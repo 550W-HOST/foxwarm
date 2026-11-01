@@ -10,12 +10,8 @@ public sealed class SessionSidebarGroupingTests
     private static string[] Ids(IEnumerable<JsonObject> rows) =>
         rows.Select(row => row["id"]!.GetValue<string>()).ToArray();
 
-    // Catalog root pages hold Session rows; the list query merges virtual groups by key.
     private static string[] Roots(SessionCatalog catalog, string mode = "default") =>
         Ids(catalog.Page(mode, 100, null, true, null).Rows);
-
-    private static string[] Groups(SessionCatalog catalog) =>
-        catalog.SidebarGroups().Select(group => group.Key).ToArray();
 
     private static string[] Under(SessionCatalog catalog, string host, string mode = "default") =>
         Ids(catalog.Children([(host, null)], mode, 20, null)[0].Rows);
@@ -24,7 +20,7 @@ public sealed class SessionSidebarGroupingTests
         SessionCatalog.Text(catalog.Scopes([id])[id]["sidebarParentId"]);
 
     [Fact]
-    public void Top_level_rows_are_shown_under_the_agent_main_or_a_virtual_group_without_changing_real_parents()
+    public void Top_level_rows_are_shown_under_the_agent_main_without_changing_real_parents()
     {
         using var temp = new TempDirectory();
         using var catalog = new SessionCatalog(temp.Path);
@@ -40,19 +36,19 @@ public sealed class SessionSidebarGroupingTests
             SessionCatalogTests.Row("gamma/only", 10, agent: "gamma"),
         ]);
 
-        Assert.Equal(["main", "alpha/main", "gamma/only"], Roots(catalog));
-        Assert.Equal(["//agent/beta"], Groups(catalog));
-        Assert.Equal(["main", "alpha/main", "gamma/only"], Roots(catalog, "time"));
-        // Flat mode is unchanged and never contains virtual groups.
+        // Rows of an Agent without a main Session stay top-level, however many there are.
+        Assert.Equal(["main", "alpha/main", "beta/two", "beta/one", "gamma/only"], Roots(catalog));
+        Assert.Equal(
+            ["main", "alpha/main", "beta/two", "beta/one", "gamma/only"],
+            Roots(catalog, "time")
+        );
+        Assert.Null(SidebarParent(catalog, "beta/one"));
         Assert.Equal(9, Roots(catalog, "flat-time").Length);
         Assert.Equal(["0905_aaaaa"], Under(catalog, "main"));
         Assert.Equal(["alpha/loose", "alpha/real"], Under(catalog, "alpha/main", "time"));
         Assert.Equal(["alpha/nested"], Under(catalog, "alpha/loose"));
-        Assert.Equal(["beta/two", "beta/one"], Under(catalog, "//agent/beta", "time"));
         Assert.Equal(2, catalog.ChildCounts(["alpha/main"])["alpha/main"]);
-        Assert.Equal(2, catalog.ChildCounts(["//agent/beta"])["//agent/beta"]);
-        var group = Assert.Single(catalog.SidebarGroups());
-        Assert.Equal(("beta", 2L, 21d), (group.Agent, group.Count, group.LastMessageTime));
+        Assert.Equal(0, catalog.ChildCounts(["beta/one"]).GetValueOrDefault("beta/one"));
 
         // Real relations stay authoritative for every non-Sidebar consumer.
         Assert.Null(catalog.Get("alpha/loose")!["parentSessionId"]);
@@ -67,41 +63,35 @@ public sealed class SessionSidebarGroupingTests
         // Focus paths and collapsed activity follow presentation parents.
         var paths = catalog.SidebarPaths(["alpha/nested", "beta/one", "gamma/only"]);
         Assert.Equal(["alpha/main", "alpha/loose", "alpha/nested"], paths["alpha/nested"]);
-        Assert.Equal(["//agent/beta", "beta/one"], paths["beta/one"]);
+        Assert.Equal(["beta/one"], paths["beta/one"]);
         Assert.Equal(["gamma/only"], paths["gamma/only"]);
         var busy = catalog.BusyDescendants(
-            ["alpha/main", "//agent/beta", "alpha/loose"],
+            ["alpha/main", "beta/one", "alpha/loose"],
             ["alpha/nested", "beta/one"]
         );
         Assert.Equal(1, busy["alpha/main"]);
-        Assert.Equal(1, busy["//agent/beta"]);
+        Assert.Equal(0, busy["beta/one"]);
         Assert.Equal(1, busy["alpha/loose"]);
     }
 
     [Fact]
-    public void Membership_follows_main_creation_deletion_pins_parents_and_the_group_threshold()
+    public void Membership_follows_main_creation_deletion_pins_and_parents()
     {
         using var temp = new TempDirectory();
         using var catalog = new SessionCatalog(temp.Path);
         catalog.Upsert([
             SessionCatalogTests.Row("beta/one", 20, agent: "beta"),
+            SessionCatalogTests.Row("beta/two", 21, agent: "beta"),
             SessionCatalogTests.Row("other/root", 5, agent: "other"),
         ]);
-        Assert.Equal(["beta/one", "other/root"], Roots(catalog));
-
-        // Crossing the threshold creates the virtual group; dropping below removes it.
-        catalog.Upsert([SessionCatalogTests.Row("beta/two", 21, agent: "beta")]);
-        Assert.Equal(["other/root"], Roots(catalog));
-        Assert.Equal(["//agent/beta"], Groups(catalog));
+        Assert.Equal(["beta/two", "beta/one", "other/root"], Roots(catalog));
         catalog.SetParent("beta/two", "other/root");
         Assert.Equal(["beta/one", "other/root"], Roots(catalog));
-        Assert.Empty(catalog.SidebarGroups());
         Assert.Equal("other/root", SidebarParent(catalog, "beta/two"));
         catalog.SetParent("beta/two", null);
-        Assert.Equal(["other/root"], Roots(catalog));
-        Assert.Equal(["//agent/beta"], Groups(catalog));
+        Assert.Equal(["beta/two", "beta/one", "other/root"], Roots(catalog));
 
-        // A pinned row is top-level in the pinned partition and leaves the group.
+        // A pinned row is top-level in the pinned partition.
         catalog.Pin("beta/two", true);
         Assert.Equal(["beta/two", "beta/one", "other/root"], Roots(catalog));
         catalog.Pin("beta/two", false);
@@ -109,21 +99,17 @@ public sealed class SessionSidebarGroupingTests
         // Creating the main Session moves every groupable row under it.
         catalog.Upsert([SessionCatalogTests.Row("beta/main", 1, agent: "beta")]);
         Assert.Equal(["other/root", "beta/main"], Roots(catalog));
-        Assert.Empty(Groups(catalog));
         Assert.Equal(["beta/two", "beta/one"], Under(catalog, "beta/main", "time"));
+        Assert.Equal(["beta/main", "beta/one"], catalog.SidebarPaths(["beta/one"])["beta/one"]);
 
-        // A pinned main still hosts the group wherever it is shown.
+        // A pinned main still hosts its Agent rows wherever it is shown.
         catalog.Pin("beta/main", true);
         Assert.Equal(["beta/main", "other/root"], Roots(catalog));
         Assert.Equal(["beta/two", "beta/one"], Under(catalog, "beta/main", "time"));
 
-        // Deleting the main Session restores the virtual group.
+        // Deleting the main Session returns its Agent rows to the top level.
         catalog.RemoveForDeletion("beta/main");
-        Assert.Equal(["other/root"], Roots(catalog));
-        Assert.Equal(["//agent/beta"], Groups(catalog));
-        catalog.RemoveForDeletion("beta/two");
-        Assert.Equal(["beta/one", "other/root"], Roots(catalog));
-        Assert.Empty(Groups(catalog));
+        Assert.Equal(["beta/two", "beta/one", "other/root"], Roots(catalog));
         Assert.Equal("beta/one", catalog.SidebarPaths(["beta/one"])["beta/one"].Single());
     }
 
@@ -314,29 +300,76 @@ public sealed class SessionSidebarGroupingTests
 
         using (var reopened = new SessionCatalog(temp.Path))
         {
-            Assert.Equal(["alpha/a", "main"], Roots(reopened).Order(StringComparer.Ordinal));
             Assert.Equal(
-                ["//agent/alpha", "//agent/beta"],
-                Groups(reopened).Order(StringComparer.Ordinal)
-            );
-            Assert.Equal(
-                ["alpha/c", "alpha/d"],
-                Under(reopened, "//agent/alpha").Order(StringComparer.Ordinal)
-            );
-            Assert.Equal(
-                ["beta/one", "beta/two"],
-                Under(reopened, "//agent/beta").Order(StringComparer.Ordinal)
+                ["alpha/a", "alpha/c", "alpha/d", "beta/one", "beta/two", "main"],
+                Roots(reopened).Order(StringComparer.Ordinal)
             );
             Assert.Equal(["alpha/b"], Under(reopened, "alpha/c"));
             Assert.Equal(["0901_aaaaa"], Under(reopened, "main"));
-            var counts = reopened.ChildCounts(["//agent/alpha", "//agent/beta", "alpha/c", "main"]);
+            var counts = reopened.ChildCounts(["alpha/c", "main", "alpha/d"]);
             Assert.Equal(
-                (2L, 2L, 1L, 1L),
-                (counts["//agent/alpha"], counts["//agent/beta"], counts["alpha/c"], counts["main"])
+                (1L, 1L, 0L),
+                (counts["alpha/c"], counts["main"], counts.GetValueOrDefault("alpha/d"))
             );
             Assert.Null(SidebarParent(reopened, "alpha/a"));
         }
         Assert.Equal(0L, Scalar(file, "SELECT count(*) FROM catalog_sidebar_dirty"));
+        AssertSidebarCountsExact(file);
+        AssertSchemaVersion3(file);
+    }
+
+    [Fact]
+    public void Virtual_group_parents_stored_by_an_earlier_build_are_removed_on_reopen()
+    {
+        using var temp = new TempDirectory();
+        using (var catalog = new SessionCatalog(temp.Path))
+            catalog.Upsert([
+                SessionCatalogTests.Row("beta/one", 20, agent: "beta"),
+                SessionCatalogTests.Row("beta/two", 21, agent: "beta"),
+                SessionCatalogTests.Row("gamma/main", 10, agent: "gamma"),
+                SessionCatalogTests.Row("gamma/x", 9, agent: "gamma"),
+            ]);
+        var file = Path.Combine(temp.Path, "state", "catalog.sqlite");
+        // An earlier build stored a virtual group key as the presentation parent and
+        // Agent target; the count trigger maintained its count row.
+        using (var db = new SqliteConnection($"Data Source={file};Pooling=False"))
+        {
+            db.Open();
+            using var command = db.CreateCommand();
+            command.CommandText = """
+                UPDATE session_catalog SET sidebar_parent='//agent/beta' WHERE agent='beta';
+                UPDATE catalog_sidebar_agent SET target='//agent/beta' WHERE agent='beta';
+                """;
+            command.ExecuteNonQuery();
+        }
+        Assert.Equal(
+            2L,
+            Scalar(
+                file,
+                "SELECT session_count FROM catalog_sidebar_count WHERE parent_key='//agent/beta'"
+            )
+        );
+
+        using (var reopened = new SessionCatalog(temp.Path))
+        {
+            Assert.Equal(["beta/two", "beta/one", "gamma/main"], Roots(reopened));
+            Assert.Null(SidebarParent(reopened, "beta/one"));
+            Assert.Equal(["gamma/x"], Under(reopened, "gamma/main"));
+            Assert.Equal(["beta/one"], reopened.SidebarPaths(["beta/one"])["beta/one"]);
+            Assert.Equal(1, reopened.ChildCounts(["gamma/main"])["gamma/main"]);
+            // A later main still collects its Agent rows through the repaired target.
+            reopened.Upsert([SessionCatalogTests.Row("beta/main", 1, agent: "beta")]);
+            Assert.Equal(["beta/two", "beta/one"], Under(reopened, "beta/main", "time"));
+        }
+        Assert.Equal(
+            0L,
+            Scalar(
+                file,
+                "SELECT (SELECT count(*) FROM session_catalog WHERE sidebar_parent LIKE '//%')"
+                    + "+(SELECT count(*) FROM catalog_sidebar_count WHERE parent_key LIKE '//%')"
+                    + "+(SELECT count(*) FROM catalog_sidebar_agent WHERE target LIKE '//%')"
+            )
+        );
         AssertSidebarCountsExact(file);
         AssertSchemaVersion3(file);
     }

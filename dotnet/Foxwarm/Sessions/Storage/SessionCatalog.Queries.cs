@@ -355,7 +355,10 @@ internal sealed partial class SessionCatalog
         }
     }
 
-    internal Dictionary<string, string[]> Paths(string[] ids)
+    internal Dictionary<string, string[]> Paths(string[] ids) => Paths(ids, "parent_session_id");
+
+    // Root-first paths following one parent column: the real parent or the Sidebar parent.
+    private Dictionary<string, string[]> Paths(string[] ids, string parentColumn)
     {
         if (ids.Length == 0)
             return new(StringComparer.Ordinal);
@@ -365,12 +368,12 @@ internal sealed partial class SessionCatalog
         {
             EnsureInitialized();
             var sql = $"""
-WITH RECURSIVE paths(focus_id,session_id,parent_session_id,depth,trail) AS (
-SELECT session_id,session_id,parent_session_id,0,'|'||hex(session_id)||'|' FROM session_catalog WHERE session_id IN ({Parameters(
+WITH RECURSIVE paths(focus_id,session_id,next_id,depth,trail) AS (
+SELECT session_id,session_id,{parentColumn},0,'|'||hex(session_id)||'|' FROM session_catalog WHERE session_id IN ({Parameters(
                     ids.Length
                 )})
-UNION ALL SELECT paths.focus_id,parent.session_id,parent.parent_session_id,paths.depth+1,paths.trail||hex(parent.session_id)||'|'
-FROM paths JOIN session_catalog parent ON parent.session_id=paths.parent_session_id
+UNION ALL SELECT paths.focus_id,parent.session_id,parent.{parentColumn},paths.depth+1,paths.trail||hex(parent.session_id)||'|'
+FROM paths JOIN session_catalog parent ON parent.session_id=paths.next_id
 WHERE paths.depth<127 AND instr(paths.trail,'|'||hex(parent.session_id)||'|')=0)
 SELECT focus_id,session_id,depth FROM paths ORDER BY focus_id,depth DESC
 """;
@@ -573,7 +576,7 @@ SELECT {Columns},total,busyTotal,queuedTotal,cachedTokens,inputTokens,outputToke
         }
     }
 
-    // Collapsed-row activity follows Sidebar presentation parents, including virtual groups.
+    // Collapsed-row activity follows Sidebar presentation parents.
     internal Dictionary<string, int> BusyDescendants(string[] roots, string[] busy)
     {
         var result = roots.ToDictionary(id => id, _ => 0, StringComparer.Ordinal);
@@ -589,10 +592,10 @@ SELECT session_id,session_id,sidebar_parent,'|'||hex(session_id)||'|' FROM sessi
                 )})
 UNION ALL SELECT a.busy_id,p.session_id,p.sidebar_parent,a.trail||hex(p.session_id)||'|' FROM ancestors a JOIN session_catalog p ON p.session_id=a.next_id
 WHERE instr(a.trail,'|'||hex(p.session_id)||'|')=0)
-SELECT next_id,count(DISTINCT busy_id) FROM ancestors WHERE next_id<>busy_id AND next_id IN ({Parameters(
+SELECT session_id,count(DISTINCT busy_id) FROM ancestors WHERE session_id<>busy_id AND session_id IN ({Parameters(
                     roots.Length,
                     busy.Length
-                )}) GROUP BY next_id
+                )}) GROUP BY session_id
 """;
             using var command = Command(db!, sql, busy.Cast<object?>().Concat(roots).ToArray());
             using var reader = command.ExecuteReader();

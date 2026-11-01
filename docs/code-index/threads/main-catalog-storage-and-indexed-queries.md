@@ -265,8 +265,8 @@ Runtime `messageCount` semantics and Architecture rendering remain unchanged.
 
 ### D-sidebar-agent-grouping
 
-[2026-11-01] The Sidebar groups otherwise top-level Sessions by Agent without
-changing any real relation. Each catalog row stores a derived
+[2026-11-01] The Sidebar shows otherwise top-level Sessions under their Agent's
+main Session without changing any real relation. Each catalog row stores a derived
 `sidebar_parent`, maintained in the same transaction as the topology change
 that affects it:
 
@@ -277,13 +277,20 @@ that affects it:
    Session when it exists, wherever the main is shown (pinned or nested).
    A top-level row whose displayed real subtree contains the main stays
    top-level, so grouping never forms a cycle.
-4. Without a main Session, the Agent's groupable rows use a virtual group key
-   `//agent/<agent>` only when there are at least two; a single row stays
-   top-level. The leading slash cannot occur in a Session ID or alias.
+4. Without a main Session, the Agent's rows stay top-level; the WebUI names
+   their Agent with a tag instead
+   ([webui-session-list](../units/webui-session-list.md#d-sidebar-agent-grouping)).
+
+[2026-11-01, revised the same day] The user replaced the first design's virtual
+Agent group rows (`//agent/<agent>` presentation parents for two or more rows of an
+Agent without a main Session) with that Agent tag: a synthetic host row that is not
+a Session read as odd. Group keys were only ever stored in the derived projection;
+the open-time recompute removes any that an earlier build left.
 
 Insert/delete/agent/parent/pin triggers mark affected rows; one refresh before
 each catalog commit recomputes hosts, per-Agent targets and the affected rows,
-with maintained per-presentation-parent counts.
+with maintained per-presentation-parent counts. The per-Agent target is the
+main Session ID or null.
 
 These objects (the `sidebar_parent` column, `catalog_sidebar_*` tables, triggers
 and indexes) are additive to schema version 3 and do not change its version, so a
@@ -291,14 +298,12 @@ Main that predates them still opens, reads and writes the catalog: its statement
 name their columns and never read the new objects, while its row writes still
 fire the triggers. Every open adds missing objects idempotently and recomputes
 all presentation parents, hosts, targets and counts in one transaction, repairing
-anything such a Main left stale; fresh catalogs and the one-time migration run
-the same step. Root pages select `sidebar_parent IS NULL`; Default/Time child pages,
-counts, focus paths and busy-descendant badges use `sidebar_parent` through
-`idx_session_catalog_sidebar_*`. The list query merges the few virtual group
-rows (`presentationGroup`, `childTotal`, archived only when every member is
-archived, newest member activity) into root pages by the ordinary keyset key.
-Flat mode, search, the Architecture forest, reporting, Tasks and every
-lifecycle path (descendant previews, stop/delete/archive cascades) keep real
+anything such a Main, or an earlier build with other rules, left stale; fresh
+catalogs and the one-time migration run the same step. Root pages select
+`sidebar_parent IS NULL`; Default/Time child pages, counts, focus paths and
+busy-descendant badges use `sidebar_parent` through
+`idx_session_catalog_sidebar_*`, so every Sidebar row is a Session. Flat mode,
+search, the Architecture forest, reporting, Tasks and every lifecycle path (descendant previews, stop/delete/archive cascades) keep real
 `parent_session_id`. Membership changes advance the catalog revision, so
 clients converge through the existing presentation-revision invalidation and
 bounded replay rather than per-row regroup deltas.

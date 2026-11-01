@@ -104,13 +104,23 @@ export function getSessionListDisplayId(sessionId: string, parentSessionId?: str
   return sessionId
 }
 
-/** Virtual Agent group keys begin with a slash, which no Session ID can. */
-export function isSidebarGroupId(id: string): boolean {
-  return id.startsWith('//agent/')
+/** The Agent's main Session ID, matching the backend: `main` for the main Agent, otherwise `<agent>/main`. */
+export function getAgentMainSessionId(agent: string): string {
+  return agent === 'main' ? 'main' : `${agent}/main`
 }
 
-/** Label for a row shown under its Agent host (main Session or virtual group) without being its real child. */
+/** Label for a row shown under its Agent main Session without being its real child. */
 export function getSessionListGroupedDisplayId(sessionId: string, hostId: string): string {
-  const hostAgent = isSidebarGroupId(hostId) ? hostId.slice('//agent/'.length) : hostId.endsWith('/main') ? hostId.slice(0, -'/main'.length) : ''
+  const hostAgent = hostId.endsWith('/main') ? hostId.slice(0, -'/main'.length) : ''
   return hostAgent && sessionId.startsWith(`${hostAgent}/`) ? sessionId.slice(hostAgent.length) : sessionId
+}
+
+/**
+ * Agent tag for a top-level tree row of an Agent without a main host: any unpinned row other
+ * than its Agent's main Session, unless the visible title already names the Agent.
+ */
+export function getSessionListAgentTag(session: { id: string; agent?: string; pinned?: boolean }, title: string): string | null {
+  const agent = session.agent
+  if (!agent || session.pinned || session.id === getAgentMainSessionId(agent)) return null
+  return title.startsWith(`${agent}/`) ? null : agent
 }

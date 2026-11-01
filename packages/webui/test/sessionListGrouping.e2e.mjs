@@ -21,9 +21,14 @@ async function api(method, route, body) {
   return payload
 }
 
-async function openList(focusSessionId) {
+async function openList(focusSessionId, storage = {}) {
   const page = await browser.newPage()
   await page.setViewport({ width: 1440, height: 900 })
+  // List preferences persist in the shared browser profile; every page starts from defaults.
+  const preferences = { foxwarm_session_list_view_mode_v1: 'default', foxwarm_session_list_compact_v1: 'true', ...storage }
+  await page.evaluateOnNewDocument(values => {
+    for (const [key, value] of Object.entries(values)) localStorage.setItem(key, value)
+  }, preferences)
   await page.goto(`${baseUrl}/#token=${encodeURIComponent(token)}`, { waitUntil: 'domcontentloaded' })
   await waitForWebUiReady(page)
   await page.waitForSelector('[data-session-list-scroll-container]', { timeout: 15_000 })
@@ -74,11 +79,12 @@ before(async () => {
   await api('POST', 'agents', { agentId: 'grp' })
   await api('POST', 'sessions', { agentId: 'grp', sessionId: 'real', parentSessionId: 'grp/main' })
   await api('POST', 'sessions', { agentId: 'grp', sessionId: 'loose' })
-  // An Agent without its main Session groups two or more top-level rows virtually.
-  await api('POST', 'agents', { agentId: 'vg' })
-  await api('DELETE', `sessions/${encodeURIComponent('vg/main')}`)
-  await api('POST', 'sessions', { agentId: 'vg', sessionId: 'a' })
-  await api('POST', 'sessions', { agentId: 'vg', sessionId: 'b' })
+  // Rows of an Agent without its main Session stay top-level and carry an Agent tag.
+  await api('POST', 'agents', { agentId: 'tagged' })
+  await api('DELETE', `sessions/${encodeURIComponent('tagged/main')}`)
+  await api('POST', 'sessions', { agentId: 'tagged', sessionId: 'a' })
+  await api('POST', 'sessions', { agentId: 'tagged', sessionId: 'b' })
+  await api('POST', `sessions/${encodeURIComponent('tagged/a')}/name`, { name: 'Release notes for the quarterly planning review' })
   browser = await puppeteer.launch({ executablePath: chromiumPath, headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] })
 })
 
@@ -90,9 +96,7 @@ test('Sidebar groups top-level Sessions under their Agent host and connects only
   const page = await openList()
   try {
     await page.waitForSelector(rowSelector('grp/main'), { timeout: 10_000 })
-    await page.waitForSelector('[data-session-group="vg"]', { timeout: 10_000 })
     assert.equal(await page.$(rowSelector('grp/loose')), null, 'grouped rows start inside their collapsed host')
-    assert.equal(await page.$(rowSelector('vg/a')), null)
 
     await expand(page, 'grp/main')
     await page.waitForSelector(rowSelector('grp/loose'))
@@ -104,6 +108,8 @@ test('Sidebar groups top-level Sessions under their Agent host and connects only
     assert.equal(loose.grouped, true)
     assert.equal(loose.connector, false, 'a grouped row sits beside the line without a connector')
     assert.match(loose.text, /\/loose/)
+    // A transient branch reload adds a loading row that briefly ends the line instead.
+    await page.waitForFunction(() => !document.querySelector('[data-session-branch-loading]'), { timeout: 10_000 })
     const lastRowId = await page.$$eval('[data-session-id]', (rows, ids) => rows.map(row => row.getAttribute('data-session-id')).filter(id => ids.includes(id)).at(-1), ['grp/real', 'grp/loose'])
     const line = await branchLine(page, 'grp/main', lastRowId)
     assert.ok(line.count >= 2, JSON.stringify(line))
@@ -111,29 +117,64 @@ test('Sidebar groups top-level Sessions under their Agent host and connects only
     assert.equal(line.columns, 1)
     assert.equal(line.endsAtLastRowMiddle, true, JSON.stringify(line))
 
-    // The virtual group is a collapsible host, not a Session.
-    const group = await page.$('[data-session-group="vg"]')
-    assert.match(await group.evaluate(element => element.textContent), /vg\s*2/)
-    await group.click({ button: 'right' })
-    await new Promise(resolve => setTimeout(resolve, 200))
-    assert.equal(await page.$('[role="menu"]'), null, 'the virtual group has no Session context menu')
-    await group.click()
-    await page.waitForSelector(rowSelector('vg/a'))
-    await page.waitForSelector(rowSelector('vg/b'))
-    assert.equal((await describeRow(page, 'vg/a')).connector, false)
-    assert.equal(await page.$eval('[data-session-group="vg"]', element => element.getAttribute('aria-expanded')), 'true')
   } finally {
     await page.close()
   }
 })
 
-test('Opening a grouped Session expands its virtual group host', async () => {
-  const page = await openList('vg/b')
+// Where the Agent tag sits in a row: after the title and before the row menu.
+const describeTag = (page, id) => page.$eval(rowSelector(id), row => {
+  const tag = row.querySelector('[data-session-agent-tag]')
+  if (!tag) return null
+  const title = row.querySelector('[data-session-title]').getBoundingClientRect()
+  const menu = row.querySelector('.session-menu-trigger').getBoundingClientRect()
+  const rect = tag.getBoundingClientRect()
+  return {
+    agent: tag.getAttribute('data-session-agent-tag'),
+    afterTitle: rect.left >= title.right - 0.5,
+    beforeMenu: rect.right <= menu.left + 0.5,
+    sameLine: Math.abs((rect.top + rect.bottom) / 2 - (title.top + title.bottom) / 2) <= 2,
+    titleWider: title.width > rect.width,
+  }
+})
+
+test('Rows of an Agent without a main Session stay top-level and show a muted Agent tag', async () => {
+  for (const [density, compact] of [['Normal', 'true'], ['Detailed', 'false']]) {
+    const page = await openList(undefined, { foxwarm_session_list_compact_v1: compact })
+    try {
+      await page.waitForSelector(rowSelector('tagged/a'), { timeout: 10_000 })
+      await page.waitForSelector(rowSelector('tagged/b'))
+      assert.equal(await page.$('[data-session-group]'), null, 'there are no virtual group rows')
+      assert.equal((await describeRow(page, 'tagged/a')).grouped, false)
+      const tag = await describeTag(page, 'tagged/a')
+      assert.deepEqual(tag, { agent: 'tagged', afterTitle: true, beforeMenu: true, sameLine: true, titleWider: true }, density)
+      assert.equal(await describeTag(page, 'tagged/b'), null, `${density}: a title that already names the Agent has no tag`)
+      assert.equal(await describeTag(page, 'grp/main'), null, `${density}: a main Session has no tag`)
+      await expand(page, 'grp/main')
+      await page.waitForSelector(rowSelector('grp/loose'))
+      assert.equal(await describeTag(page, 'grp/loose'), null, `${density}: hosted rows have no tag`)
+    } finally {
+      await page.close()
+    }
+  }
+})
+
+test('Flat mode and search results show no Agent tag', async () => {
+  const flat = await openList(undefined, { foxwarm_session_list_view_mode_v1: 'flat-time' })
   try {
-    await page.waitForSelector(rowSelector('vg/b'), { visible: true, timeout: 10_000 })
-    assert.equal(await page.$eval('[data-session-group="vg"]', element => element.getAttribute('aria-expanded')), 'true')
+    await flat.waitForSelector(rowSelector('tagged/a'), { timeout: 10_000 })
+    assert.equal(await flat.$('[data-session-agent-tag]'), null)
   } finally {
-    await page.close()
+    await flat.close()
+  }
+  const search = await openList()
+  try {
+    await search.waitForSelector(`${rowSelector('tagged/a')} [data-session-agent-tag]`, { timeout: 10_000 })
+    await search.type('input[aria-label="Search sessions"]', 'quarterly')
+    await search.waitForFunction(() => document.querySelectorAll('[data-session-id]').length === 1 && !!document.querySelector('[data-session-id="tagged/a"]'), { timeout: 10_000 })
+    assert.equal(await search.$('[data-session-agent-tag]'), null)
+  } finally {
+    await search.close()
   }
 })
 

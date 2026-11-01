@@ -74,9 +74,8 @@ try {
   assert.equal(lookup.results[4].session.parentSessionId, null); assert.equal(lookup.results[5].session.parentSessionId, null)
   const paths = await fixture.api('POST', '/api/session-list/by-id', { ids: ['team/child', 'cycle-a'], includePaths: true }); assert.equal(paths.status, 200)
   assert.deepEqual(paths.body.paths['team/child'], ['root', 'team/child']); assert.equal(new Set(paths.body.paths['cycle-a']).size, paths.body.paths['cycle-a'].length)
-  // Unparented main-Agent rows share one Agent group row, so page through the few top-level rows one at a time.
-  const first = await fixture.api('GET', '/api/session-list/sidebar?limit=1&childLimit=2'); assert.equal(first.status, 200); assert(first.body.nextCursor)
-  const second = await fixture.api('GET', '/api/session-list/sidebar?limit=1&childLimit=2&cursor=' + encodeURIComponent(first.body.nextCursor)); assert.equal(second.body.reset, false)
+  const first = await fixture.api('GET', '/api/session-list/sidebar?limit=3&childLimit=2'); assert.equal(first.status, 200); assert(first.body.nextCursor)
+  const second = await fixture.api('GET', '/api/session-list/sidebar?limit=3&childLimit=2&cursor=' + encodeURIComponent(first.body.nextCursor)); assert.equal(second.body.reset, false)
   assert.equal(new Set([...first.body.sessions, ...second.body.sessions].map(row => row.id)).size, first.body.sessions.length + second.body.sessions.length)
   const defaultChildren = await fixture.api('POST', '/api/session-list/children', { parents: [{ parentSessionId: 'root' }] }); assert.equal(defaultChildren.body.children[0].sessions.length, 10);
   for (const [body, code] of [[{ mode: null, parents: [] }, 'SESSION_LIST_MODE_INVALID'], [{ agent: 'team', parents: [] }, 'SESSION_LIST_MODE_INVALID'], [{ mode: 'time', agent: null, parents: [] }, 'SESSION_LIST_AGENT_INVALID'], [{ parents: [{ parentSessionId: 'root', cursor: null }] }, 'SESSION_LIST_CHILDREN_INVALID']]) {
@@ -123,10 +122,10 @@ try {
   await message('root', 'CASE:held-effect'); await until(() => held.has('held-effect'), 'actual held effect result'); beginLock()
   const effectFailureStart = frames.length; held.get('held-effect').complete([{ type: 'function_call', call_id: 'effect', name: 'exec', arguments: JSON.stringify({ command: 'printf unsafe > forbidden-effect', timeout: 1 }) }]); await until(() => frames.slice(effectFailureStart).some(frame => failureNotice(frame, 'root')), 'actual assistant projection failure settled', 130000); await idle('root')
   await assert.rejects(access(join(fixture.work, 'forbidden-effect'))); assert((await readAuthority('root')).history.some(row => row.parts?.some(part => part.functionCall?.id === 'effect'))); releaseLock()
-  const beforeRestart = (await fixture.api('GET', '/api/session-list/sidebar?limit=1')).body.nextCursor; socket.close(); await once(socket, 'close'); socket = null
+  const beforeRestart = (await fixture.api('GET', '/api/session-list/sidebar?limit=3')).body.nextCursor; socket.close(); await once(socket, 'close'); socket = null
   await fixture.stop(); await fixture.start()
   assert.equal((await dto('root')).displayName, 'Name during actual provider'); assert.equal((await dto('root')).model, 'b')
-  const stale = await fixture.api('GET', '/api/session-list/sidebar?limit=1&cursor=' + encodeURIComponent(beforeRestart)); assert.equal(stale.body.reset, true)
+  const stale = await fixture.api('GET', '/api/session-list/sidebar?limit=3&cursor=' + encodeURIComponent(beforeRestart)); assert.equal(stale.body.reset, true)
   assert.equal((await exact(['retained-not-live'])).results[0].resolution.kind, 'missing'); assert.equal((await dto('archived')).archived, true)
   assert.equal(sql('SELECT session_count FROM catalog_count')[0].session_count, rows.length + 1); assert.deepEqual(errors, [])
   await fixture.stop()

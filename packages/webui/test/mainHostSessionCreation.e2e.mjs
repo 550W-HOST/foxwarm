@@ -68,7 +68,7 @@ try {
   await page.click('[role="dialog"] button[aria-label="New agent"]')
   await page.type('[role="dialog"] input[placeholder="my-agent"]', 'frontend-agent')
   assert.equal(await submit('/api/agents'), 'frontend-agent/main')
-  // The lone unparented main-Agent Session stays top-level; browser Sessions are shown under browser/main.
+  // Without a main Session, main-Agent Sessions stay top-level; browser Sessions are shown under browser/main.
   assert.deepEqual((await roots()).slice(0, 2), ['frontend-agent/main', ordinary])
   assert.deepEqual((await sidebarSiblings(scoped)).slice(0, 2), ['browser/Explicit_ID', scoped])
   for (const id of [ordinary, scoped, 'browser/Explicit_ID', 'frontend-agent/main']) {
@@ -83,7 +83,7 @@ try {
   }
   await page.reload({ waitUntil: 'networkidle0' })
   await page.waitForSelector('.foxwarm-chat-root')
-  // The lone unparented main-Agent Session stays top-level; browser Sessions are shown under browser/main.
+  // Without a main Session, main-Agent Sessions stay top-level; browser Sessions are shown under browser/main.
   assert.deepEqual((await roots()).slice(0, 2), ['frontend-agent/main', ordinary])
   assert.deepEqual((await sidebarSiblings(scoped)).slice(0, 2), ['browser/Explicit_ID', scoped])
   // The original App discovers a wrapper installed after startup without executing it.

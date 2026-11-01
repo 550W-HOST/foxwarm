@@ -40,10 +40,8 @@ public sealed partial class WebUiStartupTests
         }
 
         // Top-level Sessions of an Agent with a main Session are shown under that host.
-        async Task<string[]> Under(string? host)
+        async Task<string[]> Under(string host)
         {
-            if (host is null)
-                return await Roots();
             using var response = await h.Client.PostAsJsonAsync(
                 "/api/session-list/children",
                 new { limit = 20, parents = new[] { new { parentSessionId = host } } }
@@ -114,19 +112,9 @@ public sealed partial class WebUiStartupTests
         );
 
         // Source accepts no body, a zero-byte JSON stream and an empty object as ordinary creation.
-        // Without a main Session, two top-level main-Agent rows form the virtual Agent group.
-        foreach (var seed in new[] { "seed-a", "seed-b" })
-        {
-            using var seeded = await Post(
-                JsonContent.Create(new { agentId = "main", sessionId = seed })
-            );
-            Assert.Equal(HttpStatusCode.OK, seeded.StatusCode);
-        }
-        Assert.Contains("//agent/main", await Roots());
-        const string mainHost = "//agent/main";
         foreach (var text in new string?[] { null, "", "{}" })
         {
-            previous = await Under(mainHost);
+            previous = await Roots();
             using var response = await Post(
                 text is null ? null : new StringContent(text, Encoding.UTF8, "application/json")
             );
@@ -136,7 +124,7 @@ public sealed partial class WebUiStartupTests
             ]!.GetValue<string>();
             Assert.Matches(@"^\d{4}_[a-z0-9]{5}$", generated);
             Assert.DoesNotContain(generated, previous);
-            Assert.Equal(new[] { generated }.Concat(previous), await Under(mainHost));
+            Assert.Equal(new[] { generated }.Concat(previous), await Roots());
         }
 
         previous = await Under("framing/main");
@@ -185,51 +173,6 @@ public sealed partial class WebUiStartupTests
             );
             Assert.Equal(previous, await Tree());
         }
-        // Virtual groups merge into root paging by sort key and lead focus paths.
-        foreach (var mode in new[] { "default", "time" })
-        {
-            var paged = new List<string>();
-            string? cursor = null;
-            do
-            {
-                var page = await h.Client.GetFromJsonAsync<JsonObject>(
-                    $"/api/session-list/sidebar?mode={mode}&limit=1"
-                        + (cursor is null ? "" : "&cursor=" + Uri.EscapeDataString(cursor))
-                );
-                paged.AddRange(
-                    page!["sessions"]!.AsArray().Select(row => row!["id"]!.GetValue<string>())
-                );
-                cursor = page["nextCursor"]?.GetValue<string>();
-            } while (cursor is not null);
-            var full = await h.Client.GetFromJsonAsync<JsonObject>(
-                $"/api/session-list/sidebar?mode={mode}&limit=50"
-            );
-            Assert.Equal(
-                full!["sessions"]!.AsArray().Select(row => row!["id"]!.GetValue<string>()),
-                paged
-            );
-            Assert.Single(paged, id => id == "//agent/main");
-        }
-        var focused = await h.Client.GetFromJsonAsync<JsonObject>(
-            "/api/session-list/sidebar?limit=50&focusSessionId=seed-a"
-        );
-        Assert.Equal(
-            ["//agent/main", "seed-a"],
-            focused!["presentationPaths"]!["seed-a"]!.AsArray().Select(id => id!.GetValue<string>())
-        );
-        var groupRow = focused["pathContext"]!
-            .AsArray()
-            .Single(item => item!["session"]!["id"]!.GetValue<string>() == "//agent/main")![
-            "session"
-        ]!;
-        Assert.Equal("main", groupRow["presentationGroup"]!["agent"]!.GetValue<string>());
-        Assert.Contains(
-            "seed-a",
-            focused["forcedChildren"]!["//agent/main"]!
-                .AsArray()
-                .Select(id => id!.GetValue<string>())
-        );
-
         previous = await Roots();
         using (
             var response = await h.Client.PostAsJsonAsync("/api/agents", new { agentId = "newest" })

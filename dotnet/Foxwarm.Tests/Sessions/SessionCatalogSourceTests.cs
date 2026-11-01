@@ -160,97 +160,31 @@ public sealed class SessionCatalogSourceTests
         );
     }
 
-    // Sidebar presentation parents of the fixture rows (C#-only Agent grouping). The `main`
-    // Agent has no `main` Session and more than one top-level row, so those rows share its
-    // virtual group; `alpha` has a single top-level row, which stays a root. Pinned rows and
-    // rows with a real parent (including cycles) keep their existing placement.
-    private static readonly Dictionary<string, string?> SidebarParents = new()
-    {
-        ["alpha/a"] = null,
-        ["alpha/b"] = "root",
-        ["beta/c"] = "root",
-        ["child-13"] = null,
-        ["cycle-a"] = "cycle-b",
-        ["cycle-b"] = "cycle-a",
-        ["dangling"] = "//agent/main",
-        ["ordered"] = "//agent/main",
-        ["root"] = "//agent/main",
-        ["self"] = "//agent/main",
-        ["İ"] = "//agent/main",
-        ["ΟΣ"] = "root",
-        ["𐐀"] = "//agent/main",
-        ["😀"] = "//agent/main",
-    };
-
     /// <summary>
-    /// Compares a snapshot with the Source oracle. Sidebar Agent grouping changes only two
-    /// things the Source store does not model: the additive `sidebarParentId` scope field and
-    /// the Default/Time root pages, which now omit grouped rows. Those are checked here against
-    /// the fixture's grouping and the oracle's own root order and row projections; every other
-    /// query, including Flat and non-root pages, children, counts and paths, must match exactly.
+    /// Compares a snapshot with the Source oracle. The only difference the Source store does
+    /// not model is the additive `sidebarParentId` scope field. No fixture Agent has a main
+    /// Session, so every unpinned row's Sidebar parent is its real parent and pinned rows have
+    /// none; after that check every query must match exactly.
     /// </summary>
-    private static void SourceParity(JsonNode? expectedNode, JsonObject actual, string label)
+    private static void SourceParity(JsonNode? expected, JsonObject actual, string label)
     {
-        var expected = expectedNode!.DeepClone().AsObject();
         actual = actual.DeepClone().AsObject();
-        var scopes = actual["scopes"]!.AsObject();
-        var sidebarParents = new Dictionary<string, string?>(StringComparer.Ordinal);
-        foreach (var pair in scopes)
+        foreach (var pair in actual["scopes"]!.AsObject())
         {
             var scope = pair.Value!.AsObject();
+            Assert.NotEqual(
+                SessionCatalog.AgentMainId(SessionCatalog.Text(scope["agent"])!),
+                pair.Key
+            );
             var parent = SessionCatalog.Text(scope["sidebarParentId"]);
-            sidebarParents[pair.Key] = parent;
-            var pinned = SessionCatalog.Flag(scope["pinned"]);
-            var real = SessionCatalog.Text(scope["parentSessionId"]);
-            var wanted =
-                SidebarParents.TryGetValue(pair.Key, out var known) ? known
-                : pinned ? null
-                : real;
+            var wanted = SessionCatalog.Flag(scope["pinned"])
+                ? null
+                : SessionCatalog.Text(scope["parentSessionId"]);
             Assert.True(
                 parent == wanted,
                 $"{label}: Sidebar parent of {pair.Key} is {parent}, expected {wanted}"
             );
             scope.Remove("sidebarParentId");
-        }
-        var expectedPages = expected["pages"]!.AsArray();
-        var actualPages = actual["pages"]!.AsArray();
-        Assert.Equal(expectedPages.Count, actualPages.Count);
-        for (var index = 0; index < expectedPages.Count; index++)
-        {
-            var want = expectedPages[index]!.AsObject();
-            var got = actualPages[index]!.AsObject();
-            if (
-                !SessionCatalog.Flag(want["roots"])
-                || SessionCatalog.Text(want["mode"]) == "flat-time"
-            )
-                continue;
-            // Source root order and projections, without rows the Sidebar now shows in a group.
-            var sourceRoots = want["first"]!["rows"]!
-                .AsArray()
-                .Concat(want["second"]!["rows"]!.AsArray())
-                .Select(row => row!.AsObject())
-                .Where(row => sidebarParents[Id(row)] is null)
-                .Select(row => (JsonNode?)row.DeepClone())
-                .ToArray();
-            // The oracle's first two pages cover every Sidebar root of this fixture.
-            Assert.Equal(
-                sidebarParents
-                    .Where(pair => pair.Value is null)
-                    .Select(pair => pair.Key)
-                    .Order(StringComparer.Ordinal),
-                sourceRoots.Select(row => Id(row!.AsObject())).Order(StringComparer.Ordinal)
-            );
-            Assert.True(sourceRoots.Length <= 3, $"{label}: fixture roots must fit one page");
-            var roots = new JsonObject
-            {
-                ["rows"] = new JsonArray(sourceRoots),
-                ["hasMore"] = false,
-            };
-            Equal(roots, got["first"], $"{label}: {want["mode"]} Sidebar root page");
-            // With no further page, the caller's second request repeats the first page.
-            Equal(roots, got["second"], $"{label}: {want["mode"]} Sidebar root repeat");
-            want["first"] = got["first"]!.DeepClone();
-            want["second"] = got["second"]!.DeepClone();
         }
         Equal(expected, actual, label);
     }

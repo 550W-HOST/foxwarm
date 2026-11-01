@@ -713,33 +713,15 @@ public sealed partial class WebUiStartupTests
             );
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         }
-        // Without a main Session, top-level main-Agent rows are shown in its virtual group.
         async Task<string[]> Roots(int limit)
         {
-            var ids = new List<string>();
-            string? cursor = null;
-            do
-            {
-                var parent = new JsonObject { ["parentSessionId"] = "//agent/main" };
-                if (cursor is not null)
-                    parent["cursor"] = cursor;
-                using var response = await h.Client.PostAsJsonAsync(
-                    "/api/session-list/children",
-                    new JsonObject
-                    {
-                        ["limit"] = Math.Min(20, limit - ids.Count),
-                        ["parents"] = new JsonArray(parent),
-                    }
-                );
-                var page = (await response.Content.ReadFromJsonAsync<JsonObject>())!["children"]![
-                    0
-                ]!;
-                ids.AddRange(
-                    page["sessions"]!.AsArray().Select(row => row!["id"]!.GetValue<string>())
-                );
-                cursor = page["nextCursor"]?.GetValue<string>();
-            } while (cursor is not null && ids.Count < limit);
-            return ids.ToArray();
+            var page = await h.Client.GetFromJsonAsync<JsonObject>(
+                "/api/session-list/sidebar?limit=" + limit
+            );
+            return page!["sessions"]!
+                .AsArray()
+                .Select(row => row!["id"]!.GetValue<string>())
+                .ToArray();
         }
         var previous = await Roots(100);
         var create = await h.Client.PostAsJsonAsync("/api/sessions", new { });

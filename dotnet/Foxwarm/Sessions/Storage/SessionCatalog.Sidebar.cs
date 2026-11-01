@@ -2,31 +2,10 @@ using Microsoft.Data.Sqlite;
 
 namespace Foxwarm.Sessions;
 
-internal sealed record SidebarGroupRow(
-    string Key,
-    string Agent,
-    long Count,
-    bool Archived,
-    double LastMessageTime
-);
-
 // Sidebar presentation parents. The real parent relation stays authoritative for every
 // other consumer; this projection only decides where a row is shown in the Sidebar tree.
 internal sealed partial class SessionCatalog
 {
-    // A leading slash is never part of a valid Session ID, so group keys cannot collide.
-    internal const string SidebarGroupPrefix = "//agent/";
-
-    internal static string SidebarGroupKey(string agent) => SidebarGroupPrefix + agent;
-
-    internal static bool IsSidebarGroup(string? id) =>
-        id is not null && id.StartsWith(SidebarGroupPrefix, StringComparison.Ordinal);
-
-    internal static string? SidebarGroupAgent(string? id) =>
-        IsSidebarGroup(id) && id!.Length > SidebarGroupPrefix.Length
-            ? id[SidebarGroupPrefix.Length..]
-            : null;
-
     // The canonical main Session ID; a legacy invalid Agent name cannot have one.
     internal static string AgentMainId(string agent)
     {
@@ -87,7 +66,8 @@ internal sealed partial class SessionCatalog
     /// <summary>
     /// Adds the Sidebar objects when missing (the schema version is unchanged) and
     /// recomputes every presentation parent and count, repairing anything a Main
-    /// that does not maintain them wrote meanwhile. Runs inside the caller's transaction.
+    /// that does not maintain them, or maintains them by other rules, wrote meanwhile.
+    /// Runs inside the caller's transaction.
     /// </summary>
     private static void EnsureSidebar(SqliteConnection connection)
     {
@@ -199,26 +179,15 @@ internal sealed partial class SessionCatalog
         return hosts;
     }
 
-    // The Agent main when it exists; otherwise a virtual group for two or more
-    // groupable rows. Reads the stored host set.
+    // The Agent main when it exists; otherwise the Agent's rows stay top-level.
     private static string? SidebarTarget(SqliteConnection connection, string agent)
     {
         var main = AgentMainId(agent);
-        if (
+        return
             Scalar(connection, "SELECT 1 FROM session_catalog WHERE session_id=$p0", main)
-            is not null
-        )
-            return main;
-        var groupable = Convert.ToInt64(
-            Scalar(
-                connection,
-                "SELECT count(*) FROM (SELECT 1 FROM session_catalog c WHERE c.agent=$p0 AND c.presentation_root=1 AND c.pinned_rank=1 "
-                    + "AND c.session_id<>$p1 AND NOT EXISTS(SELECT 1 FROM catalog_sidebar_host h WHERE h.session_id=c.session_id) LIMIT 2)",
-                agent,
-                main
-            )
-        );
-        return groupable >= 2 ? SidebarGroupKey(agent) : null;
+                is not null
+            ? main
+            : null;
     }
 
     /// <summary>
@@ -299,7 +268,7 @@ internal sealed partial class SessionCatalog
                 agent,
                 target
             );
-            // The shared target changed: move every groupable top-level row of this Agent.
+            // The main appeared or disappeared: move every groupable top-level row of this Agent.
             Execute(
                 connection,
                 "UPDATE session_catalog SET sidebar_parent=$p1 WHERE agent=$p0 AND presentation_root=1 AND pinned_rank=1 AND session_id<>$p2 "
@@ -328,97 +297,7 @@ internal sealed partial class SessionCatalog
         }
     }
 
-    private static SidebarGroupRow? ReadSidebarGroup(
-        SqliteConnection connection,
-        string key,
-        long count
-    )
-    {
-        var agent = SidebarGroupAgent(key);
-        if (agent is null)
-            return null;
-        using var command = Command(
-            connection,
-            "SELECT archived,recent_rank FROM session_catalog INDEXED BY idx_session_catalog_sidebar_time "
-                + "WHERE sidebar_parent=$p0 AND pinned_rank=1 ORDER BY archived,recent_rank,session_id LIMIT 1",
-            key
-        );
-        using var reader = command.ExecuteReader();
-        return reader.Read()
-            ? new(key, agent, count, reader.GetInt64(0) == 1, -reader.GetDouble(1))
-            : null;
-    }
-
-    /// <summary>Every current virtual Agent group; bounded by the number of Agents.</summary>
-    internal SidebarGroupRow[] SidebarGroups(IReadOnlyCollection<string>? keys = null)
-    {
-        lock (gate)
-        {
-            EnsureInitialized();
-            var counts = new List<(string Key, long Count)>();
-            var sql = keys is null
-                ? "SELECT parent_key,session_count FROM catalog_sidebar_count WHERE parent_key>=$p0 AND parent_key<$p1"
-                : $"SELECT parent_key,session_count FROM catalog_sidebar_count WHERE parent_key IN ({Parameters(keys.Count)})";
-            using (
-                var command = keys is null
-                    ? Command(db!, sql, SidebarGroupPrefix, "//agent0")
-                    : Command(db!, sql, keys.Cast<object?>().ToArray())
-            )
-            using (var reader = command.ExecuteReader())
-                while (reader.Read())
-                    if (IsSidebarGroup(reader.GetString(0)))
-                        counts.Add((reader.GetString(0), reader.GetInt64(1)));
-            QueryObserved?.Invoke(sql, counts.Count);
-            return counts
-                .Select(pair => ReadSidebarGroup(db!, pair.Key, pair.Count))
-                .OfType<SidebarGroupRow>()
-                .ToArray();
-        }
-    }
-
-    /// <summary>Sidebar presentation paths, root first; a virtual group key may lead.</summary>
-    internal Dictionary<string, string[]> SidebarPaths(string[] ids)
-    {
-        if (ids.Length == 0)
-            return new(StringComparer.Ordinal);
-        if (ids.Length > 100)
-            throw new InvalidDataException("Path batch exceeds 100 IDs.");
-        lock (gate)
-        {
-            EnsureInitialized();
-            var sql = $"""
-WITH RECURSIVE paths(focus_id,session_id,next_id,depth,trail) AS (
-SELECT session_id,session_id,sidebar_parent,0,'|'||hex(session_id)||'|' FROM session_catalog WHERE session_id IN ({Parameters(
-                    ids.Length
-                )})
-UNION ALL SELECT paths.focus_id,parent.session_id,parent.sidebar_parent,paths.depth+1,paths.trail||hex(parent.session_id)||'|'
-FROM paths JOIN session_catalog parent ON parent.session_id=paths.next_id
-WHERE paths.depth<127 AND instr(paths.trail,'|'||hex(parent.session_id)||'|')=0)
-SELECT focus_id,session_id,next_id,depth FROM paths ORDER BY focus_id,depth DESC
-""";
-            using var command = Command(db!, sql, ids.Cast<object?>().ToArray());
-            using var reader = command.ExecuteReader();
-            var result = new Dictionary<string, List<string>>(StringComparer.Ordinal);
-            var count = 0;
-            while (reader.Read())
-            {
-                var focus = reader.GetString(0);
-                if (!result.TryGetValue(focus, out var path))
-                {
-                    result[focus] = path = [];
-                    // The topmost row is read first; a virtual group above it leads the path.
-                    if (!reader.IsDBNull(2) && IsSidebarGroup(reader.GetString(2)))
-                        path.Add(reader.GetString(2));
-                }
-                path.Add(reader.GetString(1));
-                count++;
-            }
-            QueryObserved?.Invoke(sql, count);
-            return result.ToDictionary(
-                pair => pair.Key,
-                pair => pair.Value.ToArray(),
-                StringComparer.Ordinal
-            );
-        }
-    }
+    /// <summary>Sidebar presentation paths, root first.</summary>
+    internal Dictionary<string, string[]> SidebarPaths(string[] ids) =>
+        Paths(ids, "sidebar_parent");
 }

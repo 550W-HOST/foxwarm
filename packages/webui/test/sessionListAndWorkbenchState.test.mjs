@@ -366,16 +366,26 @@ test('session list labels omit parent and agent-main prefixes for child rows', a
   assert.equal(getSessionListDisplayId('standalone', null), 'standalone')
 })
 
-test('grouped rows shorten their Agent prefix under a main host or virtual group only', async () => {
-  const { getSessionListGroupedDisplayId, isSidebarGroupId } = await loadTypeScriptModule('../src/sessionListPresentation.ts')
+test('grouped rows shorten their Agent prefix under the Agent main host only', async () => {
+  const { getSessionListGroupedDisplayId } = await loadTypeScriptModule('../src/sessionListPresentation.ts')
 
   assert.equal(getSessionListGroupedDisplayId('agent/task', 'agent/main'), '/task')
-  assert.equal(getSessionListGroupedDisplayId('agent/task', '//agent/agent'), '/task')
   assert.equal(getSessionListGroupedDisplayId('0905_kg1ns', 'main'), '0905_kg1ns')
-  assert.equal(getSessionListGroupedDisplayId('0905_kg1ns', '//agent/main'), '0905_kg1ns')
   assert.equal(getSessionListGroupedDisplayId('other/task', 'agent/main'), 'other/task')
-  assert.equal(isSidebarGroupId('//agent/main'), true)
-  assert.equal(isSidebarGroupId('agent/main'), false)
+})
+
+test('top-level rows name their Agent unless they are its main or the title already does', async () => {
+  const { getAgentMainSessionId, getSessionListAgentTag } = await loadTypeScriptModule('../src/sessionListPresentation.ts')
+
+  assert.equal(getAgentMainSessionId('main'), 'main')
+  assert.equal(getAgentMainSessionId('beta'), 'beta/main')
+  assert.equal(getSessionListAgentTag({ id: 'beta/one', agent: 'beta' }, 'Release notes'), 'beta')
+  assert.equal(getSessionListAgentTag({ id: 'beta/one', agent: 'beta' }, 'beta/one'), null)
+  assert.equal(getSessionListAgentTag({ id: '0905_kg1ns', agent: 'main' }, '0905_kg1ns'), 'main')
+  assert.equal(getSessionListAgentTag({ id: 'main', agent: 'main' }, 'main'), null)
+  assert.equal(getSessionListAgentTag({ id: 'beta/main', agent: 'beta' }, 'Beta home'), null)
+  assert.equal(getSessionListAgentTag({ id: 'beta/one', agent: 'beta', pinned: true }, 'Release notes'), null)
+  assert.equal(getSessionListAgentTag({ id: 'loose' }, 'loose'), null)
 })
 
 test('overlapping global session refreshes cannot let an older response hide a new child', async () => {

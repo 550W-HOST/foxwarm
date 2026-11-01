@@ -61,7 +61,7 @@ internal sealed partial class WebUIChannel
                         .Distinct(StringComparer.Ordinal)
                         .ToArray();
                     var focus = view.Exact(requestedFocus, false);
-                    // Sidebar focus follows presentation parents, including virtual groups.
+                    // Sidebar focus follows presentation parents.
                     var (presentationPaths, pathContext) = view.SidebarFocus(
                         (JsonArray)focus["results"]!
                     );

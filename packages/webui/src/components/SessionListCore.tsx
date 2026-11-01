@@ -2,14 +2,14 @@ import { getSessionRuntimeTone } from '../sessionRuntimeState'
 import { useState, useRef, useEffect, useMemo, type ReactNode } from 'react'
 import { useDndContext, useDraggable, useDroppable } from '@dnd-kit/core'
 import { API_BASE_PATH } from '../config'
-import { SlidersHorizontal, MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X, CornerDownRight, ListTree, Clock3, Rows3, Pin, PinOff, Bell, BellRing, List, GitBranch, Server, Copy, Bot, SquarePlus } from 'lucide-react'
+import { SlidersHorizontal, MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X, CornerDownRight, ListTree, Clock3, Rows3, Pin, PinOff, Bell, BellRing, List, GitBranch, Server, Copy, SquarePlus } from 'lucide-react'
 import RuntimeBusySpinner from './RuntimeBusySpinner'
 import MobilePageHeader from './MobilePageHeader'
 import ContextMenu, { type ContextMenuAnchorRect, type ContextMenuEntry } from './ContextMenu'
 import { copyTextToClipboard } from './chatShared'
 import { getSessionRuntimeSummary, getSessionRuntimeStateName, type SessionRuntimeState } from '../sessionRuntimeState'
 import { type SessionIdleNotificationMode } from '../sessionIdleNotifications'
-import { collapseSessionListExpandedBranch, compareSessionListSessions, getSessionListAutoExpandedPath, getSessionListChildDisclosure, getSessionListDisplayId, getSessionListGroupedDisplayId, shouldElevateSessionToRoot, type SessionListOrderMode } from '../sessionListPresentation'
+import { collapseSessionListExpandedBranch, compareSessionListSessions, getSessionListAutoExpandedPath, getSessionListChildDisclosure, getSessionListAgentTag, getSessionListDisplayId, getSessionListGroupedDisplayId, shouldElevateSessionToRoot, type SessionListOrderMode } from '../sessionListPresentation'
 import type { ChildSessionRequest } from './AgentCreationMenu'
 import { shouldActivateSessionListDrag, shouldEnableSessionListDrag } from '../sessionListDrag'
 import { useSessionListCompact } from '../sessionListDensity'
@@ -23,10 +23,8 @@ export interface Session {
   sequenceMessageCount?: number
   lastMessageTime: number
   parentSessionId: string | null
-  /** Sidebar presentation parent: a real parent, an Agent main host, or a virtual group. */
+  /** Sidebar presentation parent: a real parent or the Agent's main Session. */
   sidebarParentId?: string | null
-  /** Present only on a virtual Agent group row, which is not a Session. */
-  presentationGroup?: { kind: 'agent'; agent: string }
   childSessions?: string[]
   childTotal?: number
   aliases?: string[]
@@ -1201,7 +1199,6 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     const showBranchRetry = !!bounded && (branchLoadState?.status === 'error' || (!boundedChildPage && !branchLoadState))
     const showMoreChildren = hiddenCount > 0 && (!bounded || (!!boundedChildPage && !branchLoadState))
     const contentPaddingLeft = `${12 + level * 16}px`
-    const isGroup = !!session.presentationGroup
 
     // Get display ID (with parent prefix removed if applicable)
     const isDirectChild = !!parentSession && resolveSessionId(session.parentSessionId) === parentSession.id
@@ -1210,6 +1207,20 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     const displayId = groupedRow
       ? getSessionListGroupedDisplayId(session.id, parentSession!.id)
       : getSessionListDisplayId(session.id, parentSession?.id, isDirectChild)
+    const title = session.displayName || displayId
+    // Top-level tree rows of an Agent without a main host name their Agent.
+    const agentTag = usePresentationParents && !mobileList && !parentSession ? getSessionListAgentTag(session, title) : null
+    // The title keeps its width first: the tag grows only to its text and shrinks before it.
+    const titleFlex = agentTag ? 'flex-auto' : 'flex-1'
+    const agentTagBadge = agentTag && (
+      <span
+        data-session-agent-tag={agentTag}
+        title={`Agent: ${agentTag}`}
+        className="min-w-[2rem] shrink-[1000] truncate rounded bg-fw-neutral-surface px-1.5 py-0.5 text-[10px] font-normal leading-none text-fw-text-muted"
+      >
+        {agentTag}
+      </span>
+    )
 
     const isCurrentSession = resolvedCurrentSessionId === session.id
     const runtimeStateName = getSessionRuntimeStateName(session)
@@ -1320,8 +1331,6 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
         {content}
       </div>
     )
-    const groupTotal = childTotal ?? 0
-
     return (
       <div
         key={session.id}
@@ -1329,40 +1338,6 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
         data-session-grouped={groupedRow || undefined}
       >
         {parentSession && !lastInBranch && trunk(level - 1, parentSession.id)}
-        {isGroup ? (
-          <div
-            role="button"
-            tabIndex={0}
-            data-session-group={session.presentationGroup!.agent}
-            aria-expanded={hasChildren ? isExpanded : undefined}
-            aria-label={`${session.presentationGroup!.agent}: ${groupTotal} ${groupTotal === 1 ? 'session' : 'sessions'}`}
-            title={`${session.presentationGroup!.agent} · ${groupTotal} ${groupTotal === 1 ? 'session' : 'sessions'}`}
-            className={`session-row relative flex items-center rounded cursor-pointer hover:bg-fw-hover dark:hover:bg-fw-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-fw-focus-ring/40 ${compact ? 'session-row-compact mt-0.5' : 'mt-1'} ${session.archived ? 'opacity-70' : ''}`}
-            onClick={() => { if (hasChildren) toggleExpand(session.id) }}
-            onKeyDown={(event) => {
-              if ((event.key === 'Enter' || event.key === ' ') && hasChildren) { event.preventDefault(); toggleExpand(session.id) }
-            }}
-            onContextMenu={(event) => event.preventDefault()}
-          >
-            <div className="flex flex-1 min-w-0 items-center gap-1.5 py-1 pr-2 min-h-10" style={{ paddingLeft: contentPaddingLeft }}>
-              <span className="session-compact-disclosure inline-flex w-4 shrink-0 justify-center text-fw-text-muted" aria-hidden="true">
-                {hasChildren && (
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={isExpanded ? 'M19 9l-7 7-7-7' : 'M9 5l7 7-7 7'} />
-                  </svg>
-                )}
-              </span>
-              <Bot className="h-3.5 w-3.5 shrink-0 text-fw-text-muted" aria-hidden="true" />
-              <span className="min-w-0 flex-1 truncate text-sm font-medium text-fw-text">{session.presentationGroup!.agent}</span>
-              {descendantBusyCount > 0 && (
-                <span role="img" aria-label="Active descendant sessions" title={`${descendantBusyCount} active descendant ${descendantBusyCount === 1 ? 'session' : 'sessions'}`} className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center text-fw-accent" data-descendant-activity>
-                  <GitBranch className="h-3.5 w-3.5" strokeWidth={1.5} aria-hidden="true" />
-                </span>
-              )}
-              <span className="shrink-0 text-xs tabular-nums text-fw-text-muted">{groupTotal}</span>
-            </div>
-          </div>
-        ) : (
         <DraggableSessionRow
           session={session}
           className={`group session-row relative flex items-center rounded cursor-pointer active:cursor-grabbing ${compact ? 'session-row-compact mt-0.5' : 'mt-1'} ${
@@ -1388,10 +1363,11 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
               {compact ? (
                 <div className="flex flex-1 min-w-0 items-center gap-1.5 py-1 pr-2 min-h-10" style={{ paddingLeft: contentPaddingLeft }}>
                   {hasChildren ? disclosure : viewMode !== 'flat-time' && !isFiltering ? <span className="session-compact-disclosure w-4 shrink-0" aria-hidden="true" /> : null}
-                  <span className={`min-w-0 flex-1 truncate text-sm font-medium text-fw-text-strong`} title={`${session.displayName || displayId} · ${session.id}`}>
-                    {session.displayName || displayId}{session.runtime === 'claude-code' && <span className="ml-1 text-xs font-normal text-fw-text-muted">Claude Code</span>}
+                  <span className={`min-w-0 ${titleFlex} truncate text-sm font-medium text-fw-text-strong`} title={`${title} · ${session.id}`} data-session-title>
+                    {title}{session.runtime === 'claude-code' && <span className="ml-1 text-xs font-normal text-fw-text-muted">Claude Code</span>}
                     {mobileList && activityTime(session.lastMessageTime) && <span className="mt-0.5 block truncate text-xs font-normal text-fw-text-muted">{session.agent ? `${session.agent} · ` : ''}{activityTime(session.lastMessageTime)}</span>}
                   </span>
+                  {agentTagBadge}
                   {session.archived && <Archive className="h-3 w-3 shrink-0 text-fw-text-muted" aria-label="Archived session" />}
                   {unreadSessionIds.has(session.id) && (
                     <span className="h-2 w-2 shrink-0 rounded-full bg-fw-accent" role="img" aria-label="Unread idle completion" title="Unread idle completion" />
@@ -1417,9 +1393,9 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
               ) : (
               <div className="flex flex-1 min-w-0 items-start py-3 pr-2" style={{ paddingLeft: contentPaddingLeft }}>
                 <div className="min-w-0 flex-1">
-                  <div className={`flex min-w-0 items-center gap-1.5 text-sm font-medium text-fw-text-strong`}>
-                    <span className="min-w-0 flex-1 truncate" data-session-title>
-                      {session.displayName || displayId}{session.runtime === 'claude-code' && <span className="ml-1 text-xs font-normal text-fw-text-muted">Claude Code</span>}
+                  <div className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-fw-text-strong">
+                    <span className={`min-w-0 ${titleFlex} truncate`} data-session-title>
+                      {title}{session.runtime === 'claude-code' && <span className="ml-1 text-xs font-normal text-fw-text-muted">Claude Code</span>}
                       {unreadSessionIds.has(session.id) && (
                         <span className="ml-1.5 inline-flex items-center align-middle">
                           <span className="h-2 w-2 rounded-full bg-fw-accent" aria-hidden="true" />
@@ -1430,6 +1406,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                         <span className="ml-2 text-xs text-fw-text-muted">[Archived]</span>
                       )}
                     </span>
+                    {agentTagBadge}
                   </div>
                   {session.displayName && (
                     <div className="text-xs text-fw-text-muted font-mono truncate">
@@ -1474,7 +1451,6 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
               </button>
           </>
         </DraggableSessionRow>
-        )}
 
         {hasChildren && isExpanded && (
           <div>
