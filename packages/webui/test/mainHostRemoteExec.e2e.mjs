@@ -78,7 +78,8 @@ const remote = join(fixture.root, 'official-cli')
 await mkdir(join(remote, 'agents/main'), { recursive: true })
 let credentials, client
 const nodes = async () => (await fixture.api('GET', '/api/nodes')).body.nodes
-const online = id => until(async () => (await nodes()).find(node => node.id === id && node.online && node.executable), 'official Node online ' + id, 30000)
+// The online record may still belong to a retiring process behind the proxy.
+const online = (id, handle = client) => until(async () => handle.output.includes('Node registered') && (await nodes()).find(node => node.id === id && node.online && node.executable), 'official Node registered and online ' + id, 30000)
 function startClient(credential, approval = false, trigger = false) {
   const args = approval ? [resolve('packages/webui/test/fixtures/officialNodeApproval.mjs')] : [resolve('packages/cli-node/dist/client.js'), '--host', nodeHost, '--id', credential.nodeId, '--auth-token', credential.authToken, '--credentials-file', join(remote, 'credentials.json'), ...(trigger ? ['--local-trigger-port', '0'] : ['--no-local-trigger'])]
   const child = spawn(process.execPath, args, { cwd: remote, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, FOXWARM_AGENTS_DIR: join(remote, 'agents'), FOXWARM_NO_CONSOLE_LOG: '0', FOXWARM_OWNED_CLIENT_OPTIONS: JSON.stringify({ host: nodeHost, nodeId: credential.nodeId, authToken: credential.authToken, credentialsFile: join(remote, 'credentials.json') }) } })
@@ -102,7 +103,13 @@ async function finish(id, key, timeout = 30000) {
   }, 'official exec turn ' + key, timeout)
 }
 async function turn(id, key, calls) { await begin(id, key, [calls]); return finish(id, key) }
-async function select(id, node = 'official-cli') { const result = await turn(id, 'select-' + id.replaceAll('/', '-'), [call('select-' + id, 'node', { action: 'select', nodeId: node })]); assert.equal(result.currentNode, node) }
+async function select(id, node = 'official-cli') {
+  const callId = 'select-' + id
+  const result = await turn(id, 'select-' + id.replaceAll('/', '-'), [call(callId, 'node', { action: 'select', nodeId: node })])
+  const receipt = pair(result, callId)
+  assert.equal(receipt?.nodeId, node, JSON.stringify(receipt))
+  assert.equal(result.currentNode, node, JSON.stringify(receipt))
+}
 async function waitBackground(id, key, command, extra = []) {
   await begin(id, key, [[call('exec-' + key, 'exec', { command, timeout: 1 })], async () => {
     const state = await saved(id), result = pair(state, 'exec-' + key), exact = execId(result)
