@@ -359,7 +359,7 @@ internal static class AgentToolDefinitions
             ),
             Tool(
                 "create_child_session",
-                "Create a child Session under the current Session. With taskId, assign or transfer the task to the child, deliver its full description and any message as one assignment, and start work. Complete the task with the task tool. Completion notifies a Session creator automatically; do not send a separate routine completion report. Without taskId, message is optional and normal completion reporting applies.",
+                "Create a child Session under the current Session. With taskId, assign or transfer the task to the child, deliver its full description and any message as one assignment, and start work. Complete the task with the task tool. Completion notifies a Session creator automatically; do not send a separate routine completion report. Without taskId, message is optional and normal completion reporting applies. With fork, this call returns in two Sessions: here as the parent and in the new child, both continuing from the same context; each result says which one you are.",
                 Parameters(
                     new JsonObject
                     {
@@ -382,17 +382,17 @@ internal static class AgentToolDefinitions
                             ["type"] = "boolean",
                             ["default"] = false,
                             ["description"] =
-                                "Copy the parent's current context into the child. Defaults to false. Context copying is available only when the child belongs to the same agent as the parent.",
+                                "Fork this Session: the child receives a copy of the current context and continues from this call, while this Session continues as the parent. The child sees this call, including message, so give the child its part there; without message or taskId the child stays idle until it receives a message. Same agent only. Defaults to false.",
                         },
                         ["displayName"] = String(
                             "Display name for the new child session. This does not change its session ID."
                         ),
                         ["handoffRecall"] = String(HandoffConfirmation.RecallDescription),
                         ["message"] = String(
-                            "Optional initial instruction. With taskId, add only information not already in the task; it is delivered with the assignment."
+                            "Optional initial instruction. A forked child reads it from this call and starts work; it can rely on the shared context. With taskId, add only information not already in the task; a fresh child receives it with the assignment."
                         ),
                         ["afterSend"] = Choice(
-                            "What this session does after creation and any initial delivery: continue (default), finish the turn without waiting, or wait for a reply. Waiting requires taskId or a nonempty message; other incoming activity can also resume the session. If any tool in the same batch returns an error, the session continues instead of waiting or finishing.",
+                            "What this session does after creation and any initial delivery: continue (default), finish the turn without waiting, or wait for a reply. With fork, it applies only to the parent. Waiting requires taskId or a nonempty message; other incoming activity can also resume the session. If any tool in the same batch returns an error, the session continues instead of waiting or finishing.",
                             "continue",
                             "finish",
                             "wait"

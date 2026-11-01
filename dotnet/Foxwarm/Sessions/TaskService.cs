@@ -263,11 +263,20 @@ internal sealed class TaskService : IDisposable
         IReadOnlyList<string> retained
     ) => store.TaskContext(sessionId, sequences, consume, retained);
 
-    internal async Task<AttachedChildResult> CreateAttachedChildAsync(
+    internal Task<AttachedChildResult> CreateAttachedChildAsync(
         string taskId,
         string sourceSessionId,
         Func<Task<SessionOwner>> create,
         string? additionalMessage = null
+    ) => CreateAttachedChildAsync(taskId, sourceSessionId, create, () => additionalMessage);
+
+    /// <param name="additionalMessage">Read after creation, so a creator can omit an instruction
+    /// the new child already has in context.</param>
+    internal async Task<AttachedChildResult> CreateAttachedChildAsync(
+        string taskId,
+        string sourceSessionId,
+        Func<Task<SessionOwner>> create,
+        Func<string?> additionalMessage
     )
     {
         var source = resolveSessionId(sourceSessionId) ?? sourceSessionId;
@@ -331,7 +340,7 @@ internal sealed class TaskService : IDisposable
             assignment,
             warnings,
             receipt,
-            additionalMessage
+            additionalMessage()
         );
         return new AttachedChildResult(
             child,

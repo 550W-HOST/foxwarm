@@ -7,7 +7,7 @@ namespace Foxwarm.Tests;
 public sealed class ForkClearLifecycleTests
 {
     [Fact]
-    public async Task Fork_copies_canonical_cut_and_closes_full_tail_batch_only_first_creating_call_gets_credit()
+    public async Task Fork_copies_canonical_cut_and_closes_full_tail_batch_only_the_creating_call_gets_the_child_result()
     {
         await using var fixture = new LifecycleFixture();
         var parent = await fixture.Manager.CreateNamedAsync("main", "main", null, null);
@@ -30,16 +30,18 @@ public sealed class ForkClearLifecycleTests
         var before = parent.Entry.Snapshot();
         var notifications = new List<SessionRuntimeEvent>();
         fixture.Manager.Changed += notifications.Add;
-        var (child, delivered) = await fixture.Manager.CreateChildAsync(
+        var (child, delivered, visible) = await fixture.Manager.CreateChildCoreAsync(
             parent,
             "copy",
             null,
             null,
             null,
             null,
-            fork: true
+            fork: true,
+            creatorCallId: "creator-two"
         );
         Assert.False(delivered);
+        Assert.True(visible);
         var fork = child.Entry.Snapshot();
         Assert.Equal(
             before.History.Select(row => row.ToJsonString()),
@@ -53,19 +55,20 @@ public sealed class ForkClearLifecycleTests
             before.AuthorityEnvelope["persistentMemorySnapshot"]!.ToJsonString(),
             fork.AuthorityEnvelope["persistentMemorySnapshot"]!.ToJsonString()
         );
-        var responses = fork.History[before.History.Count].ToJson()["parts"]!.AsArray();
+        var outputs = fork.History[before.History.Count].ToJson()["parts"]!
+            .AsArray()
+            .Select(part => part!["functionResponse"]!["response"]!["output"]!.GetValue<string>())
+            .ToArray();
         Assert.Equal(
-            "Child session created: " + child.Id,
-            responses[0]!["functionResponse"]!["response"]!["output"]!.GetValue<string>()
+            SessionBoundary.ForkChildResult(parent.Id, child.Id, null, instructed: false),
+            outputs[1]
         );
+        Assert.Contains("you are the child session `" + child.Id + "`", outputs[1]);
         Assert.All(
-            responses.Skip(1),
-            part =>
-                Assert.Equal(
-                    "Pending execution in parent session",
-                    part!["functionResponse"]!["response"]!["output"]!.GetValue<string>()
-                )
+            new[] { outputs[0], outputs[2] },
+            output => Assert.Equal(SessionBoundary.ForkSkippedCall(parent.Id), output)
         );
+        Assert.Null(fork.AuthorityEnvelope["childHandoffState"]);
         Assert.Contains("history-inherited", fork.History[before.History.Count + 1].ToJsonString());
         Assert.Contains("afterSend", fork.History[before.History.Count + 2].ToJsonString());
         Assert.Equal("user", fork.History.Materialize().Last()["role"]!.GetValue<string>());
@@ -85,7 +88,7 @@ public sealed class ForkClearLifecycleTests
             manual.Entry.Snapshot().History[before.History.Count].ToJson()["parts"]!.AsArray(),
             part =>
                 Assert.Equal(
-                    "Pending execution in parent session",
+                    SessionBoundary.ForkSkippedCall(parent.Id),
                     part!["functionResponse"]!["response"]!["output"]!.GetValue<string>()
                 )
         );

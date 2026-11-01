@@ -770,7 +770,11 @@ internal sealed partial class SessionToolExecutor(
                     delivery["truncated"] = true;
                 current.SessionMessages = new JsonArray(delivery);
             },
-            scriptScope.Value?.RunId
+            scriptScope.Value?.RunId,
+            // Only a direct model call is visible as such in the Session's own history.
+            !unattended && !Programmatic
+                ? invocation.Value?.CallId
+                : null
         );
         if (
             !unattended

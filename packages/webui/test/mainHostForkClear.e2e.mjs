@@ -15,7 +15,12 @@ const authorityPath = id => join(fixture.data, 'state/sessions', id + '.json')
 const authority = id => readFile(authorityPath(id), 'utf8').then(JSON.parse)
 const sha = id => createHash('sha256').update(id).digest('hex')
 const textOf = value => typeof value === 'string' ? value : Array.isArray(value) ? value.map(part => part.text || '').join('') : ''
-const inputText = input => input.filter(item => item.role === 'user').map(item => textOf(item.content)).join('\n')
+// A forked child reads its instruction from the copied creating call, identified by its own fork result.
+const forkedCallIds = input => new Set(input.filter(item => item.type === 'function_call_output' && JSON.stringify(item.output ?? '').includes('Fork complete: you are the child session')).map(item => item.call_id))
+const inputText = input => {
+  const forked = forkedCallIds(input)
+  return input.map(item => item.role === 'user' ? textOf(item.content) : item.type === 'function_call' && forked.has(item.call_id) ? item.arguments : '').filter(Boolean).join('\n')
+}
 const tool = (id, name, args) => ({ type: 'function_call', id: 'output-' + id, call_id: id, name, arguments: JSON.stringify(args) })
 const final = text => [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] }]
 const replay = output => output.map(item => { const copy = { ...item }; delete copy.id; delete copy.status; return copy })
@@ -129,7 +134,7 @@ try {
   assert.deepEqual(childState.history.slice(0, parentCut.length), parentCut); assert.equal(childState.promptCacheKey, oldCache)
   assert.equal(childState.model, 'a'); assert.equal(childState.effort, 'low'); assert.equal(cap[1], (await authority(parent)).nextMessageSeq - 1); assert.equal(cap[2], 1)
   const closure = childState.history[parentCut.length].parts.map(part => part.functionResponse)
-  assert(closure[0].response.output.includes(child)); assert.equal(closure[1].response.output, 'Pending execution in parent session')
+  assert(closure[0].response.output.includes(child)); assert.equal(closure[1].response.output, `Not run in this session: this call runs only in the parent session \`${parent}\`.`)
   const childWire = records.find(row => row.scenario === 'child-task'); assert(childWire); assert.equal(childWire.body.prompt_cache_key, sha(child)); assert(!childWire.body.previous_response_id)
   assert(!JSON.stringify(childWire.full).includes('Retrying model request'), 'hidden copied notice is not projected')
   // The bounded list closes its menu when the owned row set changes. Observe
@@ -145,7 +150,7 @@ try {
   ])
   const sidebarReply = await sidebarResponse.json(), manual = sidebarReply.newSessionId; assert(manual)
   const manualState = await authority(manual); assert.deepEqual(manualState.history.slice(0, parentCut.length), parentCut)
-  assert(manualState.history[parentCut.length].parts.every(part => part.functionResponse.response.output === 'Pending execution in parent session'))
+  assert(manualState.history[parentCut.length].parts.every(part => part.functionResponse.response.output === `Not run in this session: this call runs only in the parent session \`${parent}\`.`))
   assert.deepEqual((await authority(parent)).history, parentCut, 'Sidebar created no parent notice')
   const beforeContinue = records.length; assert.equal((await command(manual, '/continue')).status, 200); await until(async () => !(await history(manual)).session.busy, 'Continue uses copied paired history')
   assert(records.length > beforeContinue); assert.equal((await readFile(join(fixture.work, 'fork-effect.log'), 'utf8')).trim().split('\n').length, 1)

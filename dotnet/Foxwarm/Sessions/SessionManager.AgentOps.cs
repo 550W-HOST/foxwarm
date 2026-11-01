@@ -274,6 +274,51 @@ internal sealed partial class SessionManager
         string runtime = "foxwarm"
     )
     {
+        var created = await CreateChildCoreAsync(
+            parent,
+            suffix,
+            targetAgent,
+            displayName,
+            initialMessage,
+            forceModel,
+            fork,
+            taskId,
+            initialNode,
+            userInitiated,
+            runtime
+        );
+        return (created.Child, created.Delivered);
+    }
+
+    internal readonly record struct ChildCreation(
+        SessionOwner Child,
+        bool Delivered,
+        bool CallVisible
+    );
+
+    /// <summary>
+    /// Creates a child. A Task-linked creation never delivers initialMessage itself; the Task
+    /// assignment owns that delivery. When a fork's child can see the creating call
+    /// (<paramref name="creatorCallId"/>), its instruction is already in context: the child is
+    /// started from its copied history instead of receiving the message again.
+    /// </summary>
+    internal async Task<ChildCreation> CreateChildCoreAsync(
+        SessionOwner parent,
+        string suffix,
+        string? targetAgent,
+        string? displayName,
+        string? initialMessage,
+        JsonObject? forceModel,
+        bool fork = false,
+        string? taskId = null,
+        string? initialNode = null,
+        bool userInitiated = false,
+        string runtime = "foxwarm",
+        string? creatorCallId = null
+    )
+    {
+        var instructed = !string.IsNullOrEmpty(initialMessage);
+        var callVisible = false;
         if (
             string.IsNullOrEmpty(suffix)
             || !System.Text.RegularExpressions.Regex.IsMatch(suffix, "^[a-zA-Z0-9_-]+$")
@@ -311,14 +356,16 @@ internal sealed partial class SessionManager
         try
         {
             if (fork)
-                child = await ForkLockedAsync(
+                (child, callVisible) = await ForkLockedAsync(
                     parent,
                     suffix,
                     true,
                     displayName,
                     forceModel,
                     taskId,
-                    initialNode: initialNode
+                    initialNode: initialNode,
+                    creatorCallId: creatorCallId,
+                    instructed: instructed
                 );
             else
             {
@@ -404,11 +451,16 @@ internal sealed partial class SessionManager
         {
             gate.Release();
         }
-        if (string.IsNullOrEmpty(initialMessage))
-            return (child, false);
+        if (taskId is not null || !instructed)
+            return new(child, false, callVisible);
+        if (callVisible)
+        {
+            StartForkedChild(child);
+            return new(child, true, true);
+        }
         try
         {
-            await SendAsync(parent, child.Id, initialMessage);
+            await SendAsync(parent, child.Id, initialMessage!);
         }
         catch (Exception error)
         {
@@ -422,7 +474,31 @@ internal sealed partial class SessionManager
                 committed
             );
         }
-        return (child, true);
+        return new(child, true, false);
+    }
+
+    // Continues the child's copied turn: the creating call's result is already in its history.
+    private void StartForkedChild(SessionOwner child)
+    {
+        if (!Accepting || IsDeletionClaimed(child.Id) || child.Entry.Retired)
+            return;
+        _ = ObserveAsync();
+
+        async Task ObserveAsync()
+        {
+            try
+            {
+                await child.StartProcessing(retry: true);
+            }
+            catch (SessionContinuationUnavailableException error)
+            {
+                child.Entry.RecordBestEffortFailure(error);
+            }
+            catch
+            {
+                // StartProcessing records other processor failures on the child.
+            }
+        }
     }
 
     public async Task<string> SendAsync(

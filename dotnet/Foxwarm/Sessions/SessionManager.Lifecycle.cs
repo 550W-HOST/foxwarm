@@ -65,14 +65,9 @@ internal sealed partial class SessionManager
         await gate.WaitAsync();
         try
         {
-            return await ForkLockedAsync(
-                parent,
-                suffix,
-                childMode,
-                null,
-                null,
-                userInitiated: true
-            );
+            return (
+                await ForkLockedAsync(parent, suffix, childMode, null, null, userInitiated: true)
+            ).Owner;
         }
         finally
         {
@@ -88,7 +83,12 @@ internal sealed partial class SessionManager
             );
     }
 
-    private async Task<SessionOwner> ForkLockedAsync(
+    /// <summary>
+    /// Creates a fork. For a model-created fork, <paramref name="creatorCallId"/> names the
+    /// creating tool call in the copied tail; when that call is present the child receives its
+    /// own result for it and can read the call's instruction directly (CallVisible).
+    /// </summary>
+    private async Task<(SessionOwner Owner, bool CallVisible)> ForkLockedAsync(
         SessionOwner parent,
         string suffix,
         bool childMode,
@@ -96,7 +96,9 @@ internal sealed partial class SessionManager
         JsonObject? forceModel,
         string? taskId = null,
         bool userInitiated = false,
-        string? initialNode = null
+        string? initialNode = null,
+        string? creatorCallId = null,
+        bool instructed = false
     )
     {
         ClaudeRuntimeState.RequireFoxwarm(parent, "Fork");
@@ -114,7 +116,21 @@ internal sealed partial class SessionManager
         var id = baseId;
         for (var serial = 2; await IdReservedAsync(id); serial++)
             id = baseId + "_" + serial.ToString(CultureInfo.InvariantCulture);
-        return await WithCreationIdentityAsync(
+        var tailCalls =
+            original.History.LastOrDefault()?.ToJson() is JsonObject tail
+            && SessionWait.Text(tail["role"]) == "model"
+                ? (tail["parts"] as JsonArray ?? [])
+                    .OfType<JsonObject>()
+                    .Select(part => part["functionCall"])
+                    .OfType<JsonObject>()
+                    .ToArray()
+                : [];
+        var creator =
+            childMode && !userInitiated && !string.IsNullOrEmpty(creatorCallId)
+                ? Array.FindIndex(tailCalls, call => SessionWait.Text(call["id"]) == creatorCallId)
+                : -1;
+        var callVisible = creator >= 0;
+        var created = await WithCreationIdentityAsync(
             id,
             async () =>
             {
@@ -151,6 +167,14 @@ internal sealed partial class SessionManager
                     envelope["cwd"] = defaultCwd;
                 if (displayName is not null)
                     envelope["displayName"] = displayName;
+                // The child reads its instruction from the copied call instead of a delivered
+                // parent message, so record the report boundary that delivery would have set.
+                if (callVisible && instructed && taskId is null)
+                    envelope["childHandoffState"] = new JsonObject
+                    {
+                        ["boundary"] = "report-required",
+                        ["resolved"] = false,
+                    };
                 if (settings.Model is not null)
                     envelope["model"] = settings.Model;
                 if (settings.Effort is not null)
@@ -193,59 +217,44 @@ internal sealed partial class SessionManager
                         VectorDiagnostic("VECTOR_FORK_BASELINE_FAILED", id);
                     }
                     var suffixRows = new List<JsonObject>();
-                    if (
-                        copied.History.LastOrDefault()?.ToJson() is JsonObject tail
-                        && SessionWait.Text(tail["role"]) == "model"
-                    )
-                    {
-                        var calls = (tail["parts"] as JsonArray ?? [])
-                            .OfType<JsonObject>()
-                            .Select(part => part["functionCall"])
-                            .OfType<JsonObject>()
-                            .ToArray();
-                        var creator = childMode
-                            ? Array.FindIndex(
-                                calls,
-                                call =>
-                                    SessionWait.Text(call["name"]) == "create_child_session"
-                                    && SessionWait.Text((call["args"] as JsonObject)?["suffix"])
-                                        == suffix
-                            )
-                            : -1;
-                        if (calls.Length > 0)
-                            suffixRows.Add(
-                                new JsonObject
-                                {
-                                    ["role"] = "tool",
-                                    ["parts"] = new JsonArray(
-                                        calls
-                                            .Select(
-                                                (call, index) =>
-                                                    (JsonNode)
-                                                        new JsonObject
+                    if (tailCalls.Length > 0)
+                        suffixRows.Add(
+                            new JsonObject
+                            {
+                                ["role"] = "tool",
+                                ["parts"] = new JsonArray(
+                                    tailCalls
+                                        .Select(
+                                            (call, index) =>
+                                                (JsonNode)
+                                                    new JsonObject
+                                                    {
+                                                        ["functionResponse"] = new JsonObject
                                                         {
-                                                            ["functionResponse"] = new JsonObject
+                                                            ["tool_use_id"] = call["id"]
+                                                                ?.DeepClone(),
+                                                            ["name"] = call["name"]?.DeepClone(),
+                                                            ["response"] = new JsonObject
                                                             {
-                                                                ["tool_use_id"] = call["id"]
-                                                                    ?.DeepClone(),
-                                                                ["name"] = call["name"]
-                                                                    ?.DeepClone(),
-                                                                ["response"] = new JsonObject
-                                                                {
-                                                                    ["output"] =
-                                                                        index == creator
-                                                                            ? "Child session created: "
-                                                                                + id
-                                                                            : "Pending execution in parent session",
-                                                                },
+                                                                ["output"] =
+                                                                    index == creator
+                                                                        ? SessionBoundary.ForkChildResult(
+                                                                            parent.Id,
+                                                                            id,
+                                                                            taskId,
+                                                                            instructed
+                                                                        )
+                                                                        : SessionBoundary.ForkSkippedCall(
+                                                                            parent.Id
+                                                                        ),
                                                             },
-                                                        }
-                                            )
-                                            .ToArray()
-                                    ),
-                                }
-                            );
-                    }
+                                                        },
+                                                    }
+                                        )
+                                        .ToArray()
+                                ),
+                            }
+                        );
                     suffixRows.Add(
                         SystemRow(
                             SessionBoundary.Identity(
@@ -310,6 +319,7 @@ internal sealed partial class SessionManager
                 }
             }
         );
+        return (created, callVisible);
     }
 
     private async Task CompensateCreatedBranchAsync(

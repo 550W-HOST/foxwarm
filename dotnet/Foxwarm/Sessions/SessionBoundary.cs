@@ -258,6 +258,31 @@ internal static class SessionBoundary
         return $"If your current work is tracked by a task, complete the task with the task tool. Completion notifies a Session creator automatically; do not send a separate routine completion report. For work not tracked by a task, when you finish, explicitly call send_to_session({{{args}}}).{guidance} This sends the report and ends the turn idle without creating a wait. Use afterSend: \"wait\" only when you genuinely require a later reply from the parent; do not add a separate wait call. If no separate report or parent action is needed, end your final message with `[NO_ACTION]`.";
     }
 
+    // The forked child's own result for the creating call; the parent receives a separate result.
+    internal static string ForkChildResult(
+        string parent,
+        string child,
+        string? taskId,
+        bool instructed
+    )
+    {
+        var text =
+            $"Fork complete: you are the child session `{child}`, now running separately from the parent session `{parent}`, which received its own result for this call. This call's afterSend applies only to the parent.";
+        if (taskId is not null)
+            return text
+                + $" Task {taskId} is assigned to you; its assignment follows."
+                + (instructed ? " This call's message adds to that assignment." : "");
+        return text
+            + (
+                instructed
+                    ? " Start on this call's message now."
+                    : " This call gave you no instruction; act on the next message you receive."
+            );
+    }
+
+    internal static string ForkSkippedCall(string parent) =>
+        $"Not run in this session: this call runs only in the parent session `{parent}`.";
+
     internal static string ManualForkNotice(string parent, string child, string? initialMessage)
     {
         var attributes =

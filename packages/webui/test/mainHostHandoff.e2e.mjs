@@ -25,7 +25,10 @@ let mode = false, childReports = 0
 const provider = createServer(async (request, output) => {
   try {
     let raw = ''; for await (const chunk of request) raw += chunk
-    const body = JSON.parse(raw), input = JSON.stringify(body.input), matches = [...JSON.stringify(body.input.filter(item => item.role === 'user')).matchAll(/HAND-TASK:([A-Za-z0-9_-]+)/g)], key = matches.at(-1)?.[1] || 'ordinary'
+    const body = JSON.parse(raw), input = JSON.stringify(body.input)
+    // A forked child reads its instruction from the copied creating call, identified by its own fork result.
+    const forked = new Set(body.input.filter(item => item.type === 'function_call_output' && JSON.stringify(item.output ?? '').includes('Fork complete: you are the child session')).map(item => item.call_id))
+    const matches = [...JSON.stringify(body.input.filter(item => item.role === 'user' || item.type === 'function_call' && forked.has(item.call_id))).matchAll(/HAND-TASK:([A-Za-z0-9_-]+)/g)], key = matches.at(-1)?.[1] || 'ordinary'
     requests.push({ key, body, mode })
     const handoffs = body.tools.filter(value => ['send_to_session', 'create_child_session'].includes(value.name))
     assert.equal(handoffs.length, 2)

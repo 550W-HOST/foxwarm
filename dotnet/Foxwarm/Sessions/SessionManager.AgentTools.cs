@@ -12,7 +12,8 @@ internal sealed partial class SessionManager
         JsonObject? args,
         CancellationToken cancellationToken = default,
         Action<string, string>? sessionMessageDelivered = null,
-        string? toolScriptRunId = null
+        string? toolScriptRunId = null,
+        string? modelCallId = null
     )
     {
         var previous = semanticCaller.Value;
@@ -24,7 +25,8 @@ internal sealed partial class SessionManager
                 name,
                 args,
                 sessionMessageDelivered,
-                toolScriptRunId
+                toolScriptRunId,
+                modelCallId
             );
         }
         finally
@@ -38,7 +40,8 @@ internal sealed partial class SessionManager
         string name,
         JsonObject? args,
         Action<string, string>? sessionMessageDelivered,
-        string? toolScriptRunId
+        string? toolScriptRunId,
+        string? modelCallId
     )
     {
         try
@@ -382,29 +385,35 @@ internal sealed partial class SessionManager
                         );
                     var initialMessage = OptionalString(args, "message");
                     var initialNode = CreationNode(args);
+                    var fork = OptionalBool(args, "fork") ?? false;
                     SessionOwner child;
                     var delivered = false;
+                    var callVisible = false;
                     var sentNotifications = 0;
                     string? assignmentWarning = null;
-                    if (taskId is null)
-                    {
-                        var created = await CreateChildAsync(
+                    async Task<ChildCreation> CreateAsync() =>
+                        await CreateChildCoreAsync(
                             source,
                             RequiredString(args, "suffix"),
                             OptionalString(args, "agentName"),
                             OptionalString(args, "displayName"),
                             initialMessage,
                             forceModel,
-                            OptionalBool(args, "fork") ?? false,
+                            fork,
                             taskId,
                             initialNode,
                             runtime: ClaudeRuntimeState.ValidateSelection(
                                 args["runtime"],
                                 args.ContainsKey("runtime")
-                            )
+                            ),
+                            creatorCallId: modelCallId
                         );
+                    if (taskId is null)
+                    {
+                        var created = await CreateAsync();
                         child = created.Child;
                         delivered = created.Delivered;
+                        callVisible = created.CallVisible;
                         sentNotifications = delivered ? 1 : 0;
                     }
                     else
@@ -413,38 +422,31 @@ internal sealed partial class SessionManager
                             taskId,
                             source.Id,
                             async () =>
-                                (
-                                    await CreateChildAsync(
-                                        source,
-                                        RequiredString(args, "suffix"),
-                                        OptionalString(args, "agentName"),
-                                        OptionalString(args, "displayName"),
-                                        null,
-                                        forceModel,
-                                        OptionalBool(args, "fork") ?? false,
-                                        taskId,
-                                        initialNode,
-                                        runtime: ClaudeRuntimeState.ValidateSelection(
-                                            args["runtime"],
-                                            args.ContainsKey("runtime")
-                                        )
-                                    )
-                                ).Child,
-                            initialMessage
+                            {
+                                var created = await CreateAsync();
+                                callVisible = created.CallVisible;
+                                return created.Child;
+                            },
+                            () => callVisible ? null : initialMessage
                         );
                         child = attached.Child;
                         delivered = attached.AssignmentDelivered;
                         assignmentWarning = attached.Warning;
                         sentNotifications = attached.SentNotifications;
                     }
-                    var childOutput =
-                        $"Child session created: `{child.Id}` ({(OptionalBool(args, "fork") == true ? "forked from parent" : "new session")})";
+                    var childOutput = fork
+                        ? $"Child session created: `{child.Id}` (fork). You are the parent session `{source.Id}`; the child continues from this call separately"
+                        : $"Child session created: `{child.Id}` (new session)";
                     if (taskId is not null)
                         childOutput += delivered
                             ? $". Task assignment sent{(assignmentWarning is not null ? " with warning: " + assignmentWarning : "")}."
                             : $", but task assignment delivery failed{(assignmentWarning is not null ? ": " + assignmentWarning : ".")}";
+                    else if (callVisible && delivered)
+                        childOutput += " and has started on this call's message.";
                     else if (delivered)
                         childOutput += ". Initial message sent.";
+                    else if (fork)
+                        childOutput += ". It stays idle until it receives a message.";
                     var childResult = Output(
                         childOutput,
                         delivered && after == "wait" ? child.Id : null
