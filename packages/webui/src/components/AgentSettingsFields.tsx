@@ -106,7 +106,7 @@ export default function AgentSettingsFields({ value, onChange, agentId, agents, 
       </section>
 
       <section className="border-t border-fw-border-muted pt-4 dark:border-fw-border">
-        <h3 className={sectionTitle}><FolderOpen className="h-3.5 w-3.5" /> New sessions</h3>
+        <h3 className={sectionTitle}><FolderOpen className="h-3.5 w-3.5" /> Session defaults</h3>
         <label className={labelClass}>
           Node
           <select data-agent-default-node value={startNode === 'master' ? '' : startNode} disabled={disabled || !!value.isolatedNode} onChange={event => set({ defaultNode: event.target.value })} className={controlClass}>
