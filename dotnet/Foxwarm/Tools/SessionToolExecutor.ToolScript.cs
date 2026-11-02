@@ -33,6 +33,12 @@ internal sealed partial class SessionToolExecutor
             literal,
             async (wrapper, budget, currentToken) =>
             {
+                // seq.k.n below a model call; ts:runId.n for a run without one (for example a timer).
+                var subCallDelivery = SessionManager.SubCallDeliverySeq(
+                    rootCall?.DeliverySeq(script: true),
+                    context.ToolScriptRunId,
+                    context.SubCallOrdinal
+                );
                 var previous = scriptScope.Value;
                 scriptScope.Value = new(literal, budget, waitScope, context.ToolScriptRunId);
                 try
@@ -60,7 +66,8 @@ internal sealed partial class SessionToolExecutor
                             ["name"] = "call_tool",
                             ["args"] = request,
                         },
-                        currentToken
+                        currentToken,
+                        scriptDelivery: subCallDelivery
                     );
                     if (execution.SessionMessages is { Count: > 0 } deliveries)
                         foreach (var delivery in deliveries.OfType<JsonObject>())

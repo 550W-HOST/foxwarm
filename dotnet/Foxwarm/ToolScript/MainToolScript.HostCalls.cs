@@ -56,13 +56,15 @@ internal sealed partial class MainToolScript
                                 ?? false
                             ),
                     };
-                    (
+                    var subCalls =
                         record["subCalls"] as JsonArray
-                        ?? throw new InvalidDataException("Missing ToolScript subcall state.")
-                    ).Add(subcall);
+                        ?? throw new InvalidDataException("Missing ToolScript subcall state.");
+                    subCalls.Add(subcall);
+                    var ordinal = subCalls.Count;
                     Emit();
                     var previousDeliveryCapture = context.SessionMessageDelivered;
                     var previousRunId = context.ToolScriptRunId;
+                    var previousOrdinal = context.SubCallOrdinal;
                     JsonNode? result;
                     try
                     {
@@ -73,12 +75,14 @@ internal sealed partial class MainToolScript
                             subcall["sessionMessage"] = evidence;
                         };
                         context.ToolScriptRunId = Required(record, "runId");
+                        context.SubCallOrdinal = ordinal;
                         result = await context.CallTool(wrapper, budget, run.Token);
                     }
                     finally
                     {
                         context.SessionMessageDelivered = previousDeliveryCapture;
                         context.ToolScriptRunId = previousRunId;
+                        context.SubCallOrdinal = previousOrdinal;
                     }
                     budget.JsonValue(result);
                     (

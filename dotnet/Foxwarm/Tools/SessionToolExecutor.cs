@@ -200,7 +200,8 @@ internal sealed partial class SessionToolExecutor(
         JsonObject call,
         CancellationToken token,
         int? index = null,
-        int? total = null
+        int? total = null,
+        string? scriptDelivery = null
     )
     {
         await sessions.WaitForIdentityMutationAsync(hosted.Id, token);
@@ -217,6 +218,9 @@ internal sealed partial class SessionToolExecutor(
             Cwd = captured.Cwd,
             Index = index,
             Total = total,
+            // Only a model batch call has a committed anchor; a script subcall inherits its parent's ID.
+            AnchorSeq = index is null ? null : foregroundBatch,
+            InheritedDelivery = scriptDelivery,
         };
         invocation.Value = current;
         try
@@ -570,6 +574,7 @@ internal sealed partial class SessionToolExecutor(
 
     private async Task<JsonObject> ExecuteTaskAsync(JsonObject args, CancellationToken token)
     {
+        sessions.SetDeliverySeq(hosted, invocation.Value?.DeliverySeq(script: false));
         var (response, completionTarget) = await Manager
             .Tasks.ExecuteForToolWithReceiptAsync(Hosted, args)
             .ConfigureAwait(false);
@@ -751,6 +756,8 @@ internal sealed partial class SessionToolExecutor(
     )
     {
         sessions.BeginSuccessfulSendReceipt();
+        var deliverySeq = invocation.Value?.DeliverySeq(script: false);
+        sessions.SetDeliverySeq(hosted, deliverySeq);
         var (response, finish) = await sessions.ExecuteAgentToolAsync(
             hosted,
             name,
@@ -768,6 +775,8 @@ internal sealed partial class SessionToolExecutor(
                 };
                 if (body.Length > 32768)
                     delivery["truncated"] = true;
+                if (deliverySeq is not null)
+                    delivery["deliverySeq"] = deliverySeq;
                 current.SessionMessages = new JsonArray(delivery);
             },
             scriptScope.Value?.RunId,
@@ -1046,6 +1055,8 @@ internal sealed class TurnToolInvocation(string callId)
     internal string CallId { get; } = callId;
     internal int? Index { get; set; }
     internal int? Total { get; set; }
+    internal long? AnchorSeq { get; init; }
+    internal string? InheritedDelivery { get; init; }
     internal string Node { get; set; } = "master";
     internal string? Cwd { get; set; }
     internal WorkspaceTools? Files { get; set; }
@@ -1058,4 +1069,7 @@ internal sealed class TurnToolInvocation(string callId)
     internal JsonArray? ToolScriptSubCalls { get; set; }
     internal TurnToolReceipt? Receipt { get; set; }
     internal JsonArray? SessionMessages { get; set; }
+
+    internal string? DeliverySeq(bool script) =>
+        InheritedDelivery ?? SessionManager.BatchDeliverySeq(AnchorSeq, Index, Total, script);
 }
