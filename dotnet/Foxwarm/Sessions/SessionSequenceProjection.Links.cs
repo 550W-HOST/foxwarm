@@ -99,9 +99,14 @@ internal sealed partial class SessionSequenceProjection
                         continue;
                     default:
                     {
+                        // WebUI input is the user's own message; other channels keep their own lane.
+                        var webUi =
+                            incoming.Type == "channel"
+                            && attributes.GetValueOrDefault("channelType") is null or "webui";
                         var kind = incoming.Type switch
                         {
                             "user" => "user",
+                            "channel" when webUi => "user",
                             "channel" => "channel",
                             "timer" => "timer",
                             _ => "event",
@@ -119,10 +124,11 @@ internal sealed partial class SessionSequenceProjection
                             },
                             ["at"] = sentAt ?? incoming.ConsumedAt,
                         };
-                        var label =
-                            attributes.GetValueOrDefault("sender")
-                            ?? attributes.GetValueOrDefault("channelType")
-                            ?? (kind == "event" ? incoming.Type : null);
+                        var label = webUi
+                            ? null
+                            : attributes.GetValueOrDefault("sender")
+                                ?? attributes.GetValueOrDefault("channelType")
+                                ?? (kind == "event" ? incoming.Type : null);
                         if (label is not null)
                             from["label"] = label;
                         link["from"] = from;
