@@ -226,7 +226,6 @@ internal sealed partial class SessionCatalog
                     foreach (var row in rows)
                         Insert(connection, row.Projection);
                     NormalizeParents(connection);
-                    EnsureSidebar(connection);
                     Execute(connection, "COMMIT");
                 }
                 catch

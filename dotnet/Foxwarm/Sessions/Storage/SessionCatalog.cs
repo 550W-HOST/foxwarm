@@ -67,7 +67,7 @@ internal sealed partial class SessionCatalog : IDisposable
                 "PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON"
             );
             Execute(connection, WaitPresenceIndexSql);
-            EnsureSidebarTransaction(connection);
+            EnsureGroupObjects(connection);
             db = connection;
             Volatile.Write(
                 ref readerConnectionString,
@@ -340,7 +340,6 @@ internal sealed partial class SessionCatalog : IDisposable
                 references.Add(Text(alias)!);
         }
         NormalizeParents(db!, references);
-        RefreshSidebar(db!);
     }
 
     internal void PublishAuthority(JsonObject authority, bool allowInsert = false)
