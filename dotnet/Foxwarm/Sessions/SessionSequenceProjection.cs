@@ -16,6 +16,7 @@ internal sealed partial class SessionSequenceProjection
     internal const int DefaultEventLimit = 400;
     internal const int MaxEventLimit = 2000;
     private const double SendTolerance = 3000;
+    private const int CandidateLimit = 2000;
 
     internal sealed record Request(
         double Since,
@@ -142,9 +143,13 @@ internal sealed partial class SessionSequenceProjection
         }
         else
         {
+            // Scoped callers and focus components filter after selection, so they read a wider
+            // (still bounded, metadata-only) candidate set.
             var candidates = runtime.Catalog.SequenceCandidates(
                 request.Since,
-                request.FocusSessionId is null ? request.SessionLimit + 1 : 400
+                request.FocusSessionId is null && visibility is null
+                    ? request.SessionLimit + 1
+                    : CandidateLimit
             );
             var visible = candidates.Where(row => allows(row.Id)).ToList();
             if (request.FocusSessionId is { } focusRequest)

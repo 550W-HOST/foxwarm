@@ -169,6 +169,8 @@ export interface SequenceLane {
   depth: number
   opaque?: boolean
   busy?: boolean
+  /** Older activity in the window was cut by the per-Session row limit. */
+  partial?: boolean
 }
 
 export const SPECIAL_LANE_LABELS: Record<Exclude<SequenceLaneKind, 'session' | 'external'>, string> = {
@@ -217,7 +219,7 @@ export function orderSequenceLanes(data: SequenceData): SequenceLane[] {
   const visit = (session: SequenceSession, depth: number) => {
     if (visited.has(session.id)) return
     visited.add(session.id)
-    lanes.push({ id: session.id, kind: 'session', label: sessionLabel(session), detail: session.agent, sessionId: session.id, depth, busy: !!(session.runtimeState?.busy ?? session.busy) })
+    lanes.push({ id: session.id, kind: 'session', label: sessionLabel(session), detail: session.agent, sessionId: session.id, depth, busy: !!(session.runtimeState?.busy ?? session.busy), partial: !!session.truncated })
     for (const child of (children.get(session.id) || []).sort(byStart)) visit(child, depth + 1)
   }
   for (const root of roots) visit(root, 0)

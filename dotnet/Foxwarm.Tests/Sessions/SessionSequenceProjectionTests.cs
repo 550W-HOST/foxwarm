@@ -266,6 +266,16 @@ public sealed class SessionSequenceProjectionTests
             )
         );
         Assert.Equal(new[] { a }, Objects(scoped["sessions"]).Select(row => Text(row["id"])));
+        // Newer out-of-scope Sessions do not consume the scoped caller's lane limit.
+        var narrow = projection.Build(
+            new(start, SessionLimit: 1),
+            new(
+                id => id == a,
+                id => "external",
+                row => new JsonObject { ["id"] = row["id"]!.DeepClone() }
+            )
+        );
+        Assert.Equal(new[] { a }, Objects(narrow["sessions"]).Select(row => Text(row["id"])));
         Assert.Null(scoped["tasks"]);
         var scopedText = scoped.ToJsonString();
         Assert.DoesNotContain(f.Owner.Id, scopedText);

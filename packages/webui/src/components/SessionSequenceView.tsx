@@ -178,11 +178,11 @@ export default function SessionSequenceView({ currentSession, onSelectSession }:
           {layout && layout.lanes.length ? <>
             <div className="sticky top-0 z-10 h-12 border-b border-fw-border-muted bg-fw-surface/95 backdrop-blur" style={{ width: layout.width }}>
               {layout.lanes.map(lane => (
-                <button key={lane.id} type="button" disabled={!lane.sessionId} onClick={() => lane.sessionId && openSessionAtSeq(lane.sessionId, undefined, onSelectSession)} title={lane.sessionId || lane.label}
+                <button key={lane.id} type="button" disabled={!lane.sessionId} onClick={() => lane.sessionId && openSessionAtSeq(lane.sessionId, undefined, onSelectSession)} title={lane.partial ? `${lane.sessionId} · Earlier activity in this window is not shown` : lane.sessionId || lane.label}
                   className="absolute top-1.5 flex h-9 flex-col items-center justify-center truncate rounded-md px-1 text-center hover:bg-fw-hover disabled:hover:bg-transparent"
                   style={{ left: lane.x - SEQUENCE_LANE_WIDTH / 2 + 4, width: SEQUENCE_LANE_WIDTH - 8 }} data-sequence-lane={lane.id}>
                   <span className={`max-w-full truncate text-xs font-semibold ${lane.kind === 'session' ? 'text-fw-text-strong' : 'text-fw-text-muted'}`}>{lane.busy ? <span className="mr-1 inline-block h-1.5 w-1.5 rounded-full bg-fw-success align-middle" /> : null}{lane.label}</span>
-                  {lane.detail ? <span className="max-w-full truncate text-[10px] text-fw-text-subtle">{lane.detail}</span> : null}
+                  {lane.detail || lane.partial ? <span className="max-w-full truncate text-[10px] text-fw-text-subtle">{[lane.detail, lane.partial ? 'recent only' : null].filter(Boolean).join(' · ')}</span> : null}
                 </button>
               ))}
             </div>
