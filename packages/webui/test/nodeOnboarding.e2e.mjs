@@ -6,7 +6,7 @@ import fs from 'fs-extra'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { build } from 'esbuild'
+import { build } from './browserFixtureBundle.mjs'
 import puppeteer from 'puppeteer-core'
 import { webuiReactAliases } from './reactRendererAliases.mjs'
 
