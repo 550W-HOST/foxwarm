@@ -74,8 +74,10 @@ have tar || fail "tar is required."
 have sha256sum || fail "sha256sum is required."
 [ -n "$PACKAGE" ] || have curl || have wget || fail "curl or wget is required."
 # .NET needs these system libraries even in the self-contained package.
+# Read the cache once: grep -q closing a pipe early would fail the pipeline under pipefail.
+libraries="$(ldconfig -p 2>/dev/null || true)"
 for library in libicuuc libssl; do
-  if have ldconfig && ! ldconfig -p 2>/dev/null | grep -q "$library\.so"; then
+  if have ldconfig && ! grep -q "$library\.so" <<<"$libraries"; then
     fail "$library is missing. Install ICU and OpenSSL with your package manager (for example: apt install libicu-dev libssl3, or dnf install libicu openssl-libs)."
   fi
 done
@@ -118,7 +120,7 @@ else
 fi
 
 if [ -z "$VARIANT" ] && [ -z "$PACKAGE" ]; then
-  if have dotnet && dotnet --list-runtimes 2>/dev/null | grep -q '^Microsoft.AspNetCore.App 10\.'; then
+  if have dotnet && grep -q '^Microsoft.AspNetCore.App 10\.' <<<"$(dotnet --list-runtimes 2>/dev/null || true)"; then
     VARIANT=framework-dependent
     log "Found the ASP.NET Core 10 runtime; using the framework-dependent package."
   else
@@ -147,7 +149,7 @@ if [ -z "$PACKAGE" ]; then
 fi
 mkdir "$SCRATCH/extract"
 tar -xzf "$PACKAGE" -C "$SCRATCH/extract"
-STAGING="$(find "$SCRATCH/extract" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+STAGING="$(find "$SCRATCH/extract" -mindepth 1 -maxdepth 1 -type d -print -quit)"
 [ -n "$STAGING" ] && [ -x "$STAGING/Foxwarm" ] && [ -x "$STAGING/foxwarmctl" ] || fail "$PACKAGE is not a Foxwarm Linux server package."
 RELEASE="$(sed -n 's/^ *"version": *"\([^"]*\)".*/\1/p' "$STAGING/release.json")"
 
@@ -181,7 +183,7 @@ for i in $(seq 1 120); do
   [ $((i % 20)) -eq 0 ] && warn "Still waiting for startup. Inspect it with: tmux attach -t '$SESSION'"
   sleep 0.5
 done
-port="$(sed -n 's/^ *httpPort: *\([0-9][0-9]*\).*/\1/p' "$FOXWARM_DATA_DIR/state/config.yaml" 2>/dev/null | head -n 1)"
+port="$(sed -n 's/^ *httpPort: *\([0-9][0-9]*\).*/\1/p' "$FOXWARM_DATA_DIR/state/config.yaml" 2>/dev/null | sed -n 1p)"
 port="${port:-3001}"
 echo
 echo "Program dir: $FOXWARM_DIR"

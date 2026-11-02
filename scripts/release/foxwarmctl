@@ -36,7 +36,7 @@ EOF
 [ -e "$CURRENT/release.json" ] || fail "No release is installed at $CURRENT. Run the copy of foxwarmctl in the installation directory."
 
 release_field() {
-  sed -n "s/^ *\"$2\": *\"\{0,1\}\([^\",]*\)\"\{0,1\},\{0,1\}$/\1/p" "$1/release.json" | head -n 1
+  sed -n "s/^ *\"$2\": *\"\{0,1\}\([^\",]*\)\"\{0,1\},\{0,1\}$/\1/p" "$1/release.json" | sed -n 1p
 }
 
 # Framework-dependent packages use the dotnet on PATH, which the apphost would not search.
@@ -62,6 +62,13 @@ main_command() {
 }
 
 pane() { tmux display-message -p -t "=$SESSION:=$WINDOW" "$1" 2>/dev/null; }
+
+# An exited Main can remain a zombie until tmux reaps it; that no longer counts as running.
+alive() {
+  local state
+  state="$(ps -o stat= -p "$1" 2>/dev/null)" || return 1
+  [ -n "$state" ] && [ "${state#Z}" = "$state" ]
+}
 
 running_pid() {
   tmux has-session -t "=$SESSION" 2>/dev/null || return 1
@@ -89,17 +96,17 @@ cmd_stop() {
   fi
   kill -TERM "$pid" 2>/dev/null || true
   for ((waited = 0; waited < STOP_SECONDS * 5; waited++)); do
-    kill -0 "$pid" 2>/dev/null || break
+    alive "$pid" || break
     sleep 0.2
   done
-  if kill -0 "$pid" 2>/dev/null; then
+  if alive "$pid"; then
     log "Foxwarm did not stop within $STOP_SECONDS seconds; killing PID $pid."
     kill -KILL "$pid" 2>/dev/null || true
     for ((waited = 0; waited < 50; waited++)); do
-      kill -0 "$pid" 2>/dev/null || break
+      alive "$pid" || break
       sleep 0.2
     done
-    kill -0 "$pid" 2>/dev/null && fail "PID $pid is still running."
+    alive "$pid" && fail "PID $pid is still running ($(ps -o stat=,args= -p "$pid" 2>/dev/null))."
   fi
   tmux kill-session -t "=$SESSION" 2>/dev/null || true
   log "Foxwarm stopped."
@@ -157,7 +164,7 @@ cmd_update() {
   fi
   mkdir "$scratch/extract"
   tar -xzf "$package" -C "$scratch/extract"
-  staging="$(find "$scratch/extract" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+  staging="$(find "$scratch/extract" -mindepth 1 -maxdepth 1 -type d -print -quit)"
   [ -n "$staging" ] && [ -x "$staging/Foxwarm" ] && [ -f "$staging/release.json" ] || fail "$package is not a Foxwarm server package."
   [ "$(release_field "$staging" rid)" = "$(release_field "$CURRENT" rid)" ] || fail "$package is for $(release_field "$staging" rid), not this installation."
   new="$(release_field "$staging" version)"

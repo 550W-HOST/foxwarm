@@ -51,6 +51,7 @@ second="$(tmux display-message -p -t "=$FOXWARM_TMUX_SESSION:=foxwarm" '#{pane_p
 
 "$control" stop
 if "$control" status; then echo "Foxwarm is still running after stop" >&2; exit 1; fi
-kill -0 "$second" 2>/dev/null && { echo "PID $second survived stop" >&2; exit 1; }
+state="$(ps -o stat= -p "$second" 2>/dev/null || true)"
+[ -n "$state" ] && [ "${state#Z}" = "$state" ] && { echo "PID $second survived stop ($state)" >&2; exit 1; }
 "$control" version
 echo "Smoke test passed: $(basename "$package")"
