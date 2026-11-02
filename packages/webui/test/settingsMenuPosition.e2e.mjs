@@ -246,30 +246,28 @@ test('global UI settings keeps only the Auto, Light, and Dark color-mode control
 })
 
 
-test('sidebar Settings lives in a fixed footer and opens upward on desktop and touch', async () => {
+test('sidebar Settings lives in the brand row and opens downward on desktop and touch', async () => {
   for (const mobile of [false, true]) {
     await page.setViewport({ width: mobile ? 320 : 1000, height: mobile ? 480 : 700, isMobile: mobile, hasTouch: mobile })
     await page.goto(fixtureUrl + '?sidebar', { waitUntil: 'load' })
-    const trigger = '[data-sidebar-footer] button[aria-label="Open UI settings"]'
+    const trigger = '[data-sidebar-brand] button[aria-label="Open UI settings"]'
     await page.waitForSelector(trigger)
-    assert.deepEqual(await page.$$eval('[data-sidebar-footer] button', buttons => buttons.map(button => button.getAttribute('aria-label'))), ['Search history', 'Open UI settings'])
-    assert.equal(await page.$$eval('button[title="Search history"]', buttons => buttons.length), 1)
+    assert.equal(await page.$('[data-sidebar-footer]'), null, 'the sidebar has no footer')
     assert.equal(await page.$$eval('button[aria-label="Open UI settings"]', els => els.length), 1)
     const topBefore = await page.$eval(trigger, e => e.getBoundingClientRect().top)
     await page.$eval('[data-session-list-scroll-container]', e => { e.scrollTop = e.scrollHeight })
     assert.equal(await page.$eval(trigger, e => e.getBoundingClientRect().top), topBefore)
-    assert.equal(await page.$eval('[data-sidebar-footer]', e => e.closest('[data-session-list-scroll-container]') === null), true)
     await page.focus(trigger)
     await page.keyboard.press('Enter')
     await page.waitForFunction(() => getComputedStyle(document.querySelector('[data-global-ui-settings-menu]')).visibility === 'visible')
     const geometry = await page.evaluate(() => {
       const menu = document.querySelector('[data-global-ui-settings-menu]').getBoundingClientRect()
-      const trigger = document.querySelector('[data-sidebar-footer] button[aria-label="Open UI settings"]').getBoundingClientRect()
+      const trigger = document.querySelector('[data-sidebar-brand] button[aria-label="Open UI settings"]').getBoundingClientRect()
       return { top: menu.top, bottom: menu.bottom, left: menu.left, right: menu.right, triggerTop: trigger.top, triggerBottom: trigger.bottom, height: innerHeight, width: innerWidth }
     })
-    assert.ok(geometry.top >= 7.5 && geometry.bottom < geometry.triggerTop)
-    assert.ok(geometry.left >= 7.5 && geometry.right <= geometry.width - 7.5)
-    assert.ok(geometry.triggerBottom <= geometry.height && geometry.triggerBottom >= geometry.height - 12)
+    assert.ok(geometry.top > geometry.triggerBottom && geometry.top <= geometry.triggerBottom + 12, JSON.stringify(geometry))
+    assert.ok(geometry.left >= 7.5 && geometry.right <= geometry.width - 7.5, JSON.stringify(geometry))
+    assert.ok(geometry.triggerTop <= 24, 'the trigger sits in the top brand row')
     await page.keyboard.press('Tab')
     assert.equal(await page.evaluate(() => !!document.activeElement.closest('[data-global-ui-settings-menu]')), true)
     await page.keyboard.press('Escape')

@@ -1074,6 +1074,11 @@ function App() {
     navigateToTab(AGENTS_TAB_ID)
   }
   const openNodesTab = () => openSystemSection('nodes')
+  const [sessionsFilterRequest, setSessionsFilterRequest] = useState<{ status: 'active' | 'waiting'; nonce: number } | null>(null)
+  const openSystemSessions = (status: 'active' | 'waiting') => {
+    setSessionsFilterRequest(current => ({ status, nonce: (current?.nonce || 0) + 1 }))
+    openSystemSection('sessions')
+  }
 
   const openTasksTab = () => {
     upsertTab({ id: TASKS_TAB_ID, type: 'tasks', title: 'Tasks' }, { activate: true })
@@ -1085,11 +1090,13 @@ function App() {
     navigateToTab(LOGS_TAB_ID)
   }
 
-  const openSearchTab = () => {
+  // Reuses a blank History tab; a query (from the session filter) is prefilled, not submitted.
+  const openSearchTab = (query?: string) => {
     const blank = allTabs.find((tab): tab is Extract<WorkbenchTab, { type: 'search' }> => (
       tab.type === 'search' && !tab.searchStarted && !(tab.searchQuery || '').trim()
     ))
-    const tab = blank || makeHistoryTab()
+    const base = blank || makeHistoryTab()
+    const tab = query?.trim() ? { ...base, searchQuery: query.trim() } : base
     upsertTab(tab, { activate: true })
     navigateToTab(tab.id)
   }
@@ -1700,6 +1707,7 @@ function App() {
             onCreateSession={handleCreateSession}
             onAgentsChanged={() => { void Promise.all([fetchAgents(), fetchSessions()]) }}
             agentRequest={agentSettingsRequest}
+            sessionsRequest={sessionsFilterRequest}
             onOpenAgentMemory={(memoryRoot: string, filePath?: string) => {
               const workspace = { nodeId: 'master', path: memoryRoot }
               if (filePath) openCodeFile({ kind: 'openFile', nodeId: 'master', path: filePath }, workspace)
@@ -2108,7 +2116,7 @@ function App() {
           onSelectSession={openChatTab}
           onKeepSession={openPersistentChatTab}
           onSelectArchitecture={openAgentsView}
-          onSelectSearch={openSearchTab}
+          onSelectSearch={() => openSearchTab()}
           onSelectSetup={openSetupView}
           onSelectLogs={openLogsTab}
           onSelectTasks={openTasksTab}
@@ -2154,7 +2162,9 @@ function App() {
             onKeepSession={openPersistentChatTab}
             onSelectArchitecture={openAgentsView}
             onOpenAgentSettings={openAgentSettings}
-            onSelectSearch={openSearchTab}
+            onSelectSearch={() => openSearchTab()}
+            onSearchMessages={openSearchTab}
+            activeTabType={focusedActiveTab?.type}
             onSelectSetup={openSetupView}
             onSelectLogs={openLogsTab}
             onSelectTasks={openTasksTab}
@@ -2188,7 +2198,9 @@ function App() {
         <CollapsedSidebarContainer
           currentSession={currentContextSessionId}
           onSelectSession={openChatTab}
-          onSelectSearch={openSearchTab}
+          onSelectArchitecture={openAgentsView}
+          activeView={currentView === 'agents' ? 'system' : currentView === 'tasks' ? 'tasks' : focusedActiveTab?.type === 'search' ? 'search' : undefined}
+          onSelectSearch={() => openSearchTab()}
           onSelectSetup={openSetupView}
           onSelectLogs={openLogsTab}
           onSelectTasks={openTasksTab}
@@ -2206,7 +2218,7 @@ function App() {
           />
         </div>
         <WorkbenchStatusBar running={busyCount} sessions={sessions} nodes={nodeTargets}
-          onOpenTasks={openTasksTab} onOpenNodes={openNodesTab}
+          onOpenTasks={openTasksTab} onOpenNodes={openNodesTab} onOpenSessions={openSystemSessions}
           onToggleTerminal={toggleTerminalPanel} terminalVisible={statusTerminalVisible}
           totalUsage={boundedSessions.globalSummary?.tokenUsage}
           currentSessionId={focusedActiveTab?.type === 'chat' ? focusedActiveTab.sessionId : undefined}

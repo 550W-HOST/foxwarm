@@ -65,7 +65,7 @@ try {
   await until(async () => (await state(page)).hash === '#tab/system:agents', 'the Nodes route settles on the System tab')
   await page.click('[data-system-tab="sessions"]')
   await page.click('[data-workbench-status-bar] button[aria-label^="Nodes:"]')
-  await page.locator('[data-workbench-status-popup] button::-p-text(Open Nodes)').click()
+  await page.locator('[data-workbench-status-popup] button::-p-text(Open in System › Nodes)').click()
   await page.waitForSelector('[data-system-section="nodes"]')
   for (const hash of ['agents', 'architecture']) {
     await page.evaluate(() => { location.hash = 'tab/chat%3Alead' })

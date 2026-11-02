@@ -156,6 +156,27 @@ test('Agent groups list the main Agent first, start with the Agent main and keep
       // Pinned rows keep their own section, outside the groups.
       assert.equal(await sectionOf(page, 'starred'), 'pinned')
       assert.equal(await page.$('[data-session-agent-tag]'), null, 'Agent groups show no Agent tags')
+      // Groups are sections, not a tree level: members are level-0 rows, the header label starts
+      // at the row title column and its chevron sits on the rows' disclosure column.
+      const geometry = await page.evaluate(() => {
+        const left = element => element ? Math.round(element.getBoundingClientRect().left) : null
+        const titleOf = id => document.querySelector(`[data-session-id="${id}"] [data-session-title]`)
+        const header = document.querySelector('[data-session-group="grp"] [data-session-section-header]')
+        const chevron = header.querySelector('svg')?.getBoundingClientRect() ?? { left: NaN, right: NaN }
+        const disclosure = document.querySelector('[data-session-id="grp/main"] .session-compact-disclosure')?.getBoundingClientRect()
+        const pinned = document.querySelector('[data-session-section="pinned"] [data-session-section-label]')
+        return {
+          label: left(header.querySelector('[data-session-section-label]')),
+          pinned: left(pinned),
+          titles: ['grp/main', 'grp/loose', 'starred'].map(id => left(titleOf(id))),
+          chevronInColumn: disclosure ? Math.abs((chevron.left + chevron.right) / 2 - (disclosure.left + disclosure.right) / 2) <= 1 : chevron.right <= left(titleOf('grp/main')),
+          height: Math.round(header.getBoundingClientRect().height),
+        }
+      })
+      assert.deepEqual(geometry.titles, [geometry.label, geometry.label, geometry.label], `${density}: ${JSON.stringify(geometry)}`)
+      assert.equal(geometry.pinned, geometry.label, 'Pinned uses the same section header')
+      assert.equal(geometry.chevronInColumn, true, JSON.stringify(geometry))
+      assert.ok(geometry.height >= 28 && geometry.height <= 32, JSON.stringify(geometry))
 
       await expand(page, 'grp/loose')
       await page.waitForSelector(`${groupSelector('grp')} ${rowSelector('visitor')}`, { timeout: 10_000 })

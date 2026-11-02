@@ -48,6 +48,8 @@ interface SystemViewProps {
   onOpenAgentMemory?: (memoryRoot: string, filePath?: string) => void
   /** Opens the Agents section with this Agent's settings; a new nonce repeats the request. */
   agentRequest?: { agent: string; nonce: number } | null
+  /** Opens the Sessions list filtered by this state; a new nonce repeats the request. */
+  sessionsRequest?: { status: ArchitectureStatusFilter; nonce: number } | null
 }
 
 export default function SystemView({
@@ -61,6 +63,7 @@ export default function SystemView({
   onAgentsChanged,
   onOpenAgentMemory,
   agentRequest,
+  sessionsRequest,
 }: SystemViewProps) {
   const tabHeader = useWorkbenchTabHeader()
   const [sessions, setSessions] = useState<Session[]>([])
@@ -92,6 +95,13 @@ export default function SystemView({
     setSection('agents')
     setSelectedRegistryAgentId(agentRequest.agent)
   }, [agentRequest?.agent, agentRequest?.nonce])
+  useEffect(() => {
+    if (!sessionsRequest) return
+    setSection('sessions')
+    setSessionsView('list')
+    setSearchQuery(''); setNodeFilter(null); setModelFilter(null)
+    setStatusFilter(sessionsRequest.status)
+  }, [sessionsRequest?.status, sessionsRequest?.nonce])
   const [agentMemoryFiles, setAgentMemoryFiles] = useState<AgentMemoryFile[]>([])
   const [agentMemoryLoading, setAgentMemoryLoading] = useState(false)
   const [agentMemoryError, setAgentMemoryError] = useState('')

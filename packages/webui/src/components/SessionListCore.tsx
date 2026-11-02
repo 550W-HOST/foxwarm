@@ -2,10 +2,11 @@ import { getSessionRuntimeTone } from '../sessionRuntimeState'
 import { useState, useRef, useEffect, useMemo, type ReactNode } from 'react'
 import { useDndContext, useDraggable, useDroppable } from '@dnd-kit/core'
 import { API_BASE_PATH } from '../config'
-import { SlidersHorizontal, MoreVertical, Layers, Plus, Settings, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X, CornerDownRight, ListTree, Clock3, Rows3, Pin, PinOff, Bell, BellRing, List, GitBranch, Server, Copy, SquarePlus } from 'lucide-react'
+import { SlidersHorizontal, MoreVertical, Plus, Settings, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X, CornerDownRight, ListTree, Clock3, Rows3, Pin, PinOff, Bell, BellRing, GitBranch, Server, Copy, SquarePlus } from 'lucide-react'
 import RuntimeBusySpinner from './RuntimeBusySpinner'
 import MobilePageHeader from './MobilePageHeader'
 import ContextMenu, { type ContextMenuAnchorRect, type ContextMenuEntry } from './ContextMenu'
+import SessionListSectionHeader, { sessionRowTitleX } from './SessionListSectionHeader'
 import { copyTextToClipboard } from './chatShared'
 import { getSessionRuntimeSummary, getSessionRuntimeStateName, type SessionRuntimeState } from '../sessionRuntimeState'
 import { type SessionIdleNotificationMode } from '../sessionIdleNotifications'
@@ -76,6 +77,10 @@ interface SessionListCoreProps {
   onSelectSession: (sessionId: string) => void
   onKeepSession?: (sessionId: string) => void
   mobileHeaderActions?: ReactNode
+  /** Desktop toolbar controls between the search field and the display options. */
+  toolbarActions?: ReactNode
+  /** Opens message search for the session filter text, offered after the filtered list. */
+  onSearchMessages?: (query: string) => void
   toolbarContainerClassName?: string
   listContainerClassName?: string
   dragEnabled?: boolean
@@ -101,6 +106,7 @@ type SessionListViewMode = SessionListOrderMode
 
 const SESSION_LIST_VIEW_MODE_KEY = 'foxwarm_session_list_view_mode_v1'
 const MOBILE_SESSION_LIST_VIEW_MODE_KEY = 'foxwarm_session_list_mobile_view_mode_v1'
+const PINNED_COLLAPSED_KEY = 'foxwarm_session_list_pinned_collapsed_v1'
 
 interface ContextMenuState {
   sessionId: string
@@ -158,11 +164,6 @@ const activityTime = (timestamp: number): string => {
   if (minutes < 1440) return `${Math.floor(minutes / 60)}h ago`
   if (minutes < 10080) return `${Math.floor(minutes / 1440)}d ago`
   return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(timestamp)
-}
-
-const getNextSessionListViewMode = (mode: SessionListViewMode): SessionListViewMode => {
-  const index = SESSION_LIST_VIEW_MODES.indexOf(mode)
-  return SESSION_LIST_VIEW_MODES[(index + 1) % SESSION_LIST_VIEW_MODES.length] || 'default'
 }
 
 const getSessionFilterFields = (session: Session): string[] => {
@@ -493,7 +494,7 @@ function DraggableSessionRow({
   )
 }
 
-export default function SessionListCore({ sessions, currentSession, onSelectSession, onKeepSession, mobileHeaderActions, toolbarContainerClassName = 'p-2 pb-1', listContainerClassName = 'p-2 pt-1', dragEnabled = true, idleNotificationModes = {}, unreadSessionIds = new Set(), onToggleIdleNotificationMode, onRequestSession, onOpenAgentSettings, bounded }: SessionListCoreProps) {
+export default function SessionListCore({ sessions, currentSession, onSelectSession, onKeepSession, mobileHeaderActions, toolbarActions, onSearchMessages, toolbarContainerClassName = 'p-2 pb-1', listContainerClassName = 'p-2 pt-1', dragEnabled = true, idleNotificationModes = {}, unreadSessionIds = new Set(), onToggleIdleNotificationMode, onRequestSession, onOpenAgentSettings, bounded }: SessionListCoreProps) {
   const { active } = useDndContext()
   const [compact, toggleCompact] = useSessionListCompact()
   const [primaryPointerCoarse, setPrimaryPointerCoarse] = useState(() => window.matchMedia?.('(pointer: coarse)').matches ?? false)
@@ -720,8 +721,13 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     return keys
   }, [groupedRoots, childrenMap])
   const [groupMenu, setGroupMenu] = useState<{ agent: string; x: number; y: number } | null>(null)
-  const [groupingAnchor, setGroupingAnchor] = useState<ContextMenuAnchorRect | null>(null)
-  const groupingButtonRef = useRef<HTMLButtonElement>(null)
+  const [pinnedCollapsed, setPinnedCollapsed] = useState(() => { try { return localStorage.getItem(PINNED_COLLAPSED_KEY) === '1' } catch { return false } })
+  const togglePinnedCollapsed = () => setPinnedCollapsed(value => {
+    try { localStorage.setItem(PINNED_COLLAPSED_KEY, value ? '0' : '1') } catch { /* Keep the in-memory choice. */ }
+    return !value
+  })
+  const [displayAnchor, setDisplayAnchor] = useState<ContextMenuAnchorRect | null>(null)
+  const displayButtonRef = useRef<HTMLButtonElement>(null)
 
   const visibleRootSessions = bounded ? rootSessions : rootSessions.slice(0, visibleRootCount)
   const hiddenRootCount = bounded ? (bounded.hasMoreRoots ? MORE_VISIBLE_ROOTS_STEP : 0) : rootSessions.length - visibleRootSessions.length
@@ -890,10 +896,6 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       bounded?.onExpandBranch(sessionId)
     }
     setExpandedSessions(newExpanded)
-  }
-
-  const cycleViewMode = () => {
-    setViewPreference(current => ({ ...current, mode: getNextSessionListViewMode(current.mode) }))
   }
 
   const toggleShowMoreRoots = () => {
@@ -1194,25 +1196,30 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     }
   }
 
-  // Pinned rows keep their section above the groups; each group lists its members in the
-  // current mode's order (an Agent group starts with the Agent's main Session).
+  // Sections, not a tree level: members are level-0 rows, and the header's chevron and label
+  // sit on the rows' disclosure and title columns. Pinned rows keep their own section above the
+  // groups; each group lists its members in the current mode's order (an Agent group starts with
+  // the Agent's main Session).
+  const disclosureColumn = compact && viewMode !== 'flat-time' && !isFiltering
+  const sectionTitleX = sessionRowTitleX(disclosureColumn)
+  const renderPinnedSection = (pinnedRoots: Session[], showMore: boolean) => (
+    <section aria-label="Pinned" data-session-section="pinned" className="mb-2">
+      <SessionListSectionHeader label="Pinned" disclosureColumn={disclosureColumn} collapsed={pinnedCollapsed} onToggle={togglePinnedCollapsed} toggleLabel={`${pinnedCollapsed ? 'Expand' : 'Collapse'} pinned sessions`} count={pinnedCollapsed ? pinnedRoots.length : undefined} />
+      {!pinnedCollapsed && pinnedRoots.map(session => renderSession(session))}
+      {!pinnedCollapsed && showMore && hiddenRootCount > 0 && (
+        <button onClick={toggleShowMoreRoots} className="w-full p-2 text-left text-xs text-fw-text-muted hover:text-fw-text dark:hover:text-fw-text-strong" style={{ paddingLeft: sectionTitleX }}>
+          {`▼ Show ${Math.min(hiddenRootCount, MORE_VISIBLE_ROOTS_STEP)} more...`}
+        </button>
+      )}
+    </section>
+  )
   const renderGroups = ({ byGroup, ungrouped }: { byGroup: Map<string, string[]>; ungrouped: string[] }) => {
     const view = groupView!
     const pinnedRoots = visibleRootSessions.filter(session => session.pinned)
     const rootFor = (id: string) => sessionMap.get(id)
     return (
       <>
-        {pinnedRoots.length > 0 && (
-          <section aria-label="Pinned" data-session-section="pinned" className="mb-2">
-            <h3 className="px-2 py-1 text-xs font-medium text-fw-text-muted">Pinned</h3>
-            {pinnedRoots.map(session => renderSession(session))}
-            {hiddenRootCount > 0 && (
-              <button onClick={toggleShowMoreRoots} className="w-full text-left p-2 text-xs text-fw-text-muted hover:text-fw-text dark:hover:text-fw-text-strong">
-                {`▼ Show ${Math.min(hiddenRootCount, MORE_VISIBLE_ROOTS_STEP)} more...`}
-              </button>
-            )}
-          </section>
-        )}
+        {pinnedRoots.length > 0 && renderPinnedSection(pinnedRoots, true)}
         {view.groups.map(group => {
           const collapsed = view.collapsed.has(group.key)
           const members = (byGroup.get(group.key) || []).map(rootFor).filter((session): session is Session => !!session)
@@ -1222,50 +1229,42 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
           const label = group.label
           return (
             <section key={group.key} aria-label={label} data-session-group={group.key} data-session-group-kind={view.grouping} className="mb-1">
-              <div
-                className="group/header flex items-center gap-1 rounded px-1 text-xs text-fw-text-muted hover:bg-fw-hover"
+              <SessionListSectionHeader
+                label={label}
+                disclosureColumn={disclosureColumn}
+                collapsed={collapsed}
+                onToggle={() => view.toggleGroup(group.key)}
+                toggleLabel={`${collapsed ? 'Expand' : 'Collapse'} ${label}`}
+                title={agentGroup ? `Agent: ${group.key}` : group.key === label ? `Node: ${group.key}` : `Node: ${label} · ${group.key}`}
+                count={group.count}
+                toggleAttributes={{ 'data-session-group-toggle': group.key }}
+                labelAttributes={{ 'data-session-group-label': '' }}
                 onContextMenu={agentGroup && (onOpenAgentSettings || onRequestSession) ? event => { event.preventDefault(); setGroupMenu({ agent: group.key, x: event.clientX, y: event.clientY }) } : undefined}
-              >
-                <button
-                  type="button"
-                  onClick={() => view.toggleGroup(group.key)}
-                  aria-expanded={!collapsed}
-                  aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${label}`}
-                  data-session-group-toggle={group.key}
-                  className="flex min-w-0 flex-1 items-center gap-1.5 rounded py-1 text-left focus:outline-none focus:ring-2 focus:ring-fw-focus-ring/40"
-                >
-                  <svg className="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={collapsed ? 'M9 5l7 7-7 7' : 'M19 9l-7 7-7-7'} />
-                  </svg>
-                  {!agentGroup && (
-                    <span
-                      role="img"
-                      data-session-group-online={group.online ? 'true' : 'false'}
-                      aria-label={group.online ? 'Online' : 'Offline'}
-                      title={group.online ? 'Online' : 'Offline'}
-                      className={`h-2 w-2 shrink-0 rounded-full ${group.online ? 'bg-fw-success' : 'bg-fw-text-muted/50'}`}
-                    />
-                  )}
-                  <span className="min-w-0 truncate font-medium text-fw-text" title={agentGroup ? `Agent: ${group.key}` : group.key === label ? `Node: ${group.key}` : `Node: ${label} · ${group.key}`} data-session-group-label>{label}</span>
-                  <span className="shrink-0 tabular-nums" data-session-group-count>{group.count}</span>
-                </button>
-                {agentGroup && onRequestSession && (
+                status={!agentGroup ? (
+                  <span
+                    role="img"
+                    data-session-group-online={group.online ? 'true' : 'false'}
+                    aria-label={group.online ? 'Online' : 'Offline'}
+                    title={group.online ? 'Online' : 'Offline'}
+                    className={`h-2 w-2 shrink-0 rounded-full ${group.online ? 'bg-fw-success' : 'bg-fw-text-muted/50'}`}
+                  />
+                ) : undefined}
+                actions={agentGroup && onRequestSession ? (
                   <button
                     type="button"
                     onClick={() => onRequestSession({ agent: group.key })}
                     aria-label={`New session in ${group.key}`}
                     title={`New session in ${group.key}`}
                     data-session-group-create={group.key}
-                    className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-fw-text-muted opacity-0 hover:bg-fw-selected hover:text-fw-text-strong focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-fw-focus-ring/40 group-hover/header:opacity-100"
+                    className="mr-1 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-fw-text-muted opacity-0 hover:bg-fw-selected hover:text-fw-text-strong focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-fw-focus-ring/40 group-hover/header:opacity-100"
                   >
                     <Plus className="h-3.5 w-3.5" />
                   </button>
-                )}
-              </div>
-              {/* Members sit one level below their header, so their content lines up under its label in every density and mode. */}
-              {!collapsed && members.map(session => renderSession(session, 1))}
+                ) : undefined}
+              />
+              {!collapsed && members.map(session => renderSession(session))}
               {!collapsed && remaining > 0 && (
-                <button onClick={() => view.loadMoreGroup(group.key)} data-session-group-more={group.key} className="w-full text-left p-2 text-xs text-fw-text-muted hover:text-fw-text dark:hover:text-fw-text-strong" style={{ paddingLeft: `${28 + 16}px` }}>
+                <button onClick={() => view.loadMoreGroup(group.key)} data-session-group-more={group.key} className="w-full p-2 text-left text-xs text-fw-text-muted hover:text-fw-text dark:hover:text-fw-text-strong" style={{ paddingLeft: sectionTitleX }}>
                   {`▼ Show ${remaining} more...`}
                 </button>
               )}
@@ -1700,18 +1699,23 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       setArchiveIncludeDescendants(false)
     }
   }, [archiveConfirm, archiveDescendantCount, archiveIncludeDescendants])
-  const ViewModeIcon = SESSION_LIST_VIEW_MODE_ICONS[viewMode]
   const customMobileHeader = mobileList && mobileHeaderActions !== undefined
-  const mobileViewEntries: ContextMenuEntry[] = [
-    ...SESSION_LIST_VIEW_MODES.map(mode => ({key: mode, label: `${SESSION_LIST_VIEW_MODE_LABELS[mode]} view`, checked: mode === viewMode, onSelect: () => setViewPreference(current => ({...current, mode}))})),
-    {key: 'sep', type: 'separator'},
+  // One display menu on desktop and mobile: list mode, grouping (desktop) and row density.
+  const displayEntries: ContextMenuEntry[] = [
+    {key: 'head-view', type: 'header', label: 'View'},
+    ...SESSION_LIST_VIEW_MODES.map(mode => ({key: mode, label: SESSION_LIST_VIEW_MODE_LABELS[mode], title: SESSION_LIST_VIEW_MODE_TITLES[mode], icon: (() => { const Icon = SESSION_LIST_VIEW_MODE_ICONS[mode]; return <Icon size={14} /> })(), checked: mode === viewMode, selection: 'radio' as const, onSelect: () => setViewPreference(current => ({...current, mode}))})),
+    ...(groupView && !mobileList ? [
+      {key: 'head-group', type: 'header' as const, label: 'Group by'},
+      ...(['none', 'agent', 'node'] as const).map(value => ({ key: `group-${value}`, label: SESSION_LIST_GROUPING_LABELS[value], checked: groupView.grouping === value, selection: 'radio' as const, onSelect: () => selectGrouping(value) })),
+    ] : []),
+    {key: 'head-rows', type: 'header', label: 'Rows'},
     {key: 'density', label: 'Detailed rows', checked: !compact, onSelect: toggleCompact},
   ]
 
 
   return (
     <>
-      <div className={`relative flex h-full min-h-0 flex-col ${customMobileHeader ? 'mobile-page-root' : ''}`} data-session-list-density={compact ? 'normal' : 'detailed'} data-session-list-mobile={mobileList || undefined}>
+      <div className={`relative flex h-full min-h-0 flex-col ${customMobileHeader ? 'mobile-page-root' : ''}`} data-session-list-density={compact ? 'normal' : 'detailed'} data-session-list-mode={viewMode} data-session-list-mobile={mobileList || undefined}>
         {customMobileHeader ? <MobilePageHeader title="Sessions" actions={<>
           <button type="button" aria-label="Search sessions" data-filtered={!!filterText || undefined} aria-expanded={mobileSearchOpen} onClick={() => { setMobileSearchOpen(value => !value); requestAnimationFrame(() => mobileSearchRef.current?.focus({preventScroll:true})) }} className="mobile-header-circle"><Search size={20} /></button>
           <button ref={mobileViewRef} type="button" aria-label="Session display options" aria-haspopup="menu" aria-expanded={!!mobileViewAnchor} onClick={() => setMobileViewAnchor(mobileViewRef.current!.getBoundingClientRect())} className="mobile-header-circle"><SlidersHorizontal size={20} /></button>
@@ -1743,47 +1747,28 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                 </button>
               )}
             </div>
+            {toolbarActions}
             <button
+              ref={displayButtonRef}
               type="button"
-              onClick={cycleViewMode}
-              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-fw-border bg-fw-surface text-fw-text-muted transition hover:border-fw-accent-border hover:text-fw-accent focus:outline-none focus:ring-2 focus:ring-fw-focus-ring/30 dark:border-fw-border dark:bg-fw-canvas dark:text-fw-text dark:hover:border-fw-accent-border/70 dark:hover:text-fw-accent"
-              title={`${SESSION_LIST_VIEW_MODE_LABELS[viewMode]} mode. ${SESSION_LIST_VIEW_MODE_TITLES[viewMode]} Click to switch mode.`}
-              aria-label={`Session list mode: ${SESSION_LIST_VIEW_MODE_LABELS[viewMode]}`}
+              onClick={() => setDisplayAnchor(displayButtonRef.current!.getBoundingClientRect())}
+              aria-label="Session display options"
+              aria-haspopup="menu"
+              aria-expanded={!!displayAnchor}
+              data-session-list-display-options
+              data-session-list-grouping={groupView?.grouping}
+              title="Display options"
+              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-fw-border bg-fw-surface text-fw-text-muted transition hover:border-fw-accent-border hover:text-fw-accent focus:outline-none focus:ring-2 focus:ring-fw-focus-ring/30 dark:border-fw-border dark:bg-fw-canvas dark:text-fw-text"
             >
-              <ViewModeIcon className="h-3.5 w-3.5" />
-            </button>
-            {groupView && (
-              <button
-                ref={groupingButtonRef}
-                type="button"
-                onClick={() => setGroupingAnchor(groupingButtonRef.current!.getBoundingClientRect())}
-                aria-label="Group sessions"
-                aria-haspopup="menu"
-                aria-expanded={!!groupingAnchor}
-                data-session-list-grouping={groupView.grouping}
-                title={`Group sessions: ${SESSION_LIST_GROUPING_LABELS[groupView.grouping]}`}
-                className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border focus:outline-none focus:ring-2 focus:ring-fw-focus-ring/30 ${groupView.grouping !== 'none' ? 'border-fw-accent-border bg-fw-accent-surface text-fw-accent' : 'border-fw-border bg-fw-surface text-fw-text-muted hover:text-fw-accent hover:border-fw-accent-border'}`}
-              >
-                <Layers className="h-3.5 w-3.5" />
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={toggleCompact}
-              aria-label="Detailed session rows"
-              aria-pressed={!compact}
-              title={compact ? 'Use detailed session rows' : 'Use normal session rows'}
-              className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border focus:outline-none focus:ring-2 focus:ring-fw-focus-ring/30 ${!compact ? 'border-fw-accent-border bg-fw-accent-surface text-fw-accent' : 'border-fw-border bg-fw-surface text-fw-text-muted hover:text-fw-accent hover:border-fw-accent-border'}`}
-            >
-              <List className="h-3.5 w-3.5" />
+              <SlidersHorizontal className="h-3.5 w-3.5" />
             </button>
           </div>
           <SidebarRootDropZone visible={sessionDragEnabled && !!draggingSessionId && allowParentDrop} disabled={!sessionDragEnabled || isFiltering || draggingPinnedSession} allowOrder={allowSidebarOrder} />
         </div>
 
         )}
-        {groupView && <ContextMenu open={!!groupingAnchor} entries={(['none', 'agent', 'node'] as const).map(value => ({ key: value, label: SESSION_LIST_GROUPING_LABELS[value], checked: groupView.grouping === value, onSelect: () => selectGrouping(value) }))} anchorRect={groupingAnchor} preferredPlacement="bottom-end" onClose={() => { setGroupingAnchor(null); groupingButtonRef.current?.focus({ preventScroll: true }) }} />}
-        <ContextMenu open={!!mobileViewAnchor} entries={mobileViewEntries} anchorRect={mobileViewAnchor} preferredPlacement="bottom-end" onClose={() => {setMobileViewAnchor(null); mobileViewRef.current?.focus({preventScroll:true})}} />
+        <ContextMenu open={!!displayAnchor} entries={displayEntries} anchorRect={displayAnchor} preferredPlacement="bottom-end" onClose={() => { setDisplayAnchor(null); displayButtonRef.current?.focus({ preventScroll: true }) }} />
+        <ContextMenu open={!!mobileViewAnchor} entries={displayEntries} anchorRect={mobileViewAnchor} preferredPlacement="bottom-end" onClose={() => {setMobileViewAnchor(null); mobileViewRef.current?.focus({preventScroll:true})}} />
         <div className="min-h-0 flex-1 touch-pan-y overflow-y-auto" data-session-list-scroll-container>
           <div className={listContainerClassName}>
             {rootSessions.length > 0 || (groupedRoots && groupView!.groups.length > 0) ? (
@@ -1797,8 +1782,10 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                   const sectionRoots = visibleRootSessions.filter(session => !!session.pinned === pinned)
                   return sectionRoots.length > 0 ? (
                     <section key={label} aria-label={label} data-session-section={pinned ? 'pinned' : 'sessions'} className="mb-2 last:mb-0">
-                      <h3 className="px-2 py-1 text-xs font-medium text-fw-text-muted">{label}</h3>
-                      {sectionRoots.map(session => renderSession(session))}
+                      {pinned
+                        ? <SessionListSectionHeader label={label} disclosureColumn={disclosureColumn} collapsed={pinnedCollapsed} onToggle={togglePinnedCollapsed} toggleLabel={`${pinnedCollapsed ? 'Expand' : 'Collapse'} pinned sessions`} count={pinnedCollapsed ? sectionRoots.length : undefined} />
+                        : <SessionListSectionHeader label={label} disclosureColumn={disclosureColumn} />}
+                      {!(pinned && pinnedCollapsed) && sectionRoots.map(session => renderSession(session))}
                     </section>
                   ) : null
                 })}
@@ -1806,6 +1793,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                   <button
                     onClick={toggleShowMoreRoots}
                     className="w-full text-left p-2 text-xs text-fw-text-muted hover:text-fw-text dark:hover:text-fw-text-strong"
+                    style={{ paddingLeft: sessionRowTitleX(disclosureColumn) }}
                   >
                     {`▼ Show ${Math.min(hiddenRootCount, MORE_VISIBLE_ROOTS_STEP)} more...`}
                   </button>
@@ -1814,6 +1802,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                   <button
                     onClick={toggleShowMoreRoots}
                     className="w-full text-left p-2 text-xs text-fw-text-muted hover:text-fw-text dark:hover:text-fw-text-strong"
+                    style={{ paddingLeft: sessionRowTitleX(disclosureColumn) }}
                   >
                     ▲ Show less
                   </button>
@@ -1823,6 +1812,18 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
               <div className="px-2 py-6 text-center text-sm text-fw-text-muted">
                 {isFiltering ? 'No sessions match your search.' : 'No sessions yet.'}
               </div>
+            )}
+            {/* Names filter live here; message contents need the submitted history search. */}
+            {isFiltering && onSearchMessages && (
+              <button
+                type="button"
+                onClick={() => onSearchMessages(filterText.trim())}
+                className="mt-1 flex w-full min-w-0 items-center gap-2 rounded px-3 py-2 text-left text-sm text-fw-text-muted hover:bg-fw-hover hover:text-fw-text-strong"
+                data-session-list-search-messages
+              >
+                <Search className="h-4 w-4 shrink-0" aria-hidden="true" />
+                <span className="min-w-0 truncate">Search messages for ‘{filterText.trim()}’</span>
+              </button>
             )}
           </div>
         </div>

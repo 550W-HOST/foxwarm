@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { ChevronDown, Code2, ExternalLink } from 'lucide-react'
+import { Code2, ExternalLink } from 'lucide-react'
+import { SidebarNavItem } from './SidebarNav'
 import { normalizeCodePath } from '../vscodeWeb'
 import NodeTargetSelect from './NodeTargetSelect'
 import { getNodeTargetAvailability, preserveSelectedNodeTarget, type WebUiNodeTarget } from '../nodeTargets'
@@ -58,9 +59,6 @@ export default function CodeLaunchButton({
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [open, inlineOptions])
 
-  const baseClass = active
-    ? 'bg-fw-accent-surface text-fw-accent hover:bg-fw-accent-surface-strong dark:bg-fw-accent-surface-strong/40 dark:text-fw-accent dark:hover:bg-fw-accent-surface-strong/60'
-    : 'bg-fw-neutral-surface text-fw-text hover:bg-fw-hover dark:bg-fw-surface-raised/60 dark:text-fw-text-strong dark:hover:bg-fw-hover'
   const selectedTarget = preserveSelectedNodeTarget(nodeTargets, draftNodeId).find(node => node.id === draftNodeId)
   const selectedAvailability = selectedTarget ? getNodeTargetAvailability(selectedTarget, 'vscode-fs') : { available: false, reason: 'unavailable' }
 
@@ -88,33 +86,28 @@ export default function CodeLaunchButton({
 
   return (
     <div className="relative" ref={rootRef}>
-      {!inlineOptions && <div className="flex w-full items-stretch gap-1">
-        <button
-          type="button"
+      {!inlineOptions && (
+        <SidebarNavItem
+          icon={Code2}
+          label="Code"
+          active={active}
+          dataNav="code"
           onClick={() => onOpen(nodeId, path)}
-          className={`inline-flex flex-1 items-center justify-center gap-2 rounded-lg border border-fw-border-strong px-3 py-2 text-sm font-medium transition-colors ${baseClass}`}
           title={`Open code${openInNewWindow ? ' in a new browser tab' : ''}`}
-        >
-          <Code2 className="h-4 w-4" />
-          <span>Code</span>
-          {openInNewWindow && <ExternalLink className="h-3.5 w-3.5 opacity-70" aria-hidden="true" />}
-        </button>
-        <button
-          type="button"
-          onClick={() => {
-            setPathError('')
-            setOpen((value) => {
-              if (!value) onRefreshNodeTargets?.()
-              return !value
-            })
+          trailing={openInNewWindow ? <ExternalLink className="h-3.5 w-3.5 shrink-0 opacity-70" aria-hidden="true" /> : undefined}
+          options={{
+            open,
+            label: 'Open code options',
+            onToggle: () => {
+              setPathError('')
+              setOpen((value) => {
+                if (!value) onRefreshNodeTargets?.()
+                return !value
+              })
+            },
           }}
-          className={`inline-flex items-center justify-center rounded-lg border border-fw-border-strong px-2 transition-colors ${baseClass}`}
-          title="Code options"
-          aria-label="Open code options"
-        >
-          <ChevronDown className={`h-4 w-4 transition-transform ${open ? 'rotate-180' : ''}`} />
-        </button>
-      </div>}
+        />
+      )}
 
       {open && (
         <div className={inlineOptions ? 'min-w-0' : 'absolute left-0 top-full z-50 mt-2 w-80 max-w-[calc(100vw-2rem)] rounded-xl border border-fw-border bg-fw-surface p-3 shadow-xl dark:border-fw-border dark:bg-fw-surface'}>

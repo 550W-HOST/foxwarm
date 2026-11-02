@@ -131,6 +131,12 @@ export default function HistorySearchView({ visible = true, mobileHome = false, 
     if (visible) queryInputRef.current?.focus({ preventScroll: true })
   }, [visible])
 
+  // A reused blank tab can receive a prefilled query from outside (the session filter).
+  const externalQuery = initialDraft?.query || ''
+  useEffect(() => {
+    if (!searched && externalQuery && externalQuery !== query) setQuery(externalQuery)
+  }, [externalQuery])
+
   useEffect(() => {
     if (!visible) return
     const controller = new AbortController()

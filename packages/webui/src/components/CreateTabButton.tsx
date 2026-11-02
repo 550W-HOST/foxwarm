@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { ChevronDown, SquareTerminal } from 'lucide-react'
+import { SidebarNavItem } from './SidebarNav'
 import NodeTargetSelect from './NodeTargetSelect'
 import { getNodeTargetAvailability, MASTER_NODE_TARGET, preserveSelectedNodeTarget, type WebUiNodeTarget } from '../nodeTargets'
 import { selectLauncherDraftNode } from '../launcherDraft'
@@ -12,10 +13,12 @@ interface CreateTabButtonProps {
   nodeTargetsError?: string
   onRefreshNodeTargets?: () => void
   inlineOptions?: boolean
+  /** `nav`: a sidebar navigation row. */
+  variant?: 'button' | 'nav'
   onCancel?: () => void
 }
 
-export default function CreateTabButton({ defaultNodeId, defaultPath, onCreate, nodeTargets, nodeTargetsError, onRefreshNodeTargets, inlineOptions = false, onCancel }: CreateTabButtonProps) {
+export default function CreateTabButton({ defaultNodeId, defaultPath, onCreate, nodeTargets, nodeTargetsError, onRefreshNodeTargets, inlineOptions = false, variant = 'button', onCancel }: CreateTabButtonProps) {
   const [open, setOpen] = useState(inlineOptions)
   const [nodeId, setNodeId] = useState(defaultNodeId || 'master')
   const [path, setPath] = useState(defaultPath || '')
@@ -70,7 +73,18 @@ export default function CreateTabButton({ defaultNodeId, defaultPath, onCreate, 
 
   return (
     <div className="relative" ref={rootRef}>
-      {!inlineOptions && <div className="flex w-full items-stretch gap-1">
+      {!inlineOptions && variant === 'nav' && (
+        <SidebarNavItem
+          icon={SquareTerminal}
+          label={label}
+          dataNav="terminal"
+          onClick={handleDefaultCreate}
+          disabled={!defaultCreateAvailable}
+          title={defaultCreateAvailable ? `Create ${label.toLowerCase()} tab` : defaultAvailability.reason}
+          options={{ open, label: `Custom ${label.toLowerCase()} tab`, onToggle: () => setOpen((value) => { if (!value) onRefreshNodeTargets?.(); return !value }) }}
+        />
+      )}
+      {!inlineOptions && variant === 'button' && <div className="flex w-full items-stretch gap-1">
         <button
           onClick={handleDefaultCreate}
           disabled={!defaultCreateAvailable}

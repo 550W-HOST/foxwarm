@@ -463,9 +463,9 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
       />
       )}
       <ContextMenu open={!!mobileOptions} anchorRect={mobileOptions} preferredPlacement="bottom-end" onClose={() => {setMobileOptions(null);mobileOptionsRef.current?.focus({preventScroll:true})}} entries={[
-        {key:'appearance',label:'Appearance',checked:activeTab==='appearance',icon:<Palette size={16}/>,onSelect:()=>activateTab('appearance')},
-        {key:'models',label:'Models',checked:activeTab==='models',icon:<Bot size={16}/>,onSelect:()=>activateTab('models')},
-        {key:'config',label:'Config',checked:activeTab==='config',icon:<SlidersHorizontal size={16}/>,onSelect:()=>activateTab('config')},
+        {key:'appearance',label:'Appearance',checked:activeTab==='appearance',selection:'radio',icon:<Palette size={16}/>,onSelect:()=>activateTab('appearance')},
+        {key:'models',label:'Models',checked:activeTab==='models',selection:'radio',icon:<Bot size={16}/>,onSelect:()=>activateTab('models')},
+        {key:'config',label:'Config',checked:activeTab==='config',selection:'radio',icon:<SlidersHorizontal size={16}/>,onSelect:()=>activateTab('config')},
         {key:'sep',type:'separator'}, {key:'refresh',label:'Refresh',icon:<RefreshCw size={16}/>,onSelect:()=>{void loadStatus()}},
       ]} />
 

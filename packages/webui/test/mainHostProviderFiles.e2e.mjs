@@ -55,7 +55,7 @@ try {
   // The same directory response flows through the shared validator to the original Nodes surface.
   await page.click('[data-workbench-status-bar] button[aria-label^="Nodes:"]')
   await page.waitForSelector('[data-workbench-status-popup]')
-  await page.evaluate(() => [...document.querySelectorAll('[data-workbench-status-popup] button')].find(button => button.textContent === 'Open Nodes').click())
+  await page.evaluate(() => [...document.querySelectorAll('[data-workbench-status-popup] button')].find(button => button.textContent === 'Open in System › Nodes').click())
   await page.waitForSelector('[data-node-surface]')
   await page.waitForFunction(() => document.querySelector('[data-node-surface]')?.innerText.includes('external/target'))
   const card = await page.evaluate(() => [...document.querySelectorAll('[data-node-surface] article')].find(item => item.textContent.includes('external/target'))?.textContent)

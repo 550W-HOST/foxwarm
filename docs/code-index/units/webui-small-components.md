@@ -11,12 +11,12 @@ A collection of small, reusable React UI components and utility functions for th
 
 - `MobilePageHeader` — Transparent progressive-blur mobile heading with positive-height parent-local measurement.
 - `ContentHeader` — Page/section header with icon, title, optional back button and actions; its sole-tab Workbench close/icon controls and empty-header pane drag entry are owned by [Single-tab headers](./webui-workbench.md#single-tab-headers)
-- `ContextMenu` — Portal-based positioned context menu with keyboard/click-outside dismissal
-- `CollapsedSidebar` — Fixed-width collapsed sidebar rail with expand/new-session controls and root-session avatar buttons and the shared settings menu
+- `ContextMenu` — Portal-based positioned context menu with keyboard/click-outside dismissal, section headers, separators and checked radio/toggle items
+- `CollapsedSidebar` — Fixed-width collapsed sidebar rail: expand, settings, System/Tasks/Search icons, then New session and root-session avatar buttons
 - `AgentCreationMenu` — Shared Agents `+` control and single new-session/new-agent modal flow, including Agent tags plus inline validation/loading/error states
 - `agentCreation` helpers — Client validation and request-body helpers that omit an empty session ID so the backend generates the existing random name
-- `CreateTabButton` — Split button for creating terminal tabs with custom node/path options
-- `CodeLaunchButton` — Sidebar split button for opening Code at a remembered node/path and controlling the global new-browser-tab default
+- `CreateTabButton` — Split button (or, with `variant="nav"`, a sidebar navigation row) for creating terminal tabs with custom node/path options
+- `CodeLaunchButton` — Sidebar navigation row (`SidebarNavItem`) with an options chevron for opening Code at a remembered node/path and controlling the global new-browser-tab default
 - `NodeTargetSelect` — Shared capability-aware Code/terminal node selector
 - `ImageParts` — Renders safe image attachments from legacy inline data or current authenticated blob URLs
 - [Runtime status](./webui-runtime-status.md) owns ProcessingStatus and queue controls.
@@ -53,7 +53,7 @@ A collection of small, reusable React UI components and utility functions for th
 | `ReasoningCard({ ... })` | ~78–120 | Expandable card rendering markdown reasoning with debounce support |
 | `hardReloadApp()` | ~5–15 | Unregisters service workers, clears caches, then reloads the page |
 | `ReloadAppButton({ ... })` | ~18–35 | Button component wrapping hardReloadApp with loading state |
-| `Sidebar({ ... })` | ~65–145 | Full sidebar layout with branding, nav buttons, tab creators, and session list |
+| `Sidebar({ ... })` | Sidebar.tsx | Brand row with settings and collapse, navigation rows, and the session list ([D-sidebar-navigation](./webui-session-list.md#d-sidebar-navigation)) |
 | `buildCodeRegex(language)` | ~50–75 | Constructs a tokenizing regex for a given language |
 | `classifyToken(language, value)` | ~77–90 | Determines token kind (keyword, string, comment, etc.) from matched text |
 | `SyntaxHighlightedText({ text, filePath })` | ~92–115 | Tokenizes and wraps code text in colored spans |
@@ -77,6 +77,7 @@ A collection of small, reusable React UI components and utility functions for th
 
 ## Behavior
 
+- `ContextMenu` entries: items, `{type:'separator'}` (role `separator`) and `{type:'header', label}` (`data-context-menu-header`, a non-interactive section label). An item with `checked` is a `menuitemcheckbox` by default (`selection: 'toggle'`) or a `menuitemradio` with `selection: 'radio'`. Checked items get accent text and a visible trailing mark (`data-context-menu-mark`): a check for radio, a filled check box for toggles; unchecked toggles show an empty box and unchecked radios nothing. Callers group one-of choices under a header instead of adding their own check icons. An item's `trailingControl` (Notify on idle's `always`) uses the toggle mark itself, and its main item then shows no second mark.
 - `ContextMenu` uses `createPortal` to render outside the component tree, calculates position with `useLayoutEffect`, and auto-dismisses on outside click, Escape, or resize. Captured scroll keeps point-anchored menus open at their viewport position and dismisses rect-anchored menus whose trigger can move.
 - `AgentCreationMenu` portals only its full-page dialog to document.body, leaving its trigger and component state in their existing owner; the [Workbench overlay boundary](./webui-workbench-content.md#d-workbench-stable-content) explains the stacking contract.
 - `AgentCreationMenu` makes the shared Agents `+` open New session without an intermediate menu. The current Agent (or first available Agent) is selected by default in an accessible wrapping tag group; a final `+` tag switches the one modal to New agent. Cancel, Escape, or backdrop dismissal from New agent returns to New session without losing its Agent or optional Session ID draft. Successful Agent creation retains the existing callback contract, which may create and navigate to that Agent's main Session; it does not implicitly resume the pending Session draft. An empty Agent registry keeps New session disabled but leaves New agent reachable. New agent embeds the shared Agent settings form and New session names the selected Agent's start location ([D-webui-agent-settings-form](./webui-system-view.md#d-webui-agent-settings-form)); the dialog reads `/nodes` once per opening for Node names. A `creationRequest` (`SessionCreationRequest`: `agent` and optional `parent`) opens the same dialog with presets: the Sidebar's `Create child session` opens it as `New child session`, showing the parent and preselecting its Agent, and an Agent group's `+` preselects only the Agent; the optional fourth creation-callback argument carries `parentSessionId` into `buildSessionCreationBody`.

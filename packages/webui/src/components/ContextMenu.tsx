@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
+import { Check } from 'lucide-react'
 
 export type ContextMenuAnchorRect = {
   left: number
@@ -14,10 +15,14 @@ export type ContextMenuItem = {
   key: string
   label: ReactNode
   icon?: ReactNode
+  title?: string
   onSelect?: () => void
   disabled?: boolean
   danger?: boolean
+  /** Selection state; drawn as a trailing check. */
   checked?: boolean
+  /** `radio`: one choice in its section (`menuitemradio`); `toggle` (default): independent on/off. */
+  selection?: 'radio' | 'toggle'
   trailingControl?: {
     label: ReactNode
     checked: boolean
@@ -26,7 +31,11 @@ export type ContextMenuItem = {
   }
 }
 
-export type ContextMenuEntry = ContextMenuItem | { key: string; type: 'separator' }
+export type ContextMenuEntry =
+  | ContextMenuItem
+  | { key: string; type: 'separator' }
+  /** A section title; the menu draws a separator above it unless it comes first. */
+  | { key: string; type: 'header'; label: ReactNode }
 
 interface ContextMenuProps {
   open: boolean
@@ -141,9 +150,16 @@ export default function ContextMenu({
       style={position ? { left: `${position.left}px`, top: `${position.top}px` } : { left: 0, top: 0, visibility: 'hidden' }}
       role="menu"
     >
-      {visibleEntries.map((entry) => {
+      {visibleEntries.map((entry, index) => {
         if ('type' in entry) {
-          return <div key={entry.key} className="my-1 border-t border-fw-border/80 dark:border-fw-border/80" />
+          if (entry.type === 'header') {
+            return (
+              <div key={entry.key} role="presentation" data-context-menu-header className={`px-3 pb-1 pt-2 text-[11px] font-medium uppercase tracking-wide text-fw-text-muted ${index > 0 ? 'mt-1 border-t border-fw-border/80' : ''}`}>
+                {entry.label}
+              </div>
+            )
+          }
+          return <div key={entry.key} role="separator" className="my-1 border-t border-fw-border/80 dark:border-fw-border/80" />
         }
 
         const toneClass = entry.danger
@@ -157,8 +173,10 @@ export default function ContextMenu({
           <button
             key={entry.key}
             type="button"
-            role={entry.checked === undefined ? 'menuitem' : 'menuitemcheckbox'}
+            role={entry.checked === undefined ? 'menuitem' : entry.selection === 'radio' ? 'menuitemradio' : 'menuitemcheckbox'}
             aria-checked={entry.checked}
+            title={entry.title}
+            data-context-menu-checked={entry.checked === undefined ? undefined : entry.checked ? 'true' : 'false'}
             disabled={entry.disabled}
             onClick={() => {
               if (entry.disabled) return
@@ -168,7 +186,8 @@ export default function ContextMenu({
             className={entry.trailingControl ? splitItemClass : `${itemClass} w-full`}
           >
             <span className="flex h-4 w-4 shrink-0 items-center justify-center">{entry.icon}</span>
-            <span className="min-w-0 flex-1 truncate">{entry.label}</span>
+            <span className={`min-w-0 flex-1 truncate ${entry.checked && !entry.danger ? 'font-medium text-fw-accent' : ''}`}>{entry.label}</span>
+            {entry.checked !== undefined && !entry.trailingControl ? <SelectionMark checked={entry.checked} kind={entry.selection ?? 'toggle'} /> : null}
           </button>
         )
 
@@ -200,7 +219,7 @@ export default function ContextMenu({
               }}
               className={`mr-3 inline-flex shrink-0 items-center gap-1 text-sm transition-colors ${control.checked ? 'text-fw-accent dark:text-fw-accent' : 'text-fw-text hover:text-fw-accent dark:text-fw-text-strong dark:hover:text-fw-accent'} ${control.disabled ? 'cursor-not-allowed opacity-50' : ''}`}
             >
-              <span aria-hidden="true" className={`inline-flex h-3 w-3 items-center justify-center rounded-[1px] border-2 text-[8px] font-bold leading-none ${control.checked ? 'border-fw-accent-border bg-fw-accent text-fw-accent-text dark:border-fw-accent-border dark:bg-fw-accent dark:text-fw-accent-text' : 'border-fw-border-strong bg-fw-surface text-transparent dark:border-fw-border-strong dark:bg-fw-canvas'}`}>✓</span>
+              <SelectionMark checked={control.checked} kind="toggle" />
               <span>{control.label}</span>
             </button>
           </div>
@@ -208,5 +227,17 @@ export default function ContextMenu({
       })}
     </div>,
     document.body,
+  )
+}
+
+// A single choice shows a plain check on the chosen row; a toggle shows a small box, empty when off.
+function SelectionMark({ checked, kind }: { checked: boolean; kind: 'radio' | 'toggle' }) {
+  if (kind === 'radio') {
+    return <span aria-hidden="true" data-context-menu-mark="radio" className="flex h-4 w-4 shrink-0 items-center justify-center text-fw-accent">{checked ? <Check size={15} strokeWidth={2.5} /> : null}</span>
+  }
+  return (
+    <span aria-hidden="true" data-context-menu-mark="toggle" className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${checked ? 'border-fw-accent bg-fw-accent text-fw-accent-text' : 'border-fw-border-strong'}`}>
+      {checked ? <Check size={12} strokeWidth={3} /> : null}
+    </span>
   )
 }

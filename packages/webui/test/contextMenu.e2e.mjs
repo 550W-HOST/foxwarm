@@ -39,7 +39,14 @@ before(async () => {
           label: 'Notify on idle',
           onSelect() {},
           trailingControl: { label: 'always', checked: false, onSelect() {} },
-        }],
+        },
+        { key: 'head-view', type: 'header', label: 'View' },
+        { key: 'default', label: 'Default', checked: true, selection: 'radio', onSelect() {} },
+        { key: 'time', label: 'Time', checked: false, selection: 'radio', onSelect() {} },
+        { key: 'sep', type: 'separator' },
+        { key: 'head-rows', type: 'header', label: 'Rows' },
+        { key: 'detailed', label: 'Detailed rows', checked: true, onSelect() {} },
+        { key: 'compact', label: 'Compact', checked: false, onSelect() {} }],
       })
     }
     createRoot(document.getElementById('root')).render(React.createElement(Fixture))
@@ -89,4 +96,25 @@ test('split context-menu actions highlight the complete row from either hover ta
   assert.equal(trailingHover.row, mainHover.row)
   assert.equal(trailingHover.main, mainHover.main)
   assert.equal(trailingHover.trailing, mainHover.trailing)
+})
+test('checked items are visible, and radio choices differ from toggles', async () => {
+  const items = await page.$$eval('[role="menu"] :is([role="menuitemradio"], [role="menuitemcheckbox"]):not([data-context-menu-split-row] *)', elements => elements.map(element => ({
+    role: element.getAttribute('role'),
+    label: element.textContent.trim(),
+    checked: element.getAttribute('aria-checked'),
+    mark: element.querySelector('[data-context-menu-mark]')?.getAttribute('data-context-menu-mark') ?? null,
+    check: !!element.querySelector('[data-context-menu-mark] svg'),
+  })))
+  assert.deepEqual(items, [
+    { role: 'menuitemradio', label: 'Default', checked: 'true', mark: 'radio', check: true },
+    { role: 'menuitemradio', label: 'Time', checked: 'false', mark: 'radio', check: false },
+    { role: 'menuitemcheckbox', label: 'Detailed rows', checked: 'true', mark: 'toggle', check: true },
+    { role: 'menuitemcheckbox', label: 'Compact', checked: 'false', mark: 'toggle', check: false },
+  ])
+  assert.deepEqual(await page.$$eval('[role="menu"] [data-context-menu-header]', headers => headers.map(header => header.textContent)), ['View', 'Rows'])
+  assert.equal(await page.$$eval('[role="menu"] [role="separator"]', separators => separators.length), 1)
+  // Checked labels use emphasized accent text, so the choice reads without the mark. (This
+  // fixture has no theme variables, so the accent token itself is checked by class.)
+  const labels = await page.$$eval('[role="menu"] [role="menuitemradio"] span.flex-1', spans => spans.map(span => ({ weight: getComputedStyle(span).fontWeight, accent: span.classList.contains('text-fw-accent') })))
+  assert.deepEqual(labels, [{ weight: '500', accent: true }, { weight: '400', accent: false }])
 })

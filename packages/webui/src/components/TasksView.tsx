@@ -483,12 +483,14 @@ export default function TasksView({ onBack, onOpenSession: navigateToSession, mo
     </header>
     )}
     <ContextMenu open={!!mobileViewAnchor} anchorRect={mobileViewAnchor} preferredPlacement="bottom-end" onClose={() => {setMobileViewAnchor(null);mobileViewRef.current?.focus({preventScroll:true})}} entries={[
-      ...TASK_SCOPES.map(value => ({key:`scope-${value}`,label:TASK_SCOPE_LABELS[value],checked:scope===value,onSelect:()=>setScope(value)})),
-      {key:'sep-view',type:'separator'},
-      ...(['table','board'] as const).map(value => ({key:value,label:value==='table'?'Table':'Board',checked:view===value,onSelect:()=>setView(value)})),
-      {key:'sep-agent',type:'separator'},
-      ...['',...agentOptions].map(value => ({key:`agent-${value}`,label:value?`Agent: ${value}`:'All agents',checked:agentFilter===value,onSelect:()=>setAgentFilter(value)})),
-      ...AGENT_RELATIONS.map(value => ({key:`relation-${value}`,label:AGENT_RELATION_LABELS[value],checked:agentRelation===value,onSelect:()=>setAgentRelation(value)})),
+      {key:'head-scope',type:'header',label:'Tasks'},
+      ...TASK_SCOPES.map(value => ({key:`scope-${value}`,label:TASK_SCOPE_LABELS[value],checked:scope===value,selection:'radio' as const,onSelect:()=>setScope(value)})),
+      {key:'head-view',type:'header',label:'View'},
+      ...(['table','board'] as const).map(value => ({key:value,label:value==='table'?'Table':'Board',checked:view===value,selection:'radio' as const,onSelect:()=>setView(value)})),
+      {key:'head-agent',type:'header',label:'Agent'},
+      ...['',...agentOptions].map(value => ({key:`agent-${value}`,label:value?value:'All agents',checked:agentFilter===value,selection:'radio' as const,onSelect:()=>setAgentFilter(value)})),
+      {key:'head-relation',type:'header',label:'Relationship'},
+      ...AGENT_RELATIONS.map(value => ({key:`relation-${value}`,label:AGENT_RELATION_LABELS[value],checked:agentRelation===value,selection:'radio' as const,onSelect:()=>setAgentRelation(value)})),
       {key:'sep-refresh',type:'separator'},
       {key:'refresh',label:'Refresh',disabled:loading,onSelect:()=>setRefresh(value=>value+1)},
     ] satisfies ContextMenuEntry[]} />

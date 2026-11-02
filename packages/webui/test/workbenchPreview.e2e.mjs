@@ -1189,15 +1189,18 @@ test('old preview records disappear without removing kept or system tabs; canoni
 test('global history entry opens a persistent workbench tab without a chat composer', async () => {
   const page = await openFixture()
   try {
-    const footer = '[data-sidebar-footer]'
-    assert.deepEqual(await page.$$eval(`${footer} button`, buttons => buttons.map(button => button.getAttribute('aria-label'))), ['Open tasks', 'Search history', 'Open UI settings'])
+    // Top navigation rows: System, Tasks, Search, Code, Terminal; the sidebar has no footer.
+    assert.equal(await page.$('.foxwarm-sidebar-panel [data-sidebar-footer]'), null)
+    assert.deepEqual(await page.$$eval('[data-sidebar-nav-list] [data-sidebar-nav]', rows => rows.map(row => row.getAttribute('data-sidebar-nav'))), ['system', 'tasks', 'search', 'code', 'terminal'])
+    assert.deepEqual(await page.$$eval('[data-sidebar-nav-list] [data-sidebar-nav]', rows => rows.map(row => Math.round(row.getBoundingClientRect().height))), [32, 32, 32, 32, 32])
+    const search = '[data-sidebar-nav="search"] > button'
     assert.equal(await page.$$eval('button[title="Search history"]', buttons => buttons.length), 1)
-    assert.equal(await page.$eval(`${footer} button[aria-label="Search history"]`, button => button.getBoundingClientRect().width), 36)
-    assert.equal(await page.$eval(`${footer} button[aria-label="Search history"]`, button => button.textContent.trim()), '')
-    assert.ok(await page.$(`${footer} button[aria-label="Search history"] svg.lucide-history`))
-    if (process.env.FOXWARM_HISTORY_SCREENSHOT_DIR) await (await page.$(footer))?.screenshot({ path: `${process.env.FOXWARM_HISTORY_SCREENSHOT_DIR}/sidebar-footer-search.png` })
+    assert.equal(await page.$eval(search, button => button.textContent.trim()), 'Search')
+    assert.ok(await page.$(`${search} svg.lucide-search`))
+    if (process.env.FOXWARM_HISTORY_SCREENSHOT_DIR) await (await page.$('[data-sidebar-nav-list]'))?.screenshot({ path: `${process.env.FOXWARM_HISTORY_SCREENSHOT_DIR}/sidebar-nav-search.png` })
     if (process.env.FOXWARM_HISTORY_SCREENSHOT_DIR) await (await page.$('.foxwarm-chat-root .sticky'))?.screenshot({ path: `${process.env.FOXWARM_HISTORY_SCREENSHOT_DIR}/chat-find-header.png` })
-    await page.click(`${footer} button[aria-label="Search history"]`)
+    await page.click(search)
+    await page.waitForSelector('[data-sidebar-nav="search"][data-active]')
     await page.waitForSelector('[data-tab-id^="history:"]')
     await page.waitForSelector('[data-history-search-view]')
     assert.equal(await page.$('[data-history-search-view] [aria-label="Message"]'), null)
@@ -1216,7 +1219,7 @@ test('global history entry opens a persistent workbench tab without a chat compo
 test('History tabs keep independent drafts/results across entries, pane collapse, and mobile list hiding', async () => {
   const page = await openFixture({ split: true })
   try {
-    const footer = '[data-sidebar-footer] button[aria-label="Search history"]'
+    const footer = '[data-sidebar-nav="search"] > button'
     await page.click(footer)
     await page.waitForSelector('[data-history-search-view]')
     const firstTabId = await page.$eval('[data-tab-id^="history:"]', tab => tab.getAttribute('data-tab-id'))
@@ -1308,16 +1311,16 @@ test('History tabs keep independent drafts/results across entries, pane collapse
   } finally { await page.close() }
 })
 
-test('collapsed rail keeps its Search footer and mobile uses its primary Search tab', async () => {
+test('collapsed rail keeps the navigation entries at the top and mobile uses its primary Search tab', async () => {
   const page = await openFixture()
   try {
     await page.click('button[title="Collapse sidebar"]')
-    await page.waitForSelector('.w-12 [data-sidebar-footer] button[aria-label="Search history"]')
-    assert.equal(await page.$eval('.w-12 [data-sidebar-footer] button[aria-label="Search history"]', button => button.textContent.trim()), '')
-    assert.ok(await page.$('.w-12 [data-sidebar-footer] button[aria-label="Search history"] svg.lucide-history'))
-    assert.equal(await page.$('.w-12 > div:first-child button[aria-label="Search history"]'), null)
-    assert.equal(await page.$('.w-12 > div:first-child button[aria-label="Open UI settings"]'), null)
-    assert.ok(await page.$('.w-12 [data-sidebar-footer] button[aria-label="Open UI settings"]'))
+    const rail = '.w-12 [data-sidebar-nav-list]'
+    await page.waitForSelector(`${rail} button[aria-label="Search history"]`)
+    assert.deepEqual(await page.$$eval(`${rail} button[aria-label]`, buttons => buttons.map(button => button.getAttribute('aria-label'))), ['Open UI settings', 'System', 'Tasks', 'Search history'])
+    assert.ok(await page.$(`${rail} button[aria-label="Search history"] svg.lucide-search`))
+    assert.equal(await page.$('.w-12 [data-sidebar-footer]'), null)
+    assert.ok(await page.$('.w-12 button[aria-label="New session"]'))
     await page.setViewport({ width: 390, height: 800 })
     await page.waitForSelector('.foxwarm-desktop-workbench-shell', { hidden: true })
     await page.evaluate(() => window.foxwarmTest.switchToSession('e2e-a'))
@@ -1363,7 +1366,7 @@ test('opening an existing History tab from the footer expands its collapsed pane
   })
   try {
     await page.waitForSelector('[data-workbench-collapsed-tab="history:existing"]')
-    await page.click('[data-sidebar-footer] button[aria-label="Search history"]')
+    await page.click('[data-sidebar-nav="search"] > button')
     await page.waitForSelector('[data-history-tab-id="history:existing"]')
     await page.waitForFunction(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.root.children.find(pane => pane.id === 'pane-history').collapsed === false)
     assert.equal((await state(page)).tabsById['history:existing'].id, 'history:existing', 'the existing tab instance is activated rather than replaced')
@@ -1407,7 +1410,7 @@ test('Ctrl/Cmd+F targets the focused Chat pane and not inactive Chat or non-Chat
     await page.waitForSelector(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) [data-chat-search] input')
     assert.equal(await page.$(':is([data-pane-id="pane-other"], [data-workbench-content-pane="pane-other"]) [data-chat-search]'), null)
     await page.type(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) [data-chat-search] input', 'repeat query')
-    await page.click('[data-sidebar-footer] button[aria-label="Open UI settings"]')
+    await page.click('[data-sidebar-brand] button[aria-label="Open UI settings"]')
     await page.keyboard.down('Control'); await page.keyboard.press('f'); await page.keyboard.up('Control')
     assert.deepEqual(await page.evaluate(() => ({
       value: document.querySelector(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) [data-chat-search] input').value,
@@ -1443,7 +1446,7 @@ test('550A Chat has one Code action, honors the new-tab preference, and dispatch
     assert.equal(await page.$$eval(`${header} button[title="Code"]`, buttons => buttons.length), 1)
     assert.equal(await page.$eval(`${header} button[title="Code"]`, button => button.textContent), 'Code')
     assert.equal(await page.$(`${header} button[title="Terminal"]`), null)
-    assert.equal(await page.$eval('[data-workbench-status-bar] button[title="Terminal"]', button => button.textContent), 'Terminal')
+    assert.equal(await page.$eval('[data-workbench-status-bar] [data-status-terminal-panel]', button => button.textContent), 'Terminal panel')
     assert.equal(await page.$(`${header} .lucide-external-link`), null)
     assert.equal(await page.$(`${header} button[title="Open code in a new browser tab"]`), null)
     assert.equal(await page.evaluate(() => document.documentElement.dataset.foxwarmComponentTreatment), 'console')
@@ -1463,7 +1466,7 @@ test('550A Chat has one Code action, honors the new-tab preference, and dispatch
     assert.deepEqual(opened[0].slice(1), ['_blank', 'noopener,noreferrer'])
     assert.equal((await state(page)).tabsById['vscode-web'], undefined)
 
-    await page.click('[data-workbench-status-bar] button[title="Terminal"]')
+    await page.click('[data-workbench-status-bar] [data-status-terminal-panel]')
     await page.waitForFunction(() => Object.values(JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.tabsById).some(tab => tab.type === 'terminal'))
     const terminal = Object.values((await state(page)).tabsById).find(tab => tab.type === 'terminal')
     assert.equal(terminal.nodeId, 'master')
@@ -1490,7 +1493,7 @@ test('Application menu icons precede their labels and retain Setup, Logs, and re
   const page = await openFixture({ themeId: 'foxwarm.550a' })
   try {
     const menu = '[data-global-ui-settings-menu]'
-    const trigger = '[data-sidebar-footer] button[aria-label="Open UI settings"]'
+    const trigger = '[data-sidebar-brand] button[aria-label="Open UI settings"]'
     const openMenu = async () => {
       await page.waitForSelector(trigger)
       await page.click(trigger)
@@ -1906,24 +1909,14 @@ test('Tasks uses desktop singleton footers and an independent retained mobile pr
         assert.equal(await page.$$eval('#mobile-panel-tasks [data-tasks-view]', nodes => nodes.length), 1)
         continue
       }
-      const entry = '[data-sidebar-footer] button[aria-label="Open tasks"]'
+      // Tasks is a top navigation entry, before Search, in the expanded sidebar and the rail.
+      const entry = surface === 'collapsed' ? '.w-12 [data-sidebar-nav-list] button[aria-label="Tasks"]' : '[data-sidebar-nav="tasks"] > button'
+      const search = surface === 'collapsed' ? '.w-12 [data-sidebar-nav-list] button[aria-label="Search history"]' : '[data-sidebar-nav="search"] > button'
       await page.waitForSelector(entry)
       assert.ok(await page.$(`${entry} svg.lucide-clipboard-list`))
       assert.equal(await page.$eval(entry, button => button.textContent.trim()), surface === 'collapsed' ? '' : 'Tasks')
-      const geometry = await page.evaluate(() => {
-        const footer = document.querySelector('[data-sidebar-footer]').getBoundingClientRect()
-        const tasks = document.querySelector('[aria-label="Open tasks"]').getBoundingClientRect()
-        const history = document.querySelector('[aria-label="Search history"]').getBoundingClientRect()
-        const settings = document.querySelector('[aria-label="Open UI settings"]').getBoundingClientRect()
-        return { leftGap: tasks.left - footer.left, rightGap: footer.right - settings.right, tasksRight: tasks.right, historyLeft: history.left, tasksBottom: tasks.bottom, historyTop: history.top, settingsRight: settings.right, viewportWidth: innerWidth }
-      })
-      assert.ok(geometry.settingsRight <= geometry.viewportWidth)
-      if (surface === 'collapsed') assert.ok(geometry.tasksBottom < geometry.historyTop)
-      else {
-        assert.equal(geometry.leftGap, 8)
-        assert.equal(geometry.rightGap, 8)
-        assert.ok(geometry.tasksRight < geometry.historyLeft)
-      }
+      const [tasksBottom, searchTop] = await Promise.all([page.$eval(entry, e => e.getBoundingClientRect().bottom), page.$eval(search, e => e.getBoundingClientRect().top)])
+      assert.ok(tasksBottom <= searchTop)
       await page.click(entry)
       await page.waitForSelector('[data-tasks-view]')
       assert.equal((await state(page)).root.activeTabId, 'system:tasks')
@@ -1987,7 +1980,7 @@ test('Tasks restores from its deployment-relative route, stays singleton, and mo
     await page.reload({ waitUntil: 'domcontentloaded' })
     await waitForWebUiReady(page)
     await page.waitForSelector('[data-tasks-view]')
-    await page.click('[data-sidebar-footer] button[aria-label="Open tasks"]')
+    await page.click('[data-sidebar-nav="tasks"] > button')
     assert.equal(Object.values((await state(page)).tabsById).filter(tab => tab.type === 'tasks').length, 1)
     await page.click('[data-tab-id="system:tasks"]', { button: 'right' })
     await page.waitForSelector('[role="menu"]')
@@ -2178,7 +2171,7 @@ async function clickStatusPageEntry(page, section) {
   await page.click(`[data-workbench-status-bar] button[aria-label^="${section === 'Tasks' ? 'Tasks:' : 'Nodes:'}"]`)
   await page.waitForSelector(popup, { visible: true })
   // Loading preview rows can move the action after the popup first appears.
-  await page.locator(`${popup} button::-p-text(Open ${section})`).click()
+  await page.locator(`${popup} button::-p-text(${section === 'Tasks' ? 'Open Tasks' : 'Open in System › Nodes'})`).click()
   await page.waitForSelector(popup, { hidden: true })
 }
 
@@ -2203,7 +2196,7 @@ test('Tasks and Nodes popup entries close the preview and activate singleton pag
     assert.equal(Object.keys((await state(page)).tabsById).filter(id => id === 'system:tasks').length, 1)
     await page.click('[data-workbench-status-bar] button[aria-label^="Nodes:"]')
     await page.waitForSelector('[data-workbench-status-popup]', { visible: true })
-    await page.waitForFunction(() => document.querySelector('[data-workbench-status-popup]')?.textContent.includes('Open Nodes'))
+    await page.waitForFunction(() => document.querySelector('[data-workbench-status-popup]')?.textContent.includes('Open in System › Nodes'))
     await workbenchScreenshot(page, 'status-nodes-popup.png')
     await page.keyboard.press('Escape')
     await page.waitForSelector('[data-workbench-status-popup]', { hidden: true })
@@ -2278,7 +2271,7 @@ test('Desktop status bar opens upward details without navigation and stays outsi
   const page = await openFixture()
   try {
     const bar = '[data-workbench-status-bar]'
-    const tasks = `${bar} button[aria-label="Tasks: 2 active, 5 unfinished"]`
+    const tasks = `${bar} button[aria-label="Tasks: 2 active, 3 open"]`
     await page.waitForSelector(tasks)
     assert.equal(await page.$eval(bar, element => element.getBoundingClientRect().height), 24)
     const hash = await page.evaluate(() => location.hash)
@@ -2294,7 +2287,7 @@ test('Desktop status bar opens upward details without navigation and stays outsi
     assert.equal(await page.$('[data-workbench-status-popup]'), null)
     assert.equal(await page.$eval(tasks, element => document.activeElement === element), true)
     await page.evaluate(() => window.dispatchEvent(new CustomEvent('foxwarm-task-counts', { detail: { open: 1, active: 1 } })))
-    await page.waitForSelector(`${bar} button[aria-label="Tasks: 1 active, 2 unfinished"]`)
+    await page.waitForSelector(`${bar} button[aria-label="Tasks: 1 active, 1 open"]`)
     await page.click(`${bar} button[aria-label="Nodes: 1 online, 1 total"]`)
     await page.waitForSelector('[data-workbench-status-popup]', { visible: true })
     assert.match(await page.$eval('[data-workbench-status-popup]', element => element.textContent), /master/)
@@ -2362,9 +2355,9 @@ test('Status usage separates global totals from the focused Chat and follows foc
 test('Footer Terminal is a reusable bottom pane that collapses without PTY deletion and remains draggable', async () => {
   const terminal = { id: 'term-panel', nodeId: 'master', cwd: '/', title: 'Panel shell', attached: true }
   const page = await openFixture({ tabs: [system, chat('e2e-a', false)], terminal, responsiveChat: true, width: 1400 })
-  const control = '[data-workbench-status-bar] button[aria-label="Toggle terminal"]'
+  const control = '[data-workbench-status-bar] button[aria-label="Toggle terminal panel"]'
   try {
-    assert.equal(await page.$eval('[data-workbench-status-bar] button', button => button.getAttribute('aria-label')), 'Toggle terminal')
+    assert.equal(await page.$eval('[data-workbench-status-bar] button', button => button.getAttribute('aria-label')), 'Toggle terminal panel')
     await clickReadyControl(page, control)
     await page.waitForSelector('[data-terminal-header]', { visible: true })
     let snapshot = await state(page)
@@ -2753,7 +2746,7 @@ for (const action of ['Terminal', 'window height']) {
       try {
         const before = await idleViewportSnapshot(page)
         if (action === 'Terminal') {
-          await clickReadyControl(page, '[data-workbench-status-bar] button[aria-label="Toggle terminal"]')
+          await clickReadyControl(page, '[data-workbench-status-bar] button[aria-label="Toggle terminal panel"]')
           await page.waitForSelector('[data-terminal-header]', { visible: true })
         } else await page.setViewport({ width: 1400, height: 800 })
         await page.waitForFunction(() => document.querySelector('.foxwarm-chat-messages').clientHeight < 750)
@@ -2949,7 +2942,7 @@ test('Appearance Auto keeps independent choices and previews require explicit ap
   } finally { await page.close() }
 })
 
-test('Focused panes keep neutral outlines and Sidebar launcher buttons keep visible borders', async () => {
+test('Focused panes keep neutral outlines and Sidebar launchers are compact navigation rows', async () => {
   const page = await openFixture({ tabs: [chat('e2e-a', false), chat('e2e-b', false)], split: true, splitSecondChat: true, responsiveChat: true, themeId: 'foxwarm.vector' })
   try {
     await page.waitForSelector(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) .foxwarm-chat-root')
@@ -2957,10 +2950,11 @@ test('Focused panes keep neutral outlines and Sidebar launcher buttons keep visi
     await page.click(':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"]) .foxwarm-chat-root')
     assert.deepEqual(await page.$eval('[data-pane-id="pane-main"]', element => ({ border: getComputedStyle(element).borderColor, shadow: getComputedStyle(element).boxShadow })), before)
     assert.equal(before.shadow, 'none')
+    // Sidebar launchers are compact navigation rows, not bordered buttons.
     for (const title of ['Open System', 'Open code', 'Create terminal tab']) {
-      const selector = `.foxwarm-sidebar-panel button[title="${title}"]`
-      const border = await page.$eval(selector, element => ({ width: getComputedStyle(element).borderTopWidth, style: getComputedStyle(element).borderTopStyle, color: getComputedStyle(element).borderTopColor }))
-      assert.equal(border.width, '1px'); assert.equal(border.style, 'solid'); assert.notEqual(border.color, 'rgba(0, 0, 0, 0)')
+      const selector = `.foxwarm-sidebar-panel [data-sidebar-nav] > button[title="${title}"]`
+      const geometry = await page.$eval(selector, element => ({ border: getComputedStyle(element).borderTopWidth, height: Math.round(element.parentElement.getBoundingClientRect().height) }))
+      assert.deepEqual(geometry, { border: '0px', height: 32 }, title)
     }
   } finally { await page.close() }
 })
@@ -3187,7 +3181,7 @@ test('status popups keep full Node connectivity counts and compact theme-visible
       const nodesTrigger = '[data-workbench-status-bar] button[aria-label^="Nodes:"]'
       const popup = '[data-workbench-status-popup]'
       await page.waitForSelector('[data-node-surface]')
-      await page.waitForSelector('[data-workbench-status-bar] button[aria-label="Tasks: 1 active, 2 unfinished"]')
+      await page.waitForSelector('[data-workbench-status-bar] button[aria-label="Tasks: 1 active, 1 open"]')
       await page.waitForSelector(`${nodesTrigger}[title="Nodes: 9 online, 15 total"]`)
       assert.equal(await page.$eval(`${nodesTrigger} span:last-child`, element => element.textContent), '9/15')
       assert.match(await page.$eval('[data-node-surface]', element => element.textContent), /Online 9 · Total 15/)
@@ -3242,11 +3236,11 @@ test('status popups keep full Node connectivity counts and compact theme-visible
         return { surface: style.backgroundColor, divider: sectionStyle.borderTopColor, dividerWidth: sectionStyle.borderTopWidth, marginTop: sectionStyle.marginTop, paddingTop: sectionStyle.paddingTop, height: element.getBoundingClientRect().height }
       }))
       assert.equal(await page.$eval(`${popup} .foxwarm-status-popup-section`, element => getComputedStyle(element).borderTopColor !== getComputedStyle(element.parentElement).backgroundColor), true)
-      await page.evaluate(() => [...document.querySelectorAll('[data-workbench-status-popup] button')].find(button => button.textContent === 'Open Nodes').focus())
+      await page.evaluate(() => [...document.querySelectorAll('[data-workbench-status-popup] button')].find(button => button.textContent === 'Open in System › Nodes').focus())
       await page.keyboard.press('Enter')
       await page.waitForSelector(popup, { hidden: true })
       assert.equal((await state(page)).hash, '#tab/system:agents')
-      await page.click('[data-workbench-status-bar] button[aria-label="Tasks: 1 active, 2 unfinished"]')
+      await page.click('[data-workbench-status-bar] button[aria-label="Tasks: 1 active, 1 open"]')
       await page.waitForFunction(() => document.querySelector('[data-workbench-status-popup]')?.textContent.includes('Review Node status'))
       await workbenchScreenshot(page, `tasks-popup-${label}.png`)
       const taskPopupBadge = await badgePresentation(page, `${popup} .task-status[data-status="active"]`)
@@ -3270,7 +3264,7 @@ test('status popups keep full Node connectivity counts and compact theme-visible
         await page.waitForSelector('.tasks-table .task-status[data-status="active"]')
         assert.deepEqual(await badgePresentation(page, '.tasks-table .task-status[data-status="active"]'), { ...taskPopupBadge, padding: '3px 7px', line: '18px' })
         await workbenchScreenshot(page, `tasks-page-${label}.png`)
-        await page.click('[data-workbench-status-bar] button[aria-label="Tasks: 1 active, 2 unfinished"]')
+        await page.click('[data-workbench-status-bar] button[aria-label="Tasks: 1 active, 1 open"]')
         await page.waitForFunction(() => document.querySelector('[data-workbench-status-popup] .task-status')?.textContent === 'Active')
         await workbenchScreenshot(page, `tasks-page-popup-${label}.png`)
       }

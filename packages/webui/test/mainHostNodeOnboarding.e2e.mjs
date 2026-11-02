@@ -87,7 +87,7 @@ try {
   // Navigate through the real workbench status bar, not a replacement component fixture.
   await page.click('[data-workbench-status-bar] button[aria-label^="Nodes:"]')
   await page.waitForSelector('[data-workbench-status-popup] [aria-label="Node directory"]')
-  await click('Open Nodes'); await page.waitForSelector('[data-node-surface]')
+  await click('Open in System › Nodes'); await page.waitForSelector('[data-node-surface]')
   assert.equal(requests.filter(request => request.url.includes('/onboarding/commands')).length, 0)
   await click('New nodes'); await readyCommand('--pairing=')
   assert.equal(await page.$eval('[aria-label="Reachable address"]', input => input.value), host)

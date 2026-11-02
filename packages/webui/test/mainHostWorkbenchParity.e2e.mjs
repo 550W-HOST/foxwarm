@@ -126,7 +126,7 @@ try {
   assert.equal(await page.$eval('[data-history-search-view] [role="alert"]', node => node.textContent), submittedError)
 
   // Desktop dock/reload/collapse retains the actual PTY; explicit pane Close deletes it.
-  await chat(); await click('[aria-label="Toggle terminal"]'); await page.waitForSelector('[data-terminal-header]', { visible: true })
+  await chat(); await click('[aria-label="Toggle terminal panel"]'); await page.waitForSelector('[data-terminal-header]', { visible: true })
   const terminal = await until(async () => (await host.api('GET', '/api/terminals')).body.terminals[0], 'real docked terminal')
   assert.equal(terminal.cwd, host.work)
   await click('.xterm-screen'); await page.keyboard.type("printf 'DOCKED-PTY\\n' > docked.txt"); await page.keyboard.press('Enter')
@@ -134,8 +134,8 @@ try {
   let layout = await savedLayout(), terminalTab = Object.values(layout.tabsById).find(tab => tab.type === 'terminal')
   let terminalPane = panes(layout.root).find(pane => pane.tabIds.includes(terminalTab.id))
   assert(terminalPane && terminalPane.tabIds.length === 1)
-  await click('[aria-label="Toggle terminal"]'); assert.equal((await host.api('GET', '/api/terminals/' + terminal.id)).body.terminal.pid, terminal.pid)
-  await click('[aria-label="Toggle terminal"]'); await page.waitForSelector('[data-terminal-header]', { visible: true })
+  await click('[aria-label="Toggle terminal panel"]'); assert.equal((await host.api('GET', '/api/terminals/' + terminal.id)).body.terminal.pid, terminal.pid)
+  await click('[aria-label="Toggle terminal panel"]'); await page.waitForSelector('[data-terminal-header]', { visible: true })
   await page.reload({ waitUntil: 'domcontentloaded' }); await page.waitForSelector('[data-terminal-header]', { visible: true })
   assert.equal((await host.api('GET', '/api/terminals/' + terminal.id)).body.terminal.pid, terminal.pid)
   layout = await savedLayout(); terminalTab = Object.values(layout.tabsById).find(tab => tab.type === 'terminal'); terminalPane = panes(layout.root).find(pane => pane.tabIds.includes(terminalTab.id))
