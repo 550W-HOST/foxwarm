@@ -12,7 +12,7 @@
   <Target
     Name="PrepareFoxwarmPty"
     BeforeTargets="AssignTargetPaths"
-    Condition="'$(FoxwarmStaticMusl)' != 'true' and '$(OS)' != 'Windows_NT' and ('$(RuntimeIdentifier)' == '' or $([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('linux-')))"
+    Condition="'$(FoxwarmStaticMusl)' != 'true' and $([MSBuild]::IsOSPlatform('Linux')) and ('$(RuntimeIdentifier)' == '' or $([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('linux-')))"
   >
     <MakeDir Directories="$(IntermediateOutputPath)native" />
     <Exec Command="gcc -std=c11 -O2 -Wall -Wextra -Werror -fPIC -shared -Wl,-z,relro,-z,now -o &quot;$(IntermediateOutputPath)native/libfoxwarm-pty.so&quot; &quot;$(MSBuildProjectDirectory)/Terminal/native/foxwarm-pty.c&quot; -lutil" />
@@ -23,6 +23,23 @@
         CopyToOutputDirectory="PreserveNewest"
         CopyToPublishDirectory="PreserveNewest"
       />
+    </ItemGroup>
+  </Target>
+  <Target Name="PrepareDarwinFoxwarmPty" BeforeTargets="AssignTargetPaths"
+    Condition="$([MSBuild]::IsOSPlatform('OSX')) and ('$(RuntimeIdentifier)' == '' or $([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('osx-')))">
+    <PropertyGroup>
+      <DarwinPtyRid Condition="'$(RuntimeIdentifier)' != ''">$(RuntimeIdentifier)</DarwinPtyRid>
+      <DarwinPtyRid Condition="'$(DarwinPtyRid)' == ''">$(NETCoreSdkPortableRuntimeIdentifier)</DarwinPtyRid>
+      <DarwinPtyArch Condition="'$(DarwinPtyRid)' == 'osx-arm64'">arm64</DarwinPtyArch>
+      <DarwinPtyArch Condition="'$(DarwinPtyRid)' == 'osx-x64'">x86_64</DarwinPtyArch>
+    </PropertyGroup>
+    <Error Condition="'$(DarwinPtyArch)' == ''" Text="Unsupported macOS PTY architecture: $(DarwinPtyRid)" />
+    <MakeDir Directories="$(IntermediateOutputPath)native" />
+    <Exec Command="clang -arch $(DarwinPtyArch) -std=c11 -O2 -Wall -Wextra -Werror -dynamiclib -o &quot;$(IntermediateOutputPath)native/libfoxwarm-pty.dylib&quot; &quot;$(MSBuildProjectDirectory)/Terminal/native/foxwarm-pty.c&quot;" />
+    <Exec Command="clang -arch $(DarwinPtyArch) -std=c11 -O2 -Wall -Wextra -Werror -o &quot;$(IntermediateOutputPath)native/foxwarm-pty-helper&quot; &quot;$(MSBuildProjectDirectory)/Terminal/native/foxwarm-pty-darwin-helper.c&quot;" />
+    <ItemGroup>
+      <Content Include="$(IntermediateOutputPath)native/foxwarm-pty-helper" Link="foxwarm-pty-helper" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+      <Content Include="$(IntermediateOutputPath)native/libfoxwarm-pty.dylib" Link="libfoxwarm-pty.dylib" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     </ItemGroup>
   </Target>
 </Project>

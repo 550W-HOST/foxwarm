@@ -72,6 +72,12 @@ internal sealed partial class TerminalRegistry : IAsyncDisposable
         foreach (System.Collections.DictionaryEntry item in Environment.GetEnvironmentVariables())
             if (item.Key is string key && item.Value is string value)
                 environment[key] = value;
+        // SSH/service launches on macOS often have no locale, unlike Terminal.app.
+        // Preserve explicit locale choices; otherwise match the UTF-8 WebUI.
+        if (OperatingSystem.IsMacOS()
+            && new[] { "LC_ALL", "LC_CTYPE", "LANG" }.All(key =>
+                !environment.TryGetValue(key, out var value) || string.IsNullOrWhiteSpace(value)))
+            environment["LANG"] = "en_US.UTF-8";
         environment["TERM"] = "xterm-256color";
         environment["COLORTERM"] = "truecolor";
         var configuredShell = environment.TryGetValue("SHELL", out var configured)
@@ -115,7 +121,7 @@ internal sealed partial class TerminalRegistry : IAsyncDisposable
                         powershell ? PowerShellRc : BashRc,
                         new UTF8Encoding(powershell)
                     );
-                if (rcFile is not null && OperatingSystem.IsLinux())
+                if (rcFile is not null && !OperatingSystem.IsWindows())
                     File.SetUnixFileMode(rcFile, UnixFileMode.UserRead | UnixFileMode.UserWrite);
                 var native = TerminalNative.Handle.Spawn(
                     shell,
@@ -263,6 +269,7 @@ internal sealed partial class TerminalRegistry : IAsyncDisposable
         private readonly SemaphoreSlim input = new(1, 1);
         private readonly string cwdFile;
         private readonly string? rcFile;
+        private readonly string? processStartTicks;
         private readonly StringBuilder backlog = new();
         private readonly CancellationTokenSource lifetime = new();
         private readonly CancellationTokenSource escalationStop = new();
@@ -297,6 +304,7 @@ internal sealed partial class TerminalRegistry : IAsyncDisposable
             Id = id;
             Cwd = cwd;
             this.native = native;
+            processStartTicks = Foxwarm.Tools.NativeProcessFacts.ReadIdentity(native.Pid).Ticks;
             this.helper = helper;
             this.helperCapability = helperCapability;
             this.remove = remove;
@@ -323,6 +331,15 @@ internal sealed partial class TerminalRegistry : IAsyncDisposable
             }
             catch (IOException) { }
             catch (UnauthorizedAccessException) { }
+            if (OperatingSystem.IsMacOS() && rcFile is null && Volatile.Read(ref waitCompleted) == 0
+                && processStartTicks is not null
+                && Foxwarm.Tools.NativeProcessFacts.ReadIdentity(native.Pid).Ticks == processStartTicks)
+            {
+                var observed = Foxwarm.Tools.NativeProcessFacts.ReadDarwinWorkingDirectory(native.Pid);
+                if (observed is not null
+                    && Foxwarm.Tools.NativeProcessFacts.ReadIdentity(native.Pid).Ticks == processStartTicks)
+                    Cwd = observed;
+            }
             return new()
             {
                 ["id"] = Id,
@@ -565,7 +582,7 @@ internal sealed partial class TerminalRegistry : IAsyncDisposable
                 {
                     break;
                 }
-                if (count == 0 || count == -5 || count == -125)
+                if (count == 0 || count == -5 || count == -(OperatingSystem.IsMacOS() ? 89 : 125))
                     break;
                 if (count < 0)
                     throw new IOException($"Terminal output failed (errno {-count}).");

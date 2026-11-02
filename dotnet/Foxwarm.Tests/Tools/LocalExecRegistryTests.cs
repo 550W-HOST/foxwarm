@@ -189,7 +189,7 @@ public sealed class LocalExecRegistryTests
     [Fact]
     public async Task Concurrent_native_starts_use_one_bounded_registry_and_inherit_nonreserved_environment()
     {
-        if (!OperatingSystem.IsLinux())
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
             return;
         using var temp = new TempDirectory();
         const string name = "FOXWARM_OWNED_EXEC_PARITY";
@@ -258,7 +258,7 @@ public sealed class LocalExecRegistryTests
     [Fact]
     public async Task Missing_status_recreates_pruned_parent_but_never_invents_exit_or_duration()
     {
-        if (!OperatingSystem.IsLinux())
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
             return;
         using var temp = new TempDirectory();
         var entry = Record(temp.Path);

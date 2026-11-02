@@ -71,3 +71,12 @@ test('a musl SDK keeps its portable ABI and does not select the GNU Monty worker
   assert.equal(actual.MontyExecutable, '');
   assert.equal(actual.ArtifactTargetRid, 'linux-musl-x64');
 });
+
+for (const rid of ['osx-arm64', 'osx-x64']) {
+  test(`macOS ${rid} selects its native Monty worker`, () => {
+    const actual = evaluate({ ...ubuntuSdk, RuntimeIdentifier: rid });
+    assert.equal(actual.MontyTargetRid, rid);
+    assert.equal(actual.MontyExecutable, 'monty');
+    assert.equal(actual.ArtifactTargetRid, rid);
+  });
+}

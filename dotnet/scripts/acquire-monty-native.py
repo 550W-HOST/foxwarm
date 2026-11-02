@@ -13,9 +13,16 @@ import urllib.request
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('prefix', type=Path)
-parser.add_argument('--rid', choices=('linux-x64', 'win-x64'), default='win-x64' if platform.system() == 'Windows' else 'linux-x64')
+targets = {
+    'linux-x64': ('monty-linux-x64-gnu', 'monty'),
+    'win-x64': ('monty-win32-x64-msvc', 'monty.exe'),
+    'osx-x64': ('monty-darwin-x64', 'monty'),
+    'osx-arm64': ('monty-darwin-arm64', 'monty'),
+}
+default_rid = ('osx-arm64' if platform.machine() == 'arm64' else 'osx-x64') if platform.system() == 'Darwin' else ('win-x64' if platform.system() == 'Windows' else 'linux-x64')
+parser.add_argument('--rid', choices=tuple(targets), default=default_rid)
 args = parser.parse_args()
-package_name, executable = ('monty-win32-x64-msvc', 'monty.exe') if args.rid == 'win-x64' else ('monty-linux-x64-gnu', 'monty')
+package_name, executable = targets[args.rid]
 prefix = args.prefix.resolve()
 url = f'https://registry.npmjs.org/@pydantic/{package_name}/0.0.19'
 with urllib.request.urlopen(url, timeout=40) as response:

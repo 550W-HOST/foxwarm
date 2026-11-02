@@ -58,10 +58,13 @@ public sealed class ToolScriptSourceTests
         );
         Assert.True(SessionWait.Text(completed["status"]) == "completed", completed.ToJsonString());
         Assert.Equal("EXAMPLE_OK", SessionWait.Text(completed["result"]?["label"]));
-        Assert.Contains(
-            "automation_basic.py",
-            SessionWait.Text(completed["result"]?["listingPreview"])
-        );
+        var listing = await f.Call("read", new JsonObject { ["filePath"] = examples });
+        var listingText = SessionWait.Text(listing["output"])!;
+        // The demonstration intentionally returns only 200 characters. A long
+        // native temporary root can consume that preview before the file names.
+        Assert.Contains("automation_basic.py", listingText);
+        Assert.Equal(listingText[..Math.Min(200, listingText.Length)].Replace("\n", " "),
+            SessionWait.Text(completed["result"]?["listingPreview"]));
         var documentation = await File.ReadAllTextAsync(Path.Combine(examples, "README.md"));
         Assert.Equal(
             documentation[..160].Replace("\n", " "),

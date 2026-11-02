@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json.Nodes;
 using Foxwarm.Models;
 using Foxwarm.Sessions;
@@ -189,7 +190,23 @@ public sealed class MainExecCwdTests
             default
         );
         Assert.True(result.Response!["error"] is null, result.Response.ToJsonString());
-        Assert.Equal(first, owner.Entry.Snapshot().AuthorityEnvelope["cwd"]!.GetValue<string>());
+        // Live OS observations are physical paths; completed Bash sidecars retain
+        // logical PWD. macOS commonly aliases /var to /private/var.
+        var physicalFirst = first;
+        if (OperatingSystem.IsMacOS())
+        {
+            using var probe = Process.Start(new ProcessStartInfo("/bin/pwd")
+            {
+                WorkingDirectory = first,
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+                ArgumentList = { "-P" },
+            })!;
+            physicalFirst = (await probe.StandardOutput.ReadToEndAsync()).TrimEnd('\r', '\n');
+            await probe.WaitForExitAsync();
+            Assert.Equal(0, probe.ExitCode);
+        }
+        Assert.Equal(physicalFirst, owner.Entry.Snapshot().AuthorityEnvelope["cwd"]!.GetValue<string>());
         await owner.UpdateCwdAsync(work);
         var record = Assert.Single(
             JsonNode.Parse(

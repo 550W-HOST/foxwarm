@@ -8,7 +8,7 @@ public sealed class TerminalNativeConsumerTests
     [Fact]
     public async Task Main_registry_keeps_real_shell_cwd_dimensions_and_process_cleanup_after_extraction()
     {
-        if (!OperatingSystem.IsLinux() || !TerminalRegistry.IsSupported)
+        if ((!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS()) || !TerminalRegistry.IsSupported)
             return;
         using var temp = new TempDirectory();
         var child = Path.Combine(temp.Path, "directory space 雪");
@@ -45,7 +45,7 @@ public sealed class TerminalNativeConsumerTests
     [Fact]
     public async Task Main_same_executable_helper_enters_local_capability_ipc_before_host_startup()
     {
-        if (!OperatingSystem.IsLinux())
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
             return;
         using var temp = new TempDirectory();
         var file = Path.Combine(temp.Path, "literal space 雪.txt");
@@ -97,7 +97,21 @@ public sealed class TerminalNativeConsumerTests
         Assert.Equal(0, accepted.Code);
         Assert.Contains("Main IPC acknowledged", accepted.Output);
         Assert.Equal("owned-main-terminal", terminalId);
-        Assert.Equal(new CodeHelperServer.CodeHelperRequest("openFile", file, 3, 2), observed);
+        var resolvedFile = file;
+        if (OperatingSystem.IsMacOS())
+        {
+            using var pwd = Process.Start(new ProcessStartInfo("/bin/pwd")
+            {
+                WorkingDirectory = temp.Path,
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+                ArgumentList = { "-P" },
+            })!;
+            resolvedFile = Path.Combine((await pwd.StandardOutput.ReadToEndAsync()).TrimEnd('\r', '\n'), Path.GetFileName(file));
+            await pwd.WaitForExitAsync();
+            Assert.Equal(0, pwd.ExitCode);
+        }
+        Assert.Equal(new CodeHelperServer.CodeHelperRequest("openFile", resolvedFile, 3, 2), observed);
         helper.Unregister(registration.Capability);
         observed = null;
         var expired = await Invoke();

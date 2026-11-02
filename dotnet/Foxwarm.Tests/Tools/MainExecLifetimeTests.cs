@@ -14,7 +14,7 @@ public sealed class MainExecLifetimeTests
         bool retire
     )
     {
-        if (!OperatingSystem.IsLinux())
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
             return;
         using var temp = new TempDirectory();
         var data = Path.Combine(temp.Path, "data");
