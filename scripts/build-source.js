@@ -57,7 +57,8 @@ try {
         run('npm', ['--prefix', 'packages/webui', 'ci']);
       }
       if (!args.includes('--core-only')) run('npm', ['run', 'build:assets']);
-      run('dotnet', ['build', 'dotnet/Foxwarm/Foxwarm.csproj', '-o', staging,
+      // A source runtime only runs on this host; omit other platforms' native assets.
+      run('dotnet', ['build', 'dotnet/Foxwarm/Foxwarm.csproj', '--use-current-runtime', '-o', staging,
         ...(!args.includes('--core-only') ? ['-p:FoxwarmDelivery=true'] : [])]);
     } catch (error) {
       fs.rmSync(staging, { recursive: true, force: true });

@@ -55,7 +55,7 @@ git pull --ff-only origin main
 npm start
 ```
 
-`npm start` installs the locked dependencies, builds the app and starts it in tmux. For later restarts after a reviewed update, `npm run restart` prepares the new build while the old Main runs, then stops the old Main, selects the new output and sends the startup command. A build failure leaves the old Main running; a successful command send still needs a startup check.
+`npm start` installs the locked dependencies, builds the app and starts it in tmux. For later restarts after a reviewed update, `npm run restart` prepares the new build while the old Main runs, then stops the old Main (killing it if it has not exited after 60 seconds), selects the new output and sends the startup command. A build failure leaves the old Main running; a successful command send still needs a startup check.
 
 ### Windows
 

@@ -44,6 +44,8 @@ and other launch settings. Restart installs the root/WebUI lockfiles and builds
 the complete resources in staging while the old Main continues running. Only a
 successful build proceeds to Ctrl+C, waits for the exact dedicated tmux pane's
 foreground Main to drain, promotes the output, and sends the new launch command.
+A Main that has not exited 60 seconds after Ctrl+C is killed; this is equivalent
+to a crash, and busy Sessions resume at the next start.
 For first startup, `./scripts/start.sh` uses the same staging and promotion; it
 refuses an existing exact session. Restart also creates the session if absent.
 

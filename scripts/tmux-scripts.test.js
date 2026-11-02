@@ -68,7 +68,7 @@ sleep 300
   tmux('set-environment', '-g', 'TEST_START_LOG', log);
 
   return {
-    env, tmux,
+    env, tmux, app, root,
     targetPane() {
       const windows = tmux('list-windows', '-t', '=foxwarm', '-F', '#{window_name} #{pane_id}').split('\n');
       const target = windows.find(window => window.startsWith('foxwarm '));
@@ -82,6 +82,20 @@ sleep 300
         assert.ok(Date.now() < deadline, `Guard process not running in ${pane}`);
         await new Promise(resolve => setTimeout(resolve, 20));
       }
+    },
+    // Start a fixture job whose script reports readiness after installing its traps.
+    async job(pane, body) {
+      const ready = path.join(root, `ready-${pane.slice(1)}`);
+      const script = path.join(bin, `job-${pane.slice(1)}`);
+      fs.writeFileSync(script, `#!/bin/bash\n${body}\n`, { mode: 0o755 });
+      tmux('send-keys', '-t', pane, '-l', `${script} '${ready.replaceAll("'", "'\\''")}'`);
+      tmux('send-keys', '-t', pane, 'Enter');
+      const deadline = Date.now() + 3000;
+      while (!fs.existsSync(ready)) {
+        assert.ok(Date.now() < deadline, `Fixture job not running in ${pane}`);
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+      return script;
     },
     run(name, extraEnv = {}) {
       return spawnSync('bash', [path.join(app, 'scripts', name)], {
@@ -146,6 +160,42 @@ test('restart keeps the exact pane after its window renames beside a CLI Node wi
   await f.started(pane);
   f.assertUntouched(inactive);
   f.assertUntouched(other);
+});
+
+test('restart leaves copy mode so Ctrl+C reaches the foreground job', { skip }, async t => {
+  const f = fixture(t);
+  const pane = f.tmux('new-session', '-d', '-s', 'foxwarm', '-n', 'foxwarm', '-P', '-F', '#{pane_id}');
+  const marker = path.join(f.root, 'interrupted');
+  await f.job(pane, `trap 'touch "${marker}"; kill $!; exit 0' INT
+sleep 300 &
+touch "$1"
+wait`);
+  f.tmux('copy-mode', '-t', pane);
+  assert.equal(f.tmux('display-message', '-p', '-t', pane, '#{pane_in_mode}'), '1');
+  const result = f.run('restart.sh');
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.ok(fs.existsSync(marker), 'Foreground job did not receive Ctrl+C');
+  assert.doesNotMatch(result.stderr, /SIGKILL/);
+  await f.started(pane);
+});
+
+test('restart kills a foreground job that outlasts the stop deadline', { skip }, async t => {
+  const f = fixture(t);
+  // Shorten only this fixture copy; the installed script keeps its fixed deadline.
+  const script = path.join(f.app, 'scripts', 'restart.sh');
+  const source = fs.readFileSync(script, 'utf8');
+  assert.match(source, /DEADLINE=\$\(\(SECONDS \+ 60\)\)/);
+  fs.writeFileSync(script, source.replace('DEADLINE=$((SECONDS + 60))', 'DEADLINE=$((SECONDS + 1))'));
+  const pane = f.tmux('new-session', '-d', '-s', 'foxwarm', '-n', 'foxwarm', '-P', '-F', '#{pane_id}');
+  const stubborn = await f.job(pane, `trap '' INT
+touch "$1"
+while :; do sleep 1; done`);
+  const result = f.run('restart.sh');
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stderr, /sending SIGKILL/);
+  await f.started(pane);
+  const leftovers = spawnSync('pgrep', ['-f', stubborn], { encoding: 'utf8' }).stdout.trim();
+  assert.equal(leftovers, '', 'Killed foreground job is still running');
 });
 
 test('start still refuses an existing exact session with only a CLI Node window', { skip }, async t => {

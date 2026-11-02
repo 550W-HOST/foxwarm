@@ -50,15 +50,36 @@ else
 fi
 
 # Keep the same pane even if tmux renames its window after the process exits.
-# Wait for the foreground job to return the terminal to its shell; draining Main
-# must finish before another startup command is entered into that terminal.
-tmux send-keys -t "$PANE" C-c || exit 1
+# A pane in copy or another mode would consume Ctrl+C instead of passing it on.
+if [ "$(tmux display-message -p -t "$PANE" '#{pane_in_mode}')" = 1 ]; then
+    tmux send-keys -t "$PANE" -X cancel || exit 1
+fi
 SHELL_PID=$(tmux display-message -p -t "$PANE" '#{pane_pid}') || exit 1
+FOREGROUND=$(ps -o tpgid= -p "$SHELL_PID" | tr -d ' ')
+# Main has stopped once its whole foreground process group is gone and the
+# terminal is back with the shell. A drain that exceeds the deadline is killed.
+main_running() {
+    [ "$(ps -o tpgid= -p "$SHELL_PID" | tr -d ' ')" != "$SHELL_PID" ] && return 0
+    [ -n "$FOREGROUND" ] && [ "$FOREGROUND" -gt 1 ] && [ "$FOREGROUND" != "$SHELL_PID" ] \
+        && kill -0 -- "-$FOREGROUND" 2>/dev/null
+}
+tmux send-keys -t "$PANE" C-c || exit 1
 DEADLINE=$((SECONDS + 60))
-while [ "$(ps -o tpgid= -p "$SHELL_PID" | tr -d ' ')" != "$SHELL_PID" ]; do
+KILLED=
+while main_running; do
     if [ "$SECONDS" -ge "$DEADLINE" ]; then
-        echo "Error: Main has not returned the terminal after shutdown; no restart was sent." >&2
-        exit 1
+        if [ -n "$KILLED" ]; then
+            echo "Error: Main has not exited after SIGKILL; no restart was sent." >&2
+            exit 1
+        fi
+        echo "Main did not stop within 60 seconds; sending SIGKILL." >&2
+        for group in "$FOREGROUND" "$(ps -o tpgid= -p "$SHELL_PID" | tr -d ' ')"; do
+            if [ -n "$group" ] && [ "$group" -gt 1 ] && [ "$group" != "$SHELL_PID" ]; then
+                kill -KILL -- "-$group" 2>/dev/null
+            fi
+        done
+        KILLED=1
+        DEADLINE=$((SECONDS + 10))
     fi
     sleep 0.2
 done
