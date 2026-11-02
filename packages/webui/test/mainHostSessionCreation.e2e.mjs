@@ -49,10 +49,11 @@ try {
   await page.evaluate(() => window.foxwarmTest.switchToSession('browser/main'))
   page = await opening
   const errors = []; page.on('pageerror', error => errors.push(String(error)))
+  const checked = page.waitForResponse(response => new URL(response.url()).pathname === '/api/setup/status')
   await openDialog()
-  await page.waitForFunction(() => document.querySelector('option[value="claude-code"]')?.textContent.includes('unavailable'))
+  await checked
   assert.equal(await page.$eval('option[value="claude-code"]', option => option.disabled), true)
-  assert.match(await page.$eval('[role="dialog"]', dialog => dialog.textContent), /launcher was not found or is not executable/)
+  assert.match(await page.$eval('option[value="claude-code"]', option => option.textContent), /unavailable/)
   await page.click('[role="dialog"] button[title="main"]')
   const ordinary = await submit('/api/sessions')
   assert.match(ordinary, /^\d{4}_[a-z0-9]{5}$/)

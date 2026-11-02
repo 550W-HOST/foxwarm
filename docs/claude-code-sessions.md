@@ -10,7 +10,7 @@ claudeCode:
   credentialLifetimeSeconds: 3600
 ```
 
-The new-Session dialog marks Claude Code unavailable when the Main server cannot find or execute its launcher, lacks `setsid`, or cannot host the runtime. Omitting `claudeCode` still uses `claude` on the Main server's PATH. This local check does not run the launcher or verify login, subscription or model access. Install the launcher (or configure a wrapper), restart Main after changing startup configuration, then reopen the dialog to check again.
+The new-Session dialog shows Claude Code as unavailable, without further explanation, when the Main server cannot find or execute its launcher, lacks `setsid`, or cannot host the runtime. Omitting `claudeCode` still uses `claude` on the Main server's PATH. This local check does not run the launcher or verify login, subscription or model access. Install the launcher (or configure a wrapper), restart the Main server after changing startup configuration, then reopen the dialog to check again.
 
 Select **Claude Code** in the new-Session dialog, or call a creation tool with `runtime: "claude-code"`. For example, from an existing Session:
 
