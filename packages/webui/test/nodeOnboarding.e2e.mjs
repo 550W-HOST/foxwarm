@@ -62,7 +62,7 @@ before(async () => {
       window.fixtureClipboard=''; Object.defineProperty(navigator,'clipboard',{value:{writeText:async text=>{window.fixtureClipboard=text}}});
       const root=createRoot(document.getElementById('root')); function Fixture(){ const [section,setSection]=React.useState('sessions'); window.fixtureShowSessions=()=>setSection('sessions'); return React.createElement(SystemView,{currentSession:'main/browser-fixture',onSelectSession:()=>{},section,onSectionChange:setSection}); } root.render(React.createElement(Fixture));`,
     loader: 'tsx', resolveDir: packageRoot, sourcefile: 'node-onboarding-fixture.tsx',
-  }, bundle: true, format: 'iife', platform: 'browser', target: 'chrome120', write: false, alias: webuiReactAliases, loader: { '.css': 'empty', '.ttf': 'empty' },
+  }, bundle: true, format: 'iife', platform: 'browser', target: 'chrome120', write: false, alias: webuiReactAliases,
   define: { 'process.env.NODE_ENV': JSON.stringify('test') }, logLevel: 'silent' })
   const assets = await fs.readdir(new URL('../dist/assets/', import.meta.url))
   const css = await fs.readFile(new URL(`../dist/assets/${assets.find(name => /^index-.*\.css$/.test(name))}`, import.meta.url), 'utf8')
@@ -369,7 +369,7 @@ test('System opened on Nodes never loads setup credentials, and unmount cancels 
   const bundle = await build({ absWorkingDir: packageRoot, stdin: {
     contents: `import React from 'react'; import {createRoot} from 'react-dom/client'; import SystemView from ${JSON.stringify(component)}; const root=createRoot(document.getElementById('root')); window.unmountFixture=()=>root.unmount(); root.render(React.createElement(SystemView,{section:'nodes',onSelectSession:()=>{}}));`,
     loader: 'tsx', resolveDir: packageRoot,
-  }, bundle: true, format: 'iife', platform: 'browser', write: false, alias: webuiReactAliases, loader: { '.css': 'empty', '.ttf': 'empty' }, define: { 'process.env.NODE_ENV': JSON.stringify('test') }, logLevel: 'silent' })
+  }, bundle: true, format: 'iife', platform: 'browser', write: false, alias: webuiReactAliases, define: { 'process.env.NODE_ENV': JSON.stringify('test') }, logLevel: 'silent' })
   await page.goto('about:blank')
   const leaf = await browser.newPage()
   try {
