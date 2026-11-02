@@ -21,7 +21,6 @@ export const en: HomeStrings = {
         { time: '09:12', place: 'build-box', icon: 'server', text: 'It starts a child session on your build server and runs the test suite there.' },
         { time: '09:30', icon: 'moon', text: 'You close the laptop and go to a meeting. The work carries on.', highlight: true },
         { time: '12:40', place: 'phone', icon: 'phone', text: 'You open the child session on your phone and steer it:', quote: 'Keep full precision in prorate().' },
-        { time: '15:20', place: 'server', icon: 'memory', text: 'The context fills up. Older turns are compacted, and it recalls the original test output when it needs it.' },
         { time: '18:30', place: 'team chat', icon: 'chat', text: 'It posts a two-line summary in your team’s group. A colleague asks a follow-up; it answers from the full history.' }
       ],
       footer: 'Every step is a session you can open, read and talk to.',
