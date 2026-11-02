@@ -2,7 +2,7 @@ using Foxwarm.DevTools;
 
 if (args.Length == 0)
     throw new ArgumentException(
-        "Usage: Foxwarm.DevTools <conditional-memory|responses-request|responses-stream|journal|session-restart|catalog-fixture|mainlog-fixture> [arguments]"
+        "Usage: Foxwarm.DevTools <conditional-memory|responses-request|responses-stream|journal|session-restart|catalog-fixture|mainlog-fixture|sequence-bench> [arguments]"
     );
 
 var commandArgs = args[1..];
@@ -28,6 +28,9 @@ switch (args[0])
         break;
     case "mainlog-fixture":
         await MainLogFixtureCommand.RunAsync(commandArgs);
+        break;
+    case "sequence-bench":
+        await SequenceBenchCommand.RunAsync(commandArgs);
         break;
     default:
         throw new ArgumentException($"Unknown development command: {args[0]}");

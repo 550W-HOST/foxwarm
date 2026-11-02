@@ -118,6 +118,7 @@ internal sealed class WebUiAccess(SessionRuntime runtime, AccessConfiguration co
             (
                 "POST",
                 "/api/upload"
+                    or "/api/session-sequence"
                     or "/api/sessions/{id}/message"
                     or "/api/sessions/{id}/blobs/{blobId}/download"
             ) => true,

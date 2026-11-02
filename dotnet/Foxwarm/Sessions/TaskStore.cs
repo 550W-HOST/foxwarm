@@ -820,6 +820,26 @@ internal sealed class TaskStore : IDisposable
         return CanonicalReferences(row);
     }
 
+    // Bounded title/status lookup for display surfaces that already reference these Tasks.
+    internal JsonObject Summaries(IReadOnlyList<string> ids)
+    {
+        var result = new JsonObject();
+        if (!File.Exists(path))
+            return result;
+        lock (gate)
+        {
+            var db = Open();
+            foreach (var id in ids.Take(100))
+                if (Read(db, id) is { } row)
+                    result[id] = new JsonObject
+                    {
+                        ["title"] = Text(row["title"]),
+                        ["status"] = Text(row["status"]),
+                    };
+        }
+        return result;
+    }
+
     private JsonObject? Read(SqliteConnection db, string id)
     {
         using var cmd = db.CreateCommand();

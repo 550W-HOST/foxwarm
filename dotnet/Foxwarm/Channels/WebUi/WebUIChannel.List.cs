@@ -516,6 +516,7 @@ internal sealed partial class WebUIChannel
                     is System.Text.Json.JsonException
                         or InvalidOperationException
                         or FormatException
+                && error is not WebUiAccessException
             )
         {
             return Results.BadRequest(

@@ -113,6 +113,8 @@ internal sealed class TaskService : IDisposable
         return result.Payload;
     }
 
+    internal JsonObject Summaries(IReadOnlyList<string> ids) => store.Summaries(ids);
+
     internal async Task<TaskStoreResult> ExecuteAsync(
         JsonObject args,
         string? actor,

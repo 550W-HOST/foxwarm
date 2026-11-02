@@ -39,7 +39,7 @@ internal sealed partial class SessionManager
     private volatile bool identityStartupComplete;
     private SessionIdentityMoveRecord? unresolvedIdentityMove;
     internal Func<string, string, Task>? BeforeIdentityStage { get; set; }
-    private string ArchiveDatabase => Path.Combine(root, "state", "archive-store.sqlite");
+    internal string ArchiveDatabase => Path.Combine(root, "state", "archive-store.sqlite");
     private SessionIdentityMoveJournal IdentityJournal => new(root);
 
     internal WorkspaceTools IdentityWorkspace(
