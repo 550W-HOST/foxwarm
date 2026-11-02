@@ -37,6 +37,8 @@ export interface SequenceEvent {
   callSeq?: number
   deliverySeq?: string
   preview?: string
+  /** Assistant text phase, as in Conversation; absent for unmarked text. */
+  phase?: 'commentary' | 'final_answer'
   error?: string
   subCalls?: SequenceSubCall[]
   /** Client-only: work still running, ending at the current time. */
@@ -158,238 +160,158 @@ export function liveSequenceEvents(sessions: SequenceSession[], now: number): Se
   return result
 }
 
-export type SequenceLaneKind = 'session' | 'external' | 'user' | 'channel' | 'timer' | 'system'
+export const sessionLabel = (session: { id: string; displayName?: string }) => session.displayName || session.id.split('/').pop() || session.id
 
-export interface SequenceLane {
+export type SequenceColumnState = 'running' | 'waiting' | 'idle'
+
+export interface SequenceColumn {
   id: string
-  kind: SequenceLaneKind
   label: string
-  detail?: string
-  sessionId?: string
+  agent?: string
   depth: number
-  opaque?: boolean
-  busy?: boolean
+  state: SequenceColumnState
   /** Older activity in the window was cut by the per-Session row limit. */
   partial?: boolean
 }
 
-export const SPECIAL_LANE_LABELS: Record<Exclude<SequenceLaneKind, 'session' | 'external'>, string> = {
-  user: 'You',
-  channel: 'Channels',
-  timer: 'Timers',
-  system: 'System',
+export function sequenceColumnState(session: SequenceSession): SequenceColumnState {
+  const state = session.runtimeState
+  if (state?.state === 'waiting') return 'waiting'
+  if (state?.state === 'requesting-model' || state?.state === 'running-tool' || (state?.busy ?? session.busy)) return 'running'
+  return 'idle'
 }
 
-const laneIdForEndpoint = (endpoint: SequenceEndpoint): string | null => {
-  if (!endpoint.lane || endpoint.lane === 'session') return endpoint.sessionId ?? null
-  return `@${endpoint.lane}`
-}
-
-export const sessionLabel = (session: { id: string; displayName?: string }) => session.displayName || session.id.split('/').pop() || session.id
-
-/**
- * Orders lanes: input lanes first, then Sessions in parent/child tree order (siblings by when
- * they started) so creation and delegation arrows stay short, then peers outside the view.
- */
-export function orderSequenceLanes(data: SequenceData): SequenceLane[] {
+/** Sessions in parent/child tree order, siblings by when they started. */
+export function orderSequenceColumns(data: SequenceData): SequenceColumn[] {
   const sessions = new Map(data.sessions.map(session => [session.id, session]))
   const started = (session: SequenceSession) => session.startedAt ?? session.firstAt ?? session.lastMessageTime ?? Number.MAX_SAFE_INTEGER
+  const byStart = (a: SequenceSession, b: SequenceSession) => started(a) - started(b) || a.id.localeCompare(b.id)
   const children = new Map<string, SequenceSession[]>()
   const roots: SequenceSession[] = []
   for (const session of data.sessions) {
     const parent = session.parentSessionId
-    if (parent && sessions.has(parent) && parent !== session.id) {
-      const list = children.get(parent) || []
-      list.push(session)
-      children.set(parent, list)
-    } else roots.push(session)
+    if (parent && parent !== session.id && sessions.has(parent)) children.set(parent, [...(children.get(parent) || []), session])
+    else roots.push(session)
   }
-  const byStart = (a: SequenceSession, b: SequenceSession) => started(a) - started(b) || a.id.localeCompare(b.id)
-  roots.sort(byStart)
-  const lanes: SequenceLane[] = []
-  const used = new Set<string>()
-  for (const link of data.links) {
-    const lane = link.from.lane
-    if (lane && lane !== 'session') used.add(lane)
-  }
-  for (const kind of ['user', 'channel', 'timer', 'system'] as const) {
-    if (used.has(kind)) lanes.push({ id: `@${kind}`, kind, label: SPECIAL_LANE_LABELS[kind], depth: 0 })
-  }
+  const columns: SequenceColumn[] = []
   const visited = new Set<string>()
   const visit = (session: SequenceSession, depth: number) => {
     if (visited.has(session.id)) return
     visited.add(session.id)
-    lanes.push({ id: session.id, kind: 'session', label: sessionLabel(session), detail: session.agent, sessionId: session.id, depth, busy: !!(session.runtimeState?.busy ?? session.busy), partial: !!session.truncated })
+    columns.push({ id: session.id, label: sessionLabel(session), agent: session.agent, depth, state: sequenceColumnState(session), partial: !!session.truncated })
     for (const child of (children.get(session.id) || []).sort(byStart)) visit(child, depth + 1)
   }
-  for (const root of roots) visit(root, 0)
+  for (const root of roots.sort(byStart)) visit(root, 0)
   for (const session of data.sessions) visit(session, 0)
-  const peers = new Map(data.peers.map(peer => [peer.id, peer]))
-  const external = new Set<string>()
-  for (const link of data.links) for (const side of [link.from, link.to]) {
-    const id = laneIdForEndpoint(side)
-    if (id && !id.startsWith('@') && !sessions.has(id)) external.add(id)
-  }
-  for (const id of external) {
-    const peer = peers.get(id)
-    lanes.push({ id, kind: 'external', label: peer?.opaque ? 'Other session' : sessionLabel(peer || { id }), detail: peer?.opaque ? undefined : peer?.agent, sessionId: peer?.opaque ? undefined : id, depth: 0, opaque: !!peer?.opaque })
-  }
-  return lanes
+  return columns
 }
 
-export interface SequenceBreak { y: number; from: number; to: number }
-export interface SequenceTick { y: number; time: number; major: boolean }
+interface ItemBase { key: string; sessionId: string; time: number; seq?: number }
 
-export interface SequenceTimeScale {
-  y: (time: number) => number
-  height: number
-  breaks: SequenceBreak[]
-  ticks: SequenceTick[]
-  start: number
-  end: number
-}
+export type SequenceItem =
+  | ItemBase & { type: 'text'; text: string; commentary: boolean }
+  | ItemBase & { type: 'tools'; tools: SequenceEvent[] }
+  | ItemBase & { type: 'running'; event: SequenceEvent }
+  | ItemBase & { type: 'input'; link: SequenceLink; variant: 'user' | 'system' }
+  | ItemBase & { type: 'card'; link: SequenceLink; direction: 'sent' | 'received' }
 
-export const SEQUENCE_ZOOM_LEVELS = [3, 6, 15, 30, 60, 120, 300, 600, 1500, 3000] as const
-const BREAK_PX = 28
-const GAP_PX = 96
-const PAD_PX = 24
-const TICK_STEPS = [1_000, 5_000, 10_000, 30_000, 60_000, 120_000, 300_000, 600_000, 900_000, 1_800_000, 3_600_000, 7_200_000, 21_600_000]
+const isSessionEndpoint = (endpoint: SequenceEndpoint) => !endpoint.lane || endpoint.lane === 'session'
+const readAt = (link: SequenceLink) => link.consumedAt ?? link.to.at ?? link.sentAt
+const sentAt = (link: SequenceLink) => link.from.at ?? link.sentAt
+
+/** Time a delivery waited between sending and being read, when it has been read. */
+export const sequenceWaitMs = (link: SequenceLink): number | undefined => link.consumedAt === undefined ? undefined : Math.max(0, link.consumedAt - sentAt(link))
 
 /**
- * Real time downward at `pxPerMinute`; idle stretches longer than about GAP_PX are replaced by a
- * fixed break marker so bursts of activity stay readable.
+ * Items of each Session column in time order. Deliveries appear in both the sender's and the
+ * receiver's column (same link key); input from you, channels and timers appears in the
+ * receiving column. A tool call shown as a delivery card is not repeated as a tool tag.
  */
-export function buildSequenceTimeScale(times: number[], pxPerMinute: number): SequenceTimeScale {
-  const points = [...new Set(times.filter(Number.isFinite))].sort((a, b) => a - b)
-  const scale = pxPerMinute / 60_000
-  const maxGap = Math.max(30_000, GAP_PX / scale)
-  type Segment = { t0: number; t1: number; y0: number }
-  const segments: Segment[] = []
-  const breaks: SequenceBreak[] = []
-  let y = PAD_PX
-  for (const time of points) {
-    const last = segments.at(-1)
-    if (!last) { segments.push({ t0: time, t1: time, y0: y }); continue }
-    if (time - last.t1 > maxGap) {
-      const end = last.y0 + (last.t1 - last.t0) * scale
-      breaks.push({ y: end + BREAK_PX / 2, from: last.t1, to: time })
-      segments.push({ t0: time, t1: time, y0: end + BREAK_PX })
-    } else last.t1 = time
-  }
-  const last = segments.at(-1)
-  const height = last ? last.y0 + (last.t1 - last.t0) * scale + PAD_PX : PAD_PX * 2
-  const map = (time: number) => {
-    if (!segments.length) return PAD_PX
-    if (time <= segments[0].t0) return segments[0].y0
-    let low = 0
-    let high = segments.length - 1
-    while (low < high) {
-      const middle = (low + high + 1) >> 1
-      if (segments[middle].t0 <= time) low = middle
-      else high = middle - 1
-    }
-    const segment = segments[low]
-    if (time <= segment.t1) return segment.y0 + (time - segment.t0) * scale
-    const segmentEnd = segment.y0 + (segment.t1 - segment.t0) * scale
-    const next = segments[low + 1]
-    if (!next) return segmentEnd
-    // Inside a compressed gap: place proportionally within the break marker.
-    return segmentEnd + (next.y0 - segmentEnd) * ((time - segment.t1) / (next.t0 - segment.t1))
-  }
-  const step = TICK_STEPS.find(candidate => candidate * scale >= 64) ?? TICK_STEPS.at(-1)!
-  const ticks: SequenceTick[] = []
-  for (const segment of segments) {
-    ticks.push({ y: segment.y0, time: segment.t0, major: true })
-    for (let time = Math.ceil(segment.t0 / step) * step; time <= segment.t1; time += step) {
-      const tickY = segment.y0 + (time - segment.t0) * scale
-      if (tickY - ticks.at(-1)!.y >= 40) ticks.push({ y: tickY, time, major: false })
-    }
-  }
-  return { y: map, height, breaks, ticks, start: points[0] ?? 0, end: points.at(-1) ?? 0 }
-}
-
-export interface SequenceBar { key: string; laneId: string; x: number; y: number; height: number; event: SequenceEvent }
-
-export interface SequenceArrow {
-  key: string
-  link: SequenceLink
-  x1: number
-  y1: number
-  x2: number
-  y2: number
-  /** Time the delivery waited between send and consumption. */
-  delayMs: number
-}
-
-export interface SequenceLayout {
-  lanes: Array<SequenceLane & { x: number; startY: number }>
-  bars: SequenceBar[]
-  arrows: SequenceArrow[]
-  scale: SequenceTimeScale
-  width: number
-  height: number
-}
-
-export const SEQUENCE_AXIS_WIDTH = 72
-export const SEQUENCE_LANE_WIDTH = 132
-
-const linkTimes = (link: SequenceLink) => [link.from.at ?? link.sentAt, link.sentAt, link.consumedAt ?? link.sentAt]
-
-/** Picks the largest zoom whose compressed height stays within `maxHeight`. */
-export function chooseSequenceZoom(data: SequenceData, events: SequenceEvent[], maxHeight = 5000): number {
-  const times = sequenceTimes(data, events)
-  for (const level of [...SEQUENCE_ZOOM_LEVELS].reverse()) {
-    if (buildSequenceTimeScale(times, level).height <= maxHeight) return level
-  }
-  return SEQUENCE_ZOOM_LEVELS[0]
-}
-
-function sequenceTimes(data: SequenceData, events: SequenceEvent[]): number[] {
-  const times: number[] = []
-  for (const event of events) times.push(event.start, event.end)
-  for (const link of data.links) times.push(...linkTimes(link))
-  for (const session of data.sessions) if (session.startedAt) times.push(session.startedAt)
-  return times
-}
-
-export function layoutSequence(data: SequenceData, options: { pxPerMinute: number; now: number }): SequenceLayout {
-  const events = [...data.events, ...liveSequenceEvents(data.sessions, options.now)]
-  const scale = buildSequenceTimeScale(sequenceTimes(data, events), options.pxPerMinute)
-  const ordered = orderSequenceLanes(data)
-  const sessions = new Map(data.sessions.map(session => [session.id, session]))
-  const lanes = ordered.map((lane, index) => {
-    const session = lane.sessionId ? sessions.get(lane.sessionId) : undefined
-    // A Session created inside the window starts its lifeline at creation.
-    return { ...lane, x: SEQUENCE_AXIS_WIDTH + index * SEQUENCE_LANE_WIDTH + SEQUENCE_LANE_WIDTH / 2, startY: session?.startedAt !== undefined ? scale.y(session.startedAt) : 0 }
-  })
-  const laneX = new Map(lanes.map(lane => [lane.id, lane.x]))
-  const bars: SequenceBar[] = []
-  for (const event of events) {
-    const x = laneX.get(event.sessionId)
-    if (x === undefined) continue
-    const top = scale.y(event.start)
-    bars.push({ key: `${sequenceEventKey(event)}${event.live ? '|live' : ''}`, laneId: event.sessionId, x: event.kind === 'llm' ? x - 7 : x + 1, y: top, height: Math.max(3, scale.y(event.end) - top), event })
-  }
-  const arrows: SequenceArrow[] = []
+export function sequenceColumnItems(data: SequenceData, now: number): Map<string, SequenceItem[]> {
+  const loaded = new Set(data.sessions.map(session => session.id))
+  const items = new Map<string, SequenceItem[]>([...loaded].map(id => [id, []]))
+  const add = (item: SequenceItem) => items.get(item.sessionId)?.push(item)
+  const delivered = new Set<string>()
   for (const link of data.links) {
-    const fromId = laneIdForEndpoint(link.from)
-    const toId = laneIdForEndpoint(link.to)
-    const x1 = fromId ? laneX.get(fromId) : undefined
-    const x2 = toId ? laneX.get(toId) : undefined
-    if (x1 === undefined || x2 === undefined || fromId === toId) continue
-    const sent = link.from.at ?? link.sentAt
-    const arrived = link.consumedAt ?? link.sentAt
-    arrows.push({ key: link.key, link, x1, y1: scale.y(sent), x2, y2: scale.y(arrived), delayMs: Math.max(0, arrived - sent) })
+    const from = link.from
+    const to = link.to
+    if (!isSessionEndpoint(from)) {
+      if (to.sessionId) add({ type: 'input', key: `in|${link.key}`, sessionId: to.sessionId, time: readAt(link), seq: to.seq, link, variant: link.kind === 'user' ? 'user' : 'system' })
+      continue
+    }
+    if (from.sessionId && loaded.has(from.sessionId)) {
+      add({ type: 'card', key: `out|${link.key}`, sessionId: from.sessionId, time: sentAt(link), seq: from.seq, link, direction: 'sent' })
+      if (from.seq !== undefined && from.sub === undefined) delivered.add(`${from.sessionId}|${from.seq}|${from.call ?? 1}`)
+    }
+    if (to.sessionId && loaded.has(to.sessionId) && to.sessionId !== from.sessionId) {
+      add({ type: 'card', key: `in|${link.key}`, sessionId: to.sessionId, time: link.consumedAt === undefined ? sentAt(link) : readAt(link), seq: to.seq, link, direction: 'received' })
+    }
   }
-  return { lanes, bars, arrows, scale, width: SEQUENCE_AXIS_WIDTH + lanes.length * SEQUENCE_LANE_WIDTH + 24, height: scale.height }
+  for (const event of data.events) {
+    if (event.kind === 'llm') {
+      if (event.preview) add({ type: 'text', key: `text|${event.sessionId}|${event.seq}`, sessionId: event.sessionId, time: event.end, seq: event.seq, text: event.preview, commentary: event.phase ? event.phase === 'commentary' : (event.calls ?? 0) > 0 })
+      continue
+    }
+    if (event.callSeq !== undefined && delivered.has(`${event.sessionId}|${event.callSeq}|${event.call ?? 1}`) && event.status === 'ok') continue
+    add({ type: 'tools', key: `tool|${sequenceEventKey(event)}`, sessionId: event.sessionId, time: event.start, seq: event.callSeq ?? event.seq, tools: [event] })
+  }
+  for (const event of liveSequenceEvents(data.sessions, now)) add({ type: 'running', key: `live|${event.sessionId}`, sessionId: event.sessionId, time: event.start, event })
+  for (const list of items.values()) list.sort((a, b) => a.time - b.time || (a.seq ?? 0) - (b.seq ?? 0))
+  return items
 }
 
-/** Elements overlapping the visible band, so long histories render only what is on screen. */
-export function visibleSequenceItems(layout: SequenceLayout, top: number, bottom: number) {
-  return {
-    bars: layout.bars.filter(bar => bar.y <= bottom && bar.y + bar.height >= top),
-    arrows: layout.arrows.filter(arrow => Math.min(arrow.y1, arrow.y2) <= bottom && Math.max(arrow.y1, arrow.y2) >= top),
+/** Row sizes tried in order; the first that keeps the row count within the limit wins. */
+export const SEQUENCE_BUCKET_MINUTES = [1, 2, 5, 10, 15, 30, 60, 120, 240, 720] as const
+
+const localOffset = (time: number) => -new Date(time).getTimezoneOffset() * 60_000
+const bucketStart = (time: number, size: number) => Math.floor((time + localOffset(time)) / size) * size - localOffset(time)
+
+/** Smallest bucket (in ms) whose non-empty rows stay within `maxRows`. */
+export function chooseSequenceBucket(times: number[], maxRows = 60): number {
+  for (const minutes of SEQUENCE_BUCKET_MINUTES) {
+    const size = minutes * 60_000
+    if (new Set(times.map(time => bucketStart(time, size))).size <= maxRows) return size
   }
+  return SEQUENCE_BUCKET_MINUTES.at(-1)! * 60_000
+}
+
+export interface SequenceRow {
+  start: number
+  end: number
+  cells: Record<string, SequenceItem[]>
+}
+
+/**
+ * Time-bucket rows across all columns. Empty buckets are omitted, so idle time disappears;
+ * consecutive tool runs within a cell collapse into one counted group.
+ */
+export function buildSequenceRows(items: Map<string, SequenceItem[]>, bucketMs: number): SequenceRow[] {
+  const rows = new Map<number, SequenceRow>()
+  for (const [sessionId, list] of items) {
+    for (const item of list) {
+      const start = bucketStart(item.time, bucketMs)
+      let row = rows.get(start)
+      if (!row) rows.set(start, row = { start, end: start + bucketMs, cells: {} })
+      const cell = row.cells[sessionId] ||= []
+      const last = cell.at(-1)
+      if (item.type === 'tools' && last?.type === 'tools') cell[cell.length - 1] = { ...last, tools: [...last.tools, ...item.tools] }
+      else cell.push(item)
+    }
+  }
+  return [...rows.values()].sort((a, b) => a.start - b.start)
+}
+
+export interface SequenceGrid {
+  columns: SequenceColumn[]
+  rows: SequenceRow[]
+  bucketMs: number
+}
+
+export function buildSequenceGrid(data: SequenceData, now: number, maxRows = 60): SequenceGrid {
+  const columns = orderSequenceColumns(data)
+  const items = sequenceColumnItems(data, now)
+  const bucketMs = chooseSequenceBucket([...items.values()].flatMap(list => list.map(item => item.time)), maxRows)
+  return { columns, rows: buildSequenceRows(items, bucketMs), bucketMs }
 }
 
 export const formatSequenceDuration = (ms: number) => {

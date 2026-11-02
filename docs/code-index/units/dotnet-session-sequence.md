@@ -25,7 +25,7 @@ Implements [D-session-delivery-seq](../threads/session-sequence-view.md#d-sessio
 
 ## Route
 
-`POST /api/session-sequence` accepts `since` (ms, required), optional `focusSessionId`, `sessionIds`, `after` (Session ID to last `seq`), `sessionLimit` and `eventLimit`. It returns `sessions` (lane rows with display fields, `firstSeq`/`lastSeq`/`maxSeq`, `truncated`, `startedAt`), `peers`, `events` (`llm`/`tool` intervals with tool name, status, call position, `deliverySeq`, subcalls and bounded previews), `links` (`kind`, `key`, `from`/`to` endpoints with lane, `sessionId`, anchor `seq`/`call`/`sub`, `sentAt`, `consumedAt`, `pairing`, `state`, Task reference), `cursors`, `tasks` (administrators), `truncatedSessions` and `elapsedMs`. Invalid input returns `SESSION_SEQUENCE_INVALID`.
+`POST /api/session-sequence` accepts `since` (ms, required), optional `focusSessionId`, `sessionIds`, `after` (Session ID to last `seq`), `sessionLimit` and `eventLimit`. It returns `sessions` (lane rows with display fields, `firstSeq`/`lastSeq`/`maxSeq`, `truncated`, `startedAt`), `peers`, `events` (`llm` items with bounded assistant text and `phase`, `tool` items with tool name, argument preview, status/error, call position, `deliverySeq` and subcalls), `links` (`kind`, `key`, `from`/`to` endpoints with lane, `sessionId`, anchor `seq`/`call`/`sub`, `sentAt`, `consumedAt`, `pairing`, `state`, Task reference), `cursors`, `tasks` (administrators), `truncatedSessions` and `elapsedMs`. Invalid input returns `SESSION_SEQUENCE_INVALID`.
 
 ## Measurements
 
@@ -34,5 +34,5 @@ Implements [D-session-delivery-seq](../threads/session-sequence-view.md#d-sessio
 ## Tests
 
 - `DeliverySeqTests` runs real model batches: a parallel batch (`seq.1`, ToolScript `seq.2.1`/`seq.2.2`, child creation `seq.3`), a single direct send (`seq`), a single-call script (`seq.1.1`), a Task assignment notification, a timer-started script (`ts:runId.n`), run-wide `ts:` numbering across two unanchored slices of one run, and both receiver wrappers and sender evidence. `ClaudeRuntimeTests` checks the Claude Code anchor.
-- `SessionSequenceProjectionTests` covers exact pairing, queued deliveries, Task and spawn links, focus components, window and row bounds, `after` cursors, scoped visibility and legacy inferred pairing.
+- `SessionSequenceProjectionTests` covers assistant text phases and authored input previews, exact pairing, queued deliveries, Task and spawn links, focus components, window and row bounds, `after` cursors, scoped visibility and legacy inferred pairing.
 - `WebUiSequenceRouteTests` covers the authenticated route for administrator and scoped identities.

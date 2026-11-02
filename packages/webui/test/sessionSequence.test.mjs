@@ -5,14 +5,15 @@ import { build } from 'esbuild'
 const sourcePath = new URL('../src/sessionSequence.ts', import.meta.url).pathname
 const bundle = await build({ entryPoints: [sourcePath], bundle: true, platform: 'node', format: 'esm', write: false, logLevel: 'silent' })
 const {
-  buildSequenceTimeScale,
-  layoutSequence,
+  buildSequenceGrid,
+  buildSequenceRows,
+  chooseSequenceBucket,
   liveSequenceEvents,
   mergeSequenceData,
-  orderSequenceLanes,
+  orderSequenceColumns,
+  sequenceColumnItems,
+  sequenceWaitMs,
   unloadedSequencePeers,
-  visibleSequenceItems,
-  chooseSequenceZoom,
 } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`)
 
 const T = 1_800_000_000_000
@@ -28,7 +29,7 @@ const base = () => ({
   peers: [{ id: 'external:abc', opaque: true }],
   events: [
     { sessionId: 'main/root', seq: 2, kind: 'llm', start: T, end: T + 4_000 },
-    { sessionId: 'main/root', seq: 3, kind: 'tool', name: 'send_to_session', start: T + 4_100, end: T + 4_200, call: 1 },
+    { sessionId: 'main/root', seq: 3, kind: 'tool', name: 'send_to_session', start: T + 4_100, end: T + 4_200, call: 1, callSeq: 2, status: 'ok' },
   ],
   links: [
     { key: 'r|main/root|1|0', kind: 'user', from: { lane: 'user', at: T - 100 }, to: { sessionId: 'main/root', seq: 1, at: T }, sentAt: T - 100, consumedAt: T },
@@ -36,58 +37,6 @@ const base = () => ({
     { key: 'r|other/root|2|0', kind: 'message', from: { lane: 'session', sessionId: 'external:abc', at: T + 5_000 }, to: { sessionId: 'other/root', seq: 2, at: T + 5_500 }, sentAt: T + 5_000, consumedAt: T + 5_500, pairing: 'exact', deliverySeq: '7' },
   ],
   cursors: { 'main/root': 20, 'main/child-a': 9 },
-})
-
-test('lanes put input first, then the parent/child tree by start, then outside peers', () => {
-  const lanes = orderSequenceLanes(base())
-  assert.deepEqual(lanes.map(lane => lane.id), ['@user', 'main/root', 'main/child-a', 'main/child-b', 'other/root', 'external:abc'])
-  assert.deepEqual(lanes.map(lane => lane.depth), [0, 0, 1, 1, 0, 0])
-  const external = lanes.at(-1)
-  assert.equal(external.kind, 'external')
-  assert.equal(external.opaque, true)
-  assert.equal(external.label, 'Other session')
-  assert.equal(external.sessionId, undefined)
-})
-
-test('idle gaps are compressed into breaks while active time keeps its scale', () => {
-  const scale = buildSequenceTimeScale([T, T + 60_000, T + 3_600_000, T + 3_660_000], 60)
-  assert.equal(scale.breaks.length, 1)
-  assert.equal(scale.breaks[0].from, T + 60_000)
-  assert.equal(scale.breaks[0].to, T + 3_600_000)
-  // 60 px per minute inside active segments.
-  assert.equal(scale.y(T + 60_000) - scale.y(T), 60)
-  assert.equal(scale.y(T + 3_660_000) - scale.y(T + 3_600_000), 60)
-  // The idle hour takes only the break height, and times inside it stay monotonic.
-  const gap = scale.y(T + 3_600_000) - scale.y(T + 60_000)
-  assert.ok(gap > 0 && gap < 60)
-  const inside = scale.y(T + 1_800_000)
-  assert.ok(inside > scale.y(T + 60_000) && inside < scale.y(T + 3_600_000))
-  assert.ok(scale.height < 300)
-  assert.ok(scale.ticks.every((tick, index, all) => index === 0 || tick.y >= all[index - 1].y))
-})
-
-test('layout places bars on lanes and draws queue delay from send to read time', () => {
-  const data = base()
-  data.links[1] = { ...data.links[1], consumedAt: T + 30_000, state: undefined, to: { sessionId: 'main/child-a', seq: 3, at: T + 30_000 } }
-  const layout = layoutSequence(data, { pxPerMinute: 60, now: T + 600_000 })
-  const lane = id => layout.lanes.find(item => item.id === id)
-  const root = lane('main/root')
-  const llm = layout.bars.find(bar => bar.event.kind === 'llm')
-  const tool = layout.bars.find(bar => bar.event.kind === 'tool')
-  assert.ok(llm.x < root.x && tool.x > root.x)
-  assert.ok(tool.height >= 3)
-  const message = layout.arrows.find(arrow => arrow.link.deliverySeq === '2.1')
-  assert.equal(message.x1, root.x)
-  assert.equal(message.x2, lane('main/child-a').x)
-  assert.equal(message.delayMs, 25_900)
-  assert.ok(message.y2 > message.y1)
-  // A child created in the window starts its lifeline at creation.
-  assert.equal(lane('main/child-b').startY, layout.scale.y(T + 50_000))
-  assert.equal(root.startY, 0)
-  assert.ok(layout.arrows.some(arrow => arrow.link.kind === 'user' && arrow.x1 === lane('@user').x))
-  const visible = visibleSequenceItems(layout, message.y1 + 1, message.y1 + 2)
-  assert.ok(visible.arrows.some(arrow => arrow.key === message.key))
-  assert.ok(!visible.bars.some(bar => bar.event.kind === 'llm'))
 })
 
 test('incremental merge replaces a queued delivery with its read side and keeps the sender anchor', () => {
@@ -137,10 +86,76 @@ test('running work is drawn until now from runtime state', () => {
   assert.deepEqual(live.map(event => [event.sessionId, event.kind, event.end, event.live]), [['a', 'tool', T + 1_000, true], ['b', 'llm', T + 1_000, true]])
 })
 
-test('automatic zoom keeps dense windows within a bounded height', () => {
+
+test('columns follow the parent/child tree and show each Session state', () => {
   const data = base()
-  for (let index = 0; index < 600; index++) data.events.push({ sessionId: 'main/root', seq: 100 + index, kind: 'tool', start: T + index * 20_000, end: T + index * 20_000 + 5_000 })
-  const zoom = chooseSequenceZoom(data, data.events, 5000)
-  assert.ok(layoutSequence(data, { pxPerMinute: zoom, now: T }).height <= 5000 || zoom === 3)
-  assert.ok(zoom < 60)
+  data.sessions[1].runtimeState = { state: 'waiting', busy: false, queueLength: 0 }
+  data.sessions[2].runtimeState = { state: 'running-tool', busy: true, queueLength: 0, tool: { name: 'exec', startedAt: T } }
+  const columns = orderSequenceColumns(data)
+  assert.deepEqual(columns.map(column => column.id), ['main/root', 'main/child-a', 'main/child-b', 'other/root'])
+  assert.deepEqual(columns.map(column => column.depth), [0, 1, 1, 0])
+  assert.deepEqual(columns.map(column => column.state), ['waiting', 'running', 'idle', 'idle'])
+  // No separate input lanes: You, channels and timers appear in the receiving column.
+  assert.ok(!columns.some(column => column.id.startsWith('@')))
+})
+
+test('column items place input, both halves of a delivery, text phases and tool runs', () => {
+  const data = base()
+  data.events.push(
+    { sessionId: 'main/root', seq: 4, kind: 'llm', start: T + 5_000, end: T + 6_000, calls: 2, preview: 'Checking the build' },
+    { sessionId: 'main/root', seq: 5, kind: 'tool', name: 'exec', start: T + 6_100, end: T + 6_200, callSeq: 4, call: 1, status: 'ok' },
+    { sessionId: 'main/root', seq: 5, kind: 'tool', name: 'exec', start: T + 6_200, end: T + 6_300, callSeq: 4, call: 2, status: 'error' },
+    { sessionId: 'main/root', seq: 6, kind: 'llm', start: T + 7_000, end: T + 8_000, calls: 0, preview: 'All done' },
+    { sessionId: 'main/root', seq: 7, kind: 'llm', start: T + 9_000, end: T + 9_500, calls: 1, phase: 'final_answer', preview: 'Marked final' },
+  )
+  data.events[0].preview = undefined
+  data.links.push({ key: 't|1', kind: 'timer', from: { lane: 'timer' }, to: { sessionId: 'main/child-a', seq: 2, at: T + 70_000 }, sentAt: T + 70_000, consumedAt: T + 70_000, preview: 'Daily check' })
+  const items = sequenceColumnItems(data, T + 600_000)
+  const root = items.get('main/root')
+  assert.deepEqual(root.map(item => item.type), ['input', 'card', 'text', 'tools', 'tools', 'text', 'text'])
+  assert.equal(root[0].variant, 'user')
+  assert.equal(root[1].direction, 'sent')
+  // The send_to_session call shown as a card is not repeated as a tool tag.
+  assert.ok(!root.some(item => item.type === 'tools' && item.tools.some(tool => tool.name === 'send_to_session')))
+  assert.deepEqual(root.filter(item => item.type === 'text').map(item => item.commentary), [true, false, false])
+  const child = items.get('main/child-a')
+  assert.deepEqual(child.map(item => [item.type, item.direction ?? item.variant]), [['card', 'received'], ['input', 'system']])
+  // A queued delivery is shown in the receiver at send time.
+  assert.equal(child[0].time, T + 4_100)
+  // An opaque sender only appears inside the receiver's column.
+  assert.deepEqual(items.get('other/root').map(item => [item.type, item.direction]), [['card', 'received']])
+  assert.equal(items.has('external:abc'), false)
+})
+
+test('rows bucket by minute, omit idle time, group consecutive tools and coarsen when dense', () => {
+  const item = (sessionId, time, type = 'tools', name = 'exec') => type === 'tools'
+    ? { type, key: `${sessionId}|${time}`, sessionId, time, tools: [{ sessionId, seq: time, kind: 'tool', name, start: time, end: time, status: 'ok' }] }
+    : { type, key: `${sessionId}|${time}`, sessionId, time, text: 'x', commentary: false }
+  const minute = Math.floor(T / 60_000) * 60_000
+  const items = new Map([
+    ['a', [item('a', minute + 1_000), item('a', minute + 2_000, 'tools', 'read'), item('a', minute + 3_000, 'text'), item('a', minute + 4_000), item('a', minute + 3_600_000)]],
+    ['b', [item('b', minute + 30_000, 'text')]],
+  ])
+  const rows = buildSequenceRows(items, 60_000)
+  assert.equal(rows.length, 2)
+  assert.equal(rows[1].start - rows[0].start, 3_600_000)
+  assert.deepEqual(rows[0].cells.a.map(entry => entry.type), ['tools', 'text', 'tools'])
+  assert.deepEqual(rows[0].cells.a[0].tools.map(tool => tool.name), ['exec', 'read'])
+  assert.equal(rows[0].cells.b.length, 1)
+  assert.equal(rows[1].cells.b, undefined)
+  const dense = Array.from({ length: 300 }, (_, index) => minute + index * 60_000)
+  assert.equal(chooseSequenceBucket(dense.slice(0, 10)), 60_000)
+  assert.equal(chooseSequenceBucket(dense, 60), 5 * 60_000)
+  assert.ok(chooseSequenceBucket(dense, 2) >= 3 * 3_600_000)
+})
+
+test('the grid and wait times match both halves of a read delivery', () => {
+  const data = base()
+  data.links[1] = { ...data.links[1], consumedAt: T + 30_000, state: undefined, to: { sessionId: 'main/child-a', seq: 3, at: T + 30_000 } }
+  assert.equal(sequenceWaitMs(data.links[1]), 25_900)
+  assert.equal(sequenceWaitMs(base().links[1]), undefined)
+  const grid = buildSequenceGrid(data, T + 600_000)
+  const cards = grid.rows.flatMap(row => Object.values(row.cells).flat()).filter(item => item.type === 'card' && item.link.key === data.links[1].key)
+  assert.deepEqual(cards.map(item => [item.sessionId, item.direction, item.seq]), [['main/root', 'sent', 2], ['main/child-a', 'received', 3]])
+  assert.equal(grid.bucketMs, 60_000)
 })

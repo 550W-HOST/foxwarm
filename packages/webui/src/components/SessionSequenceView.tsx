@@ -1,21 +1,19 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Minus, Plus, RefreshCw } from 'lucide-react'
+import { RefreshCw } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
 import { webUiRealtime } from '../realtime'
 import { storeChatViewportState } from '../chatViewportState'
-import { SEQUENCE_LINK_COLORS, SequenceCanvas, SequenceDetails, type SequenceSelection } from './SessionSequenceCanvas'
+import { SessionMessageNamesContext } from './SessionMessageCard'
+import { formatTimelineTimeMarker } from './timelineTime'
+import { OTHER_SESSION_PEER, SequenceCell, type SequenceItemActions } from './SessionSequenceItems'
 import {
-  SEQUENCE_LANE_WIDTH,
   SEQUENCE_WINDOWS,
-  SEQUENCE_ZOOM_LEVELS,
-  chooseSequenceZoom,
-  layoutSequence,
-  liveSequenceEvents,
+  buildSequenceGrid,
   mergeSequenceData,
+  sessionLabel,
   unloadedSequencePeers,
-  visibleSequenceItems,
+  type SequenceColumnState,
   type SequenceData,
-  type SequenceLayout,
   type SequenceWindowId,
 } from '../sessionSequence'
 
@@ -42,10 +40,9 @@ export default function SessionSequenceView({ currentSession, onSelectSession }:
   const [data, setData] = useState<SequenceData | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
-  const [zoom, setZoom] = useState<number | null>(null)
-  const [selection, setSelection] = useState<SequenceSelection>(null)
   const [now, setNow] = useState(Date.now())
-  const [viewport, setViewport] = useState({ top: 0, height: 800 })
+  const [highlightKey, setHighlightKey] = useState<string | null>(null)
+  const [viewWidth, setViewWidth] = useState(0)
   const scrollRef = useRef<HTMLDivElement>(null)
   const dataRef = useRef<SequenceData | null>(null); dataRef.current = data
   const requestRef = useRef(0)
@@ -83,9 +80,9 @@ export default function SessionSequenceView({ currentSession, onSelectSession }:
     } catch { /* The next change or reload retries. */ }
   }, [reload])
 
-  useEffect(() => { setZoom(null); setSelection(null); void reload() }, [reload])
+  useEffect(() => { void reload() }, [reload])
 
-  // Live updates: Session list deltas carry runtime state and message times for loaded lanes.
+  // Live updates: Session list deltas carry runtime state and message times for loaded columns.
   const laneIds = useMemo(() => data?.sessions.map(session => session.id) || [], [data?.sessions])
   useEffect(() => {
     let timer: number | null = null
@@ -118,95 +115,102 @@ export default function SessionSequenceView({ currentSession, onSelectSession }:
     return () => window.clearInterval(timer)
   }, [busy])
 
-  const effectiveZoom = useMemo(() => zoom ?? (data ? chooseSequenceZoom(data, [...data.events, ...liveSequenceEvents(data.sessions, data.generatedAt)]) : 60), [zoom, data])
-  const layout = useMemo<SequenceLayout | null>(() => data ? layoutSequence(data, { pxPerMinute: effectiveZoom, now }) : null, [data, effectiveZoom, now])
+  const grid = useMemo(() => data ? buildSequenceGrid(data, now) : null, [data, now])
+  const names = useMemo(() => {
+    const result: Record<string, string> = { [OTHER_SESSION_PEER]: 'Other session' }
+    for (const peer of data?.peers || []) if (!peer.opaque) result[peer.id] = sessionLabel(peer)
+    for (const session of data?.sessions || []) result[session.id] = sessionLabel(session)
+    return result
+  }, [data?.sessions, data?.peers])
+  const open = useCallback((sessionId: string, seq?: number) => openSessionAtSeq(sessionId, seq, onSelectSession), [onSelectSession])
+  const actions = useMemo<SequenceItemActions>(() => ({ highlightKey, onHighlight: setHighlightKey, onOpen: open }), [highlightKey, open])
 
   // Follow the newest activity while the view is scrolled to the bottom.
   useLayoutEffect(() => {
     const element = scrollRef.current
-    if (!element || !layout) return
-    if (followRef.current) element.scrollTop = element.scrollHeight
-    setViewport({ top: element.scrollTop, height: element.clientHeight })
-  }, [layout?.height])
+    if (element && followRef.current) element.scrollTop = element.scrollHeight
+  }, [grid?.rows.length, data?.generatedAt])
+
+  // Time separators stay centered in the visible part of a horizontally scrolled grid.
+  useEffect(() => {
+    const element = scrollRef.current
+    if (!element) return
+    const observer = new ResizeObserver(() => setViewWidth(element.clientWidth))
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [])
 
   const onScroll = () => {
     const element = scrollRef.current
-    if (!element) return
-    followRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 32
-    setViewport({ top: element.scrollTop, height: element.clientHeight })
+    if (element) followRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 32
   }
 
-  const zoomBy = (direction: 1 | -1) => {
-    const levels = [...SEQUENCE_ZOOM_LEVELS]
-    const index = levels.findIndex(level => level >= effectiveZoom)
-    const next = levels[Math.max(0, Math.min(levels.length - 1, (index < 0 ? levels.length - 1 : index) + direction))]
-    setZoom(next)
-  }
-
-  const visible = layout ? visibleSequenceItems(layout, viewport.top - 400, viewport.top + viewport.height + 400) : { bars: [], arrows: [] }
-  const laneLabels = useMemo(() => new Map(layout?.lanes.map(lane => [lane.id, lane.label]) || []), [layout?.lanes])
-  const focusLabel = focusId ? (data?.sessions.find(session => session.id === focusId)?.displayName || focusId.split('/').pop()) : null
+  const focusLabel = focusId ? names[focusId] || focusId.split('/').pop() : null
+  const pill = (active: boolean) => `rounded-md px-2.5 py-1 font-medium ${active ? 'bg-fw-text-strong text-fw-surface' : 'text-fw-text-muted hover:bg-fw-hover'}`
+  const columns = grid?.columns || []
+  const template = `repeat(${columns.length}, ${COLUMN_WIDTH}px)`
 
   return (
     <div className="flex min-w-0 flex-col gap-3" data-session-sequence>
       <div className="flex flex-wrap items-center justify-between gap-3 px-1">
         <div>
           <h2 className="text-sm font-semibold text-fw-text-strong">Session sequence</h2>
-          <p className="mt-0.5 text-xs text-fw-text-muted">Model requests, tool runs, and messages between sessions over time.</p>
+          <p className="mt-0.5 text-xs text-fw-text-muted">What each session did, side by side, and the messages between them.</p>
         </div>
         <div className="flex flex-wrap items-center gap-2 text-xs">
           <div className="inline-flex rounded-lg border border-fw-border bg-fw-surface p-0.5" role="group" aria-label="Time window">
-            {SEQUENCE_WINDOWS.map(item => <button key={item.id} type="button" aria-pressed={windowId === item.id} onClick={() => setWindowId(item.id)} className={`rounded-md px-2.5 py-1 font-medium ${windowId === item.id ? 'bg-fw-text-strong text-fw-surface' : 'text-fw-text-muted hover:bg-fw-hover'}`}>{item.label}</button>)}
+            {SEQUENCE_WINDOWS.map(item => <button key={item.id} type="button" aria-pressed={windowId === item.id} onClick={() => setWindowId(item.id)} className={pill(windowId === item.id)}>{item.label}</button>)}
           </div>
           <div className="inline-flex rounded-lg border border-fw-border bg-fw-surface p-0.5" role="group" aria-label="Sessions shown">
-            <button type="button" aria-pressed={!focusId} onClick={() => setFocusId(null)} className={`rounded-md px-2.5 py-1 font-medium ${!focusId ? 'bg-fw-text-strong text-fw-surface' : 'text-fw-text-muted hover:bg-fw-hover'}`}>All active</button>
-            <button type="button" aria-pressed={!!focusId} disabled={!focusId && !currentSession} onClick={() => setFocusId(focusId || currentSession || null)} title={focusId ? `Sessions connected to ${focusLabel}` : 'Sessions connected to the current session'} className={`max-w-[220px] truncate rounded-md px-2.5 py-1 font-medium disabled:opacity-40 ${focusId ? 'bg-fw-text-strong text-fw-surface' : 'text-fw-text-muted hover:bg-fw-hover'}`}>{focusId ? `Connected to ${focusLabel}` : 'Connected'}</button>
-          </div>
-          <div className="inline-flex items-center rounded-lg border border-fw-border bg-fw-surface p-0.5">
-            <button type="button" aria-label="Zoom out" onClick={() => zoomBy(-1)} className="rounded-md p-1 text-fw-text-muted hover:bg-fw-hover"><Minus className="h-3.5 w-3.5" /></button>
-            <button type="button" aria-label="Fit to view" title="Fit to view" onClick={() => setZoom(null)} className="min-w-[56px] rounded-md px-1.5 py-1 tabular-nums text-fw-text-muted hover:bg-fw-hover">{effectiveZoom >= 60 ? `${effectiveZoom / 60} px/s` : `${effectiveZoom} px/min`}</button>
-            <button type="button" aria-label="Zoom in" onClick={() => zoomBy(1)} className="rounded-md p-1 text-fw-text-muted hover:bg-fw-hover"><Plus className="h-3.5 w-3.5" /></button>
+            <button type="button" aria-pressed={!focusId} onClick={() => setFocusId(null)} className={pill(!focusId)}>All active</button>
+            <button type="button" aria-pressed={!!focusId} disabled={!focusId && !currentSession} onClick={() => setFocusId(focusId || currentSession || null)} title={focusId ? `Sessions connected to ${focusLabel}` : 'Sessions connected to the current session'} className={`max-w-[220px] truncate disabled:opacity-40 ${pill(!!focusId)}`}>{focusId ? `Connected to ${focusLabel}` : 'Connected'}</button>
           </div>
           <button type="button" aria-label="Refresh" onClick={() => void reload()} className="rounded-lg border border-fw-border bg-fw-surface p-1.5 text-fw-text-muted hover:bg-fw-hover"><RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} /></button>
         </div>
       </div>
-      <SequenceLegend />
       {error ? <div className="rounded-xl border border-fw-danger-border bg-fw-danger-surface px-3 py-2 text-xs text-fw-danger">{error}</div> : null}
       {data?.truncatedSessions ? <div className="px-1 text-xs text-fw-text-muted">Showing the most recently active sessions. Choose a shorter window or a connected view to see fewer.</div> : null}
-      <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
-        <div ref={scrollRef} onScroll={onScroll} className="relative h-[calc(100vh-300px)] min-h-[420px] overflow-auto rounded-xl border border-fw-border bg-fw-surface" data-sequence-scroll>
-          {layout && layout.lanes.length ? <>
-            <div className="sticky top-0 z-10 h-12 border-b border-fw-border-muted bg-fw-surface/95 backdrop-blur" style={{ width: layout.width }}>
-              {layout.lanes.map(lane => (
-                <button key={lane.id} type="button" disabled={!lane.sessionId} onClick={() => lane.sessionId && openSessionAtSeq(lane.sessionId, undefined, onSelectSession)} title={lane.partial ? `${lane.sessionId} · Earlier activity in this window is not shown` : lane.sessionId || lane.label}
-                  className="absolute top-1.5 flex h-9 flex-col items-center justify-center truncate rounded-md px-1 text-center hover:bg-fw-hover disabled:hover:bg-transparent"
-                  style={{ left: lane.x - SEQUENCE_LANE_WIDTH / 2 + 4, width: SEQUENCE_LANE_WIDTH - 8 }} data-sequence-lane={lane.id}>
-                  <span className={`max-w-full truncate text-xs font-semibold ${lane.kind === 'session' ? 'text-fw-text-strong' : 'text-fw-text-muted'}`}>{lane.busy ? <span className="mr-1 inline-block h-1.5 w-1.5 rounded-full bg-fw-success align-middle" /> : null}{lane.label}</span>
-                  {lane.detail || lane.partial ? <span className="max-w-full truncate text-[10px] text-fw-text-subtle">{[lane.detail, lane.partial ? 'recent only' : null].filter(Boolean).join(' · ')}</span> : null}
+      <div ref={scrollRef} onScroll={onScroll} className="relative h-[calc(100vh-260px)] min-h-[420px] overflow-auto rounded-xl border border-fw-border bg-fw-surface" data-sequence-scroll>
+        {grid && columns.length ? (
+          <SessionMessageNamesContext.Provider value={names}>
+            <div className="grid w-max gap-x-3 px-3 pb-4" style={{ gridTemplateColumns: template }} data-sequence-grid data-bucket-minutes={grid.bucketMs / 60_000}>
+              {columns.map(column => (
+                <button key={column.id} type="button" onClick={() => open(column.id)} title={column.partial ? `${column.id} · Earlier activity in this window is not shown` : column.id}
+                  className="sticky top-0 z-10 flex min-w-0 flex-col items-start border-b border-fw-border-muted bg-fw-surface/95 px-1 pb-2 pt-3 text-left backdrop-blur hover:bg-fw-hover"
+                  style={{ paddingLeft: 4 + Math.min(column.depth, 4) * 8 }} data-sequence-column={column.id} data-state={column.state}>
+                  <span className="flex w-full min-w-0 items-center gap-1.5">
+                    <StateDot state={column.state} />
+                    <span className="min-w-0 truncate text-[13px] font-semibold text-fw-text-strong">{column.label}</span>
+                  </span>
+                  <span className="mt-0.5 w-full truncate pl-3 text-[11px] text-fw-text-subtle">{[STATE_LABELS[column.state], column.agent, column.partial ? 'recent only' : null].filter(Boolean).join(' · ')}</span>
                 </button>
               ))}
+              {grid.rows.map(row => {
+                const marker = formatTimelineTimeMarker({ timestamp: row.start }, now)
+                return [
+                  <div key={`t${row.start}`} style={{ gridColumn: '1 / -1', width: viewWidth ? Math.min(viewWidth - 24, columns.length * (COLUMN_WIDTH + 12) - 12) : undefined }} className="sticky left-0 my-2 text-center text-[11px] text-fw-text-subtle" data-timeline-time-separator data-sequence-row={row.start}>
+                    <time dateTime={new Date(row.start).toISOString()} title={marker.title} className="tabular-nums">{marker.text}</time>
+                  </div>,
+                  ...columns.map(column => (
+                    <div key={`${row.start}|${column.id}`} className="min-w-0 border-l border-fw-border-muted/60 pl-2" data-sequence-cell={column.id}>
+                      {row.cells[column.id] ? <SequenceCell items={row.cells[column.id]} data={data!} now={now} actions={actions} /> : null}
+                    </div>
+                  )),
+                ]
+              })}
             </div>
-            <SequenceCanvas layout={layout} bars={visible.bars} arrows={visible.arrows} selection={selection} onSelect={setSelection} />
-          </> : <div className="flex h-full items-center justify-center p-6 text-sm text-fw-text-muted">{loading ? 'Loading…' : 'No session activity in this window.'}</div>}
-        </div>
-        <SequenceDetails selection={selection} data={data} laneLabels={laneLabels} onClose={() => setSelection(null)} onOpen={(sessionId, seq) => openSessionAtSeq(sessionId, seq, onSelectSession)} onFocus={sessionId => setFocusId(sessionId)} />
+          </SessionMessageNamesContext.Provider>
+        ) : <div className="flex h-full items-center justify-center p-6 text-sm text-fw-text-muted">{loading ? 'Loading…' : 'No session activity in this window.'}</div>}
       </div>
     </div>
   )
 }
 
-function SequenceLegend() {
-  const item = (label: string, swatch: JSX.Element) => <span className="inline-flex items-center gap-1.5">{swatch}{label}</span>
-  const line = (color: string, dash?: string) => <svg width="22" height="8" aria-hidden><line x1="1" y1="4" x2="21" y2="4" stroke={color} strokeWidth="2" strokeDasharray={dash} /></svg>
-  return (
-    <div className="flex flex-wrap gap-x-4 gap-y-1 px-1 text-[11px] text-fw-text-muted">
-      {item('Model request', <span className="h-3 w-1.5 rounded-sm bg-fw-accent/60" />)}
-      {item('Tool run', <span className="h-3 w-1.5 rounded-sm bg-fw-tool" />)}
-      {item('Message', line(SEQUENCE_LINK_COLORS.message))}
-      {item('Task', line(SEQUENCE_LINK_COLORS.task))}
-      {item('New session', line(SEQUENCE_LINK_COLORS.spawn))}
-      {item('Matched by time', line('var(--foxwarm-color-text-muted)', '4 3'))}
-      {item('Not read yet', <svg width="12" height="12" aria-hidden><circle cx="6" cy="6" r="4" fill="none" stroke="var(--foxwarm-color-text-muted)" strokeWidth="1.5" /></svg>)}
-    </div>
-  )
+const COLUMN_WIDTH = 300
+
+const STATE_LABELS: Record<SequenceColumnState, string> = { running: 'Running', waiting: 'Waiting', idle: 'Idle' }
+
+function StateDot({ state }: { state: SequenceColumnState }) {
+  const tone = state === 'running' ? 'bg-fw-success animate-pulse' : state === 'waiting' ? 'bg-fw-warning' : 'bg-fw-border-strong'
+  return <span aria-hidden className={`h-2 w-2 shrink-0 rounded-full ${tone}`} />
 }
