@@ -38,7 +38,7 @@ export const zh: HomeStrings = {
       windows: '支持 Windows x64，在 PowerShell 中运行。下载预编译版本并在后台运行；另有 Windows 桌面版。',
       docker: '适用于装有 Docker 的 Linux x64。运行已发布的镜像，内含 Chromium 和 Node.js；数据保存在 foxwarm-data。'
     },
-    requirementsLink: '依赖和安装选项'
+    requirementsLink: '安装包和环境要求'
   },
   strip: {
     label: '兼容',

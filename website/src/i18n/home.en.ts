@@ -38,7 +38,7 @@ export const en: HomeStrings = {
       windows: 'Windows x64, in PowerShell. Downloads a prebuilt release and runs it in the background. A Windows desktop app is also available.',
       docker: 'Linux x64 with Docker. Runs the published image with Chromium and Node.js included; data stays in foxwarm-data.'
     },
-    requirementsLink: 'Prerequisites and options'
+    requirementsLink: 'Packages and requirements'
   },
   strip: {
     label: 'Works with',
