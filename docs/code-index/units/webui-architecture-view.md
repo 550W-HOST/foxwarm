@@ -17,6 +17,8 @@ Renders a bounded system-operations dashboard and persistent Agent registry for 
 
 ## Behavior
 
+- Surfaces are Topology, Agents and Sequence. Sequence renders [the session sequence view](./webui-session-sequence.md) with the Architecture `currentSession` as its default focus and `onSelectSession` for navigation; it does not use Architecture's bounded catalog window.
+
 - The sole-tab title/actions row uses the shared [empty-header pane movement](./webui-workbench.md#d-workbench-pane-drag) boundary without making title text, surface controls, or dashboard content draggable.
 
 - Cached/Input/Output rows and percentages use the shared [TokenUsageDetails](./webui-token-usage-details.md) renderer, also consumed by status-bar popovers. Architecture's own bounded catalog, global/loaded distinction, and popup behavior remain unchanged.

@@ -14,6 +14,14 @@ build({entryPoints:[new URL('../src/components/sessionCommunications.ts',import.
   assert.equal(received.peerSessionId,'review/main');assert.match(received.message,/^Report/);assert.match(received.message,/<foxwarm-system/);assert.doesNotMatch(received.message,/<\/foxwarm-message>/)
   assert.equal(receivedSessionCommunication({role:'user',parts:[{text:input.parts[0].system}]}),null)
  })
+ test('delivery correlation attributes and evidence fields leave cards unchanged',()=>{
+  const received=receivedSessionCommunication({role:'user',parts:[{system:'<foxwarm-message type="inter-agent" sourceSessionId="lead/main" deliverySeq="42.2.1" replyTargetSessionId="lead/main" replyVia="send_to_session" time="2026-11-02 10:00:00 +0800" hint="inter-agent message from another session, not direct end-user input">\nCheck the build\n</foxwarm-message>'}]})
+  assert.deepEqual(received,{key:'received',direction:'received',peerSessionId:'lead/main',message:'Check the build'})
+  const call={role:'model',parts:[{functionCall:{id:'d',name:'send_to_session',args:{sessionId:'worker/main',message:'Check the build'}}}]}
+  const result={role:'tool',parts:[{functionResponse:{tool_use_id:'d',response:{output:'ok'},__meta:{sessionMessages:[{id:'d',targetSessionId:'worker/main',message:'Check the build',deliverySeq:'42'}]}}}]}
+  const [card]=projectSessionCommunications([call,result]).get(result)
+  assert.equal(card.peerSessionId,'worker/main');assert.equal(card.message,'Check the build');assert.equal(card.direction,'sent')
+ })
  test('successful direct and builtin-dispatched sends preserve exact body and do not promote failures or stdout',()=>{
   const call=(id,name,args)=>({role:'model',parts:[{functionCall:{id,name,args}}]})
   const result=(id,response,meta)=>({role:'tool',parts:[{functionResponse:{tool_use_id:id,name:'send_to_session',response,__meta:meta}}]})

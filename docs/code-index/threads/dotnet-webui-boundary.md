@@ -73,5 +73,6 @@ The minimal [desktop host](../units/host-runtime.md#desktop-boundary) embeds the
 - [WebUI tasks/relations](../units/dotnet-webui-tasks-relations.md)
 - [WebUI deletion/terminal](../units/dotnet-webui-lifecycle-terminal.md)
 - [WebUI realtime](../units/webui-realtime.md)
+- [Session sequence projection route](../units/dotnet-session-sequence.md)
 - [React WebUI module](../modules/webui.md)
 - `WebUiStartupTests`, `WebUiUploadedFilesTests`, `WebUiRealtimeRevisionTests`, `CodeRoutesTests`, and Session/catalog/task tests.

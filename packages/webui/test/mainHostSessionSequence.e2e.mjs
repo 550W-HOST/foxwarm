@@ -73,8 +73,7 @@ try {
   assert.ok(exact.includes('message') && exact.includes('spawn'), exact.join(','))
   assert.ok(await page.$('[data-sequence-bar][data-kind="llm"]'))
   assert.ok(await page.$('[data-sequence-bar][data-kind="tool"]'))
-  await mkdir('/tmp/delivery', { recursive: true })
-  await page.screenshot({ path: '/tmp/delivery/session-sequence.png' })
+  if (process.env.FOXWARM_SEQUENCE_SCREENSHOT) await page.screenshot({ path: process.env.FOXWARM_SEQUENCE_SCREENSHOT })
 
   // Live: a later delivery appears without reloading the view.
   const before = (await page.$$('[data-sequence-arrow][data-kind="message"]')).length
