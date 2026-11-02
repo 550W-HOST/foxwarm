@@ -299,22 +299,29 @@ internal sealed partial class SessionSequenceProjection
             if (Str(list[index]["id"]) is { } callId)
                 calls[callId] = (row.Seq, index + 1, list.Length, name, ArgsPreview(name, args));
         }
-        if (row.Data["timing"] is not JsonObject timing)
+        var text = Preview(Str(row.Data["text"]));
+        // Text-only rows without request timing (for example external runtime output) still show.
+        var timing = row.Data["timing"] as JsonObject;
+        if (
+            timing is null
+            && (text.Length == 0 || IsHidden(row) || Str(row.Data["notice"]) is not null)
+        )
             return;
-        var end = Num(timing["completedAt"]) ?? row.Timestamp;
-        var start = Num(timing["startedAt"]) ?? end - (Num(timing["durationMs"]) ?? 0);
-        lane.Events.Add(
-            new JsonObject
-            {
-                ["sessionId"] = lane.Id,
-                ["seq"] = row.Seq,
-                ["kind"] = "llm",
-                ["start"] = start,
-                ["end"] = end,
-                ["calls"] = list.Length,
-                ["preview"] = Preview(Str(row.Data["text"])),
-            }
-        );
+        var end = Num(timing?["completedAt"]) ?? row.Timestamp;
+        var start = Num(timing?["startedAt"]) ?? end - (Num(timing?["durationMs"]) ?? 0);
+        var item = new JsonObject
+        {
+            ["sessionId"] = lane.Id,
+            ["seq"] = row.Seq,
+            ["kind"] = "llm",
+            ["start"] = start,
+            ["end"] = end,
+            ["calls"] = list.Length,
+            ["preview"] = text,
+        };
+        if (Str(row.Data["phase"]) is "commentary" or "final_answer" && text.Length > 0)
+            item["phase"] = Str(row.Data["phase"]);
+        lane.Events.Add(item);
     }
 
     private static void NormalizeTool(

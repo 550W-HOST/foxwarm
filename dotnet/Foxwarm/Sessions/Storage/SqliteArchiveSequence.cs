@@ -212,6 +212,10 @@ internal static class SqliteArchiveSequence
           'text',(SELECT substr(group_concat(json_extract(message_json,{Part}||'.text'),''),1,{PreviewLength})
             FROM json_each(message_json,'$.parts') p
             WHERE json_type(message_json,{Part}||'.text')='text' AND json_type(message_json,{Part}||'.thinking') IS NULL),
+          'phase',(SELECT json_extract(message_json,{Part}||'.phase')
+            FROM json_each(message_json,'$.parts') p
+            WHERE json_type(message_json,{Part}||'.text')='text' AND json_type(message_json,{Part}||'.thinking') IS NULL
+            ORDER BY p.key DESC LIMIT 1),
           'calls',(SELECT json_group_array(json_object(
               'id',json_extract(message_json,{Part}||'.functionCall.id'),
               'name',json_extract(message_json,{Part}||'.functionCall.name'),

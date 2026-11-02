@@ -426,6 +426,109 @@ public sealed class SessionSequenceProjectionTests
         Assert.DoesNotContain(Objects(result["links"]), link => link["state"] is not null);
     }
 
+    [Fact]
+    public async Task Assistant_text_carries_its_phase_and_user_input_shows_only_authored_content()
+    {
+        await using var f = await ScriptFixture.Create();
+        var owner = f.Owner;
+        var t0 = (long)Now - 60_000;
+        JsonObject Model(long at, JsonArray parts, bool timed = true) =>
+            new()
+            {
+                ["role"] = "model",
+                ["parts"] = parts,
+                ["__meta"] = timed
+                    ? new JsonObject
+                    {
+                        ["timestamp"] = at,
+                        ["llmRequestTiming"] = new JsonObject
+                        {
+                            ["startedAt"] = at - 100,
+                            ["completedAt"] = at,
+                        },
+                    }
+                    : new JsonObject { ["timestamp"] = at },
+            };
+        await Append(
+            owner,
+            new JsonObject
+            {
+                ["role"] = "user",
+                ["parts"] = new JsonArray(
+                    new JsonObject
+                    {
+                        ["system"] =
+                            "<foxwarm-message type=\"channel\" channelType=\"webui\" time=\"2026-11-02 10:00:00 +0800\" hint=\"direct user message via channel\">\nPlease review the patch\n</foxwarm-message>",
+                    }
+                ),
+                ["__meta"] = new JsonObject { ["timestamp"] = t0 },
+            },
+            Model(
+                t0 + 1000,
+                new JsonArray(
+                    new JsonObject { ["thinking"] = "private reasoning", ["text"] = "" },
+                    new JsonObject { ["text"] = "Looking at it", ["phase"] = "commentary" },
+                    new JsonObject
+                    {
+                        ["functionCall"] = new JsonObject
+                        {
+                            ["id"] = "x1",
+                            ["name"] = "read",
+                            ["args"] = new JsonObject { ["filePath"] = "a.txt" },
+                        },
+                    }
+                )
+            ),
+            new JsonObject
+            {
+                ["role"] = "tool",
+                ["parts"] = new JsonArray(
+                    new JsonObject
+                    {
+                        ["functionResponse"] = new JsonObject
+                        {
+                            ["tool_use_id"] = "x1",
+                            ["name"] = "read",
+                            ["response"] = new JsonObject { ["error"] = "missing" },
+                        },
+                    }
+                ),
+                ["__meta"] = new JsonObject { ["timestamp"] = t0 + 1100 },
+            },
+            Model(
+                t0 + 2000,
+                new JsonArray(new JsonObject { ["text"] = "Done", ["phase"] = "final_answer" })
+            ),
+            // Text rows without request timing (for example external runtime output) still show.
+            Model(t0 + 3000, new JsonArray(new JsonObject { ["text"] = "Untimed" }), timed: false)
+        );
+        var result = new SessionSequenceProjection(
+            new SessionRuntime(f.Manager),
+            f.Manager.ArchiveDatabase
+        ).Build(new(t0 - 10_000), null);
+        var texts = Objects(result["events"])
+            .Where(item => Text(item["kind"]) == "llm")
+            .Select(item => (Text(item["preview"]), Text(item["phase"])))
+            .ToArray();
+        Assert.Equal(
+            new (string?, string?)[]
+            {
+                ("Looking at it", "commentary"),
+                ("Done", "final_answer"),
+                ("Untimed", null),
+            },
+            texts
+        );
+        Assert.DoesNotContain("private reasoning", result.ToJsonString());
+        var tool = Objects(result["events"]).Single(item => Text(item["kind"]) == "tool");
+        Assert.Equal(
+            ("read", "a.txt", "error"),
+            (Text(tool["name"]), Text(tool["preview"]), Text(tool["status"]))
+        );
+        var input = Objects(result["links"]).Single(link => Text(link["kind"]) == "user");
+        Assert.Equal("Please review the patch", Text(input["preview"]));
+    }
+
     private static Task Append(SessionOwner owner, params JsonObject[] messages) =>
         owner.Entry.SaveLane.CommitCanonicalAppendAsync(state =>
             LocalSessionTurnHost.PrepareCanonicalAppend(
