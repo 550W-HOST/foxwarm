@@ -1307,7 +1307,8 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     // connector meets the title line (the row middle in Normal density) and stops short of the
     // row's content.
     const connectorY = compact ? '50%' : '22px'
-    const connectorWidth = compact && !hasChildren ? 10 : 6
+    // One length for every connector: it ends where a disclosure can appear, so rows match whether or not theirs is shown.
+    const connectorWidth = 6
     const rowConnector = parentSession ? (
       groupedRow
         ? lastInBranch && <span aria-hidden="true" data-session-branch-line={parentSession.id} className="pointer-events-none absolute z-[1] w-px bg-fw-border-strong" style={{ left: `${lineX(level - 1)}px`, top: `-${rowGap}px`, height: `calc(${connectorY} + ${rowGap}px)` }} />
