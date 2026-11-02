@@ -207,9 +207,17 @@ jobs:
         with:
           name: release-packages
           path: dist
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: docs/release-notes
+          path: source
       - name: Create the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Reviewed notes in docs/release-notes/<tag>.md take precedence over generated ones.
+          notes="source/docs/release-notes/$GITHUB_REF_NAME.md"
+          if [ -f "$notes" ]; then set -- --notes-file "$notes"; else set -- --generate-notes; fi
           gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" \
-            --title "Foxwarm ${GITHUB_REF_NAME#v}" --generate-notes
+            --title "Foxwarm ${GITHUB_REF_NAME#v}" --latest "$@"
