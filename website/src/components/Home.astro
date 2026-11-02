@@ -97,7 +97,7 @@ const docsHref = (page = '') => `${lang === 'zh' ? '/zh' : ''}/docs/${page}`;
               {installTabs.map((tab, index) => (
                 <div class="install-panel" role="tabpanel" id={`panel-${tab.id}`} aria-labelledby={`tab-${tab.id}`} hidden={index !== 0}>
                   <div class="command">
-                    <pre><code>{tab.command.split('\n').map((line) => (<span class="command-line"><span class="prompt" aria-hidden="true">{tab.prompt}</span>{line}</span>))}</code></pre>
+                    <pre><code>{tab.command.split('\n').map((line, i, lines) => (<span class="command-line"><span class="prompt" aria-hidden="true">{i === 0 || !lines[i - 1].endsWith('\\') ? tab.prompt : ' '.repeat(tab.prompt.length)}</span>{line}</span>))}</code></pre>
                     <button class="copy-button" type="button" data-copy={tab.command} data-copied={t.install.copied}>{t.install.copy}</button>
                   </div>
                   <p class="install-note">{tab.note} <a href={docsHref('installing/')}>{t.install.requirementsLink}</a></p>

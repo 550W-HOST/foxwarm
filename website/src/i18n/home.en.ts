@@ -141,7 +141,7 @@ export const en: HomeStrings = {
     title: 'Up and running in a few minutes.',
     lede: 'Program files and data live in separate directories, so upgrades and backups stay simple.',
     steps: [
-      { title: 'Install', body: 'Run the installer for your platform. It builds Foxwarm, starts it, and prints a sign-in link for the WebUI.' },
+      { title: 'Install', body: 'Run the installer for your platform. It downloads a release, starts Foxwarm and prints a sign-in link for the WebUI.' },
       { title: 'Add a model', body: 'Open Setup → Models and enter your provider, model ID and API key.' },
       { title: 'Start a session', body: 'Chat with the default agent, give it a working directory, and add Nodes or Channels whenever you need them.' }
     ],

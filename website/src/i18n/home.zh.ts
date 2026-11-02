@@ -141,7 +141,7 @@ export const zh: HomeStrings = {
     title: '几分钟就能跑起来。',
     lede: '程序文件和数据放在不同的目录里，升级和备份都很简单。',
     steps: [
-      { title: '安装', body: '运行对应平台的安装脚本。它会构建并启动 Foxwarm，然后输出 WebUI 的登录链接。' },
+      { title: '安装', body: '运行对应平台的安装脚本。它会下载发布版本、启动 Foxwarm，然后输出 WebUI 的登录链接。' },
       { title: '添加模型', body: '打开 Setup → Models，填写服务商、模型 ID 和 API Key。' },
       { title: '开始会话', body: '和默认 Agent 对话，给它指定工作目录；需要时再添加节点或渠道。' }
     ],
