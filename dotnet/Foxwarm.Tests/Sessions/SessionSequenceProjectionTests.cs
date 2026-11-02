@@ -54,7 +54,7 @@ public sealed class SessionSequenceProjectionTests
     private static double Now => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
     [Fact]
-    public async Task Real_deliveries_pair_exactly_and_project_lanes_windows_focus_and_scope()
+    public async Task Real_deliveries_pair_exactly_and_project_lanes_live_updates_and_scope()
     {
         string a = "",
             b = "";
@@ -107,7 +107,6 @@ public sealed class SessionSequenceProjectionTests
                 )
         );
         await using var f = await ScriptFixture.Create(suppliedOptions: Options(peer.BaseUri));
-        var start = Now - 1000;
         var targetA = await f.Manager.CreateNamedAsync("main", "peer-a", null, null);
         var targetB = await f.Manager.CreateNamedAsync("main", "peer-b", null, null);
         var unrelated = await f.Manager.CreateNamedAsync("main", "unrelated", null, null);
@@ -146,11 +145,13 @@ public sealed class SessionSequenceProjectionTests
                     )["__meta"]!["seq"]
             )!;
 
-        var all = projection.Build(new(start), null);
+        var all = projection.BuildPage(new(), null);
         var lanes = Objects(all["sessions"]).Select(row => Text(row["id"])!).ToArray();
         Assert.Contains(f.Owner.Id, lanes);
         Assert.Contains(a, lanes);
-        Assert.Contains(b, lanes);
+        // Messages to b are still queued, so b has no rows yet and appears as a peer.
+        Assert.DoesNotContain(b, lanes);
+        Assert.Contains(Objects(all["peers"]), peer => Text(peer["id"]) == b);
         Assert.Contains(kid, lanes);
         Assert.Contains(unrelated.Id, lanes);
         var links = Objects(all["links"]).ToArray();
@@ -210,40 +211,15 @@ public sealed class SessionSequenceProjectionTests
                 Assert.True(SessionWait.Number(item["end"]) >= SessionWait.Number(item["start"]))
         );
 
-        // Focus keeps the collaboration component and leaves the unrelated Session out.
-        var focused = projection.Build(new(start, FocusSessionId: a), null);
-        var component = Objects(focused["sessions"]).Select(row => Text(row["id"])!).ToHashSet();
-        Assert.Contains(f.Owner.Id, component);
-        Assert.Contains(kid, component);
-        Assert.Contains(b, component);
-        Assert.DoesNotContain(unrelated.Id, component);
-
-        // A window starting after the activity selects nothing idle.
-        var future = projection.Build(new(Now + 60_000), null);
-        Assert.All(
-            Objects(future["sessions"]),
-            row => Assert.True(row["busy"]?.GetValue<bool>() == true, row.ToJsonString())
-        );
-        Assert.DoesNotContain(Objects(future["sessions"]), row => Text(row["id"]) == unrelated.Id);
-
-        // Bounded rows keep the newest part of a Session and report truncation.
-        var bounded = projection.Build(new(start, SessionIds: [f.Owner.Id], EventLimit: 2), null);
-        var ownerLane = Objects(bounded["sessions"]).Single();
-        Assert.True(ownerLane["truncated"]!.GetValue<bool>());
-        Assert.Equal(
-            SessionWait.Number(ownerLane["maxSeq"]),
-            SessionWait.Number(ownerLane["lastSeq"])
-        );
-
         // Incremental refresh appends only rows after the client's cursor.
         var cursor = (long)SessionWait.Number(all["cursors"]![a])!;
         await f.Manager.SendAsync(targetB, a, "later news");
         await targetA.Registry.Runner.ProcessQueueAsync(a).WaitAsync(TimeSpan.FromSeconds(20));
-        var delta = projection.Build(
-            new(start, SessionIds: [a], After: new Dictionary<string, long> { [a] = cursor }),
+        var delta = projection.BuildIncremental(
+            new(Now, new Dictionary<string, long> { [a] = cursor }, SessionIds: [a]),
             null
         );
-        Assert.True(delta["incremental"]!.GetValue<bool>());
+        Assert.Equal("incremental", Text(delta["mode"]));
         Assert.All(
             Objects(delta["events"]),
             item => Assert.True(SessionWait.Number(item["seq"]) > cursor)
@@ -257,8 +233,8 @@ public sealed class SessionSequenceProjectionTests
         Assert.Equal("inferred", Text(later["pairing"]));
 
         // A scoped caller sees only allowed lanes; other peers are opaque endpoints.
-        var scoped = projection.Build(
-            new(start),
+        var scoped = projection.BuildPage(
+            new(),
             new(
                 id => id == a,
                 id => "external:" + id.Length.ToString(CultureInfo.InvariantCulture),
@@ -266,16 +242,6 @@ public sealed class SessionSequenceProjectionTests
             )
         );
         Assert.Equal(new[] { a }, Objects(scoped["sessions"]).Select(row => Text(row["id"])));
-        // Newer out-of-scope Sessions do not consume the scoped caller's lane limit.
-        var narrow = projection.Build(
-            new(start, SessionLimit: 1),
-            new(
-                id => id == a,
-                id => "external",
-                row => new JsonObject { ["id"] = row["id"]!.DeepClone() }
-            )
-        );
-        Assert.Equal(new[] { a }, Objects(narrow["sessions"]).Select(row => Text(row["id"])));
         Assert.Null(scoped["tasks"]);
         var scopedText = scoped.ToJsonString();
         Assert.DoesNotContain(f.Owner.Id, scopedText);
@@ -406,7 +372,7 @@ public sealed class SessionSequenceProjectionTests
             new SessionRuntime(f.Manager),
             f.Manager.ArchiveDatabase
         );
-        var result = projection.Build(new(t0 - 10_000), null);
+        var result = projection.BuildPage(new(), null);
         var links = Objects(result["links"])
             .Where(link => Text(link["kind"]) == "message")
             .ToArray();
@@ -505,7 +471,7 @@ public sealed class SessionSequenceProjectionTests
         var result = new SessionSequenceProjection(
             new SessionRuntime(f.Manager),
             f.Manager.ArchiveDatabase
-        ).Build(new(t0 - 10_000), null);
+        ).BuildPage(new(), null);
         var texts = Objects(result["events"])
             .Where(item => Text(item["kind"]) == "llm")
             .Select(item => (Text(item["preview"]), Text(item["phase"])))
@@ -529,7 +495,7 @@ public sealed class SessionSequenceProjectionTests
         Assert.Equal("Please review the patch", Text(input["preview"]));
     }
 
-    private static Task Append(SessionOwner owner, params JsonObject[] messages) =>
+    internal static Task Append(SessionOwner owner, params JsonObject[] messages) =>
         owner.Entry.SaveLane.CommitCanonicalAppendAsync(state =>
             LocalSessionTurnHost.PrepareCanonicalAppend(
                 state,

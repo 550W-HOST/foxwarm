@@ -1,30 +1,42 @@
 using System.Globalization;
 using System.Text.Json.Nodes;
+using Microsoft.Data.Sqlite;
 
 namespace Foxwarm.Sessions;
 
 /// <summary>
-/// Read-only, on-demand projection of recent Session activity for the WebUI sequence view.
-/// Session selection comes from the Main catalog and events from each Session's own Archive
-/// rows; nothing is persisted. Deliveries pair exactly by (sourceSessionId, deliverySeq) and
+/// Read-only, on-demand projection of Session activity for the WebUI sequence view, paged
+/// newest first across all Sessions. Sessions are chosen by their own Archive rows (span cached
+/// in memory) and events come from those rows; nothing is persisted. Deliveries pair exactly by (sourceSessionId, deliverySeq) and
 /// older rows without that ID pair heuristically and are marked inferred.
 /// </summary>
 internal sealed partial class SessionSequenceProjection
 {
-    internal const int DefaultSessionLimit = 30;
-    internal const int MaxSessionLimit = 80;
+    internal const int DefaultPageLimit = 400;
+    internal const int MaxPageLimit = 2000;
     internal const int DefaultEventLimit = 400;
     internal const int MaxEventLimit = 2000;
+    internal const int MaxSessionIds = 1000;
     private const double SendTolerance = 3000;
-    private const int CandidateLimit = 2000;
+    private const double Minute = 60_000;
+    private const int PositionChunk = 64;
 
-    internal sealed record Request(
+    /// <summary>One newest-first page: rows older than <see cref="Before"/> (newest when null).</summary>
+    internal sealed record PageRequest(
+        ArchiveSequenceCursor? Before = null,
+        int Limit = DefaultPageLimit,
+        IReadOnlyList<string>? SessionIds = null
+    );
+
+    /// <summary>
+    /// Live append: rows after each known Session's cursor, plus Sessions not yet known that have
+    /// rows at or after <see cref="Since"/>.
+    /// </summary>
+    internal sealed record IncrementalRequest(
         double Since,
-        string? FocusSessionId = null,
-        IReadOnlyList<string>? SessionIds = null,
-        IReadOnlyDictionary<string, long>? After = null,
-        int SessionLimit = DefaultSessionLimit,
-        int EventLimit = DefaultEventLimit
+        IReadOnlyDictionary<string, long> After,
+        int EventLimit = DefaultEventLimit,
+        IReadOnlyList<string>? SessionIds = null
     );
 
     /// <summary>Visibility for one caller. Administrators see every Session.</summary>
@@ -76,9 +88,10 @@ internal sealed partial class SessionSequenceProjection
         string Preview
     );
 
-    private sealed class Lane(string id)
+    private sealed class Lane(string id, ArchiveSpan span)
     {
         internal string Id { get; } = id;
+        internal ArchiveSpan Span { get; } = span;
         internal ArchiveSequencePage? Page { get; set; }
         internal List<JsonObject> Events { get; } = [];
         internal List<ToolSpan> Tools { get; } = [];
@@ -87,8 +100,35 @@ internal sealed partial class SessionSequenceProjection
         internal (double At, string? Parent, string Kind, long Seq)? Start { get; set; }
     }
 
+    // One Session's position in the newest-first merge.
+    private sealed class Source(SessionCatalog.SequenceSession session, ArchiveSpan span, long high)
+    {
+        internal SessionCatalog.SequenceSession Session { get; } = session;
+        internal ArchiveSpan Span { get; } = span;
+        internal long High { get; set; } = high;
+        internal Queue<(long Seq, double Timestamp)> Buffer { get; } = new();
+        internal long? Low { get; set; }
+        internal long? Top { get; set; }
+    }
+
+    // Newest first: later time, then the larger Session ID, then the larger seq.
+    private sealed class Newest : IComparer<(double At, string Id, long Seq)>
+    {
+        internal static readonly Newest Instance = new();
+
+        public int Compare((double At, string Id, long Seq) x, (double At, string Id, long Seq) y)
+        {
+            var order = y.At.CompareTo(x.At);
+            if (order == 0)
+                order = string.CompareOrdinal(y.Id, x.Id);
+            return order != 0 ? order : y.Seq.CompareTo(x.Seq);
+        }
+    }
+
     private readonly SessionRuntime runtime;
     private readonly string archivePath;
+    private Func<string, bool> allows = _ => true;
+    private double? pageFrom;
 
     internal SessionSequenceProjection(SessionRuntime runtime, string archivePath)
     {
@@ -96,82 +136,222 @@ internal sealed partial class SessionSequenceProjection
         this.archivePath = archivePath;
     }
 
-    internal JsonObject Build(Request request, Visibility? visibility)
+    // Visible catalog Sessions with own Archive rows, optionally limited to requested IDs.
+    private List<(SessionCatalog.SequenceSession Session, ArchiveSpan Span)> Candidates(
+        SqliteConnection connection,
+        IReadOnlyList<string>? requested
+    )
+    {
+        HashSet<string>? only = null;
+        if (requested is not null)
+            only = requested.Select(Canonical).OfType<string>().ToHashSet(StringComparer.Ordinal);
+        var result = new List<(SessionCatalog.SequenceSession, ArchiveSpan)>();
+        foreach (var session in runtime.Catalog.SequenceSessions())
+        {
+            if (only is not null && !only.Contains(session.Id) || !allows(session.Id))
+                continue;
+            if (SqliteArchiveSequence.Span(connection, archivePath, session) is { } span)
+                result.Add((session, span));
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// A k-way newest-first merge over the Sessions whose own Archive rows reach the scan
+    /// position. A Session joins once the scan reaches its last row; one already open at the
+    /// cursor starts from a binary search on seq. After <see cref="PageRequest.Limit"/> rows
+    /// the page completes its oldest minute, so a minute is never split across pages.
+    /// </summary>
+    internal JsonObject BuildPage(PageRequest request, Visibility? visibility)
     {
         var watch = System.Diagnostics.Stopwatch.StartNew();
-        var allows = visibility?.Allows ?? (_ => true);
+        allows = visibility?.Allows ?? (_ => true);
+        using var connection = SqliteArchiveSequence.Open(archivePath);
         var lanes = new Dictionary<string, Lane>(StringComparer.Ordinal);
         var order = new List<string>();
-        var truncatedSessions = false;
-        using var connection = SqliteArchiveSequence.Open(archivePath);
-
-        Lane Load(string id)
+        var cursor = request.Before;
+        JsonObject? next = null;
+        var hasMore = false;
+        double? from = null;
+        if (connection is not null)
         {
-            var lane = new Lane(id);
-            if (connection is not null)
+            var heap = new PriorityQueue<Source, (double, string, long)>(Newest.Instance);
+            var waiting = new List<(SessionCatalog.SequenceSession Session, ArchiveSpan Span)>();
+            foreach (var (session, span) in Candidates(connection, request.SessionIds))
             {
-                long? after =
-                    request.After?.TryGetValue(id, out var cursor) == true ? cursor : null;
-                lane.Page = SqliteArchiveSequence.Read(
-                    connection,
-                    id,
-                    request.Since,
-                    after,
-                    request.EventLimit
-                );
-                Normalize(lane);
-            }
-            lanes[id] = lane;
-            order.Add(id);
-            return lane;
-        }
-
-        if (request.SessionIds is { } explicitIds)
-        {
-            foreach (var requested in explicitIds)
-            {
-                var id = Canonical(requested);
-                if (id is null || lanes.ContainsKey(id) || !allows(id))
-                    continue;
-                if (lanes.Count >= request.SessionLimit)
+                if (cursor is null || span.Last < cursor.At)
+                    waiting.Add((session, span));
+                else if (cursor.Includes(span.First, session.Id, span.FirstSeq))
                 {
-                    truncatedSessions = true;
+                    var high = SqliteArchiveSequence.SeqBefore(connection, session.Id, span, cursor);
+                    Push(connection, heap, new Source(session, span, high));
+                }
+            }
+            waiting.Sort((a, b) => b.Span.Last.CompareTo(a.Span.Last));
+            var nextWaiting = 0;
+            var sources = new List<Source>();
+            var total = 0;
+            var hardCap = request.Limit * 4;
+            double? stop = null;
+            double oldest = 0;
+            while (true)
+            {
+                while (
+                    nextWaiting < waiting.Count
+                    && (
+                        heap.Count == 0
+                        || waiting[nextWaiting].Span.Last >= PeekTime(heap)
+                    )
+                )
+                {
+                    var (session, span) = waiting[nextWaiting++];
+                    Push(connection, heap, new Source(session, span, span.LastSeq));
+                }
+                if (heap.Count == 0)
+                    break;
+                heap.TryPeek(out _, out var top);
+                if (stop is double boundary && top.Item1 < boundary)
+                {
+                    hasMore = true;
+                    next = new JsonObject { ["at"] = boundary };
+                    from = boundary;
                     break;
                 }
-                Load(id);
-            }
-        }
-        else
-        {
-            // Scoped callers and focus components filter after selection, so they read a wider
-            // (still bounded, metadata-only) candidate set.
-            var candidates = runtime.Catalog.SequenceCandidates(
-                request.Since,
-                request.FocusSessionId is null && visibility is null
-                    ? request.SessionLimit + 1
-                    : CandidateLimit
-            );
-            var visible = candidates.Where(row => allows(row.Id)).ToList();
-            if (request.FocusSessionId is { } focusRequest)
-            {
-                var focus = Canonical(focusRequest);
-                if (focus is not null && allows(focus))
-                    truncatedSessions = Component(focus, visible, lanes, request, allows, Load);
-            }
-            else
-            {
-                foreach (var row in visible)
+                var source = heap.Dequeue();
+                var (seq, at) = source.Buffer.Dequeue();
+                if (source.Top is null)
+                    sources.Add(source);
+                source.Top ??= seq;
+                source.Low = seq;
+                oldest = at;
+                total++;
+                if (total >= request.Limit && stop is null)
+                    stop = Math.Floor(at / Minute) * Minute;
+                Push(connection, heap, source);
+                if (total >= hardCap)
                 {
-                    if (lanes.Count >= request.SessionLimit)
-                    {
-                        truncatedSessions = true;
-                        break;
-                    }
-                    Load(row.Id);
+                    // One extraordinarily busy minute: split it with a full row cursor.
+                    hasMore = heap.Count > 0 || nextWaiting < waiting.Count;
+                    if (hasMore)
+                        next = new JsonObject
+                        {
+                            ["at"] = at,
+                            ["sessionId"] = source.Session.Id,
+                            ["seq"] = seq,
+                        };
+                    from = at;
+                    break;
                 }
             }
+            foreach (var source in sources)
+            {
+                var lane = new Lane(source.Session.Id, source.Span)
+                {
+                    Page = SqliteArchiveSequence.ReadRange(
+                        connection,
+                        source.Session.Id,
+                        source.Span,
+                        source.Low!.Value,
+                        source.Top!.Value
+                    ),
+                };
+                Normalize(lane);
+                lanes[lane.Id] = lane;
+                order.Add(lane.Id);
+            }
+            if (!hasMore && sources.Count > 0)
+                from = Math.Floor(oldest / Minute) * Minute;
         }
+        pageFrom = from;
+        var result = Result(lanes, order, visibility, watch);
+        result["mode"] = "page";
+        result["range"] = new JsonObject { ["from"] = from, ["to"] = cursor?.At };
+        result["next"] = next;
+        result["hasMore"] = hasMore;
+        return result;
+    }
 
+    private static double PeekTime(PriorityQueue<Source, (double, string, long)> heap)
+    {
+        heap.TryPeek(out _, out var key);
+        return key.Item1;
+    }
+
+    // Queues the Source's next row, reading positions in small newest-first chunks.
+    private static void Push(
+        SqliteConnection connection,
+        PriorityQueue<Source, (double, string, long)> heap,
+        Source source
+    )
+    {
+        if (source.Buffer.Count == 0 && source.High >= source.Span.FirstSeq)
+        {
+            var rows = SqliteArchiveSequence.Positions(
+                connection,
+                source.Span,
+                source.High,
+                PositionChunk
+            );
+            foreach (var row in rows)
+                source.Buffer.Enqueue(row);
+            source.High =
+                rows.Count < PositionChunk ? source.Span.FirstSeq - 1 : rows[^1].Seq - 1;
+        }
+        if (source.Buffer.TryPeek(out var head))
+            heap.Enqueue(source, (head.Timestamp, source.Session.Id, head.Seq));
+    }
+
+    /// <summary>Rows appended since the caller's cursors, ascending per Session.</summary>
+    internal JsonObject BuildIncremental(IncrementalRequest request, Visibility? visibility)
+    {
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        allows = visibility?.Allows ?? (_ => true);
+        pageFrom = null;
+        using var connection = SqliteArchiveSequence.Open(archivePath);
+        var lanes = new Dictionary<string, Lane>(StringComparer.Ordinal);
+        var order = new List<string>();
+        if (connection is not null)
+        {
+            var after = new Dictionary<string, long>(StringComparer.Ordinal);
+            foreach (var (id, seq) in request.After)
+                if (Canonical(id) is { } canonical)
+                    after[canonical] = seq;
+            foreach (var (session, span) in Candidates(connection, request.SessionIds))
+            {
+                long? cursor = after.TryGetValue(session.Id, out var known) ? known : null;
+                if (cursor is long seq ? span.LastSeq <= seq : span.Last < request.Since)
+                    continue;
+                var lane = new Lane(session.Id, span)
+                {
+                    Page = SqliteArchiveSequence.ReadAfter(
+                        connection,
+                        session.Id,
+                        span,
+                        cursor,
+                        request.Since,
+                        request.EventLimit
+                    ),
+                };
+                if (lane.Page.Rows.Count == 0)
+                    continue;
+                Normalize(lane);
+                lanes[lane.Id] = lane;
+                order.Add(lane.Id);
+            }
+        }
+        var result = Result(lanes, order, visibility, watch);
+        result["mode"] = "incremental";
+        result["since"] = request.Since;
+        return result;
+    }
+
+    private JsonObject Result(
+        Dictionary<string, Lane> lanes,
+        List<string> order,
+        Visibility? visibility,
+        System.Diagnostics.Stopwatch watch
+    )
+    {
         var links = Pair(lanes, visibility);
         var sessions = Sessions(order, lanes, visibility);
         var peers = Peers(links, lanes, visibility);
@@ -183,21 +363,16 @@ internal sealed partial class SessionSequenceProjection
         foreach (var id in order)
             if (lanes[id].Page?.Rows is { Count: > 0 } rows)
                 cursors[id] = rows[^1].Seq;
-            else if (request.After?.TryGetValue(id, out var cursor) == true)
-                cursors[id] = cursor;
         var result = new JsonObject
         {
-            ["version"] = 1,
+            ["version"] = 2,
             ["revision"] = runtime.PresentationRevision,
             ["generatedAt"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-            ["since"] = request.Since,
-            ["incremental"] = request.After is not null,
             ["sessions"] = sessions,
             ["peers"] = peers,
             ["events"] = events,
             ["links"] = links,
             ["cursors"] = cursors,
-            ["truncatedSessions"] = truncatedSessions,
             ["elapsedMs"] = Math.Round(watch.Elapsed.TotalMilliseconds, 1),
         };
         if (visibility is null)
@@ -208,59 +383,6 @@ internal sealed partial class SessionSequenceProjection
     private string? Canonical(string id) =>
         SessionCatalog.Text(runtime.Catalog.Resolve(id)["sessionId"]);
 
-    // The collaboration component of the focus Session: parent/child relations plus peers
-    // actually seen in loaded deliveries, bounded by the Session limit.
-    private bool Component(
-        string focus,
-        IReadOnlyList<SessionCatalog.SequenceCandidate> candidates,
-        Dictionary<string, Lane> lanes,
-        Request request,
-        Func<string, bool> allows,
-        Func<string, Lane> load
-    )
-    {
-        var window = candidates.ToDictionary(row => row.Id, StringComparer.Ordinal);
-        var children = candidates
-            .Where(row => row.Parent is not null)
-            .GroupBy(row => row.Parent!, StringComparer.Ordinal)
-            .ToDictionary(
-                group => group.Key,
-                group => group.Select(row => row.Id).ToArray(),
-                StringComparer.Ordinal
-            );
-        var queue = new Queue<string>([focus]);
-        var queued = new HashSet<string>([focus], StringComparer.Ordinal);
-        while (queue.Count > 0)
-        {
-            if (lanes.Count >= request.SessionLimit)
-                return true;
-            var id = queue.Dequeue();
-            var lane = load(id);
-            var neighbors = new List<string>();
-            var parent = window.TryGetValue(id, out var row)
-                ? row.Parent
-                : SessionCatalog.Text(runtime.Catalog.Presentation(id)?["parentSessionId"]);
-            if (parent is not null && window.ContainsKey(parent))
-                neighbors.Add(parent);
-            if (children.TryGetValue(id, out var kids))
-                neighbors.AddRange(kids);
-            if (lane.Start?.Parent is { } creator)
-                neighbors.Add(creator);
-            neighbors.AddRange(lane.Outgoing.Select(item => item.Target));
-            neighbors.AddRange(
-                lane.Incoming.Select(item => item.Attributes.GetValueOrDefault("sourceSessionId"))
-                    .OfType<string>()
-            );
-            foreach (var neighbor in neighbors)
-            {
-                var canonical = window.ContainsKey(neighbor) ? neighbor : Canonical(neighbor);
-                if (canonical is not null && allows(canonical) && queued.Add(canonical))
-                    queue.Enqueue(canonical);
-            }
-        }
-        return false;
-    }
-
     private void Normalize(Lane lane)
     {
         var calls = new Dictionary<
@@ -268,7 +390,7 @@ internal sealed partial class SessionSequenceProjection
             (long Seq, int Call, int Total, string Name, string Preview)
         >(StringComparer.Ordinal);
         if (lane.Page!.Context is { } context)
-            NormalizeModel(new Lane(lane.Id), context, calls);
+            NormalizeModel(new Lane(lane.Id, lane.Span), context, calls);
         foreach (var row in lane.Page.Rows)
         {
             switch (row.Role)

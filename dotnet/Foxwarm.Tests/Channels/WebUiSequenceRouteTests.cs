@@ -114,15 +114,16 @@ public sealed class WebUiSequenceRouteTests
                     .Select(row => SessionWait.Text(row!["id"])!)
                     .ToArray();
 
-            var all = await Read(admin, new JsonObject { ["since"] = since });
-            Assert.Contains(hidden.Id, Lanes(all));
+            var all = await Read(admin, new JsonObject());
+            // The sender has no Archive rows of its own here, so it is a peer, not a column.
+            Assert.Contains(all["peers"]!.AsArray(), peer => SessionWait.Text(peer!["id"]) == hidden.Id);
             var adminLink = all["links"]!
                 .AsArray()
                 .Single(link => SessionWait.Text(link!["deliverySeq"]) == "4.2")!;
             Assert.Equal(hidden.Id, SessionWait.Text(adminLink["from"]!["sessionId"]));
             Assert.Equal("plan update", SessionWait.Text(adminLink["preview"]));
 
-            var scoped = await Read(viewer, new JsonObject { ["since"] = since });
+            var scoped = await Read(viewer, new JsonObject { ["limit"] = 50 });
             Assert.Equal([receiver.Id], Lanes(scoped));
             var text = scoped.ToJsonString();
             Assert.DoesNotContain(hidden.Id, text);
@@ -143,18 +144,20 @@ public sealed class WebUiSequenceRouteTests
 
             var outside = await Read(
                 viewer,
-                new JsonObject { ["since"] = since, ["sessionIds"] = new JsonArray(hidden.Id) }
+                new JsonObject { ["sessionIds"] = new JsonArray(hidden.Id) }
             );
             Assert.Empty(Lanes(outside));
-            var focused = await Read(
+            // Live updates for an out-of-scope cursor reveal nothing about that Session.
+            var live = await Read(
                 viewer,
-                new JsonObject { ["since"] = since, ["focusSessionId"] = hidden.Id }
+                new JsonObject { ["since"] = since, ["after"] = new JsonObject { [hidden.Id] = 0 } }
             );
-            Assert.Empty(Lanes(focused));
+            Assert.Equal([receiver.Id], Lanes(live));
+            Assert.DoesNotContain(hidden.Id, live.ToJsonString());
 
             var invalid = await viewer.PostAsJsonAsync(
                 "api/session-sequence",
-                new JsonObject { ["since"] = -1 }
+                new JsonObject { ["before"] = new JsonObject { ["at"] = -1 } }
             );
             Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
         }

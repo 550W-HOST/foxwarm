@@ -14,7 +14,8 @@ export interface SequenceSession {
   lastSeq?: number
   maxSeq?: number
   firstAt?: number
-  truncated?: boolean
+  /** Time of the Session's first own Archive row. */
+  createdAt?: number
   hasMore?: boolean
   startedAt?: number
   startKind?: string
@@ -71,13 +72,17 @@ export interface SequenceLink {
   deliverySeq?: string
   preview?: string
   state?: 'queued' | 'unread'
+  /** The other half of this delivery is in an older page that is not loaded yet. */
+  pending?: 'older'
   taskId?: string
   taskEvent?: string
   mode?: string
 }
 
+/** Newest-first paging position; returned as `next` and sent back as `before`. */
+export interface SequenceCursor { at: number; sessionId?: string; seq?: number }
+
 export interface SequenceData {
-  since: number
   generatedAt: number
   sessions: SequenceSession[]
   peers: SequencePeer[]
@@ -85,39 +90,69 @@ export interface SequenceData {
   links: SequenceLink[]
   cursors: Record<string, number>
   tasks?: Record<string, { title?: string; status?: string }>
-  truncatedSessions?: boolean
-  incremental?: boolean
+  mode?: 'page' | 'incremental'
+  /** Page only: the time range it covers; `to` is absent for the newest page. */
+  range?: { from?: number | null; to?: number | null }
+  next?: SequenceCursor | null
+  hasMore?: boolean
 }
 
-export const SEQUENCE_WINDOWS = [
-  { id: '1h', label: '1h', ms: 3_600_000 },
-  { id: '6h', label: '6h', ms: 6 * 3_600_000 },
-  { id: '24h', label: '24h', ms: 24 * 3_600_000 },
-] as const
-export type SequenceWindowId = typeof SEQUENCE_WINDOWS[number]['id']
+export const SEQUENCE_BUCKET_MS = 60_000
 
 export const sequenceEventKey = (event: SequenceEvent) => `${event.sessionId}|${event.seq}|${event.kind}|${event.call ?? 0}`
 
+const extreme = (pick: (...values: number[]) => number, a: number | undefined, b: number | undefined) =>
+  a === undefined ? b : b === undefined ? a : pick(a, b)
+
 /**
- * Appends an incremental response. Links are keyed so a delivery first seen as queued on the
- * sender is replaced once the receiver consumes it; sender-side anchors survive when the
- * incremental response only has the receiver's half.
+ * Merges an older page or a live update. Links are keyed, so the two halves of a delivery
+ * (sender and receiver, possibly from different pages) become one link: a delivery first seen
+ * as queued is replaced once its read half is known, and sender-side anchors survive when only
+ * the receiver's half arrives.
  */
 export function mergeSequenceData(base: SequenceData, delta: SequenceData): SequenceData {
   const sessions = new Map(base.sessions.map(session => [session.id, session]))
-  for (const session of delta.sessions) sessions.set(session.id, { ...sessions.get(session.id), ...session, firstSeq: sessions.get(session.id)?.firstSeq ?? session.firstSeq, firstAt: sessions.get(session.id)?.firstAt ?? session.firstAt, truncated: sessions.get(session.id)?.truncated ?? session.truncated })
+  for (const session of delta.sessions) {
+    const previous = sessions.get(session.id)
+    const older = !!previous && session.firstSeq !== undefined && previous.firstSeq !== undefined && session.firstSeq < previous.firstSeq
+    // Row bounds widen; current runtime fields come from whichever response is newer.
+    const merged = older ? { ...session, ...previous } : { ...previous, ...session }
+    sessions.set(session.id, {
+      ...merged,
+      firstSeq: extreme(Math.min, previous?.firstSeq, session.firstSeq),
+      firstAt: extreme(Math.min, previous?.firstAt, session.firstAt),
+      lastSeq: extreme(Math.max, previous?.lastSeq, session.lastSeq),
+      maxSeq: extreme(Math.max, previous?.maxSeq, session.maxSeq),
+      startedAt: previous?.startedAt ?? session.startedAt,
+      startKind: previous?.startKind ?? session.startKind,
+    })
+  }
   const peers = new Map(base.peers.map(peer => [peer.id, peer]))
   for (const peer of delta.peers) peers.set(peer.id, { ...peers.get(peer.id), ...peer })
   const events = new Map(base.events.map(event => [sequenceEventKey(event), event]))
   for (const event of delta.events) events.set(sequenceEventKey(event), event)
   const links = new Map(base.links.map(link => [link.key, link]))
+  // A send half knows the exact sending call and time; a read half knows when it was read.
+  const sendHalf = (link: SequenceLink) => link.consumedAt === undefined && (link.from.lane ?? 'session') === 'session'
   for (const link of delta.links) {
     const previous = links.get(link.key)
     if (!previous) { links.set(link.key, link); continue }
-    const keepAnchor = previous.from.seq !== undefined && link.from.seq === undefined
-    const from = keepAnchor ? { ...link.from, seq: previous.from.seq, call: previous.from.call, sub: previous.from.sub, at: previous.from.at } : link.from
+    let from = link.from
+    let sentAt = link.sentAt
+    if (previous.from.seq !== undefined && link.from.seq === undefined) {
+      from = { ...link.from, seq: previous.from.seq, call: previous.from.call, sub: previous.from.sub, at: previous.from.at }
+      sentAt = previous.sentAt
+    } else if (sendHalf(previous) && !sendHalf(link)) {
+      from = { ...link.from, ...previous.from }
+      sentAt = previous.sentAt
+    }
     const consumed = link.consumedAt ?? previous.consumedAt
-    links.set(link.key, { ...previous, ...link, from, to: { ...previous.to, ...link.to }, sentAt: keepAnchor ? previous.sentAt : link.sentAt, consumedAt: consumed, state: consumed !== undefined ? undefined : link.state })
+    // The read half's endpoint wins; a send half only knows the receiver's ID.
+    const to = previous.to.seq !== undefined && link.to.seq === undefined ? { ...link.to, ...previous.to } : { ...previous.to, ...link.to }
+    if (!(previous.to.outside && link.to.outside)) delete to.outside
+    const merged: SequenceLink = { ...previous, ...link, from, to, sentAt, consumedAt: consumed, state: consumed !== undefined ? undefined : link.state ?? previous.state, preview: link.preview || previous.preview }
+    if (!(previous.pending && link.pending)) delete merged.pending
+    links.set(link.key, merged)
   }
   const cursors = { ...base.cursors }
   for (const [id, seq] of Object.entries(delta.cursors || {})) cursors[id] = Math.max(cursors[id] ?? 0, seq)
@@ -130,19 +165,7 @@ export function mergeSequenceData(base: SequenceData, delta: SequenceData): Sequ
     links: [...links.values()],
     cursors,
     tasks: { ...base.tasks, ...delta.tasks },
-    truncatedSessions: base.truncatedSessions || delta.truncatedSessions,
   }
-}
-
-/** Session IDs referenced by links that are neither loaded lanes nor opaque peers. */
-export function unloadedSequencePeers(data: SequenceData): string[] {
-  const loaded = new Set(data.sessions.map(session => session.id))
-  const opaque = new Set(data.peers.filter(peer => peer.opaque).map(peer => peer.id))
-  const missing = new Set<string>()
-  for (const link of data.links) for (const side of [link.from, link.to]) {
-    if (side.sessionId && !loaded.has(side.sessionId) && !opaque.has(side.sessionId)) missing.add(side.sessionId)
-  }
-  return [...missing]
 }
 
 /** Work in progress from the runtime state, drawn until the current time. */
@@ -170,8 +193,6 @@ export interface SequenceColumn {
   agent?: string
   depth: number
   state: SequenceColumnState
-  /** Older activity in the window was cut by the per-Session row limit. */
-  partial?: boolean
 }
 
 export function sequenceColumnState(session: SequenceSession): SequenceColumnState {
@@ -184,7 +205,7 @@ export function sequenceColumnState(session: SequenceSession): SequenceColumnSta
 /** Sessions in parent/child tree order, siblings by when they started. */
 export function orderSequenceColumns(data: SequenceData): SequenceColumn[] {
   const sessions = new Map(data.sessions.map(session => [session.id, session]))
-  const started = (session: SequenceSession) => session.startedAt ?? session.firstAt ?? session.lastMessageTime ?? Number.MAX_SAFE_INTEGER
+  const started = (session: SequenceSession) => session.createdAt ?? session.startedAt ?? session.firstAt ?? session.lastMessageTime ?? Number.MAX_SAFE_INTEGER
   const byStart = (a: SequenceSession, b: SequenceSession) => started(a) - started(b) || a.id.localeCompare(b.id)
   const children = new Map<string, SequenceSession[]>()
   const roots: SequenceSession[] = []
@@ -198,7 +219,7 @@ export function orderSequenceColumns(data: SequenceData): SequenceColumn[] {
   const visit = (session: SequenceSession, depth: number) => {
     if (visited.has(session.id)) return
     visited.add(session.id)
-    columns.push({ id: session.id, label: sessionLabel(session), agent: session.agent, depth, state: sequenceColumnState(session), partial: !!session.truncated })
+    columns.push({ id: session.id, label: sessionLabel(session), agent: session.agent, depth, state: sequenceColumnState(session) })
     for (const child of (children.get(session.id) || []).sort(byStart)) visit(child, depth + 1)
   }
   for (const root of roots.sort(byStart)) visit(root, 0)
@@ -276,20 +297,8 @@ export function sequenceColumnItems(data: SequenceData, now: number): Map<string
   return items
 }
 
-/** Row sizes tried in order; the first that keeps the row count within the limit wins. */
-export const SEQUENCE_BUCKET_MINUTES = [1, 2, 5, 10, 15, 30, 60, 120, 240, 720] as const
-
 const localOffset = (time: number) => -new Date(time).getTimezoneOffset() * 60_000
 const bucketStart = (time: number, size: number) => Math.floor((time + localOffset(time)) / size) * size - localOffset(time)
-
-/** Smallest bucket (in ms) whose non-empty rows stay within `maxRows`. */
-export function chooseSequenceBucket(times: number[], maxRows = 60): number {
-  for (const minutes of SEQUENCE_BUCKET_MINUTES) {
-    const size = minutes * 60_000
-    if (new Set(times.map(time => bucketStart(time, size))).size <= maxRows) return size
-  }
-  return SEQUENCE_BUCKET_MINUTES.at(-1)! * 60_000
-}
 
 export interface SequenceRow {
   start: number
@@ -301,7 +310,7 @@ export interface SequenceRow {
  * Time-bucket rows across all columns. Empty buckets are omitted, so idle time disappears;
  * consecutive tool runs within a cell collapse into one counted group.
  */
-export function buildSequenceRows(items: Map<string, SequenceItem[]>, bucketMs: number): SequenceRow[] {
+export function buildSequenceRows(items: Map<string, SequenceItem[]>, bucketMs = SEQUENCE_BUCKET_MS): SequenceRow[] {
   const rows = new Map<number, SequenceRow>()
   for (const [sessionId, list] of items) {
     for (const item of list) {
@@ -315,19 +324,6 @@ export function buildSequenceRows(items: Map<string, SequenceItem[]>, bucketMs: 
     }
   }
   return [...rows.values()].sort((a, b) => a.start - b.start)
-}
-
-export interface SequenceGrid {
-  columns: SequenceColumn[]
-  rows: SequenceRow[]
-  bucketMs: number
-}
-
-export function buildSequenceGrid(data: SequenceData, now: number, maxRows = 60): SequenceGrid {
-  const columns = orderSequenceColumns(data)
-  const items = sequenceColumnItems(data, now)
-  const bucketMs = chooseSequenceBucket([...items.values()].flatMap(list => list.map(item => item.time)), maxRows)
-  return { columns, rows: buildSequenceRows(items, bucketMs), bucketMs }
 }
 
 export const formatSequenceDuration = (ms: number) => {
@@ -365,3 +361,125 @@ export function sequenceLinkTitle(link: SequenceLink): string {
   if (link.kind === 'event' && link.from.label) return link.from.label
   return LINK_TITLES[link.kind]
 }
+
+/** The pinned Session and every Session it exchanged deliveries, creation or Tasks with. */
+export function connectedSequenceSessions(data: SequenceData, pinned: string): Set<string> {
+  const connected = new Set([pinned])
+  for (const link of data.links) {
+    if (link.kind !== 'message' && link.kind !== 'task' && link.kind !== 'spawn') continue
+    const from = link.from.sessionId
+    const to = link.to.sessionId
+    if (from === pinned && to) connected.add(to)
+    if (to === pinned && from) connected.add(from)
+  }
+  return connected
+}
+
+/** Sessions with items in rows `start`..`end` (exclusive). */
+export function sequenceRowSessions(rows: SequenceRow[], start: number, end: number): Set<string> {
+  const result = new Set<string>()
+  for (let index = Math.max(0, start); index < Math.min(rows.length, end); index++) {
+    for (const id of Object.keys(rows[index].cells)) result.add(id)
+  }
+  return result
+}
+
+/**
+ * Next column set. A Session joins when it has items near the viewport (`near`) and leaves only
+ * when it has none in the wider band (`far`), so columns do not flicker at the edge. Columns
+ * keep tree order; the pinned Session is always first.
+ */
+export function nextSequenceColumns({ order, current, near, far, pinned }: { order: string[]; current: string[]; near: Set<string>; far: Set<string>; pinned?: string | null }): string[] {
+  const keep = new Set(current.filter(id => far.has(id) || near.has(id)))
+  for (const id of near) keep.add(id)
+  const result = order.filter(id => keep.has(id) && id !== pinned)
+  return pinned ? [pinned, ...result] : result
+}
+
+/** Cumulative row offsets: `offsets[i]` is the top of row i, the last entry the total height. */
+export function sequenceRowOffsets(rows: SequenceRow[], height: (row: SequenceRow) => number): number[] {
+  const offsets = [0]
+  for (const row of rows) offsets.push(offsets[offsets.length - 1] + height(row))
+  return offsets
+}
+
+/** Index of the row containing `y` (clamped). */
+export function sequenceRowAt(offsets: number[], y: number): number {
+  let low = 0
+  let high = offsets.length - 2
+  if (high < 0) return 0
+  while (low < high) {
+    const middle = (low + high + 1) >> 1
+    if (offsets[middle] <= y) low = middle
+    else high = middle - 1
+  }
+  return low
+}
+
+/** Rows to render for a viewport, with `margin` pixels above and below. */
+export function sequenceRowWindow(offsets: number[], top: number, viewport: number, margin: number): [number, number] {
+  const count = offsets.length - 1
+  if (count <= 0) return [0, 0]
+  return [sequenceRowAt(offsets, top - margin), Math.min(count, sequenceRowAt(offsets, top + viewport + margin) + 1)]
+}
+
+/** Estimated height of a row before it is measured. */
+export function estimateSequenceRow(row: SequenceRow): number {
+  let tallest = 0
+  for (const items of Object.values(row.cells)) tallest = Math.max(tallest, items.length)
+  return 36 + tallest * 64
+}
+
+/**
+ * Drops loaded activity older than `before` (a bucket boundary), keeping links whose newer half
+ * is still loaded. Used to bound memory after scrolling far back and returning to the newest.
+ */
+export function trimSequenceData(data: SequenceData, before: number): SequenceData {
+  const keepEvent = (event: SequenceEvent) => event.end >= before || event.start >= before
+  const linkTime = (link: SequenceLink) => Math.max(link.consumedAt ?? 0, link.to.at ?? 0, link.from.at ?? 0, link.sentAt)
+  return { ...data, events: data.events.filter(keepEvent), links: data.links.filter(link => linkTime(link) >= before) }
+}
+
+/** Rendered width of a full column, including the gap to the next one. */
+export const SEQUENCE_COLUMN_STRIDE = 312
+
+/**
+ * One animation step for column widths: entering columns grow, leaving columns shrink and are
+ * dropped at zero. Returns the same object when every width has reached its target.
+ */
+export function stepSequenceWidths(widths: Record<string, number>, shown: string[], stepPx: number, full = SEQUENCE_COLUMN_STRIDE): Record<string, number> {
+  const target = new Set(shown)
+  let changed = false
+  const next: Record<string, number> = {}
+  for (const id of new Set([...Object.keys(widths), ...shown])) {
+    const current = widths[id] ?? 0
+    const goal = target.has(id) ? full : 0
+    const value = current < goal ? Math.min(goal, current + stepPx) : Math.max(goal, current - stepPx)
+    if (value !== current || !(id in widths)) changed = true
+    if (value > 0 || target.has(id)) next[id] = value
+    else changed = true
+  }
+  return changed ? next : widths
+}
+
+/**
+ * Horizontal scroll change that keeps already-visible columns in place when columns are
+ * inserted, removed or resized: the first column whose right edge was in view, and which is
+ * still present, stays at the same screen position.
+ */
+export function sequenceScrollLeftShift(order: string[], before: Record<string, number>, after: Record<string, number>, scrollLeft: number): number {
+  let leftBefore = 0
+  let leftAfter = 0
+  for (const id of order) {
+    const was = before[id] ?? 0
+    const now = after[id] ?? 0
+    if (was > 0 && now > 0 && leftBefore + was > scrollLeft) return leftAfter - leftBefore
+    leftBefore += was
+    leftAfter += now
+  }
+  return 0
+}
+
+/** Rows that lie inside the loaded range; an older half-loaded bucket waits for its page. */
+export const loadedSequenceRows = (rows: SequenceRow[], loadedFrom: number | null | undefined) =>
+  loadedFrom == null ? rows : rows.filter(row => row.end > loadedFrom)

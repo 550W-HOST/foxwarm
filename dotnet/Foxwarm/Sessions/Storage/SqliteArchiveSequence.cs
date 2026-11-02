@@ -21,7 +21,7 @@ internal sealed record ArchiveSequencePage(
 /// leave the database. Fork lineage is not expanded, so a parent's pre-fork rows are not
 /// repeated under the child.
 /// </summary>
-internal static class SqliteArchiveSequence
+internal static partial class SqliteArchiveSequence
 {
     internal const int PreviewLength = 240;
 
@@ -51,91 +51,81 @@ internal static class SqliteArchiveSequence
     }
 
     /// <summary>
-    /// Reads rows at or after <paramref name="since"/>. Without <paramref name="afterSeq"/> the
-    /// newest <paramref name="limit"/> rows are kept; with it, rows after that cursor ascend.
+    /// Rows after <paramref name="afterSeq"/>, or from <paramref name="since"/> when the caller has
+    /// none of this Session's rows yet, ascending and bounded by <paramref name="limit"/>.
     /// </summary>
-    internal static ArchiveSequencePage Read(
+    internal static ArchiveSequencePage ReadAfter(
         SqliteConnection connection,
         string sessionId,
-        double since,
+        ArchiveSpan span,
         long? afterSeq,
+        double since,
         int limit
     )
     {
-        var canonical = SqliteArchiveMessageStore.ResolveReadOnly(connection, sessionId);
-        long? min = null,
-            max = null;
-        using (var bounds = connection.CreateCommand())
-        {
-            bounds.CommandText =
-                "SELECT MIN(seq),MAX(seq) FROM archive_messages WHERE session_id=$s";
-            bounds.Parameters.AddWithValue("$s", canonical);
-            using var reader = bounds.ExecuteReader();
-            if (reader.Read() && !reader.IsDBNull(0))
-            {
-                min = reader.GetInt64(0);
-                max = reader.GetInt64(1);
-            }
-        }
-        if (min is null || max is null)
-            return new(sessionId, [], null, false, false);
-        var start = WindowStart(connection, canonical, since, min.Value, max.Value);
-        if (afterSeq is long cursor && cursor + 1 > start)
-            start = cursor + 1;
-        if (start > max)
-            return new(sessionId, [], max, false, false);
-        var ascending = afterSeq is not null;
+        var start = afterSeq is long cursor
+            ? cursor + 1
+            : WindowStart(connection, span.Canonical, since, span.FirstSeq, span.LastSeq);
+        if (start > span.LastSeq)
+            return new(sessionId, [], span.LastSeq, false, false);
         using var command = connection.CreateCommand();
         command.CommandText =
-            Select
-            + " WHERE session_id=$s AND seq>=$start ORDER BY seq "
-            + (ascending ? "ASC" : "DESC")
-            + " LIMIT $limit";
-        command.Parameters.AddWithValue("$s", canonical);
+            Select + " WHERE session_id=$s AND seq>=$start ORDER BY seq ASC LIMIT $limit";
+        command.Parameters.AddWithValue("$s", span.Canonical);
         command.Parameters.AddWithValue("$start", start);
         command.Parameters.AddWithValue("$limit", limit + 1);
-        var rows = new List<ArchiveSequenceRow>();
-        using (var reader = command.ExecuteReader())
-            while (reader.Read())
-                rows.Add(
-                    new(
-                        reader.GetInt64(0),
-                        reader.GetDouble(1),
-                        reader.GetString(2),
-                        reader.IsDBNull(3)
-                            ? new JsonObject()
-                            : JsonNode.Parse(reader.GetString(3)) as JsonObject ?? new JsonObject()
-                    )
-                );
+        var rows = ReadRows(command);
         var overflow = rows.Count > limit;
         if (overflow)
             rows.RemoveAt(rows.Count - 1);
-        if (!ascending)
-            rows.Reverse();
-        // A leading tool row needs its calling model message to recover call positions.
-        ArchiveSequenceRow? context = null;
-        if (rows.Count > 0 && rows[0].Role == "tool")
-        {
-            using var previous = connection.CreateCommand();
-            previous.CommandText =
-                Select
-                + " WHERE session_id=$s AND seq<$seq AND role='model' ORDER BY seq DESC LIMIT 1";
-            previous.Parameters.AddWithValue("$s", canonical);
-            previous.Parameters.AddWithValue("$seq", rows[0].Seq);
-            using var reader = previous.ExecuteReader();
-            if (reader.Read() && !reader.IsDBNull(3))
-                context = new(
+        return new(
+            sessionId,
+            rows,
+            span.LastSeq,
+            false,
+            overflow,
+            Context(connection, span.Canonical, rows)
+        );
+    }
+
+    private static List<ArchiveSequenceRow> ReadRows(SqliteCommand command)
+    {
+        var rows = new List<ArchiveSequenceRow>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+            rows.Add(
+                new(
                     reader.GetInt64(0),
                     reader.GetDouble(1),
                     reader.GetString(2),
-                    JsonNode.Parse(reader.GetString(3)) as JsonObject ?? new JsonObject()
-                );
-        }
-        return new(sessionId, rows, max, !ascending && overflow, ascending && overflow, context);
+                    reader.IsDBNull(3)
+                        ? new JsonObject()
+                        : JsonNode.Parse(reader.GetString(3)) as JsonObject ?? new JsonObject()
+                )
+            );
+        return rows;
+    }
+
+    // A leading tool row needs its calling model message to recover call positions.
+    private static ArchiveSequenceRow? Context(
+        SqliteConnection connection,
+        string canonical,
+        IReadOnlyList<ArchiveSequenceRow> rows
+    )
+    {
+        if (rows.Count == 0 || rows[0].Role != "tool")
+            return null;
+        using var previous = connection.CreateCommand();
+        previous.CommandText =
+            Select + " WHERE session_id=$s AND seq<$seq AND role='model' ORDER BY seq DESC LIMIT 1";
+        previous.Parameters.AddWithValue("$s", canonical);
+        previous.Parameters.AddWithValue("$seq", rows[0].Seq);
+        var found = ReadRows(previous);
+        return found.Count > 0 ? found[0] : null;
     }
 
     // Archive timestamps are monotonic within one Session, so the window start is found on seq.
-    private static long WindowStart(
+    internal static long WindowStart(
         SqliteConnection connection,
         string canonical,
         double since,

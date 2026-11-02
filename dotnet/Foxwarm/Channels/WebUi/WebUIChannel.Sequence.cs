@@ -29,30 +29,19 @@ internal sealed partial class WebUIChannel
                     {
                         SessionListQueries.Keys(
                             body.Select(pair => pair.Key),
-                            "since",
-                            "focusSessionId",
-                            "sessionIds",
+                            "before",
+                            "limit",
                             "after",
-                            "sessionLimit",
-                            "eventLimit"
+                            "since",
+                            "eventLimit",
+                            "sessionIds"
                         );
-                        var since =
-                            SessionCatalog.Number(body["since"]) is { } value && value >= 0
-                                ? value
-                                : throw new SessionListQueryException(
-                                    "SESSION_SEQUENCE_INVALID",
-                                    "since must be a nonnegative time in milliseconds."
-                                );
-                        var focus = BodyText(body, "focusSessionId");
-                        if (focus is { Length: < 1 or > 512 })
-                            throw new SessionListQueryException(
-                                "SESSION_SEQUENCE_INVALID",
-                                "focusSessionId is invalid."
-                            );
+                        static SessionListQueryException Invalid(string message) =>
+                            new("SESSION_SEQUENCE_INVALID", message);
                         var ids = body.ContainsKey("sessionIds")
                             ? SessionListQueries.Ids(
                                 body["sessionIds"],
-                                SessionSequenceProjection.MaxSessionLimit
+                                SessionSequenceProjection.MaxSessionIds
                             )
                             : null;
                         Dictionary<string, long>? after = null;
@@ -60,12 +49,9 @@ internal sealed partial class WebUIChannel
                         {
                             if (
                                 body["after"] is not JsonObject cursors
-                                || cursors.Count > SessionSequenceProjection.MaxSessionLimit
+                                || cursors.Count > SessionSequenceProjection.MaxSessionIds
                             )
-                                throw new SessionListQueryException(
-                                    "SESSION_SEQUENCE_INVALID",
-                                    "after must map Session IDs to sequence numbers."
-                                );
+                                throw Invalid("after must map Session IDs to sequence numbers.");
                             after = new(StringComparer.Ordinal);
                             foreach (var (id, node) in cursors)
                             {
@@ -75,12 +61,42 @@ internal sealed partial class WebUIChannel
                                     || seq < 0
                                     || Math.Truncate(seq) != seq
                                 )
-                                    throw new SessionListQueryException(
-                                        "SESSION_SEQUENCE_INVALID",
-                                        "after must map Session IDs to sequence numbers."
-                                    );
+                                    throw Invalid("after must map Session IDs to sequence numbers.");
                                 after[id] = (long)seq;
                             }
+                        }
+                        double? since = null;
+                        if (body.ContainsKey("since"))
+                            since =
+                                SessionCatalog.Number(body["since"]) is { } value && value >= 0
+                                    ? value
+                                    : throw Invalid("since must be a nonnegative time in milliseconds.");
+                        if (after is not null != since is not null)
+                            throw Invalid("after and since are used together, for live updates.");
+                        ArchiveSequenceCursor? before = null;
+                        if (body.ContainsKey("before") && body["before"] is not null)
+                        {
+                            if (after is not null)
+                                throw Invalid("before pages older rows and cannot be combined with after.");
+                            before =
+                                body["before"] is JsonObject cursor
+                                && cursor.All(pair => pair.Key is "at" or "sessionId" or "seq")
+                                && SessionCatalog.Number(cursor["at"]) is { } at
+                                && at >= 0
+                                && (cursor["sessionId"] is null) == (cursor["seq"] is null)
+                                && (
+                                    cursor["sessionId"] is null
+                                    || SessionCatalog.Text(cursor["sessionId"]) is { Length: >= 1 and <= 512 }
+                                        && SessionCatalog.Number(cursor["seq"]) is { } tie
+                                        && tie >= 0
+                                        && Math.Truncate(tie) == tie
+                                )
+                                    ? new(
+                                        at,
+                                        SessionCatalog.Text(cursor["sessionId"]),
+                                        SessionCatalog.Number(cursor["seq"]) is { } n ? (long)n : null
+                                    )
+                                    : throw Invalid("before must be a cursor returned as next.");
                         }
                         var scoped = WebUiAccess.Request(request);
                         scoped?.Require();
@@ -91,30 +107,38 @@ internal sealed partial class WebUIChannel
                                 OpaquePeer,
                                 scoped.Session
                             );
-                        var result = new SessionSequenceProjection(
+                        var projection = new SessionSequenceProjection(
                             runtime,
                             sessions.ArchiveDatabase
-                        ).Build(
-                            new(
-                                since,
-                                focus,
-                                ids,
-                                after,
-                                BodyLimit(
-                                    body,
-                                    "sessionLimit",
-                                    SessionSequenceProjection.DefaultSessionLimit,
-                                    SessionSequenceProjection.MaxSessionLimit
-                                ),
-                                BodyLimit(
-                                    body,
-                                    "eventLimit",
-                                    SessionSequenceProjection.DefaultEventLimit,
-                                    SessionSequenceProjection.MaxEventLimit
-                                )
-                            ),
-                            visibility
                         );
+                        var result = after is not null
+                            ? projection.BuildIncremental(
+                                new(
+                                    since!.Value,
+                                    after,
+                                    BodyLimit(
+                                        body,
+                                        "eventLimit",
+                                        SessionSequenceProjection.DefaultEventLimit,
+                                        SessionSequenceProjection.MaxEventLimit
+                                    ),
+                                    ids
+                                ),
+                                visibility
+                            )
+                            : projection.BuildPage(
+                                new(
+                                    before,
+                                    BodyLimit(
+                                        body,
+                                        "limit",
+                                        SessionSequenceProjection.DefaultPageLimit,
+                                        SessionSequenceProjection.MaxPageLimit
+                                    ),
+                                    ids
+                                ),
+                                visibility
+                            );
                         // Scope can change while the projection reads; never return stale scope.
                         scoped?.Require();
                         return result;

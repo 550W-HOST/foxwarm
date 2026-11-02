@@ -97,6 +97,92 @@ function denseSequence(now) {
   }
 }
 
+// Six hours of minute-by-minute history in hourly pages: "hist/lead" throughout, "hist/recent"
+// only in the last two hours and "hist/early" only four to six hours ago.
+function pagedSequence(now, body) {
+  const end = Math.floor(now / 60_000) * 60_000
+  const to = body.before?.at ?? end + 60_000
+  const from = to - 3_600_000
+  const oldest = end - 6 * 3_600_000
+  const ids = ['hist/lead', 'hist/recent', 'hist/early']
+  const sessions = ids.map((id, index) => ({ id, agent: 'hist', parentSessionId: index ? ids[0] : undefined, createdAt: oldest - 60_000 + index }))
+  const events = []
+  for (let at = from; at < to; at += 60_000) {
+    if (at < oldest) continue
+    const ago = (end - at) / 60_000
+    const add = (sessionId, text) => events.push({ sessionId, seq: (at - oldest) / 60_000 + 1, kind: 'llm', start: at + 1_000, end: at + 2_000, preview: text, phase: 'final_answer' })
+    add(ids[0], `Lead step ${ago} minutes ago`)
+    if (ago < 120) add(ids[1], `Recent work ${ago}`)
+    if (ago >= 240) add(ids[2], `Early work ${ago}`)
+  }
+  if (body.after) return { generatedAt: now, mode: 'incremental', sessions: [], peers: [], events: [], links: [], cursors: {} }
+  const cursors = Object.fromEntries(ids.map(id => [id, 1000]))
+  return { generatedAt: now, mode: 'page', sessions, peers: [], events, links: [], cursors, range: { from, to: body.before ? to : null }, hasMore: from > oldest, next: from > oldest ? { at: from } : null }
+}
+
+async function pagedHistory(page) {
+  const now = Date.now()
+  mock = body => pagedSequence(now, body)
+  await page.click('[aria-label="Reload"]')
+  await until(async () => (await page.$$('[data-sequence-cell="hist/lead"]')).length > 0, 'Paged history renders')
+  // The view starts at the newest activity and follows it.
+  let state = await scrollState(page)
+  assert.ok(state.following && state.distance <= 4, JSON.stringify(state))
+  assert.ok(state.columns.includes('hist/recent') && !state.columns.includes('hist/early'), state.columns.join(','))
+  if (process.env.FOXWARM_SEQUENCE_BOTTOM_SCREENSHOT) await page.screenshot({ path: process.env.FOXWARM_SEQUENCE_BOTTOM_SCREENSHOT })
+
+  // Scrolling to the top loads the next older page without moving what is on screen.
+  for (let pageIndex = 0; pageIndex < 5; pageIndex++) {
+    const loadedFrom = (await scrollState(page)).loadedFrom
+    await scrollUp(page, 0)
+    await new Promise(resolve => setTimeout(resolve, 100))
+    const anchor = await page.$eval('[data-sequence-scroll]', element => {
+      const top = element.getBoundingClientRect().top
+      const row = [...element.querySelectorAll('[data-sequence-row-start]')].find(item => item.getBoundingClientRect().bottom > top + 60)
+      return { start: row.getAttribute('data-sequence-row-start'), offset: row.getBoundingClientRect().top - top }
+    })
+    await until(async () => (await scrollState(page)).loadedFrom < loadedFrom, 'An older page loads', 10000)
+    await new Promise(resolve => setTimeout(resolve, 300))
+    const after = await page.$eval('[data-sequence-scroll]', (element, start) => {
+      const row = element.querySelector(`[data-sequence-row-start="${start}"]`)
+      return { offset: row.getBoundingClientRect().top - element.getBoundingClientRect().top, top: element.scrollTop }
+    }, anchor.start)
+    assert.ok(Math.abs(after.offset - anchor.offset) <= 2, `anchor moved ${JSON.stringify({ anchor, after })}`)
+    assert.ok(after.top > 1000, 'older rows were inserted above')
+    state = await scrollState(page)
+    assert.ok(!state.following)
+    if (state.columns.includes('hist/early')) break
+  }
+  // Older activity brings its Session in; the one active only recently has left.
+  await until(async () => { const columns = (await scrollState(page)).columns; return columns.includes('hist/early') && !columns.includes('hist/recent') }, 'Columns follow the scrolled range', 10000)
+  if (process.env.FOXWARM_SEQUENCE_SCROLLED_SCREENSHOT) await page.screenshot({ path: process.env.FOXWARM_SEQUENCE_SCROLLED_SCREENSHOT })
+  // Back at the newest activity the early Session leaves again and the recent one returns.
+  await page.click('[data-sequence-jump-newest]')
+  await until(async () => { const value = await scrollState(page); return value.following && value.columns.includes('hist/recent') && !value.columns.includes('hist/early') }, 'Columns return at the newest activity', 10000)
+  // Settled: no render loop between measurement, columns and scroll position.
+  const renders = async () => Number(await page.$eval('[data-sequence-scroll]', element => element.getAttribute('data-renders')))
+  await new Promise(resolve => setTimeout(resolve, 1000))
+  const settledRenders = await renders()
+  await new Promise(resolve => setTimeout(resolve, 1000))
+  assert.ok(await renders() - settledRenders <= 2, `renders keep going: ${settledRenders} -> ${await renders()}`)
+  mock = null
+}
+
+let mock = null
+const showAll = page => page.evaluate(() => [...document.querySelectorAll('[aria-label="Sessions shown"] button')].find(button => button.textContent === 'All')?.click())
+// A user scroll: the wheel event states the intent to leave the bottom, as in Chat.
+const scrollUp = (page, top) => page.$eval('[data-sequence-scroll]', (element, value) => {
+  element.dispatchEvent(new WheelEvent('wheel', { deltaY: -100 }))
+  element.scrollTop = value
+}, top)
+const scrollState = page => page.$eval('[data-sequence-scroll]', element => ({
+  top: element.scrollTop,
+  distance: element.scrollHeight - element.scrollTop - element.clientHeight,
+  following: element.hasAttribute('data-following'),
+  loadedFrom: Number(element.getAttribute('data-loaded-from')),
+  columns: [...element.querySelectorAll('[data-sequence-column]')].map(item => item.getAttribute('data-sequence-column')),
+}))
+
 async function openTimeline(page) {
   await page.evaluate(() => { location.hash = 'system' })
   await page.waitForSelector('[data-system-tab="sessions"]')
@@ -120,15 +206,16 @@ try {
   await until(() => settled(children[0], 'Docs are done'), 'Helper finishes')
   assert.match(JSON.stringify((await history('worker')).messages), /deliverySeq=\\"\d+\.1\\"/)
 
-  const projected = (await fixture.api('POST', '/api/session-sequence', { since: Date.now() - 600_000 })).body
+  const projected = (await fixture.api('POST', '/api/session-sequence', {})).body
   const toWorker = projected.links.find(link => link.to.sessionId === 'worker' && link.kind === 'message')
   assert.equal(toWorker.pairing, 'exact')
   assert.ok(projected.events.some(event => event.kind === 'llm' && event.phase === 'commentary'))
 
   const page = globalThis.sequencePage = await fixture.openApp()
   await page.setViewport({ width: 1600, height: 1000 })
-  const browserErrors = []
+  const browserErrors = globalThis.sequenceBrowserErrors = []
   page.on('pageerror', error => browserErrors.push(error.message))
+  page.on('console', message => { if (message.type() === 'error') globalThis.sequenceConsoleErrors = [...(globalThis.sequenceConsoleErrors || []), message.text()] })
   await openTimeline(page)
   await page.waitForSelector('[data-sequence-grid]')
   const columns = await page.$$eval('[data-sequence-column]', items => items.map(item => item.getAttribute('data-sequence-column')))
@@ -166,25 +253,37 @@ try {
   await until(async () => page.evaluate(() => document.body.textContent.includes('please check the build')), 'Receiver conversation opens')
   // Denser synthetic window: several buckets, Tasks, a timer, a waiting delivery and running work.
   await page.setRequestInterception(true)
-  page.on('request', request => request.url().endsWith('/api/session-sequence')
-    ? request.respond({ status: 200, contentType: 'application/json', body: JSON.stringify(denseSequence(Date.now())) })
-    : request.continue())
+  page.on('request', request => {
+    if (!request.url().endsWith('/api/session-sequence') || !mock) return request.continue()
+    const body = JSON.parse(request.postData() || '{}')
+    const reply = mock(body)
+    setTimeout(() => request.respond({ status: 200, contentType: 'application/json', body: JSON.stringify(reply) }), body.before ? 400 : 0)
+  })
+  mock = () => denseSequence(Date.now())
   await openTimeline(page)
+  // Opened from the worker conversation: it is pinned and Connected is on, so show all.
+  await page.waitForSelector('[data-sequence-column][data-pinned]')
+  await showAll(page)
   await page.waitForSelector('[data-sequence-column="team/coordinator"]')
-  await page.evaluate(() => [...document.querySelectorAll('[aria-label="Sessions shown"] button')].find(button => button.textContent === 'All active').click())
   await until(async () => (await page.$$('[data-sequence-row]')).length >= 5, 'Dense rows render')
   assert.ok(await page.$('[data-sequence-running]'))
   assert.match((await page.$$eval('[data-sequence-cell="team/worker-b"]', cells => cells.map(cell => cell.textContent).join(' '))), /Not read yet/)
   if (process.env.FOXWARM_SEQUENCE_DENSE_SCREENSHOT) {
     await page.setViewport({ width: 1600, height: 1500 })
-    await page.evaluate(() => { document.querySelector('[data-sequence-scroll]').scrollTop = 0 })
+    await new Promise(resolve => setTimeout(resolve, 300))
+    await scrollUp(page, 0)
+    await page.waitForSelector('[data-sequence-cell="team/coordinator"] [data-sequence-link="d|team/coordinator|12.1|team/worker-a"] p')
     await page.hover('[data-sequence-cell="team/coordinator"] [data-sequence-link="d|team/coordinator|12.1|team/worker-a"] p')
     await page.screenshot({ path: process.env.FOXWARM_SEQUENCE_DENSE_SCREENSHOT })
+    await page.setViewport({ width: 1600, height: 1000 })
   }
+
+  await pagedHistory(page)
   assert.deepEqual(browserErrors, [])
   assert.deepEqual(failures, [])
   console.log('session sequence e2e passed')
 } catch (error) {
+  console.error('Browser errors:', globalThis.sequenceBrowserErrors, globalThis.sequenceConsoleErrors)
   if (process.env.FOXWARM_SEQUENCE_FAILURE_SCREENSHOT) await globalThis.sequencePage?.screenshot({ path: process.env.FOXWARM_SEQUENCE_FAILURE_SCREENSHOT }).catch(() => {})
   throw error
 } finally {

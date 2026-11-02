@@ -65,8 +65,15 @@ internal sealed partial class SessionSequenceProjection
                                 sent.Matched = true;
                                 at = sent.At;
                             }
-                            else if (lanes.TryGetValue(source, out var sender))
-                                at = AnchorTime(sender, ParseDeliverySeq(deliverySeq));
+                            else
+                            {
+                                if (lanes.TryGetValue(source, out var sender))
+                                    at = AnchorTime(sender, ParseDeliverySeq(deliverySeq));
+                                // The sending row is older than this page; the client pairs it
+                                // by key once that page loads.
+                                if (at is null && pageFrom is double start && (sentAt ?? incoming.ConsumedAt) < start)
+                                    link["pending"] = "older";
+                            }
                         }
                         else
                         {
@@ -178,11 +185,9 @@ internal sealed partial class SessionSequenceProjection
                     ["to"] = to,
                     ["sentAt"] = sent.At,
                     ["preview"] = sent.Preview,
-                    // Not in the loaded receiver history: still queued, or outside what was read.
-                    ["state"] =
-                        targetLoaded && targetLane!.Page is { HasMore: false }
-                            ? "queued"
-                            : "unread",
+                    // Reading always follows sending, and the caller loads newer rows first, so a
+                    // visible receiver has not read it yet unless a newer half with this key exists.
+                    ["state"] = allows(target) ? "queued" : "unread",
                 };
                 if (sent.DeliverySeq is not null)
                     link["deliverySeq"] = sent.DeliverySeq;
@@ -367,9 +372,9 @@ internal sealed partial class SessionSequenceProjection
                 }
                 if (page.MaxSeq is long max)
                     item["maxSeq"] = max;
-                item["truncated"] = page.TruncatedStart;
                 item["hasMore"] = page.HasMore;
             }
+            item["createdAt"] = lane.Span.First;
             if (lane.Start is { } start)
             {
                 item["startedAt"] = start.At;
