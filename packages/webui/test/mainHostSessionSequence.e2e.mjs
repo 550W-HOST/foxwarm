@@ -132,6 +132,11 @@ try {
   assert.ok(await page.$('[data-sequence-cell="lead"] .foxwarm-user-message-bubble'))
   // Both halves of the exact delivery, tool groups and commentary/final text.
   assert.equal((await page.$$(`[data-sequence-link="${toWorker.key}"]`)).length, 2)
+  // Creating the helper and its first message read as one card on each side.
+  const helperCards = await page.$$eval('[data-sequence-created]', items => items.map(item => item.textContent))
+  assert.equal(helperCards.length, 2, helperCards.join(' | '))
+  assert.ok(helperCards.every(text => /New session: help with the docs/.test(text)), helperCards.join(' | '))
+  assert.equal((await page.$$eval('[data-sequence-card]', items => items.filter(item => item.textContent.includes('New session')).length)), 2)
   assert.ok(await page.$('[data-sequence-cell="worker"] [data-tool-group-card]'))
   assert.ok(await page.$('[data-sequence-cell="worker"] [data-tool-tag-tone="error"]'))
   assert.ok(await page.$('[data-sequence-phase="commentary"]') && await page.$('[data-sequence-phase="final"]'))

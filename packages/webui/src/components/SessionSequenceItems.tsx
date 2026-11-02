@@ -98,11 +98,11 @@ function CardItem({ item, data, highlighted }: { item: Extract<SequenceItem, { t
   const opaque = data.peers.some(peer => peer.opaque && peer.id === peerEndpoint.sessionId)
   const peer = !peerEndpoint.sessionId || opaque ? OTHER_SESSION_PEER : peerEndpoint.sessionId
   const task = link.taskId ? data.tasks?.[link.taskId] : undefined
-  const caption = link.kind === 'message' ? null : [sequenceLinkTitle(link), task?.title].filter(Boolean).join(' · ')
+  const caption = [item.created ? sequenceLinkTitle(item.created) : null, link.kind === 'message' ? null : sequenceLinkTitle(link), task?.title].filter(Boolean).join(' · ') || null
   const wait = sequenceWaitMs(link)
   const pending = link.consumedAt === undefined && (link.state === 'queued' || link.state === 'unread')
   return (
-    <div data-sequence-card={direction} data-highlighted={highlighted || undefined} data-pairing={link.pairing}
+    <div data-sequence-card={direction} data-sequence-created={item.created ? '' : undefined} data-highlighted={highlighted || undefined} data-pairing={link.pairing}
       className={`rounded-lg transition-shadow ${highlighted ? 'ring-2 ring-fw-accent/60' : ''}`}>
       <SessionMessageCard communication={{ key: link.key, direction, peerSessionId: peer, message: link.preview || '' }}>
         {caption || link.preview ? <p className="my-0 whitespace-pre-wrap break-words text-[12px] leading-[18px] text-fw-text">

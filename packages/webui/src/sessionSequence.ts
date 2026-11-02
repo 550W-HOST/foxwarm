@@ -213,7 +213,7 @@ export type SequenceItem =
   | ItemBase & { type: 'tools'; tools: SequenceEvent[] }
   | ItemBase & { type: 'running'; event: SequenceEvent }
   | ItemBase & { type: 'input'; link: SequenceLink; variant: 'user' | 'system' }
-  | ItemBase & { type: 'card'; link: SequenceLink; direction: 'sent' | 'received' }
+  | ItemBase & { type: 'card'; link: SequenceLink; direction: 'sent' | 'received'; created?: SequenceLink }
 
 const isSessionEndpoint = (endpoint: SequenceEndpoint) => !endpoint.lane || endpoint.lane === 'session'
 const readAt = (link: SequenceLink) => link.consumedAt ?? link.to.at ?? link.sentAt
@@ -232,7 +232,23 @@ export function sequenceColumnItems(data: SequenceData, now: number): Map<string
   const items = new Map<string, SequenceItem[]>([...loaded].map(id => [id, []]))
   const add = (item: SequenceItem) => items.get(item.sessionId)?.push(item)
   const delivered = new Set<string>()
+  // A child's creation and its initial message or Task assignment read as one card.
+  const createdBy = new Map<string, SequenceLink>()
+  const spawns = new Set<SequenceLink>()
+  for (const spawn of data.links) {
+    if (spawn.kind !== 'spawn' || !spawn.to.sessionId) continue
+    const first = data.links
+      .filter(link => (link.kind === 'message' || link.kind === 'task') && link.from.sessionId === spawn.from.sessionId && link.to.sessionId === spawn.to.sessionId && isSessionEndpoint(link.from))
+      .filter(link => spawn.from.seq !== undefined && link.from.seq === spawn.from.seq && (link.from.call ?? 1) === (spawn.from.call ?? 1) || Math.abs(sentAt(link) - sentAt(spawn)) <= 5_000)
+      .sort((a, b) => sentAt(a) - sentAt(b))[0]
+    if (!first || createdBy.has(first.key)) continue
+    createdBy.set(first.key, spawn)
+    spawns.add(spawn)
+    if (spawn.from.seq !== undefined && spawn.from.sessionId) delivered.add(`${spawn.from.sessionId}|${spawn.from.seq}|${spawn.from.call ?? 1}`)
+  }
   for (const link of data.links) {
+    if (spawns.has(link)) continue
+    const created = createdBy.get(link.key)
     const from = link.from
     const to = link.to
     if (!isSessionEndpoint(from)) {
@@ -240,11 +256,11 @@ export function sequenceColumnItems(data: SequenceData, now: number): Map<string
       continue
     }
     if (from.sessionId && loaded.has(from.sessionId)) {
-      add({ type: 'card', key: `out|${link.key}`, sessionId: from.sessionId, time: sentAt(link), seq: from.seq, link, direction: 'sent' })
+      add({ type: 'card', key: `out|${link.key}`, sessionId: from.sessionId, time: sentAt(link), seq: from.seq, link, direction: 'sent', created })
       if (from.seq !== undefined && from.sub === undefined) delivered.add(`${from.sessionId}|${from.seq}|${from.call ?? 1}`)
     }
     if (to.sessionId && loaded.has(to.sessionId) && to.sessionId !== from.sessionId) {
-      add({ type: 'card', key: `in|${link.key}`, sessionId: to.sessionId, time: link.consumedAt === undefined ? sentAt(link) : readAt(link), seq: to.seq, link, direction: 'received' })
+      add({ type: 'card', key: `in|${link.key}`, sessionId: to.sessionId, time: link.consumedAt === undefined ? sentAt(link) : readAt(link), seq: to.seq, link, direction: 'received', created })
     }
   }
   for (const event of data.events) {

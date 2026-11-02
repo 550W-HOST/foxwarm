@@ -15,7 +15,7 @@ Renders the Architecture **Sequence** surface defined by [D-session-sequence-vie
 | `unloadedSequencePeers` | Non-opaque Sessions referenced by links but not loaded; a new one triggers a full reload |
 | `liveSequenceEvents` | Running model/tool work from catalog runtime state |
 | `orderSequenceColumns` / `sequenceColumnState` | Session columns in parent/child order with running/waiting/idle state |
-| `sequenceColumnItems` | Per-column items: input bubbles/tags, both halves of each delivery, assistant text with commentary/final, tool runs not already shown as cards, running work |
+| `sequenceColumnItems` | Per-column items: input bubbles/tags, both halves of each delivery (a child creation merged with its first message or Task), assistant text with commentary/final, tool runs not already shown as cards, running work |
 | `chooseSequenceBucket` / `buildSequenceRows` / `buildSequenceGrid` | Local-time buckets coarsened to at most 60 non-empty rows, idle buckets omitted, consecutive tool runs grouped per cell |
 | `sequenceWaitMs` | Time between sending and reading a delivery |
 | `SessionSequenceView` | Window/focus controls, loading, realtime subscription, follow-latest scrolling, column headers and time-separator rows |

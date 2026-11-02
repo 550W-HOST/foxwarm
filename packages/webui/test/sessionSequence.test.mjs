@@ -159,3 +159,20 @@ test('the grid and wait times match both halves of a read delivery', () => {
   assert.deepEqual(cards.map(item => [item.sessionId, item.direction, item.seq]), [['main/root', 'sent', 2], ['main/child-a', 'received', 3]])
   assert.equal(grid.bucketMs, 60_000)
 })
+
+test('a child creation merges with its initial message or Task into one card on both sides', () => {
+  const data = base()
+  data.links = [
+    { key: 'c|main/child-a', kind: 'spawn', mode: 'new-child', from: { lane: 'session', sessionId: 'main/root', seq: 8, call: 2, at: T + 9_000 }, to: { sessionId: 'main/child-a', seq: 1, at: T + 9_000 }, sentAt: T + 9_000, pairing: 'exact' },
+    { key: 'd|main/root|8.2|main/child-a', kind: 'message', deliverySeq: '8.2', from: { lane: 'session', sessionId: 'main/root', seq: 8, call: 2, at: T + 9_100 }, to: { sessionId: 'main/child-a', seq: 2, at: T + 9_500 }, sentAt: T + 9_100, consumedAt: T + 9_500, pairing: 'exact', preview: 'help with the docs' },
+    // A creation without a message stays a plain card.
+    { key: 'c|main/child-b', kind: 'spawn', mode: 'new-child', from: { lane: 'session', sessionId: 'main/root', seq: 12, call: 1, at: T + 60_000 }, to: { sessionId: 'main/child-b', seq: 1, at: T + 60_000 }, sentAt: T + 60_000, pairing: 'exact' },
+  ]
+  data.events = [{ sessionId: 'main/root', seq: 9, kind: 'tool', name: 'create_child_session', start: T + 9_000, end: T + 9_200, callSeq: 8, call: 2, status: 'ok' }]
+  const items = sequenceColumnItems(data, T + 600_000)
+  const sent = items.get('main/root').filter(item => item.type === 'card')
+  assert.deepEqual(sent.map(item => [item.link.key, item.created?.key]), [['d|main/root|8.2|main/child-a', 'c|main/child-a'], ['c|main/child-b', undefined]])
+  const received = items.get('main/child-a')
+  assert.deepEqual(received.map(item => [item.type, item.direction, item.link.key, item.created?.key, item.seq]), [['card', 'received', 'd|main/root|8.2|main/child-a', 'c|main/child-a', 2]])
+  assert.ok(!items.get('main/root').some(item => item.type === 'tools'))
+})
