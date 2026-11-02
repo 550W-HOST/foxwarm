@@ -44,4 +44,4 @@ Linux x64 and Windows x64 are the source candidate targets; cross-publishing doe
 
 - [CLI Node contract and invocation](../docs/code-index/units/dotnet-cli-node.md), including browser and interactive behavior.
 - [CLI-only Linux Native AOT recipe](../scripts/native-aot/README.md) and [measured compatibility](../docs/code-index/units/dotnet-cli-linux-aot.md).
-- [Windows Desktop](Foxwarm.Desktop/README.md) and its `scripts/publish-desktop.sh` helper.
+- [Windows Desktop](Foxwarm.Desktop/README.md), packaged with the server releases by [`scripts/release/package.mjs`](../docs/releasing.md).

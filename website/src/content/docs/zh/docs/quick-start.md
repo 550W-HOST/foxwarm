@@ -21,15 +21,15 @@ curl -fsSL https://foxwarm.net/install-foxwarm.sh | bash
 irm https://foxwarm.net/install-foxwarm.ps1 | iex
 ```
 
-**Docker Compose（Linux x64）**
+**Docker（Linux x64）**
 
 ```bash
-git clone https://github.com/550W-HOST/foxwarm.git && cd foxwarm
-mkdir -p foxwarm-data/state foxwarm-data/agents
-docker compose up -d --build foxwarm
+mkdir -p foxwarm-data
+docker run -d --name foxwarm --init -p 3001:3001 \
+  -v "$PWD/foxwarm-data:/data" ghcr.io/550w-host/foxwarm:latest
 ```
 
-安装脚本从源码构建 Foxwarm。它会检查 Git、Node.js、.NET 10 SDK 和少量编译工具，缺什么会明确告诉你，但不会替你安装系统软件包。Docker 方式会在镜像里构建所有依赖。具体要求见[安装 Foxwarm](/zh/docs/installing/)。
+安装脚本下载预编译版本，不需要编译。系统没有 ASP.NET Core 10 运行时时，会使用自带 .NET 的安装包。Windows 上另有桌面版。安装包和环境要求见[安装 Foxwarm](/zh/docs/installing/)。
 
 安装完成后，脚本会启动 Foxwarm，并输出一个登录链接，形如 `http://localhost:3001/#token=...`。请像对待密码一样保管它。
 

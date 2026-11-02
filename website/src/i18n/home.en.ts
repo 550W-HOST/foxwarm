@@ -24,9 +24,9 @@ export const en: HomeStrings = {
     copy: 'Copy',
     copied: 'Copied',
     notes: {
-      linux: 'Linux x64 and x64 WSL. Builds from source; needs Git, Node.js, the .NET 10 SDK and a few build tools.',
-      windows: 'Windows x64, in PowerShell. Builds from source; needs Git, Node.js, the .NET 10 SDK and Python 3.',
-      docker: 'Linux x64 with Docker Compose. Everything builds inside the image.'
+      linux: 'Linux x64 and x64 WSL. Downloads a prebuilt release and runs it in tmux. .NET is included when it is not installed.',
+      windows: 'Windows x64, in PowerShell. Downloads a prebuilt release and runs it in the background. A Windows desktop app is also available.',
+      docker: 'Linux x64 with Docker. Runs the published image with Chromium and Node.js included; data stays in foxwarm-data.'
     },
     requirementsLink: 'Prerequisites and options'
   },

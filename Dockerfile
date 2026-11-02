@@ -1,4 +1,5 @@
-# Build Main and its delivery resources from source. No host build output is used.
+# Build Main and its delivery resources from source (default target), or package a
+# prebuilt release (target `release`). No host build output is used.
 FROM node:24.17.0-trixie AS build
 
 RUN curl -fsSLo /tmp/packages-microsoft-prod.deb https://packages.microsoft.com/config/debian/13/packages-microsoft-prod.deb \
@@ -30,7 +31,7 @@ COPY LICENSE ./LICENSE
 RUN npm run build:assets \
     && dotnet publish dotnet/Foxwarm/Foxwarm.csproj -c Release --self-contained false -o /out
 
-FROM node:24.17.0-trixie-slim AS runtime
+FROM node:24.17.0-trixie-slim AS base
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -75,9 +76,17 @@ WORKDIR /app
 # of Main's managed runtime. The retained public JS bins use this lockfile.
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
-COPY --from=build /out ./
 RUN mkdir -p /data /app/packages/vscode-web/assets/vscode-web
 
 ENV FOXWARM_DATA_DIR=/data
 EXPOSE 3001
 CMD ["dotnet", "Foxwarm.dll"]
+
+# Published image: an extracted framework-dependent linux-x64 release package, e.g.
+#   docker build --target release --build-context package=foxwarm-0.9.0-linux-x64 .
+FROM base AS release
+COPY --from=package . ./
+
+# Default: build the same payload from this checkout.
+FROM base AS runtime
+COPY --from=build /out ./

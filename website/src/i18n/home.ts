@@ -9,7 +9,7 @@ export const siteUrl = 'https://foxwarm.net';
 export const installCommands = {
   linux: `curl -fsSL ${siteUrl}/install-foxwarm.sh | bash`,
   windows: `irm ${siteUrl}/install-foxwarm.ps1 | iex`,
-  docker: `git clone ${githubUrl}.git && cd foxwarm\nmkdir -p foxwarm-data/state foxwarm-data/agents\ndocker compose up -d --build foxwarm`
+  docker: `docker run -d --name foxwarm --init -p 3001:3001 \\\n  -v "$PWD/foxwarm-data:/data" ghcr.io/550w-host/foxwarm:latest`
 };
 
 export type FeatureVisual = 'memory' | 'hands' | 'team' | 'room';

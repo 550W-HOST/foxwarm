@@ -54,8 +54,8 @@ dependencies, then stops Main, promotes and starts the replacement. If lockfiles
 changed or dependencies are missing, use `npm run stop:windows` followed by
 `npm run start:windows`; the latter installs both lockfiles before building.
 PowerShell `scripts/start.ps1` and `scripts/restart.ps1` use these commands;
-`-SkipBuild` starts/restarts the already selected runtime. First source installers
-perform the same prerequisite checks and preserve their external data directory.
+`-SkipBuild` starts/restarts the already selected runtime. The public installers
+install release packages, not source checkouts; they refuse a source checkout.
 
 For a foreground source launch, `npm run build-all` followed by `node .` builds
 and selects the complete payload. With dependencies already installed,

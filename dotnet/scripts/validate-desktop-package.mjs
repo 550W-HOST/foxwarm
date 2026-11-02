@@ -60,20 +60,24 @@ export async function validateDesktopPackage(directory) {
   await native(loader)
   const runtime = JSON.parse(await required('Foxwarm.Desktop.runtimeconfig.json')).runtimeOptions
   assert.equal(runtime.tfm, 'net10.0')
-  assert.equal(runtime.includedFrameworks, undefined, 'A framework-dependent package must not embed shared frameworks')
-  const frameworks = runtime.frameworks ?? [runtime.framework]
+  // Released Desktop packages embed the three shared frameworks; framework-dependent builds reference them.
+  const selfContained = runtime.includedFrameworks !== undefined
+  const frameworks = runtime.includedFrameworks ?? runtime.frameworks ?? [runtime.framework]
   for (const name of ['Microsoft.NETCore.App', 'Microsoft.WindowsDesktop.App', 'Microsoft.AspNetCore.App']) {
     assert(frameworks.some(item => item?.name === name && /^10\./.test(item.version)), `Missing .NET 10 shared framework: ${name}`)
   }
+  if (selfContained) for (const file of ['coreclr.dll', 'hostfxr.dll', 'hostpolicy.dll']) await native(file)
+  const runtimeFiles = selfContained ? '' : '|coreclr\\.dll|hostfxr\\.dll|hostpolicy\\.dll|System\\.Private\\.CoreLib\\.dll'
+  const excluded = new RegExp(`^(?:Foxwarm(?:\\.exe|\\.runtimeconfig\\.json)?|data_dir|package(?:-lock)?\\.json|dotnet\\.exe${runtimeFiles})$`, 'i')
   for (const file of files) {
     const normalized = file.replaceAll('\\', '/')
     assert(!/^(?:state|agents|workspace|logs|\.git|\.github|src|dotnet|test|obj|bin|runtime|shared|host)(?:\/|$)/i.test(normalized), `Installation/build data in package: ${file}`)
-    assert(!/^(?:Foxwarm(?:\.exe|\.runtimeconfig\.json)?|data_dir|package(?:-lock)?\.json|coreclr\.dll|hostfxr\.dll|hostpolicy\.dll|System\.Private\.CoreLib\.dll|dotnet\.exe)$/i.test(normalized), `Console entry, source cache or runtime in package: ${file}`)
+    assert(!excluded.test(normalized), `Console entry, source cache or runtime in package: ${file}`)
     assert(!/(?:^|\/)(?:\.env|token|config\.yaml|models\.yaml|\.npm|\.cache)(?:\/|$)/i.test(normalized), `Private state or cache in package: ${file}`)
     assert(!/^node_modules\/(?:\.package-lock\.json|\.bin)(?:\/|$)/.test(normalized), `Source dependency tree in package: ${file}`)
     assert(!/\.(?:pdb|xml)$/i.test(normalized), `Debug/reference artifact in package: ${file}`)
   }
-  return { platform: 'win-x64', frameworkDependent: true, entries: files.length }
+  return { platform: 'win-x64', selfContained, entries: files.length }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

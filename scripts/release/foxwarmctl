@@ -1,0 +1,194 @@
+#!/usr/bin/env bash
+# Control a Foxwarm release installation: start, stop, restart, status, attach, run, update, version.
+# The installer places this script in the installation directory beside runtime/current.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+RUNTIME="$ROOT/runtime"
+CURRENT="$RUNTIME/current"
+SESSION="${FOXWARM_TMUX_SESSION:-foxwarm}"
+WINDOW="foxwarm"
+RELEASES="https://github.com/550W-HOST/foxwarm/releases"
+STOP_SECONDS=60
+
+log() { printf '[foxwarm] %s\n' "$*"; }
+fail() { printf '[foxwarm] %s\n' "$*" >&2; exit 1; }
+have() { command -v "$1" >/dev/null 2>&1; }
+
+usage() {
+  cat <<'EOF'
+Usage: foxwarmctl COMMAND
+
+  start              Start Foxwarm in a background tmux session
+  stop               Stop Foxwarm (forced after 60 seconds)
+  restart            Stop, then start
+  status             Show whether Foxwarm is running
+  attach             Attach to the tmux session (detach with Ctrl-b d)
+  run                Run Foxwarm in the foreground
+  update [VERSION]   Install the latest or the given release and restart if running
+         [--package FILE] [--force]
+  version            Show the installed release
+
+Environment: FOXWARM_TMUX_SESSION (default: foxwarm), FOXWARM_DATA_DIR.
+EOF
+}
+
+[ -e "$CURRENT/release.json" ] || fail "No release is installed at $CURRENT. Run the copy of foxwarmctl in the installation directory."
+
+release_field() {
+  sed -n "s/^ *\"$2\": *\"\{0,1\}\([^\",]*\)\"\{0,1\},\{0,1\}$/\1/p" "$1/release.json" | head -n 1
+}
+
+# Framework-dependent packages use the dotnet on PATH, which the apphost would not search.
+launcher() {
+  if [ "$(release_field "$1" selfContained)" = true ]; then
+    printf '%q' "$1/Foxwarm"
+  else
+    have dotnet || fail "This package needs the ASP.NET Core 10 runtime and dotnet on PATH."
+    printf '%q %q' "$(command -v dotnet)" "$1/Foxwarm.dll"
+  fi
+}
+
+main_command() {
+  local unset="" set="" name
+  # A long-lived tmux server may have a different environment from this invocation.
+  for name in FOXWARM_DATA_DIR MCP_CONFIG_PATH DOTNET_ROOT; do
+    if [ -n "${!name:-}" ]; then set+=" $(printf '%q' "$name=${!name}")"; else unset+=" -u $name"; fi
+  done
+  local command="exec env$unset$set $(printf '%q' "PATH=$PATH")"
+  # Resolve the selected release now so a later update does not move a running Main.
+  command+=" $(launcher "$(readlink -f "$CURRENT")") --installation-root $(printf '%q' "$ROOT")"
+  printf '%s' "$command"
+}
+
+pane() { tmux display-message -p -t "=$SESSION:=$WINDOW" "$1" 2>/dev/null; }
+
+running_pid() {
+  tmux has-session -t "=$SESSION" 2>/dev/null || return 1
+  [ "$(pane '#{pane_dead}')" = 0 ] || return 1
+  pane '#{pane_pid}'
+}
+
+cmd_start() {
+  have tmux || fail "tmux is required for background start. Use 'foxwarmctl run' to run in the foreground."
+  if running_pid >/dev/null; then fail "Foxwarm is already running in tmux session '$SESSION'."; fi
+  tmux kill-session -t "=$SESSION" 2>/dev/null || true
+  tmux new-session -d -s "$SESSION" -n "$WINDOW" -c "$ROOT" "$(main_command)" \; \
+    set-option -w -t "=$SESSION:=$WINDOW" remain-on-exit on
+  sleep 1
+  running_pid >/dev/null || fail "Foxwarm exited during startup. Inspect it with: tmux attach -t '$SESSION'"
+  log "Started $(release_field "$CURRENT" version) in tmux session '$SESSION'. Attach with: tmux attach -t '$SESSION'"
+}
+
+cmd_stop() {
+  local pid waited
+  if ! pid="$(running_pid)"; then
+    tmux kill-session -t "=$SESSION" 2>/dev/null || true
+    log "Foxwarm is not running."
+    return 0
+  fi
+  kill -TERM "$pid" 2>/dev/null || true
+  for ((waited = 0; waited < STOP_SECONDS * 5; waited++)); do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.2
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    log "Foxwarm did not stop within $STOP_SECONDS seconds; killing PID $pid."
+    kill -KILL "$pid" 2>/dev/null || true
+    for ((waited = 0; waited < 50; waited++)); do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 0.2
+    done
+    kill -0 "$pid" 2>/dev/null && fail "PID $pid is still running."
+  fi
+  tmux kill-session -t "=$SESSION" 2>/dev/null || true
+  log "Foxwarm stopped."
+}
+
+cmd_status() {
+  local pid
+  if pid="$(running_pid)"; then
+    log "Running (PID $pid), release $(release_field "$CURRENT" version) $(release_field "$CURRENT" target)."
+    return 0
+  fi
+  if tmux has-session -t "=$SESSION" 2>/dev/null; then
+    log "Exited with status $(pane '#{pane_dead_status}'). Inspect it with: tmux attach -t '$SESSION'"
+  else
+    log "Not running."
+  fi
+  return 3
+}
+
+download() {
+  if have curl; then curl -fL --retry 3 -o "$2" "$1"; elif have wget; then wget -q -O "$2" "$1"; else fail "curl or wget is required."; fi
+}
+
+prune() {
+  local selected entry
+  selected="$(readlink -f "$CURRENT")"
+  for entry in "$RUNTIME"/* "$RUNTIME"/.staging-*; do
+    [ -e "$entry" ] || continue
+    [ "$entry" = "$CURRENT" ] || [ "$(readlink -f "$entry")" = "$selected" ] && continue
+    rm -rf -- "$entry" || log "Could not remove $entry; it will be retried at the next update."
+  done
+}
+
+cmd_update() {
+  local package="" version="" force=false asset base staging new old name was_running=false
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --package) package="${2:?--package requires a file}"; shift 2 ;;
+      --force) force=true; shift ;;
+      -*) fail "Unknown update option: $1" ;;
+      *) version="${1#v}"; shift ;;
+    esac
+  done
+  asset="$(release_field "$CURRENT" asset)"
+  old="$(release_field "$CURRENT" version)"
+  scratch="$(mktemp -d "$RUNTIME/.staging-XXXXXX")"
+  trap 'rm -rf -- "${scratch:-}"' EXIT
+  if [ -z "$package" ]; then
+    if [ -n "$version" ]; then base="$RELEASES/download/v$version"; else base="$RELEASES/latest/download"; fi
+    log "Downloading $asset"
+    download "$base/$asset" "$scratch/$asset"
+    download "$base/SHA256SUMS" "$scratch/SHA256SUMS"
+    (cd "$scratch" && grep -E "  $asset\$" SHA256SUMS | sha256sum -c --quiet -) || fail "Checksum verification failed for $asset."
+    package="$scratch/$asset"
+  fi
+  mkdir "$scratch/extract"
+  tar -xzf "$package" -C "$scratch/extract"
+  staging="$(find "$scratch/extract" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+  [ -n "$staging" ] && [ -x "$staging/Foxwarm" ] && [ -f "$staging/release.json" ] || fail "$package is not a Foxwarm server package."
+  [ "$(release_field "$staging" rid)" = "$(release_field "$CURRENT" rid)" ] || fail "$package is for $(release_field "$staging" rid), not this installation."
+  new="$(release_field "$staging" version)"
+  if [ "$new" = "$old" ] && [ "$force" = false ]; then
+    log "Release $old is already installed. Use --force to reinstall it."
+    return 0
+  fi
+  log "Checking existing data with $new"
+  eval "$(launcher "$staging") --installation-root $(printf '%q' "$ROOT") --inspect-upgrade" || fail "Upgrade inspection blocked $new; the installed release is unchanged."
+  if running_pid >/dev/null; then was_running=true; cmd_stop; fi
+  name="$new"
+  [ -e "$RUNTIME/$name" ] && name="$new-$(date +%s)"
+  mv "$staging" "$RUNTIME/$name"
+  ln -sfn "$name" "$RUNTIME/.current-next"
+  mv -T "$RUNTIME/.current-next" "$CURRENT"
+  cp "$CURRENT/foxwarmctl" "$ROOT/.foxwarmctl-next"
+  mv "$ROOT/.foxwarmctl-next" "$ROOT/foxwarmctl"
+  log "Installed $new (was $old)."
+  prune
+  if [ "$was_running" = true ]; then cmd_start; fi
+}
+
+case "${1:-}" in
+  start) cmd_start ;;
+  stop) cmd_stop ;;
+  restart) cmd_stop; cmd_start ;;
+  status) cmd_status ;;
+  attach) exec tmux attach -t "=$SESSION" ;;
+  run) eval "$(main_command)" ;;
+  update) shift; cmd_update "$@" ;;
+  version) cat "$CURRENT/release.json" ;;
+  -h|--help|help|'') usage ;;
+  *) usage >&2; exit 2 ;;
+esac

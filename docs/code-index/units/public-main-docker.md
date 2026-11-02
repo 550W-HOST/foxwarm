@@ -5,7 +5,7 @@ Secondary files: dotnet/Foxwarm/Delivery.targets, Dockerfile.node, .github/workf
 
 ## Contract and rationale
 
-Production and test Compose build one root recipe and start complete managed Main. Node 24.17.0 on Debian 13 Trixie and the existing operational tools remain available for real JavaScript, public CLI and stdio MCP usage; changing Main runtime does not remove that environment. Microsoft's official Debian 13 signed package feed supplies the build SDK and ASP.NET Core 10 runtime. Debian supplies `/usr/bin/chromium` through ordinary package updates, independently of CI's test-browser pin. A private image or browser cache is not a public delivery input.
+Test Compose and local `docker build` use one root recipe whose default target builds from the checkout and starts complete managed Main. Its `release` target places an extracted framework-dependent Linux [release package](./release-packages.md#workflow-and-image) on the same runtime base; that is the published `ghcr.io` image, which root Compose runs. Node 24.17.0 on Debian 13 Trixie and the existing operational tools remain available for real JavaScript, public CLI and stdio MCP usage; changing Main runtime does not remove that environment. Microsoft's official Debian 13 signed package feed supplies the build SDK and ASP.NET Core 10 runtime. Debian supplies `/usr/bin/chromium` through ordinary package updates, independently of CI's test-browser pin. A private image or browser cache is not a public delivery input.
 
 The recipe prepares assets then publishes the [existing resource graph](./core-delivery-cli.md#build-and-resource-boundary); it has no separate asset copier. Docker context excludes host dependencies/build outputs, installation data and caches. Ordinary npm locks, pinned NuGet packages and pinned Monty acquisition run inside build layers. The runtime retains resources/native helpers/notices and has no baked experiment settings. Large optional Code workbench assets and optional HEIF remain external prerequisites.
 
@@ -13,7 +13,7 @@ After the dependency-install layer, the build stage explicitly copies `tsconfig.
 
 ## Consumers and side effects
 
-The default command is `dotnet Foxwarm.dll`, installation root `/app`, data root `/data`, port 3001. Root Compose retains its data mount, init process, healthcheck and separately paired optional sandbox Node.
+The default command is `dotnet Foxwarm.dll`, installation root `/app`, data root `/data`, port 3001. Root Compose runs the published image and retains its data mount, init process, healthcheck and separately paired optional sandbox Node.
 
 Test Compose uses the same recipe as project/service `foxwarm-test` on host port 3002, with `test/state` at `/data/state` and `test/agents` as the canonical Agents root at `/data/agents`. Main lives beneath `main/` alongside other Agent directories and the global framework prompt. Its optional Code overlay mounts prepared `test/.temp/code-assets` read-only at the installed resource directory.
 

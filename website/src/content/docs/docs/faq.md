@@ -109,11 +109,11 @@ QQ Bot groups need an @mention by default; set `requireMention: false` to handle
 
 Saving **Setup → Config** applies Channel changes and access identities immediately. Startup settings, such as the HTTP port, Node providers, semantic search and the inbound MCP listener, need a restart. Model changes in **Setup → Models** never need one.
 
-With Docker Compose, changing the port also means updating the port mapping and healthcheck. See [Docker Compose](/docs/installing/#docker-compose).
+With Docker, changing the port also means updating the port mapping (and, with Compose, the healthcheck). See [Docker](/docs/installing/#docker).
 
 ### How do I update?
 
-Back up the data directory, then pull and restart from the program checkout, or rebuild the container. See [Update a source installation](/docs/data-upgrades-backups/#update-a-source-installation).
+Back up the data directory, then run `foxwarmctl update` in the program directory, or pull the new container image. See [Update a release installation](/docs/data-upgrades-backups/#update-a-release-installation).
 
 ### What should I back up?
 

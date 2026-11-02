@@ -5,15 +5,17 @@ description: Find your data, make a consistent backup, and update Foxwarm.
 
 ## Where your data lives
 
-A new source installation made by the installer has this layout:
+An installation made by the installer has this layout:
 
 ```text
-foxwarm/           program checkout, dependencies and build output
+foxwarm/           program directory
   data_dir         text file containing the data-directory path
+  foxwarmctl       start, stop, update and status commands
+  runtime/current  the selected release
 foxwarm-data/      configuration, Agents, Sessions, tokens, logs and databases
 ```
 
-The data directory is the parent of `state/` and `agents/`, not the `state/` directory itself. The default Docker Compose setup instead mounts its checkout's `foxwarm-data/` at `/data` in the container.
+The data directory is the parent of `state/` and `agents/`, not the `state/` directory itself. A source checkout uses the same `data_dir` pointer. The Docker examples mount `foxwarm-data/` at `/data` in the container.
 
 ### Selecting a directory
 
@@ -37,11 +39,26 @@ Include Agent workspaces or other writable paths you have configured outside tha
 
 A live instance needs a SQLite-consistent online backup. A simpler option is to stop Foxwarm cleanly, confirm that it has stopped, and copy the complete data directory. Stop independent jobs that are still writing into the backup set as well. Copying only a `.sqlite` file while its writer is active can omit committed data still in the WAL. Restore databases and the rest of the state from the same snapshot.
 
+## Update a release installation
+
+Make a consistent backup before updating an important instance, then run from the parent of the program directory:
+
+```bash
+./foxwarm/foxwarmctl update          # Linux x64 or WSL
+.\foxwarm\foxwarmctl.cmd update      # Windows
+```
+
+`update` downloads the release for the same package type and verifies its checksum. The new release first checks the existing data while the old one keeps running; a blocking problem leaves the installed release unchanged. Foxwarm is then stopped (ended after 60 seconds if it has not exited), the new release is selected, Foxwarm starts again if it was running and the previous release is removed. Add a version, such as `update 0.9.1`, to install a specific release, or `--package FILE` (`-Package FILE` on Windows) to use a downloaded package. Rerunning the installer on an existing installation performs the same update and keeps its data directory.
+
+Existing TypeScript installations should use the [migration guide](/docs/typescript-migration/) for their first C# update.
+
 ## Update a source installation
 
 Review the target changes, preserve any local edits, and make a consistent backup before updating an important instance. Keep the existing installation and data paths.
 
-Existing TypeScript installations should use the [migration guide](/docs/typescript-migration/) for their first C# update.
+:::caution
+If the checkout contains local work, review and preserve it before updating. `git reset --hard` discards those changes.
+:::
 
 ### Linux x64 or WSL
 
@@ -81,19 +98,15 @@ Completed runtime outputs live under the checkout's `runtime/`, selected by `run
 
 ## Update a Docker installation
 
-Stop the service and back up its mounted data before an important update. From the same Compose checkout and with the same project/volume configuration:
+Stop the container and back up its mounted data before an important update. With Compose, from the directory that contains its `docker-compose.yml`:
 
 ```bash
 docker compose stop foxwarm
 # Back up the mounted data before continuing.
-git pull --ff-only origin main
-docker compose up -d --build foxwarm
+docker compose pull foxwarm
+docker compose up -d foxwarm
 ```
 
-Check `docker compose logs foxwarm` and the WebUI afterward. Retain the existing data mount; rebuilding the image does not require a new data directory.
-
-:::caution
-If the checkout contains local work, review and preserve it before updating. `git reset --hard` discards those changes.
-:::
+For a container started with `docker run`, pull `ghcr.io/550w-host/foxwarm:latest`, remove the old container and start a new one with the same data mount. Check the container logs and the WebUI afterward. A new image does not require a new data directory.
 
 For archive storage details and external JSONL export, see [Archive Store](https://github.com/550W-HOST/foxwarm/blob/main/docs/archive-store.md).

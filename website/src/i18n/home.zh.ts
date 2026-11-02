@@ -24,9 +24,9 @@ export const zh: HomeStrings = {
     copy: '复制',
     copied: '已复制',
     notes: {
-      linux: '支持 Linux x64 和 x64 WSL。从源码构建，需要 Git、Node.js、.NET 10 SDK 和少量编译工具。',
-      windows: '支持 Windows x64，在 PowerShell 中运行。从源码构建，需要 Git、Node.js、.NET 10 SDK 和 Python 3。',
-      docker: '适用于装有 Docker Compose 的 Linux x64，所有依赖都在镜像内构建。'
+      linux: '支持 Linux x64 和 x64 WSL。下载预编译版本，在 tmux 中运行；系统没有 .NET 时会使用自带运行时的版本。',
+      windows: '支持 Windows x64，在 PowerShell 中运行。下载预编译版本并在后台运行；另有 Windows 桌面版。',
+      docker: '适用于装有 Docker 的 Linux x64。运行已发布的镜像，内含 Chromium 和 Node.js；数据保存在 foxwarm-data。'
     },
     requirementsLink: '依赖和安装选项'
   },

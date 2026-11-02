@@ -21,15 +21,15 @@ curl -fsSL https://foxwarm.net/install-foxwarm.sh | bash
 irm https://foxwarm.net/install-foxwarm.ps1 | iex
 ```
 
-**Docker Compose (Linux x64)**
+**Docker (Linux x64)**
 
 ```bash
-git clone https://github.com/550W-HOST/foxwarm.git && cd foxwarm
-mkdir -p foxwarm-data/state foxwarm-data/agents
-docker compose up -d --build foxwarm
+mkdir -p foxwarm-data
+docker run -d --name foxwarm --init -p 3001:3001 \
+  -v "$PWD/foxwarm-data:/data" ghcr.io/550w-host/foxwarm:latest
 ```
 
-The installers build Foxwarm from source. They check for Git, Node.js, the .NET 10 SDK and a few build tools, and tell you what is missing; they do not install system packages. Docker builds everything inside the image. See [Install Foxwarm](/docs/installing/) for the exact requirements.
+The installers download a prebuilt release; nothing is compiled. When the ASP.NET Core 10 runtime is not installed, they use the package that includes .NET. On Windows there is also a desktop app. See [Install Foxwarm](/docs/installing/) for packages and requirements.
 
 When the installer finishes, it starts Foxwarm and prints a sign-in link such as `http://localhost:3001/#token=...`. Treat that link like a password.
 
