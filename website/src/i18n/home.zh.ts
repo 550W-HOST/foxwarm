@@ -12,11 +12,22 @@ export const zh: HomeStrings = {
   },
   nav: { features: '功能', install: '安装', docs: '文档', github: 'GitHub', theme: '切换配色', language: 'English', languageLabel: 'Switch to English', skip: '跳到正文' },
   hero: {
-    eyebrow: '开源 · 自托管 · MIT 协议',
-    titleLines: ['持续工作的 AI Agent，', '运行在你自己的机器上。'],
-    lede: 'Foxwarm 是一个自托管的 Agent 工作台。Agent 能读代码、在你接入的机器上跑命令、把任务交给其他会话，重启之后接着干。你可以在浏览器里用它，也可以把它拉进团队群聊。',
-    primary: '安装 Foxwarm',
-    secondary: '阅读文档',
+    title: '合上电脑，它还在干活。',
+    lede: 'Foxwarm 把 AI Agent 跑在你自己的服务器上。一个任务可以连续跑好几天，分派到你的多台机器上，并在你所在的地方汇报：浏览器、手机，或者团队群聊。',
+    timeline: {
+      label: '一个周二，一个任务',
+      rows: [
+        { time: '09:10', place: '笔记本', icon: 'laptop', text: '你说：', quote: 'main 分支的 CI 挂了，查一下原因并修好。' },
+        { time: '09:12', place: 'build-box', icon: 'server', text: '它在构建服务器上开了一个子会话，在那里跑测试。' },
+        { time: '09:30', icon: 'moon', text: '你合上电脑去开会。活儿还在继续。', highlight: true },
+        { time: '12:40', place: '手机', icon: 'phone', text: '你在手机上打开子会话，插了一句：', quote: 'prorate() 里保留完整精度。' },
+        { time: '15:20', place: '服务器', icon: 'memory', text: '上下文快满了。较早的内容被压缩，需要时它会找回当初的测试输出原文。' },
+        { time: '18:30', place: '团队群', icon: 'chat', text: '它在团队群里发了两句话的总结。同事追问，它基于完整历史回答。' }
+      ],
+      footer: '每一步都是一个会话，随时可以打开、查看、插话。',
+      link: 'Foxwarm 如何工作'
+    },
+    shotCaption: '同一个任务在 Foxwarm WebUI 里的样子。真实截图，演示项目。',
     screenshotAlt: 'Foxwarm WebUI 的 Conversation 视图：用户请 Agent 修复失败的测试，Agent 汇报了原因、修复方式和提交记录。侧边栏列出了其他会话，其中一些带有子会话。'
   },
   install: {
@@ -137,6 +148,5 @@ export const zh: HomeStrings = {
     ],
     guide: '完整安装指南'
   },
-  final: { title: '把你的 Agent 带回家。', body: '基于 MIT 协议免费开源。', primary: '安装 Foxwarm', secondary: '在 GitHub 上 Star' },
   footer: { tagline: '自托管的 AI Agent，MIT 协议开源。', docs: '文档', github: 'GitHub', license: '许可证' }
 };

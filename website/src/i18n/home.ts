@@ -24,6 +24,8 @@ export type Feature = {
   image: { alt: string; detailAlt?: string };
 };
 
+export type TimelineRow = { time: string; place?: string; icon?: 'laptop' | 'server' | 'phone' | 'chat' | 'moon' | 'memory'; text: string; quote?: string; highlight?: boolean };
+
 export type ChatMessage = { from: 'me' | 'member' | 'bot' | 'system'; name?: string; text: string; time?: string };
 
 export type HomeStrings = {
@@ -31,7 +33,18 @@ export type HomeStrings = {
   path: string;
   meta: { title: string; description: string; ogTitle: string };
   nav: { features: string; install: string; docs: string; github: string; theme: string; language: string; languageLabel: string; skip: string };
-  hero: { eyebrow: string; titleLines: [string, string]; lede: string; primary: string; secondary: string; screenshotAlt: string };
+  hero: {
+    title: string;
+    lede: string;
+    timeline: {
+      label: string;
+      rows: TimelineRow[];
+      footer: string;
+      link: string;
+    };
+    shotCaption: string;
+    screenshotAlt: string;
+  };
   install: {
     tabs: { linux: string; windows: string; docker: string };
     copy: string;
@@ -56,7 +69,6 @@ export type HomeStrings = {
   room: { title: string; status: string; messages: ChatMessage[] };
   extras: { eyebrow: string; title: string; items: { title: string; body: string }[] };
   start: { eyebrow: string; title: string; lede: string; steps: { title: string; body: string }[]; guide: string };
-  final: { title: string; body: string; primary: string; secondary: string };
   footer: { tagline: string; docs: string; github: string; license: string };
 };
 
