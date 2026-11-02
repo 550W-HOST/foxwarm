@@ -3,12 +3,10 @@ import { waitForWebUiReady } from './webuiReadiness.mjs'
 import test, { after, before } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
-import path from 'node:path'
 import puppeteer from 'puppeteer-core'
 
 const { baseUrl, tokenFile } = appE2eRuntime()
 const chromiumPath = process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium'
-const screenshotDir = process.env.FOXWARM_E2E_SCREENSHOT_DIR
 let browser
 let token
 
@@ -90,14 +88,6 @@ async function expand(page, id) {
   await toggle.click()
 }
 
-async function shoot(page, name) {
-  if (!screenshotDir) return
-  await page.waitForFunction(() => !document.querySelector('[data-session-branch-loading]'), { timeout: 10_000 })
-  await page.$eval('[data-session-list-scroll-container]', element => { element.scrollTop = 0 })
-  await new Promise(resolve => setTimeout(resolve, 300))
-  await page.screenshot({ path: path.join(screenshotDir, `${name}.png`), clip: { x: 0, y: 0, width: 360, height: 900 }, captureBeyondViewport: false })
-}
-
 before(async () => {
   token = (await readFile(tokenFile, 'utf8')).trim()
   await api('POST', 'agents', { agentId: 'grp' })
@@ -148,7 +138,7 @@ test('Without grouping, top-level Sessions stay top-level and real children join
 
 test('Agent groups list the main Agent first, start with the Agent main and keep real subtrees', async () => {
   for (const [density, compact] of [['normal', 'true'], ['detailed', 'false']]) {
-    // The long main group starts collapsed so every group fits in the screenshot.
+    // The long main group starts collapsed; a collapsed group still reports its count.
     const page = await openList({ foxwarm_session_list_grouping_v1: 'agent', foxwarm_session_list_collapsed_groups_v1: JSON.stringify({ agent: ['main'] }), foxwarm_session_list_compact_v1: compact, foxwarm_theme_selection_v3: dark })
     try {
       await page.waitForSelector(`${groupSelector('grp')} ${rowSelector('grp/main')}`, { timeout: 10_000 })
@@ -167,7 +157,6 @@ test('Agent groups list the main Agent first, start with the Agent main and keep
       await page.waitForSelector(`${groupSelector('grp')} ${rowSelector('visitor')}`, { timeout: 10_000 })
       await expand(page, 'grp/main')
       await page.waitForSelector(`${groupSelector('grp')} ${rowSelector('grp/real')}`, { timeout: 10_000 })
-      await shoot(page, `agent-groups-default-${density}-dark`)
     } finally {
       await page.close()
     }
@@ -220,7 +209,6 @@ test('Node groups show the Node state, and Flat groups every Session by its own 
       assert.equal(await tagOf(page, 'grp/loose'), 'grp', 'Node groups keep Agent tags')
       await expand(page, 'grp/main')
       await page.waitForSelector(`${groupSelector('master')} ${rowSelector('grp/real')}`, { timeout: 10_000 })
-      await shoot(page, `node-groups-default-${density}-dark`)
     } finally {
       await page.close()
     }
@@ -240,7 +228,6 @@ test('Node groups show the Node state, and Flat groups every Session by its own 
     await flat.click(`${groupSelector('main')} [data-session-group-toggle]`)
     await flat.waitForFunction(() => !document.querySelector('[data-session-group="main"] [data-session-id]'), { timeout: 10_000 })
     assert.equal(await flat.$('[data-session-agent-tag]'), null)
-    await shoot(flat, 'agent-groups-flat-normal-dark')
   } finally {
     await flat.close()
   }

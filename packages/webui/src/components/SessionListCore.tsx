@@ -1262,9 +1262,10 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                   </button>
                 )}
               </div>
-              {!collapsed && members.map(session => renderSession(session))}
+              {/* Members sit one level below their header, so their content lines up under its label in every density and mode. */}
+              {!collapsed && members.map(session => renderSession(session, 1))}
               {!collapsed && remaining > 0 && (
-                <button onClick={() => view.loadMoreGroup(group.key)} data-session-group-more={group.key} className="w-full text-left p-2 text-xs text-fw-text-muted hover:text-fw-text dark:hover:text-fw-text-strong">
+                <button onClick={() => view.loadMoreGroup(group.key)} data-session-group-more={group.key} className="w-full text-left p-2 text-xs text-fw-text-muted hover:text-fw-text dark:hover:text-fw-text-strong" style={{ paddingLeft: `${28 + 16}px` }}>
                   {`▼ Show ${remaining} more...`}
                 </button>
               )}
