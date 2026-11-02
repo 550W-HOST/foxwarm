@@ -61,10 +61,14 @@ internal sealed partial class MainToolScript
                         ?? throw new InvalidDataException("Missing ToolScript subcall state.");
                     subCalls.Add(subcall);
                     var ordinal = subCalls.Count;
+                    // subCalls restarts each slice; the persisted run total keeps run-wide IDs unique.
+                    var runOrdinal = (int)Number(record["subCallTotal"], 0) + 1;
+                    record["subCallTotal"] = runOrdinal;
                     Emit();
                     var previousDeliveryCapture = context.SessionMessageDelivered;
                     var previousRunId = context.ToolScriptRunId;
                     var previousOrdinal = context.SubCallOrdinal;
+                    var previousRunOrdinal = context.RunSubCallOrdinal;
                     JsonNode? result;
                     try
                     {
@@ -76,6 +80,7 @@ internal sealed partial class MainToolScript
                         };
                         context.ToolScriptRunId = Required(record, "runId");
                         context.SubCallOrdinal = ordinal;
+                        context.RunSubCallOrdinal = runOrdinal;
                         result = await context.CallTool(wrapper, budget, run.Token);
                     }
                     finally
@@ -83,6 +88,7 @@ internal sealed partial class MainToolScript
                         context.SessionMessageDelivered = previousDeliveryCapture;
                         context.ToolScriptRunId = previousRunId;
                         context.SubCallOrdinal = previousOrdinal;
+                        context.RunSubCallOrdinal = previousRunOrdinal;
                     }
                     budget.JsonValue(result);
                     (

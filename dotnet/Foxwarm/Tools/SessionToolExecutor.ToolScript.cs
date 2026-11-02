@@ -33,11 +33,13 @@ internal sealed partial class SessionToolExecutor
             literal,
             async (wrapper, budget, currentToken) =>
             {
-                // seq.k.n below a model call; ts:runId.n for a run without one (for example a timer).
+                // seq.k.n below a model call (each slice has its own anchor); ts:runId.n for
+                // slices without one (for example a timer), numbered across the whole run.
+                var parentDelivery = rootCall?.DeliverySeq(script: true);
                 var subCallDelivery = SessionManager.SubCallDeliverySeq(
-                    rootCall?.DeliverySeq(script: true),
+                    parentDelivery,
                     context.ToolScriptRunId,
-                    context.SubCallOrdinal
+                    parentDelivery is null ? context.RunSubCallOrdinal : context.SubCallOrdinal
                 );
                 var previous = scriptScope.Value;
                 scriptScope.Value = new(literal, budget, waitScope, context.ToolScriptRunId);

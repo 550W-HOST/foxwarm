@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Foxwarm.Models;
 using Foxwarm.Sessions;
+using Foxwarm.Tools;
 using ScriptFixture = Foxwarm.Tests.MainToolScriptTests.Fixture;
 
 namespace Foxwarm.Tests;
@@ -235,6 +236,82 @@ public sealed class DeliverySeqTests
         Assert.Equal(2, ids.Length);
         Assert.Matches("^ts:tsr_[^.]+\\.1$", ids[0]);
         Assert.Equal(ids[0]![..^1] + "2", ids[1]);
+    }
+
+    [Fact]
+    public async Task Run_IDs_stay_unique_across_slices_without_a_model_call()
+    {
+        await using var f = await ScriptFixture.Create();
+        var target = await f.Manager.CreateNamedAsync("main", "watched", null, null);
+        target.Registry.TriggerOverride = _ => Task.CompletedTask;
+        var definitions = new JsonArray();
+        foreach (var item in ToolScriptToolDefinitions.Definitions())
+            definitions.Add(item?.DeepClone());
+        foreach (var item in AgentToolDefinitions.Definitions())
+            definitions.Add(item.DeepClone());
+        foreach (var item in UnifiedToolDefinitions.All())
+            definitions.Add(item?.DeepClone());
+        // Calls outside a model batch: the same unanchored shape as the timer dispatcher.
+        var tools = new SessionToolExecutor(
+            new WorkspaceTools(f.Work),
+            f.Owner,
+            f.Manager,
+            SessionToolExecutor.CreateRegistry(definitions, f.Mcp, _ => f.Work)
+        );
+        tools.BeginTurn();
+        async Task<JsonObject> Call(string name, JsonObject args) =>
+            (
+                await tools.ExecuteAsync(
+                    new JsonObject
+                    {
+                        ["id"] = "unanchored",
+                        ["name"] = name,
+                        ["args"] = args,
+                    },
+                    default
+                )
+            )!.AsObject();
+        var send = (string message) =>
+            $"call_tool('send_to_session', {{'sessionId': '{target.Id}', 'message': '{message}'}})";
+        var waiting = await Call(
+            "run_script",
+            new JsonObject
+            {
+                ["code"] = string.Join(
+                    "\n",
+                    send("first"),
+                    send("second"),
+                    "ask_agent('next')",
+                    send("third"),
+                    "return 'ok'"
+                ),
+                ["mode"] = "background",
+            }
+        );
+        Assert.True(
+            waiting["status"]?.GetValue<string>() == "waiting",
+            waiting.ToJsonString()
+        );
+        var runId = waiting["runId"]!.GetValue<string>();
+        // The run-wide position is part of the persisted run record, so it survives restart.
+        var persisted = JsonNode.Parse(
+            await File.ReadAllTextAsync(
+                Path.Combine(f.Data, "state", "toolscript-runs", runId + ".json")
+            )
+        )!;
+        Assert.Equal(2, persisted["subCallTotal"]!.GetValue<int>());
+        var completed = await Call(
+            "continue_script",
+            new JsonObject
+            {
+                ["runId"] = runId,
+                ["continuationId"] = waiting["continuationId"]!.DeepClone(),
+                ["input"] = "go",
+            }
+        );
+        Assert.Equal("completed", completed["status"]!.GetValue<string>());
+        var ids = Wrappers(target).Select(item => item.DeliverySeq).ToArray();
+        Assert.Equal(new[] { $"ts:{runId}.1", $"ts:{runId}.2", $"ts:{runId}.3" }, ids);
     }
 
     [Fact]

@@ -14,7 +14,7 @@ Implements [D-session-delivery-seq](../threads/session-sequence-view.md#d-sessio
 | `SessionManager.BatchDeliverySeq` / `SubCallDeliverySeq` | Format `seq`, `seq.k`, `seq.k.n` and `ts:runId.n` IDs from positions |
 | `SessionManager.SetDeliverySeq` / `DeliverySeqFor` | Per-call `AsyncLocal` scope; `SendAsync` reads it only for the same source Session |
 | `TurnToolInvocation.AnchorSeq` / `DeliverySeq` | Batch call anchor from `BeginBatch`; ToolScript subcalls inherit the computed ID via `scriptDelivery` |
-| `ToolScriptContext.SubCallOrdinal` | 1-based subcall position, matching the `subCalls` record order |
+| `ToolScriptContext.SubCallOrdinal` / `RunSubCallOrdinal` | 1-based subcall position within the slice (matching `subCalls`) and across the run (persisted `subCallTotal`, used for `ts:` IDs) |
 | `SessionCatalog.SequenceCandidates` | Recent-or-busy catalog rows through the existing recent-rank and busy indexes |
 | `SqliteArchiveSequence.Read` | Read-only Archive connection, window start by binary search on `seq`, newest/after-cursor bounded rows, extracted JSON fields only, and the calling model row for a leading tool row |
 | `SessionSequenceProjection.Build` | Lane selection, focus component, normalization, pairing, Session/peer projection and visibility |
@@ -33,6 +33,6 @@ Implements [D-session-delivery-seq](../threads/session-sequence-view.md#d-sessio
 
 ## Tests
 
-- `DeliverySeqTests` runs real model batches: a parallel batch (`seq.1`, ToolScript `seq.2.1`/`seq.2.2`, child creation `seq.3`), a single direct send (`seq`), a single-call script (`seq.1.1`), a Task assignment notification, a timer-started script (`ts:runId.n`), and both receiver wrappers and sender evidence. `ClaudeRuntimeTests` checks the Claude Code anchor.
+- `DeliverySeqTests` runs real model batches: a parallel batch (`seq.1`, ToolScript `seq.2.1`/`seq.2.2`, child creation `seq.3`), a single direct send (`seq`), a single-call script (`seq.1.1`), a Task assignment notification, a timer-started script (`ts:runId.n`), run-wide `ts:` numbering across two unanchored slices of one run, and both receiver wrappers and sender evidence. `ClaudeRuntimeTests` checks the Claude Code anchor.
 - `SessionSequenceProjectionTests` covers exact pairing, queued deliveries, Task and spawn links, focus components, window and row bounds, `after` cursors, scoped visibility and legacy inferred pairing.
 - `WebUiSequenceRouteTests` covers the authenticated route for administrator and scoped identities.

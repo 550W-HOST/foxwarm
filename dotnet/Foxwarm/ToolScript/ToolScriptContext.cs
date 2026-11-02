@@ -24,6 +24,9 @@ internal sealed record ToolScriptContext(
 
     // 1-based position of the current call_tool host call within this run slice.
     internal int? SubCallOrdinal { get; set; }
+
+    // 1-based position of the current call_tool host call across all slices of this run.
+    internal int? RunSubCallOrdinal { get; set; }
 }
 
 internal sealed class ToolScriptWaitScope
