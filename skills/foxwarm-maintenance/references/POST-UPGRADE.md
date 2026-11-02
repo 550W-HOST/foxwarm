@@ -11,8 +11,8 @@ For the first update from TypeScript Main, read the dedicated
 
 For a public source checkout, follow [Source Updates](SOURCE-UPDATES.md). Check
 the C# prerequisites before building, preserve the installation/data roots, and
-confirm a running replacement separately from a successful build. Retain older
-runtime outputs while their independent exec helpers still need them.
+confirm a running replacement separately from a successful build. Restart
+removes earlier runtime outputs after the old Main has stopped.
 
 ## Framework prompt
 

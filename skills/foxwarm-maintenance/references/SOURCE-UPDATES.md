@@ -84,16 +84,17 @@ selected payload; source changes to them require a new build. Global skills
 retain their installation-relative `skills/` default or configured
 `paths.skillsDir`. Their packaged copies serve standalone published runtimes.
 
-Older runtime directories are retained deliberately. An independent Linux exec
-script records its original DLL path and calls it again to write completion
-status, even after Main has restarted. Existing Main/CLI processes and their
-helpers can also hold their original resources. Keep an old directory until
-those consumers have finished; stopping Main alone is not sufficient. Remove
-obsolete directories manually after checking this condition, and never remove
-the selected target of `runtime/current`. There is no automatic cleanup or
+Promotion by the start/restart controls happens after Main has stopped, so it
+removes every earlier output and keeps only the newly selected one. A standalone
+`npm run build` may run beside Main and leaves earlier outputs in place; the
+next restart removes them. On Windows, an output that a process still holds is
+kept and retried at a later promotion. Independent exec commands write their
+own completion status and do not need their original output. Commands started
+by an earlier Main that still called its output for completion lose their exit
+status if they are still running when that output is removed. There is no
 rollback service. On the first update from the earlier Debug-output layout,
 retain `dotnet/Foxwarm/bin/Debug/net10.0` until its old processes and independent
-execs have finished as well.
+execs have finished.
 
 Build and restart operations on one checkout should be run serially. The scripts
 use ordinary directory moves/link changes; they do not coordinate concurrent

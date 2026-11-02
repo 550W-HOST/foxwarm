@@ -77,7 +77,7 @@ When the installed dependencies already match the checkout, `npm run restart:win
 
 Open the WebUI, confirm that the expected conversations and settings are present, and check a model request plus any configured Channels or Nodes. If startup fails, inspect `state/logs/` in the selected data directory and the platform's process output. Do not overwrite data with a backup just because a new process did not start.
 
-Completed runtime outputs are retained under the checkout's `runtime/`. Older independent jobs may still use an earlier output, so keep it until its consumers finish. Never remove the output selected by `runtime/current`. See [source updates and runtime retention](https://github.com/550W-HOST/foxwarm/blob/main/skills/foxwarm-maintenance/references/SOURCE-UPDATES.md) for the detailed controls.
+Completed runtime outputs live under the checkout's `runtime/`, selected by `runtime/current`. Restart removes earlier outputs once the old Main has stopped; a standalone build leaves them until the next restart. See [source updates and runtime retention](https://github.com/550W-HOST/foxwarm/blob/main/skills/foxwarm-maintenance/references/SOURCE-UPDATES.md) for the detailed controls.
 
 ## Update a Docker installation
 

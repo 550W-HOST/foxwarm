@@ -71,22 +71,6 @@ internal static class ExecNative
             );
             return 0;
         }
-        if (args[0] == "--exec-status" && args.Length == 3)
-        {
-            File.WriteAllText(
-                args[1],
-                new JsonObject
-                {
-                    ["exitCode"] =
-                        args[2] == "null" ? null : int.Parse(args[2], CultureInfo.InvariantCulture),
-                    ["finishedAt"] = DateTimeOffset.UtcNow.ToString(
-                        "yyyy-MM-dd'T'HH:mm:ss.fff'Z'",
-                        CultureInfo.InvariantCulture
-                    ),
-                }.ToJsonString() + "\n"
-            );
-            return 0;
-        }
         if (OperatingSystem.IsWindows() && args is ["--exec-launch-windows", var script])
             return WindowsExecProcess.Helper(script);
         if (args[0] != "--exec-launch" || args.Length != 2)
