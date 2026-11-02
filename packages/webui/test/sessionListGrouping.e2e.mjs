@@ -148,7 +148,11 @@ test('Agent groups list the main Agent first, start with the Agent main and keep
       assert.equal(grp.rows[0], 'grp/main')
       assert.deepEqual([...grp.rows].sort(), ['grp/loose', 'grp/main'])
       assert.equal(grp.count, 2)
-      assert.deepEqual([groups[0].rows, groups[0].count], [[], 42], 'a collapsed group keeps its count')
+      // The application is shared with earlier scenario files, which add their own main-Agent
+      // Sessions, so the expected count comes from the full Session list, not the seed size.
+      const mainRoots = (await api('GET', 'sessions')).sessions.filter(row => row.agent === 'main' && !row.parentSessionId && !row.pinned)
+      assert.ok(mainRoots.length >= 42, 'the seeded main-Agent Sessions are listed')
+      assert.deepEqual([groups[0].rows, groups[0].count], [[], mainRoots.length], 'a collapsed group keeps its count')
       // Pinned rows keep their own section, outside the groups.
       assert.equal(await sectionOf(page, 'starred'), 'pinned')
       assert.equal(await page.$('[data-session-agent-tag]'), null, 'Agent groups show no Agent tags')
