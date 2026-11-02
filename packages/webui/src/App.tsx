@@ -20,6 +20,7 @@ import { useSessionIdleNotifications } from './sessionIdleNotifications'
 import { useBoundedSessionList } from './boundedSessionList'
 import { useWorkbenchStore } from './workbench/store'
 import type { WorkbenchLayoutNode, WorkbenchTab } from './workbench/types'
+import type { SystemSection } from './components/SystemView'
 import { createWorkbenchId, findPaneBelow, findPaneContainingTab, findPaneNode, getFlattenedTabIds, getPaneIds, getPaneNodes } from './workbench/utils'
 import { makeVscodeWebUrl, normalizeCodePath, planCodeOpen, readCodeOpenInNewWindowPreference, readCodeWorkspaceNodePreference, readCodeWorkspacePathPreference, resolveSessionCodeTarget, resolveToolCodeFileTarget, selectCodeFrameStarted, VSCODE_WEB_TAB_ID, writeCodeOpenInNewWindowPreference, writeCodeWorkspaceNodePreference, writeCodeWorkspacePathPreference, type CodeCommitTarget, type CodeFileTarget, type CodeTarget } from './vscodeWeb'
 import { buildAgentCreationBody, buildSessionCreationBody, type AgentSettingsChanges, type AgentSummary } from './agentCreation'
@@ -29,9 +30,10 @@ import { useChatPreferences } from './chatPreferences'
 import { makeFoxwarmPopupUrl, type FoxwarmPopupTarget } from './popupWebUi'
 import { FoxPaneLoader } from './components/FoxLoaders'
 
-type AppView = 'session' | 'agents' | 'setup' | 'logs' | 'tasks' | 'nodes'
+type AppView = 'session' | 'agents' | 'setup' | 'logs' | 'tasks'
 
-type RouteState = { view: 'tab'; tabId: string | null }
+// systemSection carries a former Nodes route into the System tab's section.
+type RouteState = { view: 'tab'; tabId: string | null; systemSection?: SystemSection }
 
 type TerminalRegistryRecord = {
   id: string
@@ -90,8 +92,7 @@ type OriginalFaviconLink = {
 
 let originalFaviconLinks: OriginalFaviconLink[] | null = null
 
-const NodesView = lazy(() => import('./components/NodesView'))
-const ArchitectureView = lazy(() => import('./components/ArchitectureView'))
+const SystemView = lazy(() => import('./components/SystemView'))
 const LogsView = lazy(() => import('./components/LogsView'))
 const TasksView = lazy(() => import('./components/TasksView'))
 const SetupView = lazy(() => import('./components/SetupView'))
@@ -320,6 +321,12 @@ function loadStoredCodeOpenInNewWindow(): boolean {
 }
 
 function getHashState(): RouteState {
+  const route = readHashRoute()
+  // The former Nodes page is now the System page's Nodes section.
+  return route.tabId === NODES_TAB_ID ? { view: 'tab', tabId: AGENTS_TAB_ID, systemSection: 'nodes' } : route
+}
+
+function readHashRoute(): RouteState {
   const hash = decodeURIComponent(window.location.hash.slice(1))
   const fallbackTabId = loadStoredLastActiveTabId()
 
@@ -327,8 +334,12 @@ function getHashState(): RouteState {
     return { view: 'tab', tabId: fallbackTabId }
   }
 
-  if (hash === ARCHITECTURE_HASH || hash === '__architecture__' || hash === 'architecture') {
+  if (hash === ARCHITECTURE_HASH || hash === '__architecture__' || hash === 'architecture' || hash === 'system') {
     return { view: 'tab', tabId: AGENTS_TAB_ID }
+  }
+
+  if (hash === 'nodes') {
+    return { view: 'tab', tabId: NODES_TAB_ID }
   }
 
   if (hash === SETUP_HASH || hash === 'oobe') {
@@ -416,11 +427,12 @@ function makeVscodeWebTab(): WorkbenchTab {
   }
 }
 
-function makeAgentsTab(): WorkbenchTab {
+function makeAgentsTab(section?: SystemSection): WorkbenchTab {
   return {
     id: AGENTS_TAB_ID,
     type: 'agents',
-    title: 'Agents',
+    title: 'System',
+    ...(section ? { section } : {}),
   }
 }
 
@@ -441,7 +453,7 @@ function makeHistoryTab(): Extract<WorkbenchTab, { type: 'search' }> {
 }
 
 function isRestorableRouteTabId(tabId: string): boolean {
-  return tabId.startsWith('chat:') || tabId === AGENTS_TAB_ID || tabId === SETUP_TAB_ID || tabId === SEARCH_TAB_ID || tabId.startsWith(HISTORY_TAB_PREFIX) || tabId === LOGS_TAB_ID || tabId === TASKS_TAB_ID || tabId === NODES_TAB_ID
+  return tabId.startsWith('chat:') || tabId === AGENTS_TAB_ID || tabId === SETUP_TAB_ID || tabId === SEARCH_TAB_ID || tabId.startsWith(HISTORY_TAB_PREFIX) || tabId === LOGS_TAB_ID || tabId === TASKS_TAB_ID
 }
 
 function App() {
@@ -573,9 +585,7 @@ function App() {
         ? 'logs'
         : focusedActiveTab?.type === 'tasks'
           ? 'tasks'
-          : focusedActiveTab?.type === 'nodes'
-            ? 'nodes'
-            : 'session'
+          : 'session'
   const busyCount = boundedSessions.globalSummary?.busy ?? sessions.filter((session) => isSessionRuntimeActive(session)).length
 
   const fetchWebUiSettings = async () => {
@@ -815,6 +825,18 @@ function App() {
     // route during that transition.
   }, [route.tabId, !!(route.tabId && tabsById[route.tabId]), activateTab])
 
+  // A former Nodes route selects the System section, then settles on the System tab's own route.
+  useEffect(() => {
+    const section = route.systemSection
+    if (!section) return
+    const tab = tabsById[AGENTS_TAB_ID]
+    if (!tab) return
+    if (tab.type === 'agents' && tab.section !== section) updateTab(AGENTS_TAB_ID, current => current.type === 'agents' ? { ...current, section } : current)
+    const hash = `#${TAB_HASH_PREFIX}${encodeURIComponent(AGENTS_TAB_ID)}`
+    if (window.location.hash !== hash) window.history.replaceState(window.history.state, '', hash)
+    setRoute({ view: 'tab', tabId: AGENTS_TAB_ID })
+  }, [route, tabsById, updateTab])
+
   useEffect(() => {
     if (route.tabId && tabsById[route.tabId] && pendingRouteTabIdRef.current === route.tabId) {
       pendingRouteTabIdRef.current = null
@@ -1043,10 +1065,15 @@ function App() {
     if (pending && (route.tabId !== pending.fromTabId || focusedPaneId !== pending.paneId)) cancelPendingChatNavigation()
   }, [route.tabId, focusedPaneId, cancelPendingChatNavigation])
 
-  const openNodesTab = () => {
-    upsertTab({ id: NODES_TAB_ID, type: 'nodes', title: 'Nodes' }, { activate: true })
-    navigateToTab(NODES_TAB_ID)
+  /** Opens the System page on one of its sections. */
+  const openSystemSection = (section: SystemSection) => {
+    const existing = useWorkbenchStore.getState().tabsById[AGENTS_TAB_ID]
+    if (existing?.type !== 'agents' || existing.section !== section || existing.title !== 'System') {
+      upsertTab(existing?.type === 'agents' ? { ...existing, title: 'System', section } : makeAgentsTab(section), { activate: true })
+    }
+    navigateToTab(AGENTS_TAB_ID)
   }
+  const openNodesTab = () => openSystemSection('nodes')
 
   const openTasksTab = () => {
     upsertTab({ id: TASKS_TAB_ID, type: 'tasks', title: 'Tasks' }, { activate: true })
@@ -1245,7 +1272,7 @@ function App() {
     if (targetTab.type === 'terminal' && !targetTab.terminalId) return
 
     if (targetTab.type === 'setup' && !window.confirm('Unsaved changes will be lost. Open Setup in a new window?')) return
-    if (targetTab.type === 'agents' && !window.confirm('Unsaved changes will be lost. Open Agents in a new window?')) return
+    if (targetTab.type === 'agents' && !window.confirm('Unsaved changes will be lost. Open System in a new window?')) return
 
     let url: URL
     if (targetTab.type === 'vscode') {
@@ -1257,14 +1284,12 @@ function App() {
           ? { kind: 'terminal', terminalId: targetTab.terminalId!, title: targetTab.title }
           : targetTab.type === 'tasks'
             ? { kind: 'tasks' }
-          : targetTab.type === 'nodes'
-            ? { kind: 'nodes' }
           : targetTab.type === 'logs'
             ? { kind: 'logs' }
           : targetTab.type === 'search'
             ? { kind: 'search' }
           : targetTab.type === 'agents'
-            ? { kind: 'agents' }
+            ? (targetTab.section === 'nodes' ? { kind: 'nodes' } : { kind: 'agents' })
             : { kind: 'setup' }
       url = makeFoxwarmPopupUrl(window.location.href, popupTarget)
     }
@@ -1535,12 +1560,7 @@ function App() {
     }
 
     if (route.tabId === AGENTS_TAB_ID) {
-      upsertTab(makeAgentsTab(), { activate: true })
-      return
-    }
-
-    if (route.tabId === NODES_TAB_ID) {
-      upsertTab({ id: NODES_TAB_ID, type: 'nodes', title: 'Nodes' }, { activate: true })
+      upsertTab(makeAgentsTab(route.systemSection), { activate: true })
       return
     }
 
@@ -1647,8 +1667,6 @@ function App() {
       )
     }
 
-    if (tab.type === 'nodes') return <Suspense fallback={<LazyViewFallback label="Loading nodes…" />}><NodesView onBack={onBack} /></Suspense>
-
     if (tab.type === 'tasks') return <Suspense fallback={<LazyViewFallback label="Loading tasks…" />}><TasksView mobileHome={tab.id.startsWith('mobile:')} onBack={onBack} onOpenSession={openChatTab} /></Suspense>
 
     if (tab.type === 'logs') return <Suspense fallback={<LazyViewFallback label="Loading logs…" />}><LogsView onBack={onBack} /></Suspense>
@@ -1671,17 +1689,18 @@ function App() {
 
     if (tab.type === 'agents') {
       return (
-        <Suspense fallback={<LazyViewFallback label="Loading agents…" />}>
-          <ArchitectureView
+        <Suspense fallback={<LazyViewFallback label="Loading system…" />}>
+          <SystemView
             currentSession={currentContextSessionId}
             onSelectSession={openChatTab}
-            onOpenNodes={openNodesTab}
+            section={tab.section}
+            onSectionChange={(section) => updateTab(tab.id, current => current.type === 'agents' ? { ...current, section } : current)}
             onBack={onBack}
             onCreateAgent={handleCreateAgent}
             onCreateSession={handleCreateSession}
             onAgentsChanged={() => { void Promise.all([fetchAgents(), fetchSessions()]) }}
             agentRequest={agentSettingsRequest}
-            onOpenAgentMemory={(memoryRoot, filePath) => {
+            onOpenAgentMemory={(memoryRoot: string, filePath?: string) => {
               const workspace = { nodeId: 'master', path: memoryRoot }
               if (filePath) openCodeFile({ kind: 'openFile', nodeId: 'master', path: filePath }, workspace)
               else openCode(workspace)

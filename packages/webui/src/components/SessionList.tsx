@@ -1,4 +1,4 @@
-import { ClipboardList, Code2, FileText, MessageSquare, MoreHorizontal, Search, Settings, SquareTerminal, Workflow, X } from 'lucide-react'
+import { ClipboardList, Code2, FileText, MessageSquare, MoreHorizontal, Search, Settings, SquareTerminal, Network, X } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import ContextMenu, { type ContextMenuAnchorRect, type ContextMenuEntry } from './ContextMenu'
@@ -17,7 +17,7 @@ interface SessionListProps {
   sessions: Session[]
   agents: AgentSummary[]
   currentSession?: string
-  currentView: 'session' | 'agents' | 'setup' | 'logs' | 'tasks' | 'nodes'
+  currentView: 'session' | 'agents' | 'setup' | 'logs' | 'tasks'
   currentSessionRecord?: Session
   onSelectSession: (sessionId: string) => void
   onKeepSession?: (sessionId: string) => void
@@ -102,7 +102,7 @@ export default function SessionList({
   }, [utility])
 
   const moreEntries: ContextMenuEntry[] = [
-    { key: 'agents', label: 'Agents', icon: <Workflow size={16} />, onSelect: onSelectArchitecture },
+    { key: 'agents', label: 'System', icon: <Network size={16} />, onSelect: onSelectArchitecture },
     { key: 'code', label: 'Code', icon: <Code2 size={16} />, onSelect: () => setUtility('code') },
     { key: 'terminal', label: 'Terminal', icon: <SquareTerminal size={16} />, onSelect: () => setUtility('terminal') },
     ...(onSelectLogs ? [{ key: 'logs', label: 'Logs', icon: <FileText size={16} />, onSelect: onSelectLogs }] : []),

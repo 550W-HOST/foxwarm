@@ -1,4 +1,4 @@
-import { PanelLeftClose, PanelLeftOpen, History, Workflow, ClipboardList } from 'lucide-react'
+import { PanelLeftClose, PanelLeftOpen, History, Network, ClipboardList } from 'lucide-react'
 import SessionListCore from './SessionListCore'
 import type { BoundedSessionListPresentationProps, Session } from './SessionListCore'
 import type { SessionIdleNotificationMode } from '../sessionIdleNotifications'
@@ -14,7 +14,7 @@ interface SidebarProps {
   sessions: Session[]
   agents: AgentSummary[]
   currentSession: string
-  currentView: 'session' | 'agents' | 'setup' | 'logs' | 'tasks' | 'nodes'
+  currentView: 'session' | 'agents' | 'setup' | 'logs' | 'tasks'
   currentSessionRecord?: Session
   onSelectSession: (sessionId: string) => void
   onKeepSession?: (sessionId: string) => void
@@ -110,10 +110,10 @@ export default function Sidebar({
             <button
               onClick={onSelectArchitecture}
               className={`inline-flex flex-1 items-center justify-center gap-2 rounded-lg border border-fw-border-strong px-3 py-2 text-sm font-medium transition-colors ${agentsBtnClass}`}
-              title="Open agents overview"
+              title="Open System"
             >
-              <Workflow className="w-4 h-4" />
-              <span>Agents</span>
+              <Network className="w-4 h-4" />
+              <span>System</span>
             </button>
             <AgentCreationMenu
               agents={agents}

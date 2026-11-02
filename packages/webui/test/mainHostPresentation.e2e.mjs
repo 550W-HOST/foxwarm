@@ -103,7 +103,7 @@ try {
   await action('root', 'archive', { archived: false }); await action('root', 'pin', { pinned: false }); await action('ui-child', 'archive', { archived: false })
   await action('target', 'archive', { archived: false }); await page.evaluate(() => window.foxwarmTest.switchToSession('ui-child'))
   await page.waitForFunction(() => document.querySelector('.foxwarm-chat-root')?.innerText.includes('session ui-child'))
-  await page.evaluate(() => { location.hash = 'architecture' }); await page.waitForSelector('.foxwarm-architecture-surface-tab'); await page.waitForSelector('[data-session-id="ui-child"]')
+  await page.evaluate(() => { location.hash = 'architecture' }); await page.waitForSelector('.foxwarm-system-tab'); await page.waitForSelector('[data-session-id="ui-child"]')
   await page.click('button[aria-label^="Session list mode"]'); await page.waitForFunction(() => document.querySelector('button[aria-label^="Session list mode"]')?.getAttribute('aria-label') === 'Session list mode: Time')
   await sleep(500)
   await page.$eval('[data-session-id="ui-child"]', node => node.scrollIntoView({ block: 'nearest' })); await sleep(200)

@@ -1,7 +1,7 @@
 # Unit: WebUI Tasks
 
 Files: packages/webui/src/components/StatusBadge.tsx, packages/webui/src/components/TasksView.tsx, packages/webui/src/components/TasksView.css, packages/webui/src/components/SessionSelector.tsx, packages/webui/test/tasksView.e2e.mjs
-Secondary files: packages/webui/src/index.css, packages/webui/src/components/WorkbenchStatusBar.tsx, packages/webui/src/components/NodesView.tsx, packages/webui/src/App.tsx, packages/webui/src/PopupWebUiApp.tsx, packages/webui/src/EmbeddedWebUiApp.tsx, packages/webui/src/popupWebUi.ts, packages/webui/src/workbench/types.ts, packages/webui/src/workbench/utils.ts, packages/webui/src/components/Sidebar.tsx, packages/webui/src/components/CollapsedSidebar.tsx, packages/webui/src/components/SessionList.tsx, packages/webui/test/workbenchPreview.e2e.mjs, packages/webui/test/sessionListAndWorkbenchState.test.mjs, packages/webui/test/popupWebUi.test.mjs
+Secondary files: packages/webui/src/index.css, packages/webui/src/components/WorkbenchStatusBar.tsx, packages/webui/src/components/SystemNodes.tsx, packages/webui/src/App.tsx, packages/webui/src/PopupWebUiApp.tsx, packages/webui/src/EmbeddedWebUiApp.tsx, packages/webui/src/popupWebUi.ts, packages/webui/src/workbench/types.ts, packages/webui/src/workbench/utils.ts, packages/webui/src/components/Sidebar.tsx, packages/webui/src/components/CollapsedSidebar.tsx, packages/webui/src/components/SessionList.tsx, packages/webui/test/workbenchPreview.e2e.mjs, packages/webui/test/sessionListAndWorkbenchState.test.mjs, packages/webui/test/popupWebUi.test.mjs
 
 ## Purpose
 

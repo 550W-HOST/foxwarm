@@ -20,8 +20,7 @@ let delayCreateResponse = false
 let createCalls = 0
 const createdResponses = []
 const delayed = []
-const component = fileURLToPath(new URL('../src/components/ArchitectureView.tsx', import.meta.url))
-const nodesComponent = fileURLToPath(new URL('../src/components/NodesView.tsx', import.meta.url))
+const component = fileURLToPath(new URL('../src/components/SystemView.tsx', import.meta.url))
 const theme = fileURLToPath(new URL('../src/theme/index.ts', import.meta.url))
 const packageRoot = fileURLToPath(new URL('..', import.meta.url))
 
@@ -59,11 +58,11 @@ before(async () => {
   await registry.createPendingPairing({ requestedName: 'Synthetic laptop', nodeType: 'cli-node', capabilities: { tools: [] } })
 
   const bundle = await build({ absWorkingDir: packageRoot, stdin: {
-    contents: `import React from 'react'; import {createRoot} from 'react-dom/client'; import ArchitectureView from ${JSON.stringify(component)}; import NodesView from ${JSON.stringify(nodesComponent)}; import {initializeThemeRuntime} from ${JSON.stringify(theme)}; initializeThemeRuntime();
+    contents: `import React from 'react'; import {createRoot} from 'react-dom/client'; import SystemView from ${JSON.stringify(component)}; import {initializeThemeRuntime} from ${JSON.stringify(theme)}; initializeThemeRuntime();
       window.fixtureClipboard=''; Object.defineProperty(navigator,'clipboard',{value:{writeText:async text=>{window.fixtureClipboard=text}}});
-      const root=createRoot(document.getElementById('root')); function Fixture(){ const [nodes,setNodes]=React.useState(false); window.fixtureShowArchitecture=()=>setNodes(false); return nodes ? React.createElement(NodesView) : React.createElement(ArchitectureView,{currentSession:'main/browser-fixture',onSelectSession:()=>{},onOpenNodes:()=>setNodes(true)}); } root.render(React.createElement(Fixture));`,
+      const root=createRoot(document.getElementById('root')); function Fixture(){ const [section,setSection]=React.useState('sessions'); window.fixtureShowSessions=()=>setSection('sessions'); return React.createElement(SystemView,{currentSession:'main/browser-fixture',onSelectSession:()=>{},section,onSectionChange:setSection}); } root.render(React.createElement(Fixture));`,
     loader: 'tsx', resolveDir: packageRoot, sourcefile: 'node-onboarding-fixture.tsx',
-  }, bundle: true, format: 'iife', platform: 'browser', target: 'chrome120', write: false, alias: webuiReactAliases,
+  }, bundle: true, format: 'iife', platform: 'browser', target: 'chrome120', write: false, alias: webuiReactAliases, loader: { '.css': 'empty', '.ttf': 'empty' },
   define: { 'process.env.NODE_ENV': JSON.stringify('test') }, logLevel: 'silent' })
   const assets = await fs.readdir(new URL('../dist/assets/', import.meta.url))
   const css = await fs.readFile(new URL(`../dist/assets/${assets.find(name => /^index-.*\.css$/.test(name))}`, import.meta.url), 'utf8')
@@ -95,7 +94,7 @@ before(async () => {
   await page.setViewport({ width: 1280, height: 900 })
   await page.setCookie({ name: 'foxwarm_token', value: 'synthetic-browser-auth', url: baseUrl, httpOnly: true })
   await page.goto(fixtureUrl, { waitUntil: 'load' })
-  await page.waitForFunction(() => document.body.innerText.includes('Execution topology'))
+  await page.waitForSelector('[data-system-session-list]')
 })
 
 after(async () => {
@@ -107,29 +106,23 @@ after(async () => {
 })
 
 test('Nodes is a real independent surface; pending approval, inline copy and explicit Shell creation use authenticated APIs', { timeout: 45_000 }, async () => {
-  assert.equal(commandReads, 0, 'ordinary Architecture loading never requests credentials')
-  await page.waitForFunction(() => [...document.querySelectorAll('header button')].some(button => /[1-9]\d* in loaded window/.test(button.textContent)))
-  const sessionCard = () => page.evaluate(() => {
-    const card = [...document.querySelectorAll('header button')].find(button => button.textContent.includes('in loaded window'))
-    return card ? { value: card.querySelector('.tabular-nums')?.textContent, detail: card.lastElementChild?.textContent } : null
-  })
-  const counts = await sessionCard()
+  assert.equal(commandReads, 0, 'ordinary System loading never requests credentials')
+  await page.waitForFunction(() => /[1-9]\d* of [1-9]\d* loaded sessions/.test(document.body.innerText))
   const positions = []
-  for (const surface of ['Topology', 'Agents']) {
-    await click(surface)
-    await page.waitForFunction(name => [...document.querySelectorAll('.foxwarm-architecture-surface-tab')].some(button => button.textContent === name && button.getAttribute('aria-pressed') === 'true'), {}, surface)
-    positions.push(await page.$eval('.foxwarm-architecture-surface-tab', button => button.parentElement.getBoundingClientRect().left))
-    assert.ok(!(await page.$eval('header', header => header.innerText)).includes('loaded of'))
-    assert.deepEqual(await sessionCard(), counts, 'summary-card values and loaded counts are retained')
+  for (const section of ['Agents', 'Sessions', 'Nodes']) {
+    await page.click(`[data-system-tab="${section.toLowerCase()}"]`)
+    await page.waitForFunction(name => [...document.querySelectorAll('.foxwarm-system-tab')].some(button => button.textContent === name && button.getAttribute('aria-selected') === 'true'), {}, section)
+    positions.push(await page.$eval('.foxwarm-system-tab', button => button.parentElement.getBoundingClientRect().left))
+    // Each section shows only its own summary.
+    assert.deepEqual(await page.$$eval('[data-system-summary]', items => items.map(item => item.getAttribute('data-system-summary'))), [section.toLowerCase()])
   }
-  assert.ok(Math.max(...positions) - Math.min(...positions) < 1, 'the surface switch retains its horizontal position')
-  await click('Topology')
-  await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.includes('protocol-compatible execution')).click())
+  assert.ok(Math.max(...positions) - Math.min(...positions) < 1, 'the section switch retains its horizontal position')
   await page.waitForSelector('[data-node-surface]')
   await page.waitForFunction(() => document.body.innerText.includes('1 pending approvals'))
   const nodeText = await page.$eval('[data-node-surface]', element => element.textContent)
   assert.ok(nodeText.includes('master') && nodeText.includes('offline-example') && nodeText.includes('Offline'))
-  assert.ok(!nodeText.includes('unavailable-session-placement'))
+  // A Session placed on a Node outside the directory is listed under an unavailable card.
+  assert.match(await page.$eval('[data-system-node-id="unavailable-session-placement"]', element => element.textContent), /Unavailable.*browser-fixture/)
   assert.equal(await page.$('input[aria-label="Search sessions, models, tools"]'), null)
   assert.ok(!(await page.evaluate(() => document.body.innerText)).includes('loaded of'))
   assert.equal(commandReads, 0)
@@ -191,10 +184,9 @@ test('Nodes is a real independent surface; pending approval, inline copy and exp
   await click('Close New nodes')
   await page.waitForSelector('[role="dialog"]', { hidden: true })
   assert.ok(!(await page.evaluate(() => document.body.innerText)).includes('NODE_AUTH_TOKEN'))
-  await page.evaluate(() => window.fixtureShowArchitecture())
+  await page.evaluate(() => window.fixtureShowSessions())
   await page.waitForSelector('input[aria-label="Search sessions, models, tools"]')
-  assert.ok((await page.evaluate(() => document.body.innerText)).includes('Execution topology'))
-  await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.includes('protocol-compatible execution')).click())
+  await page.click('[data-system-tab="nodes"]')
   await page.waitForSelector('[data-node-surface]')
   await click('New nodes')
   await page.waitForSelector('[data-node-command]')
@@ -373,11 +365,11 @@ test('every setup method supports explicit pre-creation, safe switching, updates
 })
 
 
-test('direct Nodes leaf loads only directory and visible pending data, and unmount cancels polling', async () => {
+test('System opened on Nodes never loads setup credentials, and unmount cancels pending polling', async () => {
   const bundle = await build({ absWorkingDir: packageRoot, stdin: {
-    contents: `import React from 'react'; import {createRoot} from 'react-dom/client'; import NodesView from ${JSON.stringify(nodesComponent)}; const root=createRoot(document.getElementById('root')); window.unmountFixture=()=>root.unmount(); root.render(React.createElement(NodesView));`,
+    contents: `import React from 'react'; import {createRoot} from 'react-dom/client'; import SystemView from ${JSON.stringify(component)}; const root=createRoot(document.getElementById('root')); window.unmountFixture=()=>root.unmount(); root.render(React.createElement(SystemView,{section:'nodes',onSelectSession:()=>{}}));`,
     loader: 'tsx', resolveDir: packageRoot,
-  }, bundle: true, format: 'iife', platform: 'browser', write: false, alias: webuiReactAliases, define: { 'process.env.NODE_ENV': JSON.stringify('test') }, logLevel: 'silent' })
+  }, bundle: true, format: 'iife', platform: 'browser', write: false, alias: webuiReactAliases, loader: { '.css': 'empty', '.ttf': 'empty' }, define: { 'process.env.NODE_ENV': JSON.stringify('test') }, logLevel: 'silent' })
   await page.goto('about:blank')
   const leaf = await browser.newPage()
   try {
@@ -394,7 +386,7 @@ test('direct Nodes leaf loads only directory and visible pending data, and unmou
     const reads = requests.slice(start)
     assert.ok(reads.some(url => url === '/api/nodes'))
     assert.ok(reads.some(url => url.includes('/onboarding/pending')))
-    assert.ok(!reads.some(url => /session-list|\/agents|onboarding\/commands/.test(url)), reads.join('\n'))
+    assert.ok(!reads.some(url => /onboarding\/commands/.test(url)), reads.join('\n'))
     await leaf.evaluate(() => window.unmountFixture())
     const pendingCount = requests.filter(url => url.includes('/onboarding/pending')).length
     await new Promise(resolve => setTimeout(resolve, 5200))

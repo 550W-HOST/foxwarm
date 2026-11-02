@@ -9,7 +9,7 @@ const files = {
   list: await readFile(new URL('../src/components/SessionListCore.tsx', import.meta.url), 'utf8'),
   collapsed: await readFile(new URL('../src/components/CollapsedSidebar.tsx', import.meta.url), 'utf8'),
   collapsedContainer: await readFile(new URL('../src/components/CollapsedSidebarContainer.tsx', import.meta.url), 'utf8'),
-  architecture: await readFile(new URL('../src/components/ArchitectureView.tsx', import.meta.url), 'utf8'),
+  architecture: await readFile(new URL('../src/components/SystemView.tsx', import.meta.url), 'utf8'),
   webuiChannel: await readFile(new URL('../../../src/channels/webuiChannel.ts', import.meta.url), 'utf8'),
 }
 
@@ -117,8 +117,6 @@ test('Architecture owns its bounded summary and forest instead of an all-session
   assert.match(files.architecture, /webUiRealtime\.subscribeSessionList\(architectureSubscriptionIds/)
   assert.match(files.architecture, /onOpen: \(\) => requestSessionListStreamOpenResync\(scheduler\)/)
   assert.match(files.architecture, /getArchitectureSessionNodeId/)
-  assert.match(files.architecture, /data-architecture-node-session-scroll/)
-  assert.match(files.architecture, /max-h-\[360px\]/)
   assert.doesNotMatch(files.architecture, /function SessionNode/)
   assert.doesNotMatch(files.architecture, /new EventSource/)
   assert.doesNotMatch(files.architecture, /sessions:\s*Session\[\]/)
@@ -127,7 +125,7 @@ test('Architecture owns its bounded summary and forest instead of an all-session
 
 test('Architecture Agent registry owns CRUD controls and bounded self-memory navigation', () => {
   assert.match(files.architecture, /AgentCreationMenu/)
-  assert.match(files.architecture, /surface === 'agents'/)
+  assert.match(files.architecture, /section === 'agents'/)
   assert.match(files.architecture, /\/agents\/\$\{encodeURIComponent\(selectedRegistryAgentId\)\}\/memory/)
   assert.match(files.architecture, /confirmAgentId: agentId/)
   assert.match(files.architecture, /onOpenAgentMemory/)

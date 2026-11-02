@@ -112,7 +112,7 @@ Manages a multi-pane workbench UI with tabbed panels, tab and whole-pane drag-an
 
 Tasks tab identity, read-only bounded display and popout semantics are documented in [WebUI Tasks](./webui-tasks.md).
 
-Nodes tab identity, directory/onboarding ownership and popout semantics are documented in [WebUI Nodes](./webui-nodes.md).
+The System tab's sections, the normalization of saved former Nodes tabs and popout semantics are documented in [WebUI System](./webui-system-view.md); Nodes directory/onboarding ownership in [WebUI Nodes](./webui-nodes.md).
 
 Logs tab identity, bounded display and popout semantics are documented in [WebUI Logs](./webui-logs.md).
 

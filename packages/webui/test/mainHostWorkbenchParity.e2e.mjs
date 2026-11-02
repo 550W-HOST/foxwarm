@@ -105,7 +105,7 @@ try {
   await page.$eval('.foxwarm-assistant-message-card [title="JSON"]', button => button.click())
   await page.waitForSelector('[data-json-inspector-dialog] [data-editor-ready="true"]'); await closeJson()
   // A real split preserves Chat DOM and draft without issuing another history initialization.
-  await page.evaluate(() => { location.hash = 'architecture' }); await page.waitForSelector('.foxwarm-architecture-surface-tab'); await chat()
+  await page.evaluate(() => { location.hash = 'architecture' }); await page.waitForSelector('.foxwarm-system-tab'); await chat()
   await page.type('[role="textbox"][aria-label="Message"]', 'retained normal-host draft')
   await page.evaluate(() => { window.parityChat = document.querySelector('.foxwarm-chat-root') })
   const historyReads = http.filter(row => row.path.endsWith('/history')).length

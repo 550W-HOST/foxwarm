@@ -10,6 +10,7 @@ export interface ArchitectureSessionLike {
   currentNode?: string
   model?: string | null
   modelKey?: string
+  defaultModelKey?: string
   isolated?: boolean
   archived?: boolean
   busy?: boolean
@@ -42,20 +43,34 @@ export const matchesArchitectureStatus = (session: ArchitectureSessionLike, filt
   return session.isolated === true
 }
 
+/** Model the Session is using now, otherwise its configured model. */
+export const getArchitectureSessionModel = (session: ArchitectureSessionLike): string | undefined => (
+  session.runtimeState?.active?.modelKey || session.modelKey || session.model || session.defaultModelKey || undefined
+)
+
+export interface ArchitectureSessionFilters {
+  nodeId?: string | null
+  model?: string | null
+}
+
 export const filterArchitectureSessions = <T extends ArchitectureSessionLike>(
   sessions: readonly T[],
   filter: ArchitectureStatusFilter,
   query: string,
+  filters: ArchitectureSessionFilters = {},
 ): T[] => {
   const normalizedQuery = query.trim().toLocaleLowerCase()
   return sessions.filter((session) => {
     if (!matchesArchitectureStatus(session, filter)) return false
+    if (filters.nodeId && getArchitectureSessionNodeId(session) !== filters.nodeId) return false
+    if (filters.model && getArchitectureSessionModel(session) !== filters.model) return false
     if (!normalizedQuery) return true
     const fields = [
       session.id,
       session.displayName,
       session.agent || 'main',
       getArchitectureSessionNodeId(session),
+      getArchitectureSessionModel(session),
       session.model,
       session.modelKey,
       session.runtimeState?.tool?.name,

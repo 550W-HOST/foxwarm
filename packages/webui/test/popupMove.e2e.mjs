@@ -19,8 +19,7 @@ const tabs = {
   'chat:popup-test': { id: 'chat:popup-test', type: 'chat', sessionId: 'popup-test', title: 'Popup chat' },
   'terminal:term-1': { id: 'terminal:term-1', type: 'terminal', terminalId: 'term-1', nodeId: 'master', cwd: '/tmp', title: 'Terminal /tmp' },
   'vscode-web': { id: 'vscode-web', type: 'vscode', title: 'Code' },
-  'system:nodes': { id: 'system:nodes', type: 'nodes', title: 'Nodes' },
-  'system:agents': { id: 'system:agents', type: 'agents', title: 'Agents' },
+  'system:agents': { id: 'system:agents', type: 'agents', title: 'System' },
   'system:setup': { id: 'system:setup', type: 'setup', title: 'Setup' },
   'system:search': { id: 'system:search', type: 'search', title: 'Search history' },
 }
@@ -168,7 +167,8 @@ test('moves each supported tab to the expected URL and terminal move never delet
     ['terminal:term-1', 'terminal'],
     ['system:setup', 'setup'],
     ['system:agents', 'agents'],
-    ['system:nodes', 'nodes'],
+    // System on its Nodes section moves to the nodes leaf.
+    ['system:agents', 'nodes'],
     ['system:search', 'search'],
     ['vscode-web', 'code'],
   ]
@@ -180,6 +180,12 @@ test('moves each supported tab to the expected URL and terminal move never delet
         window.open = value => { window.__opened.push(String(value)); return { opener: window } }
         window.confirm = () => true
       })
+      if (kind === 'nodes') {
+        await page.click('[data-tab-id="system:agents"]')
+        await page.waitForSelector('[data-system-tab="nodes"]')
+        await page.click('[data-system-tab="nodes"]')
+        await page.waitForSelector('[data-node-surface]')
+      }
       assert.equal(await chooseMove(page, tabId), 'clicked')
       await new Promise(resolve => setTimeout(resolve, 150))
       const stillPresent = await page.$(`[data-tab-id=${JSON.stringify(tabId)}]`)
@@ -289,32 +295,33 @@ test('the sole Chat header keeps its existing Move to new window action', async 
 })
 
 
-test('Architecture popup and embedded leaf summary enter Nodes without a Code host editor or main shell', async () => {
+test('System popup and embedded leaf switch to Nodes in place, and the nodes leaf opens System on Nodes', async () => {
   for (const embedded of [false, true]) {
     const page = await browser.newPage()
     await installFixture(page)
     try {
       const search = embedded ? '?foxwarmEmbed=agents&foxwarmEmbedNonce=synthetic-nonce-1234567890' : '?foxwarmPopup=agents&foxwarmPopupVersion=1'
       await page.goto(`${baseUrl}/prefix/ui/${search}`, { waitUntil: 'domcontentloaded' })
-      await page.waitForSelector('.foxwarm-architecture-surface-tab')
-      if (embedded) await page.evaluate(() => { window.__opened = []; window.open = url => { window.__opened.push(String(url)); return {} } })
-      await page.evaluate(() => [...document.querySelectorAll('header button')].find(button => button.textContent.includes('protocol-compatible execution')).click())
-      if (embedded) {
-        const opened = new URL(await page.evaluate(() => window.__opened[0]))
-        assert.equal(opened.pathname, '/prefix/ui/')
-        assert.equal(opened.searchParams.get('foxwarmPopup'), 'nodes')
-        assert.equal(opened.searchParams.has('foxwarmEmbed'), false)
-      } else {
-        await page.waitForSelector('[data-foxwarm-popup-root="nodes"]')
-        await page.waitForSelector('[data-node-surface]')
-        assert.equal(await page.$('[data-pane-id], [data-workbench-status-bar], [data-session-list-scroll-container]'), null)
-        const reads = await page.evaluate(() => window.__fetches.map(request => request.path))
-        assert.ok(reads.some(path => path.endsWith('/nodes/onboarding/pending')))
-        assert.ok(!reads.some(path => path.includes('/session-list/') || path.endsWith('/agents') || path.endsWith('/nodes/onboarding/commands')))
-        await page.reload({ waitUntil: 'domcontentloaded' })
-        await page.waitForSelector('[data-node-surface]')
-        assert.equal(await page.$eval('h1', heading => heading.textContent), 'Nodes')
-      }
+      await page.waitForSelector('.foxwarm-system-tab')
+      await page.evaluate(() => { window.__opened = []; window.open = url => { window.__opened.push(String(url)); return {} } })
+      await page.click('[data-system-tab="nodes"]')
+      await page.waitForSelector('[data-node-surface]')
+      assert.deepEqual(await page.evaluate(() => window.__opened), [])
+      assert.equal(await page.$('[data-pane-id], [data-workbench-status-bar], [data-session-list-scroll-container]'), null)
     } finally { await page.close() }
   }
+  const page = await browser.newPage()
+  await installFixture(page)
+  try {
+    await page.goto(`${baseUrl}/prefix/ui/?foxwarmPopup=nodes&foxwarmPopupVersion=1`, { waitUntil: 'domcontentloaded' })
+    await page.waitForSelector('[data-foxwarm-popup-root="nodes"]')
+    await page.waitForSelector('[data-node-surface]')
+    assert.equal(await page.$eval('h1', heading => heading.textContent), 'System')
+    assert.equal(await page.$('[data-pane-id], [data-workbench-status-bar], [data-session-list-scroll-container]'), null)
+    const reads = await page.evaluate(() => window.__fetches.map(request => request.path))
+    assert.ok(reads.some(path => path.endsWith('/nodes/onboarding/pending')))
+    assert.ok(!reads.some(path => path.endsWith('/nodes/onboarding/commands')), 'setup credentials load only after New nodes is opened')
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    await page.waitForSelector('[data-node-surface]')
+  } finally { await page.close() }
 })

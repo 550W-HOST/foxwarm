@@ -6,6 +6,7 @@ const sourcePath = new URL('../src/architectureOperations.ts', import.meta.url).
 const bundle = await build({ entryPoints: [sourcePath], bundle: true, platform: 'node', format: 'esm', write: false, logLevel: 'silent' })
 const {
   filterArchitectureSessions,
+  getArchitectureSessionModel,
   getArchitectureSessionNodeId,
   getArchitectureNodePreview,
   groupArchitectureSessionsByNode,
@@ -73,4 +74,21 @@ test('Agent registry ordering is stable across selection and keeps empty workspa
   assert.deepEqual(agents.map(agent => agent.id), [
     'empty-b', 'populated-b', 'active', 'main', 'empty-a', 'populated-a',
   ], 'ordering does not mutate the fetched registry')
+})
+
+test('the Sessions list filters by effective node and model as well as state and search', () => {
+  const withModels = [
+    { ...sessions[0], modelKey: 'provider/fast', runtimeState: { ...sessions[0].runtimeState, active: { modelKey: 'provider/deep' } } },
+    { ...sessions[1], defaultModelKey: 'provider/fast' },
+    sessions[2],
+    sessions[3],
+  ]
+  // The model in use wins over the configured one.
+  assert.equal(getArchitectureSessionModel(withModels[0]), 'provider/deep')
+  assert.equal(getArchitectureSessionModel(withModels[1]), 'provider/fast')
+  assert.deepEqual(filterArchitectureSessions(withModels, 'all', '', { model: 'provider/fast' }).map(session => session.id), ['research/wait'])
+  // Node filtering uses effective placement: a running tool's execution node.
+  assert.deepEqual(filterArchitectureSessions(withModels, 'all', '', { nodeId: 'mac' }).map(session => session.id), ['main/exec'])
+  assert.deepEqual(filterArchitectureSessions(withModels, 'all', '', { nodeId: 'master' }).map(session => session.id), ['main/root'])
+  assert.deepEqual(filterArchitectureSessions(withModels, 'active', 'main', { nodeId: 'master' }).map(session => session.id), ['main/root'])
 })

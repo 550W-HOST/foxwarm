@@ -16,7 +16,7 @@ import { useTheme } from './theme/useTheme'
 import { useChatPreferences } from './chatPreferences'
 import { getNodeTargetAvailability, parseWebUiNodeTargets, type WebUiNodeTarget } from './nodeTargets'
 
-const ArchitectureView = lazy(() => import('./components/ArchitectureView'))
+const SystemView = lazy(() => import('./components/SystemView'))
 const SetupView = lazy(() => import('./components/SetupView'))
 
 type WebUiSettings = { instanceName: string; tabIcon: string }
@@ -202,7 +202,7 @@ export function EmbeddedAgentsApp({ target }: { target: Extract<FoxwarmEmbeddedT
   return (
     <div className="foxwarm-fixed-viewport-shell h-full min-h-0 overflow-hidden bg-fw-canvas">
       <Suspense fallback={<EmbeddedLeafFallback label="Agents" />}>
-        <ArchitectureView onSelectSession={openSession} />
+        <SystemView onSelectSession={openSession} />
       </Suspense>
     </div>
   )

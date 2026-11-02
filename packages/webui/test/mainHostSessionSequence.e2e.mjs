@@ -97,6 +97,14 @@ function denseSequence(now) {
   }
 }
 
+async function openTimeline(page) {
+  await page.evaluate(() => { location.hash = 'system' })
+  await page.waitForSelector('[data-system-tab="sessions"]')
+  await page.click('[data-system-tab="sessions"]')
+  await page.waitForSelector('[data-sessions-view="timeline"]')
+  await page.click('[data-sessions-view="timeline"]')
+}
+
 const history = async id => (await fixture.api('GET', '/api/sessions/' + encodeURIComponent(id) + '/history?tail=80')).body
 const settled = async (id, marker) => {
   const value = await history(id)
@@ -121,9 +129,7 @@ try {
   await page.setViewport({ width: 1600, height: 1000 })
   const browserErrors = []
   page.on('pageerror', error => browserErrors.push(error.message))
-  await page.evaluate(() => { location.hash = 'architecture' })
-  await page.waitForSelector('.foxwarm-architecture-surface-tab')
-  await page.evaluate(() => [...document.querySelectorAll('.foxwarm-architecture-surface-tab')].find(button => button.textContent.trim() === 'Sequence').click())
+  await openTimeline(page)
   await page.waitForSelector('[data-sequence-grid]')
   const columns = await page.$$eval('[data-sequence-column]', items => items.map(item => item.getAttribute('data-sequence-column')))
   assert.deepEqual(columns.slice(0, 2), ['lead', children[0]], columns.join(','))
@@ -163,9 +169,7 @@ try {
   page.on('request', request => request.url().endsWith('/api/session-sequence')
     ? request.respond({ status: 200, contentType: 'application/json', body: JSON.stringify(denseSequence(Date.now())) })
     : request.continue())
-  await page.evaluate(() => { location.hash = 'architecture' })
-  await page.waitForSelector('.foxwarm-architecture-surface-tab')
-  await page.evaluate(() => [...document.querySelectorAll('.foxwarm-architecture-surface-tab')].find(button => button.textContent.trim() === 'Sequence').click())
+  await openTimeline(page)
   await page.waitForSelector('[data-sequence-column="team/coordinator"]')
   await page.evaluate(() => [...document.querySelectorAll('[aria-label="Sessions shown"] button')].find(button => button.textContent === 'All active').click())
   await until(async () => (await page.$$('[data-sequence-row]')).length >= 5, 'Dense rows render')

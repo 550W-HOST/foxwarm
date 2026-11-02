@@ -36,7 +36,7 @@ Sender model message (committed, seq N) with tool calls
 
 ## D-session-sequence-view
 
-[2026-11-02, revised after the first review] The view is the **Sequence** surface of System Architecture, beside Topology and Agents (the name avoids the Chat Timeline modes and Activity terms). It is a multi-column narrow timeline, not a sequence diagram: no proportional time scale and no lines between columns.
+[2026-11-02, revised after the first review] The view is the Timeline of the System page's Sessions section (it was first the Sequence surface of System Architecture; the System restructure of 2026-11-03 moved it). It is a multi-column narrow timeline, not a sequence diagram: no proportional time scale and no lines between columns.
 
 - **Columns:** one 300 px column per Session in parent/child tree order, with horizontal scrolling. The header shows the name and the current state (running / waiting / idle). There are no separate input lanes. Input from you appears in the receiving column as a one-line user bubble; channel, timer and other input appears as a compact system tag.
 - **Items** reuse Chat primitives, without embedding a ChatTimeline:

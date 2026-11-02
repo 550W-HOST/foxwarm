@@ -80,7 +80,7 @@ Logs is a lazy singleton `system:logs` tab with normal route restoration, close 
 
 Tasks is a lazy singleton `system:tasks` tab with the shared restoration, close and popup behavior. Its read-only Table/Board and bounded API reads are documented in [WebUI Tasks](./webui-tasks.md).
 
-Nodes is a lazy singleton `system:nodes` tab with ordinary activation, restore, close and popup behavior. Its independent directory/onboarding ownership and Architecture summary entry are documented in [WebUI Nodes](./webui-nodes.md).
+System is a lazy singleton `system:agents` tab storing its `section` (Agents, Sessions, Nodes). The former `system:nodes` route, `#nodes` and the status-bar Nodes entry open it on Nodes; see [WebUI System](./webui-system-view.md#page-and-navigation).
 
 ## Build and browser fixtures
 

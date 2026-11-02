@@ -139,7 +139,7 @@ test('workbench normalization ignores and removes legacy tab pinned state', asyn
   assert.equal(normalized.tabsById['vscode-web'].title, 'Code')
 })
 
-test('workbench normalization persists Agents, Setup, Logs, Tasks and Nodes tabs', async () => {
+test('workbench normalization persists System, Setup, Logs and Tasks tabs and folds a saved Nodes tab into System', async () => {
   const { normalizePersistedWorkbenchState } = await loadTypeScriptModule('../src/workbench/utils.ts')
   const normalized = normalizePersistedWorkbenchState({
     version: 4,
@@ -159,12 +159,35 @@ test('workbench normalization persists Agents, Setup, Logs, Tasks and Nodes tabs
     focusedPaneId: 'pane-system',
   })
 
-  assert.deepEqual(normalized.root.tabIds, ['system:agents', 'system:setup', 'system:logs', 'system:tasks', 'system:nodes'])
+  // An existing System tab absorbs the former Nodes page.
+  assert.deepEqual(normalized.root.tabIds, ['system:agents', 'system:setup', 'system:logs', 'system:tasks'])
   assert.equal(normalized.root.activeTabId, 'system:setup')
-  assert.equal(normalized.tabsById['system:agents'].type, 'agents')
+  assert.deepEqual(normalized.tabsById['system:agents'], { id: 'system:agents', type: 'agents', title: 'System' })
   assert.equal(normalized.tabsById['system:setup'].type, 'setup')
   assert.equal(normalized.tabsById['system:logs'].type, 'logs')
   assert.equal(normalized.tabsById['system:tasks'].type, 'tasks')
+  assert.equal(normalized.tabsById['system:nodes'], undefined)
+
+  // Without one, the Nodes tab becomes the System tab on its Nodes section, in the same place.
+  const nodesOnly = normalizePersistedWorkbenchState({
+    version: 4,
+    tabsById: {
+      'chat:a': { id: 'chat:a', type: 'chat', title: 'a', sessionId: 'a' },
+      'system:nodes': { id: 'system:nodes', type: 'nodes', title: 'Nodes' },
+    },
+    root: {
+      id: 'split', kind: 'split', direction: 'row', sizes: [1, 1], children: [
+        { id: 'left', kind: 'pane', tabIds: ['chat:a'], activeTabId: 'chat:a' },
+        { id: 'right', kind: 'pane', tabIds: ['system:nodes'], activeTabId: 'system:nodes', collapsed: true },
+      ],
+    },
+    focusedPaneId: 'right',
+  })
+  assert.deepEqual(nodesOnly.root.children.map(child => [child.id, child.tabIds, child.activeTabId, child.collapsed]), [['left', ['chat:a'], 'chat:a', false], ['right', ['system:agents'], 'system:agents', true]])
+  assert.deepEqual(nodesOnly.tabsById['system:agents'], { id: 'system:agents', type: 'agents', title: 'System', section: 'nodes' })
+  assert.equal(nodesOnly.focusedPaneId, 'right')
+  // Written state is already in the new form.
+  assert.deepEqual(normalizePersistedWorkbenchState(nodesOnly), nodesOnly)
 })
 
 test('workbench pane collapse survives normalization and older panes default to expanded', async () => {

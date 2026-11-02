@@ -1,7 +1,7 @@
 # Unit: webui-session-sequence
 
 Files: packages/webui/src/sessionSequence.ts, packages/webui/src/components/SessionSequenceView.tsx, packages/webui/src/components/SessionSequenceItems.tsx, packages/webui/test/sessionSequence.test.mjs, packages/webui/test/mainHostSessionSequence.e2e.mjs
-Secondary files: packages/webui/src/components/ArchitectureView.tsx, packages/webui/src/chatViewportState.ts, packages/webui/src/realtime.ts, packages/webui/src/components/SessionMessageCard.tsx, packages/webui/src/components/ToolTimelineItems.tsx, packages/webui/src/components/timelineTime.ts
+Secondary files: packages/webui/src/components/SystemView.tsx, packages/webui/src/chatViewportState.ts, packages/webui/src/realtime.ts, packages/webui/src/components/SessionMessageCard.tsx, packages/webui/src/components/ToolTimelineItems.tsx, packages/webui/src/components/timelineTime.ts
 
 ## Purpose
 

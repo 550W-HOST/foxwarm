@@ -17,7 +17,7 @@ async function waitForSystemTab(tabId, heading) {
   await page.waitForSelector(`[data-tab-id=${JSON.stringify(tabId)}], [data-workbench-tab-handle=${JSON.stringify(tabId)}]`, { timeout: 15_000 })
   await page.waitForFunction((expected) => {
     if (expected === 'Agents') {
-      return Array.from(document.querySelectorAll('h1')).some((element) => element.textContent?.trim() === 'System Architecture')
+      return Array.from(document.querySelectorAll('h1')).some((element) => element.textContent?.trim() === 'System')
     }
     return document.body.textContent?.includes(expected)
   }, { timeout: 15_000 }, heading)
@@ -81,7 +81,7 @@ after(async () => {
 })
 
 test('Agents and Setup use persistent workbench tabs without replacing the desktop shell', async () => {
-  await page.click('button[title="Open agents overview"]')
+  await page.click('button[title="Open System"]')
   await waitForSystemTab('system:agents', 'Agents')
   assert.ok(await page.$('[data-pane-id]'))
   assert.ok(await page.$('[data-session-list-scroll-container]'))
@@ -113,7 +113,7 @@ test('closing active system and chat tabs advances the route instead of hydratin
   const chatTabId = `chat:${sessionId}`
   await page.evaluate((id) => { window.location.hash = `session/${encodeURIComponent(id)}` }, sessionId)
   await page.waitForSelector('.foxwarm-model-selector-trigger', { timeout: 15_000 })
-  await page.click('button[title="Open agents overview"]')
+  await page.click('button[title="Open System"]')
   await page.waitForSelector(`[data-tab-id=${JSON.stringify(chatTabId)}]`, { timeout: 15_000 })
   await page.click(`[data-tab-id=${JSON.stringify(chatTabId)}]`)
   await closeTab(chatTabId)
@@ -171,7 +171,7 @@ test('Close all directly empties a multi-tab pane without route hydration', asyn
     await closeAllPage.goto(`${baseUrl}/#token=${encodeURIComponent(authToken)}`, { waitUntil: 'networkidle2' })
     await waitForWebUiReady(closeAllPage)
     await closeAllPage.waitForFunction(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4'))?.state?.tabsById?.['system:setup']?.type === 'setup', { timeout: 15_000 })
-    await closeAllPage.click('button[title="Open agents overview"]')
+    await closeAllPage.click('button[title="Open System"]')
     await closeAllPage.waitForSelector('[data-tab-id="system:agents"]', { timeout: 15_000 })
 
     const sessionId = 'e2e-close-all-session'
@@ -216,7 +216,7 @@ test('tab context menu survives background scroll and bulk close actions remain 
   await page.setViewport({ width: 1440, height: 900 })
   await page.evaluate(() => { window.location.hash = 'setup' })
   await waitForSystemTab('system:setup', 'Foxwarm Setup')
-  await page.click('button[title="Open agents overview"]')
+  await page.click('button[title="Open System"]')
   await waitForSystemTab('system:agents', 'Agents')
 
   await page.click('[data-tab-id="system:setup"]', { button: 'right' })
@@ -235,7 +235,7 @@ test('tab context menu survives background scroll and bulk close actions remain 
   assert.equal(await page.$('[data-tab-id="system:setup"]'), null, 'the single remaining tab hides its strip')
   assert.equal(await page.$('[data-tab-id="system:agents"]'), null)
 
-  await page.click('button[title="Open agents overview"]')
+  await page.click('button[title="Open System"]')
   await page.waitForSelector('[data-tab-id="system:setup"]', { timeout: 5_000 })
   await page.click('[data-tab-id="system:setup"]', { button: 'right' })
   await clickContextMenuItem('Close all')

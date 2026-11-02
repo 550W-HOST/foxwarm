@@ -1,7 +1,7 @@
 # Unit: WebUI realtime transport
 
 Files: packages/webui/src/realtime.ts, packages/webui/test/realtimeTransport.test.mjs, src/channels/webuiRealtime.ts, src/channels/webuiRealtime.test.ts
-Secondary files: packages/webui/src/boundedSessionList.ts, packages/webui/src/components/ArchitectureView.tsx, packages/webui/src/components/Chat.tsx, packages/webui/src/components/useChatConversationSync.ts, src/channels/webuiChannel.ts
+Secondary files: packages/webui/src/boundedSessionList.ts, packages/webui/src/components/SystemView.tsx, packages/webui/src/components/Chat.tsx, packages/webui/src/components/useChatConversationSync.ts, src/channels/webuiChannel.ts
 
 ## Purpose
 

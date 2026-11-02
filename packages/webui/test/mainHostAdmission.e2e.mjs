@@ -115,7 +115,7 @@ try {
   const priorLost = requests.length; assert.equal((await fixture.api('GET', route('lost-hint') + '/history')).status, 200); await sleep(100)
   assert.equal(requests.length, priorLost); assert.equal((await dto('lost-hint')).queueLength, 1); await send('lost-hint', '/dequeue'); await done('lost-hint', 'lost-hint')
 
-  const page = await fixture.openApp(); await page.evaluate(() => location.hash = 'architecture'); await page.waitForSelector('.foxwarm-architecture-surface-tab'); await page.evaluate(() => [...document.querySelectorAll('.foxwarm-architecture-surface-tab')].find(button => button.textContent.trim() === 'Agents').click())
+  const page = await fixture.openApp(); await page.evaluate(() => location.hash = 'architecture'); await page.waitForSelector('[data-system-tab="agents"]'); await page.click('[data-system-tab="agents"]')
   await page.waitForSelector('[data-architecture-agent-id="main"]'); await page.evaluate(() => location.hash = 'chat'); await page.waitForSelector('.foxwarm-chat-root'); await page.evaluate(() => window.foxwarmTest.switchToSession('joined'))
   await until(() => page.evaluate(() => document.body.innerText.includes('DONE-joined')), 'original Chat canonical assistant');
   await launch('exec-live'); await launch('exec-finished')
