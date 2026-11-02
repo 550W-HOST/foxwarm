@@ -171,3 +171,34 @@ test('rerunning the installer updates an existing installation and keeps its dat
   assert.equal(fs.readlinkSync(path.join(dir, 'runtime/current')), '0.9.1');
   assert.equal(fs.readFileSync(path.join(dir, 'data_dir'), 'utf8').trim(), fs.realpathSync(path.join(f.root, 'foxwarm-data')));
 });
+
+test('controls leave a tmux session of another installation alone', linux, t => {
+  const f = fixture(t);
+  const dir = path.join(f.root, 'foxwarm');
+  ok(f.install(['--package', f.makePackage('0.9.0', { stopSeconds: 1 }), '--no-start']));
+  // Another program owns the default session and window name, as a source checkout's Main would.
+  ok(f.run('tmux', ['new-session', '-d', '-s', 'release-fixture', '-n', 'foxwarm', 'sleep 600']));
+  const other = Number(ok(f.run('tmux', ['display-message', '-p', '-t', '=release-fixture:=foxwarm', '#{pane_pid}'])).stdout);
+  const hint = /belongs to another program or Foxwarm installation/;
+
+  const status = f.control(dir, 'status');
+  assert.equal(status.status, 3);
+  assert.match(status.stdout, hint);
+  const start = f.control(dir, 'start');
+  assert.equal(start.status, 1);
+  assert.match(start.stderr, hint);
+  assert.match(ok(f.control(dir, 'stop')).stdout, hint);
+  assert.match(ok(f.control(dir, 'update', '--package', f.makePackage('0.9.1'))).stdout, /Installed 0\.9\.1/);
+  assert(alive(other), 'The other session must not be signalled.');
+  assert(!fs.existsSync(path.join(dir, 'main.pid')), 'Update must not start this installation in the other session.');
+
+  // A separately named session works beside it, and a crashed Main can be started again.
+  const named = { env: { FOXWARM_TMUX_SESSION: 'release-fixture-2' } };
+  ok(f.run(path.join(dir, 'foxwarmctl'), ['start'], named));
+  process.kill(Number(fs.readFileSync(path.join(dir, 'main.pid'), 'utf8')), 'SIGKILL');
+  for (let i = 0; i < 50 && f.run(path.join(dir, 'foxwarmctl'), ['status'], named).status === 0; i++) spawnSync('sleep', ['0.1']);
+  assert.match(f.run(path.join(dir, 'foxwarmctl'), ['status'], named).stdout, /Exited \(signal 9\)/);
+  ok(f.run(path.join(dir, 'foxwarmctl'), ['start'], named));
+  ok(f.run(path.join(dir, 'foxwarmctl'), ['stop'], named));
+  assert(alive(other));
+});

@@ -61,7 +61,8 @@ main_command() {
   printf '%s' "$command"
 }
 
-pane() { tmux display-message -p -t "=$SESSION:=$WINDOW" "$1" 2>/dev/null; }
+# list-panes fails for a missing window; display-message would fall back to another pane.
+pane() { tmux list-panes -t "=$SESSION:=$WINDOW" -F "$1" 2>/dev/null | sed -n 1p; }
 
 # An exited Main can remain a zombie until tmux reaps it; that no longer counts as running.
 alive() {
@@ -70,17 +71,44 @@ alive() {
   [ -n "$state" ] && [ "${state#Z}" = "$state" ]
 }
 
-running_pid() {
+# The session name is shared by default, so act only on a session this installation started.
+# start records the installation root on the session; a live Main started by an earlier
+# foxwarmctl is recognized by its own --installation-root argument.
+owned_session() {
+  local pid root
   tmux has-session -t "=$SESSION" 2>/dev/null || return 1
+  [ "$(tmux show-options -qv -t "=$SESSION:" @foxwarm-root 2>/dev/null)" = "$ROOT" ] && return 0
+  pid="$(pane '#{pane_pid}')" && [ -n "$pid" ] || return 1
+  # Read the argument list whole: an early-closing pipe would fail under pipefail.
+  root="$(tr '\0' '\n' < "/proc/$pid/cmdline" 2>/dev/null || true)"
+  root="$(sed -n '/^--installation-root$/{n;p;q;}' <<<"$root")"
+  [ "$root" = "$ROOT" ]
+}
+
+running_pid() {
+  local pid
+  owned_session || return 1
   [ "$(pane '#{pane_dead}')" = 0 ] || return 1
-  pane '#{pane_pid}'
+  pid="$(pane '#{pane_pid}')"
+  alive "$pid" || return 1
+  printf '%s\n' "$pid"
+}
+
+foreign_session() {
+  tmux has-session -t "=$SESSION" 2>/dev/null && ! owned_session
+}
+
+foreign_hint() {
+  printf "tmux session '%s' belongs to another program or Foxwarm installation. Stop that, or choose another session name with FOXWARM_TMUX_SESSION=NAME." "$SESSION"
 }
 
 cmd_start() {
   have tmux || fail "tmux is required for background start. Use 'foxwarmctl run' to run in the foreground."
+  foreign_session && fail "$(foreign_hint)"
   if running_pid >/dev/null; then fail "Foxwarm is already running in tmux session '$SESSION'."; fi
   tmux kill-session -t "=$SESSION" 2>/dev/null || true
   tmux new-session -d -s "$SESSION" -n "$WINDOW" -c "$ROOT" "$(main_command)" \; \
+    set-option -t "=$SESSION:" @foxwarm-root "$ROOT" \; \
     set-option -w -t "=$SESSION:=$WINDOW" remain-on-exit on
   sleep 1
   running_pid >/dev/null || fail "Foxwarm exited during startup. Inspect it with: tmux attach -t '$SESSION'"
@@ -90,8 +118,12 @@ cmd_start() {
 cmd_stop() {
   local pid waited
   if ! pid="$(running_pid)"; then
-    tmux kill-session -t "=$SESSION" 2>/dev/null || true
-    log "Foxwarm is not running."
+    if foreign_session; then
+      log "Foxwarm is not running. $(foreign_hint)"
+    else
+      tmux kill-session -t "=$SESSION" 2>/dev/null || true
+      log "Foxwarm is not running."
+    fi
     return 0
   fi
   kill -TERM "$pid" 2>/dev/null || true
@@ -118,8 +150,10 @@ cmd_status() {
     log "Running (PID $pid), release $(release_field "$CURRENT" version) $(release_field "$CURRENT" target)."
     return 0
   fi
-  if tmux has-session -t "=$SESSION" 2>/dev/null; then
-    log "Exited with status $(pane '#{pane_dead_status}'). Inspect it with: tmux attach -t '$SESSION'"
+  if foreign_session; then
+    log "Not running. $(foreign_hint)"
+  elif tmux has-session -t "=$SESSION" 2>/dev/null; then
+    log "Exited ($(pane '#{?pane_dead_signal,signal #{pane_dead_signal},status #{pane_dead_status}}')). Inspect it with: tmux attach -t '$SESSION'"
   else
     log "Not running."
   fi
@@ -192,7 +226,7 @@ case "${1:-}" in
   stop) cmd_stop ;;
   restart) cmd_stop; cmd_start ;;
   status) cmd_status ;;
-  attach) exec tmux attach -t "=$SESSION" ;;
+  attach) foreign_session && fail "$(foreign_hint)"; exec tmux attach -t "=$SESSION" ;;
   run) eval "$(main_command)" ;;
   update) shift; cmd_update "$@" ;;
   version) cat "$CURRENT/release.json" ;;
