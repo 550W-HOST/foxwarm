@@ -18,7 +18,7 @@ export const zh: HomeStrings = {
       label: '一个周二，一个任务',
       rows: [
         { time: '09:10', place: '笔记本', icon: 'laptop', text: '你说：', quote: 'main 分支的 CI 挂了，查一下原因并修好。' },
-        { time: '09:12', place: 'build-box', icon: 'server', text: '它在构建服务器上开了一个子会话，在那里跑测试。' },
+        { time: '09:12', place: 'build-box', icon: 'server', text: '它开了一个子会话，让它到构建服务器上跑测试。' },
         { time: '09:30', icon: 'moon', text: '你合上电脑去开会。活儿还在继续。', highlight: true },
         { time: '12:40', place: '手机', icon: 'phone', text: '你在手机上打开子会话，插了一句：', quote: 'prorate() 里保留完整精度。' },
         { time: '18:30', place: '团队群', icon: 'chat', text: '它在团队群里发了两句话的总结。同事追问，它基于完整历史回答。' }

@@ -18,7 +18,7 @@ export const en: HomeStrings = {
       label: 'One Tuesday, one task',
       rows: [
         { time: '09:10', place: 'laptop', icon: 'laptop', text: 'You ask:', quote: 'CI on main is red. Find out why and fix it.' },
-        { time: '09:12', place: 'build-box', icon: 'server', text: 'It starts a child session on your build server and runs the test suite there.' },
+        { time: '09:12', place: 'build-box', icon: 'server', text: 'It hands the test run to a child session, which runs the suite on your build server.' },
         { time: '09:30', icon: 'moon', text: 'You close the laptop and go to a meeting. The work carries on.', highlight: true },
         { time: '12:40', place: 'phone', icon: 'phone', text: 'You open the child session on your phone and steer it:', quote: 'Keep full precision in prorate().' },
         { time: '18:30', place: 'team chat', icon: 'chat', text: 'It posts a two-line summary in your team’s group. A colleague asks a follow-up; it answers from the full history.' }
