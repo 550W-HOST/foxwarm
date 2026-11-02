@@ -29,6 +29,8 @@ interface ArchitectureViewProps {
   onCreateSession?: (agentId: string, sessionId?: string, runtime?: 'foxwarm' | 'claude-code') => Promise<void>
   onAgentsChanged?: () => void | Promise<void>
   onOpenAgentMemory?: (memoryRoot: string, filePath?: string) => void
+  /** Opens the Agents surface with this Agent's settings; a new nonce repeats the request. */
+  agentRequest?: { agent: string; nonce: number } | null
 }
 
 type AgentRegistryEntry = {
@@ -589,6 +591,7 @@ export default function ArchitectureView({
   onCreateSession,
   onAgentsChanged,
   onOpenAgentMemory,
+  agentRequest,
 }: ArchitectureViewProps) {
   const tabHeader = useWorkbenchTabHeader()
   const [sessions, setSessions] = useState<Session[]>([])
@@ -608,7 +611,12 @@ export default function ArchitectureView({
   const { nodes: nodeTargets, error: nodeTargetsError } = useNodeDirectory()
   const [surface, setSurface] = useState<'topology' | 'agents'>('topology')
   const [agentRegistry, setAgentRegistry] = useState<AgentRegistryEntry[]>([])
-  const [selectedRegistryAgentId, setSelectedRegistryAgentId] = useState<string | null>('main')
+  const [selectedRegistryAgentId, setSelectedRegistryAgentId] = useState<string | null>(agentRequest?.agent || 'main')
+  useEffect(() => {
+    if (!agentRequest) return
+    setSurface('agents')
+    setSelectedRegistryAgentId(agentRequest.agent)
+  }, [agentRequest?.agent, agentRequest?.nonce])
   const [agentMemoryFiles, setAgentMemoryFiles] = useState<AgentMemoryFile[]>([])
   const [agentMemoryLoading, setAgentMemoryLoading] = useState(false)
   const [agentMemoryError, setAgentMemoryError] = useState('')

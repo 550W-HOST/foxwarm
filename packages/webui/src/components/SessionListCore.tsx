@@ -2,15 +2,16 @@ import { getSessionRuntimeTone } from '../sessionRuntimeState'
 import { useState, useRef, useEffect, useMemo, type ReactNode } from 'react'
 import { useDndContext, useDraggable, useDroppable } from '@dnd-kit/core'
 import { API_BASE_PATH } from '../config'
-import { SlidersHorizontal, MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X, CornerDownRight, ListTree, Clock3, Rows3, Pin, PinOff, Bell, BellRing, List, GitBranch, Server, Copy, SquarePlus } from 'lucide-react'
+import { SlidersHorizontal, MoreVertical, Layers, Plus, Settings, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X, CornerDownRight, ListTree, Clock3, Rows3, Pin, PinOff, Bell, BellRing, List, GitBranch, Server, Copy, SquarePlus } from 'lucide-react'
 import RuntimeBusySpinner from './RuntimeBusySpinner'
 import MobilePageHeader from './MobilePageHeader'
 import ContextMenu, { type ContextMenuAnchorRect, type ContextMenuEntry } from './ContextMenu'
 import { copyTextToClipboard } from './chatShared'
 import { getSessionRuntimeSummary, getSessionRuntimeStateName, type SessionRuntimeState } from '../sessionRuntimeState'
 import { type SessionIdleNotificationMode } from '../sessionIdleNotifications'
-import { collapseSessionListExpandedBranch, compareSessionListSessions, getSessionListAutoExpandedPath, getSessionListChildDisclosure, getSessionListAgentTag, getSessionListDisplayId, getSessionListGroupedDisplayId, shouldElevateSessionToRoot, type SessionListOrderMode } from '../sessionListPresentation'
-import type { ChildSessionRequest } from './AgentCreationMenu'
+import { collapseSessionListExpandedBranch, compareSessionListSessions, getSessionListAutoExpandedPath, getSessionListChildDisclosure, getSessionListAgentTag, getSessionListDisplayId, assignSessionListGroupRoots, shouldElevateSessionToRoot, SESSION_LIST_GROUPING_KEY, loadStoredSessionListGrouping, type SessionListGrouping, type SessionListOrderMode } from '../sessionListPresentation'
+import type { SessionCreationRequest } from './AgentCreationMenu'
+import { GROUP_PAGE_STEP, type BoundedSessionGroupView } from '../boundedSessionList'
 import { shouldActivateSessionListDrag, shouldEnableSessionListDrag } from '../sessionListDrag'
 import { useSessionListCompact } from '../sessionListDensity'
 import { getResolvedSessionNodeId } from '../sessionNode'
@@ -23,8 +24,6 @@ export interface Session {
   sequenceMessageCount?: number
   lastMessageTime: number
   parentSessionId: string | null
-  /** Sidebar presentation parent: a real parent or the Agent's main Session. */
-  sidebarParentId?: string | null
   childSessions?: string[]
   childTotal?: number
   aliases?: string[]
@@ -68,6 +67,7 @@ export interface BoundedSessionListPresentationProps {
   onExpandBranches: (parentSessionIds: string[]) => void
   onRetryBranch: (parentSessionId: string) => void
   onCollapseBranch: (parentSessionId: string) => void
+  groupView?: BoundedSessionGroupView
 }
 
 interface SessionListCoreProps {
@@ -82,7 +82,10 @@ interface SessionListCoreProps {
   idleNotificationModes?: Record<string, SessionIdleNotificationMode>
   unreadSessionIds?: ReadonlySet<string>
   onToggleIdleNotificationMode?: (sessionId: string, mode: SessionIdleNotificationMode) => void
-  onCreateChildSession?: (request: ChildSessionRequest) => void
+  /** Opens the New session dialog with presets. */
+  onRequestSession?: (request: SessionCreationRequest) => void
+  /** Opens an Agent's settings. */
+  onOpenAgentSettings?: (agent: string) => void
   bounded?: BoundedSessionListPresentationProps
 }
 
@@ -114,6 +117,12 @@ const DEFAULT_VISIBLE_ROOTS = 50
 const MORE_VISIBLE_ROOTS_STEP = 50
 
 const SESSION_LIST_VIEW_MODES: SessionListViewMode[] = ['default', 'time', 'flat-time']
+
+const SESSION_LIST_GROUPING_LABELS: Record<SessionListGrouping, string> = {
+  none: 'No grouping',
+  agent: 'By Agent',
+  node: 'By Node',
+}
 
 const SESSION_LIST_VIEW_MODE_LABELS: Record<SessionListViewMode, string> = {
   default: 'Default',
@@ -484,7 +493,7 @@ function DraggableSessionRow({
   )
 }
 
-export default function SessionListCore({ sessions, currentSession, onSelectSession, onKeepSession, mobileHeaderActions, toolbarContainerClassName = 'p-2 pb-1', listContainerClassName = 'p-2 pt-1', dragEnabled = true, idleNotificationModes = {}, unreadSessionIds = new Set(), onToggleIdleNotificationMode, onCreateChildSession, bounded }: SessionListCoreProps) {
+export default function SessionListCore({ sessions, currentSession, onSelectSession, onKeepSession, mobileHeaderActions, toolbarContainerClassName = 'p-2 pb-1', listContainerClassName = 'p-2 pt-1', dragEnabled = true, idleNotificationModes = {}, unreadSessionIds = new Set(), onToggleIdleNotificationMode, onRequestSession, onOpenAgentSettings, bounded }: SessionListCoreProps) {
   const { active } = useDndContext()
   const [compact, toggleCompact] = useSessionListCompact()
   const [primaryPointerCoarse, setPrimaryPointerCoarse] = useState(() => window.matchMedia?.('(pointer: coarse)').matches ?? false)
@@ -605,14 +614,11 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     return aliasMap.get(sessionId) || null
   }
 
-  // Bounded tree modes place rows by the server's Sidebar presentation parent; search
-  // and Flat keep real relations. Real parents remain the authority for every action.
-  const usePresentationParents = !!bounded && !isFiltering && viewMode !== 'flat-time'
-  const buildParentMap = (parentOf: (session: Session) => string | null | undefined) => {
+  const normalizedParentMap = useMemo(() => {
     const map = new Map<string, string | null>()
 
     for (const session of sessions) {
-      const resolvedParentId = resolveSessionId(parentOf(session))
+      const resolvedParentId = resolveSessionId(session.parentSessionId)
       map.set(
         session.id,
         resolvedParentId && resolvedParentId !== session.id && sessionMap.has(resolvedParentId)
@@ -622,14 +628,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     }
 
     return map
-  }
-  const realParentMap = useMemo(() => buildParentMap(session => session.parentSessionId), [sessions, sessionMap, aliasMap])
-  const normalizedParentMap = useMemo(
-    () => usePresentationParents
-      ? buildParentMap(session => session.sidebarParentId === undefined ? session.parentSessionId : session.sidebarParentId)
-      : realParentMap,
-    [sessions, sessionMap, aliasMap, usePresentationParents, realParentMap],
-  )
+  }, [sessions, sessionMap, aliasMap])
 
   const visibleSessionIds = useMemo(() => {
     if (!isFiltering || bounded) {
@@ -696,6 +695,34 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     [visibleSessions, visibleParentMap, viewMode]
   )
 
+  // Agent/Node groups of the bounded desktop list. Search, the mobile list and pinned rows
+  // stay ungrouped; the server assigns every group member, the list only places loaded rows.
+  const groupView = bounded?.groupView
+  const grouping: SessionListGrouping = groupView && !isFiltering && !mobileList ? groupView.grouping : 'none'
+  const showAgentTags = !!bounded && !isFiltering && !mobileList && viewMode !== 'flat-time' && grouping !== 'agent'
+  const groupedRoots = useMemo(
+    () => grouping === 'none' || !groupView
+      ? null
+      : assignSessionListGroupRoots(rootSessions.filter(session => !session.pinned).map(session => session.id), groupView.pages, groupView.presentationGroups),
+    [grouping, groupView, rootSessions],
+  )
+  // The group of every rendered row: a top-level row's group, inherited by its subtree.
+  const rowGroupKeys = useMemo(() => {
+    const keys = new Map<string, string>()
+    if (!groupedRoots) return keys
+    const pending: Array<[string, string]> = [...groupedRoots.byGroup].flatMap(([key, ids]) => ids.map(id => [id, key] as [string, string]))
+    while (pending.length) {
+      const [id, key] = pending.pop()!
+      if (keys.has(id)) continue
+      keys.set(id, key)
+      for (const child of childrenMap.get(id) || []) pending.push([child.id, key])
+    }
+    return keys
+  }, [groupedRoots, childrenMap])
+  const [groupMenu, setGroupMenu] = useState<{ agent: string; x: number; y: number } | null>(null)
+  const [groupingAnchor, setGroupingAnchor] = useState<ContextMenuAnchorRect | null>(null)
+  const groupingButtonRef = useRef<HTMLButtonElement>(null)
+
   const visibleRootSessions = bounded ? rootSessions : rootSessions.slice(0, visibleRootCount)
   const hiddenRootCount = bounded ? (bounded.hasMoreRoots ? MORE_VISIBLE_ROOTS_STEP : 0) : rootSessions.length - visibleRootSessions.length
 
@@ -714,22 +741,6 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     return false
   }
 
-  // Drop validity follows real relations: grouping never makes a row a real descendant.
-  const isRealDescendantOf = (candidateSessionId: string | null | undefined, ancestorSessionId: string | null | undefined): boolean => {
-    if (!candidateSessionId || !ancestorSessionId || candidateSessionId === ancestorSessionId) return false
-    let cursor = realParentMap.get(candidateSessionId) || null
-    const seen = new Set<string>()
-    while (cursor && !seen.has(cursor)) {
-      if (cursor === ancestorSessionId) return true
-      seen.add(cursor)
-      cursor = realParentMap.get(cursor) || null
-    }
-    return false
-  }
-  const isGroupedSession = (session: Session | undefined): boolean => {
-    if (!session || !usePresentationParents || session.sidebarParentId === undefined || session.pinned) return false
-    return (resolveSessionId(session.sidebarParentId) || session.sidebarParentId) !== (resolveSessionId(session.parentSessionId) || session.parentSessionId || null)
-  }
 
   useEffect(() => {
     try { localStorage.setItem(mobileList ? MOBILE_SESSION_LIST_VIEW_MODE_KEY : SESSION_LIST_VIEW_MODE_KEY, viewMode) } catch { /* Keep the in-memory choice. */ }
@@ -738,6 +749,12 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   }, [viewMode, normalizedFilterQuery, mobileList])
 
   useEffect(() => { bounded?.onFilterChange(filterText) }, [filterText, bounded?.onFilterChange])
+  // The mobile list stays ungrouped; the desktop list restores the stored grouping.
+  useEffect(() => { groupView?.setGrouping(mobileList ? 'none' : loadStoredSessionListGrouping()) }, [mobileList, groupView?.setGrouping])
+  const selectGrouping = (next: SessionListGrouping) => {
+    try { localStorage.setItem(SESSION_LIST_GROUPING_KEY, next) } catch { /* Keep the in-memory choice. */ }
+    groupView?.setGrouping(next)
+  }
   // Presentation changes reset disclosure; selection only adds the new active path below.
   useEffect(() => { if (bounded) setExpandedSessions(new Set()) }, [viewMode, filterText])
   useEffect(() => {
@@ -1177,6 +1194,88 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     }
   }
 
+  // Pinned rows keep their section above the groups; each group lists its members in the
+  // current mode's order (an Agent group starts with the Agent's main Session).
+  const renderGroups = ({ byGroup, ungrouped }: { byGroup: Map<string, string[]>; ungrouped: string[] }) => {
+    const view = groupView!
+    const pinnedRoots = visibleRootSessions.filter(session => session.pinned)
+    const rootFor = (id: string) => sessionMap.get(id)
+    return (
+      <>
+        {pinnedRoots.length > 0 && (
+          <section aria-label="Pinned" data-session-section="pinned" className="mb-2">
+            <h3 className="px-2 py-1 text-xs font-medium text-fw-text-muted">Pinned</h3>
+            {pinnedRoots.map(session => renderSession(session))}
+            {hiddenRootCount > 0 && (
+              <button onClick={toggleShowMoreRoots} className="w-full text-left p-2 text-xs text-fw-text-muted hover:text-fw-text dark:hover:text-fw-text-strong">
+                {`▼ Show ${Math.min(hiddenRootCount, MORE_VISIBLE_ROOTS_STEP)} more...`}
+              </button>
+            )}
+          </section>
+        )}
+        {view.groups.map(group => {
+          const collapsed = view.collapsed.has(group.key)
+          const members = (byGroup.get(group.key) || []).map(rootFor).filter((session): session is Session => !!session)
+          const page = view.pages.get(group.key)
+          const remaining = page?.nextCursor ? Math.max(1, Math.min(GROUP_PAGE_STEP, page.total - page.ids.length)) : 0
+          const agentGroup = view.grouping === 'agent'
+          const label = group.label
+          return (
+            <section key={group.key} aria-label={label} data-session-group={group.key} data-session-group-kind={view.grouping} className="mb-1">
+              <div
+                className="group/header flex items-center gap-1 rounded px-1 text-xs text-fw-text-muted hover:bg-fw-hover"
+                onContextMenu={agentGroup && (onOpenAgentSettings || onRequestSession) ? event => { event.preventDefault(); setGroupMenu({ agent: group.key, x: event.clientX, y: event.clientY }) } : undefined}
+              >
+                <button
+                  type="button"
+                  onClick={() => view.toggleGroup(group.key)}
+                  aria-expanded={!collapsed}
+                  aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${label}`}
+                  data-session-group-toggle={group.key}
+                  className="flex min-w-0 flex-1 items-center gap-1.5 rounded py-1 text-left focus:outline-none focus:ring-2 focus:ring-fw-focus-ring/40"
+                >
+                  <svg className="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={collapsed ? 'M9 5l7 7-7 7' : 'M19 9l-7 7-7-7'} />
+                  </svg>
+                  {!agentGroup && (
+                    <span
+                      role="img"
+                      data-session-group-online={group.online ? 'true' : 'false'}
+                      aria-label={group.online ? 'Online' : 'Offline'}
+                      title={group.online ? 'Online' : 'Offline'}
+                      className={`h-2 w-2 shrink-0 rounded-full ${group.online ? 'bg-fw-success' : 'bg-fw-text-muted/50'}`}
+                    />
+                  )}
+                  <span className="min-w-0 truncate font-medium text-fw-text" title={agentGroup ? `Agent: ${group.key}` : group.key === label ? `Node: ${group.key}` : `Node: ${label} · ${group.key}`} data-session-group-label>{label}</span>
+                  <span className="shrink-0 tabular-nums" data-session-group-count>{group.count}</span>
+                </button>
+                {agentGroup && onRequestSession && (
+                  <button
+                    type="button"
+                    onClick={() => onRequestSession({ agent: group.key })}
+                    aria-label={`New session in ${group.key}`}
+                    title={`New session in ${group.key}`}
+                    data-session-group-create={group.key}
+                    className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-fw-text-muted opacity-0 hover:bg-fw-selected hover:text-fw-text-strong focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-fw-focus-ring/40 group-hover/header:opacity-100"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
+              {!collapsed && members.map(session => renderSession(session))}
+              {!collapsed && remaining > 0 && (
+                <button onClick={() => view.loadMoreGroup(group.key)} data-session-group-more={group.key} className="w-full text-left p-2 text-xs text-fw-text-muted hover:text-fw-text dark:hover:text-fw-text-strong">
+                  {`▼ Show ${remaining} more...`}
+                </button>
+              )}
+            </section>
+          )
+        })}
+        {ungrouped.map(id => rootFor(id)).filter((session): session is Session => !!session).map(session => renderSession(session))}
+      </>
+    )
+  }
+
   const renderSession = (session: Session, level: number = 0, parentSession: Session | null = null, lastInBranch = false) => {
     const children = childrenMap.get(session.id) || []
     const boundedChildPage = bounded?.childPages.get(session.id)
@@ -1202,14 +1301,10 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
 
     // Get display ID (with parent prefix removed if applicable)
     const isDirectChild = !!parentSession && resolveSessionId(session.parentSessionId) === parentSession.id
-    // A grouped row is shown under its Agent host without being its real child.
-    const groupedRow = !!parentSession && !isDirectChild && isGroupedSession(session)
-    const displayId = groupedRow
-      ? getSessionListGroupedDisplayId(session.id, parentSession!.id)
-      : getSessionListDisplayId(session.id, parentSession?.id, isDirectChild)
+    const displayId = getSessionListDisplayId(session.id, parentSession?.id, isDirectChild)
     const title = session.displayName || displayId
-    // Top-level tree rows of an Agent without a main host name their Agent.
-    const agentTag = usePresentationParents && !mobileList && !parentSession ? getSessionListAgentTag(session, title) : null
+    // Top-level tree rows name their Agent, except inside an Agent group.
+    const agentTag = showAgentTags && !parentSession ? getSessionListAgentTag(session, title) : null
     // The title truncates first; the tag keeps up to 45% of the row so the Agent stays readable.
     const agentTagBadge = agentTag && (
       <span
@@ -1226,9 +1321,8 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     const showRuntimeBadge = session.runtimeState ? runtimeStateName !== 'idle' || !!session.runtimeState.compaction : !!session.busy
     const resolvedNodeId = getResolvedSessionNodeId(session)
     const rowParentSessionId = visibleParentMap.get(session.id) || null
-    const realRowParentSessionId = groupedRow ? realParentMap.get(session.id) || null : rowParentSessionId
-    const targetParentWouldCreateCycle = realRowParentSessionId
-      ? realRowParentSessionId === draggingSessionId || isRealDescendantOf(realRowParentSessionId, draggingSessionId)
+    const targetParentWouldCreateCycle = rowParentSessionId
+      ? rowParentSessionId === draggingSessionId || isDescendantOf(rowParentSessionId, draggingSessionId)
       : false
     const disableSidebarDrop = !draggingSessionId
       || !sessionDragEnabled
@@ -1237,14 +1331,10 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       || draggingPinnedSession
       || !!session.pinned
       || draggingSessionId === session.id
-      || isRealDescendantOf(session.id, draggingSessionId)
+      || isDescendantOf(session.id, draggingSessionId)
       || targetParentWouldCreateCycle
-    // Sibling order drops write the real parent. They are unavailable where that would
-    // silently reparent a row that only appears in the same Sidebar group.
-    const draggingSession = draggingSessionId ? sessionMap.get(draggingSessionId) : undefined
-    const reorderWouldReparent = groupedRow || (isGroupedSession(draggingSession)
-      && !!rowParentSessionId
-      && rowParentSessionId === (resolveSessionId(draggingSession?.sidebarParentId) || draggingSession?.sidebarParentId))
+      // A drop across groups would change a Session's Agent or Node.
+      || !!draggingSessionId && rowGroupKeys.get(session.id) !== rowGroupKeys.get(draggingSessionId)
 
     const nodeBadge = resolvedNodeId !== 'master' && (
       <span
@@ -1295,24 +1385,21 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     )
 
     // Tree lines: every expanded branch has one continuous vertical line under its parent's
-    // disclosure. Real children join it with a short horizontal connector; rows that are only
-    // shown in an Agent group sit beside the line without one. The line ends at the middle of
-    // the branch's last row.
+    // disclosure. Children join it with a short horizontal connector. The line ends at the
+    // middle of the branch's last row.
     const rowGap = compact ? 2 : 4
     const lineX = (lineLevel: number) => 20 + lineLevel * 16
     const trunk = (lineLevel: number, owner: string) => (
       <span aria-hidden="true" data-session-branch-line={owner} className="pointer-events-none absolute inset-y-0 z-[1] w-px bg-fw-border-strong" style={{ left: `${lineX(lineLevel)}px` }} />
     )
-    // Drawn inside a row: the last row's part of the line, and a real child's connector. The
+    // Drawn inside a row: the last row's part of the line, and the child's connector. The
     // connector meets the title line (the row middle in Normal density) and stops short of the
     // row's content.
     const connectorY = compact ? '50%' : '22px'
     // One length for every connector: it ends where a disclosure can appear, so rows match whether or not theirs is shown.
     const connectorWidth = 6
     const rowConnector = parentSession ? (
-      groupedRow
-        ? lastInBranch && <span aria-hidden="true" data-session-branch-line={parentSession.id} className="pointer-events-none absolute z-[1] w-px bg-fw-border-strong" style={{ left: `${lineX(level - 1)}px`, top: `-${rowGap}px`, height: `calc(${connectorY} + ${rowGap}px)` }} />
-        : lastInBranch
+      lastInBranch
           ? <span aria-hidden="true" data-session-branch-line={parentSession.id} data-session-branch-connector className="pointer-events-none absolute z-[1] rounded-bl border-b border-l border-fw-border-strong" style={{ left: `${lineX(level - 1)}px`, top: `-${rowGap}px`, width: `${connectorWidth}px`, height: `calc(${connectorY} + ${rowGap + 1}px)` }} />
           : <span aria-hidden="true" data-session-branch-connector className="pointer-events-none absolute z-[1] h-px bg-fw-border-strong" style={{ left: `${lineX(level - 1)}px`, top: connectorY, width: `${connectorWidth}px` }} />
     ) : null
@@ -1335,7 +1422,6 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       <div
         key={session.id}
         className="relative flow-root"
-        data-session-grouped={groupedRow || undefined}
       >
         {parentSession && !lastInBranch && trunk(level - 1, parentSession.id)}
         <DraggableSessionRow
@@ -1357,7 +1443,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                 session={session}
                 parentSessionId={rowParentSessionId}
                 disabled={disableSidebarDrop}
-                allowReorder={allowSidebarOrder && !reorderWouldReparent}
+                allowReorder={allowSidebarOrder}
                 allowParentDrop={allowParentDrop}
               />
               {compact ? (
@@ -1550,13 +1636,13 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
         label: 'Fork',
         onSelect: () => { void forkSession(contextMenu.sessionId) },
       },
-      ...(onCreateChildSession ? [{
+      ...(onRequestSession ? [{
         key: 'create-child',
         icon: <SquarePlus size={14} />,
         label: 'Create child session',
         onSelect: () => {
           setContextMenu(null)
-          onCreateChildSession({ parentSessionId: contextMenu.sessionId, parentLabel: session?.displayName || contextMenu.sessionId, agent: session?.agent })
+          onRequestSession({ parent: { sessionId: contextMenu.sessionId, label: session?.displayName || contextMenu.sessionId }, agent: session?.agent })
         },
       }] : []),
       {
@@ -1665,6 +1751,21 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
             >
               <ViewModeIcon className="h-3.5 w-3.5" />
             </button>
+            {groupView && (
+              <button
+                ref={groupingButtonRef}
+                type="button"
+                onClick={() => setGroupingAnchor(groupingButtonRef.current!.getBoundingClientRect())}
+                aria-label="Group sessions"
+                aria-haspopup="menu"
+                aria-expanded={!!groupingAnchor}
+                data-session-list-grouping={groupView.grouping}
+                title={`Group sessions: ${SESSION_LIST_GROUPING_LABELS[groupView.grouping]}`}
+                className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border focus:outline-none focus:ring-2 focus:ring-fw-focus-ring/30 ${groupView.grouping !== 'none' ? 'border-fw-accent-border bg-fw-accent-surface text-fw-accent' : 'border-fw-border bg-fw-surface text-fw-text-muted hover:text-fw-accent hover:border-fw-accent-border'}`}
+              >
+                <Layers className="h-3.5 w-3.5" />
+              </button>
+            )}
             <button
               type="button"
               onClick={toggleCompact}
@@ -1680,12 +1781,13 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
         </div>
 
         )}
+        {groupView && <ContextMenu open={!!groupingAnchor} entries={(['none', 'agent', 'node'] as const).map(value => ({ key: value, label: SESSION_LIST_GROUPING_LABELS[value], checked: groupView.grouping === value, onSelect: () => selectGrouping(value) }))} anchorRect={groupingAnchor} preferredPlacement="bottom-end" onClose={() => { setGroupingAnchor(null); groupingButtonRef.current?.focus({ preventScroll: true }) }} />}
         <ContextMenu open={!!mobileViewAnchor} entries={mobileViewEntries} anchorRect={mobileViewAnchor} preferredPlacement="bottom-end" onClose={() => {setMobileViewAnchor(null); mobileViewRef.current?.focus({preventScroll:true})}} />
         <div className="min-h-0 flex-1 touch-pan-y overflow-y-auto" data-session-list-scroll-container>
           <div className={listContainerClassName}>
-            {rootSessions.length > 0 ? (
+            {rootSessions.length > 0 || (groupedRoots && groupView!.groups.length > 0) ? (
               <>
-                {[
+                {groupedRoots ? renderGroups(groupedRoots) : [
                   { label: 'Pinned', pinned: true },
                   { label: 'Sessions', pinned: false },
                 ].map(({ label, pinned }) => {
@@ -1699,7 +1801,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                     </section>
                   ) : null
                 })}
-                {hiddenRootCount > 0 && (
+                {!groupedRoots && hiddenRootCount > 0 && (
                   <button
                     onClick={toggleShowMoreRoots}
                     className="w-full text-left p-2 text-xs text-fw-text-muted hover:text-fw-text dark:hover:text-fw-text-strong"
@@ -1725,6 +1827,16 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
         </div>
       </div>
 
+      <ContextMenu
+        open={!!groupMenu}
+        entries={groupMenu ? [
+          ...(onRequestSession ? [{ key: 'new-session', icon: <Plus size={14} />, label: 'New session', onSelect: () => { onRequestSession({ agent: groupMenu.agent }) } }] : []),
+          ...(onOpenAgentSettings ? [{ key: 'agent-settings', icon: <Settings size={14} />, label: 'Agent settings', onSelect: () => { onOpenAgentSettings(groupMenu.agent) } }] : []),
+        ] : []}
+        point={groupMenu ? { x: groupMenu.x, y: groupMenu.y } : null}
+        preferredPlacement="point"
+        onClose={() => setGroupMenu(null)}
+      />
       <ContextMenu
         open={!!contextMenu}
         entries={contextMenuEntries}

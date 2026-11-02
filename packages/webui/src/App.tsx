@@ -543,7 +543,7 @@ function App() {
     return selectVisibleSessionIds(activeSessionIds, !isMobile || !showSessionList)
   }, [isMobile, showSessionList, focusedPane, paneNodes, tabsById])
   const exactSessionIds = useMemo(() => allTabs.flatMap(tab => isChatTab(tab) ? [tab.sessionId] : []), [allTabs])
-  const boundedSessions = useBoundedSessionList({ focusIds: currentContextSessionId ? [currentContextSessionId] : [], exactIds: exactSessionIds, includeGlobalSummary: true })
+  const boundedSessions = useBoundedSessionList({ focusIds: currentContextSessionId ? [currentContextSessionId] : [], exactIds: exactSessionIds, includeGlobalSummary: true, groupable: true })
   const sessions = boundedSessions.knownSessions
   const sidebarSessions = boundedSessions.sessions
   const notificationOpenSessionRef = useRef<((sessionId: string) => void) | null>(null)
@@ -562,6 +562,7 @@ function App() {
     onExpandBranches: (sessionIds: string[]) => { void boundedSessions.expandBranches(sessionIds) },
     onRetryBranch: (sessionId: string) => { void boundedSessions.retryBranch(sessionId) },
     onCollapseBranch: boundedSessions.collapseBranch,
+    groupView: boundedSessions.groupView,
   }
   const currentContextSessionRecord = sessions.find((session) => session.id === currentContextSessionId || session.aliases?.includes(currentContextSessionId))
   const currentView: AppView = focusedActiveTab?.type === 'agents'
@@ -1511,6 +1512,11 @@ function App() {
     upsertTab(tab, { activate: true })
     navigateToTab(tab.id)
   }
+  const [agentSettingsRequest, setAgentSettingsRequest] = useState<{ agent: string; nonce: number } | null>(null)
+  const openAgentSettings = (agent: string) => {
+    setAgentSettingsRequest(current => ({ agent, nonce: (current?.nonce || 0) + 1 }))
+    openAgentsView()
+  }
 
   const openSetupView = (options?: { focusModels?: boolean }) => {
     if (options?.focusModels) setFocusModelsRequest((current) => current + 1)
@@ -1674,6 +1680,7 @@ function App() {
             onCreateAgent={handleCreateAgent}
             onCreateSession={handleCreateSession}
             onAgentsChanged={() => { void Promise.all([fetchAgents(), fetchSessions()]) }}
+            agentRequest={agentSettingsRequest}
             onOpenAgentMemory={(memoryRoot, filePath) => {
               const workspace = { nodeId: 'master', path: memoryRoot }
               if (filePath) openCodeFile({ kind: 'openFile', nodeId: 'master', path: filePath }, workspace)
@@ -2127,6 +2134,7 @@ function App() {
             onSelectSession={openChatTab}
             onKeepSession={openPersistentChatTab}
             onSelectArchitecture={openAgentsView}
+            onOpenAgentSettings={openAgentSettings}
             onSelectSearch={openSearchTab}
             onSelectSetup={openSetupView}
             onSelectLogs={openLogsTab}

@@ -109,18 +109,63 @@ export function getAgentMainSessionId(agent: string): string {
   return agent === 'main' ? 'main' : `${agent}/main`
 }
 
-/** Label for a row shown under its Agent main Session without being its real child. */
-export function getSessionListGroupedDisplayId(sessionId: string, hostId: string): string {
-  const hostAgent = hostId.endsWith('/main') ? hostId.slice(0, -'/main'.length) : ''
-  return hostAgent && sessionId.startsWith(`${hostAgent}/`) ? sessionId.slice(hostAgent.length) : sessionId
-}
-
 /**
- * Agent tag for a top-level tree row of an Agent without a main host: any unpinned row other
- * than its Agent's main Session, unless the visible title already names the Agent.
+ * Agent tag for a top-level tree row: any unpinned row other than its Agent's main Session,
+ * except rows of the default `main` Agent and rows whose visible title already names the Agent.
  */
 export function getSessionListAgentTag(session: { id: string; agent?: string; pinned?: boolean }, title: string): string | null {
   const agent = session.agent
-  if (!agent || session.pinned || session.id === getAgentMainSessionId(agent)) return null
+  if (!agent || agent === 'main' || session.pinned || session.id === getAgentMainSessionId(agent)) return null
   return title.startsWith(`${agent}/`) ? null : agent
+}
+
+export type SessionListGrouping = 'none' | 'agent' | 'node'
+
+/** A Sidebar group header as served by the backend, in display order. */
+export interface SessionListGroup {
+  key: string
+  label: string
+  count: number
+  online?: boolean
+}
+
+/**
+ * Places the top-level rows the list renders into their server-assigned groups: rows of a
+ * loaded group page keep the page order, other rows (focus paths, exact rows) follow by the
+ * server's presentation group. Rows without a known group are returned separately.
+ */
+export function assignSessionListGroupRoots(
+  rootIds: readonly string[],
+  groupPages: ReadonlyMap<string, { ids: readonly string[] }>,
+  presentationGroups: Readonly<Record<string, string>>,
+): { byGroup: Map<string, string[]>; ungrouped: string[] } {
+  const roots = new Set(rootIds)
+  const placed = new Set<string>()
+  const byGroup = new Map<string, string[]>()
+  for (const [key, page] of groupPages) {
+    const ids = page.ids.filter(id => roots.has(id) && !placed.has(id))
+    ids.forEach(id => placed.add(id))
+    byGroup.set(key, ids)
+  }
+  const ungrouped: string[] = []
+  for (const id of rootIds) {
+    if (placed.has(id)) continue
+    const key = presentationGroups[id]
+    if (key === undefined) { ungrouped.push(id); continue }
+    byGroup.set(key, [...(byGroup.get(key) || []), id])
+  }
+  return { byGroup, ungrouped }
+}
+
+export const SESSION_LIST_GROUPING_KEY = 'foxwarm_session_list_grouping_v1'
+export const SESSION_LIST_GROUPINGS: SessionListGrouping[] = ['none', 'agent', 'node']
+
+/** The stored Sidebar grouping. The mobile list stays ungrouped. */
+export function loadStoredSessionListGrouping(): SessionListGrouping {
+  try {
+    if (typeof window !== 'undefined' && window.innerWidth < 768) return 'none'
+    const stored = localStorage.getItem(SESSION_LIST_GROUPING_KEY)
+    if (SESSION_LIST_GROUPINGS.includes(stored as SessionListGrouping)) return stored as SessionListGrouping
+  } catch { /* Preferences are optional when browser storage is unavailable. */ }
+  return 'none'
 }

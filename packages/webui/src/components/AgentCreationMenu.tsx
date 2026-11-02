@@ -8,10 +8,10 @@ import AgentSettingsFields, { EMPTY_AGENT_SETTINGS, agentSettingsChanges, nodeDi
 
 type CreationMode = 'agent' | 'session'
 /** Opens the New session dialog for a child of an existing Session. */
-export interface ChildSessionRequest {
-  parentSessionId: string
-  parentLabel: string
+/** Presets for the New session dialog: an Agent, and optionally the parent of a child Session. */
+export interface SessionCreationRequest {
   agent?: string
+  parent?: { sessionId: string; label: string }
 }
 
 interface AgentCreationMenuProps {
@@ -22,8 +22,8 @@ interface AgentCreationMenuProps {
   triggerClassName?: string
   onCreateAgent: (agentId: string, settings: AgentSettingsChanges) => Promise<void>
   onCreateSession: (agentId: string, sessionId?: string, runtime?: 'foxwarm' | 'claude-code', parentSessionId?: string) => Promise<void>
-  childRequest?: ChildSessionRequest | null
-  onChildRequestHandled?: () => void
+  creationRequest?: SessionCreationRequest | null
+  onCreationRequestHandled?: () => void
 }
 
 export default function AgentCreationMenu({
@@ -34,8 +34,8 @@ export default function AgentCreationMenu({
   triggerClassName,
   onCreateAgent,
   onCreateSession,
-  childRequest,
-  onChildRequestHandled,
+  creationRequest,
+  onCreationRequestHandled,
 }: AgentCreationMenuProps) {
   const [mode, setMode] = useState<CreationMode | null>(null)
   const [agentId, setAgentId] = useState('')
@@ -45,7 +45,7 @@ export default function AgentCreationMenu({
   const [sessionId, setSessionId] = useState('')
   const [runtime, setRuntime] = useState<'foxwarm' | 'claude-code'>('foxwarm')
   const [claudeAvailable, setClaudeAvailable] = useState(false)
-  const [parent, setParent] = useState<ChildSessionRequest | null>(null)
+  const [parent, setParent] = useState<SessionCreationRequest['parent'] | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const triggerRef = useRef<HTMLButtonElement>(null)
@@ -115,9 +115,9 @@ export default function AgentCreationMenu({
     return () => controller.abort()
   }, [mode])
 
-  const openSessionModal = (request: ChildSessionRequest | null = null) => {
+  const openSessionModal = (request: SessionCreationRequest | null = null) => {
     setMode('session')
-    setParent(request)
+    setParent(request?.parent || null)
     setSessionAgent(request?.agent && agents.some(agent => agent.id === request.agent) ? request.agent : defaultAgent)
     setSessionId('')
     setRuntime('foxwarm')
@@ -126,10 +126,10 @@ export default function AgentCreationMenu({
   }
 
   useEffect(() => {
-    if (!childRequest) return
-    openSessionModal(childRequest)
-    onChildRequestHandled?.()
-  }, [childRequest])
+    if (!creationRequest) return
+    openSessionModal(creationRequest)
+    onCreationRequestHandled?.()
+  }, [creationRequest])
 
   const openAgentModal = () => {
     setMode('agent')
@@ -176,7 +176,7 @@ export default function AgentCreationMenu({
       if (mode === 'agent') {
         await onCreateAgent(agentId.trim(), agentSettingsChanges(agentSettings))
       } else {
-        await onCreateSession(sessionAgent, sessionId.trim() || undefined, runtime, parent?.parentSessionId)
+        await onCreateSession(sessionAgent, sessionId.trim() || undefined, runtime, parent?.sessionId)
       }
       setMode(null)
     } catch (cause) {
@@ -229,8 +229,8 @@ export default function AgentCreationMenu({
             ) : (
               <div className="space-y-4">
                 {parent && (
-                  <p className="min-w-0 truncate text-sm text-fw-text-muted" data-creation-parent={parent.parentSessionId} title={parent.parentSessionId}>
-                    Parent: <span className="font-medium text-fw-text-strong">{parent.parentLabel}</span>
+                  <p className="min-w-0 truncate text-sm text-fw-text-muted" data-creation-parent={parent.sessionId} title={parent.sessionId}>
+                    Parent: <span className="font-medium text-fw-text-strong">{parent.label}</span>
                   </p>
                 )}
                 <fieldset disabled={loading} className="min-w-0">

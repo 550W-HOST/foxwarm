@@ -2,30 +2,45 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { API_BASE_PATH } from './config'
 import type { Session } from './components/SessionListCore'
 import { createSessionListRefreshScheduler, requestSessionListStreamOpenResync, type SessionListRefreshScheduler } from './sessionListRefresh'
-import type { SessionListOrderMode } from './sessionListPresentation'
+import { loadStoredSessionListGrouping, type SessionListGroup, type SessionListGrouping, type SessionListOrderMode } from './sessionListPresentation'
 import { applyExactMissTombstone, captureExactAliasKeys, chunkBoundedIds, createEpochRows, mergeDeltaRows, mergeHttpRows, preserveKnownChildTotals, preserveKnownSequenceMessageCounts, pruneEpochRows, replayAtomicWindows, replayCursorBranches, replayCursorWindow, trackHttpRowsRequest } from './boundedSessionReplay'
 import { dispatchSessionIdleDeleted, getSessionIdleUnreadIds, SESSION_IDLE_UNREAD_EVENT } from './sessionIdleAttention'
 import { webUiRealtime } from './realtime'
 
 export interface BoundedChildPage { parentSessionId: string; ids: string[]; total: number; nextCursor: string | null }
 export interface BoundedBranchLoadState { status: 'loading' | 'error'; message?: string }
+/** One loaded window of a Sidebar group's members, in server order. */
+export interface BoundedGroupPage { key: string; ids: string[]; total: number; nextCursor: string | null }
 interface SidebarPayload { version: 1; sessions: Session[]; nextCursor: string | null; reset?: boolean
   children?: Array<{ parentSessionId: string; sessions: Session[]; total: number }>
-  focus?: Array<{ session: Session | null }>; pathContext?: Array<{ session: Session | null }>; forcedChildren?: Record<string, string[]> }
+  focus?: Array<{ session: Session | null }>; pathContext?: Array<{ session: Session | null }>; forcedChildren?: Record<string, string[]>
+  groups?: SessionListGroup[]; presentationGroups?: Record<string, string> }
 interface CacheState { rows: Map<string, Session>; rootIds: string[]; rootCursor: string | null; rootTarget: number
   childPages: Map<string, BoundedChildPage>; previewParents: Set<string>; ownedBranches: Map<string, number>
-  forcedChildren: Record<string, string[]>; searchIds: string[] | null; descendantBusy: Map<string, number>; invalidationVersion: number }
+  forcedChildren: Record<string, string[]>; searchIds: string[] | null; descendantBusy: Map<string, number>; invalidationVersion: number
+  groups: SessionListGroup[]; groupPages: Map<string, BoundedGroupPage>; rootGroups: Record<string, string>; exactGroups: Record<string, string> }
 const emptyState = (rootTarget: number): CacheState => ({ rows: new Map(), rootIds: [], rootCursor: null, rootTarget,
   childPages: new Map(), previewParents: new Set(), ownedBranches: new Map(), forcedChildren: {}, searchIds: null,
-  descendantBusy: new Map(), invalidationVersion: 0 })
+  descendantBusy: new Map(), invalidationVersion: 0, groups: [], groupPages: new Map(), rootGroups: {}, exactGroups: {} })
+const GROUP_PAGE_TARGET = 10; export const GROUP_PAGE_STEP = 20
+const COLLAPSED_GROUPS_KEY = 'foxwarm_session_list_collapsed_groups_v1'
+function loadCollapsedGroups(grouping: SessionListGrouping): Set<string> {
+  if (grouping === 'none') return new Set()
+  try { const stored = JSON.parse(localStorage.getItem(COLLAPSED_GROUPS_KEY) || '{}')?.[grouping]; return new Set(Array.isArray(stored) ? stored.filter((key: unknown): key is string => typeof key === 'string') : []) } catch { return new Set() }
+}
+function storeCollapsedGroups(grouping: SessionListGrouping, keys: ReadonlySet<string>) {
+  if (grouping === 'none') return
+  try { const stored = JSON.parse(localStorage.getItem(COLLAPSED_GROUPS_KEY) || '{}'); localStorage.setItem(COLLAPSED_GROUPS_KEY, JSON.stringify({ ...(stored && typeof stored === 'object' && !Array.isArray(stored) ? stored : {}), [grouping]: [...keys] })) } catch { /* Keep the in-memory choice. */ }
+}
 const dedupe = (ids: Iterable<string>) => [...new Set(ids)]
 function responseError(response: Response): Promise<Error> { return response.json().catch(() => ({})).then(body => new Error(body?.error || `Request failed (${response.status})`)) }
 async function fetchJson(path: string, init?: RequestInit): Promise<any> { const response = await fetch(`${API_BASE_PATH}${path}`, init); if (!response.ok) throw await responseError(response); return response.json() }
 function currentWatchIds(): string[] { try { const value = JSON.parse(localStorage.getItem('foxwarm_session_idle_notifications_v1') || '{}'); return value && typeof value === 'object' && !Array.isArray(value) ? Object.keys(value) : [] } catch { return [] } }
 function currentUnreadIds(): string[] { return getSessionIdleUnreadIds(localStorage) }
 function currentAttentionIds(includeIdleWatches: boolean, unreadIds = currentUnreadIds()): string[] { return dedupe([...(includeIdleWatches ? currentWatchIds() : []), ...unreadIds]) }
-function structuralIds(state: Pick<CacheState, 'rootIds'|'childPages'|'forcedChildren'>): string[] {
+function structuralIds(state: Pick<CacheState, 'rootIds'|'childPages'|'forcedChildren'|'groupPages'>): string[] {
   const ids = [...state.rootIds]
+  for (const page of state.groupPages.values()) ids.push(...page.ids)
   for (const page of state.childPages.values()) ids.push(page.parentSessionId, ...page.ids)
   for (const [parent, children] of Object.entries(state.forcedChildren)) ids.push(parent, ...children)
   return dedupe(ids)
@@ -43,15 +58,24 @@ export type BoundedGlobalSummary = {
   tokenUsage?: { cachedTokens: number; inputTokens: number; outputTokens: number; cost?: number }
 }
 
-export interface BoundedSessionListController { sessions: Session[]; knownSessions: Session[]; mode: SessionListOrderMode; query: string
+/** Server-side Sidebar grouping: group headers, their loaded member windows and controls. */
+export interface BoundedSessionGroupView { grouping: SessionListGrouping; groups: SessionListGroup[]; pages: Map<string, BoundedGroupPage>
+  presentationGroups: Record<string, string>; collapsed: ReadonlySet<string>
+  setGrouping: (grouping: SessionListGrouping) => void; toggleGroup: (key: string) => void; loadMoreGroup: (key: string) => void }
+
+export interface BoundedSessionListController { sessions: Session[]; knownSessions: Session[]; mode: SessionListOrderMode; query: string; groupView: BoundedSessionGroupView
   hasMoreRoots: boolean; childPages: Map<string, BoundedChildPage>; branchLoadStates: Map<string, BoundedBranchLoadState>; descendantBusy: Map<string, number>; invalidationVersion: number
   setMode: (mode: SessionListOrderMode) => void; setQuery: (query: string) => void; loadMoreRoots: () => Promise<void>
   loadMoreChildren: (id: string) => Promise<void>; expandBranch: (id: string) => Promise<void>; expandBranches: (ids: string[]) => Promise<void>; retryBranch: (id: string) => Promise<void>; collapseBranch: (id: string) => void
   refresh: () => Promise<void>; invalidate: () => void; globalSummary: BoundedGlobalSummary | null }
 
-export function useBoundedSessionList(options: { focusIds: string[]; exactIds?: string[]; rootLimit?: number; childLimit?: number; connectStream?: boolean; includeGlobalSummary?: boolean; includeIdleWatches?: boolean }): BoundedSessionListController {
+export function useBoundedSessionList(options: { focusIds: string[]; exactIds?: string[]; rootLimit?: number; childLimit?: number; connectStream?: boolean; includeGlobalSummary?: boolean; includeIdleWatches?: boolean; groupable?: boolean }): BoundedSessionListController {
   const rootLimit = options.rootLimit || 50; const childLimit = options.childLimit || 5
   const [mode, setModeState] = useState<SessionListOrderMode>('default'); const [query, setQueryState] = useState('')
+  const [grouping, setGroupingState] = useState<SessionListGrouping>(() => options.groupable ? loadStoredSessionListGrouping() : 'none')
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => loadCollapsedGroups(grouping))
+  const collapsedGroupsRef = useRef(collapsedGroups); collapsedGroupsRef.current = collapsedGroups
+  const groupTargetsRef = useRef<Map<string, number>>(new Map())
   const [unreadIds, setUnreadIds] = useState<string[]>(currentUnreadIds)
   const [watchIds, setWatchIds] = useState<string[]>(() => currentAttentionIds(options.includeIdleWatches !== false, unreadIds)); const [state, setState] = useState(() => emptyState(rootLimit))
   const [branchLoadStates, setBranchLoadStates] = useState<Map<string, BoundedBranchLoadState>>(new Map())
@@ -95,16 +119,33 @@ export function useBoundedSessionList(options: { focusIds: string[]; exactIds?: 
   const collectRoots = useCallback(async (target: number) => {
     const result = await replayCursorWindow<Session>({ targetCount: target, pageCap: 100, fetchPage: async (cursor, limit) => {
       const params = new URLSearchParams({ mode, limit: String(limit), childLimit: String(childLimit) }); if (cursor) params.set('cursor', cursor)
+      if (grouping !== 'none') params.set('group', grouping)
       for (const id of focusIds) params.append('focusSessionId', id)
       const payload = await fetchJson(`/session-list/sidebar?${params}`) as SidebarPayload
       return { ...payload, items: payload.sessions, nextCursor: payload.nextCursor }
     } })
     const pages = result.pages as Array<SidebarPayload & { items: Session[] }>; const rows: Session[] = [...result.items]
     const childPages = new Map<string, BoundedChildPage>(); const previewParents = new Set<string>(); let forcedChildren: Record<string, string[]> = {}
+    // A grouped Sidebar pages its pinned rows here; group headers come with the first page.
+    const groups = grouping === 'none' ? [] : pages[0]?.groups || []; let rootGroups: Record<string, string> = {}
     for (const page of pages) { for (const group of page.children || []) { previewParents.add(group.parentSessionId); childPages.set(group.parentSessionId, { parentSessionId: group.parentSessionId, ids: group.sessions.map(row => row.id), total: group.total, nextCursor: null }); rows.push(...group.sessions) }
-      rows.push(...(page.focus || []).flatMap(item => item.session ? [item.session] : []), ...(page.pathContext || []).flatMap(item => item.session ? [item.session] : [])); forcedChildren = { ...forcedChildren, ...(page.forcedChildren || {}) } }
-    return { rootIds: result.items.map(row => row.id), rootCursor: result.nextCursor, childPages, previewParents, forcedChildren, rows, revision: result.revision }
-  }, [mode, childLimit, focusIds.join('\0')])
+      rows.push(...(page.focus || []).flatMap(item => item.session ? [item.session] : []), ...(page.pathContext || []).flatMap(item => item.session ? [item.session] : [])); forcedChildren = { ...forcedChildren, ...(page.forcedChildren || {}) }; rootGroups = { ...rootGroups, ...(page.presentationGroups || {}) } }
+    return { rootIds: result.items.map(row => row.id), rootCursor: result.nextCursor, childPages, previewParents, forcedChildren, rows, revision: result.revision, groups, rootGroups }
+  }, [mode, grouping, childLimit, focusIds.join('\0')])
+
+  // Member windows of every expanded group, with the child previews of their rows.
+  const collectGroups = useCallback(async (groups: SessionListGroup[], expectedRevision?: string) => {
+    const previews = new Map<string, { sessions: Session[]; total: number }>()
+    const targets = new Map(groups.filter(group => !collapsedGroupsRef.current.has(group.key)).map(group => [group.key, groupTargetsRef.current.get(group.key) || GROUP_PAGE_TARGET]))
+    if (grouping === 'none' || !targets.size) return { pages: new Map<string, BoundedGroupPage>(), previews, rows: [] as Session[] }
+    const replay = await replayCursorBranches<Session>({ targets, pageCap: 50, parentBatchCap: 20, expectedRevision,
+      fetchBatch: async (keys, limit) => { const payload = await fetchJson('/session-list/group-pages', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ group: grouping, mode, limit, childLimit, groups: keys.map(item => ({ key: item.parentSessionId, ...(item.cursor ? { cursor: item.cursor } : {}) })) }) })
+        for (const preview of payload.children || []) previews.set(preview.parentSessionId, { sessions: preview.sessions, total: preview.total })
+        return { reset: payload.reset, revision: payload.revision, groups: (payload.groups || []).map((group: any) => ({ parentSessionId: group.key, items: group.sessions, nextCursor: group.nextCursor, total: group.total })) } } })
+    const pages = new Map<string, BoundedGroupPage>(); const rows: Session[] = []
+    for (const [key, page] of replay) { pages.set(key, { key, ids: page.items.map(row => row.id), total: page.total, nextCursor: page.nextCursor }); rows.push(...page.items) }
+    return { pages, previews, rows }
+  }, [mode, grouping, childLimit])
 
   const collectBranches = useCallback(async (targets: Map<string, number>, expectedRevision?: string) => replayCursorBranches<Session>({ targets, pageCap: 20, parentBatchCap: 20, expectedRevision,
     fetchBatch: async (parents, limit) => { const payload = await fetchJson('/session-list/children', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode, limit, parents }) })
@@ -113,9 +154,10 @@ export function useBoundedSessionList(options: { focusIds: string[]; exactIds?: 
   const replayOwnedWindows = useCallback(async (rootTarget: number, branchTargets: Map<string, number>) => trackHttpRowsRequest(rowStoreRef.current, async startEpoch => {
     if (!mountedRef.current) return false
     const ownerEpoch = ownerEpochRef.current; const generation = ++windowGenerationRef.current
-    let replay: Awaited<ReturnType<typeof replayAtomicWindows<Awaited<ReturnType<typeof collectRoots>>, Map<string, { items: Session[]; nextCursor: string | null; total: number }>>>>
+    let replay: Awaited<ReturnType<typeof replayAtomicWindows<Awaited<ReturnType<typeof collectRoots>>, { groups: Awaited<ReturnType<typeof collectGroups>>; branches: Map<string, { items: Session[]; nextCursor: string | null; total: number }> }>>>
     try { replay = await replayAtomicWindows({ loadRoots: () => collectRoots(rootTarget),
-      loadBranches: roots => branchTargets.size ? collectBranches(branchTargets, roots.revision) : Promise.resolve(new Map<string, { items: Session[]; nextCursor: string | null; total: number }>()) }) }
+      loadBranches: async roots => ({ groups: await collectGroups(roots.groups, roots.revision),
+        branches: branchTargets.size ? await collectBranches(branchTargets, roots.revision) : new Map<string, { items: Session[]; nextCursor: string | null; total: number }>() }) }) }
     catch (error) {
       if (!isCurrentOwner(ownerEpoch) || generation !== windowGenerationRef.current) return false
       const message = error instanceof Error ? error.message : String(error || 'Failed to load child sessions')
@@ -127,14 +169,15 @@ export function useBoundedSessionList(options: { focusIds: string[]; exactIds?: 
       throw error
     }
     if (!isCurrentOwner(ownerEpoch) || generation !== windowGenerationRef.current) return false
-    const { roots, branches } = replay
+    const { roots, branches: { groups, branches } } = replay
     const current = stateRef.current; const next: CacheState = { ...current, rootIds: roots.rootIds, rootCursor: roots.rootCursor, rootTarget,
       childPages: new Map(roots.childPages), previewParents: new Set(roots.previewParents), ownedBranches: new Map(branchTargets), forcedChildren: roots.forcedChildren,
-      descendantBusy: new Map(current.descendantBusy), rows: new Map() }
-    const rows = [...roots.rows]
+      descendantBusy: new Map(current.descendantBusy), rows: new Map(), groups: roots.groups, groupPages: groups.pages, rootGroups: roots.rootGroups }
+    const rows = [...roots.rows, ...groups.rows]
+    for (const [parent, preview] of groups.previews) { next.previewParents.add(parent); next.childPages.set(parent, { parentSessionId: parent, ids: preview.sessions.map(row => row.id), total: preview.total, nextCursor: null }); rows.push(...preview.sessions) }
     for (const [parent, replay] of branches) { next.childPages.set(parent, { parentSessionId: parent, ids: replay.items.map(row => row.id), total: replay.total, nextCursor: replay.nextCursor }); rows.push(...replay.items) }
     // Keep only expanded branches still connected to a current root/focus path.
-    const reachable = new Set(roots.rootIds); for (const [parent, children] of Object.entries(roots.forcedChildren)) { reachable.add(parent); children.forEach(id => reachable.add(id)) }
+    const reachable = new Set([...roots.rootIds, ...[...groups.pages.values()].flatMap(page => page.ids)]); for (const [parent, children] of Object.entries(roots.forcedChildren)) { reachable.add(parent); children.forEach(id => reachable.add(id)) }
     let changed = true; while (changed) { changed = false; for (const [parent] of next.ownedBranches) if (reachable.has(parent)) for (const id of next.childPages.get(parent)?.ids || []) if (!reachable.has(id)) { reachable.add(id); changed = true } }
     for (const parent of [...next.ownedBranches.keys()]) if (!reachable.has(parent)) { next.ownedBranches.delete(parent); if (!next.previewParents.has(parent)) next.childPages.delete(parent) }
     branchTargetsRef.current = new Map(next.ownedBranches)
@@ -146,7 +189,7 @@ export function useBoundedSessionList(options: { focusIds: string[]; exactIds?: 
       return changedState ? remaining : currentStates
     })
     return true
-  }), [collectRoots, collectBranches, publish, isCurrentOwner])
+  }), [collectRoots, collectGroups, collectBranches, publish, isCurrentOwner])
 
   const loadBadges = useCallback(async (ids: string[]) => {
     if (!mountedRef.current) return
@@ -158,12 +201,14 @@ export function useBoundedSessionList(options: { focusIds: string[]; exactIds?: 
 
   const loadExact = useCallback(async () => trackHttpRowsRequest(rowStoreRef.current, async startEpoch => { if (!mountedRef.current) return false; const ownerEpoch = ownerEpochRef.current; const generation = ++exactGenerationRef.current; const rows: Session[] = []; const missing: string[] = []
     const known = captureExactAliasKeys(rowStoreRef.current, exactIds)
-    for (const batch of chunkBoundedIds(exactIds, 100)) { const payload = await fetchJson('/session-list/by-id', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: batch, includePaths: false }) }); for (const item of payload.results || []) item.session ? rows.push(item.session) : missing.push(item.requestedId) }
+    // Exact rows outside a loaded group window are shown in the group the server assigns.
+    let exactGroups: Record<string, string> = {}
+    for (const batch of chunkBoundedIds(exactIds, 100)) { const payload = await fetchJson('/session-list/by-id', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: batch, includePaths: false, ...(grouping !== 'none' ? { group: grouping, mode } : {}) }) }); for (const item of payload.results || []) item.session ? rows.push(item.session) : missing.push(item.requestedId); exactGroups = { ...exactGroups, ...(payload.presentationGroups || {}) } }
     if (!isCurrentOwner(ownerEpoch) || generation !== exactGenerationRef.current) return false; mergeHttpRows(rowStoreRef.current, rows, startEpoch)
     for (const requested of missing) applyExactMissTombstone(rowStoreRef.current, requested, known.get(requested), startEpoch)
     dispatchSessionIdleDeleted(missing)
-    const next = { ...stateRef.current, rows: new Map() }; pruneEpochRows(rowStoreRef.current, ownedKeepIds(next, exactIds)); next.rows = new Map(rowStoreRef.current.rows); stateRef.current = next; setState(next); return true
-  }), [exactIds.join('\0'), isCurrentOwner])
+    const next = { ...stateRef.current, rows: new Map(), exactGroups }; pruneEpochRows(rowStoreRef.current, ownedKeepIds(next, exactIds)); next.rows = new Map(rowStoreRef.current.rows); stateRef.current = next; setState(next); return true
+  }), [exactIds.join('\0'), grouping, mode, isCurrentOwner])
 
   const loadSearch = useCallback(async (value: string) => trackHttpRowsRequest(rowStoreRef.current, async startEpoch => { if (!mountedRef.current) return false; const ownerEpoch = ownerEpochRef.current; const generation = ++searchGenerationRef.current
     const payload = await fetchJson(`/session-list/search?${new URLSearchParams({ q: value, limit: '100' })}`); if (!isCurrentOwner(ownerEpoch) || generation !== searchGenerationRef.current) return false
@@ -197,7 +242,12 @@ export function useBoundedSessionList(options: { focusIds: string[]; exactIds?: 
   useEffect(() => { const ownerEpoch = ownerEpochRef.current; const exact = loadExact(); const generation = exactGenerationRef.current
     void exact.catch(error => reportErrorIfCurrent('Failed bounded Session exact context', error, ownerEpoch, generation, exactGenerationRef)) }, [loadExact, reportErrorIfCurrent])
 
-  const setMode = useCallback((nextMode: SessionListOrderMode) => { if (nextMode === mode) return; setModeState(nextMode); branchTargetsRef.current = new Map(); ++windowGenerationRef.current; ++branchLoadGenerationRef.current; setBranchLoadStates(new Map()); const next = clearBranchOwnership({ ...stateRef.current, rootTarget: rootLimit }); stateRef.current = next; setState(next) }, [mode, rootLimit])
+  const setMode = useCallback((nextMode: SessionListOrderMode) => { if (nextMode === mode) return; setModeState(nextMode); branchTargetsRef.current = new Map(); ++windowGenerationRef.current; ++branchLoadGenerationRef.current; setBranchLoadStates(new Map()); const next = clearBranchOwnership({ ...stateRef.current, rootTarget: rootLimit, groupPages: new Map(), groups: [] }); groupTargetsRef.current = new Map(); stateRef.current = next; setState(next) }, [mode, rootLimit])
+  const setGrouping = useCallback((nextGrouping: SessionListGrouping) => { if (nextGrouping === grouping || !options.groupable) return; setGroupingState(nextGrouping); const collapsed = loadCollapsedGroups(nextGrouping); collapsedGroupsRef.current = collapsed; setCollapsedGroups(collapsed); branchTargetsRef.current = new Map(); groupTargetsRef.current = new Map(); ++windowGenerationRef.current; ++branchLoadGenerationRef.current; setBranchLoadStates(new Map()); const next = clearBranchOwnership({ ...stateRef.current, rootTarget: rootLimit, groupPages: new Map(), groups: [], rootGroups: {}, exactGroups: {} }); stateRef.current = next; setState(next) }, [grouping, rootLimit, options.groupable])
+  const replayGroups = useCallback(() => { const ownerEpoch = ownerEpochRef.current; const replay = replayOwnedWindows(stateRef.current.rootTarget, new Map(branchTargetsRef.current)); const generation = windowGenerationRef.current
+    void replay.catch(error => reportErrorIfCurrent('Failed bounded Session group replay', error, ownerEpoch, generation, windowGenerationRef)) }, [replayOwnedWindows, reportErrorIfCurrent])
+  const toggleGroup = useCallback((key: string) => { const collapsed = new Set(collapsedGroupsRef.current); if (!collapsed.delete(key)) { collapsed.add(key); groupTargetsRef.current.delete(key) } collapsedGroupsRef.current = collapsed; setCollapsedGroups(collapsed); storeCollapsedGroups(grouping, collapsed); replayGroups() }, [grouping, replayGroups])
+  const loadMoreGroup = useCallback((key: string) => { const loaded = stateRef.current.groupPages.get(key)?.ids.length || 0; groupTargetsRef.current = new Map(groupTargetsRef.current).set(key, Math.max(groupTargetsRef.current.get(key) || GROUP_PAGE_TARGET, loaded) + GROUP_PAGE_STEP); replayGroups() }, [replayGroups])
   const setQuery = useCallback((nextQuery: string) => {
     const cleared = !!queryRef.current.trim() && !nextQuery.trim()
     if (nextQuery !== queryRef.current) { branchTargetsRef.current = new Map(); ++windowGenerationRef.current; ++branchLoadGenerationRef.current; setBranchLoadStates(new Map()); const next = clearBranchOwnership(stateRef.current); stateRef.current = next; setState(next) }
@@ -277,7 +327,9 @@ export function useBoundedSessionList(options: { focusIds: string[]; exactIds?: 
   }, [subscriptionIds.join('\0'), options.connectStream, invalidate])
 
   const visibleIds = dedupe([...(state.searchIds || structuralIds(state)), ...unreadIds])
-  return { sessions: visibleIds.map(id => state.rows.get(id)).filter((row): row is Session => !!row), knownSessions: [...state.rows.values()], mode, query,
+  const groupView = useMemo<BoundedSessionGroupView>(() => ({ grouping, groups: state.groups, pages: state.groupPages, presentationGroups: { ...state.exactGroups, ...state.rootGroups }, collapsed: collapsedGroups, setGrouping, toggleGroup, loadMoreGroup }),
+    [grouping, state.groups, state.groupPages, state.exactGroups, state.rootGroups, collapsedGroups, setGrouping, toggleGroup, loadMoreGroup])
+  return { sessions: visibleIds.map(id => state.rows.get(id)).filter((row): row is Session => !!row), knownSessions: [...state.rows.values()], mode, query, groupView,
     hasMoreRoots: !query.trim() && !!state.rootCursor, childPages: query.trim() ? new Map() : state.childPages, branchLoadStates: query.trim() ? new Map() : branchLoadStates, descendantBusy: state.descendantBusy,
     invalidationVersion: state.invalidationVersion, setMode, setQuery, loadMoreRoots, loadMoreChildren, expandBranch, expandBranches, retryBranch, collapseBranch, refresh, invalidate, globalSummary }
 }

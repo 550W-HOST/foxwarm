@@ -375,26 +375,36 @@ test('session list labels omit parent and agent-main prefixes for child rows', a
   assert.equal(getSessionListDisplayId('standalone', null), 'standalone')
 })
 
-test('grouped rows shorten their Agent prefix under the Agent main host only', async () => {
-  const { getSessionListGroupedDisplayId } = await loadTypeScriptModule('../src/sessionListPresentation.ts')
-
-  assert.equal(getSessionListGroupedDisplayId('agent/task', 'agent/main'), '/task')
-  assert.equal(getSessionListGroupedDisplayId('0905_kg1ns', 'main'), '0905_kg1ns')
-  assert.equal(getSessionListGroupedDisplayId('other/task', 'agent/main'), 'other/task')
-})
-
-test('top-level rows name their Agent unless they are its main or the title already does', async () => {
+test('top-level rows name a non-default Agent unless they are its main or the title already does', async () => {
   const { getAgentMainSessionId, getSessionListAgentTag } = await loadTypeScriptModule('../src/sessionListPresentation.ts')
 
   assert.equal(getAgentMainSessionId('main'), 'main')
   assert.equal(getAgentMainSessionId('beta'), 'beta/main')
   assert.equal(getSessionListAgentTag({ id: 'beta/one', agent: 'beta' }, 'Release notes'), 'beta')
   assert.equal(getSessionListAgentTag({ id: 'beta/one', agent: 'beta' }, 'beta/one'), null)
-  assert.equal(getSessionListAgentTag({ id: '0905_kg1ns', agent: 'main' }, '0905_kg1ns'), 'main')
+  assert.equal(getSessionListAgentTag({ id: '0905_kg1ns', agent: 'main' }, 'Release notes'), null)
   assert.equal(getSessionListAgentTag({ id: 'main', agent: 'main' }, 'main'), null)
   assert.equal(getSessionListAgentTag({ id: 'beta/main', agent: 'beta' }, 'Beta home'), null)
   assert.equal(getSessionListAgentTag({ id: 'beta/one', agent: 'beta', pinned: true }, 'Release notes'), null)
   assert.equal(getSessionListAgentTag({ id: 'loose' }, 'loose'), null)
+})
+
+test('group roots keep their page order and place other rows by their server group', async () => {
+  const { assignSessionListGroupRoots } = await loadTypeScriptModule('../src/sessionListPresentation.ts')
+
+  const pages = new Map([['alpha', { ids: ['alpha/main', 'alpha/b', 'alpha/a'] }], ['beta', { ids: ['beta/x'] }]])
+  // A focus root of a loaded group follows its page; an unknown row stays ungrouped.
+  const { byGroup, ungrouped } = assignSessionListGroupRoots(
+    ['beta/x', 'alpha/a', 'focus', 'alpha/main', 'stray', 'alpha/b'],
+    pages,
+    { focus: 'alpha', 'beta/x': 'alpha' },
+  )
+  assert.deepEqual([...byGroup], [['alpha', ['alpha/main', 'alpha/b', 'alpha/a', 'focus']], ['beta', ['beta/x']]])
+  assert.deepEqual(ungrouped, ['stray'])
+  // Rows not yet rendered are omitted from their page.
+  assert.deepEqual([...assignSessionListGroupRoots(['alpha/a'], pages, {}).byGroup], [['alpha', ['alpha/a']], ['beta', []]])
+  // A row of a collapsed (unloaded) group is placed by its server group.
+  assert.deepEqual([...assignSessionListGroupRoots(['gamma/1'], new Map(), { 'gamma/1': 'gamma' }).byGroup], [['gamma', ['gamma/1']]])
 })
 
 test('overlapping global session refreshes cannot let an older response hide a new child', async () => {

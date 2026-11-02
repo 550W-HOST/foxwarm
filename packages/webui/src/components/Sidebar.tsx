@@ -6,7 +6,7 @@ import CreateTabButton from './CreateTabButton'
 import CodeLaunchButton from './CodeLaunchButton'
 import GlobalUiSettingsMenu from './GlobalUiSettingsMenu'
 import { useState } from 'react'
-import AgentCreationMenu, { type ChildSessionRequest } from './AgentCreationMenu'
+import AgentCreationMenu, { type SessionCreationRequest } from './AgentCreationMenu'
 import type { AgentSettingsChanges, AgentSummary } from '../agentCreation'
 import type { WebUiNodeTarget } from '../nodeTargets'
 
@@ -19,6 +19,7 @@ interface SidebarProps {
   onSelectSession: (sessionId: string) => void
   onKeepSession?: (sessionId: string) => void
   onSelectArchitecture: () => void
+  onOpenAgentSettings?: (agent: string) => void
   onSelectSearch: () => void
   onSelectSetup: () => void
   onSelectLogs?: () => void
@@ -54,6 +55,7 @@ export default function Sidebar({
   onSelectSession,
   onKeepSession,
   onSelectArchitecture,
+  onOpenAgentSettings,
   onSelectSearch,
   onSelectSetup,
   onSelectLogs,
@@ -79,7 +81,7 @@ export default function Sidebar({
   onToggleIdleNotificationMode,
   bounded,
 }: SidebarProps) {
-  const [childRequest, setChildRequest] = useState<ChildSessionRequest | null>(null)
+  const [creationRequest, setCreationRequest] = useState<SessionCreationRequest | null>(null)
   const defaultNodeId = currentSessionRecord?.currentNode || 'master'
   const defaultPath = currentSessionRecord?.cwd || '/'
 
@@ -119,8 +121,8 @@ export default function Sidebar({
               compact
               onCreateAgent={onCreateAgent}
               onCreateSession={onCreateSession}
-              childRequest={childRequest}
-              onChildRequestHandled={() => setChildRequest(null)}
+              creationRequest={creationRequest}
+              onCreationRequestHandled={() => setCreationRequest(null)}
             />
           </div>
           <CodeLaunchButton
@@ -157,7 +159,8 @@ export default function Sidebar({
           unreadSessionIds={unreadSessionIds}
           onToggleIdleNotificationMode={onToggleIdleNotificationMode}
           bounded={bounded}
-          onCreateChildSession={setChildRequest}
+          onRequestSession={setCreationRequest}
+          onOpenAgentSettings={onOpenAgentSettings}
           toolbarContainerClassName="p-2 pb-1"
           listContainerClassName="p-2 pt-1"
         />

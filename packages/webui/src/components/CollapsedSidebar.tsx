@@ -38,7 +38,7 @@ export default function CollapsedSidebar({
   unreadSessionIds = new Set(),
 }: CollapsedSidebarProps) {
   const rootSessions = sessions
-    .filter((s) => (s.pinned || !(s.sidebarParentId === undefined ? s.parentSessionId : s.sidebarParentId)) && !s.archived)
+    .filter((s) => (s.pinned || !s.parentSessionId) && !s.archived)
 
   return (
     <div className="foxwarm-sidebar-panel h-full w-12 flex flex-col items-center bg-fw-sidebar-surface border-r border-fw-border">

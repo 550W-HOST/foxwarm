@@ -1,6 +1,5 @@
 import { appE2eRuntime } from '../../../test/app-e2e/runtime.mjs'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
-import { expandSidebarHost, revealSidebarRows } from './sidebarHosts.mjs'
 import test, { after, before } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
@@ -133,9 +132,6 @@ before(async () => {
     const response = await fetch('./api/sessions')
     return (await response.json()).sessions
   })
-  await expandSidebarHost(page)
-  // The refocus scenario needs a sidebar taller than its viewport.
-  await revealSidebarRows(page, 30)
   const renderedIds = await page.$$eval('[data-session-id]', (rows) => rows.map((row) => row.getAttribute('data-session-id')))
   const longSessions = sessions
     .filter((session) => session.messageCount > 120)

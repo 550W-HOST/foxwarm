@@ -1,6 +1,5 @@
 import { appE2eRuntime } from '../../../test/app-e2e/runtime.mjs'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
-import { expandSidebarHost } from './sidebarHosts.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
@@ -59,7 +58,6 @@ test('Sidebar keeps a newly forked child when an older bounded-window response a
     await page.goto(`${baseUrl}/#token=${encodeURIComponent(token)}`, { waitUntil: 'domcontentloaded' })
     await waitForWebUiReady(page)
     await page.waitForSelector('[data-session-list-scroll-container]', { timeout: 15_000 })
-    await expandSidebarHost(page)
 
     parentSessionId = await page.evaluate(async () => {
       const response = await fetch('./api/sessions', {
@@ -233,7 +231,6 @@ test('Sidebar collapse prunes nested expansion state without clearing unrelated 
     await page.goto(`${baseUrl}/#token=${encodeURIComponent(token)}`, { waitUntil: 'domcontentloaded' })
     await waitForWebUiReady(page)
     await page.waitForSelector('[data-session-list-scroll-container]', { timeout: 15_000 })
-    await expandSidebarHost(page)
 
     const root = await createSession()
     const child = await createSession()
@@ -401,7 +398,6 @@ test('Sidebar auto-expansion acquires child pages and exposes branch loading, fa
     await page.goto(`${baseUrl}/#token=${encodeURIComponent(token)}`, { waitUntil: 'domcontentloaded' })
     await waitForWebUiReady(page)
     await page.waitForSelector('[data-session-list-scroll-container]', { timeout: 15_000 })
-    await expandSidebarHost(page)
 
     const root = await createSession()
     const coordinator = await createSession()
@@ -423,7 +419,6 @@ test('Sidebar auto-expansion acquires child pages and exposes branch loading, fa
     await page.reload({ waitUntil: 'domcontentloaded' })
     await waitForWebUiReady(page)
     await page.waitForSelector('[data-session-list-scroll-container]', { timeout: 15_000 })
-    await expandSidebarHost(page)
     await page.waitForFunction(id => !!document.querySelector(`[data-session-id="${CSS.escape(id)}"]`), { timeout: 10_000 }, root)
     await clickDisclosure(root)
     await page.waitForFunction(id => !!document.querySelector(`[data-session-id="${CSS.escape(id)}"]`), { timeout: 10_000 }, coordinator)
