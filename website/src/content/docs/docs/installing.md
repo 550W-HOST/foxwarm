@@ -19,7 +19,7 @@ Nothing is compiled during installation. Existing TypeScript installations shoul
 
 ## Packages
 
-Each [release](https://github.com/550W-HOST/foxwarm/releases) provides:
+Each [release](https://github.com/550W-HOST/foxwarm/releases/latest) provides:
 
 | Package | Use |
 | --- | --- |
@@ -83,7 +83,7 @@ It also accepts `-Version`, `-Package FILE` and `-NoStart`. If script execution 
 
 ## Windows desktop app
 
-Download `foxwarm-desktop-win-x64.zip` from the [releases page](https://github.com/550W-HOST/foxwarm/releases), extract it and open **Foxwarm.Desktop.exe**. It runs Foxwarm inside a window with a tray icon and keeps its data under `%LOCALAPPDATA%\Foxwarm\Desktop`. It needs the Microsoft Edge WebView2 Runtime, which Windows 10 and 11 normally include. The desktop app listens only on this computer; install the server if other devices should connect.
+Download [`foxwarm-desktop-win-x64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-win-x64.zip) from the [latest release](https://github.com/550W-HOST/foxwarm/releases/latest), extract it and open **Foxwarm.Desktop.exe**. It runs Foxwarm inside a window with a tray icon and keeps its data under `%LOCALAPPDATA%\Foxwarm\Desktop`. It needs the Microsoft Edge WebView2 Runtime, which Windows 10 and 11 normally include. The desktop app listens only on this computer; install the server if other devices should connect.
 
 ## Open the WebUI
 

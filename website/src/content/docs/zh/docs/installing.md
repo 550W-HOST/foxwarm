@@ -17,7 +17,7 @@ Foxwarm 服务器支持 **Linux x64**（包括 x64 WSL）和 **Windows x64**，�
 
 ## 安装包
 
-每个 [Release](https://github.com/550W-HOST/foxwarm/releases) 提供：
+每个 [Release](https://github.com/550W-HOST/foxwarm/releases/latest) 提供：
 
 | 安装包 | 用途 |
 | --- | --- |
@@ -81,7 +81,7 @@ Invoke-WebRequest https://foxwarm.net/install-foxwarm.ps1 -OutFile install-foxwa
 
 ## Windows 桌面版
 
-从 [Releases 页面](https://github.com/550W-HOST/foxwarm/releases)下载 `foxwarm-desktop-win-x64.zip`，解压后打开 **Foxwarm.Desktop.exe**。它在窗口中运行 Foxwarm，带托盘图标，数据保存在 `%LOCALAPPDATA%\Foxwarm\Desktop`。需要 Microsoft Edge WebView2 Runtime，Windows 10 和 11 通常已自带。桌面版只在本机监听；需要其他设备访问时请安装服务器版。
+从[最新 Release](https://github.com/550W-HOST/foxwarm/releases/latest)下载 [`foxwarm-desktop-win-x64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-win-x64.zip)，解压后打开 **Foxwarm.Desktop.exe**。它在窗口中运行 Foxwarm，带托盘图标，数据保存在 `%LOCALAPPDATA%\Foxwarm\Desktop`。需要 Microsoft Edge WebView2 Runtime，Windows 10 和 11 通常已自带。桌面版只在本机监听；需要其他设备访问时请安装服务器版。
 
 ## 打开 WebUI
 
