@@ -7,6 +7,7 @@ import type { Session } from './SessionListCore'
 import { formatUsdCost } from '../usageCost'
 import UsageDetails, { formatUsageNumber as usageNumber, type TokenUsage } from './TokenUsageDetails'
 import AgentCreationMenu from './AgentCreationMenu'
+import SessionSequenceView from './SessionSequenceView'
 import { buildAgentCreationBody, type AgentSettingsChanges } from '../agentCreation'
 import AgentSettingsFields, { EMPTY_AGENT_SETTINGS, agentSettingsChanges, agentSettingsDirty, agentSettingsDraft, type AgentSettingsDraft } from './AgentSettingsFields'
 import { useNodeDirectory } from '../useNodeDirectory'
@@ -609,7 +610,7 @@ export default function ArchitectureView({
   const [searchQuery, setSearchQuery] = useState('')
   const [inspectedSessionId, setInspectedSessionId] = useState<string | null>(currentSession || null)
   const { nodes: nodeTargets, error: nodeTargetsError } = useNodeDirectory()
-  const [surface, setSurface] = useState<'topology' | 'agents'>('topology')
+  const [surface, setSurface] = useState<'topology' | 'agents' | 'sequence'>('topology')
   const [agentRegistry, setAgentRegistry] = useState<AgentRegistryEntry[]>([])
   const [selectedRegistryAgentId, setSelectedRegistryAgentId] = useState<string | null>(agentRequest?.agent || 'main')
   useEffect(() => {
@@ -944,7 +945,7 @@ export default function ArchitectureView({
                 <WorkbenchTabIcon className="flex h-10 w-10 items-center justify-center rounded-xl bg-fw-text-strong text-fw-surface"><Network className="h-5 w-5" /></WorkbenchTabIcon>
                 <div>
                   <h1 className="text-2xl font-bold text-fw-text-strong">System Architecture</h1>
-                  <p className="mt-0.5 text-sm text-fw-text-muted">{surface === 'topology' ? 'Operational topology, runtime placement, and session diagnostics.' : 'Agent lifecycle, inheritance, isolation, and memory workspaces.'}</p>
+                  <p className="mt-0.5 text-sm text-fw-text-muted">{surface === 'topology' ? 'Operational topology, runtime placement, and session diagnostics.' : surface === 'sequence' ? 'How sessions work and communicate over time.' : 'Agent lifecycle, inheritance, isolation, and memory workspaces.'}</p>
                 </div>
               </div>
             </div>
@@ -952,6 +953,7 @@ export default function ArchitectureView({
               <div className="inline-flex rounded-lg border border-fw-border bg-fw-surface p-0.5 dark:border-fw-border dark:bg-fw-surface">
                 <button type="button" data-active={surface === 'topology'} aria-pressed={surface === 'topology'} onClick={() => setSurface('topology')} className={`foxwarm-architecture-surface-tab rounded-md px-2.5 py-1 text-xs font-medium ${surface === 'topology' ? 'bg-fw-text-strong text-fw-surface' : 'text-fw-text-muted hover:bg-fw-hover'}`}>Topology</button>
                 <button type="button" data-active={surface === 'agents'} aria-pressed={surface === 'agents'} onClick={() => setSurface('agents')} className={`foxwarm-architecture-surface-tab rounded-md px-2.5 py-1 text-xs font-medium ${surface === 'agents' ? 'bg-fw-text-strong text-fw-surface' : 'text-fw-text-muted hover:bg-fw-hover'}`}>Agents</button>
+                <button type="button" data-active={surface === 'sequence'} aria-pressed={surface === 'sequence'} onClick={() => setSurface('sequence')} className={`foxwarm-architecture-surface-tab rounded-md px-2.5 py-1 text-xs font-medium ${surface === 'sequence' ? 'bg-fw-text-strong text-fw-surface' : 'text-fw-text-muted hover:bg-fw-hover'}`}>Sequence</button>
               </div>
               {summary.managedCount > 0 ? renderMetaBadge(`${summary.managedCount} managed`, 'active') : null}
               {nodeTargetsError ? renderMetaBadge('node status unavailable', 'warning') : null}
@@ -1061,7 +1063,7 @@ export default function ArchitectureView({
             </main>
             <AgentRegistryInspector agent={selectedRegistryAgent} allAgents={agentRegistry} nodes={displayNodes} memoryFiles={agentMemoryFiles} memoryLoading={agentMemoryLoading} memoryError={agentMemoryError} onOpenMemory={openAgentMemory} onSave={saveRegistryAgent} onDelete={deleteRegistryAgent} />
           </div>
-        ) : null}
+        ) : surface === 'sequence' ? <SessionSequenceView currentSession={currentSession} onSelectSession={onSelectSession} /> : null}
       </div>
     </div>
   )
