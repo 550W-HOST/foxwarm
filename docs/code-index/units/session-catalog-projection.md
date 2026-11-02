@@ -1,6 +1,6 @@
 # Unit: Session catalog projections and indexed queries
 
-Files: `dotnet/Foxwarm/Sessions/Storage/SessionCatalog.Projection.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionCatalog.Queries.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionCatalog.Sidebar.cs`
+Files: `dotnet/Foxwarm/Sessions/Storage/SessionCatalog.Projection.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionCatalog.Queries.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionCatalog.Groups.cs`
 
 ## Purpose
 
@@ -9,8 +9,8 @@ Projects validated Session snapshots into bounded Main-owned list/architecture/p
 ## Stable methods and callers
 
 - `Page` provides bounded keyset pages by time/default/architecture order, including root/agent filters and `hasMore`.
-- `Children`, `ChildCounts`, and `Scopes` serve bounded architecture/tree requests and reject oversized batches or invalid agent-forest modes. Without an agent filter they follow the Sidebar presentation parent; the agent forest keeps real parents.
-- `SessionCatalog.Sidebar.cs` maintains `sidebar_parent` and serves `SidebarPaths` (the shared root-first path query over `sidebar_parent`); the contract is [D-sidebar-agent-grouping](../threads/main-catalog-storage-and-indexed-queries.md#d-sidebar-agent-grouping).
+- `Children`, `ChildCounts`, and `Scopes` serve bounded architecture/tree requests and reject oversized batches or invalid agent-forest modes. They use real parents.
+- `SessionCatalog.Groups.cs` serves Sidebar Agent/Node groups: `GroupCounts`, `GroupPage` (keyset member pages, optionally excluding an Agent main placed separately) and `GroupKeys`; `Page(pinnedOnly)` serves the pinned section of a grouped Sidebar. On open it adds the grouping indexes and maintained `catalog_node_count`, and drops the retired `catalog_sidebar_*` objects; the contract is [D-sidebar-groups](../threads/main-catalog-storage-and-indexed-queries.md#d-sidebar-groups).
 - `Get`, `GetMany`, `List`, `Resolve`, `Presentation`, and `PathIds` implement exact identity/alias and presentation navigation; `Resolve` preserves missing versus ambiguous aliases.
 - `RestartIds` selects indexed busy, queue and managed-pending work only; a declared wait alone does not admit its history.
 - `RecentWaitIds` returns wait-bearing IDs through an indexed recency cutoff for startup liveness observation. It does not replace the complete startup binding-validation read or restrict unrelated recovery. Activity eligibility and authoritative rechecks are owned by [wait liveness](./session-domain.md#wait-liveness-observation-and-admission).
@@ -30,6 +30,6 @@ Ordinary `Get` and `Resolve` calls no longer acquire the writer monitor after in
 
 ## Tests
 
-`dotnet/Foxwarm.Tests/Sessions/SessionCatalogTests.cs`; `SessionCatalogPublicationTests.cs`; `SessionCatalogSourceTests.cs`; `SessionIdentityBoundaryTests.cs`. `SessionCatalogSourceTests` compares every query with the Source oracle (Node 24.21.0 / Unicode 17 required). Sidebar Agent grouping is outside the Source store, so that test qualifies only the additive `sidebarParentId` scope field (no fixture Agent has a main Session, so it equals the real parent for unpinned rows) and the additive Sidebar schema objects separately; every query, including root pages, remains exact.
-`SessionSidebarGroupingTests.cs` covers grouping, top-level rows of Agents without a main Session, main/pin/parent membership changes, cycle-safe hosts, adding missing Sidebar objects without a version change, reopen repair after writes by a Main without Sidebar support and of virtual group keys stored by an earlier build, real-only lifecycle descendants and the user-child opening notice. Reopen checks compare maintained Sidebar counts against a full recount in both directions; an extra stored-row negative control verifies the oracle rejects stale count entries.
+`dotnet/Foxwarm.Tests/Sessions/SessionCatalogTests.cs`; `SessionCatalogPublicationTests.cs`; `SessionCatalogSourceTests.cs`; `SessionIdentityBoundaryTests.cs`. `SessionCatalogSourceTests` compares every query with the Source oracle (Node 24.21.0 / Unicode 17 required); its schema comparison excludes only the additive grouping objects.
+`SessionSidebarGroupsTests.cs` covers group counts and pages by own Agent/Node (tree and Flat), saved order and keyset continuation, the pinned-only page, maintained Node counts against a full recount through topology changes, trigger-only writers and re-creation, and retiring the earlier Sidebar objects without a version change. `WebUiStartupTests.SidebarGroups.cs` covers the grouped HTTP routes.
 `SessionCatalogConcurrencyTests.cs` covers held-writer exact/resolution reads, retained children rows/count exclusion, concurrent first reads, identity/parent transitions, and disposal/reopen.
