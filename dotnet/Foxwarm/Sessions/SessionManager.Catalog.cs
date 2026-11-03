@@ -483,6 +483,14 @@ internal sealed partial class SessionManager
         return Task.CompletedTask;
     }
 
+    internal bool RenameIfUnnamed(string id, string name)
+    {
+        if (!Catalog.RenameIfUnnamed(id, name))
+            return false;
+        Find(id)?.PublishStateChanged();
+        return true;
+    }
+
     private Dictionary<string, long> ArchiveSequenceCounts(string[] ids)
     {
         var result = new Dictionary<string, long>(StringComparer.Ordinal);

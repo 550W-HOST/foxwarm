@@ -13,6 +13,8 @@ Owns the mutation edges around the Main catalog: authority publication, identity
 - Presentation helpers commit display name/parent/pinned/sidebar/channel-facing fields without entering Session authority validation.
 - Deletion helpers remove projection rows, aliases, counts, and dependent catalog metadata after the manager has completed its lifecycle claim.
 
+`RenameIfUnnamed` sets a label only when the row has none, checking and writing under the catalog gate; [automatic Session titles](./session-auto-title.md) use it so a concurrently set name wins.
+
 Callers: `SessionManager` lifecycle/identity/deletion methods, `SessionObservation` parent updates, `SessionSaveLane.CommitDisplayNameAsync`, `WebUIChannel` presentation routes, and `MessageRouter` presentation commands.
 
 ## Contract and side effects

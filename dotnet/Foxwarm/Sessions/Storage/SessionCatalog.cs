@@ -373,6 +373,21 @@ internal sealed partial class SessionCatalog : IDisposable
         Changed?.Invoke();
     }
 
+    // Sets a label only while none is present; the check and write share the catalog gate.
+    internal bool RenameIfUnnamed(string id, string name)
+    {
+        lock (gate)
+        {
+            var row = Get(id);
+            if (row is null || !string.IsNullOrEmpty(Text(row["displayName"])))
+                return false;
+            row["displayName"] = name;
+            UpsertLocked([row]);
+        }
+        Changed?.Invoke();
+        return true;
+    }
+
     private static void Insert(SqliteConnection connection, JsonObject row)
     {
         var fields = new[]
