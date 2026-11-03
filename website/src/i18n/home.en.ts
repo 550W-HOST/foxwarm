@@ -30,11 +30,11 @@ export const en: HomeStrings = {
     screenshotAlt: 'The Foxwarm WebUI in Conversation view: the user asks an agent to fix a failing test suite, and the agent reports the cause, the fix and the commit. The sidebar lists other sessions, some with child sessions.'
   },
   install: {
-    tabs: { linux: 'Linux / WSL', windows: 'Windows', docker: 'Docker' },
+    tabs: { linux: 'Linux / macOS', windows: 'Windows', docker: 'Docker' },
     copy: 'Copy',
     copied: 'Copied',
     notes: {
-      linux: 'Linux x64 and x64 WSL. Downloads a prebuilt release and runs it in tmux. .NET is included when it is not installed.',
+      linux: 'Linux x64 (including WSL) and macOS arm64. Downloads a prebuilt release and starts it in the background, using tmux when available. Includes .NET when no compatible runtime is installed.',
       windows: 'Windows x64, in PowerShell. Downloads a prebuilt release and runs it in the background. A Windows desktop app is also available.',
       docker: 'Linux x64 with Docker. Runs the published image with Chromium and Node.js included; data stays in foxwarm-data.'
     },

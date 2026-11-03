@@ -30,11 +30,11 @@ export const zh: HomeStrings = {
     screenshotAlt: 'Foxwarm WebUI 的 Conversation 视图：用户请 Agent 修复失败的测试，Agent 汇报了原因、修复方式和提交记录。侧边栏列出了其他会话，其中一些带有子会话。'
   },
   install: {
-    tabs: { linux: 'Linux / WSL', windows: 'Windows', docker: 'Docker' },
+    tabs: { linux: 'Linux / macOS', windows: 'Windows', docker: 'Docker' },
     copy: '复制',
     copied: '已复制',
     notes: {
-      linux: '支持 Linux x64 和 x64 WSL。下载预编译版本，在 tmux 中运行；系统没有 .NET 时会使用自带运行时的版本。',
+      linux: '支持 Linux x64（包括 WSL）和 macOS arm64。下载预编译版本并在后台启动，有 tmux 时优先使用；系统没有兼容运行时则使用自带 .NET 的版本。',
       windows: '支持 Windows x64，在 PowerShell 中运行。下载预编译版本并在后台运行；另有 Windows 桌面版。',
       docker: '适用于装有 Docker 的 Linux x64。运行已发布的镜像，内含 Chromium 和 Node.js；数据保存在 foxwarm-data。'
     },
