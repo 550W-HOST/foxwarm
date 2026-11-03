@@ -252,7 +252,12 @@ internal sealed partial class ContextPreviewRenderer
                 + (
                     stamp >= DateTimeOffset.MinValue.ToUnixTimeMilliseconds()
                     && stamp <= DateTimeOffset.MaxValue.ToUnixTimeMilliseconds()
-                        ? DateTimeOffset.FromUnixTimeMilliseconds((long)stamp.Value).ToString("O")
+                        ? DateTimeOffset
+                            .FromUnixTimeMilliseconds((long)stamp.Value)
+                            .UtcDateTime.ToString(
+                                "yyyy-MM-dd HH:mm:ss'Z'",
+                                System.Globalization.CultureInfo.InvariantCulture
+                            )
                         : EcmaNumber.Format(stamp.Value) + " ms"
                 );
 
@@ -334,7 +339,7 @@ internal sealed partial class ContextPreviewRenderer
                             "/#" + resultSeq + ")",
                             StringComparison.Ordinal
                         );
-                    return owner.ActivityTime
+                    return (owner.ToolOnly ? owner.ActivityTime : "")
                         + item.Name
                         + (item.Summary.Length > 0 ? " — " + item.Summary : "")
                         + (string.IsNullOrEmpty(status) ? "" : " [" + status + "]")

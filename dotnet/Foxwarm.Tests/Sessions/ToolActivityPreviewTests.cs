@@ -121,6 +121,27 @@ public sealed class ToolActivityPreviewTests
     }
 
     [Fact]
+    public void Activity_layout_uses_second_precision_UTC_and_one_timestamp_per_message()
+    {
+        var mixed = Call(5, "mixed", "exec", new() { ["summary"] = "Inspect mixed message" });
+        mixed["parts"]!.AsArray().Insert(0, new JsonObject { ["text"] = "Check the next source." });
+        var output = Preview([
+            Call(1, "first", "exec", new() { ["summary"] = "Inspect source" }),
+            Result(2, "first", "exec", new() { ["output"] = "first result" }),
+            Call(3, "second", "exec", new() { ["command"] = "git diff" }),
+            Result(4, "second", "exec", new() { ["output"] = "second result" }),
+            mixed,
+            Result(6, "mixed", "exec", new() { ["output"] = "mixed result" }),
+        ]);
+        Assert.Contains("1970-01-01 00:00:01Z exec", output);
+        Assert.Contains("(#1/#2)\n1970-01-01 00:00:03Z exec", output);
+        Assert.Contains("(#3/#4)\n\n[#5 time 1970-01-01 00:00:05Z] model:", output);
+        Assert.Contains("Check the next source.\nexec — Inspect mixed message (#5/#6)", output);
+        Assert.Equal(1, output.Split("1970-01-01 00:00:05Z").Length - 1);
+        Assert.Contains("(#5/#6)\n\nDetails:", output);
+    }
+
+    [Fact]
     public void Boundary_results_do_not_invent_a_running_call_and_duplicate_ids_do_not_hide_operations()
     {
         var result = Result(10, "id", "exec", new() { ["output"] = "finished" });

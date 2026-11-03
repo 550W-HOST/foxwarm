@@ -412,7 +412,10 @@ internal sealed partial class ContextPreviewRenderer
                 break;
             }
             var reserve = remaining > 1 ? Omission(matched[(index + 1)..]).Length + 2 : 0;
-            var separator = index == 0 ? "" : "\n\n";
+            var separator =
+                index == 0 ? ""
+                : detail == "names" && matched[index - 1].ToolOnly && matched[index].ToolOnly ? "\n"
+                : "\n\n";
             var max = available - separator.Length - reserve;
             var itemBudget = Math.Min(max, Math.Max(320, max / remaining));
             var item = RenderItem(matched[index], itemBudget);
