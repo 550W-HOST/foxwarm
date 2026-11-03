@@ -35,6 +35,7 @@ import {
   getChatViewportAnchorSeq,
   getMessageStableKey,
   getMessageViewportAnchorKey,
+  getOpeningChatViewportState,
   getStoredChatViewportState,
   storeChatViewportState,
   updateChatBottomFollow,
@@ -256,7 +257,14 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
   const continuousPagingIntentRef = useRef<'earlier' | 'later' | null>(null)
   const lastNativeScrollTopRef = useRef(0)
   const composerHeightRef = useRef<number | null>(null)
-  const initialViewportState = getStoredChatViewportState(viewportSessionId, historyMode) || { kind: 'bottom' as const }
+  const storedInitialViewportState = getStoredChatViewportState(viewportSessionId, historyMode)
+  const initialViewportState = storedInitialViewportState || { kind: 'bottom' as const }
+  // Interaction version at which a Session without a saved position may still take its
+  // opening position once history loads; null after that decision.
+  const openingViewportVersionRef = useRef<number | null>(storedInitialViewportState ? null : 0)
+  // Opening position held until the user scrolls or the conversation moves on. Content
+  // that grows while it is held (Markdown, fonts) keeps it instead of reading a position.
+  const openingViewportHeldRef = useRef<{ version: number; state: ChatViewportState } | null>(null)
   const currentViewportStateRef = useRef<ChatViewportState>(initialViewportState)
   const pendingViewportRestoreRef = useRef<PendingViewportRestore | null>({
     kind: 'state',
@@ -456,6 +464,8 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
     const pending = pendingViewportRestoreRef.current
     if (pending?.kind === 'state') return pending.state
     if (pendingContentResizeRef.current) return pendingContentResizeRef.current.state
+    const opening = openingViewportHeldRef.current
+    if (opening?.version === userInteractionVersionRef.current) return opening.state
     const followState = updateBottomFollowState()
     const bottomThresholdPx = followState.pendingUserLeave
       ? -1
@@ -1149,13 +1159,44 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
     capturedInteractionVersionRef.current = userInteractionVersionRef.current
     pendingContextScrollbarNavigationRef.current = null
     pendingScrollToTrueTopRef.current = false
-    const state = getStoredChatViewportState(viewportSessionId, historyMode) || { kind: 'bottom' as const }
+    const storedState = getStoredChatViewportState(viewportSessionId, historyMode)
+    const state = storedState || { kind: 'bottom' as const }
+    openingViewportVersionRef.current = storedState ? null : userInteractionVersionRef.current
+    openingViewportHeldRef.current = null
     currentViewportStateRef.current = state
     pendingContentResizeRef.current = null
     currentViewportGeometryRef.current = null
     pendingViewportRestoreRef.current = { kind: 'state', state, interactionVersion: userInteractionVersionRef.current }
     setBottomFollow(state.kind === 'bottom')
   }, [historyMode, viewportSessionId, setBottomFollow])
+
+  useLayoutEffect(() => {
+    const held = openingViewportHeldRef.current
+    if (held !== null) {
+      // The opening position was not the user's choice: once the conversation moves on
+      // without the user scrolling, follow the latest message again.
+      if (held.version !== userInteractionVersionRef.current) openingViewportHeldRef.current = null
+      else if (!getOpeningChatViewportState(timelineMessages)) {
+        openingViewportHeldRef.current = null
+        pendingViewportRestoreRef.current = { kind: 'state', state: { kind: 'bottom' }, interactionVersion: held.version }
+      }
+      return
+    }
+    const version = openingViewportVersionRef.current
+    if (version === null) return
+    if (historyMode === 'continuous' ? !archivePage.loaded || !continuousHistoryReady : !historyLoaded) return
+    openingViewportVersionRef.current = null
+    if (version !== userInteractionVersionRef.current) return
+    const state = getOpeningChatViewportState(timelineMessages)
+    if (!state) return
+    // Hand the opening position to the ordinary restore below.
+    openingViewportHeldRef.current = { version, state }
+    // Supersede any resize correction captured for the empty timeline.
+    pendingContentResizeRef.current = null
+    currentViewportStateRef.current = state
+    pendingViewportRestoreRef.current = { kind: 'state', state, interactionVersion: version }
+    setBottomFollow(false)
+  }, [historyMode, archivePage.loaded, continuousHistoryReady, historyLoaded, timelineMessages, setBottomFollow])
 
   useLayoutEffect(() => {
     const pending = pendingViewportRestoreRef.current
