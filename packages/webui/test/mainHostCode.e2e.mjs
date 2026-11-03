@@ -210,7 +210,21 @@ try {
   stage('workbench and workspace restore')
   // The retained Chat can match before asynchronous Session navigation commits.
   await page.waitForFunction(() => decodeURIComponent(location.hash) === '#tab/chat:main' && !document.querySelector('[data-pane-navigation-pending]'))
-  await page.click('button[title="Open notes.txt in Code"]'); code = await codeFrame(page); await code.waitForSelector('.monaco-workbench', { timeout: 30000 })
+  // The terminal stage left Chat in a short upper pane whose composer covers the lower half of
+  // the message list, where an automatic scroll-into-view would centre the button. Wheel it
+  // into the readable band above the composer, as a reader would, before clicking.
+  const openNotes = 'button[title="Open notes.txt in Code"]'
+  await until(async () => {
+    const { button, list, composer } = await page.$eval(openNotes, element => {
+      const rect = node => { const box = node.getBoundingClientRect(); return { top: box.top, bottom: box.bottom, left: box.left, width: box.width } }
+      return { button: rect(element), list: rect(element.closest('.foxwarm-chat-messages')), composer: rect(document.querySelector('.foxwarm-chat-composer-form')) }
+    })
+    if (button.top >= list.top && button.bottom <= composer.top) return true
+    await page.mouse.move(list.left + list.width / 2, list.top + 8)
+    await page.mouse.wheel({ deltaY: button.top < list.top ? -40 : 40 })
+    return false
+  }, 'Open notes.txt in Code above the composer')
+  await page.click(openNotes); code = await codeFrame(page); await code.waitForSelector('.monaco-workbench', { timeout: 30000 })
   const persisted = JSON.parse(await readFile(join(owned.data, 'state/vscode-web/foxwarm.code-workspace'), 'utf8')); assert(persisted.folders.length >= 3); assert.equal(persisted.settings['yaml.schemaStore.enable'], false)
   assert.equal((await owned.api('GET', '/api/vscode-web/git/commit?workspace=' + encodeURIComponent(owned.work) + '&id=' + rootCommit)).body.comparison.mode, 'empty-tree')
   await page.evaluate(() => window.foxwarmTest.switchToSession('main'))
