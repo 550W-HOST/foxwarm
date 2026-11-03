@@ -94,3 +94,21 @@ test('Windows native resolved paths retain their real callback target and plain 
     { raw: '$fw_agentdir/input.txt', lines: {}, target: { resolvedPath: 'W:\\work space\\input.txt', nodeId: 'master' } },
   ])
 })
+
+
+test('pending cross-Node wrapper paths stay readable without borrowing native Code navigation', async () => {
+  await page.goto(url)
+  await page.evaluate(() => window.renderCase('read', {
+    id: 'pending-remote-read', name: 'call_tool', args: {
+      toolId: 'node:other-node/read', args: { filePath: '/workspace/input.txt' },
+    },
+  }))
+  await page.waitForSelector('#read .foxwarm-tool-call-summary')
+  assert.equal(await page.$eval('#read .foxwarm-tool-call-summary', element => element.textContent), '/workspace/input.txt')
+  assert.equal(await page.$$eval('#read .foxwarm-tool-code-open', buttons => buttons.length), 0)
+  await page.click('#read .foxwarm-tool-call-summary')
+  await page.waitForSelector('#read .foxwarm-tool-call-args')
+  assert.match(await page.$eval('#read .foxwarm-tool-call-args', element => element.textContent), /node:other-node\/read/)
+  assert.equal(await page.$$eval('#read .foxwarm-tool-code-open', buttons => buttons.length), 0)
+  assert.deepEqual(await page.evaluate(() => window.clicks), [])
+})

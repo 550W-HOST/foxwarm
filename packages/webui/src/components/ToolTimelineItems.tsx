@@ -27,6 +27,7 @@ import {
 } from './chatShared'
 import { ToolScriptProgressContext } from './ToolScriptProgressContext'
 import JsonInspectorDialog from './JsonInspectorDialog'
+import { toolActivitySummary, toolActivityTarget } from '../../../shared/src/toolActivity'
 import { shouldUseStreamingToolPlaceholder } from '../../../shared/src/webuiToolRendering'
 import { formatToolScriptExecutionResponse } from '../../../shared/src/toolResponseFormatting'
 import ImageParts from './ImageParts'
@@ -66,7 +67,7 @@ export const getToolCallSearchText = (call: FunctionCall): string => {
       ]).join('\u0000')
     } catch { return String(patchText(call) || JSON.stringify(args, null, 2)) }
   }
-  if (call.name === 'exec') return String(args.command || '')
+  if (call.name === 'exec') return [args.summary, args.command].filter(value => typeof value === 'string').join('\u0000')
   if (call.name === 'send_to_session') return [args.sessionId, typeof args.message === 'string' ? args.message : formatCompactObjectPreview(args.message)].join('\u0000')
   if (call.name === 'create_child_session') return [args.suffix, args.taskId, args.agentName, args.displayName, args.node, args.afterSend, typeof args.forceModel === 'object' ? formatCompactObjectPreview(args.forceModel) : args.forceModel, args.message].filter(value => typeof value === 'string').join('\u0000')
   return formatCompactObjectPreview(call.name === 'session' ? call.args || { action: 'status' } : call.args)
@@ -300,6 +301,16 @@ const renderToolCallPreview = (call: FunctionCall, options: { partial?: boolean;
     return <span className="truncate break-all text-fw-text-muted">{preview || 'streaming tool call…'}</span>
   }
 
+  const target = toolActivityTarget(call)
+  if (call.name === 'call_tool' && target.name !== 'call_tool') {
+    const summary = toolActivitySummary(target)
+    return <span className="truncate" title={summary}>{summary}</span>
+  }
+  if (call.name === 'exec' || call.name === 'run_script') {
+    const summary = toolActivitySummary(call)
+    return <span className="truncate" title={summary}>{summary}</span>
+  }
+
   if (call.name === 'read') {
     const extra = (call.args.startLine || call.args.endLine)
       ? ` (lines ${call.args.startLine || 1}-${call.args.endLine || 'end'})`
@@ -352,12 +363,6 @@ const renderToolCallPreview = (call: FunctionCall, options: { partial?: boolean;
     } catch {
       return <span className="text-fw-danger">invalid patch</span>
     }
-  }
-
-  if (call.name === 'exec') {
-    const cmd = call.args?.command ?? ''
-    const preview = cmd.length > 200 ? `${cmd.substring(0, 200)}...` : cmd
-    return <span className="truncate font-mono" title={cmd}><ExecCommandText command={preview} heredocBodyBlock={false} /></span>
   }
 
   if (call.name === 'send_to_session') {
@@ -499,7 +504,7 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
 
   if (call.name === 'exec') {
     const cmd = call.args?.command ?? ''
-    return <div className="whitespace-pre-wrap break-all"><ExecCommandText command={cmd} /></div>
+    return <div className="whitespace-pre-wrap break-all">{typeof call.args?.summary === 'string' && <div>{call.args.summary}</div>}<ExecCommandText command={cmd} /></div>
   }
 
   if (call.name === 'send_to_session') {

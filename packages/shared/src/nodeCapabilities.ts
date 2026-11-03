@@ -54,11 +54,12 @@ export const CLI_NODE_CAPABILITIES = {
       parameters: {
         type: 'object',
         properties: {
+          summary: { type: 'string', description: "Briefly describe what this command or script will do. State its purpose, not an expected result." },
           command: { type: 'string' , description: "Shell command or pipeline to execute."},
           cwd: { type: 'string' , description: "Working directory for this command. Relative paths use the session working directory supplied for this Node, or the Node process working directory if unset. With no cwd, execution uses that same default chain. On master and CLI Nodes, a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected."},
           timeout: { type: 'number', minimum: 1, description: "Seconds to wait before returning a still-running command as a background execution. Defaults to 15; values above 60 are reduced to 60 with a warning." },
         },
-        required: ['command'],
+        required: ['summary', 'command'],
       },
     },
     {

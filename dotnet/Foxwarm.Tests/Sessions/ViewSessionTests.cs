@@ -182,7 +182,7 @@ public sealed class ViewSessionTests
     }
 
     [Fact]
-    public async Task Names_group_logical_calls_once_errors_and_partial_results_without_generated_ids()
+    public async Task Names_show_each_operation_once_with_errors_and_neutral_page_boundaries()
     {
         await using var f = await OutboundMcpFixture.CreateAsync();
         await ForkClearLifecycleTests.AppendAsync(
@@ -193,20 +193,21 @@ public sealed class ViewSessionTests
             Text("after")
         );
         var output = Output(await View(f));
-        Assert.Contains("read ×1", output);
+        Assert.Contains("read — sample", output);
         Assert.DoesNotContain("read ×2", output);
-        Assert.Contains("1 error", output);
+        Assert.Contains("error: synthetic failure", output);
         Assert.DoesNotContain("hidden-id", output);
         Assert.True(
             output.IndexOf("before", StringComparison.Ordinal)
-                < output.IndexOf("read ×1", StringComparison.Ordinal)
+                < output.IndexOf("read — sample", StringComparison.Ordinal)
         );
         Assert.True(
-            output.IndexOf("read ×1", StringComparison.Ordinal)
+            output.IndexOf("read — sample", StringComparison.Ordinal)
                 < output.IndexOf("after", StringComparison.Ordinal)
         );
         var partial = Output(await View(f, new JsonObject { ["start"] = 2, ["count"] = 1 }));
-        Assert.Contains("partial/unpaired", partial);
+        Assert.Contains("result only", partial);
+        Assert.DoesNotContain("partial/unpaired", partial);
         Assert.Contains("recall(", partial);
         var full = Output(await View(f, new JsonObject { ["toolDetail"] = "full" }));
         Assert.Contains("synthetic failure", full);
@@ -266,7 +267,7 @@ public sealed class ViewSessionTests
         Assert.Contains("[#42 time", rendered);
         Assert.DoesNotContain("[101]", rendered);
         Assert.Contains("Truncated preview", rendered);
-        Assert.Contains("msg#42", rendered);
+        Assert.Contains("#42", rendered);
         Assert.Contains("recall(", rendered);
     }
 
@@ -319,8 +320,8 @@ public sealed class ViewSessionTests
             0,
             [Tool("duplicate", false), Tool("duplicate", false), Tool("duplicate", true)]
         );
-        Assert.Contains("read ×2", duplicates);
-        Assert.Contains("partial/unpaired", duplicates);
+        Assert.Equal(3, duplicates.Split('\n').Count(line => line.StartsWith("read")));
+        Assert.DoesNotContain("partial/unpaired", duplicates);
         Assert.DoesNotContain("duplicate", duplicates);
     }
 

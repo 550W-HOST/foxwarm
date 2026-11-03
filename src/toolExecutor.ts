@@ -1,3 +1,4 @@
+import { toolActivitySummary } from '../packages/shared/dist/toolActivity';
 import type { FunctionResponse } from './types';
 import * as tools from './tools';
 import { logger } from './common';
@@ -112,8 +113,8 @@ function buildToolArgsPreview(call: FunctionCall): string {
     let argValue: unknown = '';
     if (call.argsParseError && typeof call.rawArgsText === 'string') {
         argValue = call.rawArgsText;
-    } else if (call.name === 'exec') {
-        argValue = call.args?.command;
+    } else if (call.name === 'exec' || call.name === 'run_script' || call.name === 'call_tool') {
+        argValue = toolActivitySummary(call);
     } else if (call.name === 'edit' && typeof call.args?.apply_patch === 'string') {
         argValue = call.args.apply_patch;
     } else if (call.name === 'edit' || call.name === 'write' || call.name === 'edit_memory' || call.name === 'write_memory' || call.name === 'delete_memory') {

@@ -73,6 +73,8 @@ Unified `edit` patch calls use the existing patch summaries, hunks and Code acti
 
 ## Behavior
 
+- Existing exec and run_script header summaries prefer the supplied purpose. Legacy exec headers show a short literal command prefix; expanded command arguments and output remain available. Unified call_tool headers derive their summary from the inner descriptor, including argsJson, rather than repeating the outer argument envelope. These wrapper summaries remain plain text and do not borrow native file Code actions or infer a navigation Node from the current Session; `toolResolvedPathNavigation.e2e.mjs` covers a pending cross-Node read wrapper. The shared `toolActivity` helper also serves retained TypeScript runtime progress. Exec purpose text is part of the expanded searchable argument surface; raw inspection and canonical calls stay unchanged. `toolArgsHeader.e2e.mjs` exercises purpose/fallback headers, wrapper resolution, error tone and original-command expansion.
+
 - Tool and counted-group headers publish their own `data-tool-header-tone` for theme-specific surfaces; nested success/error headers are not recolored by a neutral group ancestor.
 
 - An optional selected pane-local Search target reveals its exact Tool card and full argument/result body in the rendered view without changing manual disclosure, starting a height animation, or inserting hidden full-text DOM while Search is closed. Legacy edit and patch-update argument matches use the unified diff’s line changes, counting shared context once. A selected diff card shows unified mode temporarily without overwriting the manual split/unified choice; diff toggles and download controls do not shift a body match’s ordinal.

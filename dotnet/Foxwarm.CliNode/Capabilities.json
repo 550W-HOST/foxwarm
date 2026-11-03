@@ -134,6 +134,10 @@
       "parameters": {
         "type": "object",
         "properties": {
+          "summary": {
+            "type": "string",
+            "description": "Briefly describe what this command or script will do. State its purpose, not an expected result."
+          },
           "command": {
             "type": "string",
             "description": "Shell command or pipeline to execute."
@@ -149,6 +153,7 @@
           }
         },
         "required": [
+          "summary",
           "command"
         ]
       }

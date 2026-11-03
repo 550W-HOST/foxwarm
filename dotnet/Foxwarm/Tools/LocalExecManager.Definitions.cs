@@ -18,6 +18,12 @@ internal sealed partial class LocalExecManager
                     ["additionalProperties"] = false,
                     ["properties"] = new JsonObject
                     {
+                        ["summary"] = new JsonObject
+                        {
+                            ["type"] = "string",
+                            ["description"] =
+                                "Briefly describe what this command or script will do. State its purpose, not an expected result.",
+                        },
                         ["command"] = new JsonObject
                         {
                             ["type"] = "string",
@@ -37,7 +43,7 @@ internal sealed partial class LocalExecManager
                                 "Seconds to wait before returning a still-running command as a background execution. Defaults to 15; values above 60 are reduced to 60 with a warning.",
                         },
                     },
-                    ["required"] = new JsonArray("command"),
+                    ["required"] = new JsonArray("summary", "command"),
                 },
                 ["strict"] = false,
             }

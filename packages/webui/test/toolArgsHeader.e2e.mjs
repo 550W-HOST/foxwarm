@@ -38,6 +38,18 @@ async function buildFixtureBundle() {
     const longCommand = 'printf ' + 'long-command-argument '.repeat(45)
     const longResult = 'long result content '.repeat(70)
     const fixtures = {
+      summarizedExec: {
+        call: { id: 'summary-exec', name: 'exec', args: { summary: 'Inspect source layout', command: 'export SETUP=1; printf source' } },
+        response: { tool_use_id: 'summary-exec', name: 'exec', response: { output: 'source result' } },
+      },
+      summarizedScript: {
+        call: { id: 'summary-script', name: 'run_script', args: { summary: 'Collect task evidence', code: 'return 42' } },
+        response: { tool_use_id: 'summary-script', name: 'run_script', response: { status: 'completed', result: 42 } },
+      },
+      unifiedExec: {
+        call: { id: 'summary-unified', name: 'call_tool', args: { toolId: 'node:provider/worker/exec', argsJson: JSON.stringify({ summary: 'Compile source', command: 'build-project' }) } },
+        response: { tool_use_id: 'summary-unified', name: 'call_tool', response: { error: 'Compiler unavailable' } },
+      },
       exec: {
         call: { id: 'exec-call', name: 'exec', args: { command: longCommand } },
         response: { tool_use_id: 'exec-call', name: 'exec', response: { output: longResult } },
@@ -123,7 +135,7 @@ async function mountFixture({ width, height, style = 'default', dark = false }) 
   await page.evaluate(({ style, dark }) => {
     window.setFixtureTheme(style, dark)
   }, { style, dark })
-  await page.waitForFunction(() => document.querySelectorAll('.foxwarm-tool-card').length === 11)
+  await page.waitForFunction(() => document.querySelectorAll('.foxwarm-tool-card').length === 14)
 }
 
 async function readVisualState(id) {
@@ -302,7 +314,7 @@ before(async () => {
   const bundle = await buildFixtureBundle()
   server = createServer((_request, response) => {
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-  response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}</style><style>html,body{margin:0;width:100%;overflow-x:hidden}main{width:100%;padding:12px}.fixture{width:100%;min-width:0}</style></head><body><main>${['exec', 'edit', 'error', 'send', 'sendAlias', 'child', 'malformedPatch', 'malformedExec', 'rawNoError', 'rawMissing', 'noResult', 'timeline'].map(id => `<div id="${id}" class="fixture"></div>`).join('')}</main><script>${bundle}</script></body></html>`)
+  response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}</style><style>html,body{margin:0;width:100%;overflow-x:hidden}main{width:100%;padding:12px}.fixture{width:100%;min-width:0}</style></head><body><main>${['summarizedExec', 'summarizedScript', 'unifiedExec', 'exec', 'edit', 'error', 'send', 'sendAlias', 'child', 'malformedPatch', 'malformedExec', 'rawNoError', 'rawMissing', 'noResult', 'timeline'].map(id => `<div id="${id}" class="fixture"></div>`).join('')}</main><script>${bundle}</script></body></html>`)
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   fixtureUrl = `http://127.0.0.1:${server.address().port}`
@@ -542,4 +554,20 @@ test('Detailed and expanded-group member result clicks use the Timeline manual d
     await page.waitForSelector(`${card} .foxwarm-tool-result-preview`)
     assert.equal(await page.$(`${card} .foxwarm-tool-call-args`), null)
   }
+})
+
+
+test('tool activity headers show supplied purposes and keep original execution arguments on expansion', async () => {
+  await mountFixture({ width: 1280, height: 900 })
+  for (const [id, expected] of [['summarizedExec', 'Inspect source layout'], ['summarizedScript', 'Collect task evidence'], ['unifiedExec', 'Compile source']]) {
+    const summary = await page.$eval(`#${id} .foxwarm-tool-call-summary`, element => element.textContent)
+    assert.equal(summary, expected)
+  }
+  assert.match(await page.$eval('#exec .foxwarm-tool-call-summary', element => element.textContent), /^printf long-command-argument/)
+  assert.match(await page.$eval('#unifiedExec .foxwarm-tool-tag', element => element.textContent), /exec/)
+  assert.equal(await page.$eval('#unifiedExec .foxwarm-tool-header', element => element.dataset.toolHeaderTone), 'error')
+  await page.click('#summarizedExec .foxwarm-tool-call-summary')
+  const expanded = await page.$eval('#summarizedExec .foxwarm-tool-call-args', element => element.textContent)
+  assert.match(expanded, /Inspect source layout/)
+  assert.match(expanded, /export SETUP=1; printf source/)
 })

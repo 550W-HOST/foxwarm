@@ -382,7 +382,7 @@ internal sealed partial class SessionToolExecutor(
             ?? (
                 name switch
                 {
-                    "exec" => Text(args["command"]),
+                    "exec" or "run_script" or "call_tool" => ToolActivity.Summary(name, args),
                     "edit" when args.ContainsKey("apply_patch") => Text(args["apply_patch"]),
                     "edit" or "write" or "edit_memory" or "write_memory" or "delete_memory" => Text(
                         args["filePath"]

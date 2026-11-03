@@ -273,7 +273,12 @@ internal static class VectorRecall
                         $"[vector source session:{sourceId}; full hit msg#{rawRange.First}-{rawRange.Last}; selected msg#{window.FirstSeq}-{window.LastSeq}; omitted {window.OmittedCount} message(s)]",
                         string.Join(
                             "\n\n",
-                            messageItems.Select(message => message.Heading + "\n" + message.Body)
+                            renderer
+                                .GroupTools(messageItems)
+                                .Select(message =>
+                                    (message.Heading.Length > 0 ? message.Heading + "\n" : "")
+                                    + message.Body
+                                )
                         ),
                         bounded
                             ? ""
