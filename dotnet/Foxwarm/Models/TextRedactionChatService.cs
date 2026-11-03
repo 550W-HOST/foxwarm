@@ -29,14 +29,11 @@ internal sealed class TextRedactionChatService(
         var token = lifetime?.Token ?? cancellationToken;
         var redactor = TextRedactor.Shared;
         Task<string> Redact(string text) => redactor.RedactAsync(http, settings, text, token);
-        IReadOnlyList<JsonObject> prepared;
         string instructions;
         JsonArray? tools;
         try
         {
-            prepared = await TextRedactionProjection
-                .HistoryAsync(history, Redact)
-                .ConfigureAwait(false);
+            await TextRedactionProjection.RedactHistoryAsync(history, Redact).ConfigureAwait(false);
             instructions = await Redact(options.Instructions).ConfigureAwait(false);
             tools = await TextRedactionProjection
                 .ToolsAsync(options.Tools, Redact)
@@ -82,7 +79,7 @@ internal sealed class TextRedactionChatService(
                 : (id, value) =>
                     progress(id, TextRedactionProjection.RestoreProgress(value, redactor))
         );
-        var result = await service.ChatAsync(sessionId, prepared, token).ConfigureAwait(false);
+        var result = await service.ChatAsync(sessionId, history, token).ConfigureAwait(false);
         var wireAssistant = result.AssistantMessage is null
             ? null
             : (JsonObject)result.AssistantMessage.DeepClone();

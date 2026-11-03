@@ -128,6 +128,8 @@ internal static class ConfiguredModelRequests
         );
     }
 
+    // Callers supply request-owned history, including hydrated image-part identity.
+    // The service may transform ordinary text in that copy before serialization.
     internal static IChatService CreatePreparedService(
         HttpClient http,
         ConcreteHostModel model,

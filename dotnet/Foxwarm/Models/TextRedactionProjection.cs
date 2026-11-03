@@ -8,15 +8,15 @@ namespace Foxwarm.Models;
 // These are semantic text slots, not a walk over the final provider payload.
 internal static class TextRedactionProjection
 {
-    internal static async Task<IReadOnlyList<JsonObject>> HistoryAsync(
+    // The configured request owner has already made this copy and hydrated its
+    // image parts. Mutate text slots in place to retain request-local part identity.
+    internal static async Task RedactHistoryAsync(
         IReadOnlyList<JsonObject> history,
         Func<string, Task<string>> redact
     )
     {
-        var result = new List<JsonObject>();
-        foreach (var original in history)
+        foreach (var message in history)
         {
-            var message = (JsonObject)original.DeepClone();
             await ContentAsync(message, redact);
             foreach (var part in (message["parts"] as JsonArray ?? []).OfType<JsonObject>())
             {
@@ -49,9 +49,7 @@ internal static class TextRedactionProjection
                         ),
                     };
             }
-            result.Add(message);
         }
-        return result;
     }
 
     private static async Task ContentAsync(JsonObject message, Func<string, Task<string>> redact)
