@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Publish prebuilt release packages from built delivery assets.
 // Prerequisites: root and WebUI npm dependencies, `npm run build:assets` (or --build-assets),
-// the .NET 10 SDK and Python 3. Linux hosts can produce every target.
+// the .NET 10 SDK and Python 3. macOS packages must be built on macOS arm64.
 import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -14,6 +14,8 @@ const version = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf
 export const TARGETS = {
   'linux-x64': { kind: 'server', rid: 'linux-x64', selfContained: false, archive: 'tar.gz' },
   'linux-x64-self-contained': { kind: 'server', rid: 'linux-x64', selfContained: true, archive: 'tar.gz' },
+  'osx-arm64': { kind: 'server', rid: 'osx-arm64', selfContained: false, archive: 'tar.gz' },
+  'osx-arm64-self-contained': { kind: 'server', rid: 'osx-arm64', selfContained: true, archive: 'tar.gz' },
   'win-x64': { kind: 'server', rid: 'win-x64', selfContained: false, archive: 'zip' },
   'win-x64-self-contained': { kind: 'server', rid: 'win-x64', selfContained: true, archive: 'zip' },
   'desktop-win-x64': { kind: 'desktop', rid: 'win-x64', selfContained: true, archive: 'zip' },
@@ -22,6 +24,7 @@ export const TARGETS = {
 // Collected artifact-runtime packages that npm installs only for the build host.
 const TARGET_NATIVES = {
   'linux-x64': ['@esbuild/linux-x64', '@img/sharp-linux-x64', '@img/sharp-libvips-linux-x64'],
+  'osx-arm64': ['@esbuild/darwin-arm64', '@img/sharp-darwin-arm64', '@img/sharp-libvips-darwin-arm64'],
   'win-x64': ['@esbuild/win32-x64', '@img/sharp-win32-x64'],
 }
 
@@ -31,8 +34,8 @@ export function assetName(name) {
 
 function usage(message) {
   if (message) console.error(message)
-  console.error(`Usage: node scripts/release/package.mjs --output DIR [--target NAME]... [--build-assets] [--directory-only]
-Targets: ${Object.keys(TARGETS).join(', ')} (default: all)`)
+  console.error(`Usage: node scripts/release/package.mjs --output DIR [--target NAME]... [--build-assets] [--directory-only] [--checksums-only]
+Targets: ${Object.keys(TARGETS).join(', ')} (default: macOS targets on macOS, Linux/Windows targets elsewhere)`)
   process.exit(2)
 }
 
@@ -106,7 +109,7 @@ function publish(name, directory) {
   }, null, 2) + '\n')
 }
 
-function archive(name, staging, output) {
+export function archive(name, staging, output) {
   const file = path.join(output, assetName(name))
   fs.rmSync(file, { force: true })
   const top = path.basename(staging)
@@ -123,13 +126,28 @@ with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as archive
 `, path.dirname(staging), top, file])
   } else {
     const epoch = capture('git', ['show', '-s', '--format=%ct', 'HEAD'])
-    run('tar', ['--sort=name', `--mtime=@${epoch}`, '--owner=0', '--group=0', '--numeric-owner',
-      '-czf', file, '-C', path.dirname(staging), top])
+    // Python supplies the same sorted, fixed-time archive on GNU and BSD hosts.
+    // Clear the gzip filename/time as well as tar ownership and PAX timestamps.
+    run('python3', ['-c', `
+import gzip, os, sys, tarfile
+base, top, out, epoch = sys.argv[1:5]
+epoch = int(epoch)
+def normalized(info):
+    info.uid = info.gid = 0
+    info.uname = info.gname = ''
+    info.mtime = epoch
+    info.pax_headers = {}
+    return info
+with open(out, 'wb') as raw:
+    with gzip.GzipFile(filename='', mode='wb', fileobj=raw, mtime=epoch) as compressed:
+        with tarfile.open(fileobj=compressed, mode='w', format=tarfile.PAX_FORMAT) as archive:
+            archive.add(os.path.join(base, top), arcname=top, filter=normalized)
+`, path.dirname(staging), top, file, epoch])
   }
   return file
 }
 
-function writeChecksums(output) {
+export function writeChecksums(output) {
   const lines = fs.readdirSync(output).filter(file => /\.(zip|tar\.gz)$/.test(file)).sort().map(file =>
     `${createHash('sha256').update(fs.readFileSync(path.join(output, file))).digest('hex')}  ${file}`)
   fs.writeFileSync(path.join(output, 'SHA256SUMS'), lines.join('\n') + '\n')
@@ -140,18 +158,29 @@ function main(argv) {
   const targets = []
   let buildAssets = false
   let directoryOnly = false
+  let checksumsOnly = false
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
     if (arg === '--output') output = argv[++i]
     else if (arg === '--target') targets.push(argv[++i])
     else if (arg === '--build-assets') buildAssets = true
     else if (arg === '--directory-only') directoryOnly = true
+    else if (arg === '--checksums-only') checksumsOnly = true
     else usage(`Unknown argument: ${arg}`)
   }
   if (!output) usage('--output is required')
   for (const name of targets) if (!TARGETS[name]) usage(`Unknown target: ${name}`)
   output = path.resolve(output)
-  const selected = targets.length ? targets : Object.keys(TARGETS)
+  if (checksumsOnly) {
+    if (targets.length || buildAssets || directoryOnly) usage('--checksums-only cannot be combined with build options')
+    writeChecksums(output)
+    return
+  }
+  const selected = targets.length ? targets : Object.keys(TARGETS).filter(name =>
+    process.platform === 'darwin' ? name.startsWith('osx-') : !name.startsWith('osx-'))
+  if (selected.some(name => name.startsWith('osx-')) && (process.platform !== 'darwin' || process.arch !== 'arm64')) {
+    throw new Error('macOS packages require an arm64 macOS build host for the native PTY library and helper.')
+  }
   if (buildAssets) run('npm', ['run', 'build:assets'], { shell: process.platform === 'win32' })
   fs.mkdirSync(output, { recursive: true })
   const work = path.join(output, '.work')

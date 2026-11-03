@@ -1,13 +1,14 @@
 ---
 title: 安装 Foxwarm
-description: 在 Linux、WSL、Windows 或 Docker 上安装 Foxwarm，以及启动、停止、更新和定位实例。
+description: 在 Linux、WSL、macOS、Windows 或 Docker 上安装 Foxwarm，以及启动、停止、更新和定位实例。
 ---
 
-Foxwarm 服务器支持 **Linux x64**（包括 x64 WSL）和 **Windows x64**，也可以在 Linux x64 上用 Docker 运行。Foxwarm 服务器不支持 macOS，但 Mac 可以作为[节点](/zh/docs/nodes/)接入。Windows 上还可以使用[桌面版](#windows-桌面版)。
+Foxwarm 服务器支持 **Linux x64**（包括 x64 WSL）、**macOS arm64**（Apple Silicon）和 **Windows x64**，也可以在 Linux x64 上用 Docker 运行。Windows 上还可以使用[桌面版](#windows-桌面版)。
 
 | 平台 | 命令 |
 | --- | --- |
 | Linux x64 或 x64 WSL | `curl -fsSL https://foxwarm.net/install-foxwarm.sh \| bash` |
+| macOS（Apple Silicon） | `curl -fsSL https://foxwarm.net/install-foxwarm.sh \| bash` |
 | Windows x64（PowerShell） | `irm https://foxwarm.net/install-foxwarm.ps1 \| iex` |
 | Docker | 见 [Docker](#docker) |
 
@@ -23,21 +24,24 @@ Foxwarm 服务器支持 **Linux x64**（包括 x64 WSL）和 **Windows x64**，�
 | --- | --- |
 | `foxwarm-linux-x64.tar.gz` | Linux 服务器，使用系统已安装的 ASP.NET Core 10 运行时 |
 | `foxwarm-linux-x64-self-contained.tar.gz` | Linux 服务器，自带 .NET 运行时 |
+| `foxwarm-osx-arm64.tar.gz` | Apple Silicon Mac 服务器，使用系统已安装的 ASP.NET Core 10 运行时 |
+| `foxwarm-osx-arm64-self-contained.tar.gz` | Apple Silicon Mac 服务器，自带 .NET 运行时 |
 | `foxwarm-win-x64.zip` | Windows 服务器，使用系统已安装的 ASP.NET Core 10 运行时 |
 | `foxwarm-win-x64-self-contained.zip` | Windows 服务器，自带 .NET 运行时 |
 | `foxwarm-desktop-win-x64.zip` | Windows 桌面版，自带 .NET 运行时 |
 | `SHA256SUMS` | 以上文件的校验和 |
 
-如果 `dotnet --list-runtimes` 里有 `Microsoft.AspNetCore.App 10.x`，安装脚本会选较小的安装包，否则选自带运行时的版本。也可以用 `--self-contained` / `--framework-dependent`（Linux）或 `-SelfContained` / `-FrameworkDependent`（Windows）自己指定。
+如果 `dotnet --list-runtimes` 里有 `Microsoft.AspNetCore.App 10.x`，安装脚本会选较小的安装包，否则选自带运行时的版本。也可以用 `--self-contained` / `--framework-dependent`（Linux/macOS）或 `-SelfContained` / `-FrameworkDependent`（Windows）自己指定。
 
 ## 环境要求
 
-| | Linux x64 / WSL | Windows x64 |
-| --- | --- | --- |
-| tmux（可连接的控制台） | 可选 | — |
-| curl 或 wget、tar、sha256sum | ✓ | — |
-| ICU 和 OpenSSL 库（大多数系统已自带） | ✓ | — |
-| ASP.NET Core 10 运行时 | 仅较小的安装包需要 | 仅较小的安装包需要 |
+| | Linux x64 / WSL | macOS arm64 | Windows x64 |
+| --- | --- | --- | --- |
+| tmux（可选，后台启动时优先使用） | ✓ | ✓ | — |
+| curl 或 wget、tar | ✓ | 系统自带 | — |
+| sha256sum 或 shasum | ✓ | 系统自带 shasum | — |
+| ICU 和 OpenSSL 库（多数 Linux 系统已自带） | ✓ | 使用 macOS 系统库 | — |
+| ASP.NET Core 10 运行时 | 仅较小的安装包需要 | 仅较小的安装包需要 | 仅较小的安装包需要 |
 
 Linux 安装包需要 glibc 2.34 或更新版本（例如 Ubuntu 22.04、Debian 12、RHEL 9）；语义历史检索需要 glibc 2.39。
 
@@ -63,6 +67,26 @@ curl -fsSL https://foxwarm.net/install-foxwarm.sh | bash -s -- \
 ```
 
 `--package FILE` 安装已下载的安装包，`--no-start` 只安装不启动。运行前可以先阅读[安装脚本](https://github.com/550W-HOST/foxwarm/blob/main/install-foxwarm.sh)。
+
+## macOS（Apple Silicon）
+
+需要 **macOS 15 或更新版本**，与 [.NET 10 支持范围](https://github.com/dotnet/core/blob/main/release-notes/10.0/supported-os.md)一致。不支持 Intel Mac，也不提供 macOS 桌面版。
+
+```bash
+curl -fsSL https://foxwarm.net/install-foxwarm.sh | bash
+```
+
+目录、版本和安装包参数与 Linux 相同。安装脚本会自动选择依赖已安装运行时或自带运行时的 arm64 安装包，不需要通过 Homebrew 安装 ICU 或 OpenSSL。需要可连接的控制台时可安装 tmux；没有 tmux 时，Foxwarm 会在后台启动并写入文件日志。
+
+安装包未做发行签名或公证。curl 安装脚本不会添加隔离标记；浏览器下载的归档可能带有 Gatekeeper 隔离标记。先用 Release 的 `SHA256SUMS` 校验归档，确认信任后，仅移除该归档的隔离标记再安装：
+
+```bash
+xattr -d com.apple.quarantine foxwarm-osx-arm64-self-contained.tar.gz
+curl -fsSLO https://foxwarm.net/install-foxwarm.sh
+bash install-foxwarm.sh --package foxwarm-osx-arm64-self-contained.tar.gz
+```
+
+如果已经解压且 Gatekeeper 阻止运行，可以对该解压目录执行 `xattr -dr com.apple.quarantine /path/to/extracted-package`。不要关闭系统全局的 Gatekeeper。
 
 ## Windows PowerShell
 
@@ -99,7 +123,7 @@ http://localhost:3001/#token=...
 
 安装脚本会把 `foxwarmctl` 放在程序目录：
 
-| 操作 | Linux x64、WSL | Windows |
+| 操作 | Linux、WSL、macOS | Windows |
 | --- | --- | --- |
 | 后台启动 | `./foxwarm/foxwarmctl start` | `.\foxwarm\foxwarmctl.cmd start` |
 | 停止 | `./foxwarm/foxwarmctl stop` | `.\foxwarm\foxwarmctl.cmd stop` |

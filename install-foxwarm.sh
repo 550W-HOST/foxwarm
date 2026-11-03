@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install a prebuilt Foxwarm release on Linux x64 and start it.
+# Install a prebuilt Foxwarm release on Linux x64 or macOS arm64 and start it.
 #   curl -fsSL https://foxwarm.net/install-foxwarm.sh | bash
 set -euo pipefail
 
@@ -66,23 +66,23 @@ absolute_path() {
 }
 
 case "$(uname -s)-$(uname -m)" in
-  Linux-x86_64) ;;
-  Darwin-*) fail "The Foxwarm server does not support macOS yet. A Mac can join an existing server as a Node." ;;
-  *) fail "Foxwarm release packages support Linux x64 and Windows x64." ;;
+  Linux-x86_64) RID=linux-x64 ;;
+  Darwin-arm64) RID=osx-arm64 ;;
+  Darwin-x86_64) fail "Foxwarm macOS server packages require Apple Silicon (arm64). Intel Macs are not supported." ;;
+  *) fail "Foxwarm release packages support Linux x64, macOS arm64 and Windows x64." ;;
 esac
 have tar || fail "tar is required."
-have sha256sum || fail "sha256sum is required."
+if have sha256sum; then checksum=(sha256sum); elif have shasum; then checksum=(shasum -a 256); else fail "sha256sum or shasum is required."; fi
 [ -n "$PACKAGE" ] || have curl || have wget || fail "curl or wget is required."
-# .NET needs these system libraries even in the self-contained package.
-# Read the cache once: grep -q closing a pipe early would fail the pipeline under pipefail.
-libraries="$(ldconfig -p 2>/dev/null || true)"
-for library in libicuuc libssl; do
-  if have ldconfig && ! grep -q "$library\.so" <<<"$libraries"; then
-    fail "$library is missing. Install ICU and OpenSSL with your package manager (for example: apt install libicu-dev libssl3, or dnf install libicu openssl-libs)."
-  fi
-done
-if [ "$START" = true ]; then
-  have tmux || fail "tmux is required to run Foxwarm in the background. Install it, or rerun with --no-start."
+# Linux needs system ICU and OpenSSL even for self-contained .NET. macOS uses
+# its system ICU and Apple cryptography libraries; it does not use ldconfig.
+if [ "$RID" = linux-x64 ]; then
+  libraries="$(ldconfig -p 2>/dev/null || true)"
+  for library in libicuuc libssl; do
+    if have ldconfig && ! grep -q "$library\.so" <<<"$libraries"; then
+      fail "$library is missing. Install ICU and OpenSSL with your package manager (for example: apt install libicu-dev libssl3, or dnf install libicu openssl-libs)."
+    fi
+  done
 fi
 
 FOXWARM_DIR="$(absolute_path "${FOXWARM_DIR:-foxwarm}" "$CALL_DIR")"
@@ -128,8 +128,8 @@ if [ -z "$VARIANT" ] && [ -z "$PACKAGE" ]; then
     log "No ASP.NET Core 10 runtime found; using the self-contained package."
   fi
 fi
-ASSET="foxwarm-linux-x64.tar.gz"
-[ "$VARIANT" = self-contained ] && ASSET="foxwarm-linux-x64-self-contained.tar.gz"
+ASSET="foxwarm-$RID.tar.gz"
+[ "$VARIANT" = self-contained ] && ASSET="foxwarm-$RID-self-contained.tar.gz"
 
 mkdir -p "$FOXWARM_DIR/runtime"
 SCRATCH="$(mktemp -d "$FOXWARM_DIR/runtime/.staging-XXXXXX")"
@@ -144,13 +144,15 @@ if [ -z "$PACKAGE" ]; then
   log "Downloading $ASSET${VERSION:+ $VERSION}"
   download "$base/$ASSET" "$SCRATCH/$ASSET"
   download "$base/SHA256SUMS" "$SCRATCH/SHA256SUMS"
-  (cd "$SCRATCH" && grep -E "  $ASSET\$" SHA256SUMS | sha256sum -c --quiet -) || fail "Checksum verification failed for $ASSET."
+  (cd "$SCRATCH" && grep -E "  $ASSET\$" SHA256SUMS | "${checksum[@]}" -c -) || fail "Checksum verification failed for $ASSET."
   PACKAGE="$SCRATCH/$ASSET"
 fi
 mkdir "$SCRATCH/extract"
 tar -xzf "$PACKAGE" -C "$SCRATCH/extract"
 STAGING="$(find "$SCRATCH/extract" -mindepth 1 -maxdepth 1 -type d -print -quit)"
-[ -n "$STAGING" ] && [ -x "$STAGING/Foxwarm" ] && [ -x "$STAGING/foxwarmctl" ] || fail "$PACKAGE is not a Foxwarm Linux server package."
+[ -n "$STAGING" ] && [ -x "$STAGING/Foxwarm" ] && [ -x "$STAGING/foxwarmctl" ] || fail "$PACKAGE is not a Foxwarm server package."
+package_rid="$(sed -n 's/^ *"rid": *"\([^"]*\)".*/\1/p' "$STAGING/release.json")"
+[ "$package_rid" = "$RID" ] || fail "$PACKAGE is for $package_rid, not $RID."
 RELEASE="$(sed -n 's/^ *"version": *"\([^"]*\)".*/\1/p' "$STAGING/release.json")"
 
 mkdir -p "$FOXWARM_DATA_DIR/state" "$FOXWARM_DATA_DIR/agents"
@@ -170,7 +172,6 @@ ln -sfn "$RELEASE" "$FOXWARM_DIR/runtime/current"
 cp "$FOXWARM_DIR/runtime/current/foxwarmctl" "$FOXWARM_DIR/foxwarmctl"
 log "Installed Foxwarm $RELEASE in $FOXWARM_DIR"
 
-SESSION="${FOXWARM_TMUX_SESSION:-foxwarm}"
 if [ "$START" = false ]; then
   echo "Start it with: '$FOXWARM_DIR/foxwarmctl' start"
   exit 0
@@ -178,9 +179,9 @@ fi
 "$FOXWARM_DIR/foxwarmctl" start
 
 token=""
-for i in $(seq 1 120); do
+for ((i = 1; i <= 120; i++)); do
   if [ -s "$FOXWARM_DATA_DIR/state/token" ]; then token="$(cat "$FOXWARM_DATA_DIR/state/token")"; break; fi
-  [ $((i % 20)) -eq 0 ] && warn "Still waiting for startup. Inspect it with: tmux attach -t '$SESSION'"
+  [ $((i % 20)) -eq 0 ] && warn "Still waiting for startup. Inspect it with: '$FOXWARM_DIR/foxwarmctl' status"
   sleep 0.5
 done
 port="$(sed -n 's/^ *httpPort: *\([0-9][0-9]*\).*/\1/p' "$FOXWARM_DATA_DIR/state/config.yaml" 2>/dev/null | sed -n 1p)"

@@ -6,7 +6,7 @@ import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createHostFixture, until } from './mainHostFixture.mjs'
 
-const env = {}, options = { env, }
+const env = {}, options = { env, corePath: process.env.FOXWARM_PUBLISHED_CORE ? join(process.env.FOXWARM_PUBLISHED_CORE, 'Foxwarm.dll') : undefined }
 const fixture = await createHostFixture('native-exec', options)
 options.cwd = fixture.root
 Object.assign(env, { FOXWARM_NATIVE_OWNED_VALUE: 'inherited ordinary value' })
@@ -87,6 +87,7 @@ try {
   const resumed = (await history()).messages.flatMap(row => row.parts || [])
   assert.equal(resumed.filter(part => part.system?.includes('background-process-finished') && part.system.includes(restartId)).length, 1)
   assert(resumed.some(part => part.functionResponse?.tool_use_id === 'original-log' && part.functionResponse.response.output.includes('native finished')))
+  assert.match(await readFile(join(fixture.data, 'state/logs/foxwarm.log'), 'utf8'), /Main HTTP listening:/)
   await fixture.stop(); assert.deepEqual(failures, []); assert.equal(new Set(fixture.hostPids).size, 2)
   console.log(JSON.stringify({ result: 'Native adjacent commands, inherited environment, Stop, detached lifetime, actual Main restart, exact completion, original-path read and startup log rotation passed.', mainProcesses: fixture.hostPids.length, modelRequests: requests.length }))
 } finally {

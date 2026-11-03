@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   packages:
-    name: Build packages
+    name: Build Linux and Windows packages
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -41,8 +41,98 @@ jobs:
           [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "Tag $GITHUB_REF_NAME does not match package.json $version"; exit 1; }
       - name: Install dependencies
         run: npm ci && npm --prefix packages/webui ci
-      - name: Build all packages
+      - name: Build Linux and Windows packages
         run: node scripts/release/package.mjs --build-assets --output dist
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-packages-linux-windows
+          path: dist/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  macos:
+    name: Build and qualify macOS arm64 packages
+    # The standard macos-15 label is arm64; macos-15-intel is a different image.
+    runs-on: macos-15
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.21.0
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            packages/webui/package-lock.json
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+      - name: Confirm native runner and install test prerequisites
+        run: |
+          test "$(uname -m)" = arm64
+          command -v tmux || brew install tmux
+          npm ci && npm --prefix packages/webui ci
+      - name: Build both macOS packages natively
+        run: node scripts/release/package.mjs --build-assets --output dist --target osx-arm64 --target osx-arm64-self-contained
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-packages-macos
+          path: dist/*.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+      - name: Qualify the archived Main, detached exec, PTY and native ToolScript
+        run: |
+          for package in dist/foxwarm-osx-arm64*.tar.gz; do
+            extracted="$(mktemp -d "$RUNNER_TEMP/macos-package.XXXXXX")"
+            tar -xzf "$package" -C "$extracted"
+            payload="$(find "$extracted" -mindepth 1 -maxdepth 1 -type d -print -quit)"
+            test -f "$payload/libfoxwarm-pty.dylib"
+            test -x "$payload/foxwarm-pty-helper"
+            # Published natives must not depend on the runner's Homebrew installation.
+            find "$payload" -name '*.dylib' -exec otool -L {} \; > "$extracted/native-libraries.txt"
+            otool -L "$payload/Foxwarm" "$payload/foxwarm-pty-helper" >> "$extracted/native-libraries.txt"
+            cat "$extracted/native-libraries.txt"
+            if grep -E '/(opt/homebrew|usr/local)/(opt|Cellar|lib)/' "$extracted/native-libraries.txt"; then exit 1; fi
+            node scripts/release/qualify-macos-package.mjs "$payload"
+            FOXWARM_PUBLISHED_CORE="$payload" node packages/webui/test/mainHostNativeExec.e2e.mjs
+            rm -rf "$extracted"
+          done
+      - name: Installer and control smoke with system Bash and tmux
+        shell: /bin/bash -e {0}
+        run: |
+          for package in dist/foxwarm-osx-arm64*.tar.gz; do
+            /bin/bash scripts/release/smoke-server.sh "$package"
+          done
+      - name: Installer and control smoke without tmux
+        shell: /bin/bash -e {0}
+        run: |
+          for package in dist/foxwarm-osx-arm64*.tar.gz; do
+            /bin/bash scripts/release/smoke-server.sh "$package" 3001 --without-tmux
+          done
+
+  aggregate:
+    name: Aggregate release assets and checksums
+    needs: [packages, macos]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.21.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: release-packages-*
+          merge-multiple: true
+          path: dist
+      - name: Write one checksum list covering every platform
+        run: node scripts/release/package.mjs --output dist --checksums-only
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-packages
@@ -65,7 +155,7 @@ jobs:
           dotnet-version: '10.0.x'
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: release-packages
+          name: release-packages-linux-windows
           path: dist
       - name: Install tmux
         run: sudo apt-get update && sudo apt-get install -y tmux
@@ -98,7 +188,7 @@ jobs:
           dotnet-version: '10.0.x'
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: release-packages
+          name: release-packages-linux-windows
           path: dist
       - name: Install the Desktop acceptance driver
         run: npm ci
@@ -163,7 +253,7 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: release-packages
+          name: release-packages-linux-windows
           path: dist
       - name: Build from the Linux package
         run: |
@@ -197,7 +287,7 @@ jobs:
   release:
     name: Publish GitHub release
     if: startsWith(github.ref, 'refs/tags/')
-    needs: [linux, windows, image]
+    needs: [linux, windows, image, macos, aggregate]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:

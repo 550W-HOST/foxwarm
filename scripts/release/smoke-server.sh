@@ -1,13 +1,26 @@
 #!/usr/bin/env bash
-# Install a Linux server package into a disposable directory, then exercise
+# Install a POSIX server package into a disposable directory, then exercise
 # start, HTTP sign-in page, status, forced reinstall through update, and stop.
-# Usage: scripts/release/smoke-server.sh PACKAGE [PORT]
+# Usage: scripts/release/smoke-server.sh PACKAGE [PORT] [--without-tmux]
 set -euo pipefail
 
-package="$(realpath "${1:?Usage: smoke-server.sh PACKAGE [PORT]}")"
+package="${1:?Usage: smoke-server.sh PACKAGE [PORT] [--without-tmux]}"
+package="$(cd "$(dirname "$package")" && pwd -P)/$(basename "$package")"
 port="${2:-3001}"
 installer="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/install-foxwarm.sh"
-work="$(mktemp -d)"
+# Darwin's long per-user TMPDIR can exceed the Unix socket path limit in tmux.
+work="$(mktemp -d /tmp/foxwarm-smoke.XXXXXX)"
+if [ "${3:-}" = --without-tmux ]; then
+  [ "$(uname -s)" = Darwin ] || { echo "--without-tmux requires the macOS system PATH" >&2; exit 1; }
+  mkdir "$work/bin"
+  case "$package" in
+    *-self-contained.tar.gz) unset DOTNET_ROOT DOTNET_ROOT_ARM64 ;;
+    *) if command -v dotnet >/dev/null 2>&1; then ln -s "$(command -v dotnet)" "$work/bin/dotnet"; fi ;;
+  esac
+  export PATH="$work/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+  ! command -v tmux || { echo "tmux must be absent from the smoke PATH" >&2; exit 1; }
+  case "$package" in *-self-contained.tar.gz) ! command -v dotnet ;; esac
+fi
 export FOXWARM_TMUX_SESSION="foxwarm-smoke-$$"
 # Use a private tmux server, never the caller's.
 unset TMUX
@@ -16,8 +29,11 @@ control="$work/foxwarm/foxwarmctl"
 
 cleanup() {
   status=$?
-  if [ "$status" -ne 0 ] && tmux has-session -t "=$FOXWARM_TMUX_SESSION" 2>/dev/null; then
+  if [ "$status" -ne 0 ] && command -v tmux >/dev/null && tmux has-session -t "=$FOXWARM_TMUX_SESSION" 2>/dev/null; then
     tmux capture-pane -p -S -200 -t "=$FOXWARM_TMUX_SESSION:=foxwarm" || true
+  fi
+  if [ "$status" -ne 0 ]; then
+    for file in "$work/data/state/logs/"*.log; do [ ! -f "$file" ] || tail -100 "$file"; done
   fi
   [ -x "$control" ] && "$control" stop >/dev/null 2>&1 || true
   tmux kill-server 2>/dev/null || true
@@ -27,7 +43,7 @@ cleanup() {
 trap cleanup EXIT
 
 wait_http() {
-  for _ in $(seq 1 120); do
+  for ((attempt = 0; attempt < 120; attempt++)); do
     if curl -fsS -o /dev/null "http://127.0.0.1:$port/login.html"; then return 0; fi
     sleep 0.5
   done
@@ -37,15 +53,23 @@ wait_http() {
 
 mkdir -p "$work/data/state"
 printf 'bot:\n  httpPort: %s\n' "$port" > "$work/data/state/config.yaml"
-(cd "$work" && bash "$installer" --package "$package" --dir foxwarm --data-dir data)
+(cd "$work" && /bin/bash "$installer" --package "$package" --dir foxwarm --data-dir data)
 wait_http
 [ -s "$work/data/state/token" ] || { echo "No sign-in token was created" >&2; exit 1; }
 "$control" status
-first="$(tmux list-panes -t "=$FOXWARM_TMUX_SESSION:=foxwarm" -F '#{pane_pid}')"
+first="$("$control" status | sed -n 's/.*Running (PID \([0-9]*\)).*/\1/p')"
+[ -n "$first" ]
+if [ "${3:-}" = --without-tmux ]; then
+  [ "$(cat "$work/foxwarm/foxwarm.pid")" = "$first" ]
+  [ -f "$work/data/state/logs/foxwarm.stdout.log" ]
+  [ -f "$work/data/state/logs/foxwarm.stderr.log" ]
+fi
+[ -s "$work/data/state/logs/foxwarm.log" ] || { echo "No Main file log was created" >&2; exit 1; }
 
 "$control" update --package "$package" --force
 wait_http
-second="$(tmux list-panes -t "=$FOXWARM_TMUX_SESSION:=foxwarm" -F '#{pane_pid}')"
+second="$("$control" status | sed -n 's/.*Running (PID \([0-9]*\)).*/\1/p')"
+[ -n "$second" ]
 [ "$first" != "$second" ] || { echo "Update did not restart Foxwarm" >&2; exit 1; }
 [ "$(find "$work/foxwarm/runtime" -mindepth 1 -maxdepth 1 | wc -l)" -eq 2 ] || { ls -la "$work/foxwarm/runtime" >&2; echo "Old releases were not removed" >&2; exit 1; }
 

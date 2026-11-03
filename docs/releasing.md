@@ -8,14 +8,18 @@ Foxwarm releases are prebuilt packages. Installing one compiles nothing and need
 | --- | --- |
 | `foxwarm-linux-x64.tar.gz` | Server for Linux x64; runs on the installed ASP.NET Core 10 runtime |
 | `foxwarm-linux-x64-self-contained.tar.gz` | Server for Linux x64 including the .NET runtime |
+| `foxwarm-osx-arm64.tar.gz` | Server for Apple Silicon Macs; runs on the installed ASP.NET Core 10 runtime |
+| `foxwarm-osx-arm64-self-contained.tar.gz` | Server for Apple Silicon Macs including the .NET runtime |
 | `foxwarm-win-x64.zip` | Server for Windows x64; runs on the installed ASP.NET Core 10 runtime |
 | `foxwarm-win-x64-self-contained.zip` | Server for Windows x64 including the .NET runtime |
 | `foxwarm-desktop-win-x64.zip` | Windows desktop app including the .NET runtime |
 | `SHA256SUMS` | SHA-256 checksums of the assets |
 
-Asset names carry no version, so `releases/latest/download/<asset>` always names the newest release; each archive has a single top-level directory such as `foxwarm-0.9.0-linux-x64/`. Every package contains `release.json` (version, target, runtime identifier, whether it is self-contained, its asset name and source commit). Server packages also contain the installation control script: `foxwarmctl` on Linux, `foxwarmctl.ps1` and `foxwarmctl.cmd` on Windows.
+Asset names carry no version, so `releases/latest/download/<asset>` always names the newest release; each archive has a single top-level directory such as `foxwarm-0.9.0-linux-x64/`. Every package contains `release.json` (version, target, runtime identifier, whether it is self-contained, its asset name and source commit). Server packages also contain the installation control script: `foxwarmctl` on Linux and macOS, `foxwarmctl.ps1` and `foxwarmctl.cmd` on Windows.
 
 Each server package is the complete published Core: WebUI, skills, templates, Node client bundles, browser and Code extensions, artifact compiler resources, ToolScript worker and native libraries for its platform. Artifact preparation still runs the collected compiler under a `node` found on `PATH`; it is optional at runtime. The Code workbench assets and HEIF decoders remain separate optional installations.
+
+macOS packages require **macOS 15 or later**, following the [.NET 10 supported operating systems](https://github.com/dotnet/core/blob/main/release-notes/10.0/supported-os.md). They use the system ICU and Apple cryptography libraries; no Homebrew ICU or OpenSSL installation is required. The native qualification checks bundled dylibs and entry executables for Homebrew library dependencies. Intel Macs and macOS Desktop are not packaged. These archives are not signed or notarized as distribution packages; browser downloads can carry Gatekeeper quarantine. See the [installation guide](https://foxwarm.net/docs/installing/#macos-apple-silicon) before using a browser-downloaded archive. The curl installer does not add quarantine.
 
 ## Installed layout
 
@@ -47,19 +51,20 @@ node scripts/release/package.mjs --build-assets --output dist
 node scripts/release/package.mjs --output dist --target linux-x64   # one package
 ```
 
-A Linux x64 host builds every target. Windows packages are cross-published; the script installs the locked Windows esbuild and sharp packages (verified against `package-lock.json`) beside the host ones so the artifact runtime collector can find them. `--directory-only` leaves the published directories under `dist/.work` instead of archiving them.
+A Linux x64 host builds the Linux and Windows targets. macOS arm64 targets must be built on an Apple Silicon macOS host: Clang builds the Darwin PTY library and its controlling-terminal helper during publish. With no `--target`, macOS selects its two server variants and Linux selects the Linux and Windows targets. Windows packages are cross-published; the script installs the locked target-native esbuild and sharp packages (verified against `package-lock.json`) beside the host ones so the artifact runtime collector can find them. Tar archives use Python 3 on both GNU and BSD hosts, with sorted entries, commit timestamps, numeric root ownership and a fixed gzip header. `--directory-only` leaves the published directories under `dist/.work` instead of archiving them.
 
-`scripts/release/smoke-server.sh PACKAGE [PORT]` and `scripts/release/smoke-server.ps1 -Package FILE [-Port N]` install a package into a temporary directory with the real installer, then check startup, the sign-in page, status, a forced reinstall through `update`, release cleanup and stop. `scripts/release/release-install.test.js` covers the Linux installer and control script with fixture packages, including tmux pane isolation, detached background lifecycle, launcher hangups, stale PIDs and checksum-tool fallback.
+`scripts/release/smoke-server.sh PACKAGE [PORT] [--without-tmux]` and `scripts/release/smoke-server.ps1 -Package FILE [-Port N]` install a package into a temporary directory with the real installer, then check startup, the sign-in page, status, a forced reinstall through `update`, release cleanup and stop. `scripts/release/release-install.test.js` covers the Linux installer and control script with fixture packages, including tmux pane isolation, detached background lifecycle, launcher hangups, stale PIDs and checksum-tool fallback. `scripts/release/package.test.mjs` covers portable archives, merged checksums, macOS installer selection and the `shasum` fallback. The macOS smoke uses system Bash 3.2 and BSD utilities, with tmux and with a system-only PATH that excludes tmux; the self-contained background smoke also excludes `dotnet`.
 
 ## Publishing a release
 
 The **Release packages** workflow builds all packages on every push to `testing` and `main` and qualifies them:
 
 - the Linux framework-dependent package on the runner, and the self-contained package on Ubuntu 22.04 without .NET;
+- both macOS arm64 packages, built on the official `macos-15` arm64 runner and exercised from their extracted archives: Main startup and file logging, detached exec surviving an actual Main restart with once-only recovery, PTY input/output/resize/cancel, native Monty/ToolScript, and installer/control start/status/update/stop with and without tmux;
 - both Windows server packages, and the Desktop package through its validation and WebView2 acceptance;
 - the container image built from the Linux package.
 
-The packages remain available as the `release-packages` workflow artifact for 14 days. To publish:
+The Linux/Windows and macOS build jobs upload separate artifacts. An aggregation job merges their assets and regenerates one `SHA256SUMS` covering all seven packages before uploading `release-packages`; the tag-only release job waits for aggregation and every qualification job. The packages remain available as the `release-packages` workflow artifact for 14 days. To publish:
 
 1. Set `version` in the root `package.json` (and the root entries of `package-lock.json`) to the release version.
 2. Push a tag `v<version>` for that commit. The workflow refuses a tag that differs from `package.json`.

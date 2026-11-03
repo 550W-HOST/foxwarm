@@ -1,15 +1,16 @@
 ---
 title: Install Foxwarm
-description: Install Foxwarm on Linux, WSL, Windows or Docker, then start, stop, update and locate your instance.
+description: Install Foxwarm on Linux, WSL, macOS, Windows or Docker, then start, stop, update and locate your instance.
 sidebar:
   order: 1
 ---
 
-The Foxwarm server runs on **Linux x64** (including x64 WSL) and **Windows x64**, or in Docker on Linux x64. macOS is not supported for the server; a Mac can still join as a [Node](/docs/nodes/). On Windows you can also use the [desktop app](#windows-desktop-app).
+The Foxwarm server runs on **Linux x64** (including x64 WSL), **macOS arm64** (Apple Silicon) and **Windows x64**, or in Docker on Linux x64. On Windows you can also use the [desktop app](#windows-desktop-app).
 
 | Platform | Command |
 | --- | --- |
 | Linux x64 or x64 WSL | `curl -fsSL https://foxwarm.net/install-foxwarm.sh \| bash` |
+| macOS, Apple Silicon | `curl -fsSL https://foxwarm.net/install-foxwarm.sh \| bash` |
 | Windows x64, in PowerShell | `irm https://foxwarm.net/install-foxwarm.ps1 \| iex` |
 | Docker | See [Docker](#docker) |
 
@@ -25,21 +26,24 @@ Each [release](https://github.com/550W-HOST/foxwarm/releases/latest) provides:
 | --- | --- |
 | `foxwarm-linux-x64.tar.gz` | Linux server; uses the installed ASP.NET Core 10 runtime |
 | `foxwarm-linux-x64-self-contained.tar.gz` | Linux server with the .NET runtime included |
+| `foxwarm-osx-arm64.tar.gz` | Apple Silicon Mac server; uses the installed ASP.NET Core 10 runtime |
+| `foxwarm-osx-arm64-self-contained.tar.gz` | Apple Silicon Mac server with the .NET runtime included |
 | `foxwarm-win-x64.zip` | Windows server; uses the installed ASP.NET Core 10 runtime |
 | `foxwarm-win-x64-self-contained.zip` | Windows server with the .NET runtime included |
 | `foxwarm-desktop-win-x64.zip` | Windows desktop app, .NET runtime included |
 | `SHA256SUMS` | Checksums of the files above |
 
-The installers choose the smaller package when `dotnet --list-runtimes` shows `Microsoft.AspNetCore.App 10.x`, and the self-contained package otherwise. Use `--self-contained` / `--framework-dependent` (Linux) or `-SelfContained` / `-FrameworkDependent` (Windows) to choose yourself.
+The installers choose the smaller package when `dotnet --list-runtimes` shows `Microsoft.AspNetCore.App 10.x`, and the self-contained package otherwise. Use `--self-contained` / `--framework-dependent` (Linux/macOS) or `-SelfContained` / `-FrameworkDependent` (Windows) to choose yourself.
 
 ## Requirements
 
-| | Linux x64 / WSL | Windows x64 |
-| --- | --- | --- |
-| tmux, for an attachable console | optional | — |
-| curl or wget, tar, sha256sum | ✓ | — |
-| ICU and OpenSSL libraries (present on most systems) | ✓ | — |
-| ASP.NET Core 10 runtime | only for the smaller package | only for the smaller package |
+| | Linux x64 / WSL | macOS arm64 | Windows x64 |
+| --- | --- | --- | --- |
+| tmux (optional, preferred for background start) | ✓ | ✓ | — |
+| curl or wget, tar | ✓ | included with macOS | — |
+| sha256sum or shasum | ✓ | shasum is included | — |
+| ICU and OpenSSL libraries (present on most Linux systems) | ✓ | uses macOS system libraries | — |
+| ASP.NET Core 10 runtime | only for the smaller package | only for the smaller package | only for the smaller package |
 
 Linux packages need glibc 2.34 or later (for example Ubuntu 22.04, Debian 12, RHEL 9). Semantic history search needs glibc 2.39.
 
@@ -65,6 +69,26 @@ curl -fsSL https://foxwarm.net/install-foxwarm.sh | bash -s -- \
 ```
 
 `--package FILE` installs an already downloaded package, and `--no-start` installs without starting. You can read the [installer](https://github.com/550W-HOST/foxwarm/blob/main/install-foxwarm.sh) before running it.
+
+## macOS (Apple Silicon)
+
+Requires **macOS 15 or later**, following the [.NET 10 support policy](https://github.com/dotnet/core/blob/main/release-notes/10.0/supported-os.md). Intel Macs are not supported. There is no macOS desktop package.
+
+```bash
+curl -fsSL https://foxwarm.net/install-foxwarm.sh | bash
+```
+
+The same directory, version and package options as Linux apply. The installer chooses between the framework-dependent and self-contained arm64 packages. No Homebrew ICU or OpenSSL installation is needed. Install tmux if you want an attachable console; otherwise Foxwarm starts in the background with file logs.
+
+These packages are not signed or notarized for distribution. The curl installer does not add quarantine, but archives downloaded with a browser can be quarantined by Gatekeeper. After verifying the archive against the release's `SHA256SUMS` and deciding to trust it, remove quarantine from that archive before installing it:
+
+```bash
+xattr -d com.apple.quarantine foxwarm-osx-arm64-self-contained.tar.gz
+curl -fsSLO https://foxwarm.net/install-foxwarm.sh
+bash install-foxwarm.sh --package foxwarm-osx-arm64-self-contained.tar.gz
+```
+
+If you already extracted the archive and Gatekeeper blocks its executables, clear quarantine only on that extracted package with `xattr -dr com.apple.quarantine /path/to/extracted-package`. Do not disable Gatekeeper system-wide.
 
 ## Windows PowerShell
 
@@ -101,7 +125,7 @@ On a new installation, Foxwarm opens **Setup → Models**. Follow [Set up your f
 
 The installer places `foxwarmctl` in the program directory:
 
-| Action | Linux x64, WSL | Windows |
+| Action | Linux, WSL, macOS | Windows |
 | --- | --- | --- |
 | Start in the background | `./foxwarm/foxwarmctl start` | `.\foxwarm\foxwarmctl.cmd start` |
 | Stop | `./foxwarm/foxwarmctl stop` | `.\foxwarm\foxwarmctl.cmd stop` |
