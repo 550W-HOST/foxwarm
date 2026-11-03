@@ -126,3 +126,32 @@ test('node PTY service bridges its terminal-scoped code helper through service e
     await fs.remove(tempDir);
   }
 });
+
+
+test('node PTY launch removes hosting tmux context and preserves normal environment', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-pty-env-'));
+  const values = { TMUX: `${root}/host.sock,123,0`, TMUX_PANE: '%7', TMUX_TMPDIR: root, FOXWARM_ENV_PROBE: 'ordinary value' };
+  const previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]]));
+  Object.assign(process.env, values);
+  let environment: NodeJS.ProcessEnv | undefined;
+  const service = new NodePtyService({ spawn(_file, _args, options) {
+    environment = options.env;
+    return new FakePtyProcess();
+  } }, root, () => {});
+  try {
+    await service.execute('create', { cwd: root });
+    assert.ok(environment);
+    assert.equal(environment.TMUX, undefined);
+    assert.equal(environment.TMUX_PANE, undefined);
+    assert.equal(environment.TMUX_TMPDIR, root);
+    assert.equal(environment.FOXWARM_ENV_PROBE, 'ordinary value');
+    for (const [key, value] of Object.entries(values)) assert.equal(process.env[key], value);
+  } finally {
+    await service.dispose();
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    await fs.remove(root);
+  }
+});

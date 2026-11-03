@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import fs from 'fs-extra';
 import path from 'path';
 import { createRequire } from 'module';
+import { independentProcessEnvironment } from '../../shared/dist/processOperations';
 import { CodeHelperIpcServer, type CodeHelperControlResult, type CodeHelperOpenRequest } from '../../shared/dist/codeHelperIpc';
 
 export type NodePtyTerminalRecord = {
@@ -148,13 +149,13 @@ export class NodePtyService {
         cols,
         rows,
         cwd,
-        env: {
+        env: independentProcessEnvironment({
           ...process.env,
           TERM: 'xterm-256color',
           COLORTERM: 'truecolor',
           ...codeHelper.env,
           ...(cwdPath ? { FOXWARM_TERMINAL_CWD_PATH: cwdPath } : {}),
-        },
+        }),
       });
     } catch (error) {
       this.codeHelper.unregisterTerminal(codeHelper.capability);

@@ -173,3 +173,27 @@ test('Windows background capture survives wait cancellation and manager recovery
     await fs.remove(root);
   }
 });
+
+
+test('persistent exec drops inherited tmux context without changing the host or explicit command environment', { skip: process.platform === 'win32' }, async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-exec-env-'));
+  const values = { TMUX: `${root}/host.sock,123,0`, TMUX_PANE: '%7', TMUX_TMPDIR: root, FOXWARM_ENV_PROBE: 'ordinary value' };
+  const previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]]));
+  Object.assign(process.env, values);
+  const manager = new PersistentExecManager({ getDefaultCwd: () => root, getExecTempDir: () => path.join(root, 'exec') });
+  try {
+    const entry = await manager.startPersistentExec({ command: `printf '%s\\n' "\${TMUX-unset}" "\${TMUX_PANE-unset}" "$FOXWARM_ENV_PROBE" "$TMUX_TMPDIR"; TMUX=explicit TMUX_PANE=chosen /bin/bash -c 'printf "%s %s\\n" "$TMUX" "$TMUX_PANE"'` });
+    const status = await manager.waitForExecCompletion(entry.id, 10_000);
+    assert.equal(status?.exitCode, 0);
+    assert.equal(await fs.readFile(entry.logPath, 'utf8'), `unset\nunset\nordinary value\n${root}\nexplicit chosen\n`);
+    for (const [key, value] of Object.entries(values)) assert.equal(process.env[key], value);
+    await manager.finalizeForegroundExec(entry.id);
+  } finally {
+    await manager.shutdown();
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    await fs.remove(root);
+  }
+});
