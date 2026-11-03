@@ -49,7 +49,7 @@ Creation sets prospective configuration, not the identity of a successful provid
 | Action | What changes | What does not follow from it |
 | --- | --- | --- |
 | Display-name update, WebUI Rename, `/session rename` | Human-readable label; clearing it retains the internal ID. | No new lifetime, Archive rename, Agent move, or parent change. |
-| Automatic title after the first completed user turn | Sets a generated label only on an unnamed Session whose first input came directly from the user. | No change to an existing or concurrently set label, no history row, and no retry. |
+| Automatic title after the first completed user turn, when `sessionAutoTitle` is enabled | Sets a generated label only on an unnamed Session whose first input came directly from the user. | No change to an existing or concurrently set label, no history row, and no retry. |
 | Reorder a Session in the sidebar | Browser-facing sibling order recorded in the catalog. | No history move, new context, or execution placement change. |
 | Reparent, including a tree drag to another parent | Actual Session parent relation. Sidebar ordering may be changed separately. | No Agent membership, inherited memory, Task creator/owner, or copied conversation change. |
 | `move_session` or `/session move` | Internal ID, optionally Agent membership, retained aliases, and associated history/attachment identity. Direct child references follow the new canonical ID. | Not the WebUI sidebar `/move` operation, a recursive tree move, or a copy of every Agent-owned file. |

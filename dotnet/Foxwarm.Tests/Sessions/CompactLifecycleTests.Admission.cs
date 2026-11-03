@@ -118,8 +118,6 @@ public sealed partial class CompactLifecycleTests
             typeof(MainHost)
                 .GetField("sessions", BindingFlags.Instance | BindingFlags.NonPublic)!
                 .GetValue(host)!;
-        // The scripted provider indexes exact turn and planner requests.
-        manager.AutoTitles = false;
         var owner = manager.Find(id)!;
         var route = "api/sessions/" + Uri.EscapeDataString(id);
         var finalizing = new TaskCompletionSource(

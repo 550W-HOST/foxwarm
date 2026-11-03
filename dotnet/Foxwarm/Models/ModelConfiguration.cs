@@ -16,6 +16,7 @@ internal sealed partial class ModelConfiguration
     internal HostPaths Paths { get; }
     public string ActivePath { get; }
     public string TemplatePath { get; }
+    internal string AppTemplatePath { get; }
     public string AppPath { get; }
     public string AppRaw { get; }
     internal AccessConfiguration Access { get; }
@@ -142,6 +143,10 @@ internal sealed partial class ModelConfiguration
     public HostModels Models { get; }
     internal JsonObject AppConfiguration => (JsonObject)app.DeepClone();
     internal bool HandoffConfirmationEnabled { get; }
+    private volatile bool sessionAutoTitle;
+
+    // Applied live by Setup Config saves; hand edits apply at startup.
+    internal bool SessionAutoTitleEnabled => sessionAutoTitle;
     internal string ProviderImageOutputFormat { get; }
     public double MaxOutput { get; }
     public double CompactKeep { get; }
@@ -154,6 +159,7 @@ internal sealed partial class ModelConfiguration
     {
         ActivePath = paths.ModelsPath;
         TemplatePath = Path.Combine(paths.ResourceRoot, "templates", "models.example.yaml");
+        AppTemplatePath = Path.Combine(paths.ResourceRoot, "templates", "config.example.yaml");
         AppPath = paths.ConfigPath;
         AppRaw = File.Exists(AppPath) ? File.ReadAllText(AppPath, Encoding.UTF8) : "";
         app = ConfigurationYaml.Parse(AppRaw, "app config");
@@ -161,6 +167,7 @@ internal sealed partial class ModelConfiguration
         Paths = paths.WithConfiguration(app);
         Access = new(app);
         HandoffConfirmationEnabled = Foxwarm.Tools.HandoffConfirmation.Enabled(app);
+        sessionAutoTitle = AppConfigurationRules.SessionAutoTitle(app);
         var llm = app["llm"] as JsonObject;
         MaxOutput = HostModels.PositiveSetting(llm?["maxOutput"], 32768, "llm.maxOutput");
         var imageOutput = llm?["providerImageOutputFormat"];

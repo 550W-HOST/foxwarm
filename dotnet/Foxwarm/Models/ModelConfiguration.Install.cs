@@ -85,6 +85,7 @@ internal sealed partial class ModelConfiguration
                 raw = raw[1..];
             if (target == "models")
             {
+                var firstRun = !File.Exists(ActivePath);
                 var next = Validate(raw);
                 await ReplaceRawAsync(
                     ActivePath,
@@ -99,6 +100,9 @@ internal sealed partial class ModelConfiguration
                         }
                     }
                 );
+                // The seed is a separate first-run effect; the models receipt keeps its shape.
+                if (firstRun)
+                    await SeedAppAsync(token);
                 return Installed(target, ["models"], [], []);
             }
             throw new InvalidDataException("Unknown configuration target.");
@@ -119,7 +123,8 @@ internal sealed partial class ModelConfiguration
             .Concat(config.Select(pair => pair.Key))
             .Distinct(StringComparer.Ordinal)
             .Where(key =>
-                key is not ("access" or "channels") && !JsonNode.DeepEquals(app[key], config[key])
+                key is not ("access" or "channels" or "sessionAutoTitle")
+                && !JsonNode.DeepEquals(app[key], config[key])
             )
             .ToList();
         if (!JsonNode.DeepEquals(app["channels"]?["webui"], config["channels"]?["webui"]))
@@ -148,6 +153,10 @@ internal sealed partial class ModelConfiguration
         var applied = Access.McpRuntimeAvailable
             ? new List<string> { "access.identities", "access.surfaces.mcp" }
             : new List<string> { "access.identities" };
+        var autoTitle = AppConfigurationRules.SessionAutoTitle(config);
+        if (autoTitle != sessionAutoTitle)
+            applied.Add("sessionAutoTitle");
+        sessionAutoTitle = autoTitle;
         JsonObject? reload = null;
         if (ManagedChannels is { } runtime)
         {
@@ -165,6 +174,61 @@ internal sealed partial class ModelConfiguration
         if (reload is not null)
             result["reload"] = reload;
         return result;
+    }
+
+    // First-run Setup gives a new installation its initial app settings. An existing
+    // config.yaml is never edited, and installations that pre-create models.yaml skip this.
+    private async Task<bool> SeedAppAsync(CancellationToken token)
+    {
+        if (File.Exists(AppPath) || !File.Exists(AppTemplatePath))
+            return false;
+        await appPersistence.WaitAsync(token);
+        try
+        {
+            if (File.Exists(AppPath))
+                return false;
+            var bytes = await File.ReadAllBytesAsync(AppTemplatePath, token);
+            var seeded = ConfigurationYaml.Parse(
+                new UTF8Encoding(false, true).GetString(bytes).TrimStart('\uFEFF'),
+                "app config template"
+            );
+            AppConfigurationRules.Validate(seeded);
+            var directory = Path.GetDirectoryName(AppPath)!;
+            Directory.CreateDirectory(directory);
+            var temporary = Path.Combine(
+                directory,
+                "." + Path.GetFileName(AppPath) + "." + Guid.NewGuid().ToString("N") + ".tmp"
+            );
+            try
+            {
+                await File.WriteAllBytesAsync(temporary, bytes, token);
+                // Never replace a file created concurrently by another writer.
+                File.Move(temporary, AppPath, false);
+            }
+            catch (IOException) when (File.Exists(AppPath))
+            {
+                return false;
+            }
+            finally
+            {
+                File.Delete(temporary);
+            }
+            sessionAutoTitle = AppConfigurationRules.SessionAutoTitle(seeded);
+            return true;
+        }
+        catch (Exception error) when (error is IOException or InvalidDataException)
+        {
+            // The models save already committed; a missing seed only leaves defaults.
+            System.Diagnostics.Trace.TraceWarning(
+                "Initial app configuration was not written: {0}",
+                error.Message
+            );
+            return false;
+        }
+        finally
+        {
+            appPersistence.Release();
+        }
     }
 
     private async Task<(

@@ -66,8 +66,6 @@ internal sealed class ExternalChannelFixture : IAsyncDisposable
             new ResponsesClientOptions(endpoint, "wire", "", "", "", 1024),
             f.Configuration.Models
         );
-        // Channel turns here script exact provider sequences; titles have their own tests.
-        f.Manager.AutoTitles = false;
         await f.Manager.LoadMainHostAsync();
         f.Router = new(new SessionRuntime(f.Manager));
         f.Manager.InitializeChannels(f.Router, f.Configuration, dependencies);

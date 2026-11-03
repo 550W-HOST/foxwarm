@@ -581,6 +581,11 @@ export const APP_CONFIG_SCHEMA = {
       default: false,
       description: 'Require structured handoff recall and confirmation for send_to_session and create_child_session. Defaults to false and requires restart.',
     },
+    sessionAutoTitle: {
+      type: 'boolean',
+      default: false,
+      description: 'Name an unnamed Session automatically after its first reply, using one short background model request. Defaults to false; new installations enable it during first-run Setup. Applies when saved in Setup.',
+    },
     vectorMaintenance: {
       oneOf: [
         { type: 'boolean' },

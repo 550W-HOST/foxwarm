@@ -1,0 +1,4 @@
+# Foxwarm application settings. Edit in Setup -> Config.
+
+# Name new Sessions automatically after their first reply.
+sessionAutoTitle: true

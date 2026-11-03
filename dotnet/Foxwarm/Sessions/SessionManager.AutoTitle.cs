@@ -8,9 +8,6 @@ internal sealed partial class SessionManager
 {
     private static readonly TimeSpan AutoTitleTimeout = TimeSpan.FromMinutes(2);
 
-    // Internal test seam for fixtures that script an exact provider request sequence.
-    internal bool AutoTitles { get; set; } = true;
-
     private static void AutoTitleTurnStarting(SessionOwner owner)
     {
         if (owner.AutoTitle.Settled)
@@ -23,7 +20,9 @@ internal sealed partial class SessionManager
     private void StartAutoTitle(SessionOwner owner)
     {
         var state = owner.AutoTitle;
-        if (state.Settled || !AutoTitles)
+        // Off when unconfigured. Not settling keeps a still-unanswered Session eligible
+        // if the setting is enabled live before its first reply.
+        if (state.Settled || models.ConfigurationOwner?.SessionAutoTitleEnabled != true)
             return;
         try
         {

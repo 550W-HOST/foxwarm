@@ -284,6 +284,95 @@ public sealed class SessionAutoTitleTests
         Assert.Null(owner.Metadata().DisplayName);
     }
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData("sessionAutoTitle: false\n")]
+    public async Task Titles_are_off_unless_app_config_enables_them(string? appConfig)
+    {
+        await using var peer = new ScriptedResponsesSequenceServer(
+            1,
+            async (_, stream, _) => await SendAsync(stream, "answer")
+        );
+        await using var f = await FixtureAsync(peer.BaseUri, appConfig);
+        var owner = await f.Manager.CreateNamedAsync("main", "off", null, null);
+        await RunUserTurnAsync(f.Manager, owner, "hello");
+        Assert.Null(owner.AutoTitle.Pending);
+        Assert.Equal(1, peer.RequestCount);
+        Assert.Null(owner.Metadata().DisplayName);
+    }
+
+    [Fact]
+    public void Non_boolean_setting_is_rejected()
+    {
+        using var temp = new TempDirectory();
+        Directory.CreateDirectory(Path.Combine(temp.Path, "state"));
+        File.WriteAllText(
+            Path.Combine(temp.Path, "state", "config.yaml"),
+            "sessionAutoTitle: yes please\n"
+        );
+        var error = Assert.Throws<InvalidDataException>(() => new ModelConfiguration(temp.Path));
+        Assert.Contains("sessionAutoTitle", error.Message);
+    }
+
+    [Fact]
+    public async Task Setup_config_save_applies_the_setting_live()
+    {
+        using var temp = new TempDirectory();
+        var configuration = new ModelConfiguration(temp.Path);
+        Assert.False(configuration.SessionAutoTitleEnabled);
+        var saved = await configuration.SaveAppAsync("sessionAutoTitle: true\n");
+        Assert.True(configuration.SessionAutoTitleEnabled);
+        Assert.Contains("sessionAutoTitle", saved["applied"]!.AsArray().Select(v => v!.ToString()));
+        Assert.DoesNotContain(
+            "sessionAutoTitle",
+            saved["restartRequired"]!.AsArray().Select(v => v!.ToString())
+        );
+        await configuration.SaveAppAsync("bot:\n  name: fox\n");
+        Assert.False(configuration.SessionAutoTitleEnabled);
+    }
+
+    [Fact]
+    public async Task First_run_models_save_seeds_the_new_install_template_once()
+    {
+        using var temp = new TempDirectory();
+        var appPath = Path.Combine(temp.Path, "state", "config.yaml");
+        var configuration = new ModelConfiguration(temp.Path);
+        Assert.True(File.Exists(configuration.AppTemplatePath));
+        var template = await File.ReadAllTextAsync(configuration.AppTemplatePath);
+        Assert.True(
+            AppConfigurationRules.SessionAutoTitle(ConfigurationYaml.Parse(template, "template"))
+        );
+
+        var saved = await configuration.SaveAsync(
+            new JsonObject { ["yaml"] = ModelsYaml(new Uri("http://127.0.0.1:1/v1/")) }
+        );
+        Assert.Equal(template, await File.ReadAllTextAsync(appPath));
+        Assert.True(configuration.SessionAutoTitleEnabled);
+        Assert.Equal("models", Assert.Single(saved["applied"]!.AsArray())!.ToString());
+
+        // Later models saves are not first-run and never recreate the file.
+        File.Delete(appPath);
+        await configuration.SaveAsync(
+            new JsonObject { ["yaml"] = ModelsYaml(new Uri("http://127.0.0.1:2/v1/")) }
+        );
+        Assert.False(File.Exists(appPath));
+    }
+
+    [Fact]
+    public async Task First_run_models_save_never_edits_an_existing_app_config()
+    {
+        using var temp = new TempDirectory();
+        var appPath = Path.Combine(temp.Path, "state", "config.yaml");
+        Directory.CreateDirectory(Path.GetDirectoryName(appPath)!);
+        await File.WriteAllTextAsync(appPath, "bot:\n  httpPort: 3999\n");
+        var configuration = new ModelConfiguration(temp.Path);
+        await configuration.SaveAsync(
+            new JsonObject { ["yaml"] = ModelsYaml(new Uri("http://127.0.0.1:1/v1/")) }
+        );
+        Assert.Equal("bot:\n  httpPort: 3999\n", await File.ReadAllTextAsync(appPath));
+        Assert.False(configuration.SessionAutoTitleEnabled);
+    }
+
     private static async Task RunUserTurnAsync(
         SessionManager manager,
         SessionOwner owner,
@@ -340,19 +429,45 @@ public sealed class SessionAutoTitleTests
         }
     }
 
-    private static async Task<Fixture> FixtureAsync(Uri provider)
+    private static async Task<Fixture> FixtureAsync(
+        Uri provider,
+        string? appConfig = "sessionAutoTitle: true\n"
+    )
     {
         var temp = new TempDirectory();
-        var options = new ResponsesClientOptions(provider, "wire", "a", "", "", 713);
+        var data = Path.Combine(temp.Path, "data");
+        Directory.CreateDirectory(Path.Combine(data, "state"));
+        await File.WriteAllTextAsync(
+            Path.Combine(data, "state", "models.yaml"),
+            ModelsYaml(provider)
+        );
+        if (appConfig is not null)
+            await File.WriteAllTextAsync(Path.Combine(data, "state", "config.yaml"), appConfig);
+        var configuration = new ModelConfiguration(data);
         var manager = new SessionManager(
-            Path.Combine(temp.Path, "data"),
+            data,
             Path.Combine(temp.Path, "work"),
-            options,
-            HostModels.ForTest(options)
+            new ResponsesClientOptions(provider, "wire", "", "", "", 713),
+            configuration.Models
         );
         await manager.LoadAsync();
         return new(temp, manager);
     }
+
+    private static string ModelsYaml(Uri provider) =>
+        new JsonObject
+        {
+            ["default"] = "local/wire",
+            ["providers"] = new JsonObject
+            {
+                ["local"] = new JsonObject
+                {
+                    ["providerType"] = "openai-responses",
+                    ["baseUrl"] = provider.ToString(),
+                    ["models"] = new JsonArray("wire"),
+                },
+            },
+        }.ToJsonString();
 
     private static SessionHistory History(params JsonObject[] rows) =>
         SessionHistory.FromJson(rows);

@@ -66,6 +66,16 @@ test('static config schemas are distinct, permissive, and omit the removed model
   assert.equal(schemas.MODELS_CONFIG_SCHEMA.required?.includes('default') || false, false)
 })
 
+test('app config schema validates the sessionAutoTitle boolean and the new-install template', async () => {
+  const { parse } = await import('yaml')
+  const template = parse(await readFile(new URL('../../../templates/config.example.yaml', import.meta.url), 'utf8'))
+  assert.equal(template.sessionAutoTitle, true)
+  assert.equal(validateAppConfigSchema(template), true, JSON.stringify(validateAppConfigSchema.errors))
+  assert.equal(schemas.APP_CONFIG_SCHEMA.properties.sessionAutoTitle.default, false)
+  assert.equal(validateAppConfigSchema({ sessionAutoTitle: false }), true)
+  assert.equal(validateAppConfigSchema({ sessionAutoTitle: 'yes' }), false)
+})
+
 test('app config schema suggests all managed channel types and QQ credential keys while accepting custom types', () => {
   const channels = schemas.APP_CONFIG_SCHEMA.properties.channels
   const channel = channels.additionalProperties
