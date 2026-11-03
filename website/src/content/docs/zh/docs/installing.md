@@ -78,6 +78,8 @@ curl -fsSL https://foxwarm.net/install-foxwarm.sh | bash
 
 目录、版本和安装包参数与 Linux 相同。安装脚本会自动选择依赖已安装运行时或自带运行时的 arm64 安装包，不需要通过 Homebrew 安装 ICU 或 OpenSSL。需要可连接的控制台时可安装 tmux；没有 tmux 时，Foxwarm 会在后台启动并写入文件日志。
 
+安装包已在 Apple Silicon 的 macOS 15 上测试。语义历史检索和浏览器工具已包含在内，但尚未在 macOS 上验证。
+
 安装包未做发行签名或公证。curl 安装脚本不会添加隔离标记；浏览器下载的归档可能带有 Gatekeeper 隔离标记。先用 Release 的 `SHA256SUMS` 校验归档，确认信任后，仅移除该归档的隔离标记再安装：
 
 ```bash

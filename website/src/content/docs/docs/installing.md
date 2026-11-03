@@ -80,6 +80,8 @@ curl -fsSL https://foxwarm.net/install-foxwarm.sh | bash
 
 The same directory, version and package options as Linux apply. The installer chooses between the framework-dependent and self-contained arm64 packages. No Homebrew ICU or OpenSSL installation is needed. Install tmux if you want an attachable console; otherwise Foxwarm starts in the background with file logs.
 
+The packages are tested on macOS 15 on Apple Silicon. Semantic history search and the browser tool are included but not yet verified on macOS.
+
 These packages are not signed or notarized for distribution. The curl installer does not add quarantine, but archives downloaded with a browser can be quarantined by Gatekeeper. After verifying the archive against the release's `SHA256SUMS` and deciding to trust it, remove quarantine from that archive before installing it:
 
 ```bash
