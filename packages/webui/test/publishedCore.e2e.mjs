@@ -4,13 +4,14 @@ import { createServer } from 'node:http'
 import { createServer as socketServer } from 'node:net'
 import { spawn, execFileSync } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdtemp, mkdir, readFile, writeFile, readdir, stat, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, writeFile, readdir, stat, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import puppeteer from 'puppeteer-core'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
 import { until } from './mainHostFixture.mjs'
 import { publishedToolOutcomes } from './publishedToolOutcomes.mjs'
+import { observePublishedBrowser } from './publishedBrowserObservation.mjs'
 
 const payload = process.env.FOXWARM_PUBLISHED_CORE
 assert(payload, 'Set FOXWARM_PUBLISHED_CORE to an owned complete Core publish directory.')
@@ -29,10 +30,13 @@ const env = { ...process.env }
 for (const key of Object.keys(env)) if (key.startsWith('FOXWARM_') || ['CONFIG_PATH', 'MCP_CONFIG_PATH', 'ASPNETCORE_URLS'].includes(key)) delete env[key]
 env.NODE_OPTIONS = ''
 let child, output = '', browser, token, qualificationHistory, lastProviderReply, mainBrowserReached = false, browserErrors = []
+// Temporary diagnosis: bounded child output is printed only by the existing failure path.
+let launchObservationTimer, launchObservation
+function captureOutput(bytes) { output = (output + bytes.toString()).slice(-65536) }
 function startHost() {
   output = ''
   child = spawn(dotnet, [join(payload, 'Foxwarm.dll')], { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] })
-  child.stdout.on('data', bytes => { output += bytes }); child.stderr.on('data', bytes => { output += bytes })
+  child.stdout.on('data', captureOutput); child.stderr.on('data', captureOutput)
 }
 startHost()
 const requests = []
@@ -47,6 +51,12 @@ const peer = createServer(async (request, response) => {
     if (request.method === 'GET') { response.writeHead(204).end(); return }
     let raw = ''; for await (const chunk of request) raw += chunk
     const body = JSON.parse(raw); requests.push(body)
+    if (requests.length === 2) {
+      // Observe the actual Main-owned launch once, before SDK timeout cleanup.
+      launchObservationTimer = setTimeout(() => {
+        launchObservation = observePublishedBrowser(child.pid).catch(error => ({ error: String(error.message).slice(0, 300) }))
+      }, 25_000)
+    } else if (requests.length === 3) clearTimeout(launchObservationTimer)
     const outputRows = requests.length === 1
       ? [{ type: 'function_call', call_id: 'packaged-toolscript', name: 'run_script', arguments: JSON.stringify({
         code: "skill = call_tool('skill', {'action':'load','skillName':'code-index'})\nresource = call_tool('read', {'filePath': args['resource']})\ncall_tool('write', {'filePath':'packaged-native-effect.txt','content':'native packaged worker'})\nreturn {'skill':skill,'resource':resource,'answer':6*7}\n",
@@ -188,8 +198,19 @@ try {
   console.error('Published Core output:\n' + output)
   // Main's launch policy is independent of the browser used to drive the App.
   const mainBrowserExecutable = { path: '/usr/bin/chromium' }
+  mainBrowserExecutable.resolved = await realpath(mainBrowserExecutable.path).catch(() => null)
   mainBrowserExecutable.present = await stat(mainBrowserExecutable.path).then(() => true, () => false)
   if (mainBrowserExecutable.present) {
+    for (const [key, command, args] of [
+      ['fileType', 'file', ['-L', mainBrowserExecutable.path]],
+      ['packageOwner', 'dpkg-query', ['-S', mainBrowserExecutable.path]],
+    ]) {
+      try {
+        mainBrowserExecutable[key] = execFileSync(command, args, {
+          env, encoding: 'utf8', timeout: 2000, maxBuffer: 4096, stdio: 'pipe',
+        }).trim().slice(0, 1000)
+      } catch (probeError) { mainBrowserExecutable[key] = String(probeError.message).slice(0, 300) }
+    }
     try {
       mainBrowserExecutable.version = execFileSync(mainBrowserExecutable.path, ['--version'], {
         env, encoding: 'utf8', timeout: 2000, maxBuffer: 8192, stdio: 'pipe',
@@ -203,6 +224,7 @@ try {
   const lastNotice = messages.findLast(row => row.__meta?.sessionNotice || row.__meta?.retry?.final)
   console.error('Published qualification diagnostics:\n' + JSON.stringify({
     providerRequests: requests.length, lastProviderReply, mainBrowserReached, mainBrowserExecutable,
+    launchObservation: launchObservation ? await launchObservation : { captured: false },
     session: qualificationHistory?.session && {
       busy: qualificationHistory.session.busy,
       runtimeState: {
@@ -221,6 +243,7 @@ try {
   }, null, 2))
   throw error
 } finally {
+  clearTimeout(launchObservationTimer)
   await browser?.close().catch(() => {})
   if (child.exitCode === null && child.signalCode === null) { child.kill('SIGKILL'); await once(child, 'exit').catch(() => {}) }
   peer.closeAllConnections(); await new Promise(done => peer.close(done))

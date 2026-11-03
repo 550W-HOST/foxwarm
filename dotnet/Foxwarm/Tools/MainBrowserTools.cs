@@ -37,6 +37,8 @@ internal sealed class MainBrowserTools(Func<LaunchOptions, Task<IBrowser>>? laun
                     {
                         ExecutablePath = "/usr/bin/chromium",
                         Headless = true,
+                        // Temporary hosted diagnosis: preserve the SDK stderr observer.
+                        DumpIO = true,
                         Args =
                         [
                             "--no-sandbox",
