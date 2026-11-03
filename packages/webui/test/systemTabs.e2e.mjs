@@ -310,7 +310,8 @@ test('forced OOBE Setup still rejects workbench close requests', async () => {
     await forcedPage.waitForSelector(closeSelector, { timeout: 15_000 })
     await forcedPage.waitForFunction(() => document.body.textContent?.includes('Foxwarm first-time setup'), { timeout: 15_000 })
     await forcedPage.waitForSelector('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-models.yaml"][data-editor-ready="true"]', { timeout: 15_000 })
-    assert.equal(await forcedPage.$('button::-p-text(Form)'), null)
+    // Forced Setup offers the model form/YAML switch; it still cannot be closed before a valid save.
+    assert.ok(await forcedPage.$('[role="group"][aria-label="Model settings view"]'))
     await forcedPage.click(closeSelector)
     await new Promise((resolve) => setTimeout(resolve, 150))
     assert.ok(await forcedPage.$(closeSelector))

@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
-import { createHostFixture, until } from './mainHostFixture.mjs'
+import { createHostFixture, openModelsYaml, until } from './mainHostFixture.mjs'
 
 // First-run Setup creates `main` with its welcome; closing Setup opens it at the start
 // of the welcome, and the conversation follows the latest message once it moves on.
@@ -23,7 +23,7 @@ test('first-run welcome opens at its start and later rows rejoin bottom follow',
     await fixture.start()
     const page = await fixture.openApp()
     await page.setViewport({ width: 1280, height: 720 })
-    await page.waitForSelector('#setup-tab-models'); await page.click('#setup-tab-models')
+    await openModelsYaml(page)
     const editor = '[aria-label="Models YAML editor"] [role="textbox"]'
     await page.waitForSelector(editor); await page.focus(editor)
     await page.keyboard.down('Control'); await page.keyboard.press('A'); await page.keyboard.up('Control')

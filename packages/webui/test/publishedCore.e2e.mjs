@@ -111,6 +111,8 @@ try {
   const models = JSON.stringify({ default: 'fixture', providers: { fixture: { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${peer.address().port}`, models: ['wire'], asyncCompact: false } } }, null, 2) + '\n'
   await page.evaluate(() => { location.hash = 'setup' })
   await page.waitForSelector('#setup-tab-models'); await page.click('#setup-tab-models')
+  // First-run Models opens in the form view; this proof writes exact YAML through the editor.
+  await page.waitForSelector('[data-models-view="yaml"]'); await page.click('[data-models-view="yaml"]')
   const editor = '[aria-label="Models YAML editor"] [role="textbox"]'
   await page.waitForSelector(editor)
   await page.evaluate(async value => {
