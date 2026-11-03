@@ -97,7 +97,8 @@ try {
   await saved.waitForSelector('[data-fox-splash]', { hidden: true })
   // Normalized on read: the tab is System, in the former tab's position.
   assert.deepEqual(await saved.$$eval('[data-tab-id]', tabs => tabs.map(tab => tab.getAttribute('data-tab-id'))), ['chat:lead', 'system:agents'])
-  assert.equal(await saved.$eval('[data-tab-id="system:agents"]', element => element.textContent.trim()), 'System')
+  // The visible label wraps the title in LRM marks for its start-side ellipsis; the tab's title is plain.
+  assert.deepEqual(await saved.$eval('[data-tab-id="system:agents"]', element => ({ title: element.getAttribute('title'), text: element.textContent.replaceAll('\u200e', '').trim() })), { title: 'System', text: 'System' })
   // The next Workbench write stores the new form.
   await saved.click('[data-system-tab="sessions"]')
   await until(async () => {
