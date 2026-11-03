@@ -44,7 +44,7 @@ A live instance needs a SQLite-consistent online backup. A simpler option is to 
 Make a consistent backup before updating an important instance, then run from the parent of the program directory:
 
 ```bash
-./foxwarm/foxwarmctl update          # Linux x64 or WSL
+./foxwarm/foxwarmctl update          # Linux, WSL or macOS
 .\foxwarm\foxwarmctl.cmd update      # Windows
 ```
 

@@ -25,7 +25,7 @@ Foxwarm 是一个常驻运行的服务器。对话会持久保存，可以持续
 
 ### 能在 macOS 上运行吗？
 
-不能作为服务器运行。Foxwarm 支持 Linux x64、x64 WSL 和 Windows x64，也可以在 Linux x64 上用 Docker 运行。Mac 可以作为[节点](/zh/docs/nodes/)接入，Agent 仍然能在上面操作文件、执行命令。
+可以，支持 macOS 15 或更新版本的 Apple Silicon Mac，安装命令和 Linux 相同。Intel Mac 不能作为服务器运行，也没有 macOS 桌面版。任何 Mac 都可以作为[节点](/zh/docs/nodes/)接入其他服务器。见 [macOS（Apple Silicon）](/zh/docs/installing/#macosapple-silicon)。
 
 ### 在哪里登录？
 

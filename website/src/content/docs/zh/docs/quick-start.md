@@ -9,7 +9,7 @@ description: 安装 Foxwarm，添加模型，给 Agent 布置第一个任务。
 
 在你希望放置 Foxwarm 程序目录和数据目录的位置，运行对应平台的命令。
 
-**Linux x64 或 x64 WSL**
+**Linux x64、x64 WSL 或 Apple Silicon Mac**
 
 ```bash
 curl -fsSL https://foxwarm.net/install-foxwarm.sh | bash

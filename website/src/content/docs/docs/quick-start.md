@@ -9,7 +9,7 @@ This page takes the shortest path to a working agent. Each step links to the ful
 
 Run the command for your platform from the directory where you want Foxwarm's program and data directories created.
 
-**Linux x64 or x64 WSL**
+**Linux x64, x64 WSL or macOS on Apple Silicon**
 
 ```bash
 curl -fsSL https://foxwarm.net/install-foxwarm.sh | bash
