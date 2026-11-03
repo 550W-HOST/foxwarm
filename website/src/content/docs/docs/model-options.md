@@ -94,8 +94,9 @@ These go on a model object (`- id: ...`) or, for all of a provider's models, on 
 | `pricing` | `{ cached, input, output }` in USD per million tokens. Foxwarm then saves an estimated cost with each reply's token usage (model objects only). |
 | `extraFields`, `extraHeaders` | Extra request-body fields or HTTP headers an endpoint needs. |
 | `providerImageOutputFormat` | Format for images Foxwarm optimizes before sending them: `webp` (default) or `jpeg`. |
+| `imageInput` | Set `false` for a text-only model. Images stay in the Session, but requests to this model carry a short note that the image was not sent. Switching back to an image-capable model sends them again. Default `true`. |
 
-To change a setting for every model, use the root `defaults` block. It accepts only `contextLimit`, `maxOutput` and `providerImageOutputFormat`:
+To change a setting for every model, use the root `defaults` block. It accepts only `contextLimit`, `maxOutput`, `providerImageOutputFormat` and `imageInput`:
 
 ```yaml
 defaults:
@@ -113,7 +114,7 @@ Besides concrete providers, `models.yaml` can define routes that point at concre
 - **Failover** (`providerType: failover`): tries `targets` in order. A target that keeps failing is skipped for a while (by default after 5 consecutive failures, for 10 minutes; set `failureThreshold` and `cooldownMs` to change this). Needs at least two targets.
 - **Sticky spread** (`providerType: session-hash`): spreads Sessions across several equivalent `targets`, but keeps each conversation on the same one so the provider's prompt cache stays warm.
 
-Targets must be concrete models from the same file; a route cannot point at another route. A route is selectable like any model, and its context limit is the smallest of its targets'. Each reply in the history records which concrete model actually answered. See the repository's [virtual models reference](https://github.com/550W-HOST/foxwarm/blob/main/docs/virtual-models.md) for every option.
+Targets must be concrete models from the same file; a route cannot point at another route. A route is selectable like any model, and its context limit is the smallest of its targets'. Image input is decided by the target that actually answers. Each reply in the history records which concrete model actually answered. See the repository's [virtual models reference](https://github.com/550W-HOST/foxwarm/blob/main/docs/virtual-models.md) for every option.
 
 ## Hosted search and image generation
 

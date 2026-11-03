@@ -11,7 +11,7 @@ Stores canonical image blobs, probes/decodes raster and HEIF data, converts API 
 - `ImageBlobStore` owns canonical blob paths, session references, cleanup/export, and hydration of inline/ref image parts.
 - Shared [native primitives](./dotnet-node-primitives.md) own `RasterImageMime.Detect`, which recognizes PNG/JPEG/WebP/GIF/BMP from at most twelve header bytes without decoding or validating the file. Native/provider file reads and hosted Responses image classification share it; hosted generation still excludes BMP.
 - `RasterCodec.Probe/Decode` and `HeifDecoder` normalize dimensions, MIME/orientation, transparency, and encoded variants.
-- `ImageTransport` registers JSON converters for image references/inline forms; `ProviderImageDedup` emits refs-only provider parts when a canonical image has already been sent; `ImageTokenEstimate` supplies bounded model cost estimates.
+- `ImageTransport` registers JSON converters for image references/inline forms; `ProviderImageDedup` emits refs-only provider parts when a canonical image has already been sent; `ImageTokenEstimate` supplies bounded model cost estimates. `HydrateAsync(imageInput: false)` marks ordinary-vision parts unsupported for a text-only concrete target under [D-image-provider-image-input](../threads/image-blob-lifecycle.md#d-image-provider-image-input); `ProviderImageParts` emits the label and placeholder text.
 
 Callers: `WebUIChannel.Images/Files`, `PersistentSessionAuthorityStore.LoadAsync` image externalization, `ProviderImageParts`, Responses/Anthropic/Completions serializers, and file delivery.
 
@@ -28,6 +28,8 @@ Unreadable, out-of-scope or corrupt ordinary-vision references still fail before
 `dotnet/Foxwarm.Tests/Models/GeneratedImageReplayAdmissionTests.cs` exercises normal generated output, canonical authority/Archive append, exact-concrete, alias and declared model/provider-compatible replay, foreign Responses/Completions placeholder requests after owned blob deletion, compatible-model no-send failures, and same-key protocol reconfiguration through the normal configuration owner against a loopback peer.
 
 `HostedResponsesWsImageTests.cs` additionally checks compatible-variant original-byte replay on a distinct internal-model connection and subsequent same-model chain reuse.
+
+`dotnet/Foxwarm.Tests/Models/ModelImageInputTests*.cs` covers `imageInput` inheritance/validation/model-list exposure, per-protocol serialization with the flag false and true (user, tool and legacy inline images), unread missing references, and one Session switching between text-only Completions/Anthropic/WebSocket targets, an image-capable Responses target, and a failover route whose failed text-only attempt is followed by an image-carrying capable attempt.
 
 `dotnet/Foxwarm.Tests/Images/ImageBlobStore*Tests.cs`; `ImageCodecTests.cs`; `ImagePipelineTests.cs`; `ImageIdentityGuidanceTests.cs`; `ImageLegacyLifecycleTests.cs`; `VisionInputParityTests.cs` and its actual Source oracle `dotnet/Foxwarm.Tests/Fixtures/vision-input-fixture-ts.mjs` compare genuine over-byte/over-pixel images, descriptors, tool-result placement, serialization and canonical persistence.
 

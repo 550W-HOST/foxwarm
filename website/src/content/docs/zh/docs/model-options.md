@@ -94,8 +94,9 @@ effort:
 | `pricing` | `{ cached, input, output }`，单位为每百万 token 的美元价格。设置后，Foxwarm 会在每条回复的 token 用量旁保存估算费用（仅限模型对象）。 |
 | `extraFields`、`extraHeaders` | 端点需要的额外请求体字段或 HTTP 头。 |
 | `providerImageOutputFormat` | Foxwarm 发送前优化图片时使用的格式：`webp`（默认）或 `jpeg`。 |
+| `imageInput` | 纯文本模型设为 `false`。图片仍保存在会话中，但发给该模型的请求只带一句“未发送图片”的简短说明；切回支持图片的模型后会重新发送。默认 `true`。 |
 
-要统一修改所有模型，使用根级的 `defaults`。它只接受 `contextLimit`、`maxOutput` 和 `providerImageOutputFormat`：
+要统一修改所有模型，使用根级的 `defaults`。它只接受 `contextLimit`、`maxOutput`、`providerImageOutputFormat` 和 `imageInput`：
 
 ```yaml
 defaults:

@@ -104,7 +104,7 @@ internal static class AppConfigurationRules
     {
         if (value is not JsonObject llm)
             return;
-        HostModels.ValidateDefaults(llm, "llm");
+        HostModels.ValidateDefaults(llm, "llm", modelsScope: false);
         Fraction(
             llm,
             llm.ContainsKey("compactKeepPercent") ? "compactKeepPercent" : "compactPercent",

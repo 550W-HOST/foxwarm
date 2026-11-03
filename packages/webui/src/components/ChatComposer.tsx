@@ -21,6 +21,7 @@ import { buildChildModelComposerState, type ChildPolicyChainEntry } from './chil
 import InlineComposerEditor, { type InlineComposerEditorHandle } from './InlineComposerEditor'
 import NodePicker from './NodePicker'
 import ComposerAttachmentGrid from './ComposerAttachmentGrid'
+import { IMAGE_INPUT_UNSUPPORTED_HINT, shouldShowImageInputHint } from '../imageInputSupport'
 import {
   clearComposerDraft,
   getPlainComposerDraftText,
@@ -44,6 +45,7 @@ export type ModelOption = {
   targets?: string[]
   allowedEfforts?: string[]
   defaultEffort?: string | null
+  imageInput?: boolean
 }
 
 interface ChatComposerProps {
@@ -1034,6 +1036,8 @@ const ChatComposer = memo(function ChatComposer({
     return file ? [{ ref: segment.ref, file }] : []
   }), [attachmentSegments, sessionId])
   const hasMissingAttachments = availableAttachments.length !== attachmentSegments.length
+  const showImageInputHint = sessionRuntime !== 'claude-code'
+    && shouldShowImageInputHint(modelOptions, currentModelKey || defaultModelKey, attachmentSegments)
 
   const handleSubmit = useCallback(async (e?: React.FormEvent) => {
     if (e) e.preventDefault()
@@ -1568,6 +1572,7 @@ const ChatComposer = memo(function ChatComposer({
           onCommandKeyDown={handleCommandKeyDownBridge}
         />
         {draftPersistenceError && <div className="px-3 pb-1 text-xs text-fw-danger" role="alert">{draftPersistenceError}</div>}
+        {showImageInputHint && <div className="px-3 pb-1 text-xs text-fw-warning" role="status" data-image-input-hint="true">{IMAGE_INPUT_UNSUPPORTED_HINT}</div>}
         <div className="flex items-center justify-between gap-2 px-2 pb-1">
           <div className="flex min-w-0 flex-1 items-center gap-1">
             <div className="flex min-w-0 shrink-0 items-center gap-1 overflow-x-auto pb-0.5">

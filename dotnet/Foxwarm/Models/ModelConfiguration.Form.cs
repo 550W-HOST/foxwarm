@@ -76,6 +76,7 @@ internal sealed partial class ModelConfiguration
                         "contextLimit",
                         "maxOutput",
                         "providerImageOutputFormat",
+                        "imageInput",
                         "streamContentInactivityTimeoutMs",
                         "effort",
                         "historyReasoningField",
