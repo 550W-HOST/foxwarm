@@ -41,11 +41,11 @@ printf 'bot:\n  httpPort: %s\n' "$port" > "$work/data/state/config.yaml"
 wait_http
 [ -s "$work/data/state/token" ] || { echo "No sign-in token was created" >&2; exit 1; }
 "$control" status
-first="$(tmux display-message -p -t "=$FOXWARM_TMUX_SESSION:=foxwarm" '#{pane_pid}')"
+first="$(tmux list-panes -t "=$FOXWARM_TMUX_SESSION:=foxwarm" -F '#{pane_pid}')"
 
 "$control" update --package "$package" --force
 wait_http
-second="$(tmux display-message -p -t "=$FOXWARM_TMUX_SESSION:=foxwarm" '#{pane_pid}')"
+second="$(tmux list-panes -t "=$FOXWARM_TMUX_SESSION:=foxwarm" -F '#{pane_pid}')"
 [ "$first" != "$second" ] || { echo "Update did not restart Foxwarm" >&2; exit 1; }
 [ "$(find "$work/foxwarm/runtime" -mindepth 1 -maxdepth 1 | wc -l)" -eq 2 ] || { ls -la "$work/foxwarm/runtime" >&2; echo "Old releases were not removed" >&2; exit 1; }
 

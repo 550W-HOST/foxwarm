@@ -66,8 +66,32 @@ function fixture(t) {
   function control(dir, ...args) {
     return run(path.join(dir, 'foxwarmctl'), args);
   }
-  return { root, makePackage, install, control, run };
+  // Runs tmux on the fixture's private server and returns its output.
+  function tmux(...args) {
+    return ok(run('tmux', args)).stdout.trim();
+  }
+  return { root, makePackage, install, control, run, tmux };
 }
+
+function waitFor(condition, ms = 5000) {
+  const end = Date.now() + ms;
+  while (!condition()) {
+    assert(Date.now() < end, 'Timed out waiting for the fixture.');
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+  }
+}
+
+function mainPid(dir) {
+  return Number(fs.readFileSync(path.join(dir, 'main.pid'), 'utf8'));
+}
+
+// Panes of the fixture's Main window as "pane-id pid", or [] when the window is missing.
+function mainWindow(f) {
+  const result = f.run('tmux', ['list-panes', '-t', '=release-fixture:=foxwarm', '-F', '#{pane_id} #{pane_pid}']);
+  return result.status === 0 ? result.stdout.trim().split('\n') : [];
+}
+
+const panePids = f => mainWindow(f).map(pane => Number(pane.split(' ')[1]));
 
 function ok(result) {
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
@@ -180,4 +204,112 @@ test('rerunning the installer updates an existing installation and keeps its dat
   ok(f.install(['--package', path.join(f.root, 'foxwarm-0.9.1.tar.gz'), '--no-start']));
   assert.equal(fs.readlinkSync(path.join(dir, 'runtime/current')), '0.9.1');
   assert.equal(fs.readFileSync(path.join(dir, 'data_dir'), 'utf8').trim(), fs.realpathSync(path.join(f.root, 'foxwarm-data')));
+});
+
+test("stop and update touch only Main's pane, never the user windows in its session", linux, t => {
+  const f = fixture(t);
+  const dir = path.join(f.root, 'foxwarm');
+  ok(f.install(['--package', f.makePackage('0.9.0'), '--no-start']));
+  ok(f.control(dir, 'start'));
+  const first = mainPid(dir);
+  const [mainPane] = mainWindow(f)[0].split(' ');
+  // The user attaches, opens a window of their own and splits Main's window.
+  const own = Number(f.tmux('new-window', '-d', '-P', '-F', '#{pane_pid}', '-t', '=release-fixture:', '-n', 'mine', '-c', f.root, 'sleep 600'));
+  const split = Number(f.tmux('split-window', '-d', '-P', '-F', '#{pane_pid}', '-t', '=release-fixture:=foxwarm', '-c', f.root, 'sleep 600'));
+
+  const updated = ok(f.control(dir, 'update', '--package', f.makePackage('0.9.1')));
+  assert(!alive(first), stoppedMessage(first, updated));
+  const second = mainPid(dir);
+  assert(alive(second) && alive(own) && alive(split));
+  assert.equal(mainWindow(f)[0], `${mainPane} ${second}`, 'Main restarts in its own pane.');
+  assert.match(ok(f.control(dir, 'status')).stdout, /Running \(PID \d+\), release 0\.9\.1/);
+
+  const stopped = ok(f.control(dir, 'stop'));
+  assert(!alive(second), stoppedMessage(second, stopped));
+  assert(alive(own) && alive(split));
+  assert.deepEqual(panePids(f), [split], 'Only Main pane is removed.');
+  // The remaining split pane is not Main, so it is reported and never replaced.
+  const status = f.control(dir, 'status');
+  assert.equal(status.status, 3);
+  assert.match(status.stdout, /Another program .* FOXWARM_TMUX_SESSION/);
+});
+
+test('a foreign program in the Main window is never signalled', linux, t => {
+  const f = fixture(t);
+  const dir = path.join(f.root, 'foxwarm');
+  ok(f.install(['--package', f.makePackage('0.9.0'), '--no-start']));
+  // Another installation or a source checkout holds the default window, in another directory.
+  f.tmux('new-session', '-d', '-s', 'release-fixture', '-n', 'foxwarm', '-c', f.root, 'sleep 600');
+  const [foreign] = panePids(f);
+
+  const started = f.control(dir, 'start');
+  assert.equal(started.status, 1);
+  assert.match(started.stderr, /Another program .* FOXWARM_TMUX_SESSION/);
+  const status = f.control(dir, 'status');
+  assert.equal(status.status, 3);
+  assert.match(status.stdout, /Not running\. Another program/);
+  assert.match(ok(f.control(dir, 'stop')).stdout, /not running/);
+  ok(f.control(dir, 'update', '--package', f.makePackage('0.9.1')));
+  assert.equal(fs.readlinkSync(path.join(dir, 'runtime/current')), '0.9.1');
+  assert.equal(f.control(dir, 'restart').status, 1);
+  assert(alive(foreign));
+  assert.deepEqual(panePids(f), [foreign]);
+  assert(!fs.existsSync(path.join(dir, 'main.pid')), 'Main must not be started elsewhere.');
+});
+
+test('an exited Main pane is restarted in place or removed', linux, t => {
+  const f = fixture(t);
+  const dir = path.join(f.root, 'foxwarm');
+  ok(f.install(['--package', f.makePackage('0.9.0'), '--no-start']));
+  ok(f.control(dir, 'start'));
+  const [pane] = mainWindow(f)[0].split(' ');
+  process.kill(mainPid(dir), 'SIGKILL');
+  waitFor(() => f.tmux('display-message', '-p', '-t', pane, '#{pane_dead}') === '1');
+  const exited = f.control(dir, 'status');
+  assert.equal(exited.status, 3);
+  assert.match(exited.stdout, /Exited with signal 9/);
+
+  ok(f.control(dir, 'start'));
+  const restarted = mainPid(dir);
+  assert.deepEqual(mainWindow(f), [`${pane} ${restarted}`]);
+
+  process.kill(restarted, 'SIGKILL');
+  waitFor(() => f.tmux('display-message', '-p', '-t', pane, '#{pane_dead}') === '1');
+  ok(f.control(dir, 'stop'));
+  assert.equal(f.run('tmux', ['has-session', '-t', '=release-fixture']).status, 1);
+  assert.equal(f.control(dir, 'status').status, 3);
+});
+
+test('an installation reached through a symlink recognizes its Main', linux, t => {
+  const f = fixture(t);
+  const dir = path.join(f.root, 'foxwarm');
+  const link = path.join(f.root, 'link');
+  ok(f.install(['--package', f.makePackage('0.9.0'), '--no-start']));
+  fs.symlinkSync(dir, link);
+  ok(f.control(link, 'start'));
+  const pid = mainPid(dir);
+  assert.match(ok(f.control(dir, 'status')).stdout, /Running/);
+  assert.match(ok(f.control(link, 'status')).stdout, /Running/);
+  assert.match(f.control(dir, 'start').stderr, /already running/);
+  ok(f.control(dir, 'stop'));
+  assert(!alive(pid));
+  assert.deepEqual(mainWindow(f), []);
+});
+
+test('a Main started by the 0.9.0 control script is recognized and updated', linux, t => {
+  const f = fixture(t);
+  const dir = path.join(f.root, 'foxwarm');
+  ok(f.install(['--package', f.makePackage('0.9.0'), '--no-start']));
+  // The 0.9.0 start command: the pane process in ROOT, remain-on-exit set on the window.
+  f.tmux('new-session', '-d', '-s', 'release-fixture', '-n', 'foxwarm', '-c', dir,
+    `exec env PATH="$PATH" '${dir}/runtime/0.9.0/Foxwarm' --installation-root '${dir}'`, ';',
+    'set-option', '-w', '-t', '=release-fixture:=foxwarm', 'remain-on-exit', 'on');
+  waitFor(() => fs.existsSync(path.join(dir, 'main.pid')));
+  const first = mainPid(dir);
+  assert.match(ok(f.control(dir, 'status')).stdout, new RegExp(`Running \\(PID ${first}\\)`));
+
+  const updated = ok(f.control(dir, 'update', '--package', f.makePackage('0.9.1')));
+  assert(!alive(first), stoppedMessage(first, updated));
+  assert(alive(mainPid(dir)));
+  assert.match(ok(f.control(dir, 'status')).stdout, /release 0\.9\.1/);
 });
