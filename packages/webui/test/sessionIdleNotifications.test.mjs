@@ -378,7 +378,7 @@ test('session context menu exposes an accessible once item with a trailing alway
   assert.match(menu, /foxwarm-context-menu-split-row/)
   assert.doesNotMatch(menu, /entry\.trailingControl \? itemClass/)
   assert.match(menu, /mr-3 inline-flex shrink-0 items-center gap-1 text-sm/)
-  assert.match(menu, /h-3 w-3 items-center justify-center rounded-\[1px\] border-2/)
+  assert.match(menu, /<SelectionMark checked=\{control\.checked\} kind="toggle" \/>/)
   assert.match(list, /label: 'Notify on idle'/)
   assert.match(list, /BellRing size=\{14\} className="text-fw-accent dark:text-fw-accent"/)
   assert.match(list, /Bell size=\{14\}/)

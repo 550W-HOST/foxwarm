@@ -243,14 +243,16 @@ test('a list controller can resync once per physical socket generation across lo
 test('all current list and Chat surfaces use the shared transport instead of EventSource', async () => {
   const sources = await Promise.all([
     '../src/boundedSessionList.ts',
-    '../src/components/ArchitectureView.tsx',
+    '../src/components/SystemView.tsx',
     '../src/components/useChatConversationSync.ts',
     '../src/components/Chat.tsx',
+    '../src/components/useSequencePaging.ts',
   ].map(path => readFile(new URL(path, import.meta.url), 'utf8')))
   assert.equal(sources.some(source => /new\s+EventSource|EventSource\s*\(/.test(source)), false)
   assert.match(sources[0], /webUiRealtime\.subscribeSessionList/)
   assert.match(sources[1], /webUiRealtime\.subscribeSessionList/)
   assert.match(sources[2], /webUiRealtime\.subscribeSession/)
+  assert.match(sources[4], /webUiRealtime\.subscribeSessionList/)
 })
 
 test('Logs shares the existing socket, resumes its byte cursor, and ignores an obsolete logs lifetime', async () => {

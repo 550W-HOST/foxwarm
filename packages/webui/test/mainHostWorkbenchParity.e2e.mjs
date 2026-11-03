@@ -89,8 +89,8 @@ try {
   assert.match(await page.$eval('[data-workbench-status-popup]', element => element.textContent), /Cached20.*Input60.*Output10/)
   await page.keyboard.press('Escape')
   await page.reload({ waitUntil: 'domcontentloaded' }); await page.waitForFunction(() => window.foxwarmTest?.switchToSession); await chat()
-  await page.waitForSelector('[aria-label="Tasks: 1 active, 2 unfinished"]')
-  await click('[aria-label="Tasks: 1 active, 2 unfinished"]'); await page.waitForFunction(() => document.querySelector('[data-workbench-status-popup]')?.textContent.includes('Parity active task'))
+  await page.waitForSelector('[aria-label="Tasks: 1 active, 1 open"]')
+  await click('[aria-label="Tasks: 1 active, 1 open"]'); await page.waitForFunction(() => document.querySelector('[data-workbench-status-popup]')?.textContent.includes('Parity active task'))
   assert.match(await page.$eval('[data-workbench-status-popup]', element => element.textContent), /Parity open task/); await page.keyboard.press('Escape')
 
   // The Debug endpoint and Timeline share the original lazy JSON inspector.

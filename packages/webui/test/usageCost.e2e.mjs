@@ -15,7 +15,7 @@ before(async () => {
     import ChatTimeline from './src/components/ChatTimeline'
     import TokenUsageDetails from './src/components/TokenUsageDetails'
     import WorkbenchStatusBar from './src/components/WorkbenchStatusBar'
-    import ArchitectureView from './src/components/ArchitectureView'
+    import SystemView from './src/components/SystemView'
     import { buildTimelineRows } from './src/components/timelineRows'
     import { useBoundedSessionList } from './src/boundedSessionList'
     const counts = {cachedTokens:8,inputTokens:2,outputTokens:5}
@@ -40,7 +40,7 @@ before(async () => {
       const address=String(input)
       const payload = address.includes('/session-list/architecture') ? {version:1,revision:'r',roots:{sessions:[session],hasMore:false},children:[],agentCounts:[{agent:'main',count:2}],summary:{total:2,busy:0,queued:0,managed:0,...counts,cost:1.25}}
         : address.includes('/tasks') ? {total:0,tasks:[]}
-        : address.includes('/nodes') ? {nodes:[]} : address.includes('/agents') ? {agents:[]} : {}
+        : address.includes('/nodes') ? {nodes:[]} : address.includes('/agents') ? {agents:[{id:'main',inherit:null,inheritanceChain:['main'],isolated:false,isolatedNode:null,defaultNode:null,defaultCwd:null,sessionCount:2,activeSessionCount:0,queuedSessionCount:0,memoryRoot:'/agents/main/memory',memoryFileCount:0,memoryLastModified:null}]} : {}
       return new Response(JSON.stringify(payload),{status:200,headers:{'Content-Type':'application/json'}})
     }
     class Socket { static CLOSED=3; constructor(){this.readyState=0;queueMicrotask(()=>{this.readyState=1;this.onopen?.({});this.onmessage?.({data:JSON.stringify({type:'connected'})})})} close(){this.readyState=3} send(){} }
@@ -57,7 +57,7 @@ before(async () => {
     for(const [id,usage,loaded] of [['unknown',counts,false],['zero',{...counts,cost:0},false],['tiny',{...counts,cost:.0000001},true]])
       createRoot(document.getElementById(id)).render(<TokenUsageDetails usage={usage} detailed loaded={loaded} />)
     createRoot(document.getElementById('status')).render(<Status />)
-    createRoot(document.getElementById('architecture')).render(<ArchitectureView onSelectSession={()=>{}} onBack={()=>{}} onOpenNodes={()=>{}} onCreateAgent={()=>{}} onCreateSession={()=>{}} onAgentsChanged={()=>{}} onOpenAgentMemory={()=>{}} />)
+    createRoot(document.getElementById('architecture')).render(<SystemView section="sessions" onSelectSession={()=>{}} onBack={()=>{}} onCreateAgent={()=>{}} onCreateSession={()=>{}} onAgentsChanged={()=>{}} onOpenAgentMemory={()=>{}} />)
   `
   const bundle = await build({ stdin: { contents: source, resolveDir: new URL('..', import.meta.url).pathname, sourcefile: 'usage-cost-fixture.tsx', loader: 'tsx' }, bundle: true, format: 'iife', platform: 'browser', target: 'chrome120', write: false, define: { 'process.env.NODE_ENV': JSON.stringify('test') }, logLevel: 'silent' })
   server = createServer((_req, res) => {
@@ -105,7 +105,7 @@ test('Workbench uses global saved subtotal and distinguishes current-session zer
   assert.match(await text('[data-workbench-status-popup]'), /\$0\.00 USD/)
 })
 
-test('Architecture keeps global and loaded-window recorded estimates separate', async () => {
+test('System keeps global and loaded-window recorded estimates separate', async () => {
   await mount()
   await page.evaluate(() => { for (const section of document.querySelectorAll('body > section')) if (section.id !== 'architecture') section.style.display = 'none'; window.scrollTo(0, 0) })
   await page.waitForSelector('#architecture [aria-label="Global token usage"]')
@@ -114,6 +114,8 @@ test('Architecture keeps global and loaded-window recorded estimates separate', 
   await page.waitForSelector('[role="dialog"][aria-label="Token usage"]')
   assert.match(await text('[role="dialog"][aria-label="Token usage"]'), /\$1\.25 USD/)
   await page.keyboard.press('Escape')
-  await page.click('#architecture [aria-label="Loaded token usage"]')
+  await page.click('#architecture [data-system-tab="agents"]')
+  await page.waitForSelector('#architecture [data-architecture-agent-id="main"] [aria-label="Loaded token usage"]')
+  await page.click('#architecture [data-architecture-agent-id="main"] [aria-label="Loaded token usage"]')
   assert.match(await text('[role="dialog"][aria-label="Token usage"]'), /\$0\.125 USD/)
 })
