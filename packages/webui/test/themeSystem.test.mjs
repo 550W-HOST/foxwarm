@@ -332,11 +332,11 @@ test('shape, effects, typography, and procedural backgrounds project to runtime 
   assert.equal(crtVariables['--foxwarm-background-size'], '8px 8px')
 })
 
-test('Architecture inverse icon and active-tab treatments use a readable semantic pair', async () => {
-  const source = await readFile(path.join(webuiRoot, 'src/components/ArchitectureView.tsx'), 'utf8')
+test('System inverse icon and active-tab treatments use a readable semantic pair', async () => {
+  const source = await readFile(path.join(webuiRoot, 'src/components/SystemView.tsx'), 'utf8')
   assert.match(source, /bg-fw-text-strong text-fw-surface"><Network/)
-  assert.equal((source.match(/bg-fw-text-strong text-fw-surface/g) || []).length >= 3, true)
-  assert.doesNotMatch(source, /bg-fw-canvas text-fw-text-inverse/)
+  assert.match(source, /active \? 'bg-fw-text-strong text-fw-surface'/)
+  assert.doesNotMatch(source, /bg-fw-canvas text-fw-text-inverse|text-fw-section/)
 })
 
 

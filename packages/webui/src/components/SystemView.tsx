@@ -445,7 +445,7 @@ export default function SystemView({
                   <ArrowLeft className="h-4 w-4" /> Back
                 </button>
               ) : null}
-              <WorkbenchTabIcon className="flex h-10 w-10 items-center justify-center rounded-xl bg-fw-text-strong text-fw-section"><Network className="h-5 w-5" /></WorkbenchTabIcon>
+              <WorkbenchTabIcon className="flex h-10 w-10 items-center justify-center rounded-xl bg-fw-text-strong text-fw-surface"><Network className="h-5 w-5" /></WorkbenchTabIcon>
               <div>
                 <h1 className="text-2xl font-bold text-fw-text-strong">System</h1>
                 <p className="mt-0.5 text-sm text-fw-text-muted">{SECTION_SUBTITLES[section]}</p>
