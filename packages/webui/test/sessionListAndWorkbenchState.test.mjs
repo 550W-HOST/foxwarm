@@ -260,6 +260,25 @@ test('user tab activation expands its pane while restore and inactive insertion 
   assert.equal(useWorkbenchStore.getState().root.children[0].collapsed, true, 'route/restore activation can preserve collapse')
 })
 
+test('replacing a tab keeps its position among retained tab content', async () => {
+  const { useWorkbenchStore } = await loadTypeScriptModule('../src/workbench/store.ts')
+  useWorkbenchStore.setState({
+    version: 4,
+    tabsById: {
+      'chat:main': { id: 'chat:main', type: 'chat', sessionId: 'main', title: 'main', preview: true },
+      'vscode-web': { id: 'vscode-web', type: 'vscode', title: 'Code' },
+    },
+    root: { id: 'pane-main', kind: 'pane', tabIds: ['chat:main', 'vscode-web'], activeTabId: 'chat:main' },
+    focusedPaneId: 'pane-main',
+  })
+  // Selecting the Session in its own preview tab replaces the tab under the same ID.
+  useWorkbenchStore.getState().replaceTabId('chat:main', { id: 'chat:main', type: 'chat', sessionId: 'main', title: 'main', preview: true })
+  assert.deepEqual(Object.keys(useWorkbenchStore.getState().tabsById), ['chat:main', 'vscode-web'])
+  useWorkbenchStore.getState().replaceTabId('chat:main', { id: 'chat:other', type: 'chat', sessionId: 'other', title: 'other', preview: true })
+  assert.deepEqual(Object.keys(useWorkbenchStore.getState().tabsById), ['chat:other', 'vscode-web'])
+  assert.deepEqual(useWorkbenchStore.getState().root.tabIds, ['chat:other', 'vscode-web'])
+})
+
 test('Code workspace URLs preserve paths and reverse-proxy base paths', async () => {
   const { getVscodeWebPath, makeCodeWorkspaceUri, makeVscodeWebUrl, normalizeCodePath } = await loadTypeScriptModule('../src/vscodeWeb.ts')
   assert.equal(getVscodeWebPath('/api'), '/vscode-web/')
