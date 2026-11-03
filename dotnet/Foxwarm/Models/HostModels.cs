@@ -24,6 +24,7 @@ internal sealed record ConcreteHostModel(
         HostModels.PositiveSetting(Configuration["maxOutput"], 32768, "maxOutput");
     internal string ProviderImageOutputFormat =>
         HostModels.Text(Configuration, "providerImageOutputFormat") ?? "webp";
+    internal bool ImageInput => !ModelRoutingFingerprint.False(Configuration["imageInput"]);
     internal bool IsVirtual => ProviderType is "session-hash" or "failover";
     internal Uri BaseUri =>
         new(
@@ -150,7 +151,7 @@ internal sealed partial class HostModels
                 ?? throw new InvalidDataException("Models defaults must be an object.")
             : new JsonObject();
         ValidateDefaults(defaults, "defaults", rejectUnknown: true);
-        ValidateDefaults(llm, "llm");
+        ValidateDefaults(llm, "llm", modelsScope: false);
         foreach (var (providerKey, raw) in source)
         {
             if (raw is JsonValue alias && alias.TryGetValue<string>(out var target))
@@ -246,6 +247,7 @@ internal sealed partial class HostModels
                     "contextLimit",
                     "maxOutput",
                     "providerImageOutputFormat",
+                    "imageInput",
                     "streamContentInactivityTimeoutMs",
                     "effort",
                     "historyReasoningField",
@@ -301,6 +303,8 @@ internal sealed partial class HostModels
             resolved["asyncCompact"] = leaves.All(leaf =>
                 !ModelRoutingFingerprint.False(leaf.Configuration["asyncCompact"])
             );
+            // Presentation only; each request still decides from its concrete target.
+            resolved["imageInput"] = leaves.All(leaf => leaf.ImageInput);
             resolved["fingerprint"] = ModelRoutingFingerprint.Build(
                 type,
                 canonicalTargets,

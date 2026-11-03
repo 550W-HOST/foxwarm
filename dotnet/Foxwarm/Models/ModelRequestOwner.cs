@@ -352,7 +352,8 @@ internal sealed class ModelRequestOwner(
                             outputFormat: leaf.ProviderImageOutputFormat,
                             token: cancellationToken,
                             concreteModelId: leaf.Key,
-                            compatibility: options.HistoryCompatibility
+                            compatibility: options.HistoryCompatibility,
+                            imageInput: leaf.ImageInput
                         );
                     }
                     catch (Foxwarm.Images.ImageInputException error)
