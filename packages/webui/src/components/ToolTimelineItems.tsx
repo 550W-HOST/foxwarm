@@ -303,7 +303,8 @@ const renderToolCallPreview = (call: FunctionCall, options: { partial?: boolean;
 
   const target = toolActivityTarget(call)
   if (call.name === 'call_tool' && target.name !== 'call_tool') {
-    return renderToolCallPreview({ ...call, name: target.name, args: target.args }, options)
+    const summary = toolActivitySummary(target)
+    return <span className="truncate" title={summary}>{summary}</span>
   }
   if (call.name === 'exec' || call.name === 'run_script') {
     const summary = toolActivitySummary(call)
