@@ -260,7 +260,7 @@ When initializing an agent, choose defaults for these preferences.
 
 Agent memory is not a progress log.
 
-Long session history is already preserved by layered context, compaction summaries, archives, and `recall`. Therefore, memory should contain only information that should affect future behavior by default.
+Long session history is already preserved by CTX-BLOCK summaries, the Session archive and `recall`. Therefore, memory should contain only information that should affect future behavior by default.
 
 Use progressive disclosure when deciding where knowledge belongs:
 

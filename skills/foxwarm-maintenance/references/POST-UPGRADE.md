@@ -16,21 +16,20 @@ removes earlier runtime outputs after the old Main has stopped.
 
 ## Framework prompt
 
-The bundled template and live prompt are separate files:
-
 | File | Role |
 | --- | --- |
-| `<program-repo>/templates/agents/00_SYSTEM.md` | Bundled default |
-| `<data-root>/agents/00_SYSTEM.md` | Preferred live framework prompt |
-| `<data-root>/agents/main/memory/00_SYSTEM.md` | Legacy fallback when the preferred file is absent |
+| `<program-repo>/templates/agents/00_SYSTEM.md` | Bundled framework prompt; updated with Foxwarm |
+| `<data-root>/agents/00_SYSTEM.local.md` | Optional installation additions, appended after the bundled prompt |
+| `<data-root>/agents/00_SYSTEM.md` | Legacy copy from an earlier release; replaces the bundled prompt when edited |
+| `<data-root>/agents/main/memory/00_SYSTEM.md` | Older legacy copy, used only when the previous file is absent |
 
-Compare the effective live file with the new template. Explain any relevant
-changes and preserve user customizations when an update is approved. Do not copy
-the template over the live file as part of a routine source upgrade.
-
-An approved move from the legacy path must preserve the existing prompt content.
-Once the top-level file exists, it takes precedence; the legacy file is not
-loaded again as ordinary Agent memory.
+Startup removes legacy copies that are byte-identical (apart from line endings)
+to a released template. An edited legacy copy keeps working as a full
+replacement, and Main logs that the installation is not receiving framework
+prompt updates. With the administrator's approval, migrate it: compare it with
+the bundled template, move only the installation-specific instructions to
+`agents/00_SYSTEM.local.md`, then delete the legacy file. Do not overwrite the
+bundled template for one installation.
 
 ## Configuration and persisted data
 

@@ -65,7 +65,7 @@ Canonical compact behavior: [context compaction and recall](../threads/context-c
 ## Compatibility
 
 - Current metadata uses Foxwarm wrappers; supported legacy bracketed history remains readable.
-- The current top-level framework prompt has a documented legacy main-agent fallback.
+- The framework prompt is the bundled base plus an optional installation addition; see [framework prompt sources](../behaviors/conversation-and-history.md#framework-prompt-sources).
 - Provider/model persisted readers are documented in [src-config](../units/src-config.md#compatibility).
 
 ## Design decisions

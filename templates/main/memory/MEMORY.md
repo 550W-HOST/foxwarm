@@ -1,9 +1,3 @@
-# MEMORY.md - Long-Term Project Context
+# MEMORY.md - Lasting Context
 
-This file stores durable project context and decisions that Foxwarm should preserve across sessions for this agent.
-
-## Project History
-- Add important events, decisions, and milestones here
-
-## Configuration Notes
-- Document important configuration choices and their rationale here
+Lasting decisions, conventions, configuration notes and environment facts that every Session of this Agent should know, with pointers to detailed docs. Conversations keep their own history, so task progress and completed work don't belong here.

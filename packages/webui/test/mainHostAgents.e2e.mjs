@@ -49,7 +49,7 @@ try {
   await mkdir(dataRoot); await mkdir(workRoot, { recursive: true })
   await mkdir(join(dataRoot, 'agents'), { recursive: true })
   await mkdir(join(workRoot, 'memory'))
-  await writeFile(join(dataRoot, 'agents', '00_SYSTEM.md'), 'FRAME-SHARED\n<foxwarm-if model-id="local-b/two">\nFRAME-B-ONLY\n</foxwarm-if>\n')
+  await writeFile(join(dataRoot, 'agents', '00_SYSTEM.local.md'), 'FRAME-SHARED\n<foxwarm-if model-id="local-b/two">\nFRAME-B-ONLY\n</foxwarm-if>\n')
   await writeFile(join(workRoot, 'memory', 'MEMORY.md'), 'LEGACY-MAIN-MEMORY')
   await writeFile(join(workRoot, 'memory', 'ONBOOT.md'), ' \n')
   const modelsFile = join(root, 'models.json')
@@ -71,7 +71,7 @@ try {
       assert(latest, 'The fixture input is recovered independently of later control rows')
       const count = (counts.get(id) || 0) + 1; counts.set(id, count)
       const snapshot = body.instructions || ''
-      assert(snapshot.includes('FRAME-SHARED'))
+      assert(snapshot.includes('You are running in Foxwarm') && snapshot.includes('FRAME-SHARED'))
       if (id.startsWith('beta/')) {
         assert(snapshot.includes('BETA-'), `${id} missing beta memory`)
         assert(!snapshot.includes('ALPHA-V1'), `${id} inherited another Agent memory`)

@@ -23,13 +23,21 @@ A memory-backed Session uses a retained system-prompt snapshot, not a fresh scan
 
 | Source/action | What the model can receive | What it does not do |
 | --- | --- | --- |
-| Default memory selection | Framework guidance followed by inherited/current Agent memory, with applicable Session/model filtering. | Does not insert another Agent's conversation or copy its whole workspace. |
+| Default memory selection | [Framework prompt](#framework-prompt-sources) followed by inherited/current Agent memory, with applicable Session/model filtering. | Does not insert another Agent's conversation or copy its whole workspace. |
 | Explicit `systemPromptFiles` | Replaces default memory-file selection in listed order. An explicit empty list selects no memory files; omission keeps defaults. Catalog and generated directory/recall guidance remain. | Not an extra-file append to default memory. [Creator authority](#custom-prompt-files-and-legacy-isolation) governs admission. |
 | Skill catalog in the snapshot | Names, descriptions, and winning sources so the Agent can choose relevant instructions. | Not the full skill bodies, an eager read of resources, or a grant of tool capabilities. |
 | `skill` with `action: "load"` | The resolved entry document and a bounded listing of supporting resource paths, through the ordinary tool-result path. | Does not automatically load those resources or attach the full skill permanently to every future prompt. |
 | Read a resource or historical evidence | The selected content returned by that authorized operation. | Not a memory-file write or reinsertion of archived messages into active history. |
 
 Ongoing Agent inheritance selects reusable sources for later snapshots. One-time memory copying initializes independent files and does not keep them synchronized. Ongoing inheritance rejects self/cyclic relationships and isolated source Agents; copying is a separate choice, not an implicit inheritance relationship or permission grant. Skill resolution uses local over inherited over global sources, with the first matching name winning. A directory containing `SKILL.md` is a skill boundary; nested documents are resources, not automatically additional catalog entries. Exact source order, filtering, and resource bounds remain in [prompt assembly](../units/src-session-prompt.md#source-assembly) and [skills](../units/src-skills.md#behavior).
+
+### Framework prompt sources
+
+**Directly requested (2026-11-04).** Framework prompt updates must reach existing installations; installation instructions must survive them.
+
+- The bundled `templates/agents/00_SYSTEM.md` is the live base, read at snapshot build and never copied into the installation.
+- Optional `<Agents root>/00_SYSTEM.local.md` holds installation additions, appended after the base for every Agent with the same raw-content and conditional treatment.
+- Earlier releases copied the template once to `<Agents root>/00_SYSTEM.md` (or the main Agent's `memory/00_SYSTEM.md`). Startup deletes unedited copies; an edited copy keeps its precedence, replaces the bundled base, and is reported in the startup log. Details: [session domain](../units/session-domain.md#d-framework-prompt-copy-retirement).
 
 ### When do changed instructions reach the model?
 

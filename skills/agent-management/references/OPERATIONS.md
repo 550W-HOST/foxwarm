@@ -87,35 +87,15 @@ When deciding where to put information, ask:
 
 If a directory contains `SKILL.md`, treat it as a skill boundary. Files and subdirectories inside it are supporting resources for that skill; do not expect nested `SKILL.md` files inside references, examples, scripts, docs, or assets to appear as separate catalog entries.
 
-## Special file: `agents/00_SYSTEM.md`
+## Framework prompt files
 
-This file is special.
+The framework prompt is the first block of every Agent's default system prompt:
 
-Current prompt assembly injects:
+- Foxwarm's bundled `templates/agents/00_SYSTEM.md` is the base. It is part of the program and changes with Foxwarm updates; do not edit it for one installation.
+- `agents/00_SYSTEM.local.md`, when present, is appended after the base for **all Agents** of the installation. Put installation-wide instructions there.
+- A legacy `agents/00_SYSTEM.md` (or older `agents/main/memory/00_SYSTEM.md`) that was edited after an earlier release copied it **replaces** the bundled base, so that installation does not receive framework prompt updates. Unedited copies are removed automatically at startup. To migrate an edited copy, move only the installation-specific parts to `agents/00_SYSTEM.local.md` and delete the legacy file.
 
-- `agents/00_SYSTEM.md`
-
-as a framework-level system block for **all agents**.
-
-Older installations may still rely on the legacy fallback path:
-
-- `agents/main/memory/00_SYSTEM.md`
-
-Also important:
-
-- default agent memory loading explicitly skips `00_SYSTEM.md` in per-agent memory directories
-- that means ordinary agents should **not** create their own per-agent `00_SYSTEM.md` expecting it to behave like the global one
-
-So the guidance is:
-
-- treat `agents/00_SYSTEM.md` as the framework/global system layer
-- treat `agents/main/memory/00_SYSTEM.md` as a legacy compatibility fallback, not the preferred location for new installs
-- for agent-specific instructions, use normal memory files such as:
-  - `MEMORY.md`
-  - `SOUL.md`
-  - `USER.md`
-  - or other clearly named `.md` files
-- do **not** recommend adding a custom `00_SYSTEM.md` under another agent unless you are intentionally changing framework behavior and understand the prompt assembly code
+Per-Agent memory loading skips `00_SYSTEM.md`, so a `memory/00_SYSTEM.md` inside an ordinary Agent has no special effect. For Agent-specific instructions, use normal memory files such as `MEMORY.md`, `SOUL.md`, `USER.md` or other clearly named `.md` files.
 
 ## Mental model: agent vs session
 
@@ -446,6 +426,7 @@ Avoid ad-hoc manual mutation such as:
 
 - renaming agent directories by hand
 - creating per-agent `00_SYSTEM.md` and assuming it will be loaded by default
+- editing the bundled framework template for one installation instead of `agents/00_SYSTEM.local.md`
 - deleting agent folders without going through the intended flow
 - editing persistent state files blindly to "fake" a rename
 - assuming another Session knows about a file edit without a change message or a snapshot refresh

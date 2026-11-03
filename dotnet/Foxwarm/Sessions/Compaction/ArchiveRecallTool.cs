@@ -324,7 +324,7 @@ internal static class ArchiveRecallTool
                         : $"B#{topology.Min(row => row.Id)}-B#{topology.Max(row => row.Id)} ({topology.Count} total; frontier: {frontier.Count}; {levels})";
                 return Output(
                     ContextPreviewRenderer.Clip(
-                        $"Recall overview for session `{id}`.\n\nAvailable message log: {range}.\nLayered CTX-BLOCK archive: {blocks}.\n\n{Help}\n"
+                        $"Recall overview for session `{id}`.\n\nAvailable message log: {range}.\nCTX-BLOCK archive: {blocks}.\n\n{Help}\n"
                             + Advice(
                                 frontier.Count > 0 ? ["blocks", $"B#{frontier[0].Id}"] : ["blocks"]
                             ),

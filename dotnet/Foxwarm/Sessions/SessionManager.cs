@@ -153,7 +153,11 @@ internal sealed partial class SessionManager : IAsyncDisposable
                     ?? Path.Combine(AppContext.BaseDirectory, "skills")
             )
         );
-        memory = new AgentMemory(agents, skills);
+        memory = new AgentMemory(
+            agents,
+            skills,
+            FrameworkPrompt.TemplatePath(hostPaths?.ResourceRoot ?? AppContext.BaseDirectory)
+        );
         executor = new LocalExecManager(
             this.root,
             sessionId =>

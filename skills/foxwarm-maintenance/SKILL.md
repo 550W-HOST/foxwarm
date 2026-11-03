@@ -26,7 +26,7 @@ working directory. A shell's environment may differ from the running service.
 
 - `<data-root>/state/` contains configuration, credentials, Session authority,
   databases, blobs, and logs. `<data-root>/agents/` contains user-owned Agent
-  files and the live framework prompt.
+  files and the installation's framework prompt additions.
 - `<program-repo>/skills/` supplies global skills unless `paths.skillsDir`
   selects another directory. Source builds also copy skills into their payload
   for standalone publication. Templates and native resources come from the

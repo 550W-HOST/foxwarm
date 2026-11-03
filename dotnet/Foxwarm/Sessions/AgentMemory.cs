@@ -6,7 +6,11 @@ using YamlDotNet.Serialization;
 
 namespace Foxwarm.Sessions;
 
-internal sealed partial class AgentMemory(AgentCatalog agents, Skills skills)
+internal sealed partial class AgentMemory(
+    AgentCatalog agents,
+    Skills skills,
+    string? frameworkTemplatePath = null
+)
 {
     public async Task<string> BuildAsync(
         string agentName,
@@ -31,19 +35,35 @@ internal sealed partial class AgentMemory(AgentCatalog agents, Skills skills)
             );
         else
         {
-            var frameworkPath = File.Exists(agents.FrameworkSystemPath)
-                ? agents.FrameworkSystemPath
-                : agents.MainFallbackSystemPath;
-            if (File.Exists(frameworkPath))
+            // A legacy copy still present at startup was edited and keeps replacing the bundled base.
+            var replacement =
+                File.Exists(agents.FrameworkSystemPath) ? agents.FrameworkSystemPath
+                : File.Exists(agents.MainFallbackSystemPath) ? agents.MainFallbackSystemPath
+                : null;
+            var frameworkPath =
+                replacement ?? (File.Exists(frameworkTemplatePath) ? frameworkTemplatePath : null);
+            if (frameworkPath is not null)
                 AppendBlock(
                     blocks,
-                    frameworkPath == agents.FrameworkSystemPath ? "framework" : "main",
-                    frameworkPath == agents.FrameworkSystemPath || agentName != "main"
+                    frameworkPath == agents.MainFallbackSystemPath ? "main" : "framework",
+                    frameworkPath != agents.MainFallbackSystemPath || agentName != "main"
                         ? "inherited"
                         : "self",
                     frameworkPath,
                     ConditionalMemory.FilterConditionalMemorySource(
                         await File.ReadAllTextAsync(frameworkPath, cancellationToken),
+                        concreteModelId,
+                        runtime
+                    )
+                );
+            if (File.Exists(agents.FrameworkLocalPath))
+                AppendBlock(
+                    blocks,
+                    "framework",
+                    "inherited",
+                    agents.FrameworkLocalPath,
+                    ConditionalMemory.FilterConditionalMemorySource(
+                        await File.ReadAllTextAsync(agents.FrameworkLocalPath, cancellationToken),
                         concreteModelId,
                         runtime
                     )
@@ -61,7 +81,7 @@ internal sealed partial class AgentMemory(AgentCatalog agents, Skills skills)
                     {
                         var fileName = Path.GetFileName(path);
                         if (
-                            fileName == "00_SYSTEM.md"
+                            fileName == FrameworkPrompt.FileName
                             || fileName.Equals("ONBOOT.md", StringComparison.OrdinalIgnoreCase)
                         )
                             continue;

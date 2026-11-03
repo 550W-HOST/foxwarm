@@ -73,7 +73,7 @@ internal static partial class CompactPrompt
             .ToArray();
         var lines = new List<string>
         {
-            "COMPACTION STARTED: stop any previous task and focus only on layered-context compaction.",
+            "COMPACTION STARTED: stop any previous task and focus only on CTX-BLOCK compaction.",
             "Goal: Replace older context with compact, source-bound summaries that preserve what the main model needs to continue and identify when to recall details.",
             $"Recent messages {(recent.Length > 0 ? $"({recent.Length} rendered item(s), {Range(recentSeqs.FirstOrDefault(), recentSeqs.LastOrDefault())})" : "(none)")} are already force-kept verbatim by the system. No need to summarize/replace them.",
             "Hard compaction limits for this run:",

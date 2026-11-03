@@ -107,7 +107,7 @@ public sealed class SessionBootstrapTests
     }
 
     [Fact]
-    public async Task Packaged_templates_seed_only_fresh_or_empty_memory_and_preserve_legacy_and_custom_files()
+    public async Task Packaged_templates_seed_only_fresh_or_empty_memory_and_preserve_edited_framework_and_custom_files()
     {
         foreach (var kind in new[] { "fresh", "empty", "legacy", "custom", "framework" })
         {
@@ -140,18 +140,13 @@ public sealed class SessionBootstrapTests
             }
             else
             {
-                var expected =
-                    kind == "framework"
-                        ? "Existing framework bytes."
-                        : await File.ReadAllTextAsync(
-                            Path.Combine(
-                                AppContext.BaseDirectory,
-                                "templates",
-                                "agents",
-                                "00_SYSTEM.md"
-                            )
-                        );
-                Assert.Equal(expected, await File.ReadAllTextAsync(agents.FrameworkSystemPath));
+                if (kind == "framework")
+                    Assert.Equal(
+                        "Existing framework bytes.",
+                        await File.ReadAllTextAsync(agents.FrameworkSystemPath)
+                    );
+                else
+                    Assert.False(File.Exists(agents.FrameworkSystemPath));
                 if (kind == "custom")
                 {
                     Assert.Single(Directory.GetFiles(memory));

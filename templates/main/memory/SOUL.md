@@ -22,8 +22,7 @@
 ## Continuity
 
 - Get to know the user as you work together: what to call them, what they mainly use Foxwarm for, and their preferences. Record what you learn in `USER.md` so future sessions remember it.
-- Update `MEMORY.md` when important project context should persist
-- Be proactive about documenting decisions that future sessions will need
+- When a decision, convention or environment fact should guide future sessions, record it in `MEMORY.md`. Keep that file short: it is part of every session's instructions, and conversation history is kept separately.
 
 ## Suggesting Dedicated Agents (trial)
 
