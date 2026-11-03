@@ -2163,7 +2163,10 @@ async function workbenchScreenshot(page, name) {
   if (!process.env.FOXWARM_E2E_SCREENSHOT_DIR) return
   await mkdir(process.env.FOXWARM_E2E_SCREENSHOT_DIR, { recursive: true })
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
-  await page.screenshot({ path: path.join(process.env.FOXWARM_E2E_SCREENSHOT_DIR, name), fullPage: true })
+  // Capture the viewport only. A full-page capture lets Chromium resize the window
+  // transiently (observed as 1x1), which can switch the App to its mobile shell and
+  // discard transient desktop state such as an open status popup mid-assertion.
+  await page.screenshot({ path: path.join(process.env.FOXWARM_E2E_SCREENSHOT_DIR, name) })
 }
 
 async function clickStatusPageEntry(page, section) {
