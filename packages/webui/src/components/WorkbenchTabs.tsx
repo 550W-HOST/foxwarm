@@ -299,7 +299,8 @@ function SortableTab({
       {...listeners}
     >
       <TabIcon type={tab.type} />
-      <span className={`min-w-0 flex-1 truncate text-left [direction:rtl] ${isPreview ? 'italic' : ''}`}>{tab.title}</span>
+      {/* RTL direction moves the ellipsis to the start; the LRM marks keep IDs such as `1103_9t0ea` in their written order. */}
+      <span className={`min-w-0 flex-1 truncate text-left [direction:rtl] ${isPreview ? 'italic' : ''}`}>{`\u200E${tab.title}\u200E`}</span>
       <button
         onPointerDown={(event) => event.stopPropagation()}
         onMouseDown={(event) => event.stopPropagation()}

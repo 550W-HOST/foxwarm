@@ -159,3 +159,15 @@ test('continuous remount targets only canonical sequence anchors', async () => {
   assert.equal(getChatViewportAnchorSeq({ kind: 'anchor', messageKey: 'ctx-block-local-312', offsetPx: 0 }), undefined)
   assert.equal(getChatViewportAnchorSeq({ kind: 'anchor', messageKey: 'seq-local-0', offsetPx: 0 }), undefined)
 })
+
+test('a timeline of only one assistant message opens at its start', async () => {
+  const { getOpeningChatViewportState } = await loadTypeScriptModule('../src/chatViewportState.ts')
+  const welcome = { role: 'model', parts: [{ text: 'Hi' }], __meta: { seq: 2 } }
+  const state = getOpeningChatViewportState([welcome])
+  assert.equal(state?.kind, 'anchor')
+  assert.equal(state.messageKey, 'seq-local-2')
+  assert.equal(getOpeningChatViewportState([]), null)
+  assert.equal(getOpeningChatViewportState([{ role: 'user', parts: [{ text: 'Hello' }], __meta: { seq: 1 } }]), null)
+  assert.equal(getOpeningChatViewportState([{ role: 'user', parts: [{ text: 'Hello' }], __meta: { seq: 1 } }, welcome]), null)
+  assert.equal(getOpeningChatViewportState([{ role: 'model', parts: [], __meta: { synthetic: 'streamingAssistantDraft', temporary: true } }]), null)
+})

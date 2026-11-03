@@ -25,6 +25,8 @@ let productionBaseUrl
 let browser
 let page
 let savedRequest
+// The first-run welcome language; kept apart so body assertions cover the installed models input.
+let savedLocale
 let savedRequestPath
 let saveError = null
 let savedConfigRequest
@@ -244,7 +246,9 @@ async function attachRequestMocks(targetPage, options = {}) {
     }
     if (url.pathname.endsWith('/api/setup/models') && request.method() === 'POST') {
       savedRequestPath = url.pathname
-      savedRequest = JSON.parse(request.postData() || '{}')
+      const { locale, ...savedBody } = JSON.parse(request.postData() || '{}')
+      savedLocale = locale
+      savedRequest = savedBody
       options.modelsSaveRequests?.push(savedRequest)
       if (options.heldModelsSaves) {
         options.heldModelsSaves.push({ request, body: savedRequest })
@@ -1671,6 +1675,7 @@ test('raw model save remains enabled and preserves editor text', async () => {
   assert.equal((await feedback.evaluate((element) => element.textContent || '')).trim(), 'Models saved.')
   assert.equal(await feedback.evaluate((element) => element.closest('[data-setup-section]')?.getAttribute('data-setup-section')), 'models')
   assert.deepEqual(savedRequest, { yaml: statusPayload.models.rawYaml })
+  assert.equal(savedLocale, await page.evaluate(() => navigator.language))
   assert.equal(savedRequestPath, '/preview/api/setup/models')
 
   await runMonacoEditorAction(page, 'inmemory://foxwarm/setup/foxwarm-models.yaml', 'position', { line: 1, column: statusPayload.models.rawYaml.split('\n')[0].length + 1 })

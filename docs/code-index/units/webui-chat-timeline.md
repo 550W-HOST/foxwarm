@@ -89,6 +89,10 @@ Conversation activities retain their mounted identity through overlapping techni
 
 `workbenchPreview.e2e.mjs` exercises the built App in Conversation with version-2 text deltas for explicit `final_answer` replies and unknown-phase previews, without disclosure clicks. It records native-scroller frames during genuine upward wheel input and continued output, rejects reverse motion after leaving the tail, and checks attached growth, explicit rejoin, and detached downward reading. The regression reproduces native anchoring in Chromium and Firefox; it asserts no elapsed duration or exact frame count.
 
+- Chat does not render the persistent-memory snapshot row or other [internal rows](./webui-chat-shared.md#behavior) in any timeline view; the Session debug view keeps them. The ContextScrollbar still counts the snapshot as a segment, and navigating to it scrolls to the start of the loaded timeline instead of waiting for a row that never mounts.
+
+- [2026-11-03] A Session without a saved viewport position whose loaded timeline is a single assistant message (the first-run welcome) opens through the ordinary anchor restore at the start of that message (`getOpeningChatViewportState`) instead of at its end. While that opening position is untouched it supersedes resize corrections captured for the empty timeline and is kept as content grows, and the first later row rejoins bottom follow; user scrolling cancels it like any restore. Every other Session keeps the latest-message default.
+
 ## Design Decisions
 
 ### D-webui-assistant-markdown-tables

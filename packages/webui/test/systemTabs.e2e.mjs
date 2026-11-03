@@ -200,7 +200,7 @@ test('Close all directly empties a multi-tab pane without route hydration', asyn
       const pane = document.querySelector('[data-pane-id="pane-e2e-close-all"]')
       return !!pane
         && pane.querySelectorAll('[data-tab-id]').length === 0
-        && /Empty pane/.test(pane.textContent || '')
+        && /Start a conversation/.test(pane.textContent || '')
         && window.location.hash === ''
         && localStorage.getItem('foxwarm_last_active_tab_v1') === null
     }, { timeout: 5_000 })
@@ -242,7 +242,7 @@ test('tab context menu survives background scroll and bulk close actions remain 
   await page.waitForFunction(() => document.querySelectorAll('[data-tab-id]').length === 0, { timeout: 5_000 })
   await new Promise((resolve) => setTimeout(resolve, 200))
   assert.equal(await page.$$eval('[data-tab-id]', (elements) => elements.length), 0)
-  assert.match(await page.$eval('[data-pane-id]', (element) => element.textContent || ''), /Empty pane/)
+  assert.match(await page.$eval('[data-pane-id]', (element) => element.textContent || ''), /Start a conversation/)
 })
 
 test('system tabs remain workbench tabs on a mobile viewport', async () => {

@@ -91,6 +91,8 @@ interface SessionListCoreProps {
   onRequestSession?: (request: SessionCreationRequest) => void
   /** Opens an Agent's settings. */
   onOpenAgentSettings?: (agent: string) => void
+  /** Starts a conversation from the empty list. */
+  onStartSession?: () => void
   bounded?: BoundedSessionListPresentationProps
 }
 
@@ -494,7 +496,7 @@ function DraggableSessionRow({
   )
 }
 
-export default function SessionListCore({ sessions, currentSession, onSelectSession, onKeepSession, mobileHeaderActions, toolbarActions, onSearchMessages, toolbarContainerClassName = 'p-2 pb-1', listContainerClassName = 'p-2 pt-1', dragEnabled = true, idleNotificationModes = {}, unreadSessionIds = new Set(), onToggleIdleNotificationMode, onRequestSession, onOpenAgentSettings, bounded }: SessionListCoreProps) {
+export default function SessionListCore({ sessions, currentSession, onSelectSession, onKeepSession, mobileHeaderActions, toolbarActions, onSearchMessages, toolbarContainerClassName = 'p-2 pb-1', listContainerClassName = 'p-2 pt-1', dragEnabled = true, idleNotificationModes = {}, unreadSessionIds = new Set(), onToggleIdleNotificationMode, onRequestSession, onOpenAgentSettings, onStartSession, bounded }: SessionListCoreProps) {
   const { active } = useDndContext()
   const [compact, toggleCompact] = useSessionListCompact()
   const [primaryPointerCoarse, setPrimaryPointerCoarse] = useState(() => window.matchMedia?.('(pointer: coarse)').matches ?? false)
@@ -1811,6 +1813,12 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
             ) : (
               <div className="px-2 py-6 text-center text-sm text-fw-text-muted">
                 {isFiltering ? 'No sessions match your search.' : 'No sessions yet.'}
+                {!isFiltering && onStartSession && (
+                  <button type="button" data-session-list-start onClick={onStartSession}
+                    className="mt-2 block w-full rounded-md px-2 py-1 text-sm font-medium text-fw-accent hover:bg-fw-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-fw-focus-ring/40">
+                    Start a conversation
+                  </button>
+                )}
               </div>
             )}
             {/* Names filter live here; message contents need the submitted history search. */}

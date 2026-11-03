@@ -15,6 +15,8 @@ export async function until(check, label, timeout = 22000) {
   while (Date.now() < end) { const result = await check(); if (result) return result; await sleep(25) }
   throw new Error('Timed out: ' + label)
 }
+// With only `main` and no alternative runtime, `+` creates directly and a split options control opens the dialog.
+export const NEW_SESSION_DIALOG_TRIGGER = 'button[aria-haspopup="dialog"]:is([aria-label="New session"], [aria-label="New session options"])'
 export async function saveModelsInOriginalApp(page, raw, modelPath) {
   await page.evaluate(() => { location.hash = 'setup' })
   await page.waitForSelector('#setup-tab-models'); await page.click('#setup-tab-models')

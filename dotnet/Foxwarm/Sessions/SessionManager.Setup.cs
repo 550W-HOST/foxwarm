@@ -5,6 +5,46 @@ namespace Foxwarm.Sessions;
 
 internal sealed partial class SessionManager
 {
+    private readonly SemaphoreSlim firstRunSession = new(1, 1);
+
+    /// <summary>
+    /// Creates the main Agent's default Session with the prepared welcome when first-run
+    /// Setup installs a model configuration on an installation without Sessions.
+    /// Returns the created Session ID, or null when the installation already has a
+    /// Session or the default ID is reserved; existing Sessions are never changed.
+    /// </summary>
+    internal async Task<string?> EnsureFirstRunSessionAsync(string language)
+    {
+        await firstRunSession.WaitAsync();
+        try
+        {
+            var id = SessionIdentity.Build("main", "main");
+            if (Catalog.Count() > 0 || await IdReservedAsync(id))
+                return null;
+            var text = await FirstRunWelcome.TextAsync(
+                hostPaths?.ResourceRoot ?? AppContext.BaseDirectory,
+                language
+            );
+            var owner = await CreateNamedAsync("main", "main", null, null);
+            await AppendOwnedRowsAsync(
+                owner,
+                [
+                    SystemRow(SessionBoundary.FirstRunOpening(owner.Id, ExecutionPlacement(owner))),
+                    new JsonObject
+                    {
+                        ["role"] = "model",
+                        ["parts"] = new JsonArray(new JsonObject { ["text"] = text }),
+                    },
+                ]
+            );
+            return owner.Id;
+        }
+        finally
+        {
+            firstRunSession.Release();
+        }
+    }
+
     internal async Task<SetupListedModel[]> ListSetupProviderModelsAsync(
         JsonObject input,
         CancellationToken cancellationToken

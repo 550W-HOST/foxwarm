@@ -1691,7 +1691,7 @@ test('every ordinary single tab closes from its header; Code retains the strip',
       await page.waitForFunction(id => !JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.tabsById[id], {}, tab.id)
       assert.equal((await state(page)).hash, '')
       assert.deepEqual((await state(page)).root.tabIds, [])
-      assert.match(await page.$eval('[data-pane-id]', pane => pane.textContent), /Empty pane/)
+      assert.match(await page.$eval('[data-pane-id]', pane => pane.textContent), /Start a conversation/)
     } finally { await page.close() }
   }
 })

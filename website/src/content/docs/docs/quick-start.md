@@ -54,7 +54,7 @@ providers:
 
 ## 3. Give an agent a task
 
-Foxwarm starts with a `main` Agent and its default Session. Try a short question first. Then give it something real, in a directory you are happy for it to work in:
+After the first save, Foxwarm creates the `main` Agent's default Session `main` with a short welcome that explains Agents and Sessions and asks what to call you. Closing Setup takes you there. Reply to it: your answer is also the first live test of the provider connection, and the Agent remembers what you tell it. Then give it something real, in a directory you are happy for it to work in:
 
 ```text
 Look at ~/projects/my-app. Run the tests and tell me which ones fail and why. Don't change anything yet.

@@ -165,28 +165,16 @@ test('track remains sticky inside the native timeline scroll chain for wheel and
   assert.equal(after.page, before.page, 'wheel remains in the timeline scroll chain rather than scrolling the page')
 })
 
-test('a tall persistent snapshot has its own ContextScrollbar anchor and keeps a nonzero viewport thumb', async () => {
+test('the persistent snapshot keeps its overview segment without a timeline row', async () => {
   await mount(1000, 50000, 720, false, false, false, true)
-  const snapshot = await page.$('[data-context-scrollbar-anchor-key="persistent-memory-snapshot"]')
-  assert.ok(snapshot)
-  assert.equal(await snapshot.evaluate(element => element.getAttribute('data-chat-message-anchor-key')), null, 'snapshot remains excluded from generic Chat viewport persistence')
+  assert.equal(await page.$('[data-context-scrollbar-anchor-key="persistent-memory-snapshot"]'), null)
+  assert.equal(await page.$eval('.foxwarm-chat-messages', element => element.textContent.includes('expanded persistent snapshot')), false)
+  assert.ok(await page.$('.foxwarm-context-scrollbar-segment'), 'snapshot tokens still count in the overview')
   await page.$eval('.foxwarm-chat-messages', element => { element.scrollTop = 300; element.dispatchEvent(new Event('scroll')) })
   await page.waitForSelector('button[aria-label="Scroll to top"]')
   await page.click('button[aria-label="Scroll to top"]')
-  await page.waitForFunction(() => {
-    const container = document.querySelector('.foxwarm-chat-messages')
-    const snapshotAnchor = document.querySelector('[data-context-scrollbar-anchor-key="persistent-memory-snapshot"]')
-    const firstMessage = document.querySelector('[data-chat-message-anchor-key="seq-local-1"]')
-    return container?.scrollTop === 0 && snapshotAnchor?.getBoundingClientRect().height >= 1600 && !!firstMessage
-      && document.querySelector('.foxwarm-context-scrollbar-viewport')?.getBoundingClientRect().height > 1
-  })
-  const initial = await page.$eval('.foxwarm-context-scrollbar-viewport', element => ({ top: element.getBoundingClientRect().top, height: element.getBoundingClientRect().height }))
-  assert.ok(initial.height > 1, 'both viewport edges inside the snapshot still interpolate a positive thumb span')
-  await page.$eval('.foxwarm-chat-messages', element => { element.scrollTop = 200; element.dispatchEvent(new Event('scroll')) })
-  await new Promise(resolve => setTimeout(resolve, 80))
-  const afterScroll = await page.$eval('.foxwarm-context-scrollbar-viewport', element => ({ top: element.getBoundingClientRect().top, height: element.getBoundingClientRect().height }))
-  assert.ok(afterScroll.top > initial.top, 'snapshot-local boundary mapping advances as the native viewport scrolls')
-  assert.ok(afterScroll.height > 1)
+  await page.waitForFunction(() => document.querySelector('.foxwarm-chat-messages')?.scrollTop === 0
+    && !!document.querySelector('[data-chat-message-anchor-key="seq-local-1"]'))
 })
 
 test('overview dims as a whole at rest, strengthens its thumb on hover, and keeps an intermediate pressed state', async () => {

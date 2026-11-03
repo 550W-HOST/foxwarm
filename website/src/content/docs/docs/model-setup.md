@@ -52,7 +52,9 @@ These paths follow the custom data directory if you chose one.
 
 ## Try a first conversation
 
-After saving the model configuration, open the default Session and ask a small question that does not require tools. This first reply is also a simple live check of the provider connection. You can then try a scoped file or shell task in a directory you are comfortable giving the Agent access to.
+When first-run Setup saves the model configuration, Foxwarm creates the `main` Agent's default Session `main` and opens it when you close Setup. It starts with a prepared welcome in your browser's language (English or Chinese; other languages get English), so it appears even before the provider has answered anything. Reply to it with a small question or with the name you want to be called. That first reply is a simple live check of the provider connection. You can then try a scoped file or shell task in a directory you are comfortable giving the Agent access to.
+
+Installations that already have Sessions, and later model saves, do not create or change any Session. To start another conversation, use **+** above the Session list.
 
 The bundled `about-foxwarm` Skill can explain concepts and point to deeper features after model setup is complete.
 

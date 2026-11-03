@@ -14,7 +14,7 @@ import { CONTEXT_SCROLLBAR_SETTINGS_EVENT, readContextScrollbarSettings } from '
 import type { CodeCommitTarget } from '../commitMarker'
 import ContentHeader from './ContentHeader'
 import ProcessingStatus, { QueuedMessageStatus } from './ProcessingStatus'
-import type { Message } from './chatShared'
+import { isInternalTimelineMessage, type Message } from './chatShared'
 import { buildStreamingAssistantMessage } from '../streamingAssistantDraft'
 import { useChatConversationSync } from './useChatConversationSync'
 import { isRuntimeStateInactiveName, isSessionRuntimeActive } from '../sessionRuntimeState'
@@ -30,11 +30,13 @@ import {
   CHAT_BOTTOM_FOLLOW_REJOIN_THRESHOLD_PX,
   CHAT_MESSAGE_ANCHOR_SELECTOR,
   CONTEXT_SCROLLBAR_ANCHOR_SELECTOR,
+  PERSISTENT_MEMORY_SNAPSHOT_CONTEXT_SCROLLBAR_ANCHOR_KEY,
   chooseChatViewportState,
   getChatViewportAnchorAdjustment,
   getChatViewportAnchorSeq,
   getMessageStableKey,
   getMessageViewportAnchorKey,
+  getOpeningChatViewportState,
   getStoredChatViewportState,
   storeChatViewportState,
   updateChatBottomFollow,
@@ -256,7 +258,14 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
   const continuousPagingIntentRef = useRef<'earlier' | 'later' | null>(null)
   const lastNativeScrollTopRef = useRef(0)
   const composerHeightRef = useRef<number | null>(null)
-  const initialViewportState = getStoredChatViewportState(viewportSessionId, historyMode) || { kind: 'bottom' as const }
+  const storedInitialViewportState = getStoredChatViewportState(viewportSessionId, historyMode)
+  const initialViewportState = storedInitialViewportState || { kind: 'bottom' as const }
+  // Interaction version at which a Session without a saved position may still take its
+  // opening position once history loads; null after that decision.
+  const openingViewportVersionRef = useRef<number | null>(storedInitialViewportState ? null : 0)
+  // Opening position held until the user scrolls or the conversation moves on. Content
+  // that grows while it is held (Markdown, fonts) keeps it instead of reading a position.
+  const openingViewportHeldRef = useRef<{ version: number; state: ChatViewportState } | null>(null)
   const currentViewportStateRef = useRef<ChatViewportState>(initialViewportState)
   const pendingViewportRestoreRef = useRef<PendingViewportRestore | null>({
     kind: 'state',
@@ -456,6 +465,8 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
     const pending = pendingViewportRestoreRef.current
     if (pending?.kind === 'state') return pending.state
     if (pendingContentResizeRef.current) return pendingContentResizeRef.current.state
+    const opening = openingViewportHeldRef.current
+    if (opening?.version === userInteractionVersionRef.current) return opening.state
     const followState = updateBottomFollowState()
     const bottomThresholdPx = followState.pendingUserLeave
       ? -1
@@ -617,6 +628,11 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
     // latch as wheel/touch/scrollbar interaction before moving native scroll.
     leaveBottomFollow()
     if (scrollToContextScrollbarAnchor(anchorKey, fraction)) return
+    // The memory snapshot precedes the history but has no timeline row.
+    if (anchorKey === PERSISTENT_MEMORY_SNAPSHOT_CONTEXT_SCROLLBAR_ANCHOR_KEY) {
+      scrollToTop()
+      return
+    }
     pendingContextScrollbarNavigationRef.current = { anchorKey, fraction }
     if (historyMode === 'continuous') {
       const index = messages.findIndex(message => getMessageViewportAnchorKey(message) === anchorKey)
@@ -625,7 +641,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
         setContinuousWindowKey(getMessageStableKey(messages[Math.max(0, index - 20)], 0))
       }
     } else setShowFullTimeline(true)
-  }, [leaveBottomFollow, scrollToContextScrollbarAnchor, historyMode, messages])
+  }, [leaveBottomFollow, scrollToContextScrollbarAnchor, scrollToTop, historyMode, messages])
 
   const readProtectedHistoryRange = useCallback((): ProtectedHistoryRange | null => {
     const container = messagesContainerRef.current
@@ -977,10 +993,11 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
     buildStreamingAssistantMessage(streamingAssistantDraft)
   ), [streamingAssistantDraft])
 
+  // The memory snapshot and other internal rows stay available in the Session debug view.
   const timelineMessages = useMemo(() => {
-    const baseMessages = snapshotSystemMessage ? [snapshotSystemMessage, ...visibleMessages] : visibleMessages
+    const baseMessages = visibleMessages.some(isInternalTimelineMessage) ? visibleMessages.filter(message => !isInternalTimelineMessage(message)) : visibleMessages
     return streamingAssistantMessage && displayingLatest ? [...baseMessages, streamingAssistantMessage] : baseMessages
-  }, [snapshotSystemMessage, streamingAssistantMessage, visibleMessages, displayingLatest])
+  }, [streamingAssistantMessage, visibleMessages, displayingLatest])
 
   const navigateSearch = useCallback((match: typeof selectedSearchMatch) => {
     if (!match) return
@@ -1143,13 +1160,44 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
     capturedInteractionVersionRef.current = userInteractionVersionRef.current
     pendingContextScrollbarNavigationRef.current = null
     pendingScrollToTrueTopRef.current = false
-    const state = getStoredChatViewportState(viewportSessionId, historyMode) || { kind: 'bottom' as const }
+    const storedState = getStoredChatViewportState(viewportSessionId, historyMode)
+    const state = storedState || { kind: 'bottom' as const }
+    openingViewportVersionRef.current = storedState ? null : userInteractionVersionRef.current
+    openingViewportHeldRef.current = null
     currentViewportStateRef.current = state
     pendingContentResizeRef.current = null
     currentViewportGeometryRef.current = null
     pendingViewportRestoreRef.current = { kind: 'state', state, interactionVersion: userInteractionVersionRef.current }
     setBottomFollow(state.kind === 'bottom')
   }, [historyMode, viewportSessionId, setBottomFollow])
+
+  useLayoutEffect(() => {
+    const held = openingViewportHeldRef.current
+    if (held !== null) {
+      // The opening position was not the user's choice: once the conversation moves on
+      // without the user scrolling, follow the latest message again.
+      if (held.version !== userInteractionVersionRef.current) openingViewportHeldRef.current = null
+      else if (!getOpeningChatViewportState(timelineMessages)) {
+        openingViewportHeldRef.current = null
+        pendingViewportRestoreRef.current = { kind: 'state', state: { kind: 'bottom' }, interactionVersion: held.version }
+      }
+      return
+    }
+    const version = openingViewportVersionRef.current
+    if (version === null) return
+    if (historyMode === 'continuous' ? !archivePage.loaded || !continuousHistoryReady : !historyLoaded) return
+    openingViewportVersionRef.current = null
+    if (version !== userInteractionVersionRef.current) return
+    const state = getOpeningChatViewportState(timelineMessages)
+    if (!state) return
+    // Hand the opening position to the ordinary restore below.
+    openingViewportHeldRef.current = { version, state }
+    // Supersede any resize correction captured for the empty timeline.
+    pendingContentResizeRef.current = null
+    currentViewportStateRef.current = state
+    pendingViewportRestoreRef.current = { kind: 'state', state, interactionVersion: version }
+    setBottomFollow(false)
+  }, [historyMode, archivePage.loaded, continuousHistoryReady, historyLoaded, timelineMessages, setBottomFollow])
 
   useLayoutEffect(() => {
     const pending = pendingViewportRestoreRef.current

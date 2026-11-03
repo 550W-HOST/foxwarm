@@ -163,6 +163,7 @@ Renders a hierarchical, interactive session list for the Foxwarm web UI. `Sessio
 
 - Session list toolbar: `[Search sessions] [+ New session] [display options]`. The `+` is `AgentCreationMenu` (per-group `New session in X` stays). One display-options menu (`SlidersHorizontal`) holds `View` (Default/Time/Flat radio), `Group by` (None/Agent/Node radio, desktop only) and `Rows` (`Detailed rows` toggle); the mobile header uses the same menu without grouping. There is no cycling mode button.
 - While the Session filter has text, the end of the filtered list offers `Search messages for ‘…’`, which opens the History search tab with that query prefilled but not submitted. Session filtering and message search stay separate features.
+- An empty, unfiltered list shows `No sessions yet.` with a `Start a conversation` action (`onStartSession`) that creates a Session in `main` and opens it; filtering retains the plain no-match text.
 - The collapsed rail keeps the same entries at the top: expand, settings, then System, Tasks and Search icons; `New session` leads the Session rail. Mobile keeps its own shell contract.
 
 ### D-webui-session-list-density

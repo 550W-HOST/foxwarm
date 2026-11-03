@@ -320,7 +320,8 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
       const res = await fetch(`${API_BASE_PATH}/setup/models`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ yaml: submittedYaml }),
+        // The locale selects the language of the first-run welcome message.
+        body: JSON.stringify({ yaml: submittedYaml, locale: navigator.language }),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || `Failed to save models (${res.status})`)

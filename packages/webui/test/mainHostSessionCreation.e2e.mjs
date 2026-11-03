@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { readFile, writeFile, unlink, access } from 'node:fs/promises'
 import { join } from 'node:path'
-import { createHostFixture, until } from './mainHostFixture.mjs'
+import { createHostFixture, until, NEW_SESSION_DIALOG_TRIGGER } from './mainHostFixture.mjs'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
 
 const options = { env: {} }
@@ -20,7 +20,7 @@ const saved = async id => JSON.parse(await readFile(join(fixture.data, 'state/se
 let page
 async function openDialog() {
   await waitForWebUiReady(page)
-  await page.click('button[aria-label="New session"]')
+  await page.click(NEW_SESSION_DIALOG_TRIGGER)
   await page.waitForSelector('[role="dialog"] input[placeholder^="Random ID"]')
 }
 async function submit(path) {

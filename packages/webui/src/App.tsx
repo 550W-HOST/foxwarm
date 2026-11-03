@@ -2,6 +2,7 @@ import { prepareChatHistory, discardPreparedChatHistory } from './preparedChatHi
 import { SessionMessageNamesContext } from './components/SessionMessageCard'
 import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { DndContext, DragOverlay, PointerSensor, pointerWithin, useSensor, useSensors, type DragEndEvent, type DragStartEvent } from '@dnd-kit/core'
+import { Plus } from 'lucide-react'
 import Chat from './components/Chat'
 import SessionList from './components/SessionList'
 import Sidebar from './components/Sidebar'
@@ -681,13 +682,31 @@ function App() {
     }
   }
 
+  const setupOobeRef = useRef(false)
+  // First-run Setup creates the default `main` Session with a welcome. Place it next to
+  // Setup so closing Setup lands in the conversation instead of an empty pane.
+  const openFirstRunSession = async () => {
+    try {
+      const res = await fetch(`${API_BASE_PATH}/sessions/main/state`)
+      if (!res.ok) return
+      await fetchSessions()
+      if (Object.values(useWorkbenchStore.getState().tabsById).some(tab => isChatTab(tab) && tab.sessionId === 'main')) return
+      upsertTab(makeChatTab('main', 'main'), { activate: false })
+    } catch (error) {
+      console.error('Failed to open the first Session:', error)
+    }
+  }
+
   const fetchSetupStatus = async () => {
     try {
       const res = await fetch(`${API_BASE_PATH}/setup/status`)
       if (!res.ok) return
       const data = await res.json()
       const isOobe = !!data?.oobe
+      const completedFirstRun = setupOobeRef.current && !isOobe
+      setupOobeRef.current = isOobe
       setSetupOobe(isOobe)
+      if (completedFirstRun) void openFirstRunSession()
       if (isOobe && route.tabId !== SETUP_TAB_ID) {
         setRoute({ view: 'tab', tabId: SETUP_TAB_ID })
         window.location.hash = SETUP_HASH
@@ -1839,9 +1858,13 @@ function App() {
         ? <WorkbenchContentSlot paneId={paneId} soleTab={paneTabs.length === 1 && activeTab.type !== 'vscode'} tabType={activeTab.type} />
         : (
           <div className="flex h-full items-center justify-center bg-fw-surface-sunken text-center text-sm text-fw-text-muted dark:bg-fw-canvas-edge">
-            <div className="max-w-sm space-y-2 px-6">
-              <div className="text-base font-medium text-fw-text-strong">Empty pane</div>
-              <div>Focus this pane and open a chat or terminal from the sidebar/session list.</div>
+            <div className="max-w-sm space-y-3 px-6">
+              <div className="text-base font-medium text-fw-text-strong">Start a conversation</div>
+              <div>Pick a Session from the list, or start a new one here.</div>
+              <button type="button" data-empty-pane-new-session onClick={handleQuickCreateSession}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-fw-accent px-3 py-1.5 text-sm font-medium text-fw-accent-text hover:bg-fw-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-fw-focus-ring">
+                <Plus className="h-4 w-4" aria-hidden="true" /> New session
+              </button>
             </div>
           </div>
         ),
