@@ -80,6 +80,7 @@ internal sealed partial class HostModels
             ?? Text(defaults, "providerImageOutputFormat")
             ?? Text(llm, "providerImageOutputFormat")
             ?? "webp";
+        config["textRedaction"] = TextRedactionOptions.Resolve(defaults, provider, model);
         config["imageInput"] =
             model?["imageInput"]?.DeepClone()
             ?? provider["imageInput"]?.DeepClone()
@@ -204,11 +205,14 @@ internal sealed partial class HostModels
                         or "providerImageOutputFormat"
                         or "imageInput"
                         or "retryIntervalsMs"
+                        or "textRedaction"
                     )
                 )
                     throw new InvalidDataException(label + " has unsupported field " + field + ".");
         if (modelsScope && scope.ContainsKey("retryIntervalsMs"))
             _ = ReadRetryIntervals(scope);
+        if (modelsScope && scope.ContainsKey("textRedaction"))
+            TextRedactionOptions.Validate(scope["textRedaction"]);
         foreach (var field in new[] { "contextLimit", "maxOutput" })
             if (scope.ContainsKey(field))
             {

@@ -755,10 +755,12 @@ public sealed partial class ResponsesPrefixCommitTests
     private sealed class Effects : ITurnToolExecutor
     {
         internal int Count;
+        internal readonly List<JsonObject> Calls = [];
 
         public Task<JsonNode?> ExecuteAsync(JsonObject call, CancellationToken token)
         {
             Count++;
+            Calls.Add((JsonObject)call.DeepClone());
             return Task.FromResult<JsonNode?>(new JsonObject());
         }
     }

@@ -25,6 +25,8 @@ Redaction omits image data URLs, Anthropic base64 image data, image-generation r
 
 All preparation, capture and write failures are diagnostic-only. They neither withhold a successful result nor change provider retry/health behavior. Accepted diagnostic work is awaited by its producer, with no independent persistence/shutdown authority. The exact Session save owner alone commits commentary prefixes and final history; see [model streaming](../threads/model-request-and-streaming.md).
 
+When model [text redaction](./model-text-redaction.md) is enabled, raw transport capture sees the substituted request and provider output. It does not become local-history redaction: neutral journal inputs retain originals and accepted canonical results are restored.
+
 ## Stable methods and tests
 
 - `ModelInteractionDiagnostics.Begin` / `Interaction.StartAttempt`: logical file ownership and immutable attempt credential capture.

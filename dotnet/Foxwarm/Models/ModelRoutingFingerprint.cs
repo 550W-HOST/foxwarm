@@ -63,6 +63,7 @@ internal static class ModelRoutingFingerprint
                     ["extraFieldsHash"] = Hash(config["extraFields"] ?? new JsonObject()),
                     ["extraHeadersHash"] = Hash(config["extraHeaders"] ?? new JsonObject()),
                     ["webSearchHash"] = Hash(config["webSearch"] ?? new JsonObject()),
+                    ["textRedactionHash"] = Hash(config["textRedaction"] ?? new JsonObject()),
                     ["imageGenerationHash"] = Hash(config["imageGeneration"] ?? new JsonObject()),
                 }
             );

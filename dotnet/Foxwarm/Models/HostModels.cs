@@ -284,6 +284,7 @@ internal sealed partial class HostModels
                     "maxOutput",
                     "providerImageOutputFormat",
                     "imageInput",
+                    "textRedaction",
                     "streamContentInactivityTimeoutMs",
                     "effort",
                     "historyReasoningField",

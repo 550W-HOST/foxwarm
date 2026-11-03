@@ -26,6 +26,7 @@ public sealed record ResponsesClientOptions(
 {
     internal ModelHistoryCompatibility HistoryCompatibility { get; init; } =
         ModelHistoryCompatibility.Exact;
+    internal TextRedactionOptions? TextRedaction { get; init; }
     internal double? HardTimeoutMs { get; init; }
     internal TimeProvider? Clock { get; init; }
     internal bool KeepReasoningOnError { get; init; }
@@ -369,7 +370,7 @@ public static partial class ResponsesRequestSerializer
         return data;
     }
 
-    private static JsonArray BuildToolDefinitions() =>
+    internal static JsonArray BuildToolDefinitions() =>
         new(
             new JsonObject
             {

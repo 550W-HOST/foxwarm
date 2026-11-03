@@ -80,6 +80,9 @@ internal static class ConfiguredModelRequests
         }
         return defaults with
         {
+            TextRedaction = TextRedactionOptions.FromResolved(
+                model.Configuration["textRedaction"] as JsonObject
+            ),
             KeepReasoningOnError =
                 model.Configuration["keepReasoningOnError"]?.GetValue<bool>() == true,
             BaseUri = model.BaseUri,
@@ -135,6 +138,34 @@ internal static class ConfiguredModelRequests
         ModelRequestScope scope = ModelRequestScope.LowLevel
     )
     {
+        if (options.TextRedaction is { } redaction)
+        {
+            var redactionOptions = options;
+            if (
+                options.Tools is null
+                && model.ProviderType is "openai" or "openai-responses" or "openai-ws"
+            )
+                redactionOptions = options with
+                {
+                    Tools = ResponsesRequestSerializer.BuildToolDefinitions(),
+                };
+            return new TextRedactionChatService(
+                http,
+                redactionOptions,
+                redaction,
+                progress,
+                (prepared, restoredProgress) =>
+                    CreatePreparedService(
+                        http,
+                        model,
+                        prepared,
+                        cacheKey,
+                        restoredProgress,
+                        websockets,
+                        scope
+                    )
+            );
+        }
         if (options.Diagnostics is { } diagnostics)
         {
             var prepared = options.AttemptPrepared;

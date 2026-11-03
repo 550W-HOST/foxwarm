@@ -479,6 +479,15 @@ internal sealed class ModelRequestOwner(
                         }
                     throw;
                 }
+                catch (TextRedactionException error) when (!attemptPrepared)
+                {
+                    failure = new ModelAttemptFailure(
+                        error.Message,
+                        "text-redaction",
+                        error.Retryable,
+                        false
+                    );
+                }
                 catch (Exception) when (!attemptPrepared)
                 {
                     // Serialization and local attempt callbacks are not provider failures.

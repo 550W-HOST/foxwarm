@@ -67,6 +67,20 @@ test('static config schemas are distinct, permissive, and omit the removed model
   assert.equal(schemas.MODELS_CONFIG_SCHEMA.required?.includes('default') || false, false)
 })
 
+test('text redaction schema supports inherited options and concrete disablement', () => {
+  const config = {
+    defaults: { textRedaction: { enabled: true, endpoint: 'https://detector.example/classify', threshold: 0.5 } },
+    providers: {
+      p: { textRedaction: { timeoutMs: 1000 }, models: ['inherited', { id: 'off', textRedaction: false }] },
+    },
+  }
+  assert.equal(validateModelsSchema(config), true, JSON.stringify(validateModelsSchema.errors))
+  for (const invalid of [null, { enabled: 'yes' }, { threshold: 1.1 }, { timeoutMs: 0 }, { endpoint: 'file:///invalid' }, { unknown: true }]) {
+    assert.equal(validateModelsSchema({ defaults: { textRedaction: invalid }, providers: { p: {} } }), false)
+  }
+  assert.equal(validateModelsSchema({ providers: { p: {}, alias: { providerType: 'session-hash', targets: ['p'], textRedaction: false } } }), false)
+})
+
 test('app config schema validates the sessionAutoTitle boolean and the new-install template', async () => {
   const { parse } = await import('yaml')
   const template = parse(await readFile(new URL('../../../templates/config.example.yaml', import.meta.url), 'utf8'))
