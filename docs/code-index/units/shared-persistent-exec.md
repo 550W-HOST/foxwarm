@@ -26,6 +26,7 @@ Generated Windows scripts use UTF-8 with BOM for PowerShell 5.1. The wrapper exp
 | `NativeExecBackend.start()` | nativeExecBackend | Native cwd validation, Agent env, date-co-located scripts/artifacts, detached launch and path discovery |
 | `NativeExecBackend.poll()` | nativeExecBackend | Native status parsing, PID observation and missing-status fallback |
 | `NativeExecBackend.readFinishedWorkingDirectory()` / `readLiveWorkingDirectory()` / `inspectSnapshot()` | nativeExecBackend | Native cwd and process facts |
+| `independentProcessEnvironment` | processOperations | Copy launch environment without inherited `TMUX`/`TMUX_PANE`; shared by native exec and CLI PTY |
 | `ProcessOperations`, `nativeProcessOperations` | processOperations | Target-local launch, runtime/platform identity, liveness, live cwd and process snapshots |
 | `startPersistentExec()` | manager | Reserve public ID, call the chosen backend once and persist its receipt |
 | `waitForExecCompletion()` | manager | Foreground timeout/Stop waiting without command termination |
@@ -42,6 +43,12 @@ Generated Windows scripts use UTF-8 with BOM for PowerShell 5.1. The wrapper exp
 | Petname generation/constants and `isSupportedPersistentExecId()` | persistentExec | Public IDs plus historical persisted-ID acceptance |
 
 ## Native mechanics and compatibility
+
+### D-independent-launch-tmux-context
+
+Independent commands and newly created terminals omit the hosting process's `TMUX` and `TMUX_PANE` environment values. The parent environment, `TMUX_TMPDIR`, ordinary environment values and explicit command assignments remain unchanged. Explicit tmux socket selection (`-S` or `-L`) continues to work. This removes an implicit hosting-pane association; it is not process isolation, and bare tmux can still select a default socket.
+
+The shared .NET `ExecNative.Launcher` and `TerminalNative.Handle.Spawn` own this boundary for Main and CLI. TypeScript native exec and the supported CLI PTY use `independentProcessEnvironment`; retained TypeScript Main exec shares that native backend. Provider-owned execution environments remain the Provider's responsibility.
 
 ### D-persistent-exec-logical-cwd
 
