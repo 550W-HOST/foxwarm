@@ -229,7 +229,9 @@ export default function ModelSetupFormPanel({ form, onChange, focusRequest = 0 }
         {form.models.length > 0 ? (
           <ul aria-label="Selected models" className="mt-2 flex flex-wrap gap-2">
             {form.models.map((model) => {
-              const limits = describeModelLimits(model)
+              // A declared image capability is shown even though only "text only" is written to the file.
+              const listed = availableModels.find((item) => item.id === model.id)
+              const limits = describeModelLimits({ ...model, imageInput: model.imageInput ?? listed?.imageInput })
               return (
               <li key={model.id} data-model-setup-model={model.id} className="inline-flex max-w-full items-center gap-1 rounded-full border border-fw-border-muted bg-fw-surface-sunken py-1 pl-3 pr-1 text-sm text-fw-text-strong">
                 <span className="truncate">{model.id}</span>

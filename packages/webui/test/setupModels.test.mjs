@@ -72,6 +72,7 @@ test('form output round-trips exactly through YAML for every API type and incomp
     form({ providerType: 'openai-responses', providerId: 'openai', baseUrl: 'https://api.openai.com/v1' }),
     form({ providerType: 'anthropic', providerId: 'claude', baseUrl: 'https://api.anthropic.com', models: [{ id: 'claude-opus-5', contextLimit: 1000000, maxOutput: 128000 }], defaultModel: 'claude-opus-5' }),
     form({ providerId: 'openrouter', models: [{ id: 'anthropic/claude-opus-5', contextLimit: 200000 }, { id: 'x:free' }, { id: 'y', maxOutput: 8192 }], defaultModel: 'anthropic/claude-opus-5' }),
+    form({ models: [{ id: 'text-model', contextLimit: 32768, imageInput: false }, { id: 'vision', imageInput: true }, { id: 'plain' }], defaultModel: 'plain' }),
     form({ apiKey: '', baseUrl: 'http://127.0.0.1:11434/v1' }),
     form({ models: [], defaultModel: '' }),
     form({ baseUrl: '', apiKey: 'quote " and \\ backslash: # not a comment' }),
@@ -108,6 +109,9 @@ test('files the form cannot represent faithfully stay in YAML', () => {
     modelObjectIdOnly: base.replace('models: [m]', 'models: [{id: m}]'),
     modelObjectFractionalLimit: base.replace('models: [m]', 'models: [{id: m, contextLimit: 1000.5}]'),
     modelObjectStringLimit: base.replace('models: [m]', 'models: [{id: m, contextLimit: "1000"}]'),
+    modelObjectStringImageInput: base.replace('models: [m]', 'models: [{id: m, imageInput: "no"}]'),
+    providerImageInput: base.replace('    apiKey: k\n', '    apiKey: k\n    imageInput: false\n'),
+    rootDefaultsImageInput: `${base}defaults:\n  imageInput: false\n`,
     duplicateModelObject: base.replace('models: [m]', 'models: [m, {id: m, contextLimit: 1000}]'),
     extraProviderField: base.replace('    apiKey: k\n', '    apiKey: k\n    extraHeaders: {x-a: b}\n'),
     rootDefaults: `${base}defaults:\n  contextLimit: 1000\n`,
@@ -127,6 +131,10 @@ test('files the form cannot represent faithfully stay in YAML', () => {
   assert.equal(readModelSetupForm(base).ok, true)
   const withLimits = readModelSetupForm(base.replace('models: [m]', 'models: [{id: m, contextLimit: 200000, maxOutput: 64000}, n]'))
   assert.deepEqual(withLimits.ok && withLimits.form.models, [{ id: 'm', contextLimit: 200000, maxOutput: 64000 }, { id: 'n' }])
+  // Per-model image input, written by the form or by hand, stays editable in the form.
+  const withImageInput = readModelSetupForm(base.replace('models: [m]', 'models: [{id: m, imageInput: false}, {id: n, imageInput: true}]'))
+  assert.deepEqual(withImageInput.ok && withImageInput.form.models, [{ id: 'm', imageInput: false }, { id: 'n', imageInput: true }])
+  assert.deepEqual(parse(buildModelSetupYaml(withImageInput.form)).providers.a.models, [{ id: 'm', imageInput: false }, { id: 'n', imageInput: true }])
 })
 
 test('declared listing limits are written with the selected model, and only when declared', () => {
@@ -134,6 +142,7 @@ test('declared listing limits are written with the selected model, and only when
     { id: 'claude-a', contextLimit: 1000000, maxOutput: 128000, imageInput: true },
     { id: 'claude-b', contextLimit: 200000, imageInput: false },
     { id: 'plain' },
+    { id: 'text-only', imageInput: false },
     'legacy-string',
     { id: 'claude-a', contextLimit: 1 },
     { id: 'bad', contextLimit: -1, maxOutput: 1.5, imageInput: 'yes' },
@@ -144,6 +153,7 @@ test('declared listing limits are written with the selected model, and only when
     { id: 'claude-a', contextLimit: 1000000, maxOutput: 128000, imageInput: true },
     { id: 'claude-b', contextLimit: 200000, imageInput: false },
     { id: 'plain' },
+    { id: 'text-only', imageInput: false },
     { id: 'legacy-string' },
     { id: 'bad' },
   ])
@@ -151,12 +161,14 @@ test('declared listing limits are written with the selected model, and only when
   draft = addModel(draft, 'claude-a', listed)
   draft = addModel(draft, 'claude-b', listed)
   draft = addModel(draft, 'plain', listed)
+  draft = addModel(draft, 'text-only', listed)
   draft = addModel(draft, 'typed-by-hand', listed)
-  // Image input support is listed but not written to the model configuration yet.
+  // Image input defaults to true, so only a model declared text-only gets the setting.
   assert.deepEqual(draft.models, [
     { id: 'claude-a', contextLimit: 1000000, maxOutput: 128000 },
-    { id: 'claude-b', contextLimit: 200000 },
+    { id: 'claude-b', contextLimit: 200000, imageInput: false },
     { id: 'plain' },
+    { id: 'text-only', imageInput: false },
     { id: 'typed-by-hand' },
   ])
   const yaml = buildModelSetupYaml(draft)
@@ -173,13 +185,18 @@ test('declared listing limits are written with the selected model, and only when
     '        maxOutput: 128000',
     '      - id: "claude-b"',
     '        contextLimit: 200000',
+    '        imageInput: false',
     '      - "plain"',
+    '      - id: "text-only"',
+    '        imageInput: false',
     '      - "typed-by-hand"',
     '',
   ].join('\n'))
   assert.deepEqual(readModelSetupForm(yaml), { ok: true, form: draft })
   assert.equal(describeModelLimits(draft.models[0]), '1M context · 128K output')
-  assert.equal(describeModelLimits(draft.models[1]), '200K context')
+  assert.equal(describeModelLimits(draft.models[1]), '200K context · Text only')
+  assert.equal(describeModelLimits(listed[0]), '1M context · 128K output · Images')
+  assert.equal(describeModelLimits(draft.models[3]), 'Text only')
   assert.equal(describeModelLimits({ contextLimit: 131072 }), '128K context')
   assert.equal(describeModelLimits(draft.models[2]), '')
 })

@@ -14,7 +14,7 @@ description: 在 Foxwarm 首次设置中配置 OpenAI 兼容或 Anthropic 模型
 1. **Service**：选择 OpenAI、Anthropic、OpenRouter、DeepSeek、Ollama，或者选 **Other service** 填写任意兼容端点。选择服务会自动填入 API 类型和基础地址，两者都可以修改。
 2. **API type**：`OpenAI-compatible (Chat Completions)`、`OpenAI Responses` 或 `Anthropic Messages`。
 3. **API key**：托管服务必须填写；Ollama 这类本地服务可以留空。
-4. **Models**：点 **Load models** 获取服务提供的模型列表再选择，或者直接输入准确的模型 ID 后按回车。如果服务报告了模型的上下文和输出上限，Setup 会把它们和该模型一起保存。
+4. **Models**：点 **Load models** 获取服务提供的模型列表再选择，或者直接输入准确的模型 ID 后按回车。如果服务报告了模型的上下文和输出上限，或者说明模型不能读取图片，Setup 会把这些信息和该模型一起保存。
 5. **Default model**：新对话默认使用的模型。
 
 点 **Test connection** 会向默认模型发送一条简短消息，确认无误后点 **Save models**。如果 API Key 仍是占位符，或者需要密钥的托管服务没有填写密钥，首次设置不会完成。

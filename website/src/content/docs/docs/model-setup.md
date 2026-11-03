@@ -16,7 +16,7 @@ First-run Setup opens on **Setup → Models** with a short form:
 1. **Service** — pick OpenAI, Anthropic, OpenRouter, DeepSeek, Ollama, or **Other service** for any compatible endpoint. A service fills in the API type and base URL; you can change both.
 2. **API type** — `OpenAI-compatible (Chat Completions)`, `OpenAI Responses`, or `Anthropic Messages`.
 3. **API key** — required for hosted services. A local server such as Ollama can leave it empty.
-4. **Models** — select **Load models** to fetch the service's model list, then pick one, or type an exact model ID and press Enter. When the service reports a model's context and output limits, Setup saves them with that model.
+4. **Models** — select **Load models** to fetch the service's model list, then pick one, or type an exact model ID and press Enter. When the service reports a model's context and output limits, or that it can't read images, Setup saves that with the model.
 5. **Default model** — the model new conversations use.
 
 Select **Test connection** to send one short message to the default model, then **Save models**. First-run Setup will not finish while the API key is still a placeholder or missing for a hosted service that needs one.

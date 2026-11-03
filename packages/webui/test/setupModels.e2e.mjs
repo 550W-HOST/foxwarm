@@ -2004,7 +2004,7 @@ test('first-run Setup completes a provider through the model form, list, connect
     modelsSaveRequests,
     providerModelListRequests,
     providerTestRequests,
-    providerModelListResponse: [{ id: 'vendor/model-a' }, { id: 'vendor/model-b', contextLimit: 262144, maxOutput: 65536, imageInput: true }],
+    providerModelListResponse: [{ id: 'vendor/model-a', contextLimit: 32768, imageInput: false }, { id: 'vendor/model-b', contextLimit: 262144, maxOutput: 65536, imageInput: true }],
   })
   try {
     await formPage.goto(`${productionBaseUrl}/#setup`, { waitUntil: 'networkidle2' })
@@ -2032,7 +2032,14 @@ test('first-run Setup completes a provider through the model form, list, connect
     await formPage.type('[data-model-setup-field="model"]', 'vendor/model-b')
     await formPage.keyboard.press('Enter')
     await formPage.waitForSelector('[data-model-setup-model="vendor/model-b"]')
-    assert.equal(await formPage.$eval('[data-model-setup-model="vendor/model-b"] [data-model-setup-limits]', node => node.textContent), '256K context · 64K output')
+    assert.equal(await formPage.$eval('[data-model-setup-model="vendor/model-b"] [data-model-setup-limits]', node => node.textContent), '256K context · 64K output · Images')
+    assert.equal(await formPage.$eval('[data-model-setup-field="defaultModel"]', select => select.value), 'vendor/model-b')
+
+    // A model listed without image input is saved with imageInput: false.
+    await formPage.type('[data-model-setup-field="model"]', 'vendor/model-a')
+    await formPage.keyboard.press('Enter')
+    await formPage.waitForSelector('[data-model-setup-model="vendor/model-a"]')
+    assert.equal(await formPage.$eval('[data-model-setup-model="vendor/model-a"] [data-model-setup-limits]', node => node.textContent), '32K context · Text only')
     assert.equal(await formPage.$eval('[data-model-setup-field="defaultModel"]', select => select.value), 'vendor/model-b')
 
     await formPage.click('button::-p-text(Test connection)')
@@ -2042,7 +2049,7 @@ test('first-run Setup completes a provider through the model form, list, connect
       providerType: 'openai-completions',
       baseUrl: 'https://openrouter.ai/api/v1',
       apiKey: 'sk-or-test',
-      models: 'vendor/model-b',
+      models: 'vendor/model-b\nvendor/model-a',
       testModel: 'vendor/model-b',
     }])
     await setupScreenshot(formPage, '02-first-run-models-form-tested.png')
@@ -2050,7 +2057,7 @@ test('first-run Setup completes a provider through the model form, list, connect
     await formPage.click('button::-p-text(Save models)')
     await formPage.waitForFunction(() => document.querySelector('[data-save-feedback="models"]')?.textContent === 'Models saved.')
     assert.deepEqual(modelsSaveRequests, [{
-      yaml: 'default: "openrouter/vendor/model-b"\nproviders:\n  openrouter:\n    providerType: "openai-completions"\n    baseUrl: "https://openrouter.ai/api/v1"\n    apiKey: "sk-or-test"\n    models:\n      - id: "vendor/model-b"\n        contextLimit: 262144\n        maxOutput: 65536\n',
+      yaml: 'default: "openrouter/vendor/model-b"\nproviders:\n  openrouter:\n    providerType: "openai-completions"\n    baseUrl: "https://openrouter.ai/api/v1"\n    apiKey: "sk-or-test"\n    models:\n      - id: "vendor/model-b"\n        contextLimit: 262144\n        maxOutput: 65536\n      - id: "vendor/model-a"\n        contextLimit: 32768\n        imageInput: false\n',
     }])
     await setupScreenshot(formPage, '03-first-run-models-saved.png')
     // The saved file is representable, so the form remains the view after the status refresh.

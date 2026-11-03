@@ -35,7 +35,7 @@ These declarations affect only existing native-history admission gates. Selectio
 
 ### Setup model listing
 
-`SetupProviderRequests.ListAsync` returns `SetupListedModel` entries (`{ id, contextLimit?, maxOutput?, imageInput? }` on the wire) with metadata only when the provider declares it: Anthropic `max_input_tokens`, `max_tokens` and `capabilities.image_input.supported`; OpenRouter-style gateways `context_length`, `top_provider.max_completion_tokens` and `architecture.input_modalities` (image support only from a complete string list). Limits must be positive integers. OpenAI's list has identifiers only. `SetupProviderModelListTests` covers the three shapes. The YAML completion caller uses only `id`; the form's use is [D-setup-models-declared-limits](./webui-setup-view.md#d-setup-models-declared-limits).
+`SetupProviderRequests.ListAsync` returns `SetupListedModel` entries (`{ id, contextLimit?, maxOutput?, imageInput? }` on the wire) with metadata only when the provider declares it: Anthropic `max_input_tokens`, `max_tokens` and `capabilities.image_input.supported`; OpenRouter-style gateways `context_length`, `top_provider.max_completion_tokens` and `architecture.input_modalities` (image support only from a complete string list). Limits must be positive integers. OpenAI's list has identifiers only. `SetupProviderModelListTests` covers the three shapes. The YAML completion caller uses only `id`; the form's use, including writing `imageInput: false` for models declared text-only, is [D-setup-models-declared-limits](./webui-setup-view.md#d-setup-models-declared-limits).
 
 ### First-run key check
 

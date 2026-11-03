@@ -37,15 +37,19 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
   { id: CUSTOM_PRESET_ID, label: 'Other service', providerId: 'custom', providerType: 'openai-completions', baseUrl: '', models: [] },
 ]
 
-/** A model entry. Limits are written only when the provider's model list declared them. */
+/**
+ * A model entry. Settings come from what the provider's model list declared, or from an existing
+ * file; `imageInput` defaults to true, so the form adds it only for models declared text-only.
+ */
 export type ModelSetupModel = {
   id: string
   contextLimit?: number
   maxOutput?: number
+  imageInput?: boolean
 }
 
-/** One entry of `/setup/models/list`. `imageInput` is reported but not written to YAML yet. */
-export type ListedModel = ModelSetupModel & { imageInput?: boolean }
+/** One entry of `/setup/models/list`; every field except `id` is present only when declared. */
+export type ListedModel = ModelSetupModel
 
 export type ModelSetupForm = {
   providerId: string
@@ -147,13 +151,14 @@ export function buildModelSetupYaml(form: ModelSetupForm): string {
   else {
     lines.push('    models:')
     for (const model of form.models) {
-      if (model.contextLimit === undefined && model.maxOutput === undefined) {
+      if (model.contextLimit === undefined && model.maxOutput === undefined && model.imageInput === undefined) {
         lines.push(`      - ${quote(model.id)}`)
         continue
       }
       lines.push(`      - id: ${quote(model.id)}`)
       if (model.contextLimit !== undefined) lines.push(`        contextLimit: ${model.contextLimit}`)
       if (model.maxOutput !== undefined) lines.push(`        maxOutput: ${model.maxOutput}`)
+      if (model.imageInput !== undefined) lines.push(`        imageInput: ${model.imageInput}`)
     }
   }
   return `${lines.join('\n')}\n`
@@ -161,24 +166,26 @@ export function buildModelSetupYaml(form: ModelSetupForm): string {
 
 const ROOT_KEYS = new Set(['default', 'providers'])
 const PROVIDER_KEYS = new Set(['providerType', 'baseUrl', 'apiKey', 'models'])
-const MODEL_KEYS = new Set(['id', 'contextLimit', 'maxOutput'])
+const MODEL_KEYS = new Set(['id', 'contextLimit', 'maxOutput', 'imageInput'])
 
 function isPositiveInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
 }
 
-/** A model the form can show: an ID string, or an object with an ID and declared limits only. */
+/** A model the form can show: an ID string, or an object with an ID plus limits and image input only. */
 function readModel(value: unknown): ModelSetupModel | null {
   if (typeof value === 'string') return value.trim() && value === value.trim() ? { id: value } : null
   if (!isPlainObject(value) || Object.keys(value).some((key) => !MODEL_KEYS.has(key))) return null
-  const { id, contextLimit, maxOutput } = value
+  const { id, contextLimit, maxOutput, imageInput } = value
   if (typeof id !== 'string' || !id.trim() || id !== id.trim()) return null
-  if (contextLimit === undefined && maxOutput === undefined) return null
+  if (contextLimit === undefined && maxOutput === undefined && imageInput === undefined) return null
   if ((contextLimit !== undefined && !isPositiveInteger(contextLimit)) || (maxOutput !== undefined && !isPositiveInteger(maxOutput))) return null
+  if (imageInput !== undefined && typeof imageInput !== 'boolean') return null
   return {
     id,
     ...(contextLimit !== undefined ? { contextLimit } : {}),
     ...(maxOutput !== undefined ? { maxOutput } : {}),
+    ...(imageInput !== undefined ? { imageInput } : {}),
   }
 }
 
@@ -266,7 +273,8 @@ export function modelIds(form: Pick<ModelSetupForm, 'models'>): string[] {
 
 /**
  * Adds a model by ID. When the provider's listing declared limits for that ID, they are written
- * with it; otherwise the model keeps the configured defaults.
+ * with it, and a model declared without image input gets `imageInput: false`. Anything undeclared
+ * keeps the configured defaults.
  */
 export function addModel(form: ModelSetupForm, model: string, listed: readonly ListedModel[] = []): ModelSetupForm {
   const id = model.trim()
@@ -276,6 +284,7 @@ export function addModel(form: ModelSetupForm, model: string, listed: readonly L
     id,
     ...(declared && isPositiveInteger(declared.contextLimit) ? { contextLimit: declared.contextLimit } : {}),
     ...(declared && isPositiveInteger(declared.maxOutput) ? { maxOutput: declared.maxOutput } : {}),
+    ...(declared?.imageInput === false ? { imageInput: false } : {}),
   }
   return { ...form, models: [...form.models, entry], defaultModel: form.defaultModel || id }
 }
@@ -313,11 +322,15 @@ export function formatTokenCount(value: number): string {
   return String(value)
 }
 
-/** Declared limits for display, such as "1M context · 128K output"; empty when none were declared. */
-export function describeModelLimits(model: Pick<ModelSetupModel, 'contextLimit' | 'maxOutput'>): string {
+/**
+ * Known model details for display, such as "1M context · 128K output · Images"; empty when nothing
+ * is known. Image support is shown only when declared or configured.
+ */
+export function describeModelLimits(model: Pick<ModelSetupModel, 'contextLimit' | 'maxOutput' | 'imageInput'>): string {
   return [
     model.contextLimit !== undefined ? `${formatTokenCount(model.contextLimit)} context` : '',
     model.maxOutput !== undefined ? `${formatTokenCount(model.maxOutput)} output` : '',
+    model.imageInput === true ? 'Images' : model.imageInput === false ? 'Text only' : '',
   ].filter(Boolean).join(' · ')
 }
 
