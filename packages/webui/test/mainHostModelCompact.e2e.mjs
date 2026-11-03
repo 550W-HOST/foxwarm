@@ -12,6 +12,7 @@ import { once } from 'node:events'
 import puppeteer from 'puppeteer-core'
 import { startScriptedProvider } from './mainHostModelCompact.provider.mjs'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
+import { NEW_SESSION_DIALOG_TRIGGER } from './mainHostFixture.mjs'
 
 const token = 'local-multimodel-test-api-token'
 const alphaToken = 'local-alpha-provider-secret'
@@ -138,7 +139,7 @@ try {
   await page.click('button[type="submit"]')
   await waitForWebUiReady(page)
   await page.waitForSelector('button[aria-label="New session"]')
-  await page.click('button[aria-label="New session"]')
+  await page.click(NEW_SESSION_DIALOG_TRIGGER)
   await page.waitForSelector('[role="dialog"]')
   await page.click('[role="dialog"] button[type="submit"]')
   await page.waitForSelector('[role="dialog"]', { hidden: true })

@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import puppeteer from 'puppeteer-core'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
+import { NEW_SESSION_DIALOG_TRIGGER } from './mainHostFixture.mjs'
 
 const root = await mkdtemp(join(tmpdir(), 'foxwarm-agents-e2e-'))
 const dataRoot = join(root, 'data'); const workRoot = join(dataRoot, 'agents', 'main')
@@ -220,7 +221,7 @@ try {
   await page.waitForSelector('#token'); await page.type('#token', apiToken)
   await page.click('button[type="submit"]'); await page.waitForSelector('button[aria-label="New session"]'); await waitForWebUiReady(page)
   async function browserCreateAgent(name, memoryText) {
-    await page.click('button[aria-label="New session"]')
+    await page.click(NEW_SESSION_DIALOG_TRIGGER)
     await page.waitForSelector('button[aria-label="New agent"]')
     await page.click('button[aria-label="New agent"]')
     await page.waitForSelector('input[placeholder="my-agent"]')
@@ -298,7 +299,7 @@ try {
   assert.equal(childAuthority.model, 'local-b/two'); assert.equal(childAuthority.effort, 'low')
   assert.equal(childAuthority.childModelDefault, undefined)
   assert.equal(childAuthority.childEffortDefault, undefined)
-  await page.click('button[aria-label="New session"]')
+  await page.click(NEW_SESSION_DIALOG_TRIGGER)
   await page.waitForSelector('form[role="dialog"]')
   await page.click('form[role="dialog"] button[title="alpha"]')
   await page.click('form[role="dialog"] button[type="submit"]')

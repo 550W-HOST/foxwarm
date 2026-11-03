@@ -34,6 +34,7 @@ const {
   getSystemMessageKind,
   getSystemMessagePreviewDescriptor,
   parseFoxwarmMetadataLine,
+  isInternalTimelineMessage,
 } = await import(pathToFileURL(bundledPath).href)
 
 test('foxwarm metadata tags are recognized as system-like small metadata lines', () => {
@@ -260,4 +261,19 @@ test('LLM error classification requires retry metadata and a single text-only mo
     assert.equal(getLlmErrorMessageDetails(message), null, JSON.stringify(message))
     assert.notEqual(getSystemMessagePreviewDescriptor(message).kind, 'llm error', JSON.stringify(message))
   }
+})
+
+test('internal runtime rows are recognized for timeline omission', () => {
+  const settings = { role: 'user', parts: [{ system: '<foxwarm-system kind="session-settings-changed" reason="effective-selection" modelId="a/b" oldModel="a/a" newModel="a/b" seq="4" />' }] }
+  const firstRun = { role: 'user', parts: [{ system: '<foxwarm-system kind="session-boundary" event="first-run" currentSessionId="main" currentNode="master" seq="1" />\nFoxwarm setup has just finished.' }] }
+  const snapshot = { role: 'tool', parts: [{ text: '<foxwarm-system kind="snapshot" hint="snapshot" />\n<foxwarm-current-model model-id="a/b" />' }], __meta: { timestamp: -1, synthetic: 'persistentMemorySnapshot' } }
+  const withTime = { role: 'user', parts: [{ system: '<foxwarm-system kind="time" time="2026-11-03 07:00:00 +0000" />' }, settings.parts[0]] }
+  for (const message of [settings, firstRun, snapshot, withTime]) assert.equal(isInternalTimelineMessage(message), true)
+
+  const childBoundary = { role: 'user', parts: [{ system: '<foxwarm-system kind="session-boundary" event="new-child" parentSessionId="p" currentSessionId="c" />' }] }
+  const userText = { role: 'user', parts: [settings.parts[0], { text: 'Hello' }] }
+  const event = { role: 'user', parts: [{ system: '<foxwarm-system kind="event" type="background-process-finished" />' }] }
+  const welcome = { role: 'model', parts: [{ text: 'Hi, I am Foxwarm.' }] }
+  const onlyTime = { role: 'user', parts: [{ system: '<foxwarm-system kind="time" time="2026-11-03 07:00:00 +0000" />' }] }
+  for (const message of [childBoundary, userText, event, welcome, onlyTime]) assert.equal(isInternalTimelineMessage(message), false)
 })

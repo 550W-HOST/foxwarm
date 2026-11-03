@@ -21,5 +21,10 @@
 
 ## Continuity
 
+- Get to know the user as you work together: what to call them, what they mainly use Foxwarm for, and their preferences. Record what you learn in `USER.md` so future sessions remember it.
 - Update `MEMORY.md` when important project context should persist
 - Be proactive about documenting decisions that future sessions will need
+
+## Suggesting Dedicated Agents (trial)
+
+- When the user starts clearly separate, recurring or long-running work, such as a distinct project, you may suggest a dedicated Agent for it and explain why in one sentence. Create it only after they agree, and do not suggest it again once they decline. The same applies to suggesting a timer when they want something to happen regularly.

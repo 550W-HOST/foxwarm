@@ -48,9 +48,11 @@ async function buildFixtureBundle() {
 
     function Fixture() {
       const [agents, setAgents] = useState(${JSON.stringify(initialAgents)})
+      const [directCreate, setDirectCreate] = useState(false)
       useEffect(() => {
         window.fixture = {
           setAgents,
+          setDirectCreate,
           setTheme: setThemeSelection,
           resetCalls() { window.fixtureCalls = [] },
           setBehavior(kind, behavior) { window.fixtureBehavior[kind] = behavior },
@@ -84,6 +86,7 @@ async function buildFixtureBundle() {
               compact: true,
               onCreateAgent,
               onCreateSession,
+              directCreate,
             })
           ),
           React.createElement('p', { className: 'mt-4 text-sm text-fw-text-muted' }, 'Owned sidebar fixture.')
@@ -194,6 +197,42 @@ test('the shared plus opens New session directly and submits the selected Agent 
   assert.deepEqual(await page.evaluate(() => window.fixtureCalls.at(-1)), {
     type: 'session', agentId: 'research', sessionId: null, runtime: 'foxwarm',
   })
+})
+
+test('with only main and no alternative runtime, plus creates directly and options open the dialog', async () => {
+  await resetFixture()
+  runtimeState = { available: false, reason: 'not installed' }
+  await page.evaluate(() => { window.fixture.setAgents([{ id: 'main' }]); window.fixture.setDirectCreate(true) })
+  await page.waitForSelector('button[data-new-session-direct]')
+  await page.click('button[aria-label="New session"]')
+  await page.waitForFunction(() => window.fixtureCalls.length === 1)
+  assert.deepEqual(await page.evaluate(() => window.fixtureCalls), [{ type: 'session', agentId: 'main', sessionId: null }])
+  assert.equal(await page.$('[role="dialog"]'), null)
+
+  await page.click('button[aria-label="New session options"]')
+  await page.waitForFunction(() => document.querySelector('#creation-dialog-title')?.textContent === 'New session')
+  assert.ok(await page.$('button[aria-label="New agent"]'), 'Agent creation stays reachable')
+  await clickButtonByText('Cancel')
+  await page.waitForSelector('[role="dialog"]', { hidden: true })
+
+  await page.evaluate(() => window.fixture.setBehavior('session', 'error'))
+  await page.click('button[aria-label="New session"]')
+  await page.waitForFunction(() => document.querySelector('[role="dialog"]')?.textContent.includes('Session request failed'))
+  await clickButtonByText('Cancel')
+  await page.evaluate(() => window.fixture.setBehavior('session', 'success'))
+
+  await page.evaluate(() => window.fixture.setAgents([{ id: 'main' }, { id: 'research' }]))
+  await page.waitForSelector('button[aria-label="New session options"]', { hidden: true })
+  assert.equal(await page.$eval('button[aria-label="New session"]', button => button.getAttribute('aria-haspopup')), 'dialog')
+})
+
+test('an available alternative runtime keeps the plus on the dialog', async () => {
+  await resetFixture()
+  const checked = availabilityResponse()
+  await page.evaluate(() => { window.fixture.setAgents([{ id: 'main' }]); window.fixture.setDirectCreate(true) })
+  await checked
+  assert.equal(await page.$('button[aria-label="New session options"]'), null)
+  await openSessionDialog()
 })
 
 test('New agent stays in one modal and cancel returns to the preserved session draft', async () => {

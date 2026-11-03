@@ -1,6 +1,6 @@
 import { createPortal } from 'react-dom'
 import { useEffect, useRef, useState } from 'react'
-import { Plus, X } from 'lucide-react'
+import { ChevronDown, Plus, X } from 'lucide-react'
 import { makeApiUrl } from '../config'
 import { RANDOM_SESSION_ID_PLACEHOLDER, agentStartLocation, validateAgentId, validateSessionId, type AgentSettingsChanges, type AgentSummary } from '../agentCreation'
 import { parseWebUiNodeTargets, type WebUiNodeTarget } from '../nodeTargets'
@@ -24,6 +24,12 @@ interface AgentCreationMenuProps {
   onCreateSession: (agentId: string, sessionId?: string, runtime?: 'foxwarm' | 'claude-code', parentSessionId?: string) => Promise<void>
   creationRequest?: SessionCreationRequest | null
   onCreationRequestHandled?: () => void
+  /**
+   * With only the `main` Agent and no alternative runtime, the trigger creates a Session
+   * directly and a separate options control opens the full dialog.
+   */
+  directCreate?: boolean
+  optionsTriggerClassName?: string
 }
 
 export default function AgentCreationMenu({
@@ -36,6 +42,8 @@ export default function AgentCreationMenu({
   onCreateSession,
   creationRequest,
   onCreationRequestHandled,
+  directCreate = false,
+  optionsTriggerClassName,
 }: AgentCreationMenuProps) {
   const [mode, setMode] = useState<CreationMode | null>(null)
   const [agentId, setAgentId] = useState('')
@@ -48,6 +56,9 @@ export default function AgentCreationMenu({
   const [parent, setParent] = useState<SessionCreationRequest['parent'] | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  // Unknown until checked; the dialog stays the default while an alternative runtime may exist.
+  const [alternativeRuntime, setAlternativeRuntime] = useState<boolean | null>(null)
+  const [creatingDirectly, setCreatingDirectly] = useState(false)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const agentIdInputRef = useRef<HTMLInputElement>(null)
   const sessionIdInputRef = useRef<HTMLInputElement>(null)
@@ -114,6 +125,34 @@ export default function AgentCreationMenu({
       .catch(() => {})
     return () => controller.abort()
   }, [mode])
+
+  useEffect(() => {
+    if (!directCreate) return
+    const controller = new AbortController()
+    void fetch(makeApiUrl('/setup/status'), { signal: controller.signal })
+      .then(response => response.ok ? response.json() : null)
+      .then(payload => {
+        if (payload && !controller.signal.aborted) setAlternativeRuntime(payload.capabilities?.claudeCode?.available === true)
+      })
+      .catch(() => {})
+    return () => controller.abort()
+  }, [directCreate])
+
+  const direct = directCreate && alternativeRuntime === false && agents.length === 1 && agents[0].id === 'main'
+
+  const createDirectly = async () => {
+    if (creatingDirectly) return
+    setCreatingDirectly(true)
+    try {
+      await onCreateSession('main')
+    } catch (cause) {
+      // Show the failure where the user can adjust the request and retry.
+      openSessionModal()
+      setError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setCreatingDirectly(false)
+    }
+  }
 
   const openSessionModal = (request: SessionCreationRequest | null = null) => {
     setMode('session')
@@ -193,17 +232,32 @@ export default function AgentCreationMenu({
       <button
         ref={triggerRef}
         type="button"
-        onClick={() => openSessionModal()}
-        className={triggerClassName ?? (compact
+        onClick={() => { if (direct) void createDirectly(); else openSessionModal() }}
+        disabled={creatingDirectly}
+        className={`${triggerClassName ?? (compact
           ? 'inline-flex items-center justify-center rounded-lg border border-fw-border-strong px-2 transition-colors bg-fw-neutral-surface text-fw-text hover:bg-fw-hover dark:bg-fw-surface-raised/60 dark:text-fw-text-strong dark:hover:bg-fw-hover'
-          : 'inline-flex h-8 w-8 items-center justify-center rounded-lg text-fw-text-muted hover:bg-fw-hover hover:text-fw-text-strong dark:text-fw-text-muted dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse transition')}
+          : 'inline-flex h-8 w-8 items-center justify-center rounded-lg text-fw-text-muted hover:bg-fw-hover hover:text-fw-text-strong dark:text-fw-text-muted dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse transition')}${direct ? ' rounded-r-none' : ''}`}
         title="New session"
         aria-label="New session"
-        aria-haspopup="dialog"
+        aria-haspopup={direct ? undefined : 'dialog'}
+        data-new-session-direct={direct || undefined}
       >
         <Plus className="h-4 w-4" />
         {triggerLabel && <span>{triggerLabel}</span>}
       </button>
+      {direct && (
+        <button
+          type="button"
+          onClick={() => openSessionModal()}
+          className={`${optionsTriggerClassName ?? 'inline-flex h-8 w-5 items-center justify-center rounded-lg text-fw-text-muted hover:bg-fw-hover hover:text-fw-text-strong transition'} rounded-l-none`}
+          title="New session options"
+          aria-label="New session options"
+          aria-haspopup="dialog"
+          aria-expanded={mode !== null}
+        >
+          <ChevronDown className="h-3.5 w-3.5" />
+        </button>
+      )}
 
       {mode && createPortal(
         <div className="fixed inset-0 z-[100] flex items-center justify-center overflow-y-auto bg-fw-overlay/40 p-4" role="presentation" onMouseDown={(event) => {

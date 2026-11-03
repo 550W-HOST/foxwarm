@@ -157,6 +157,7 @@ export default function Sidebar({
           bounded={bounded}
           onRequestSession={setCreationRequest}
           onOpenAgentSettings={onOpenAgentSettings}
+          onStartSession={() => { void onCreateSession('main').catch(error => window.alert(`Failed to create session: ${error instanceof Error ? error.message : String(error)}`)) }}
           onSearchMessages={onSearchMessages}
           toolbarActions={
             <AgentCreationMenu
@@ -166,7 +167,9 @@ export default function Sidebar({
               onCreateSession={onCreateSession}
               creationRequest={creationRequest}
               onCreationRequestHandled={() => setCreationRequest(null)}
+              directCreate
               triggerClassName="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-fw-border bg-fw-surface text-fw-text-muted transition hover:border-fw-accent-border hover:text-fw-accent focus:outline-none focus:ring-2 focus:ring-fw-focus-ring/30 dark:border-fw-border dark:bg-fw-canvas dark:text-fw-text"
+              optionsTriggerClassName="inline-flex h-7 w-5 shrink-0 items-center justify-center rounded-lg border border-l-0 border-fw-border bg-fw-surface text-fw-text-muted transition hover:border-fw-accent-border hover:text-fw-accent focus:outline-none focus:ring-2 focus:ring-fw-focus-ring/30 dark:border-fw-border dark:bg-fw-canvas dark:text-fw-text"
             />
           }
           toolbarContainerClassName="p-2 pb-1"

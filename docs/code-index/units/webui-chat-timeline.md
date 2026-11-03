@@ -89,6 +89,8 @@ Conversation activities retain their mounted identity through overlapping techni
 
 `workbenchPreview.e2e.mjs` exercises the built App in Conversation with version-2 text deltas for explicit `final_answer` replies and unknown-phase previews, without disclosure clicks. It records native-scroller frames during genuine upward wheel input and continued output, rejects reverse motion after leaving the tail, and checks attached growth, explicit rejoin, and detached downward reading. The regression reproduces native anchoring in Chromium and Firefox; it asserts no elapsed duration or exact frame count.
 
+- Chat does not render the persistent-memory snapshot row or other [internal rows](./webui-chat-shared.md#behavior) in any timeline view; the Session debug view keeps them. The ContextScrollbar still counts the snapshot as a segment, and navigating to it scrolls to the start of the loaded timeline instead of waiting for a row that never mounts.
+
 ## Design Decisions
 
 ### D-webui-assistant-markdown-tables

@@ -1,6 +1,6 @@
 # Unit: Session manager Agent, setup, files, knowledge, waits, and compaction
 
-Files: `dotnet/Foxwarm/Sessions/SessionManager.AgentOps.cs`, `dotnet/Foxwarm/Sessions/SessionManager.AgentTools.cs`, `dotnet/Foxwarm/Sessions/SessionManager.Authorization.cs`, `dotnet/Foxwarm/Sessions/SessionManager.Compact.cs`, `dotnet/Foxwarm/Sessions/SessionManager.FileDelivery.cs`, `dotnet/Foxwarm/Sessions/FileDeliveryArtifact.cs`, `dotnet/Foxwarm/Sessions/SessionManager.InboundFiles.cs`, `dotnet/Foxwarm/Sessions/SessionManager.Knowledge.cs`, `dotnet/Foxwarm/Sessions/SessionManager.Settings.cs`, `dotnet/Foxwarm/Sessions/SessionManager.Setup.cs`, `dotnet/Foxwarm/Sessions/SessionManager.Wait.cs`
+Files: `dotnet/Foxwarm/Sessions/SessionManager.AgentOps.cs`, `dotnet/Foxwarm/Sessions/SessionManager.AgentTools.cs`, `dotnet/Foxwarm/Sessions/SessionManager.Authorization.cs`, `dotnet/Foxwarm/Sessions/SessionManager.Compact.cs`, `dotnet/Foxwarm/Sessions/SessionManager.FileDelivery.cs`, `dotnet/Foxwarm/Sessions/FileDeliveryArtifact.cs`, `dotnet/Foxwarm/Sessions/SessionManager.InboundFiles.cs`, `dotnet/Foxwarm/Sessions/SessionManager.Knowledge.cs`, `dotnet/Foxwarm/Sessions/SessionManager.Settings.cs`, `dotnet/Foxwarm/Sessions/SessionManager.Setup.cs`, `dotnet/Foxwarm/Sessions/FirstRunWelcome.cs`, `dotnet/Foxwarm/Sessions/SessionManager.Wait.cs`
 
 ## Purpose
 
@@ -35,6 +35,8 @@ Custom prompt-file selection follows [creator-scoped admission](../behaviors/con
 `SendFileAsync` preserves the existing destination/path/Node authorization and staging owners. It dispatches external files through the shared channel registry, preserving direct error propagation and partial Session-fanout results; [external channels](./dotnet-external-channels.md) owns adapter and automatic-delivery behavior. It returns a bounded version-1 `fileDelivery` value only after at least one actual delivery succeeds. `FileDeliveryArtifact.Create` prepares original basename/MIME/size, exact canonical Session or direct channel target, unique delivery ID, source Node and actual Main staging path under the [shared receipt contract](./shared-file-delivery.md). Remote receipts retain the transfer payload MIME, using the ordinary extension fallback only when no MIME was supplied; receipt metadata does not change download/preview authorization. The structured receipt survives direct tool values and nested ToolScript return values; failed sends and unrelated image exports do not gain receipts. No extra queue row, target history message or notification accompanies delivery.
 
 `RestoreRetainedAgentAsync` joins the existing Agent admission/creation key and catalog publication owner without creating a main Session. Its trusted route and cleanup counterpart follow [retained Agent administration](./session-manager-lifecycle-identity.md#retained-agent-administration).
+
+`EnsureFirstRunSessionAsync` creates the first-run default Session with its opening and prepared welcome through `CreateNamedAsync` and the existing owned-row append; its admission and caller contract are owned by [First-run default Session](./dotnet-webui-agents-setup.md#first-run-default-session).
 
 ## Tests
 

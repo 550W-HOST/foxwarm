@@ -14,7 +14,7 @@ import { CONTEXT_SCROLLBAR_SETTINGS_EVENT, readContextScrollbarSettings } from '
 import type { CodeCommitTarget } from '../commitMarker'
 import ContentHeader from './ContentHeader'
 import ProcessingStatus, { QueuedMessageStatus } from './ProcessingStatus'
-import type { Message } from './chatShared'
+import { isInternalTimelineMessage, type Message } from './chatShared'
 import { buildStreamingAssistantMessage } from '../streamingAssistantDraft'
 import { useChatConversationSync } from './useChatConversationSync'
 import { isRuntimeStateInactiveName, isSessionRuntimeActive } from '../sessionRuntimeState'
@@ -29,6 +29,7 @@ import {
   CHAT_BOTTOM_FOLLOW_REJOIN_THRESHOLD_PX,
   CHAT_MESSAGE_ANCHOR_SELECTOR,
   CONTEXT_SCROLLBAR_ANCHOR_SELECTOR,
+  PERSISTENT_MEMORY_SNAPSHOT_CONTEXT_SCROLLBAR_ANCHOR_KEY,
   chooseChatViewportState,
   getChatViewportAnchorAdjustment,
   getChatViewportAnchorSeq,
@@ -616,6 +617,11 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
     // latch as wheel/touch/scrollbar interaction before moving native scroll.
     leaveBottomFollow()
     if (scrollToContextScrollbarAnchor(anchorKey, fraction)) return
+    // The memory snapshot precedes the history but has no timeline row.
+    if (anchorKey === PERSISTENT_MEMORY_SNAPSHOT_CONTEXT_SCROLLBAR_ANCHOR_KEY) {
+      scrollToTop()
+      return
+    }
     pendingContextScrollbarNavigationRef.current = { anchorKey, fraction }
     if (historyMode === 'continuous') {
       const index = messages.findIndex(message => getMessageViewportAnchorKey(message) === anchorKey)
@@ -624,7 +630,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
         setContinuousWindowKey(getMessageStableKey(messages[Math.max(0, index - 20)], 0))
       }
     } else setShowFullTimeline(true)
-  }, [leaveBottomFollow, scrollToContextScrollbarAnchor, historyMode, messages])
+  }, [leaveBottomFollow, scrollToContextScrollbarAnchor, scrollToTop, historyMode, messages])
 
   const readProtectedHistoryRange = useCallback((): ProtectedHistoryRange | null => {
     const container = messagesContainerRef.current
@@ -976,10 +982,11 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
     buildStreamingAssistantMessage(streamingAssistantDraft)
   ), [streamingAssistantDraft])
 
+  // The memory snapshot and other internal rows stay available in the Session debug view.
   const timelineMessages = useMemo(() => {
-    const baseMessages = snapshotSystemMessage ? [snapshotSystemMessage, ...visibleMessages] : visibleMessages
+    const baseMessages = visibleMessages.some(isInternalTimelineMessage) ? visibleMessages.filter(message => !isInternalTimelineMessage(message)) : visibleMessages
     return streamingAssistantMessage && displayingLatest ? [...baseMessages, streamingAssistantMessage] : baseMessages
-  }, [snapshotSystemMessage, streamingAssistantMessage, visibleMessages, displayingLatest])
+  }, [streamingAssistantMessage, visibleMessages, displayingLatest])
 
   const navigateSearch = useCallback((match: typeof selectedSearchMatch) => {
     if (!match) return

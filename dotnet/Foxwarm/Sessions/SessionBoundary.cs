@@ -206,6 +206,15 @@ internal static class SessionBoundary
     internal static string UserChildNotice(string parent) =>
         $"This session was created by the user as a child of session `{parent}`. The parent relationship organizes the session; it does not itself assign work or require a completion report. Follow the user's instructions in this session.";
 
+    /// <summary>
+    /// User-role opening of the first-run default Session. It precedes the prepared
+    /// welcome so provider history starts with a user turn and the welcome reads as
+    /// the model's own answer to it.
+    /// </summary>
+    internal static string FirstRunOpening(string current, (string Node, string? Cwd) placement) =>
+        $"<foxwarm-system kind=\"session-boundary\" event=\"first-run\" currentSessionId=\"{Escape(current)}\"{Placement(placement.Node, placement.Cwd)} time=\"{LocalTime()}\" />\n"
+        + "Foxwarm's first-run setup has just finished, and the user is opening this default Session for the first time. Welcome them, briefly explain how Foxwarm works, and ask what to call them and what they mainly want to use Foxwarm for.";
+
     private static string Opening(
         string boundary,
         string parent,
