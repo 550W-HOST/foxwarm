@@ -23,7 +23,10 @@ const delayedBrowser = [], abortedBrowser = []
 async function screenshot(name) {
   if (!process.env.FOXWARM_E2E_SCREENSHOT_DIR) return
   await mkdir(process.env.FOXWARM_E2E_SCREENSHOT_DIR, { recursive: true })
-  await (await page.$('[role="dialog"]')).screenshot({ path: join(process.env.FOXWARM_E2E_SCREENSHOT_DIR, name) })
+  // The dialog is inside the viewport. Capturing beyond it makes Chromium resize the
+  // window transiently, which can switch the App to its mobile shell and unmount the
+  // open dialog before the next assertion.
+  await (await page.$('[role="dialog"]')).screenshot({ path: join(process.env.FOXWARM_E2E_SCREENSHOT_DIR, name), captureBeyondViewport: false })
 }
 const api = (method, path, body) => fixture.api(method, prefix + path, body)
 const nodes = async () => (await api('GET', '/api/nodes')).body.nodes
