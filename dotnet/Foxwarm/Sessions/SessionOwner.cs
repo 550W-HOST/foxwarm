@@ -48,6 +48,7 @@ internal sealed partial class SessionOwner
 
     public SessionRegistry Registry { get; set; } = null!;
     public SessionCompactor Compactor { get; set; } = null!;
+    internal SessionAutoTitle.OwnerState AutoTitle { get; } = new();
     public SqliteArchiveMessageStore Archive { get; set; } = null!;
     public LocalExecManager Executor { get; set; } = null!;
     internal PersistentSessionAuthorityStore AuthorityStore { get; set; } = null!;

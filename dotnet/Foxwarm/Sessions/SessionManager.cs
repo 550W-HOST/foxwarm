@@ -622,6 +622,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         };
         registry.OnTurnStarting = async _ =>
         {
+            AutoTitleTurnStarting(hosted);
             StartChannelTurn(hosted);
             try
             {
@@ -631,9 +632,13 @@ internal sealed partial class SessionManager : IAsyncDisposable
             await MaybeRefreshStaleAsync(hosted);
         };
         registry.OnTurnCompleted = (_, result) =>
-            ClaudeRuntimeState.IsExternal(hosted.Entry.Snapshot().AuthorityEnvelope)
-                ? Task.CompletedTask
-                : hosted.Compactor.AutoAfterTurnAsync(result);
+        {
+            if (ClaudeRuntimeState.IsExternal(hosted.Entry.Snapshot().AuthorityEnvelope))
+                return Task.CompletedTask;
+            // Detached; never delays continuation maintenance or the next turn.
+            StartAutoTitle(hosted);
+            return hosted.Compactor.AutoAfterTurnAsync(result);
+        };
         registry.OnProcessorFinalizing = async (_, error, interrupted, suspended) =>
         {
             // Retire this run's draft before a queued successor can claim the processor.

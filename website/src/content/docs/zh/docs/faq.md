@@ -107,7 +107,7 @@ QQ 机器人在群里默认需要 @ 才会回复，设置 `requireMention: false
 
 ### 保存了 Config，需要重启吗？
 
-在 **Setup → Config** 里保存后，渠道和访问身份的修改会立即生效。HTTP 端口、节点 Provider、语义检索、入站 MCP 监听等启动设置需要重启。在 **Setup → Models** 里修改模型永远不需要重启。
+在 **Setup → Config** 里保存后，渠道、访问身份和 `sessionAutoTitle` 的修改会立即生效。HTTP 端口、节点 Provider、语义检索、入站 MCP 监听等启动设置需要重启。在 **Setup → Models** 里修改模型永远不需要重启。
 
 使用 Docker 时，修改端口还需要同步修改端口映射（使用 Compose 时还有健康检查），见 [Docker](/zh/docs/installing/#docker)。
 

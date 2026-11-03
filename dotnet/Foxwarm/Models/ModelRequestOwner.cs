@@ -15,6 +15,8 @@ internal sealed class ModelRequestOwner(
     ModelInteractionDiagnostics? diagnostics = null
 )
 {
+    internal const int DefaultMaxAttempts = 6;
+
     internal static int RetryDelay(int failedAttempt) =>
         failedAttempt switch
         {
@@ -107,7 +109,8 @@ internal sealed class ModelRequestOwner(
         string journalPurpose = "low-level",
         int journalIteration = 0,
         Action<string>? journalRequestStarted = null,
-        Func<Task<IReadOnlyList<JsonObject>>>? requestContext = null
+        Func<Task<IReadOnlyList<JsonObject>>>? requestContext = null,
+        int maxAttempts = DefaultMaxAttempts
     ) =>
         RequestAsync(
             sessionId,
@@ -132,7 +135,8 @@ internal sealed class ModelRequestOwner(
             journalPurpose,
             journalIteration,
             journalRequestStarted,
-            requestContext
+            requestContext,
+            maxAttempts: maxAttempts
         );
 
     internal async Task<ChatResult> RequestAsync(
@@ -162,14 +166,15 @@ internal sealed class ModelRequestOwner(
             CancellationToken,
             Task<RequestHistory?>
         >? adoptSelection = null,
-        Func<JsonObject, bool, Task<JsonObject>>? commitAssistantSegment = null
+        Func<JsonObject, bool, Task<JsonObject>>? commitAssistantSegment = null,
+        int maxAttempts = DefaultMaxAttempts
     )
     {
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxAttempts, 1);
         var catalog = captured.Catalog;
         var route = captured.Route;
         var request = captured.Routing;
         var rawEffort = captured.RawEffort;
-        const int maxAttempts = 6;
         long? requestStarted = null;
         string? journalRequestId = null;
         var journalAttempt = 0;

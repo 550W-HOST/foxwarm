@@ -107,7 +107,7 @@ QQ Bot groups need an @mention by default; set `requireMention: false` to handle
 
 ### I saved Config. Do I need to restart?
 
-Saving **Setup → Config** applies Channel changes and access identities immediately. Startup settings, such as the HTTP port, Node providers, semantic search and the inbound MCP listener, need a restart. Model changes in **Setup → Models** never need one.
+Saving **Setup → Config** applies Channel changes, access identities and `sessionAutoTitle` immediately. Startup settings, such as the HTTP port, Node providers, semantic search and the inbound MCP listener, need a restart. Model changes in **Setup → Models** never need one.
 
 With Docker, changing the port also means updating the port mapping (and, with Compose, the healthcheck). See [Docker](/docs/installing/#docker).
 

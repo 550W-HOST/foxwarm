@@ -50,6 +50,8 @@ Keep real API keys in your own `foxwarm-data/state/models.yaml`. Do not commit t
 
 These paths follow the custom data directory if you chose one.
 
+On a new installation, saving models in first-run Setup also creates `state/config.yaml` with `sessionAutoTitle: true`, which names each new Session after its first reply. An existing `config.yaml` is never edited, including one you created beforehand (for example, to set `httpPort`). If you skip first-run Setup by creating `models.yaml` yourself, the file is not created; add `sessionAutoTitle: true` to `config.yaml` to turn automatic titles on. Without the key, Sessions keep their ID until you rename them.
+
 ## Try a first conversation
 
 When first-run Setup saves the model configuration, Foxwarm creates the `main` Agent's default Session `main` and opens it when you close Setup. It starts with a prepared welcome in your browser's language (English or Chinese; other languages get English), so it appears even before the provider has answered anything. Reply to it with a small question or with the name you want to be called. That first reply is a simple live check of the provider connection. You can then try a scoped file or shell task in a directory you are comfortable giving the Agent access to.
