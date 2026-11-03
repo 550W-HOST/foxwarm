@@ -178,7 +178,9 @@ internal sealed partial class LocalExecManager
             return null;
         try
         {
-            return new DirectoryInfo($"/proc/{record.Pid}/cwd").LinkTarget;
+            return OperatingSystem.IsMacOS()
+                ? NativeProcessFacts.ReadDarwinWorkingDirectory(checked((int)record.Pid!))
+                : new DirectoryInfo($"/proc/{record.Pid}/cwd").LinkTarget;
         }
         catch (IOException)
         {

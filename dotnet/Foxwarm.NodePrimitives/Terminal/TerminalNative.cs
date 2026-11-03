@@ -9,10 +9,10 @@ internal static class TerminalNative
 #if !FOXWARM_STATIC_MUSL
     private static readonly string NativePath = Path.Combine(
         AppContext.BaseDirectory,
-        "libfoxwarm-pty.so"
+        OperatingSystem.IsMacOS() ? "libfoxwarm-pty.dylib" : "libfoxwarm-pty.so"
     );
     private static readonly IntPtr NativeHandle =
-        OperatingSystem.IsLinux() && NativeLibrary.TryLoad(NativePath, out var loaded)
+        (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS()) && NativeLibrary.TryLoad(NativePath, out var loaded)
             ? loaded
             : IntPtr.Zero;
 #endif
@@ -21,7 +21,7 @@ internal static class TerminalNative
 #if FOXWARM_STATIC_MUSL
         || OperatingSystem.IsLinux();
 #else
-        || OperatingSystem.IsLinux() && NativeHandle != IntPtr.Zero;
+        || (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS()) && NativeHandle != IntPtr.Zero;
 
     static TerminalNative()
     {

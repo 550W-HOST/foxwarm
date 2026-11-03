@@ -20,6 +20,22 @@ internal readonly record struct OpenFileMetadata(string Identity, long Size)
                 checked((long)info.Size)
             );
         }
+        if (OperatingSystem.IsMacOS())
+        {
+            // Intel Darwin exports the 64-bit-inode ABI with a suffix; Apple Silicon
+            // uses it for the unsuffixed symbol. Both use the same stat64 layout.
+            var result = RuntimeInformation.ProcessArchitecture == Architecture.X64
+                ? FStatDarwinIntel(handle, out var info)
+                : FStatDarwin(handle, out info);
+            if (result != 0)
+                throw new IOException(new Win32Exception(Marshal.GetLastPInvokeError()).Message);
+            if ((info.Mode & 0xf000) != 0x8000)
+                throw new IOException("The log destination is not a regular file.");
+            return new(
+                $"{info.Device}:{info.Inode}:{info.BirthSeconds}:{info.BirthNanoseconds}",
+                info.Size
+            );
+        }
         if (OperatingSystem.IsWindows())
         {
             if (!GetFileInformationByHandle(handle, out var info))
@@ -32,9 +48,27 @@ internal readonly record struct OpenFileMetadata(string Identity, long Size)
             );
         }
         throw new PlatformNotSupportedException(
-            "Open-file log identity is supported on Linux and Windows."
+            "Open-file log identity is supported on Linux, macOS and Windows."
         );
     }
+
+    // Darwin sys/stat.h __DARWIN_STRUCT_STAT64 on 64-bit macOS.
+    [StructLayout(LayoutKind.Explicit, Size = 144)]
+    private struct DarwinInfo
+    {
+        [FieldOffset(0)] internal int Device;
+        [FieldOffset(4)] internal ushort Mode;
+        [FieldOffset(8)] internal ulong Inode;
+        [FieldOffset(80)] internal long BirthSeconds;
+        [FieldOffset(88)] internal long BirthNanoseconds;
+        [FieldOffset(96)] internal long Size;
+    }
+
+    [DllImport("libc", EntryPoint = "fstat", SetLastError = true)]
+    private static extern int FStatDarwin(SafeFileHandle handle, out DarwinInfo info);
+
+    [DllImport("libc", EntryPoint = "fstat$INODE64", SetLastError = true)]
+    private static extern int FStatDarwinIntel(SafeFileHandle handle, out DarwinInfo info);
 
     [StructLayout(LayoutKind.Explicit, Size = 256)]
     private struct LinuxInfo
