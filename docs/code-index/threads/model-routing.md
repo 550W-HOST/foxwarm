@@ -70,7 +70,8 @@ Selection chooses the first configured target that is not cooling down. Outcomes
 - reaching `failureThreshold` cools a non-final target for `cooldownMs`;
 - cooldown expiry removes the old streak before the target becomes eligible again;
 - success resets only the successful target;
-- a countable failure from the configured final target clears the route's health and terminates the current request, so the next independent request starts from the first target.
+- a countable failure from the configured final target clears the route's health and terminates the current request, so the next independent request starts from the first target;
+- a configuration failure (below) on a non-final target cools it immediately instead of waiting for `failureThreshold`, so the next attempt uses the next target.
 
 With defaults and two targets, attempts 1–5 may fail on A, the fifth failure cools A, and attempt 6 selects B.
 
@@ -80,11 +81,15 @@ Failures that are retryable and count toward failover health:
 
 - network, DNS, TLS, timeout, and stream failures;
 - HTTP 408, 429, 5xx, and 529;
-- HTTP 401, 403, and 404;
-- model-not-found responses, including HTTP 400 bodies identified by nested structured error code/type or bounded model-specific text patterns;
+- HTTP 404 without a model-not-found body;
 - malformed or unusable successful responses.
 
 HTTP 400, 413, and 422 are terminal and do not affect route health unless the body identifies model-not-found. Other HTTP statuses preserve the prior retry behavior but do not affect shared route health until explicitly classified.
+
+Configuration failures count toward failover health but are never repeated on the same target ([D-model-routing-configuration-failures](#d-model-routing-configuration-failures)):
+
+- HTTP 401 (`authentication`, refined to `missing-api-key` when the leaf sent no key) and HTTP 403 (`permission`), including a Responses WebSocket handshake rejected with those statuses;
+- model-not-found responses (`model-not-found`), identified by nested structured error code/type, Anthropic's `not_found_error` with a `model: <id>` message, or bounded model-specific text patterns, including on HTTP 400 and 404.
 
 Abort, stop, and cancellation terminate immediately and do not count as target health failures.
 
@@ -94,7 +99,7 @@ The [response-usability behavior](../behaviors/models-and-requests.md#routing-an
 
 - Session and WebUI model selection continue to expose the configured virtual key. Public session projections expose raw current/child effort overrides separately from their derived effective values, allowed sets, and concrete defaults; virtual defaults are represented as per-leaf rather than inventing one route-level default.
 - `ChatResult.modelId` and assistant `__meta.modelId` identify the canonical concrete leaf that actually succeeded. When the resolved route is virtual, successful results/messages additionally carry that resolved configuration key as optional `virtualModelKey`; concrete, user, tool, synthetic, failed, and legacy messages omit it. Logs and retry diagnostics continue to identify both the attempted concrete leaf and virtual route where applicable.
-- WebUI Setup presents Models as raw YAML only. Its local static schema accepts provider objects or non-whitespace alias strings, and current-document suggestions include string-alias keys for model/default values but exclude them from concrete `targets`. Save uses the canonical config validator and remains byte-preserving after validation.
+- WebUI Setup offers a one-provider form only for documents it can represent and otherwise the YAML editor ([D-setup-models-form](../units/webui-setup-view.md#d-setup-models-form)); virtual routes are YAML-only. The editor's local static schema accepts provider objects or non-whitespace alias strings, and current-document suggestions include string-alias keys for model/default values but exclude them from concrete `targets`. Save uses the canonical config validator and remains byte-preserving after validation.
 - Structured setup input accepts virtual targets and failover settings; setup diagnostics expose `isVirtual`, `targets`, `failureThreshold`, and `cooldownMs`. The model-list API also exposes the allowlisted provider key, internal configured model ID, provider type, virtual status, resolved targets, effective context limit, ordered allowed efforts, and a concrete default or `null` for virtual per-leaf defaulting, without connection URLs, leaf credentials, headers, or other provider configuration. The browser uses the explicit identity fields for duplicate-ID trigger qualification and uses virtual strategy/targets only as configured routing summaries, never as a claim about the dynamically selected leaf or current health.
 - `/model`, `/session child-model`, the existing model/child-model WebUI endpoints, and the compact Chat selector update model-plus-effort pairs through one SessionRuntime settings mutation. Property presence distinguishes omitted fields from explicit unset/default, and `none` remains an explicit value.
 - Model-facing `create_child_session` and `create_session` schemas expose optional strict `forceModel: { modelId?, effort? }` for visibly intentional current-session overrides. Omission or `{}` keeps existing inheritance/default behavior, while removed top-level keys are rejected. `set_session_child_model` sets or clears future-child model and effort defaults without introducing another overlapping settings tool. Shared session status reports raw/effective current and child effort.
@@ -115,6 +120,10 @@ The [response-usability behavior](../behaviors/models-and-requests.md#routing-an
 - Retry presentation: [D-pipeline-display-only-retries](./message-processing-pipeline.md#d-pipeline-display-only-retries)
 
 ## Design decisions
+
+### D-model-routing-configuration-failures
+
+[2026-11-03, approved first-run proposal] A rejected key, denied access or unknown model cannot be repaired by repeating the same request, and six attempts with backoff (about 77 seconds) hid the cause from new users. `ModelAttemptFailure.ConfigurationCause` classifies these HTTP failures; `ModelRequestOwner` then ends a concrete or `session-hash` request after that attempt, and a `failover` route cools the rejected non-final target at once (`ModelRouting.Failed(..., exhausted: true)`) so the next attempt moves on within the same budget. A final target still terminates as before. The terminal `ModelRetryEvent` carries `cause` and a readable `explanation` naming the provider and upstream model; its notice text, channel text and `ModelRequestException` message read "<explanation> Check Setup → Models." followed by the provider response. Retry JSON gains these two fields only for configuration failures. Transient failures keep the existing classification and backoff. WebUI presentation of the final notice belongs to [runtime status](../units/webui-runtime-status.md).
 
 ### D-model-routing-provider-type
 

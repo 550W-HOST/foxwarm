@@ -13,6 +13,7 @@ Secondary files: packages/webui/src/components/FoxLoaders.css, packages/webui/sr
 - `QueuedMessageStatus` is the independent message-aligned queue count/action. Stop remains in the composer. Submission does not replace an authoritative active tool/request/wait status.
 - `getSessionNotice`, `getLastSessionFailure`, `createLocalSessionNotice` recognize trusted display-only events and represent local delivery uncertainty without inventing provider-visible messages.
 - `SystemEventCard` renders a short semantic event panel with native closed diagnostics. Text stays escaped, selectable and bounded. Search can reveal the original diagnostic surface.
+- A final `llm-retry` notice whose retry metadata carries `cause` and `explanation` (key, access or model-ID rejection; see [configuration failures](../threads/model-routing.md#d-model-routing-configuration-failures)) uses the explanation as its summary and offers **Open model settings**. The action is presentation-only (`SessionNotice.action`, never read from persisted notice data) and appears only where Chat supplies `OpenModelSettingsContext`, which normal Chat provides from its Setup → Models callback outside WebUI identity mode. `llmErrorThreadCard.e2e.mjs` covers both cases.
 
 The chat synchronization hook correlates control request IDs, retains pending Stop/Continue until authoritative progress, ignores unrelated acknowledgements, and separates no-op/uncertain feedback from canonical history. Existing source data, replay, permission and queue behavior remain owned by their domains.
 

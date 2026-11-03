@@ -13,13 +13,21 @@ internal sealed class ModelAttemptFailure(
     bool retryable,
     bool countable,
     string? status = null,
-    Exception? inner = null
+    Exception? inner = null,
+    string? cause = null
 ) : Exception(message, inner)
 {
     internal string Kind { get; } = kind;
     internal bool Retryable { get; } = retryable;
     internal bool Countable { get; } = countable;
     internal string? Status { get; } = status;
+
+    /// <summary>
+    /// A provider configuration problem that repeating the same request cannot repair:
+    /// <c>authentication</c>, <c>permission</c> or <c>model-not-found</c>. The request owner
+    /// refines <c>authentication</c> to <c>missing-api-key</c> when the leaf sent no key.
+    /// </summary>
+    internal string? Cause { get; } = cause;
 
     internal static ModelAttemptFailure Empty() =>
         new("Selected model disallows an empty completed response.", "response-error", true, true);
@@ -38,9 +46,32 @@ internal sealed class ModelAttemptFailure(
             "http-error",
             retryable,
             countable,
-            status.ToString(CultureInfo.InvariantCulture)
+            status.ToString(CultureInfo.InvariantCulture),
+            cause: ConfigurationCause(status, body)
         );
     }
+
+    /// <summary>
+    /// Identifies provider rejections caused by the configured key, account access or model ID.
+    /// Other statuses, including 404 without a model-specific body, keep ordinary retry handling.
+    /// </summary>
+    internal static string? ConfigurationCause(int status, string body) =>
+        ModelNotFound(body) ? "model-not-found"
+        : status == 401 ? "authentication"
+        : status == 403 ? "permission"
+        : null;
+
+    internal static string ConfigurationExplanation(string cause, ConcreteHostModel leaf) =>
+        cause switch
+        {
+            "missing-api-key" => $"No API key is set for the {leaf.ProviderKey} provider.",
+            "authentication" => $"The {leaf.ProviderKey} provider rejected the API key.",
+            "permission" =>
+                $"The {leaf.ProviderKey} provider denied access to the model {leaf.UpstreamModelId}.",
+            "model-not-found" =>
+                $"The {leaf.ProviderKey} provider does not recognize the model {leaf.UpstreamModelId}.",
+            _ => $"The {leaf.ProviderKey} provider rejected the request.",
+        };
 
     // The diagnostic carrier stays bounded; classification consumes the complete
     // provider error, whose structured code may follow a long message.
@@ -122,6 +153,12 @@ internal sealed class ModelAttemptFailure(
             )
         )
             return true;
+        // Anthropic reports an unknown model as not_found_error with the message "model: <id>".
+        if (
+            codes.Contains("not_found_error")
+            && strings.Any(text => Regex.IsMatch(text, "^\\s*model:\\s*\\S", flags))
+        )
+            return true;
         var name = "(?:\"[^\"]{1,200}\"|'[^']{1,200}'|`[^`]{1,200}`|[^\\s,;:]{1,200})";
         if (
             Regex.IsMatch(
@@ -174,11 +211,14 @@ internal sealed record ModelRetryEvent(
     string? Status = null,
     int? NextAttempt = null,
     int? DelayMs = null,
-    bool Final = false
+    bool Final = false,
+    string? Cause = null,
+    string? Explanation = null
 )
 {
-    internal JsonObject ToJson() =>
-        new()
+    internal JsonObject ToJson()
+    {
+        var value = new JsonObject
         {
             ["attempt"] = Attempt,
             ["maxRetries"] = MaxRetries,
@@ -191,6 +231,23 @@ internal sealed record ModelRetryEvent(
             ["delayMs"] = DelayMs,
             ["final"] = Final,
         };
+        // Present only for configuration failures, so ordinary retry records keep their shape.
+        if (Cause is not null)
+        {
+            value["cause"] = Cause;
+            value["explanation"] = Explanation;
+        }
+        return value;
+    }
+
+    /// <summary>Readable terminal text for a configuration failure, or null for other failures.</summary>
+    internal string? ConfigurationMessage()
+    {
+        if (Explanation is null)
+            return null;
+        var response = Status is null ? Reason : Status + ": " + Reason;
+        return $"{Explanation} Check Setup → Models.\nProvider response: {response}";
+    }
 }
 
 internal sealed class ModelRequestException(

@@ -157,7 +157,7 @@ internal sealed partial class WebUIChannel
                         new JsonObject
                         {
                             ["models"] = new JsonArray(
-                                models.Select(value => (JsonNode?)JsonValue.Create(value)).ToArray()
+                                models.Select(model => (JsonNode?)model.ToJson()).ToArray()
                             ),
                         }
                     );

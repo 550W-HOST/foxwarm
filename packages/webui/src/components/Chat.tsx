@@ -20,6 +20,7 @@ import { useChatConversationSync } from './useChatConversationSync'
 import { isRuntimeStateInactiveName, isSessionRuntimeActive } from '../sessionRuntimeState'
 import SessionDebugModal from './SessionDebugModal'
 import { ToolScriptProgressContext } from './ToolScriptProgressContext'
+import { OpenModelSettingsContext } from './SystemEventCard'
 import { ThreadCardHeightContext } from './useThreadCardHeightTransition'
 import { isSessionTurnIncomplete } from '../../../shared/src/sessionContinuation'
 import { formatSessionHeaderSubtitle } from '../sessionHeader'
@@ -1670,9 +1671,11 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
             <HistoryCommit revision={historyMode === 'continuous' ? visibleMessages : showFullTimeline} beforeCommit={captureHistoryCommit}>
             <div ref={committedTimelineRef} data-chat-timeline="committed" className="min-w-0 max-w-full">
               <ThreadCardHeightContext.Provider value={cardHeightContext}>
+                <OpenModelSettingsContext.Provider value={webUiIdentityMode ? null : onOpenModelSettings ?? null}>
                 <ToolScriptProgressContext.Provider value={toolScriptProgress}>
                   <ChatTimeline sessionId={sessionId} historyMessages={messages} currentHistoryMessages={activeMessages} runtimeState={displayingLatest ? sessionRecord?.runtimeState : undefined} busyStartedAt={displayingLatest ? sessionRecord?.busyStartedAt : undefined} isRunningTool={displayingLatest && sessionRecord?.runtimeState?.state === 'running-tool'} messages={timelineMessages} isMobile={isMobile} timelineView={timelineView} showInterAgentMessages={showInterAgentMessages} showCommentary={showCommentary} showUsageBadge={showUsageBadge} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} searchTarget={searchOpen && selectedSearchMatch?.id === searchMatchId ? selectedSearchMatch : null} renderMessageFooter={displayingLatest && sessionQueueLength > 0 && queuedMessages.length === 0 ? renderQueuedFooter : undefined} />
                 </ToolScriptProgressContext.Provider>
+                </OpenModelSettingsContext.Provider>
               </ThreadCardHeightContext.Provider>
             </div>
             </HistoryCommit>

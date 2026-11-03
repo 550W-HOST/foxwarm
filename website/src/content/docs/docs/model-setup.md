@@ -11,15 +11,19 @@ Open the WebUI using the installer's login URL. If you need to recover it, follo
 
 ## Add a provider
 
-Open **Setup → Models** and enter YAML for one supported provider. **Save models** validates the YAML and resolves the configured model entries. It does not send a live request to the provider. Include:
+First-run Setup opens on **Setup → Models** with a short form:
 
-- a provider type
-- the provider's API base URL
-- one or more exact model IDs
-- an API key when the endpoint requires one
-- a default model in `provider/model` form
+1. **Service** — pick OpenAI, Anthropic, OpenRouter, DeepSeek, Ollama, or **Other service** for any compatible endpoint. A service fills in the API type and base URL; you can change both.
+2. **API type** — `OpenAI-compatible (Chat Completions)`, `OpenAI Responses`, or `Anthropic Messages`.
+3. **API key** — required for hosted services. A local server such as Ollama can leave it empty.
+4. **Models** — select **Load models** to fetch the service's model list, then pick one, or type an exact model ID and press Enter. When the service reports a model's context and output limits, Setup saves them with that model.
+5. **Default model** — the model new conversations use.
 
-Here is a minimal OpenAI-compatible Chat Completions configuration:
+Select **Test connection** to send one short message to the default model, then **Save models**. First-run Setup will not finish while the API key is still a placeholder or missing for a hosted service that needs one.
+
+The form writes `models.yaml` for you. Switch to **YAML** at any time to see or edit the file directly. The YAML view is also where aliases, failover, several providers and other model options live. When a saved file uses settings like these, Setup opens it in YAML so nothing is lost.
+
+The same configuration in YAML looks like this:
 
 ```yaml
 default: my-provider/my-model
@@ -32,7 +36,7 @@ providers:
       - my-model
 ```
 
-Use `openai-responses` for an endpoint implementing the Responses API, or `anthropic` for an Anthropic-compatible endpoint. A local OpenAI-compatible gateway can leave `apiKey` empty when the gateway does not require one.
+Use `openai-responses` for an endpoint implementing the Responses API, or `anthropic` for an Anthropic-compatible endpoint. A local OpenAI-compatible gateway can leave `apiKey` empty when the gateway does not require one. **Save models** validates the YAML and resolves the model entries; only **Test connection** or your first message sends a live request.
 
 :::caution
 Keep real API keys in your own `foxwarm-data/state/models.yaml`. Do not commit that file or paste credentials into public issues, docs, or screenshots.
@@ -54,7 +58,8 @@ The bundled `about-foxwarm` Skill can explain concepts and point to deeper featu
 
 ## Troubleshooting
 
-- If the first prompt fails, check the provider type, API base URL, model ID, and credentials.
+- If the API key is rejected or the model ID is unknown, the reply fails right away with the cause and a link to the model settings. Fix the key or model in **Setup → Models**.
+- If the first prompt fails for another reason, check the provider type, API base URL, model ID, and credentials. **Test connection** shows the provider's response.
 - In Docker, `localhost` refers to the container. Use a host-reachable address such as `host.docker.internal` where supported.
 - If a manually edited config blocks setup, fix or remove `state/models.yaml` in the data directory to return to first-run Setup.
 - If WebUI shows no response, inspect `foxwarm-data/state/logs/`.

@@ -327,7 +327,11 @@ internal sealed class ResponsesWsTransport(
                         "request-error",
                         true,
                         true,
-                        inner: error
+                        null,
+                        error,
+                        socket.HttpStatusCode != 0
+                            ? ModelAttemptFailure.ConfigurationCause((int)socket.HttpStatusCode, "")
+                            : null
                     );
                 }
                 resource.StartPump();

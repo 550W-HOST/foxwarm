@@ -35,7 +35,9 @@ docker run -d --name foxwarm --init -p 3001:3001 \
 
 ## 2. 添加模型
 
-打开登录链接。新安装的实例会打开 **Setup → Models**。粘贴一段服务商配置，例如：
+打开登录链接。新安装的实例会打开 **Setup → Models**。选择你的服务，粘贴 API Key，选一个模型（**Load models** 会列出服务提供的模型），再点 **Test connection**。然后保存，就可以开始聊天。
+
+想直接写 YAML？把 Models 视图切换到 **YAML**，粘贴一段服务商配置，例如：
 
 ```yaml
 default: my-provider/my-model
@@ -48,7 +50,7 @@ providers:
       - my-model
 ```
 
-保存后就可以开始聊天。保存时只检查配置格式，不会请求服务商；你发出的第一条消息才是真正的连通测试。各字段的含义见[配置第一个模型](/zh/docs/model-setup/)。
+各字段的含义见[配置第一个模型](/zh/docs/model-setup/)。
 
 ## 3. 给 Agent 布置任务
 
