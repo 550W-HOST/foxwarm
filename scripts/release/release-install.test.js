@@ -264,7 +264,9 @@ test('an exited Main pane is restarted in place or removed', linux, t => {
   ok(f.control(dir, 'start'));
   const [pane] = mainWindow(f)[0].split(' ');
   process.kill(mainPid(dir), 'SIGKILL');
-  waitFor(() => f.tmux('display-message', '-p', '-t', pane, '#{pane_dead}') === '1');
+  // tmux can mark the pane dead when its terminal closes, before it reaps the process and
+  // records how it ended. Wait for that record, which the status line reports.
+  waitFor(() => f.tmux('display-message', '-p', '-t', pane, '#{pane_dead_signal}') === '9');
   const exited = f.control(dir, 'status');
   assert.equal(exited.status, 3);
   assert.match(exited.stdout, /Exited with signal 9/);
