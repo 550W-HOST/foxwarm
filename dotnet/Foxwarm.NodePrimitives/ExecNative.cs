@@ -16,7 +16,7 @@ internal static class ExecNative
             "powershell.exe"
         );
 
-    internal static bool Supported => OperatingSystem.IsLinux() || OperatingSystem.IsWindows();
+    internal static bool Supported => OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsWindows();
     internal static string SelfCommand => Command(SelfStart());
 
     internal static string Command(ProcessStartInfo start) =>

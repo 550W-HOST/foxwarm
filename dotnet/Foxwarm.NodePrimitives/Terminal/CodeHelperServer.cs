@@ -106,7 +106,7 @@ internal sealed class CodeHelperServer : IAsyncDisposable
             socket.Bind(new UnixDomainSocketEndPoint(socketPath));
             socket.Listen(16);
             listener = socket;
-            if (OperatingSystem.IsLinux())
+            if (!OperatingSystem.IsWindows())
                 File.SetUnixFileMode(socketPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
             _ = AcceptLoopAsync(socket);
             await Task.CompletedTask;
@@ -147,7 +147,7 @@ internal sealed class CodeHelperServer : IAsyncDisposable
             ? $"exec {ShQuote(process)} {ShQuote(assembly)} --code-helper"
             : $"exec {ShQuote(process)} --code-helper";
         await File.WriteAllTextAsync(path, "#!/bin/sh\n" + launcher + " \"$@\"\n");
-        if (OperatingSystem.IsLinux())
+        if (!OperatingSystem.IsWindows())
             File.SetUnixFileMode(
                 path,
                 UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
