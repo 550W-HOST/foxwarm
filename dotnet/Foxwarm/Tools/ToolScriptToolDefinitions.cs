@@ -16,7 +16,12 @@ internal static class ToolScriptToolDefinitions
     "parameters": {
       "type": "object",
       "additionalProperties": false,
+      "required": ["summary"],
       "properties": {
+        "summary": {
+          "type": "string",
+          "description": "Briefly describe what this command or script will do. State its purpose, not an expected result."
+        },
         "node": {
           "type": "string",
           "description": "Node containing filePath. Omit or use current for this Session's current Node; otherwise name a Node such as master. Source selection does not change script execution or nested tools' default Node."

@@ -153,28 +153,17 @@ internal sealed partial class ContextPreviewRenderer
 
     private string? RenderItem(PreviewItem item, int max)
     {
-        var prefix = item.Heading + "\n";
+        var prefix = item.Heading.Length > 0 ? item.Heading + "\n" : "";
         var folded = detail != "full" && !string.IsNullOrEmpty(item.OmittedTools);
         var toolMatch = Active && folded && Matches(item.OmittedTools!);
-        string Notice(bool truncated)
-        {
-            if (!truncated && !folded)
-                return "";
-            return "["
-                + (truncated ? "Truncated preview. " : "Tool content folded. ")
-                + (toolMatch ? "Matched in omitted tool call/result content. " : "")
-                + (
-                    item.DrillDown is { Length: > 0 } drill
-                        ? "Archive original: " + drill
-                        : "Narrow the range or increase previewLength/toolDetail."
-                            + (
-                                externalRead
-                                    ? " Archive originals are not available through this endpoint."
-                                    : ""
-                            )
-                )
-                + "]";
-        }
+        string Notice(bool truncated) =>
+            truncated
+                ? "[Truncated preview"
+                    + (item.ToolOnly ? "; " + item.ActivityLocator : "")
+                    + (toolMatch ? "; match in omitted tool content" : "")
+                    + "]"
+            : toolMatch ? "[Matched in omitted tool call/result content]"
+            : "";
         var note = Notice(false);
         var usable = max - prefix.Length - (note.Length > 0 ? note.Length + 1 : 0);
         var truncated = item.Body.Length > usable;
@@ -183,7 +172,7 @@ internal sealed partial class ContextPreviewRenderer
             note = Notice(true);
             usable = max - prefix.Length - note.Length - 1;
         }
-        // Never cut a recovery call or present a budget excerpt as the full body.
+        // Keep an explicit omission notice rather than presenting a budget excerpt as the full body.
         if (usable < Math.Min(20, item.Body.Length))
             return null;
         var body = truncated
@@ -238,11 +227,10 @@ internal sealed partial class ContextPreviewRenderer
                 + Text(record.Message["role"])
                 + Visibility(record.Message)
                 + ":",
-            SourceIndex = record.Seq,
-            ArchiveSession = ownerId ?? record.SessionId,
             Sequence = record.Seq,
-            EndSequence = record.Seq,
             DrillDown = ArchiveDrill(ownerId ?? record.SessionId, "msg#" + record.Seq),
+            ActivityTime = Time(record.Timestamp)[6..] + " ",
+            ActivityLocator = "(#" + record.Seq + ") " + source + Visibility(record.Message),
         };
     }
 
@@ -284,7 +272,10 @@ internal sealed partial class ContextPreviewRenderer
             page.Count == 0 ? "Header only."
                 : items.Length == 0 ? "No eligible content in this range."
                 : "No selected records matched these page filters; older history was not searched.",
-            navigation
+            navigation,
+            runningCallId: SessionWait.Text(page.Runtime["state"]) == "running-tool"
+                ? SessionWait.Text(page.Runtime["tool"]?["id"])
+                : null
         );
     }
 
@@ -294,7 +285,8 @@ internal sealed partial class ContextPreviewRenderer
         Func<int, string> titleFor,
         string empty,
         IReadOnlyList<string>? extraNotices = null,
-        int? maxItems = null
+        int? maxItems = null,
+        string? runningCallId = null
     )
     {
         var selected = items.AsEnumerable();
@@ -329,7 +321,16 @@ internal sealed partial class ContextPreviewRenderer
                 "[filter] excludeRegex excluded {count} additional item(s) that remained after earlier filter stages."
             );
         var sourceMatches = (maxItems is { } maximum ? selected.Take(maximum) : selected).ToArray();
-        var matched = GroupTools(sourceMatches);
+        var matched = GroupTools(sourceMatches, runningCallId);
+        var example = sourceMatches.FirstOrDefault(item => item.DrillDown is not null)?.DrillDown;
+        var footer =
+            "Details: toolDetail:\"snippets\" or \"full\"; increase previewLength or narrow the range."
+            + (
+                example is not null ? " Archive example: " + example
+                : externalRead ? " Archive originals are not available through this endpoint."
+                : ""
+            );
+        var contentBudget = budget - footer.Length - 2;
         var selectionOmitted = selected.Count() - sourceMatches.Length;
         if (selectionOmitted > 0)
             notices.Add(
@@ -344,7 +345,7 @@ internal sealed partial class ContextPreviewRenderer
         var title = titleFor(sourceMatches.Length);
         string Prefix(int reserveForBody)
         {
-            var available = Math.Max(0, budget - reserveForBody);
+            var available = Math.Max(0, contentBudget - reserveForBody);
             var sections = new List<string>();
             var used = 0;
             void Append(string text, int max)
@@ -386,7 +387,9 @@ internal sealed partial class ContextPreviewRenderer
         if (matched.Length == 0)
         {
             var suffix = "\n\n" + empty;
-            return Clip((Prefix(suffix.Length) + suffix).TrimStart(), budget);
+            return Clip((Prefix(suffix.Length) + suffix).TrimStart(), contentBudget)
+                + "\n\n"
+                + footer;
         }
         var prefix = Prefix(242);
         var output = prefix.Length > 0 ? prefix + "\n\n" : "";
@@ -394,31 +397,15 @@ internal sealed partial class ContextPreviewRenderer
         {
             var first = rows[0];
             var last = rows[^1];
-            var drill =
-                first.ArchiveSession is { } session
-                && first.Sequence is { } seq
-                && last.EndSequence is { } end
-                && rows.All(row => row.ArchiveSession == session && row.Sequence is not null)
-                    ? ArchiveDrill(session, $"msg#{Math.Min(seq, end)}-{Math.Max(seq, end)}")
-                    : first.DrillDown;
-            return $"[{rows.Length} item(s) not displayed: previewLength budget {budget}. "
-                + (
-                    drill is { Length: > 0 }
-                        ? "Omitted Archive original(s): " + drill
-                        : "Narrow the range or raise previewLength."
-                            + (
-                                externalRead
-                                    ? " Archive originals are not available through this endpoint."
-                                    : ""
-                            )
-                )
-                + "]";
+            var range =
+                first.Sequence is { } seq && last.Sequence is { } end ? $" (#{seq}–#{end})" : "";
+            return $"[{rows.Length} item(s){range} not displayed: previewLength budget {budget}.]";
         }
         var omitted = 0;
         for (var index = 0; index < matched.Length; index++)
         {
             var remaining = matched.Length - index;
-            var available = budget - output.Length;
+            var available = contentBudget - output.Length;
             if (available <= 120)
             {
                 omitted = remaining;
@@ -439,8 +426,8 @@ internal sealed partial class ContextPreviewRenderer
         if (omitted > 0)
         {
             var note = "\n\n" + Omission(matched[^omitted..]);
-            output = Clip(output, budget - note.Length) + note;
+            output = Clip(output, contentBudget - note.Length) + note;
         }
-        return Clip(output, budget).TrimEnd();
+        return Clip(output, contentBudget).TrimEnd() + "\n\n" + footer;
     }
 }

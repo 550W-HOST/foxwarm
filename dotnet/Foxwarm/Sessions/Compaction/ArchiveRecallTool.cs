@@ -67,7 +67,7 @@ internal static class ArchiveRecallTool
                       },
                       "toolDetail": {
                         "type": "string",
-                        "description": "Tool display detail: names (default) summarizes names, counts and errors; snippets adds short excerpts; full expands arguments and results within the response budget.",
+                        "description": "names (default) shows compact tool activity; snippets adds short argument and result excerpts; full includes complete tool content within the preview budget.",
                         "enum": [
                           "names",
                           "snippets",

@@ -1,10 +1,17 @@
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Foxwarm.Sessions;
+using Foxwarm.Tools;
 
 namespace Foxwarm;
 
-internal sealed record PreviewTool(string Name, string? Id, bool Result, bool Error);
+internal sealed record PreviewTool(
+    string Name,
+    string? Id,
+    bool Result,
+    string Summary = "",
+    string Status = ""
+);
 
 internal sealed record PreviewItem(
     string Heading,
@@ -14,12 +21,11 @@ internal sealed record PreviewItem(
     IReadOnlyList<string>? PriorityNotices = null,
     IReadOnlyList<PreviewTool>? Tools = null,
     bool ToolOnly = false,
-    long? SourceIndex = null,
     string? DrillDown = null,
     string? UnfoldedBody = null,
-    string? ArchiveSession = null,
     long? Sequence = null,
-    long? EndSequence = null
+    string ActivityTime = "",
+    string ActivityLocator = ""
 );
 
 internal sealed partial class ContextPreviewRenderer
@@ -100,7 +106,8 @@ internal sealed partial class ContextPreviewRenderer
             {
                 if (!textIncluded || text.Length == 0)
                     return;
-                body.Add(text);
+                if (!linked || detail != "names")
+                    body.Add(text);
                 search.Add(text);
                 if (linked)
                     tool.Add(text);
@@ -139,7 +146,8 @@ internal sealed partial class ContextPreviewRenderer
                     ?? SessionWait.Text((part["imageMeta"] as JsonObject)?["imageId"]);
                 if (imageId is not null)
                     line += " " + imageId;
-                body.Add(line);
+                if (!linked || detail != "names")
+                    body.Add(line);
                 search.Add(line);
                 if (!linked && part["functionCall"] is null)
                     prose = true;
@@ -151,7 +159,18 @@ internal sealed partial class ContextPreviewRenderer
                 var name = Text(call["name"]);
                 var args = Args(call);
                 var line = $"[call:{name}] {args}";
-                events.Add(new(name, SessionWait.Text(call["id"]), false, false));
+                var target = ToolActivity.Target(
+                    name,
+                    call["args"] as JsonObject ?? new JsonObject()
+                );
+                events.Add(
+                    new(
+                        target.Name,
+                        SessionWait.Text(call["id"]),
+                        false,
+                        ToolActivity.Summary(target.Name, target.Args)
+                    )
+                );
                 tool.Add(name + "\n" + args);
                 search.Add(name + "\n" + args);
                 if (detail != "names")
@@ -171,8 +190,7 @@ internal sealed partial class ContextPreviewRenderer
                         name,
                         SessionWait.Text(response["tool_use_id"]),
                         true,
-                        (response["response"] as JsonObject)?["error"] is not null
-                            || McpError(response["response"] as JsonObject)
+                        Status: ResultStatus(response["response"] as JsonObject)
                     )
                 );
                 tool.Add(name + "\n" + content);
@@ -190,6 +208,7 @@ internal sealed partial class ContextPreviewRenderer
         var identity =
             block is not null ? "CTX B#" + Unknown(block["id"])
             : SessionWait.Number(meta?["seq"]) is { } seq ? "#" + EcmaNumber.Format(seq)
+            : sourceIndex is { } index ? "source " + index
             : "unsequenced";
         var time = Time(SessionWait.Number(meta?["timestamp"]));
         var visibility = Visibility(message);
@@ -210,19 +229,13 @@ internal sealed partial class ContextPreviewRenderer
             detail != "full" ? string.Join('\n', tool) : null,
             Tools: events,
             ToolOnly: !prose && events.Count > 0,
-            SourceIndex: sourceIndex,
             DrillDown: drill,
             UnfoldedBody: string.Join('\n', body),
-            ArchiveSession: externalRead ? null : sessionId,
             Sequence: (long?)SessionWait.Number(meta?["seq"]),
-            EndSequence: (long?)SessionWait.Number(meta?["seq"])
+            ActivityTime: time.Length > 0 ? time[6..] + " " : "",
+            ActivityLocator: "(" + identity + ")" + visibility
         );
-        return detail == "names" && events.Count > 0
-            ? item with
-            {
-                Body = JoinBody(item.Body, ToolSummary(events, events)),
-            }
-            : item;
+        return detail == "names" && events.Count > 0 ? GroupTools([item])[0] : item;
     }
 
     private static string Visibility(JsonObject message) =>
@@ -259,85 +272,108 @@ internal sealed partial class ContextPreviewRenderer
     private static string JoinBody(string text, string summary) =>
         text.Length == 0 ? summary : text + "\n" + summary;
 
-    private static string ToolSummary(
-        IReadOnlyList<PreviewTool> events,
-        IReadOnlyList<PreviewTool> page
-    )
+    private static string ResultStatus(JsonObject? response)
     {
-        bool Paired(PreviewTool item) =>
-            item.Id is not null
-            && page.Count(other => other.Id == item.Id && other.Name == item.Name && !other.Result)
-                == 1
-            && page.Count(other => other.Id == item.Id && other.Name == item.Name && other.Result)
-                == 1;
-        return "Tools: "
-            + string.Join(
-                " · ",
-                events
-                    .GroupBy(item => item.Name)
-                    .Select(group =>
-                    {
-                        var calls = group.Count(item => !item.Result);
-                        var results = group.Where(item => item.Result).ToArray();
-                        var unpaired = group.Count(item => !Paired(item));
-                        var errors = results.Count(item => item.Error);
-                        return group.Key
-                            + (calls > 0 ? " ×" + calls : " results")
-                            + (errors > 0 ? $" ({errors} error(s))" : "")
-                            + (unpaired > 0 ? $" ({unpaired} partial/unpaired)" : "");
-                    })
-            );
+        if (response?["error"] is { } error)
+            return "error: "
+                + ToolActivity.SingleLine(
+                    SessionWait.Text((error as JsonObject)?["message"]) ?? Unknown(error),
+                    100
+                );
+        if (McpError(response))
+            return "error";
+        return SessionWait.Text(response?["status"]) is "running" or "background" ? "running" : "";
     }
 
-    private PreviewItem[] GroupTools(PreviewItem[] items)
+    private static (PreviewTool Tool, PreviewItem Owner)? Pair(
+        PreviewTool item,
+        ILookup<string?, (PreviewTool Tool, PreviewItem Owner)> page
+    )
+    {
+        if (item.Id is null)
+            return null;
+        var matches = page[item.Id].ToArray();
+        return matches.Length == 2 && matches.Count(other => other.Tool.Result) == 1
+            ? matches.Single(other => other.Tool.Result != item.Result)
+            : null;
+    }
+
+    private static string ToolSummary(
+        PreviewItem owner,
+        IReadOnlyList<PreviewTool> events,
+        ILookup<string?, (PreviewTool Tool, PreviewItem Owner)> page,
+        string? runningCallId
+    )
+    {
+        return string.Join(
+            '\n',
+            events
+                .Select(item =>
+                {
+                    var pair = Pair(item, page);
+                    if (item.Result && pair is not null)
+                        return null;
+                    var status = item.Result ? item.Status : pair?.Tool.Status;
+                    if (
+                        !item.Result
+                        && pair is null
+                        && item.Id is not null
+                        && item.Id == runningCallId
+                        && page[item.Id].Count() == 1
+                    )
+                        status = "running";
+                    var locator = owner.ActivityLocator;
+                    if (
+                        !item.Result
+                        && owner.Sequence is not null
+                        && pair?.Owner.Sequence is { } resultSeq
+                        && resultSeq != owner.Sequence
+                    )
+                        locator = locator.Replace(
+                            ")",
+                            "/#" + resultSeq + ")",
+                            StringComparison.Ordinal
+                        );
+                    return owner.ActivityTime
+                        + item.Name
+                        + (item.Summary.Length > 0 ? " — " + item.Summary : "")
+                        + (string.IsNullOrEmpty(status) ? "" : " [" + status + "]")
+                        + (item.Result && pair is null ? " [result only]" : "")
+                        + " "
+                        + locator;
+                })
+                .Where(line => line is not null)
+        );
+    }
+
+    internal PreviewItem[] GroupTools(PreviewItem[] items, string? runningCallId = null)
     {
         if (detail != "names")
             return items;
-        var page = items.SelectMany(item => item.Tools ?? []).ToArray();
-        var groups = new List<PreviewItem>();
-        for (var index = 0; index < items.Length; index++)
-        {
-            var item = items[index];
-            if (!item.ToolOnly)
+        var page = items
+            .SelectMany(owner => (owner.Tools ?? []).Select(tool => (Tool: tool, Owner: owner)))
+            .ToLookup(entry => entry.Tool.Id);
+        return items
+            .Select(item =>
             {
-                groups.Add(
-                    item.Tools is { Count: > 0 } mixedTools
-                        ? item with
-                        {
-                            Body = JoinBody(item.UnfoldedBody ?? "", ToolSummary(mixedTools, page)),
-                        }
-                        : item
-                );
-                continue;
-            }
-            var end = index;
-            while (
-                end + 1 < items.Length
-                && items[end + 1].ToolOnly
-                && items[end].SourceIndex is { } previous
-                && items[end + 1].SourceIndex == previous + 1
-            )
-                end++;
-            var members = items[index..(end + 1)];
-            var tools = members.SelectMany(member => member.Tools ?? []).ToArray();
-            groups.Add(
-                item with
+                if (item.Tools is not { Count: > 0 } tools)
+                    return item;
+                var activity = ToolSummary(item, tools, page, runningCallId);
+                return item with
                 {
-                    Heading =
-                        end == index ? item.Heading : item.Heading + " — " + items[end].Heading,
-                    Body = ToolSummary(tools, page),
-                    OmittedTools = string.Join('\n', members.Select(member => member.OmittedTools)),
-                    DrillDown =
-                        item.ArchiveSession is { } session
-                        && item.Sequence is { } first
-                        && items[end].EndSequence is { } last
-                            ? ArchiveDrill(session, $"msg#{first}-{last}")
-                            : item.DrillDown,
-                    EndSequence = items[end].EndSequence,
-                }
-            );
-            index = end;
-        }
-        return groups.ToArray();
+                    Heading = item.ToolOnly ? "" : item.Heading,
+                    Body = JoinBody(item.UnfoldedBody ?? "", activity),
+                    OmittedTools = string.Join(
+                        '\n',
+                        new[] { item.OmittedTools }.Concat(
+                            tools
+                                .Where(tool => !tool.Result)
+                                .Select(tool => Pair(tool, page)?.Owner.OmittedTools)
+                        )
+                    ),
+                };
+            })
+            .Where(item => item.Body.Length > 0 || !item.ToolOnly)
+            .ToArray();
     }
 }
