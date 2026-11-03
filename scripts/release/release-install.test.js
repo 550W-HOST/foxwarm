@@ -74,13 +74,23 @@ function ok(result) {
   return result;
 }
 
-function alive(pid) {
+// Same rule as foxwarmctl: a Main that has exited but that tmux has not reaped yet (state Z) is stopped.
+function processState(pid) {
   try {
-    process.kill(pid, 0);
-    return true;
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+    return stat.slice(stat.lastIndexOf(')') + 2, stat.lastIndexOf(')') + 3);
   } catch {
-    return false;
+    return null;
   }
+}
+
+function alive(pid) {
+  const state = processState(pid);
+  return state !== null && state !== 'Z';
+}
+
+function stoppedMessage(pid, result) {
+  return `PID ${pid} is still running (state ${processState(pid)}); foxwarmctl reported: ${String(result.stdout)}${String(result.stderr)}`;
 }
 
 test('fresh install selects data, records it, and installs the control script', linux, t => {
@@ -136,15 +146,15 @@ test('update replaces a running release, restarts it and removes the old one', l
   assert(alive(first), 'A blocked update must not stop Main.');
   fs.rmSync(path.join(dir, 'fake-block'));
 
-  ok(f.control(dir, 'update', '--package', next));
-  assert(!alive(first));
+  const updated = ok(f.control(dir, 'update', '--package', next));
+  assert(!alive(first), stoppedMessage(first, updated));
   const second = Number(fs.readFileSync(path.join(dir, 'main.pid'), 'utf8'));
   assert.notEqual(second, first);
   assert(alive(second));
   assert.equal(fs.readlinkSync(path.join(dir, 'runtime/current')), '0.9.1');
   assert.deepEqual(fs.readdirSync(path.join(dir, 'runtime')).sort(), ['0.9.1', 'current']);
-  ok(f.control(dir, 'stop'));
-  assert(!alive(second));
+  const stopped = ok(f.control(dir, 'stop'));
+  assert(!alive(second), stoppedMessage(second, stopped));
   assert.equal(f.control(dir, 'status').status, 3);
 });
 
