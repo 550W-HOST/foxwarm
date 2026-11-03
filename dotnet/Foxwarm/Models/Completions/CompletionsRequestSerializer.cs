@@ -44,6 +44,22 @@ internal static class CompletionsRequestSerializer
                             .Select(block => (JsonNode)block.DeepClone())
                             .ToArray()
                     );
+                    var images = ProviderImageParts.GroupBlocks(
+                        group.Parts.Where(ProviderImageParts.IsImage),
+                        "completions"
+                    );
+                    if (
+                        images.Count > 0
+                        && group
+                            .Parts.Where(ProviderImageParts.IsImage)
+                            .All(ProviderImageParts.IsUnsupported)
+                    )
+                    {
+                        // Text-only image placeholders stay with their tool result.
+                        foreach (var block in images)
+                            texts.Add(block?.DeepClone());
+                        images.Clear();
+                    }
                     JsonNode toolContent =
                         texts.Count == 0 ? JsonValue.Create("")!
                         : texts.Count == 1 ? texts[0]!["text"]!.DeepClone()
@@ -55,10 +71,6 @@ internal static class CompletionsRequestSerializer
                             ["tool_call_id"] = group.Id,
                             ["content"] = toolContent,
                         }
-                    );
-                    var images = ProviderImageParts.GroupBlocks(
-                        group.Parts.Where(ProviderImageParts.IsImage),
-                        "completions"
                     );
                     if (images.Count > 0)
                     {
@@ -86,6 +98,7 @@ internal static class CompletionsRequestSerializer
                     && !Truthy(part["functionCall"])
                     && !Truthy(part["functionResponse"])
                     && !Truthy(part["inlineData"])
+                    && !ProviderImageParts.IsImage(part)
                 )
             )
                 parts =

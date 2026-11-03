@@ -86,6 +86,9 @@ internal sealed partial class ModelConfiguration
             if (target == "models")
             {
                 var next = Validate(raw);
+                // First-run Setup ends with this save, so it must not install an unfinished key.
+                if (!File.Exists(ActivePath))
+                    ModelApiKeys.EnsureUsableForFirstRun(next);
                 await ReplaceRawAsync(
                     ActivePath,
                     bytes,

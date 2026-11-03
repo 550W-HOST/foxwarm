@@ -5,7 +5,7 @@ namespace Foxwarm.Sessions;
 
 internal sealed partial class SessionManager
 {
-    internal async Task<string[]> ListSetupProviderModelsAsync(
+    internal async Task<SetupListedModel[]> ListSetupProviderModelsAsync(
         JsonObject input,
         CancellationToken cancellationToken
     )
@@ -212,11 +212,34 @@ internal sealed partial class SessionManager
                         journalError.Message
                     );
                 }
-            throw new SetupProviderRequestException(
-                "request",
-                ConfiguredModelRequests.SafeError(error, model),
-                400
+            throw new SetupProviderRequestException("request", SetupTestFailure(error, model), 400);
+        }
+
+        // Provider rejections name their cause; other failures keep the redacted generic text.
+        static string SetupTestFailure(Exception error, ConcreteHostModel model)
+        {
+            var failure = error switch
+            {
+                ModelAttemptFailure known => known,
+                ResponsesHttpException http when http.StatusCode is not null =>
+                    ModelAttemptFailure.Http((int)http.StatusCode, http.ClassificationBody),
+                _ => null,
+            };
+            if (failure is null)
+                return ConfiguredModelRequests.SafeError(error, model);
+            var detail = ModelAttemptFailure.Summary(
+                ConfiguredModelRequests.SafeReason(failure.Message, model)
             );
+            var response = failure.Status is null ? detail : failure.Status + ": " + detail;
+            var cause =
+                failure.Cause == "authentication" && model.Token.Length == 0
+                    ? "missing-api-key"
+                    : failure.Cause;
+            return cause is null
+                ? "The provider returned an error. Provider response: " + response
+                : ModelAttemptFailure.ConfigurationExplanation(cause, model)
+                    + " Provider response: "
+                    + response;
         }
 
         static string TextOrDefault(JsonNode? node, string fallback)

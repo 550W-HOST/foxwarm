@@ -20,6 +20,8 @@ Setup/Agent changes are authenticated and explicit. Setup save success means the
 
 The current Setup does not expose Authorizations. The normal host retains [outbound OAuth administrator routes](./dotnet-mcp-oauth.md), saved grants and the narrow public callback/client documents independently of this setup file; existing caller tool permissions still control MCP use.
 
+Setup provider checks name the cause of a provider rejection without echoing credentials. A failed `/api/setup/models/test` classifies HTTP and attempt failures with the [configuration-failure classifier](../threads/model-routing.md#d-model-routing-configuration-failures) (for example "The openai provider rejected the API key. Provider response: 401: …"); other errors keep the redacted generic text. `/api/setup/models/list` reports 401/403 as a missing or rejected key. The first models save is subject to the [first-run key check](./model-configuration.md#first-run-key-check); the route's post-save behavior is unchanged.
+
 ## Tests
 
 `mainHostSetupProviders.e2e.mjs` qualifies transient listing/test requests, unchanged saved models/catalog during discovery, provider discovery from unsaved Models YAML through real editor input and completion actions, and an original-App raw `pricing` save followed by normal request cost recording, without depending on bundle module names. `mainHostModelCompact.e2e.mjs` and its controlled provider retain original creation/model/child selectors, strict setting failures, layered compaction, immutable Archive recall, cancellation and cold restart.

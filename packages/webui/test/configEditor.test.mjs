@@ -557,8 +557,8 @@ test('provider model inflight requests merge and editor removal aborts late resu
 test('shared and editor schemas accept narrow model defaults and reject invalid settings at every scope', () => {
   const valid = {
     default: 'leaf/model',
-    defaults: { contextLimit: 200000, maxOutput: 32768, providerImageOutputFormat: 'webp' },
-    providers: { leaf: { models: [{ id: 'model', maxOutput: 500, providerImageOutputFormat: 'jpeg' }] } },
+    defaults: { contextLimit: 200000, maxOutput: 32768, providerImageOutputFormat: 'webp', imageInput: false },
+    providers: { leaf: { imageInput: true, models: [{ id: 'model', maxOutput: 500, providerImageOutputFormat: 'jpeg', imageInput: false }] } },
   }
   for (const validate of [validateModelsSchema, validateSharedModelsSchema]) {
     assert.equal(validate(valid), true, JSON.stringify(validate.errors))
@@ -573,6 +573,11 @@ test('shared and editor schemas accept narrow model defaults and reject invalid 
       raw => { raw.providers.leaf.providerImageOutputFormat = 'png' },
       raw => { raw.providers.route = { providerType: 'session-hash', targets: ['leaf'], maxOutput: 500 } },
       raw => { raw.providers.route = { providerType: 'failover', targets: ['leaf', 'other'], providerImageOutputFormat: 'jpeg' } },
+      raw => { raw.defaults.imageInput = 'false' },
+      raw => { raw.providers.leaf.imageInput = 0 },
+      raw => { raw.providers.leaf.models[0].imageInput = null },
+      raw => { raw.providers.route = { providerType: 'session-hash', targets: ['leaf'], imageInput: false } },
+      raw => { raw.providers.route = { providerType: 'failover', targets: ['leaf', 'other'], imageInput: true } },
     ]) {
       const candidate = structuredClone(valid); mutate(candidate)
       assert.equal(validate(candidate), false, JSON.stringify(candidate))

@@ -41,6 +41,7 @@ internal static class ModelRoutingFingerprint
                     ["contextLimit"] = leaf.ContextLimit,
                     ["maxOutput"] = leaf.MaxOutput,
                     ["providerImageOutputFormat"] = leaf.ProviderImageOutputFormat,
+                    ["imageInput"] = leaf.ImageInput,
                     ["streamContentInactivityTimeoutMs"] =
                         config["streamContentInactivityTimeoutMs"]?.DeepClone()
                         ?? JsonValue.Create(60000),

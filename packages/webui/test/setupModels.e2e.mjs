@@ -136,7 +136,7 @@ function respondJson(request, body, status = 200) {
 async function attachRequestMocks(targetPage, options = {}) {
   const blockedEditorAssets = options.blockYamlWorkerImport ? ['yaml.worker']
     : options.blockEditorChunks ? ['monaco-editor', 'monaco-yaml', 'yaml.worker', 'editor.worker'] : []
-  let mockModelsRawYaml = options.oobe ? '' : statusPayload.models.rawYaml
+  let mockModelsRawYaml = options.oobe ? '' : (options.modelsRawYaml ?? statusPayload.models.rawYaml)
   let mockConfigRawYaml = options.configRawYaml ?? statusPayload.config.rawYaml
   let mockOobe = !!options.oobe
   let mockSessionModel = 'route'
@@ -233,6 +233,13 @@ async function attachRequestMocks(targetPage, options = {}) {
       } else {
         void respondJson(request, { models: options.providerModelListResponse || ['gpt-5.6/x', 'ft:gpt-5.6:project'] })
       }
+      return
+    }
+    if (url.pathname.endsWith('/api/setup/models/test') && request.method() === 'POST') {
+      const body = JSON.parse(request.postData() || '{}')
+      options.providerTestRequests?.push(body)
+      if (options.providerTestError) void respondJson(request, { success: false, error: options.providerTestError }, 400)
+      else void respondJson(request, { success: true, text: 'ok' })
       return
     }
     if (url.pathname.endsWith('/api/setup/models') && request.method() === 'POST') {
@@ -580,7 +587,8 @@ test('Setup uses accessible Appearance, Models and Config tabs with status icons
     assert.equal(bodyText.includes('raw config editor below preserves'), false)
     assert.equal(bodyText.includes('Models path:'), false)
     assert.equal(bodyText.includes('Config path:'), false)
-    assert.equal(await setupPage.$('button::-p-text(Form)'), null)
+    // The default fixture uses aliases and several providers, so Models opens in YAML; the form stays available as a view.
+    assert.equal(await setupPage.$eval('[data-models-view="yaml"]', button => button.getAttribute('aria-pressed')), 'true')
     assert.equal(await setupPage.$('::-p-text(Setup checklist)'), null)
 
     const tabs = await setupPage.$$eval('[role="tab"]', (elements) => elements.map((element) => ({
@@ -1885,7 +1893,10 @@ test('OOBE remains editable and savable when lazy Monaco/YAML support import rej
     await degradedPage.waitForSelector('[data-setup-tab="models"] [data-setup-tab-status="attention"]')
     const forcedSetupClose = await degradedPage.waitForSelector('[data-workbench-tab-close="system:setup"]')
     await degradedPage.waitForFunction(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.root.activeTabId === 'system:setup')
-    await degradedPage.click('[data-setup-tab="models"]')
+    // Forced first-run Setup opens directly on Models, with the form as the starting view.
+    assert.equal(await degradedPage.$eval('[data-setup-tab="models"]', tab => tab.getAttribute('aria-selected')), 'true')
+    await degradedPage.waitForSelector('[data-model-setup-form]', { visible: true })
+    await degradedPage.click('[data-models-view="yaml"]')
     await forcedSetupClose.click()
     assert.ok(await degradedPage.$('[data-workbench-tab-close="system:setup"]'))
     assert.equal(await degradedPage.$eval('[data-setup-tab="models"]', tab => tab.getAttribute('aria-selected')), 'true')
@@ -1972,6 +1983,129 @@ test('OOBE remains editable and savable when lazy Monaco/YAML support import rej
     ])
   } finally {
     await degradedPage.close()
+  }
+})
+
+async function setupScreenshot(targetPage, name) {
+  const directory = process.env.FOXWARM_SETUP_SCREENSHOT_DIR
+  if (!directory) return
+  await mkdir(directory, { recursive: true })
+  await targetPage.screenshot({ path: path.join(directory, name) })
+}
+
+test('first-run Setup completes a provider through the model form, list, connection test and save', async () => {
+  const formPage = await browser.newPage()
+  const modelsSaveRequests = []
+  const providerModelListRequests = []
+  const providerTestRequests = []
+  await formPage.setViewport({ width: 1280, height: 800 })
+  await attachRequestMocks(formPage, {
+    oobe: true,
+    modelsSaveRequests,
+    providerModelListRequests,
+    providerTestRequests,
+    providerModelListResponse: [{ id: 'vendor/model-a', contextLimit: 32768, imageInput: false }, { id: 'vendor/model-b', contextLimit: 262144, maxOutput: 65536, imageInput: true }],
+  })
+  try {
+    await formPage.goto(`${productionBaseUrl}/#setup`, { waitUntil: 'networkidle2' })
+    await waitForWebUiReady(formPage)
+    await formPage.waitForFunction(() => document.body.textContent?.includes('Foxwarm first-time setup'), { timeout: 15_000 })
+    assert.equal(await formPage.$eval('[data-setup-tab="models"]', tab => tab.getAttribute('aria-selected')), 'true')
+    await formPage.waitForSelector('[data-model-setup-form]', { visible: true })
+    assert.equal(await formPage.$eval('[data-models-view="form"]', button => button.getAttribute('aria-pressed')), 'true')
+    assert.equal(await formPage.$eval('[data-model-setup-field="service"]', select => select.value), 'openai')
+    assert.equal(await formPage.$eval('[data-model-setup-field="apiKey"]', input => input.value), '', 'the template placeholder is not shown as a key')
+    await setupScreenshot(formPage, '01-first-run-models-form.png')
+
+    await formPage.click('button::-p-text(Save models)')
+    await formPage.waitForSelector('[data-save-feedback="models"][role="alert"]')
+    assert.equal(await formPage.$eval('[data-save-feedback="models"]', node => node.textContent), 'Replace the placeholder API key with your key.')
+    assert.deepEqual(modelsSaveRequests, [], 'an unfinished key is not sent')
+
+    await formPage.select('[data-model-setup-field="service"]', 'openrouter')
+    assert.equal(await formPage.$eval('[data-model-setup-field="baseUrl"]', input => input.value), 'https://openrouter.ai/api/v1')
+    await formPage.type('[data-model-setup-field="apiKey"]', 'sk-or-test')
+    await formPage.click('button::-p-text(Load models)')
+    await formPage.waitForFunction(() => document.querySelector('[data-model-setup-feedback="list"]')?.textContent?.includes('2 models available'))
+    assert.deepEqual(providerModelListRequests, [{ providerType: 'openai-completions', baseUrl: 'https://openrouter.ai/api/v1', apiKey: 'sk-or-test' }])
+    assert.deepEqual(await formPage.$$eval('[data-model-setup-form] datalist option', options => options.map(option => option.value)), ['vendor/model-a', 'vendor/model-b'])
+    await formPage.type('[data-model-setup-field="model"]', 'vendor/model-b')
+    await formPage.keyboard.press('Enter')
+    await formPage.waitForSelector('[data-model-setup-model="vendor/model-b"]')
+    assert.equal(await formPage.$eval('[data-model-setup-model="vendor/model-b"] [data-model-setup-limits]', node => node.textContent), '256K context · 64K output · Images')
+    assert.equal(await formPage.$eval('[data-model-setup-field="defaultModel"]', select => select.value), 'vendor/model-b')
+
+    // A model listed without image input is saved with imageInput: false.
+    await formPage.type('[data-model-setup-field="model"]', 'vendor/model-a')
+    await formPage.keyboard.press('Enter')
+    await formPage.waitForSelector('[data-model-setup-model="vendor/model-a"]')
+    assert.equal(await formPage.$eval('[data-model-setup-model="vendor/model-a"] [data-model-setup-limits]', node => node.textContent), '32K context · Text only')
+    assert.equal(await formPage.$eval('[data-model-setup-field="defaultModel"]', select => select.value), 'vendor/model-b')
+
+    await formPage.click('button::-p-text(Test connection)')
+    await formPage.waitForFunction(() => document.querySelector('[data-model-setup-feedback="test"]')?.textContent?.includes('Connected.'))
+    assert.deepEqual(providerTestRequests, [{
+      providerKey: 'openrouter',
+      providerType: 'openai-completions',
+      baseUrl: 'https://openrouter.ai/api/v1',
+      apiKey: 'sk-or-test',
+      models: 'vendor/model-b\nvendor/model-a',
+      testModel: 'vendor/model-b',
+    }])
+    await setupScreenshot(formPage, '02-first-run-models-form-tested.png')
+
+    await formPage.click('button::-p-text(Save models)')
+    await formPage.waitForFunction(() => document.querySelector('[data-save-feedback="models"]')?.textContent === 'Models saved.')
+    assert.deepEqual(modelsSaveRequests, [{
+      yaml: 'default: "openrouter/vendor/model-b"\nproviders:\n  openrouter:\n    providerType: "openai-completions"\n    baseUrl: "https://openrouter.ai/api/v1"\n    apiKey: "sk-or-test"\n    models:\n      - id: "vendor/model-b"\n        contextLimit: 262144\n        maxOutput: 65536\n      - id: "vendor/model-a"\n        contextLimit: 32768\n        imageInput: false\n',
+    }])
+    await setupScreenshot(formPage, '03-first-run-models-saved.png')
+    // The saved file is representable, so the form remains the view after the status refresh.
+    assert.equal(await formPage.$eval('[data-models-view="form"]', button => button.getAttribute('aria-pressed')), 'true')
+    assert.equal(await formPage.$eval('[data-model-setup-field="service"]', select => select.value), 'openrouter')
+  } finally {
+    await formPage.close()
+  }
+})
+
+test('an existing configuration opens in the form only when the form can keep all of it', async () => {
+  // One page at a time: a background page does not run animation frames, which WebUI readiness waits for.
+  const simplePage = await browser.newPage()
+  let complexPage = null
+  await simplePage.setViewport({ width: 1280, height: 800 })
+  await attachRequestMocks(simplePage, { modelsRawYaml: 'default: local/m\nproviders:\n  local:\n    providerType: openai-completions\n    baseUrl: http://127.0.0.1:11434/v1\n    models: [m, n]\n' })
+  try {
+    await simplePage.goto(`${productionBaseUrl}/#setup`, { waitUntil: 'networkidle2' })
+    await waitForWebUiReady(simplePage)
+    await simplePage.waitForSelector('[data-setup-tab="appearance"][aria-selected="true"]')
+    await simplePage.click('[data-setup-tab="models"]')
+    await simplePage.waitForSelector('[data-model-setup-form]', { visible: true })
+    assert.equal(await simplePage.$eval('[data-model-setup-field="service"]', select => select.value), 'custom')
+    assert.equal(await simplePage.$eval('[data-model-setup-field="baseUrl"]', input => input.value), 'http://127.0.0.1:11434/v1')
+    assert.deepEqual(await simplePage.$$eval('[data-model-setup-model]', items => items.map(item => item.getAttribute('data-model-setup-model'))), ['m', 'n'])
+    assert.equal(await simplePage.$eval('[data-model-setup-field="defaultModel"]', select => select.value), 'm')
+    await simplePage.close()
+
+    complexPage = await browser.newPage()
+    await complexPage.setViewport({ width: 1280, height: 800 })
+    await attachRequestMocks(complexPage)
+
+    await complexPage.goto(`${productionBaseUrl}/#setup`, { waitUntil: 'networkidle2' })
+    await waitForWebUiReady(complexPage)
+    await complexPage.click('[data-setup-tab="models"]')
+    await complexPage.waitForSelector('[data-models-view="yaml"][aria-pressed="true"]')
+    assert.equal(await complexPage.$('[data-model-setup-form]'), null)
+    await complexPage.click('[data-models-view="form"]')
+    await complexPage.waitForSelector('[data-models-form-unavailable]', { visible: true })
+    assert.match(await complexPage.$eval('[data-models-form-unavailable]', node => node.textContent), /Edit it in YAML so nothing is lost/)
+    assert.equal(await complexPage.$('button::-p-text(Start over with the form)'), null, 'a saved configuration is never replaced from here')
+    assert.equal(await complexPage.$eval('button::-p-text(Save models)', button => button.disabled), true)
+    await setupScreenshot(complexPage, '04-existing-complex-config-stays-in-yaml.png')
+    await complexPage.click('button::-p-text(Edit in YAML)')
+    await complexPage.waitForSelector('[data-models-view="yaml"][aria-pressed="true"]')
+  } finally {
+    if (!simplePage.isClosed()) await simplePage.close()
+    await complexPage?.close()
   }
 })
 

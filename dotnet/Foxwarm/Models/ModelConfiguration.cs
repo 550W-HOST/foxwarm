@@ -299,13 +299,7 @@ internal sealed partial class ModelConfiguration
                     ?? "openai-completions";
                 var virtualModel = type is "session-hash" or "failover";
                 var secret = SessionWait.Text(config["apiKey"]) ?? "";
-                if (
-                    System.Text.RegularExpressions.Regex.IsMatch(
-                        secret.Trim(),
-                        "^(your-|sk-\\.\\.\\.|changeme|replace-me)$",
-                        System.Text.RegularExpressions.RegexOptions.IgnoreCase
-                    )
-                )
+                if (!virtualModel && ModelApiKeys.IsPlaceholder(secret))
                     placeholder.Add(key);
                 var members =
                     config["models"] as JsonArray

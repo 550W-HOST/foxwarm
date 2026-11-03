@@ -9,7 +9,22 @@ internal static class ProviderImageParts
 {
     private sealed record Dimensions(int Width, int Height);
 
+    private sealed class OmittedMarker { }
+
     private static readonly ConditionalWeakTable<JsonObject, Dimensions> SentDimensions = new();
+    private static readonly ConditionalWeakTable<JsonObject, OmittedMarker> Omitted = new();
+
+    internal const string UnsupportedInputText =
+        "The current model does not support image input; this image was not sent.";
+
+    // Request-local only: hydration marks a cloned part for a text-only concrete target.
+    internal static void MarkUnsupported(JsonObject part)
+    {
+        part.Remove("inlineData");
+        Omitted.GetValue(part, _ => new OmittedMarker());
+    }
+
+    internal static bool IsUnsupported(JsonObject part) => Omitted.TryGetValue(part, out _);
 
     internal static void SetSentDimensions(JsonObject part, int? width, int? height)
     {
@@ -20,7 +35,8 @@ internal static class ProviderImageParts
     internal static bool IsImage(JsonObject part) =>
         part["inlineData"] is JsonObject
         || part["inlineDataRef"] is JsonObject
-        || Foxwarm.Images.ProviderImageDedup.IsDeduplicated(part);
+        || Foxwarm.Images.ProviderImageDedup.IsDeduplicated(part)
+        || IsUnsupported(part);
 
     internal static JsonObject? Block(JsonObject part, string protocol)
     {
@@ -29,6 +45,7 @@ internal static class ProviderImageParts
             if (
                 part["inlineDataRef"] is not null
                 && !Foxwarm.Images.ProviderImageDedup.IsDeduplicated(part)
+                && !IsUnsupported(part)
             )
                 throw new ModelPreparationException(
                     "Image reference was not hydrated before provider serialization."
@@ -71,7 +88,8 @@ internal static class ProviderImageParts
             return;
         var image = Block(part, protocol);
         var duplicate = Foxwarm.Images.ProviderImageDedup.IsDeduplicated(part);
-        if (image is null && !duplicate)
+        var unsupported = IsUnsupported(part);
+        if (image is null && !duplicate && !unsupported)
             return;
         var metadata = part["imageMeta"] as JsonObject;
         var reference = part["inlineDataRef"] as JsonObject;
@@ -123,7 +141,9 @@ internal static class ProviderImageParts
                 }
             );
         }
-        if (duplicate)
+        if (unsupported)
+            blocks.Add(new JsonObject { ["type"] = textType, ["text"] = UnsupportedInputText });
+        else if (duplicate)
             blocks.Add(
                 new JsonObject
                 {

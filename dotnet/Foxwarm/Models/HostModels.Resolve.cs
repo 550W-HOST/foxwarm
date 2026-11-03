@@ -80,6 +80,11 @@ internal sealed partial class HostModels
             ?? Text(defaults, "providerImageOutputFormat")
             ?? Text(llm, "providerImageOutputFormat")
             ?? "webp";
+        config["imageInput"] =
+            model?["imageInput"]?.DeepClone()
+            ?? provider["imageInput"]?.DeepClone()
+            ?? defaults["imageInput"]?.DeepClone()
+            ?? JsonValue.Create(true);
         foreach (var scope in new[] { provider, model })
             if (
                 scope?.ContainsKey("keepReasoningOnError") == true
@@ -179,12 +184,21 @@ internal sealed partial class HostModels
     internal static void ValidateDefaults(
         JsonObject scope,
         string label,
-        bool rejectUnknown = false
+        bool rejectUnknown = false,
+        bool modelsScope = true
     )
     {
         if (rejectUnknown)
             foreach (var field in scope.Select(pair => pair.Key))
-                if (field is not ("contextLimit" or "maxOutput" or "providerImageOutputFormat"))
+                if (
+                    field
+                    is not (
+                        "contextLimit"
+                        or "maxOutput"
+                        or "providerImageOutputFormat"
+                        or "imageInput"
+                    )
+                )
                     throw new InvalidDataException(label + " has unsupported field " + field + ".");
         foreach (var field in new[] { "contextLimit", "maxOutput" })
             if (scope.ContainsKey(field))
@@ -202,6 +216,13 @@ internal sealed partial class HostModels
             throw new InvalidDataException(
                 label + ".providerImageOutputFormat must be webp or jpeg."
             );
+        // imageInput is a models.yaml capability; the legacy app llm block does not supply it.
+        if (
+            modelsScope
+            && scope.ContainsKey("imageInput")
+            && (scope["imageInput"] is not JsonValue flag || !flag.TryGetValue<bool>(out _))
+        )
+            throw new InvalidDataException(label + ".imageInput must be boolean.");
     }
 
     private static JsonObject Map(JsonNode? node, string label) =>

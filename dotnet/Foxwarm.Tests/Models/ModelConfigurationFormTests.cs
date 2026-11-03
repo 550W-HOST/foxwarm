@@ -8,6 +8,18 @@ namespace Foxwarm.Tests;
 
 public sealed class ModelConfigurationFormTests
 {
+    // These forms omit provider keys on purpose; the legacy app-level key keeps them usable for
+    // first-run installation, which rejects keyless configurations of hosted endpoints.
+    private static ModelConfiguration KeyedConfiguration(TempDirectory temp)
+    {
+        Directory.CreateDirectory(Path.Combine(temp.Path, "state"));
+        File.WriteAllText(
+            Path.Combine(temp.Path, "state", "config.yaml"),
+            "llm:\n  openaiApiKey: synthetic-fallback-key\n"
+        );
+        return new ModelConfiguration(HostPaths.ForDataRoot(temp.Path, environment: _ => null));
+    }
+
     [Theory]
     [InlineData(
         "{\"providers\":[{\"id\":\" chosen \",\"providerKey\":\"other\",\"provider\":\"third\",\"models\":\"wire\"}]}",
@@ -34,9 +46,7 @@ public sealed class ModelConfigurationFormTests
     )
     {
         using var temp = new TempDirectory();
-        var configuration = new ModelConfiguration(
-            HostPaths.ForDataRoot(temp.Path, environment: _ => null)
-        );
+        var configuration = KeyedConfiguration(temp);
         var receipt = await configuration.SaveAsync(JsonNode.Parse(raw)!.AsObject());
         Assert.True(receipt["saved"]!.GetValue<bool>());
         var saved = ConfigurationYaml.Parse(
@@ -58,9 +68,7 @@ public sealed class ModelConfigurationFormTests
     )
     {
         using var temp = new TempDirectory();
-        var configuration = new ModelConfiguration(
-            HostPaths.ForDataRoot(temp.Path, environment: _ => null)
-        );
+        var configuration = KeyedConfiguration(temp);
         var form = JsonNode.Parse(raw)!.AsObject();
         form["providers"] = JsonNode.Parse(
             """
@@ -81,9 +89,7 @@ public sealed class ModelConfigurationFormTests
     public async Task Single_provider_normalization_clears_omitted_connection_fields_like_TypeScript()
     {
         using var temp = new TempDirectory();
-        var configuration = new ModelConfiguration(
-            HostPaths.ForDataRoot(temp.Path, environment: _ => null)
-        );
+        var configuration = KeyedConfiguration(temp);
         await configuration.SaveAsync(
             new JsonObject
             {
@@ -113,9 +119,7 @@ public sealed class ModelConfigurationFormTests
     )
     {
         using var temp = new TempDirectory();
-        var configuration = new ModelConfiguration(
-            HostPaths.ForDataRoot(temp.Path, environment: _ => null)
-        );
+        var configuration = KeyedConfiguration(temp);
         await configuration.SaveAsync(
             new JsonObject
             {
@@ -174,9 +178,7 @@ public sealed class ModelConfigurationFormTests
                 )
         );
         using var temp = new TempDirectory();
-        var configuration = new ModelConfiguration(
-            HostPaths.ForDataRoot(temp.Path, environment: _ => null)
-        );
+        var configuration = KeyedConfiguration(temp);
         var initial = new JsonObject
         {
             ["default"] = "a/wire-a",

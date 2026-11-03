@@ -11,6 +11,7 @@
     "test:setup-models": "node --test test/setupModels.test.mjs",
     "test:config-editor": "node --test test/configEditor.test.mjs",
     "test:model-options": "node --test test/modelOptionsLoader.test.mjs",
+    "test:image-input": "node --test test/imageInputSupport.test.mjs",
     "test:model-filter": "node --test test/modelFilter.test.mjs",
     "test:launcher-draft": "node --test test/launcherDraft.test.mjs",
     "test:setup-models-e2e": "node --test test/setupModels.e2e.mjs",

@@ -10,11 +10,16 @@ export function getSessionNotice(message: Message): SessionNotice | null {
   const retry = message.__meta.retry
   const final = retry?.final === true
   const details = message.parts.map(part => part.text).join('\n').slice(0, 32768)
+  // A final key, access or model-ID rejection names its cause and leads to model settings.
+  const explanation = final && typeof retry?.cause === 'string' && typeof retry?.explanation === 'string' && retry.explanation.trim()
+    ? retry.explanation.trim().slice(0, 240)
+    : null
   return {
     version: 1, id: `retry:${message.__meta.seq || message.__meta.timestamp || 'legacy'}`,
     source: 'model-request', severity: final ? 'error' : 'warning', title: final ? 'Request failed' : 'Request retry',
-    summary: final ? 'The model request did not complete.' : 'A model request attempt failed.',
+    summary: explanation ? `${explanation} Check the model settings.` : final ? 'The model request did not complete.' : 'A model request attempt failed.',
     ...(details ? { details } : {}),
+    ...(explanation ? { action: 'open-model-settings' as const } : {}),
   }
 }
 

@@ -268,6 +268,37 @@ public sealed partial class RuntimePresentationTests
     }
 
     [Fact]
+    public async Task Terminal_configuration_retry_notice_names_the_cause_and_Setup()
+    {
+        var owner = Owner(new InMemorySessionAuthorityStore());
+        var notice = new ModelRetryNotice(owner);
+        await notice.NotifyAsync(
+            new ModelRetryEvent(
+                1,
+                6,
+                "http-error",
+                "Incorrect API key provided.",
+                "openai/m",
+                null,
+                "401",
+                Final: true,
+                Cause: "authentication",
+                Explanation: "The openai provider rejected the API key."
+            )
+        );
+        var row = Assert.Single(owner.History());
+        Assert.Equal(
+            "⚠️ LLM Error: The openai provider rejected the API key. Check Setup → Models.\nProvider response: 401: Incorrect API key provided.",
+            row["parts"]![0]!["text"]!.GetValue<string>()
+        );
+        Assert.Equal("authentication", row["__meta"]!["retry"]!["cause"]!.GetValue<string>());
+        Assert.Equal(
+            "The openai provider rejected the API key.",
+            row["__meta"]!["retry"]!["explanation"]!.GetValue<string>()
+        );
+    }
+
+    [Fact]
     public void Argument_previews_follow_resolved_arguments_and_remain_bounded()
     {
         Assert.Equal(

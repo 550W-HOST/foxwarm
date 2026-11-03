@@ -3,7 +3,8 @@ import ContextMenu, {type ContextMenuAnchorRect} from './ContextMenu'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Bot, CheckCircle2, Palette, RefreshCw, Settings, SlidersHorizontal, XCircle } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
-import { buildModelsYaml, makeDefaultProvider } from '../setupModels'
+import { buildModelSetupYaml, defaultModelsYaml, formFromPreset, readModelSetupForm, validateModelSetupForm, type ModelSetupForm } from '../setupModels'
+import ModelSetupFormPanel from './ModelSetupFormPanel'
 import { refreshModelOptions } from '../modelOptionsLoader'
 import { APP_CONFIG_YAML_MODEL_URI, MODELS_YAML_MODEL_URI } from '../yamlConfigSchemas'
 import ContentHeader from './ContentHeader'
@@ -60,7 +61,7 @@ interface SetupViewProps {
   onTabIconChange?: (tabIcon: string) => Promise<void> | void
 }
 
-const DEFAULT_MODELS_YAML = buildModelsYaml([makeDefaultProvider(0)], 'openai/gpt-5.6-sol')
+const DEFAULT_MODELS_YAML = defaultModelsYaml()
 
 const DEFAULT_CONFIG_YAML = `# Foxwarm settings.
 # bot:
@@ -95,6 +96,7 @@ function StatusPill({ ok, label }: { ok: boolean; label: string }) {
 
 type SaveResult = { kind: 'success' | 'error'; message: string }
 type SetupTab = 'appearance' | 'models' | 'config'
+type ModelsView = 'form' | 'yaml'
 const SETUP_TABS: SetupTab[] = ['appearance', 'models', 'config']
 
 function SaveFeedback({ section, result }: { section: 'models' | 'config'; result: SaveResult | null }) {
@@ -124,7 +126,8 @@ function normalizeWeixinQrPayload(value: string): { imageSrc: string | null; raw
 
 export default function SetupView({ mobileHome = false, forced = false, onClose, onSetupChanged, focusModelsRequest = 0, onFocusModelsRequestHandled, webUiSettings, onInstanceNameChange, onTabIconChange }: SetupViewProps) {
   const tabHeader = useWorkbenchTabHeader()
-  const [activeTab, setActiveTab] = useState<SetupTab>('appearance')
+  // First-run Setup exists to add a model, so it starts on Models; ordinary Setup starts on Appearance.
+  const [activeTab, setActiveTab] = useState<SetupTab>(forced ? 'models' : 'appearance')
   const [mobileOptions, setMobileOptions] = useState<ContextMenuAnchorRect | null>(null)
   const mobileOptionsRef = useRef<HTMLButtonElement>(null)
 
@@ -140,6 +143,10 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
     return () => observer.disconnect()
   }, [])
   const [modelsEditorFocusRequest, setModelsEditorFocusRequest] = useState(0)
+  const [modelsFormFocusRequest, setModelsFormFocusRequest] = useState(0)
+  const [modelsView, setModelsView] = useState<ModelsView>('form')
+  const modelsViewRef = useRef<ModelsView>('form')
+  modelsViewRef.current = modelsView
   const [status, setStatus] = useState<SetupStatus | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -170,6 +177,7 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
 
   rawModelsYamlRef.current = rawModelsYaml
   configYamlRef.current = configYaml
+  const modelsReading = useMemo(() => readModelSetupForm(rawModelsYaml), [rawModelsYaml])
 
   const modelConfigured = !!status?.models.exists
   const channelAvailable = (status?.channels || []).some((channel) => channel.running) || true // WebUI itself is available when this page is open.
@@ -231,6 +239,8 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
       setStatus(data)
       if (hydrateModels && modelsRevisionRef.current === expectedModelsRevision && typeof data?.models?.rawYaml === 'string' && data.models.rawYaml.trim()) {
         updateModelsYaml(data.models.rawYaml)
+        // The form is only offered for files it can write back without losing anything.
+        if (!readModelSetupForm(data.models.rawYaml).ok) setModelsView('yaml')
       }
       if (hydrateConfig && configRevisionRef.current === expectedConfigRevision) {
         if (typeof data?.config?.rawYaml === 'string') {
@@ -257,12 +267,18 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
   }, [focusModelsRequest])
 
   useEffect(() => {
-    if (focusModelsRequest <= 0 || activeTab !== 'models') return
+    if (forced) setActiveTab('models')
+  }, [forced])
+
+  useEffect(() => {
+    // Wait for the saved configuration: it decides whether the form or the YAML editor receives focus.
+    if (focusModelsRequest <= 0 || activeTab !== 'models' || !status) return
     // The owner clears this one-shot request after it is consumed, so a later remount or ordinary Setup activation cannot replay it.
     onFocusModelsRequestHandled?.(focusModelsRequest)
-    setModelsEditorFocusRequest((current) => current + 1)
+    if (modelsViewRef.current === 'form') setModelsFormFocusRequest((current) => current + 1)
+    else setModelsEditorFocusRequest((current) => current + 1)
     requestAnimationFrame(() => modelsSectionRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' }))
-  }, [activeTab, focusModelsRequest, onFocusModelsRequestHandled])
+  }, [activeTab, focusModelsRequest, onFocusModelsRequestHandled, status])
 
   const activateTab = (tab: SetupTab, focus = false) => {
     setActiveTab(tab)
@@ -287,6 +303,16 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
     const saveGeneration = ++modelsSaveGenerationRef.current
     const submittedRevision = modelsRevisionRef.current
     const submittedYaml = rawModelsYamlRef.current
+    if (modelsViewRef.current === 'form') {
+      const reading = readModelSetupForm(submittedYaml)
+      const problem = reading.ok ? validateModelSetupForm(reading.form) : null
+      if (problem) {
+        savingModelsRef.current = false
+        modelsSaveGenerationRef.current += 1
+        setModelsSaveResult({ kind: 'error', message: problem })
+        return
+      }
+    }
     setSavingModels(true)
     setModelsSaveResult(null)
     setError(null)
@@ -302,7 +328,13 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
       if (saveGeneration !== modelsSaveGenerationRef.current) return
       const submissionIsCurrent = modelsRevisionRef.current === submittedRevision && rawModelsYamlRef.current === submittedYaml
       if (submissionIsCurrent) {
-        setModelsSaveResult({ kind: 'success', message: 'Models saved.' })
+        const placeholders = Array.isArray(data.models?.placeholderProviders) ? data.models.placeholderProviders.filter((item: unknown): item is string => typeof item === 'string') : []
+        setModelsSaveResult({
+          kind: 'success',
+          message: placeholders.length > 0
+            ? `Models saved. Replace the placeholder API key for ${placeholders.join(', ')}.`
+            : 'Models saved.',
+        })
       }
       await loadStatus({ clearSaveResults: false, hydrateConfig: false, expectedModelsRevision: submittedRevision })
       onSetupChanged?.()
@@ -548,13 +580,58 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
             </section>
 
             <section ref={modelsSectionRef} id="setup-panel-models" role="tabpanel" aria-labelledby="setup-tab-models" data-setup-section="models" hidden={activeTab !== 'models'} className={`${activeTab === 'models' ? 'flex' : 'hidden'} min-h-0 flex-1 flex-col overflow-y-auto scroll-mt-4 p-4 md:p-5`}>
-              <div className="foxwarm-setup-editor-section">
-                <div className="shrink-0">
-                  <h2 className="text-base font-semibold text-fw-text-strong">Model settings</h2>
-                  <p className="mt-1 text-sm text-fw-text">Configure model providers, routing, and your default model in YAML.</p>
+              <div className={modelsView === 'yaml' ? 'foxwarm-setup-editor-section' : 'flex flex-col'}>
+                <div className="flex shrink-0 flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <h2 className="text-base font-semibold text-fw-text-strong">Model settings</h2>
+                    <p className="mt-1 text-sm text-fw-text">{modelsView === 'form'
+                      ? 'Connect the service that runs your models.'
+                      : 'Configure model providers, routing, and your default model in YAML.'}</p>
+                  </div>
+                  <div role="group" aria-label="Model settings view" className="inline-flex shrink-0 rounded-lg border border-fw-border p-0.5 dark:border-fw-border">
+                    {(['form', 'yaml'] as const).map((view) => (
+                      <button
+                        key={view}
+                        type="button"
+                        aria-pressed={modelsView === view}
+                        data-models-view={view}
+                        onClick={() => {
+                          setModelsView(view)
+                          setModelsSaveResult(null)
+                        }}
+                        className={`rounded-md px-3 py-1 text-sm font-medium ${modelsView === view ? 'bg-fw-accent-surface text-fw-accent dark:bg-fw-accent-surface' : 'text-fw-text hover:bg-fw-hover'}`}
+                      >
+                        {view === 'form' ? 'Form' : 'YAML'}
+                      </button>
+                    ))}
+                  </div>
                 </div>
 
-                <div className="mt-4 min-h-72 flex-1" onKeyDownCapture={(event) => handleEditorSaveShortcut(event, 'models')}>
+                {modelsView === 'form' && (
+                  <div className="mt-5" onKeyDownCapture={(event) => handleEditorSaveShortcut(event, 'models')}>
+                    {modelsReading.ok ? (
+                      <ModelSetupFormPanel
+                        form={modelsReading.form}
+                        focusRequest={modelsFormFocusRequest}
+                        onChange={(next: ModelSetupForm) => updateModelsYaml(buildModelSetupYaml(next))}
+                      />
+                    ) : (
+                      <div data-models-form-unavailable className="max-w-2xl rounded-lg border border-fw-border-muted bg-fw-surface-sunken/40 p-4 text-sm text-fw-text">
+                        <p>{modelsReading.reason === 'invalid'
+                          ? 'The YAML has an error, so the form can’t show it. Fix it in YAML.'
+                          : 'This configuration uses settings the form can’t show, such as comments, several providers, aliases, failover or other model options. Edit it in YAML so nothing is lost.'}</p>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <button type="button" onClick={() => setModelsView('yaml')} className="rounded-lg bg-fw-accent px-3 py-1.5 text-sm font-medium text-fw-accent-text hover:bg-fw-accent">Edit in YAML</button>
+                          {!modelConfigured && (
+                            <button type="button" onClick={() => updateModelsYaml(buildModelSetupYaml(formFromPreset('openai')))} className="rounded-lg border border-fw-border px-3 py-1.5 text-sm font-medium text-fw-text hover:bg-fw-hover">Start over with the form</button>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div className={`${modelsView === 'yaml' ? '' : 'hidden'} mt-4 min-h-72 flex-1`} onKeyDownCapture={(event) => handleEditorSaveShortcut(event, 'models')}>
                   <SimpleCodeEditor
                     value={rawModelsYaml}
                     onChange={updateModelsYaml}
@@ -567,7 +644,7 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
                 </div>
 
                 <div className="mt-4 flex shrink-0 flex-wrap items-center gap-2">
-                  <button disabled={savingModels} onClick={() => void saveModels()} className="rounded-lg bg-fw-accent px-4 py-2 text-sm font-medium text-fw-accent-text hover:bg-fw-accent disabled:opacity-60">{savingModels ? 'Saving…' : 'Save models'}</button>
+                  <button disabled={savingModels || (modelsView === 'form' && !modelsReading.ok)} onClick={() => void saveModels()} className="rounded-lg bg-fw-accent px-4 py-2 text-sm font-medium text-fw-accent-text hover:bg-fw-accent disabled:opacity-60">{savingModels ? 'Saving…' : 'Save models'}</button>
                   <SaveFeedback section="models" result={modelsSaveResult} />
                   {forced && !canLeave && <span className="text-sm text-fw-warning dark:text-fw-warning">Save a valid model configuration to continue.</span>}
                 </div>

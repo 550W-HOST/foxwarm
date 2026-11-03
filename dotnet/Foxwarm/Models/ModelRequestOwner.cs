@@ -352,7 +352,8 @@ internal sealed class ModelRequestOwner(
                             outputFormat: leaf.ProviderImageOutputFormat,
                             token: cancellationToken,
                             concreteModelId: leaf.Key,
-                            compatibility: options.HistoryCompatibility
+                            compatibility: options.HistoryCompatibility,
+                            imageInput: leaf.ImageInput
                         );
                     }
                     catch (Foxwarm.Images.ImageInputException error)
@@ -525,15 +526,29 @@ internal sealed class ModelRequestOwner(
                         result?.FinalizeHistory(null, warning);
                 }
                 cancellationToken.ThrowIfCancellationRequested();
-                var terminalTarget =
-                    failure.Countable
-                    && request is not null
-                    && selection is not null
-                    && routing.Failed(request, selection).Terminal;
-                var final = !failure.Retryable || terminalTarget || attempt == maxAttempts;
+                // Key, access and model-ID rejections do not improve by repeating the same
+                // target. A failover route moves to its next target; otherwise the turn ends.
+                var cause =
+                    failure.Cause == "authentication" && leaf.Token.Length == 0
+                        ? "missing-api-key"
+                        : failure.Cause;
+                var routed =
+                    failure.Countable && request is not null && selection is not null
+                        ? routing.Failed(request, selection, cause is not null)
+                        : null;
+                var terminalTarget = routed?.Terminal == true;
+                var failsOver = routed is { Terminal: false, EnteredCooldown: true };
+                var final =
+                    !failure.Retryable
+                    || terminalTarget
+                    || attempt == maxAttempts
+                    || cause is not null && !failsOver;
                 var reason = ModelAttemptFailure.Summary(
                     ConfiguredModelRequests.SafeReason(failure.Message, leaf)
                 );
+                var explanation = cause is null
+                    ? null
+                    : ModelAttemptFailure.ConfigurationExplanation(cause, leaf);
                 var value = new ModelRetryEvent(
                     attempt,
                     maxAttempts,
@@ -544,7 +559,9 @@ internal sealed class ModelRequestOwner(
                     failure.Status,
                     final ? null : attempt + 1,
                     final ? null : RetryDelay(attempt),
-                    final
+                    final,
+                    cause,
+                    explanation
                 );
                 var delivered = false;
                 if (retry is not null)
@@ -566,7 +583,8 @@ internal sealed class ModelRequestOwner(
                 cancellationToken.ThrowIfCancellationRequested();
                 if (final)
                     throw new ModelRequestException(
-                        $"API request failed after {attempt} attempts: {reason}",
+                        value.ConfigurationMessage()
+                            ?? $"API request failed after {attempt} attempts: {reason}",
                         value,
                         scope
                     )

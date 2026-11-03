@@ -348,6 +348,7 @@ internal static class WebUiContract
                                 ["label"] = model.Key,
                                 ["isDefault"] = model.Key == config.DefaultKey,
                                 ["contextLimit"] = model.ContextLimit,
+                                ["imageInput"] = model.ImageInput,
                                 ["providerKey"] = model.ProviderKey,
                                 ["modelId"] = model.ModelId,
                                 ["providerType"] = model.ProviderType,

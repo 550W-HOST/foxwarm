@@ -35,7 +35,9 @@ When the installer finishes, it starts Foxwarm and prints a sign-in link such as
 
 ## 2. Add a model
 
-Open the sign-in link. On a new installation, Foxwarm opens **Setup → Models**. Paste a provider configuration, for example:
+Open the sign-in link. On a new installation, Foxwarm opens **Setup → Models**. Choose your service, paste your API key, pick a model (**Load models** lists what the service offers) and select **Test connection**. Then save and start chatting.
+
+Prefer YAML? Switch the Models view to **YAML** and paste a provider configuration, for example:
 
 ```yaml
 default: my-provider/my-model
@@ -48,7 +50,7 @@ providers:
       - my-model
 ```
 
-Save, then start chatting. Saving checks the configuration but does not call the provider; your first message is the live test. [Set up your first model](/docs/model-setup/) explains each field.
+[Set up your first model](/docs/model-setup/) explains each field.
 
 ## 3. Give an agent a task
 
