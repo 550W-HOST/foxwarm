@@ -36,7 +36,7 @@ The installers choose the smaller package when `dotnet --list-runtimes` shows `M
 
 | | Linux x64 / WSL | Windows x64 |
 | --- | --- | --- |
-| tmux, for background start | ✓ | — |
+| tmux, for an attachable console | optional | — |
 | curl or wget, tar, sha256sum | ✓ | — |
 | ICU and OpenSSL libraries (present on most systems) | ✓ | — |
 | ASP.NET Core 10 runtime | only for the smaller package | only for the smaller package |
@@ -111,7 +111,7 @@ The installer places `foxwarmctl` in the program directory:
 | Watch the console | `./foxwarm/foxwarmctl attach` | logs under `state\logs` |
 | Run in the foreground | `./foxwarm/foxwarmctl run` | `.\foxwarm\foxwarmctl.cmd run` |
 
-On Linux, Foxwarm runs in the tmux session `foxwarm` (`FOXWARM_TMUX_SESSION` changes the name); detach with <kbd>Ctrl</kbd>+<kbd>b</kbd>, then <kbd>d</kbd>. Stop waits up to 60 seconds for running work to finish, then ends the process.
+On Linux and macOS, start uses the tmux session `foxwarm` when tmux is available (`FOXWARM_TMUX_SESSION` changes the name); detach with <kbd>Ctrl</kbd>+<kbd>b</kbd>, then <kbd>d</kbd>. Without tmux, Foxwarm starts as a detached background process and keeps running when the terminal or SSH connection closes. `attach` then shows the paths of `state/logs/foxwarm.stdout.log` and `foxwarm.stderr.log` in the data directory. `status` reports the PID and launch mode. Both modes keep a `foxwarm.pid` file in the program directory; stale PID files are ignored. Stop waits up to 60 seconds for running work to finish, then ends the process.
 
 `update` downloads and checks the new release while the old one keeps running, then stops Foxwarm, switches to the new release, starts it again if it was running and removes the old release. `update 0.9.1` installs a specific version. Rerunning the installer on an existing installation does the same. See [data, updates, and backups](/docs/data-upgrades-backups/) before upgrading important data.
 

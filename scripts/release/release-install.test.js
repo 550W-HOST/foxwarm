@@ -11,7 +11,8 @@ const { spawnSync } = require('node:child_process');
 
 const repo = path.resolve(__dirname, '../..');
 const hasTmux = spawnSync('tmux', ['-V']).status === 0;
-const linux = { skip: (process.platform !== 'linux' && 'Linux packages') || (!hasTmux && 'tmux is not installed') };
+const unix = { skip: process.platform !== 'linux' && 'Linux fixture process checks' };
+const linux = { skip: unix.skip || (!hasTmux && 'tmux is not installed') };
 
 // The fixture Main reads its installation root, records its PID and token, and stops on
 // SIGTERM unless the installation contains `fake-ignore-term`.
@@ -26,13 +27,19 @@ data="$(cat "$root/data_dir")"
 mkdir -p "$data/state"
 printf fixture-token > "$data/state/token"
 echo $$ > "$root/main.pid"
+echo "fixture stdout $$"
+echo "fixture stderr $$" >&2
 [ -e "$root/fake-ignore-term" ] && trap '' TERM || trap 'exit 0' TERM
 while :; do sleep 0.1; done
 `;
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxwarm release '));
+  const installations = new Set();
   t.after(() => {
+    for (const dir of installations) {
+      if (fs.existsSync(path.join(dir, 'foxwarmctl'))) control(dir, 'stop');
+    }
     spawnSync('tmux', ['kill-server'], { env: { ...process.env, TMUX: '', TMUX_TMPDIR: root } });
     fs.rmSync(root, { recursive: true, force: true });
   });
@@ -61,6 +68,8 @@ function fixture(t) {
     return spawnSync(command, args, { cwd: root, env: { ...env, ...options.env }, encoding: 'utf8', timeout: 30000 });
   }
   function install(args, options) {
+    const dirIndex = args.indexOf('--dir');
+    installations.add(path.resolve(root, dirIndex === -1 ? 'foxwarm' : args[dirIndex + 1]));
     return run('/bin/bash', [path.join(repo, 'install-foxwarm.sh'), ...args], options);
   }
   function control(dir, ...args) {
@@ -70,7 +79,20 @@ function fixture(t) {
   function tmux(...args) {
     return ok(run('tmux', args)).stdout.trim();
   }
-  return { root, makePackage, install, control, run, tmux };
+  function withoutTmux({ checksum = 'sha256sum' } = {}) {
+    const bin = path.join(root, 'bin');
+    fs.mkdirSync(bin);
+    // Only the tools used by the control script and fixture Main, deliberately no tmux.
+    for (const name of ['awk', 'bash', 'basename', 'cat', 'cp', 'date', 'dirname', 'env',
+      'gzip', 'ln', 'mkdir', 'mktemp', 'mv', 'nohup', 'ps', 'rm', 'sed', 'sleep', 'tar', 'uname', checksum]) {
+      const executable = spawnSync('/bin/bash', ['-c', 'command -v "$1"', 'bash', name], { encoding: 'utf8' }).stdout.trim();
+      assert(executable, `${name} must be available for the fixture`);
+      fs.symlinkSync(executable, path.join(bin, name));
+    }
+    env.PATH = bin;
+    return bin;
+  }
+  return { root, makePackage, install, control, run, tmux, withoutTmux };
 }
 
 function waitFor(condition, ms = 5000) {
@@ -124,7 +146,7 @@ test('fresh install selects data, records it, and installs the control script', 
   const dir = path.join(f.root, 'foxwarm');
   assert.equal(fs.readFileSync(path.join(dir, 'data_dir'), 'utf8').trim(), fs.realpathSync(path.join(f.root, 'foxwarm-data')));
   assert.equal(fs.readlinkSync(path.join(dir, 'runtime/current')), '0.9.0');
-  assert.equal(fs.statSync(path.join(dir, 'foxwarmctl')).mode & 0o111, 0o111);
+  fs.accessSync(path.join(dir, 'foxwarmctl'), fs.constants.X_OK);
   assert.match(fs.readFileSync(path.join(dir, 'inspections'), 'utf8'), /inspected foxwarm-0.9.0-linux-x64/);
   assert.deepEqual(fs.readdirSync(path.join(dir, 'runtime')).sort(), ['0.9.0', 'current']);
 
@@ -157,7 +179,8 @@ test('update replaces a running release, restarts it and removes the old one', l
   ok(f.install(['--package', f.makePackage('0.9.0'), '--no-start']));
   ok(f.control(dir, 'start'));
   const first = Number(fs.readFileSync(path.join(dir, 'main.pid'), 'utf8'));
-  assert.match(ok(f.control(dir, 'status')).stdout, /Running \(PID \d+\), release 0\.9\.0/);
+  assert.match(ok(f.control(dir, 'status')).stdout, /Running \(PID \d+\), release 0\.9\.0.*Mode: tmux/);
+  assert.equal(fs.readFileSync(path.join(dir, 'foxwarm.pid'), 'utf8'), `${first}\n`);
 
   assert.match(ok(f.control(dir, 'update', '--package', f.makePackage('0.9.0'))).stdout, /already installed/);
   assert(alive(first));
@@ -179,6 +202,7 @@ test('update replaces a running release, restarts it and removes the old one', l
   assert.deepEqual(fs.readdirSync(path.join(dir, 'runtime')).sort(), ['0.9.1', 'current']);
   const stopped = ok(f.control(dir, 'stop'));
   assert(!alive(second), stoppedMessage(second, stopped));
+  assert(!fs.existsSync(path.join(dir, 'foxwarm.pid')));
   assert.equal(f.control(dir, 'status').status, 3);
 });
 
@@ -314,4 +338,141 @@ test('a Main started by the 0.9.0 control script is recognized and updated', lin
   assert(!alive(first), stoppedMessage(first, updated));
   assert(alive(mainPid(dir)));
   assert.match(ok(f.control(dir, 'status')).stdout, /release 0\.9\.1/);
+});
+
+test('without tmux, background Main survives launcher hangup and supports restart, update and stop', unix, t => {
+  const f = fixture(t);
+  const dir = path.join(f.root, 'foxwarm');
+  const next = f.makePackage('0.9.1');
+  ok(f.install(['--package', f.makePackage('0.9.0'), '--no-start']));
+  f.withoutTmux();
+  // End a separate launcher's session with SIGHUP, including its process group.
+  // Main has nohup's ignored HUP disposition and no descriptors tied to the launcher.
+  const launched = f.run('/usr/bin/python3', ['-c', `
+import os, signal, subprocess, sys
+os.setsid()
+subprocess.run([sys.argv[1], 'start'], check=True)
+os.killpg(os.getpgrp(), signal.SIGHUP)
+`, path.join(dir, 'foxwarmctl')]);
+  assert.equal(launched.signal, 'SIGHUP', launched.stderr);
+  const first = mainPid(dir);
+  assert(alive(first));
+  assert.equal(fs.readFileSync(path.join(dir, 'foxwarm.pid'), 'utf8'), `${first}\n`);
+  assert.match(ok(f.control(dir, 'status')).stdout, new RegExp(`Running \\(PID ${first}\\).*Mode: background`));
+  assert.match(f.control(dir, 'start').stderr, /already running/);
+  const logs = path.join(f.root, 'foxwarm-data/state/logs');
+  assert.match(ok(f.control(dir, 'attach')).stdout, /without tmux.*foxwarm.stdout.log.*foxwarm.stderr.log/);
+  assert.match(fs.readFileSync(path.join(logs, 'foxwarm.stdout.log'), 'utf8'), new RegExp(`stdout ${first}`));
+  assert.match(fs.readFileSync(path.join(logs, 'foxwarm.stderr.log'), 'utf8'), new RegExp(`stderr ${first}`));
+
+  ok(f.control(dir, 'restart'));
+  const second = mainPid(dir);
+  assert.notEqual(first, second);
+  assert(!alive(first) && alive(second));
+  const stdout = fs.readFileSync(path.join(logs, 'foxwarm.stdout.log'), 'utf8');
+  assert.match(stdout, new RegExp(`stdout ${first}`));
+  assert.match(stdout, new RegExp(`stdout ${second}`), 'Restart appends rather than replacing logs.');
+
+  fs.writeFileSync(path.join(dir, 'fake-block'), '');
+  assert.equal(f.control(dir, 'update', '--package', next).status, 1);
+  assert(alive(second));
+  fs.rmSync(path.join(dir, 'fake-block'));
+  ok(f.control(dir, 'update', '--package', next));
+  const third = mainPid(dir);
+  assert(!alive(second) && alive(third));
+  assert.notEqual(second, third);
+  assert.equal(fs.readFileSync(path.join(dir, 'foxwarm.pid'), 'utf8'), `${third}\n`);
+  assert.deepEqual(fs.readdirSync(path.join(dir, 'runtime')).sort(), ['0.9.1', 'current']);
+  ok(f.control(dir, 'stop'));
+  assert(!alive(third));
+  assert(!fs.existsSync(path.join(dir, 'foxwarm.pid')));
+  assert.equal(f.control(dir, 'status').status, 3);
+});
+
+test('stale background PID files never report or signal an unrelated live process', unix, t => {
+  const f = fixture(t);
+  const dir = path.join(f.root, 'foxwarm');
+  const next = f.makePackage('0.9.1');
+  ok(f.install(['--package', f.makePackage('0.9.0'), '--no-start']));
+  // A second installation has the first root as a prefix: suffix matching must be exact.
+  const other = `${dir}-other`;
+  ok(f.install(['--package', path.join(f.root, 'foxwarm-0.9.0.tar.gz'), '--dir', other, '--no-start']));
+  f.withoutTmux();
+  ok(f.control(other, 'start'));
+  const unrelated = mainPid(other);
+  const pidFile = path.join(dir, 'foxwarm.pid');
+  fs.writeFileSync(pidFile, `${unrelated}\n`);
+  assert.equal(f.control(dir, 'status').status, 3);
+  ok(f.control(dir, 'stop'));
+  assert(alive(unrelated));
+  ok(f.control(dir, 'update', '--package', next));
+  assert(alive(unrelated));
+  assert(!fs.existsSync(path.join(dir, 'main.pid')), 'An update with a stale PID does not start Main.');
+  ok(f.control(dir, 'restart'));
+  assert(alive(unrelated));
+  assert.notEqual(mainPid(dir), unrelated);
+  assert.equal(Number(fs.readFileSync(pidFile, 'utf8')), mainPid(dir));
+  ok(f.control(dir, 'stop'));
+  assert(alive(unrelated));
+});
+
+test('background crash and forced shutdown treat zombies as stopped', unix, t => {
+  const f = fixture(t);
+  const dir = path.join(f.root, 'foxwarm');
+  ok(f.install(['--package', f.makePackage('0.9.0', { stopSeconds: 1 }), '--no-start']));
+  f.withoutTmux();
+  ok(f.control(dir, 'start'));
+  const crashed = mainPid(dir);
+  process.kill(crashed, 'SIGKILL');
+  waitFor(() => !alive(crashed));
+  assert.equal(f.control(dir, 'status').status, 3);
+  assert.match(f.control(dir, 'attach').stderr, /foxwarm.stdout.log/);
+  fs.writeFileSync(path.join(dir, 'fake-ignore-term'), '');
+  ok(f.control(dir, 'start'));
+  const restarted = mainPid(dir);
+  assert.notEqual(restarted, crashed);
+  const stopped = ok(f.control(dir, 'stop'));
+  assert.match(stopped.stdout, /did not stop within 1 seconds; killing/);
+  assert(!alive(restarted));
+});
+
+test('background logs follow Main data-directory precedence and installation-relative paths', unix, t => {
+  const f = fixture(t);
+  const dir = path.join(f.root, 'foxwarm');
+  ok(f.install(['--package', f.makePackage('0.9.0'), '--no-start']));
+  f.withoutTmux();
+  fs.writeFileSync(path.join(dir, 'data_dir'), '  selected data  \n');
+  ok(f.control(dir, 'start'));
+  assert(fs.existsSync(path.join(dir, 'selected data/state/logs/foxwarm.stdout.log')));
+  ok(f.control(dir, 'stop'));
+  const selected = { env: { FOXWARM_DATA_DIR: '  ~/override  ', HOME: f.root } };
+  ok(f.run(path.join(dir, 'foxwarmctl'), ['start'], selected));
+  assert(fs.existsSync(path.join(f.root, 'override/state/logs/foxwarm.stdout.log')));
+  assert.match(ok(f.run(path.join(dir, 'foxwarmctl'), ['status'], selected)).stdout, /override\/state\/logs/);
+  ok(f.control(dir, 'stop'));
+});
+
+test('downloaded updates verify checksums with shasum when sha256sum is unavailable', unix, t => {
+  const f = fixture(t);
+  const dir = path.join(f.root, 'foxwarm');
+  const next = f.makePackage('0.9.1');
+  ok(f.install(['--package', f.makePackage('0.9.0'), '--no-start']));
+  const asset = 'foxwarm-linux-x64-self-contained.tar.gz';
+  const sum = require('node:crypto').createHash('sha256').update(fs.readFileSync(next)).digest('hex');
+  fs.writeFileSync(path.join(f.root, 'SHA256SUMS'), `${sum}  ${asset}\n`);
+  const bin = f.withoutTmux({ checksum: 'shasum' });
+  // Replace network transport only; the control script runs the real checksum tools.
+  fs.writeFileSync(path.join(bin, 'curl'), `#!/bin/bash
+case "$6" in
+  */SHA256SUMS) cp '${f.root}/SHA256SUMS' "$5" ;;
+  *) cp '${next}' "$5" ;;
+esac
+`, { mode: 0o755 });
+  ok(f.control(dir, 'update'));
+  assert.equal(fs.readlinkSync(path.join(dir, 'runtime/current')), '0.9.1');
+  fs.writeFileSync(path.join(f.root, 'SHA256SUMS'), `${'0'.repeat(64)}  ${asset}\n`);
+  const invalid = f.control(dir, 'update', '--force');
+  assert.equal(invalid.status, 1);
+  assert.match(invalid.stderr, /Checksum verification failed/);
+  assert.equal(fs.readlinkSync(path.join(dir, 'runtime/current')), '0.9.1');
 });

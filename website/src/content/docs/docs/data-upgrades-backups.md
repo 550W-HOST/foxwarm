@@ -50,6 +50,8 @@ Make a consistent backup before updating an important instance, then run from th
 
 `update` downloads the release for the same package type and verifies its checksum. The new release first checks the existing data while the old one keeps running; a blocking problem leaves the installed release unchanged. Foxwarm is then stopped (ended after 60 seconds if it has not exited), the new release is selected, Foxwarm starts again if it was running and the previous release is removed. Add a version, such as `update 0.9.1`, to install a specific release, or `--package FILE` (`-Package FILE` on Windows) to use a downloaded package. Rerunning the installer on an existing installation performs the same update and keeps its data directory.
 
+On Linux and macOS, these commands manage both tmux and detached background starts. The program directory's `foxwarm.pid` records Main's PID; a stale file does not make an unrelated process part of an update or stop. Use `status` to check the running PID and mode, or `attach` to open the tmux pane or see the background log paths.
+
 Existing TypeScript installations should use the [migration guide](/docs/typescript-migration/) for their first C# update.
 
 ## Update a source installation

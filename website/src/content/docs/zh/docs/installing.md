@@ -34,7 +34,7 @@ Foxwarm 服务器支持 **Linux x64**（包括 x64 WSL）和 **Windows x64**，�
 
 | | Linux x64 / WSL | Windows x64 |
 | --- | --- | --- |
-| tmux（后台运行） | ✓ | — |
+| tmux（可连接的控制台） | 可选 | — |
 | curl 或 wget、tar、sha256sum | ✓ | — |
 | ICU 和 OpenSSL 库（大多数系统已自带） | ✓ | — |
 | ASP.NET Core 10 运行时 | 仅较小的安装包需要 | 仅较小的安装包需要 |
@@ -109,7 +109,7 @@ http://localhost:3001/#token=...
 | 查看控制台 | `./foxwarm/foxwarmctl attach` | 日志在 `state\logs` |
 | 前台运行 | `./foxwarm/foxwarmctl run` | `.\foxwarm\foxwarmctl.cmd run` |
 
-在 Linux 上，Foxwarm 运行在 tmux 会话 `foxwarm` 中（可用 `FOXWARM_TMUX_SESSION` 改名）；按 <kbd>Ctrl</kbd>+<kbd>b</kbd> 再按 <kbd>d</kbd> 可以退出而不停止。停止时最多等待 60 秒让正在进行的工作结束，之后结束进程。
+在 Linux 和 macOS 上，安装了 tmux 时会在 tmux 会话 `foxwarm` 中启动（可用 `FOXWARM_TMUX_SESSION` 改名）；按 <kbd>Ctrl</kbd>+<kbd>b</kbd> 再按 <kbd>d</kbd> 可以退出而不停止。没有 tmux 时会自动在后台启动，关闭终端或 SSH 连接后继续运行。此时 `attach` 会显示数据目录下 `state/logs/foxwarm.stdout.log` 和 `foxwarm.stderr.log` 的路径。`status` 会报告 PID 和启动方式。两种方式都会在程序目录写入 `foxwarm.pid`，过期的 PID 文件会被忽略。停止时最多等待 60 秒让正在进行的工作结束，之后结束进程。
 
 `update` 会在旧版本继续运行时下载并检查新版本，然后停止 Foxwarm、切换到新版本、如果之前在运行就重新启动，并删除旧版本。`update 0.9.1` 安装指定版本。对已有安装重新运行安装脚本效果相同。升级重要数据前请阅读[数据、更新与备份](/zh/docs/data-upgrades-backups/)。
 
