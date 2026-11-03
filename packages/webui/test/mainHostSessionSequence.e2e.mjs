@@ -122,7 +122,8 @@ function pagedSequence(now, body) {
 
 async function pagedHistory(page) {
   const now = Date.now()
-  mock = body => pagedSequence(now, body)
+  let olderRequests = 0
+  mock = body => { if (body.before) olderRequests++; return pagedSequence(now, body) }
   await page.click('[aria-label="Reload"]')
   await until(async () => (await page.$$('[data-sequence-cell="hist/lead"]')).length > 0, 'Paged history renders')
   // The view starts at the newest activity and follows it.
@@ -134,6 +135,7 @@ async function pagedHistory(page) {
   // Scrolling to the top loads the next older page without moving what is on screen.
   for (let pageIndex = 0; pageIndex < 5; pageIndex++) {
     const loadedFrom = (await scrollState(page)).loadedFrom
+    const requestsBefore = olderRequests
     await scrollUp(page, 0)
     await new Promise(resolve => setTimeout(resolve, 100))
     const anchor = await page.$eval('[data-sequence-scroll]', element => {
@@ -149,6 +151,8 @@ async function pagedHistory(page) {
     }, anchor.start)
     assert.ok(Math.abs(after.offset - anchor.offset) <= 2, `anchor moved ${JSON.stringify({ anchor, after })}`)
     assert.ok(after.top > 1000, 'older rows were inserted above')
+    // Kept in place, the view is no longer near the top, so one scroll loads one page.
+    assert.equal(olderRequests - requestsBefore, 1, 'older pages requested for one scroll to the top')
     state = await scrollState(page)
     assert.ok(!state.following)
     if (state.columns.includes('hist/early')) break

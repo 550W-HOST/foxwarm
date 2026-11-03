@@ -372,7 +372,12 @@ export default function SessionSequenceView({ currentSession, onSelectSession }:
   }, [loading, rows.length])
   useEffect(() => {
     if (!autoOlder || loading || !paging.hasMore || !viewport.height) return
-    if (viewport.top < viewport.height) void loadOlder()
+    // `viewport` was measured before this commit; when a page was just prepended, the layout
+    // effect has already moved the view to keep the anchor, so read the current position.
+    const element = scrollRef.current
+    const list = rowsRef.current
+    const top = element && list ? element.scrollTop - list.offsetTop : viewport.top
+    if (top < viewport.height) void loadOlder()
   }, [autoOlder, loading, paging.hasMore, viewport, loadOlder])
   const loadEarlier = () => { emptyPagesRef.current = 0; setAutoOlder(true); void loadOlder() }
   useEffect(() => { emptyPagesRef.current = 0; setAutoOlder(true) }, [connectedOnly])
