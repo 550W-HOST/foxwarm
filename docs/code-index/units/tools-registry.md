@@ -69,4 +69,4 @@ Model-facing `exec` and `run_script` schemas require `summary` describing the ac
 
 `ProviderFileConsumerTests.OutputRecovery.cs` covers direct/unified remote read-only results retaining authorized Main spooling, denied Main storage, guard-time policy-failure latching, unchanged completed success, skipped later batch slots, paired history and terminal settlement after real lifecycle policy repair.
 
-`ToolActivityPreviewTests` covers required schema structure, real direct/unified execution with and without summaries, and native ToolScript calling legacy exec arguments.
+`ToolActivityPreviewTests` covers required schema structure, real direct/unified execution with and without summaries, and native ToolScript calling legacy exec arguments. `mainHostAuthorization.e2e.mjs` checks canonical default Node declarations alongside denied direct/unified effects and filtered discovery. `mainHostShellHttp.e2e.mjs` supplies purpose summaries in schema-validated model calls while retaining summary-free native automation and the complete Shell command/output/lifetime qualification.

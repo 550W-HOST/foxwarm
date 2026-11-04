@@ -56,7 +56,7 @@ Windows Main includes native PowerShell exec, ConPTY terminals/Code helper entry
 
 ## Tests
 
-`packages/webui/test/mainHostOnboot.e2e.mjs` exercises inert retired startup files, retained typed queue recovery, explicit Setup and first-turn snapshots, deferred virtual selection, cold alias/catalog preservation, and Session-local recovery isolation with healthy queued/deadline siblings through the ordinary [startup admission](./session-manager-bootstrap.md) path.
+`packages/webui/test/mainHostOnboot.e2e.mjs` exercises inert retired startup files, retained typed queue recovery, explicit Setup and first-turn snapshots, deferred virtual selection, cold alias/catalog preservation, and Session-local recovery isolation with healthy queued/deadline siblings through the ordinary [startup admission](./session-manager-bootstrap.md) path. It checks that the bundled framework reaches the first concrete snapshot/provider request without an installation copy, and that a declared but denied exec still produces no startup effect. Provider assertions surface their original failure before any secondary HTTP-header error.
 
 `packages/webui/test/mainHostWebUiDisabled.e2e.mjs` explicitly creates its bound Session, keeps a retired ONBOOT file as a negative control, and uses authenticated Trigger ingress with WebUI disabled to verify unavailable file delivery, unchanged attachments and independent Node administration. `mainHostOctoberAlignment.e2e.mjs` checks the administrator role/features through HTTP and the original App before exercising trusted activity receipts, native tools/waits, Anthropic replay, exact configuration installation and durable compaction facts.
 

@@ -22,7 +22,10 @@ async function create(name, agent = 'team') { const result = await fixture.api('
 async function send(id, key) { const result = await fixture.api('POST', route(id) + '/message', { text: 'AUTH-TASK:' + key + (key.startsWith('seed-') ? '\n' + ('owned ordered detail ' + key + ' ').repeat(750) : '') }); assert.equal(result.status, 202); return result }
 async function run(id, key, calls = []) {
   scripts.set(key, calls); await send(id, key)
-  await until(async () => (await history(id)).messages.some(row => row.parts?.some(part => part.text === 'DONE-' + key)), key + ' final')
+  await until(async () => {
+    assert.deepEqual(failures, [], 'Provider request assertions')
+    return (await history(id)).messages.some(row => row.parts?.some(part => part.text === 'DONE-' + key))
+  }, key + ' final')
   await idle(id)
 }
 async function replace(raw) { await writeFile(policy, raw); await sleep(10100) }
@@ -46,7 +49,7 @@ const provider = createServer(async (request, response) => {
     record.followup = calls.length && calls.every(call => body.input.some(item => item.type === 'function_call_output' && item.call_id === call.call_id))
     if (key === 'held-background') { held.set(key, () => complete(final('DONE-' + key))); return }
     if (key === 'visibility') {
-      assert(!body.tools.some(value => value.name === 'exec')); assert(body.tools.some(value => value.name === 'write')); assert(body.tools.some(value => value.name === 'call_tool')); assert(!body.tools.some(value => value.name === 'set_config'))
+      assert(body.tools.some(value => value.name === 'exec')); assert(body.tools.some(value => value.name === 'write')); assert(body.tools.some(value => value.name === 'call_tool')); assert(!body.tools.some(value => value.name === 'set_config'))
     }
     if (key === 'compact-schema' || key === 'held-background') assert(!body.tools.some(value => value.name === 'submit_compact_plan'))
     complete(record.followup || !calls.length ? final('DONE-' + key) : calls)
@@ -64,7 +67,7 @@ try {
   const own = join(fixture.data, 'agents/team'); await mkdir(join(own, 'allowed')); await mkdir(join(own, 'forbidden'))
   await writeFile(join(own, 'allowed/existing'), 'unchanged'); await writeFile(join(own, 'forbidden/second'), 'unchanged')
   await run(current, 'visibility', [tool('search-node', 'search_tools', { sources: ['node'], query: 'exec', limit: 10 }), tool('search-mcp', 'search_tools', { sources: ['mcp'] }),
-    tool('direct-denied', 'exec', { command: 'touch forbidden-exec' }), invoke('neutral-denied', 'node:master/exec', { command: 'touch forbidden-exec' }),
+    tool('direct-denied', 'exec', { summary: 'Attempt a denied file creation', command: 'touch forbidden-exec' }), invoke('neutral-denied', 'node:master/exec', { summary: 'Attempt a denied file creation', command: 'touch forbidden-exec' }),
     invoke('mcp-denied', 'mcp:policy-peer/hidden', { tag: 'hidden' }), invoke('mcp-allowed', 'mcp:policy-peer/probe', { tag: 'allowed' }),
     tool('write-denied', 'write', { filePath: 'forbidden/new', content: 'denied' }), tool('write-allowed', 'write', { filePath: 'allowed/new', content: 'allowed' }),
     tool('patch-denied', 'edit', { apply_patch: '*** Begin Patch\n*** Update File: allowed/existing\n@@\n-unchanged\n+changed\n*** Update File: forbidden/second\n@@\n-unchanged\n+changed\n*** End Patch' })])
@@ -133,7 +136,7 @@ try {
   const mainOnly = JSON.parse(await readFile(agentPath, 'utf8')); mainOnly.team.isolated = true
   await writeFile(agentPath, JSON.stringify(mainOnly)); const mainIsolationBytes = await readFile(agentPath)
   await fixture.start(); stopped = false
-  await run(current, 'isolated', [tool('isolated-exec', 'exec', { command: 'touch forbidden-isolated-exec' }), invoke('isolated-neutral-exec', 'node:master/exec', { command: 'touch forbidden-isolated-exec' }),
+  await run(current, 'isolated', [tool('isolated-exec', 'exec', { summary: 'Attempt file creation from an isolated Agent', command: 'touch forbidden-isolated-exec' }), invoke('isolated-neutral-exec', 'node:master/exec', { summary: 'Attempt file creation from an isolated Agent', command: 'touch forbidden-isolated-exec' }),
     tool('isolated-management', 'create_agent', { agentName: 'forbidden-agent' }), tool('isolated-own-read', 'read', { filePath: 'after-invalid' }),
     tool('isolated-foreign-read', 'read', { filePath: join(fixture.data, 'agents/other', 'foreign') }), tool('isolated-list', 'session', { action: 'list' }), tool('isolated-status', 'session', { action: 'status' }),
     tool('isolated-skill', 'skill', { action: 'list', agentName: 'other' }), tool('isolated-recall', 'recall', { sessionId: 'other/main' }), tool('isolated-history', 'view_session', { sessionId: current })])
