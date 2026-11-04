@@ -50,14 +50,14 @@ after(async () => {
   await new Promise(resolve => server?.close(resolve))
 })
 
-async function openFixture({ freshBrowser = false, tabs = [system, chat('e2e-a')], activeTabId = 'chat:e2e-a', hash = '', split = false, splitSecondChat = false, splitDirection = 'row', layout = null, themeId, colorMode = 'light', nodeDirectory = [], taskRows = null, codeNewWindow, responsiveChat = false, chatMessages = null, timelineView = 'grouped', showScrollbar, terminal = null, width = 1400, height = 900, reducedMotion = false, waitForSplash = true } = {}) {
+async function openFixture({ freshBrowser = false, tabs = [system, chat('e2e-a')], activeTabId = 'chat:e2e-a', hash = '', split = false, splitSecondChat = false, splitDirection = 'row', layout = null, themeId, colorMode = 'light', nodeDirectory = [], taskRows = null, codeNewWindow, responsiveChat = false, chatMessages = null, timelineView = 'grouped', mobileTimelineView, showScrollbar, terminal = null, width = 1400, height = 900, reducedMotion = false, waitForSplash = true } = {}) {
   const page = await browser.newPage()
   if (reducedMotion) await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }])
   const pageErrors = []
   page.on('pageerror', error => pageErrors.push(error.message))
   // Firefox ESR retains its native viewport; Puppeteer orientation emulation is unsupported.
   if (!firefox) await page.setViewport({ width, height })
-  await page.evaluateOnNewDocument(({ freshBrowser, initialTabs, activeId, splitPanes, splitSecondChat, splitDirection, initialLayout, themeId, colorMode, nodeDirectory, taskRows, codeNewWindow, responsiveChat, chatMessages, timelineView, showScrollbar, terminal }) => {
+  await page.evaluateOnNewDocument(({ freshBrowser, initialTabs, activeId, splitPanes, splitSecondChat, splitDirection, initialLayout, themeId, colorMode, nodeDirectory, taskRows, codeNewWindow, responsiveChat, chatMessages, timelineView, mobileTimelineView, showScrollbar, terminal }) => {
     if (window !== window.top) return
     const tabsById = Object.fromEntries(initialTabs.map(tab => [tab.id, tab]))
     const root = initialLayout || (splitPanes
@@ -74,6 +74,7 @@ async function openFixture({ freshBrowser = false, tabs = [system, chat('e2e-a')
       if(freshBrowser) for(const key of ['foxwarm_workbench_state_v4','foxwarm_workbench_tabs_v3','foxwarm_last_active_tab_v1','foxwarm_last_visited_session_v1'])localStorage.removeItem(key)
     }
     if (chatMessages) localStorage.setItem('foxwarm_timeline_view_v1', timelineView)
+    if (mobileTimelineView) localStorage.setItem('foxwarm_mobile_timeline_view_v1', mobileTimelineView)
     if (showScrollbar !== undefined) localStorage.setItem('foxwarm.contextScrollbar.showScrollbar', String(showScrollbar))
     if (themeId) localStorage.setItem('foxwarm_theme_selection_v3', JSON.stringify({ version: 3, themeId, lightThemeId: themeId, darkThemeId: themeId, colorMode }))
     if (codeNewWindow !== undefined) localStorage.setItem('foxwarm_code_open_new_window_v1', String(codeNewWindow))
@@ -185,7 +186,7 @@ async function openFixture({ freshBrowser = false, tabs = [system, chat('e2e-a')
     }
     window.__emitRealtime = data => { for (const socket of FixtureWebSocket.instances) socket.onmessage?.({ data: JSON.stringify(data) }) }
     window.WebSocket = FixtureWebSocket
-  }, { freshBrowser, initialTabs: tabs, activeId: activeTabId, splitPanes: split, splitSecondChat, splitDirection, initialLayout: layout, themeId, colorMode, nodeDirectory, taskRows, codeNewWindow, responsiveChat, chatMessages, timelineView, showScrollbar, terminal })
+  }, { freshBrowser, initialTabs: tabs, activeId: activeTabId, splitPanes: split, splitSecondChat, splitDirection, initialLayout: layout, themeId, colorMode, nodeDirectory, taskRows, codeNewWindow, responsiveChat, chatMessages, timelineView, mobileTimelineView, showScrollbar, terminal })
   await page.goto(`${baseUrl}${hash}`, { waitUntil: 'domcontentloaded' })
   await page.bringToFront()
   await page.waitForFunction(() => !!window.foxwarmTest || !!document.querySelector('[data-foxwarm-popup-root="chat"]'), { timeout: 8_000 }).catch(async error => {
@@ -3777,3 +3778,56 @@ test('fresh browsers keep an empty workbench rather than opening implicit main; 
   assert.equal(await page.evaluate(()=>window.__fetches.some(r=>r.path.includes('/sessions/main/'))),false)
  }finally{await page.close()}
 })
+
+for (const width of [390, 1400]) for (const keptTarget of [false, true]) {
+  test(`native Session links use one browser history entry at ${width}px with ${keptTarget ? 'kept' : 'new preview'} target`, async () => {
+    const mobile = width < 768
+    const tabs = [system, chat('e2e-a'), ...(keptTarget ? [chat('e2e-b', false)] : [])]
+    const chatMessages = [{ role: 'user', parts: [{ system: '<foxwarm-message type="inter-agent" sourceSessionId="e2e-b">\nMessage from another Session.\n</foxwarm-message>' }], __meta: { seq: 1 } }]
+    const page = await openFixture({ width, height: 844, tabs, responsiveChat: true, chatMessages, timelineView: 'conversation', mobileTimelineView: 'conversation', hash: mobile ? '' : '#session/e2e-a' })
+    try {
+      if (mobile) await page.click('[data-session-id="e2e-a"]')
+      const link = '.foxwarm-chat-root [data-session-communication="received"] a.foxwarm-session-hash-link'
+      await page.waitForSelector(link, { visible: true })
+      assert.equal(await page.$eval(link, element => element.getAttribute('href')), '#session/e2e-b')
+      const historyBefore = await page.evaluate(() => {
+        localStorage.setItem('foxwarm_session_idle_unread_v1', JSON.stringify({ version: 1, unread: { 'e2e-b': 1, 'e2e-c': 2 } }))
+        dispatchEvent(new Event('foxwarm-idle-unread-changed'))
+        return history.length
+      })
+      await page.click(link)
+      const waitForChat = async id => {
+        await page.waitForFunction(id => {
+          const workbench = JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state
+          return workbench.root.activeTabId === `chat:${id}` && document.querySelector(`[data-workbench-content-tab="chat:${id}"] .foxwarm-chat-root [role="textbox"][aria-label="Message"]`)
+        }, {}, id)
+      }
+      await waitForChat('e2e-b')
+      assert.equal(await page.evaluate(() => history.length), historyBefore + 1, 'native anchor and route hydration represent one navigation')
+      assert.equal((await state(page)).tabsById['chat:e2e-b'].preview, !keptTarget)
+      await page.waitForFunction(() => !JSON.parse(localStorage.getItem('foxwarm_session_idle_unread_v1')).unread['e2e-b'])
+      const historyAfter = await page.evaluate(() => history.length)
+      for (let traversal = 0; traversal < 2; traversal++) {
+        await page.goBack()
+        await waitForChat('e2e-a')
+        assert.match((await state(page)).hash, /^#(?:session\/e2e-a|tab\/chat:e2e-a)$/)
+        await page.goForward()
+        await waitForChat('e2e-b')
+        assert.equal(await page.evaluate(() => history.length), historyAfter, 'restoring replaced previews preserves the forward entry')
+      }
+      assert.equal(new URL(page.url()).pathname, '/prefix/ui/')
+      assert.ok((await state(page)).tabsById['system:agents'], 'unrelated retained desktop tab survives')
+      assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('foxwarm_session_idle_unread_v1')).unread), { 'e2e-c': 2 }, 'unvisited Session remains unread')
+      if (mobile) {
+        const beforeBack = await state(page)
+        await page.click('.foxwarm-chat-root button[title="Back"]')
+        await page.waitForSelector('#mobile-tab-sessions', { visible: true })
+        assert.equal(await page.$('.foxwarm-chat-root'), null)
+        assert.equal((await state(page)).hash, '')
+        assert.deepEqual((await state(page)).tabsById, beforeBack.tabsById, 'Chat Back returns to the retained primary page without closing tabs')
+        await page.goBack()
+        await waitForChat('e2e-b')
+      }
+    } finally { await page.close() }
+  })
+}

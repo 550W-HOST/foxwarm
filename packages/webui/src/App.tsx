@@ -378,7 +378,14 @@ function setTabHash(tabId?: string | null) {
     window.location.hash = ''
     return
   }
-  window.location.hash = `${TAB_HASH_PREFIX}${encodeURIComponent(tabId)}`
+  const hash = `#${TAB_HASH_PREFIX}${encodeURIComponent(tabId)}`
+  if (window.location.hash === hash) return
+  // Restoring an inbound route must not add a second history entry for the same tab.
+  if (window.location.hash && getHashState().tabId === tabId) {
+    window.history.replaceState(window.history.state, '', hash)
+  } else {
+    window.location.hash = hash
+  }
 }
 
 function makeChatTab(sessionId: string, title: string, options?: { preview?: boolean }): WorkbenchTab {
