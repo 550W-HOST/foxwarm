@@ -23,11 +23,11 @@ const peer = createServer(async (request, response) => {
     const complete = output => { if (!response.destroyed) response.end('data: ' + JSON.stringify({ type: 'response.completed', response: { id: 'boot-' + requests.length, output, usage: { input_tokens: 30, output_tokens: 4 } } }) + '\n\n') }
     for (const item of body.input.filter(item => item.type === 'function_call')) assert(body.input.some(value => value.type === 'function_call_output' && value.call_id === item.call_id), item.call_id + ' historical pair')
     if (boot && body.input.at(-1)?.type !== 'function_call_output') {
-      assert(!body.tools.some(value => value.name === 'exec'))
-      complete([call('boot-write-' + requests.length, 'write', { filePath: 'onboot-proof-' + requests.length + '.txt', content: user }), call('boot-denied-' + requests.length, 'exec', { command: 'touch forbidden-onboot-effect' })]); return
+      assert(body.tools.some(value => value.name === 'exec'))
+      complete([call('boot-write-' + requests.length, 'write', { filePath: 'onboot-proof-' + requests.length + '.txt', content: user }), call('boot-denied-' + requests.length, 'exec', { summary: 'Attempt a denied startup effect', command: 'touch forbidden-onboot-effect' })]); return
     }
     complete([text('DONE-' + (boot ? 'BOOT' : task))])
-  } catch (error) { failures.push(error.stack); if (!response.destroyed) { response.writeHead(500); response.end() } }
+  } catch (error) { failures.push(error.stack); if (!response.destroyed) { if (!response.headersSent) response.writeHead(500); response.end() } }
 })
 peer.listen(0, '127.0.0.1'); await once(peer, 'listening')
 const models = { default: 'a', providers: { a: { providerType: 'openai-responses', baseUrl: 'http://127.0.0.1:' + peer.address().port, models: ['wire'], contextLimit: 20000 } } }
@@ -41,7 +41,12 @@ async function create(name, content, config = models) {
 }
 const saved = async (fixture, id = 'main') => JSON.parse(await readFile(join(fixture.data, 'state', 'sessions', id + '.json'), 'utf8'))
 async function history(fixture, id = 'main') { const result = await fixture.api('GET', route(id) + '/history'); assert.equal(result.status, 200, JSON.stringify(result)); return result.body.messages }
-async function done(fixture, marker, id = 'main') { await until(async () => (await history(fixture, id)).some(row => row.parts?.some(part => part.text === 'DONE-' + marker)) && !(await saved(fixture, id)).busy, marker + ' completed') }
+async function done(fixture, marker, id = 'main') {
+  await until(async () => {
+    assert.deepEqual(failures, [], 'Provider request assertions')
+    return (await history(fixture, id)).some(row => row.parts?.some(part => part.text === 'DONE-' + marker)) && !(await saved(fixture, id)).busy
+  }, marker + ' completed')
+}
 async function send(fixture, task, id = 'main') { assert.equal((await fixture.api('POST', route(id) + '/message', { text: 'ON-TASK:' + task })).status, 202) }
 function bootRows(raw) { return raw.history.filter(row => row.role === 'user' && row.parts?.some(part => part.system?.includes('ONBOOT: '))) }
 async function seedCatalog(fixture, rows, archiveOnly = []) {
@@ -94,13 +99,18 @@ try {
   const emptyHistory = await empty.api('GET', route('main') + '/history'); assert.equal(emptyHistory.status, 200); assert.equal(emptyHistory.body.session.modelKey, ''); assert.equal(emptyHistory.body.session.defaultModelKey, ''); assert.equal(emptyHistory.body.session.effortDefault, 'high'); assert.equal(emptyHistory.body.session.effectiveCompactThresholdTokens, Math.floor(200000 * 0.85))
   assert.equal((await empty.api('GET', route('main') + '/state')).status, 200)
   const frames = [], ws = new WebSocket(empty.origin.replace('http:', 'ws:') + '/api/webui/stream', { headers: { authorization: 'Bearer synthetic-onboot-empty-setup-api' } }); ws.on('message', raw => frames.push(JSON.parse(String(raw)))); await once(ws, 'open'); ws.send(JSON.stringify({ type: 'set-subscriptions', revision: 1, sessionIds: ['main'], sessionListIds: ['main'], sessionListActive: true })); await until(() => frames.some(frame => frame.type === 'subscriptions-applied' && frame.revision === 1), 'unconfigured Main state/draft/context subscription applies'); assert(frames.some(frame => frame.type === 'session-state' && frame.session?.modelKey === '')); assert(!frames.some(frame => frame.type === 'session-error')); ws.close(); await once(ws, 'close')
-  const framework = await readFile(resolve('dotnet/Foxwarm/bin/Debug/net10.0/templates/agents/00_SYSTEM.md'))
-  assert.deepEqual(await readFile(join(empty.data, 'agents', '00_SYSTEM.md')), framework)
+  const framework = await readFile(resolve('dotnet/Foxwarm/bin/Debug/net10.0/templates/agents/00_SYSTEM.md'), 'utf8')
+  await assert.rejects(access(join(empty.data, 'agents', '00_SYSTEM.md')), { code: 'ENOENT' })
   for (const name of ['MEMORY.md', 'SOUL.md', 'USER.md']) assert.deepEqual(await readFile(join(empty.work, 'memory', name)), await readFile(resolve('dotnet/Foxwarm/bin/Debug/net10.0/templates/main/memory', name)))
   await assert.rejects(access(join(empty.work, 'memory/BOOTSTRAP.md')), { code: 'ENOENT' })
   await assert.rejects(access(join(empty.work, 'memory/ONBOOT.md')), { code: 'ENOENT' })
   const setupPage = await empty.openApp(); await saveModelsInOriginalApp(setupPage, `default: a\nproviders:\n  a:\n    providerType: openai-responses\n    baseUrl: 'http://127.0.0.1:${peer.address().port}'\n    apiKey: synthetic-onboot\n    models: [wire]\n    contextLimit: 20000\n`, empty.modelPath)
-  await send(empty, 'after-setup'); await done(empty, 'after-setup'); assert.match((await saved(empty)).persistentMemorySnapshot, /<foxwarm-current-model model-id="a\/wire" \/>/); await empty.stop()
+  await send(empty, 'after-setup'); await done(empty, 'after-setup')
+  const snapshot = (await saved(empty)).persistentMemorySnapshot
+  assert.match(snapshot, /<foxwarm-current-model model-id="a\/wire" \/>/)
+  assert(snapshot.includes(framework.trim()), 'First concrete snapshot contains the bundled framework source')
+  assert(requests.at(-1).body.instructions.includes(framework.trim()), 'First provider request carries the framework prompt')
+  await empty.stop()
 
   // Virtual startup has no selected concrete snapshot/route; only the first real turn captures a leaf.
   const virtualConfig = { ...models, default: 'route', providers: { ...models.providers, route: { providerType: 'session-hash', targets: ['a'] } } }
