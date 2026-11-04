@@ -85,7 +85,7 @@ const executionCallPreview = (call: { name: string; args?: Record<string, unknow
   if (purposeOnly) return toolActivitySummary(call)
   const args = call.args || {}
   const source = call.name === 'exec' ? args.command
-    : typeof args.code === 'string' && args.code.trim() ? args.code.split(/\r?\n/).find(line => line.trim())
+    : typeof args.code === 'string' && args.code.trim() ? args.code
     : args.filePath !== undefined ? args.filePath : args.code
   if (source === undefined) return toolActivitySummary(call)
   const text = argumentValue(source).replace(/\s+/g, ' ').trim()

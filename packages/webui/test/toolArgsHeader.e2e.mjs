@@ -595,14 +595,28 @@ async function argumentScreenshot(name) {
 test('single-line execution headers follow the caller presentation mode, not result arrival', async () => {
   await mountFixture({ width: 1100, height: 780, style: '550a', dark: true })
   const expected = { summarizedExec: 'export SETUP=1; printf source', summarizedScript: '# Collect evidence', fileScript: './scripts/audit.py', unifiedExec: 'build-project' }
-  for (const [id, prefix] of Object.entries(expected)) {
-    assert.ok((await page.$eval(`#${id} .foxwarm-tool-call-summary`, element => element.textContent)).startsWith(prefix))
-    const geometry = await page.$eval(`#${id} .foxwarm-tool-call-summary`, element => ({ height: element.getBoundingClientRect().height, lineHeight: parseFloat(getComputedStyle(element).lineHeight) }))
-    assert.ok(geometry.height <= geometry.lineHeight + 1)
-    assert.equal(await page.$(`#${id} .foxwarm-tool-call-args`), null)
+  for (const width of [1100, 390]) {
+    await page.setViewport({ width, height: 780, deviceScaleFactor: 1 })
+    for (const [id, prefix] of Object.entries(expected)) {
+      assert.ok((await page.$eval(`#${id} .foxwarm-tool-call-summary`, element => element.textContent)).startsWith(prefix))
+      const geometry = await page.$eval(`#${id} .foxwarm-tool-call-summary`, element => {
+        const range = document.createRange(); range.selectNodeContents(element)
+        const rects = [...range.getClientRects()]
+        return { height: element.getBoundingClientRect().height, lineHeight: parseFloat(getComputedStyle(element).lineHeight), textTops: [...new Set(rects.map(rect => Math.round(rect.top)))] }
+      })
+      assert.ok(geometry.height <= geometry.lineHeight + 1, `${id} at ${width}px: header height`)
+      assert.equal(geometry.textTops.length, 1, `${id} at ${width}px: text stays on one physical line`)
+      assert.equal(await page.$(`#${id} .foxwarm-tool-call-args`), null)
+    }
+    const script = await page.$eval('#summarizedScript .foxwarm-tool-call-summary', element => element.textContent)
+    assert.equal(script, '# Collect evidence records = call_tool("task", {"action": "list"}) return records')
   }
+  for (const width of [1100, 390]) {
+    await page.setViewport({ width, height: 780, deviceScaleFactor: 1 })
+    await argumentScreenshot(`collapsed-with-results-${width}`)
+  }
+  await page.setViewport({ width: 1100, height: 780, deviceScaleFactor: 1 })
   const before = await page.$eval('#summarizedExec .foxwarm-tool-call-summary', element => element.textContent)
-  await argumentScreenshot('collapsed-with-results')
   await page.evaluate(() => window.updateToolFixture('summarizedExec', { response: null }))
   await page.waitForFunction(() => !document.querySelector('#summarizedExec .foxwarm-tool-result-preview'))
   assert.equal(await page.$eval('#summarizedExec .foxwarm-tool-call-summary', element => element.textContent), before)
