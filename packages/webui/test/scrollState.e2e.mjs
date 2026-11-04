@@ -122,6 +122,8 @@ before(async () => {
     const token = localStorage.getItem('foxwarm_token')
     localStorage.clear()
     if (token) localStorage.setItem('foxwarm_token', token)
+    // These cases exercise active-prefix loading and its context overview.
+    localStorage.setItem('foxwarm_timeline_view_v1', 'detailed')
   })
   await page.reload({ waitUntil: 'networkidle2' })
   await waitForWebUiReady(page)

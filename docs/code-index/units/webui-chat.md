@@ -188,4 +188,4 @@ The synchronization hook can initialize active metadata/messages and a separate 
 
 Lazy-prepend tests explicitly select Detailed/active history. The no-stable-anchor case compares actual scroll-height and scrollTop deltas at 2px tolerance, allowing App chrome to resize the viewport. The supported App sequence runs Core first.
 
-`scrollState.e2e.mjs` awaits native movement in the wheel direction before selecting its remount anchor, then switches away in that measurement task. A wheel-event frame can precede native capture. Return checks wait for the full-history context overview before comparing the saved anchor or bottom.
+`scrollState.e2e.mjs` selects Detailed/active history and awaits native movement in the wheel direction before selecting its remount anchor, then switches away in that measurement task. A wheel-event frame can precede native capture. Return checks wait for the full-history context overview before comparing the saved anchor or bottom.
