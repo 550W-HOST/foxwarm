@@ -186,6 +186,6 @@ The synchronization hook can initialize active metadata/messages and a separate 
 
 `workbenchPreview.e2e.mjs` covers prepared continuous-history remount through native-wheel anchors, first host sizing and bounded catch-up, retaining preparation cursors and the later suffix.
 
-The no-stable-anchor prepend fixture compares actual scroll-height and scrollTop deltas at 2px tolerance, allowing App chrome to resize the viewport. The supported App sequence runs Core first.
+Lazy-prepend tests explicitly select Detailed/active history. The no-stable-anchor case compares actual scroll-height and scrollTop deltas at 2px tolerance, allowing App chrome to resize the viewport. The supported App sequence runs Core first.
 
 `scrollState.e2e.mjs` awaits native movement in the wheel direction before selecting its remount anchor, then switches away in that measurement task. A wheel-event frame can precede native capture. Return checks wait for the full-history context overview before comparing the saved anchor or bottom.

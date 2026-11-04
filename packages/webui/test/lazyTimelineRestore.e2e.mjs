@@ -56,6 +56,8 @@ async function openFixture(shape) {
   })
   const page = await browser.newPage()
   await page.setViewport({ width: 1440, height: 900 })
+  // These cases exercise active-history recent-tail expansion, not continuous paging.
+  await page.evaluateOnNewDocument(() => localStorage.setItem('foxwarm_timeline_view_v1', 'detailed'))
   await page.setRequestInterception(true)
   page.on('request', request => {
     if (request.url().includes(`/api/sessions/${encodeURIComponent(fixtureSessionId)}/history`)) {
