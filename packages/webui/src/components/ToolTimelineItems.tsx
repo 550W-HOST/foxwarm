@@ -93,6 +93,12 @@ const executionCallPreview = (call: { name: string; args?: Record<string, unknow
   return text.length > 200 ? text.slice(0, end) + '…' : text
 }
 
+const CollapsedExecutionCode = ({ text, script }: { text: string; script: boolean }) => (
+  <span className="whitespace-nowrap">
+    {script ? <SyntaxHighlightedText text={text} filePath="script.py" /> : <ExecCommandText command={text} heredocBodyBlock={false} />}
+  </span>
+)
+
 const ExecutionCode = ({ text, script }: { text: string; script: boolean }) => {
   const [copied, setCopied] = useState(false)
   return <div className="foxwarm-tool-execution-code relative min-w-0">
@@ -378,11 +384,18 @@ const renderToolCallPreview = (call: FunctionCall, options: { partial?: boolean;
   const target = toolActivityTarget(call)
   if (call.name === 'call_tool' && target.name !== 'call_tool') {
     const summary = target.name === 'exec' || target.name === 'run_script' ? executionCallPreview(target, !!options.purposeOnly) : toolActivitySummary(target)
+    if (target.name === 'exec' || target.name === 'run_script') {
+      return options.purposeOnly
+        ? <span className="truncate" title={summary}>{summary}</span>
+        : <span className="truncate" title={summary}><CollapsedExecutionCode text={summary} script={target.name === 'run_script'} /></span>
+    }
     return <span className="truncate" title={summary}>{summary}</span>
   }
   if (call.name === 'exec' || call.name === 'run_script') {
     const summary = executionCallPreview(call, !!options.purposeOnly)
-    return <span className="truncate" title={summary}>{summary}</span>
+    return options.purposeOnly
+      ? <span className="truncate" title={summary}>{summary}</span>
+      : <span className="truncate" title={summary}><CollapsedExecutionCode text={summary} script={call.name === 'run_script'} /></span>
   }
 
   if (call.name === 'read') {

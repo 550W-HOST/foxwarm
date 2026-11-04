@@ -609,6 +609,17 @@ test('single-line execution headers follow the caller presentation mode, not res
     }
     const script = await page.$eval('#summarizedScript .foxwarm-tool-call-summary', element => element.textContent)
     assert.equal(script, '# Collect evidence records = call_tool("task", {"action": "list"}) return records')
+    assert.ok(await page.$('#summarizedExec .foxwarm-tool-call-summary .text-fw-syntax-keyword'), 'collapsed exec preview keeps shell syntax highlighting')
+    assert.ok(await page.$('#summarizedScript .foxwarm-tool-call-summary .text-fw-syntax-keyword'), 'collapsed run_script preview keeps Python syntax highlighting')
+    for (const id of ['summarizedExec', 'summarizedScript']) {
+      const tokenGeometry = await page.$eval(`#${id} .foxwarm-tool-call-summary`, element => {
+        const range = document.createRange(); range.selectNodeContents(element)
+        const rects = [...range.getClientRects()]
+        return { lineCount: [...new Set(rects.map(rect => Math.round(rect.top)))].length, text: element.textContent }
+      })
+      assert.equal(tokenGeometry.lineCount, 1, `${id}: highlighted collapsed preview remains one physical line`)
+      assert.ok(tokenGeometry.text.length > 0)
+    }
   }
   for (const width of [1100, 390]) {
     await page.setViewport({ width, height: 780, deviceScaleFactor: 1 })
@@ -625,6 +636,7 @@ test('single-line execution headers follow the caller presentation mode, not res
   await page.waitForFunction(() => document.querySelector('#summarizedExec .foxwarm-tool-call-summary').textContent === 'Inspect source layout')
   for (const [id, purpose] of [['summarizedExec', 'Inspect source layout'], ['summarizedScript', 'Collect task evidence'], ['fileScript', 'Run the source audit'], ['unifiedExec', 'Compile source']]) {
     assert.equal(await page.$eval(`#${id} .foxwarm-tool-call-summary`, element => element.textContent), purpose)
+    assert.equal(await page.$(`#${id} .foxwarm-tool-call-summary .text-fw-syntax-keyword`), null, `${id}: purpose-only Conversation preview stays summary-only`)
     assert.equal(await page.$(`#${id} .foxwarm-tool-result-preview`), null)
   }
   await argumentScreenshot('collapsed-purpose-only')
