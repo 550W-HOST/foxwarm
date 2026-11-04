@@ -58,7 +58,10 @@ exec '${process.execPath}' "$@"
   const runtime = path.join(app, 'runtime', 'fixture');
   fs.mkdirSync(runtime, { recursive: true });
   fs.symlinkSync('fixture', path.join(app, 'runtime', 'current'));
+  // Like the real host, the stand-in ignores Node options such as the test runner's
+  // --import preload, which would load the .dll entry through the ESM loader.
   fs.writeFileSync(path.join(bin, 'dotnet'), `#!/bin/bash
+unset NODE_OPTIONS
 exec -a dotnet '${process.execPath}' "$@"
 `, { mode: 0o755 });
   // Exercise the real JS launcher and PID writer with a small managed-process stand-in.
