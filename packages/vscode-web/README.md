@@ -179,7 +179,7 @@ At runtime the installed workbench payload belongs at `packages/vscode-web/asset
 
 When the required static files exist (`out/nls.messages.js`, `out/vs/workbench/workbench.web.main.internal.css`, `out/vs/workbench/workbench.web.main.internal.js`), `/vscode-web` emits a VS Code Web workbench bootstrap that includes `foxwarm-fs` as an additional browser builtin extension. Direct launches open the requested `folderUri`; embedded launches open the persistent workspace configuration created under the Foxwarm state directory. Without a requested folder, the route derives the master folder URI from the application root without probing installation-specific paths.
 
-When the assets are absent, authenticated requests to `/vscode-web` return a styled `503 Code is not built` page rather than a blank workbench. It shows both preparation commands and the installed asset location. Individual missing static assets continue to return `404`.
+When the assets are absent, authenticated requests to `/vscode-web` return a styled `503 Code is not built` page rather than a blank workbench. It shows both preparation commands, the required source rebuild/restart, and the installed asset location. Source builds collect already-prepared assets into the selected runtime; downloading into the checkout alone does not modify a running snapshot. Default distributable builds exclude these operator assets; explicitly set `FoxwarmIncludeCodeAssets=true` only when intending to package them and after reviewing their licensing. Individual missing static assets continue to return `404`.
 
 ## Main WebUI entry
 

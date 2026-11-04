@@ -176,6 +176,16 @@
       CopyToPublishDirectory="PreserveNewest"
     />
   </ItemGroup>
+  <!-- Source installs explicitly opt in to already-prepared operator assets.
+       Distributable packages do not silently bundle a downloaded product build. -->
+  <ItemGroup Condition="'$(FoxwarmIncludeCodeAssets)' == 'true'">
+    <Content Include="../../packages/vscode-web/assets/vscode-web/**/*"
+      Link="packages/vscode-web/assets/vscode-web/%(RecursiveDir)%(Filename)%(Extension)"
+      CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../packages/vscode-web/assets/extensions/redhat.vscode-yaml/**/*"
+      Link="packages/vscode-web/assets/extensions/redhat.vscode-yaml/%(RecursiveDir)%(Filename)%(Extension)"
+      CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
   <PropertyGroup>
     <ArtifactTargetRid Condition="'$(RuntimeIdentifier)' != ''"
       >$(RuntimeIdentifier)</ArtifactTargetRid>

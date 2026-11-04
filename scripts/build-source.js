@@ -58,6 +58,7 @@ try {
       }
       if (!args.includes('--core-only')) run('npm', ['run', 'build:assets']);
       run('dotnet', ['build', 'dotnet/Foxwarm/Foxwarm.csproj', '-o', staging,
+        '-p:FoxwarmIncludeCodeAssets=true',
         ...(!args.includes('--core-only') ? ['-p:FoxwarmDelivery=true'] : [])]);
     } catch (error) {
       fs.rmSync(staging, { recursive: true, force: true });
