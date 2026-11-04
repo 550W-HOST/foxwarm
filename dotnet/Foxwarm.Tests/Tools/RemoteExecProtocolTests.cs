@@ -230,16 +230,19 @@ public sealed class RemoteExecProtocolTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Selected_remote_exec_schema_requires_advertisement_and_current_policy(
+    public async Task Canonical_exec_declaration_is_independent_of_remote_advertisement_and_policy(
         bool advertiseExec
     )
     {
         await using var fixture = new Fixture();
         await fixture.Start(advertiseExec: advertiseExec);
         var definitions = fixture.Manager.ModelDefinitions(fixture.Owner);
+        Assert.Contains(definitions, node => node?["name"]?.GetValue<string>() == "exec");
         Assert.Equal(
             advertiseExec,
-            definitions.Any(node => node?["name"]?.GetValue<string>() == "exec")
+            fixture
+                .Manager.NodeProviders.Definitions("remote")
+                .Any(node => node?["name"]?.GetValue<string>() == "exec")
         );
         var session = Assert.Single(
             definitions.OfType<JsonObject>(),
@@ -258,10 +261,11 @@ public sealed class RemoteExecProtocolTests
             "version: 1\nrules:\n- id: remote-exec\n  action: deny\n  match:\n    tool: {source: node, name: exec}\n    targetNode: remote\n"
         );
         fixture.Manager.Authorization.Invalidate();
-        Assert.DoesNotContain(
-            fixture.Manager.ModelDefinitions(fixture.Owner),
-            node => node?["name"]?.GetValue<string>() == "exec"
+        Assert.Equal(
+            definitions.ToJsonString(),
+            fixture.Manager.ModelDefinitions(fixture.Owner).ToJsonString()
         );
+        Assert.False(fixture.Manager.ToolVisible(fixture.Owner, "node", "exec", node: "remote"));
     }
 
     [Theory]

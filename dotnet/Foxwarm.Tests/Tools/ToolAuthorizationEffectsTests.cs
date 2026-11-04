@@ -196,7 +196,7 @@ public sealed partial class ToolAuthorizationEffectsTests
             "version: 1\nrules:\n- id: exec\n  action: deny\n  match: {tool: {source: node, name: exec}}\n- id: paths\n  action: deny\n  match: {tool: {source: node, name: [write, edit, apply_patch]}, path: {anyNotWithin: '${agent.dir}/allowed'}}"
         );
         var definitions = manager.ModelDefinitions(owner);
-        Assert.DoesNotContain(definitions, node => node?["name"]?.GetValue<string>() == "exec");
+        Assert.Contains(definitions, node => node?["name"]?.GetValue<string>() == "exec");
         Assert.Contains(definitions, node => node?["name"]?.GetValue<string>() == "write");
         Assert.Contains(definitions, node => node?["name"]?.GetValue<string>() == "call_tool");
         Assert.DoesNotContain(
@@ -555,7 +555,7 @@ public sealed partial class ToolAuthorizationEffectsTests
             "tool_authorization_denied",
             Error(await Call(execution.Tools, "view_session", Obj("""{"sessionId":"opaque"}""")))
         );
-        Assert.DoesNotContain(
+        Assert.Contains(
             manager.ModelDefinitions(owner),
             node => node?["name"]?.GetValue<string>() == "exec"
         );
