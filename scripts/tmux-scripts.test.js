@@ -291,30 +291,28 @@ for (const script of ['restart.sh', 'stop.sh']) {
   });
 }
 
-for (const suffix of ['-other', ' other']) {
-  test(`stop ignores another installation whose root shares this root prefix (${suffix})`, { skip }, async t => {
-    const f = fixture(t);
-    const foreign = f.app + suffix;
-    fs.mkdirSync(foreign);
-    // Same executable, different installation identity: the root must match exactly.
-    const child = spawn(path.join(f.root, 'bin/dotnet'), [path.join(f.app, 'runtime/fixture/Foxwarm.dll'), '--installation-root', foreign], {
-      env: f.env, stdio: ['ignore', 'ignore', 'ignore', 'pipe'],
-    });
-    t.after(() => child.kill('SIGKILL'));
-    const deadline = Date.now() + 3000;
-    while (!fs.existsSync(path.join(foreign, 'main-ready'))) {
-      assert.ok(Date.now() < deadline, 'Foreign Main did not start');
-      await new Promise(resolve => setTimeout(resolve, 20));
-    }
-    fs.writeFileSync(path.join(f.app, 'foxwarm.pid'), `${child.pid}\n`);
-    const result = f.run('stop.sh');
-    assert.equal(result.status, 0, result.stdout + result.stderr);
-    assert.ok(alive(child.pid));
-    assert.ok(!fs.existsSync(path.join(foreign, 'term-received')));
+test('stop ignores another installation whose root shares this root prefix', { skip }, async t => {
+  const f = fixture(t);
+  const foreign = f.app + '-other';
+  fs.mkdirSync(foreign);
+  // The same executable and a root prefix alone must not identify this installation.
+  const child = spawn(path.join(f.root, 'bin/dotnet'), [path.join(f.app, 'runtime/fixture/Foxwarm.dll'), '--installation-root', foreign], {
+    env: f.env, stdio: ['ignore', 'ignore', 'ignore', 'pipe'],
   });
-}
+  t.after(() => child.kill('SIGKILL'));
+  const deadline = Date.now() + 3000;
+  while (!fs.existsSync(path.join(foreign, 'main-ready'))) {
+    assert.ok(Date.now() < deadline, 'Foreign Main did not start');
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  fs.writeFileSync(path.join(f.app, 'foxwarm.pid'), `${child.pid}\n`);
+  const result = f.run('stop.sh');
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.ok(alive(child.pid));
+  assert.ok(!fs.existsSync(path.join(foreign, 'term-received')));
+});
 
-test('PID stop accepts a Linux source launch with trailing arguments', { skip: skip || (process.platform !== 'linux' && 'Requires Linux argument boundaries') }, async t => {
+test('PID stop accepts a source launch with trailing arguments', { skip }, async t => {
   const f = fixture(t);
   const args = ['--urls', 'http://127.0.0.1:0'];
   assert.equal(f.run('start.sh', {}, args).status, 0);

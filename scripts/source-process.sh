@@ -9,38 +9,16 @@ source_alive() {
 }
 
 source_main_pid() {
-    local args command selected argument previous="" identity=""
+    local args
     case "$1" in ''|*[!0-9]*|0|1) return 1 ;; esac
     source_alive "$1" || return 1
     args=$(ps -ww -o args= -p "$1" 2>/dev/null) || return 1
-    # Linux exposes argument boundaries. Preserve source launch arguments without
-    # mistaking a longer installation root containing spaces for those arguments.
-    if [ -r "/proc/$1/cmdline" ]; then
-        while IFS= read -r -d '' argument; do
-            if [ "$previous" = --installation-root ]; then identity=$argument; break; fi
-            previous=$argument
-        done < "/proc/$1/cmdline"
-        [ "$identity" = "$FOXWARM_DIR" ] || return 1
-    else
-        # Without argument boundaries, only the exact final identity is safe.
-        case "$args" in *" --installation-root $FOXWARM_DIR") ;; *) return 1 ;; esac
-    fi
-    # Source DLLs live in a stable runtime child, even after current is promoted.
-    # Also accept a resolved current outside the checkout (e.g. a linked build).
-    selected=$(cd "$FOXWARM_DIR/runtime/current" 2>/dev/null && pwd -P)
+    # Main may have trailing source arguments; require an installation-root boundary.
     case "$args" in
-        dotnet\ *|*/dotnet\ *) command=${args#* } ;;
-        *) command=$args ;;
-    esac
-    case "$command" in
-        "$FOXWARM_DIR/runtime/"*"/Foxwarm.dll --installation-root $FOXWARM_DIR"|\
-        "$FOXWARM_DIR/runtime/"*"/Foxwarm.dll --installation-root $FOXWARM_DIR "*|\
-        "$selected/Foxwarm.dll --installation-root $FOXWARM_DIR"|\
-        "$selected/Foxwarm.dll --installation-root $FOXWARM_DIR "*|\
-        "$FOXWARM_DIR/Foxwarm --installation-root $FOXWARM_DIR"|\
-        "$FOXWARM_DIR/Foxwarm --installation-root $FOXWARM_DIR "*|\
-        "$FOXWARM_DIR/Foxwarm.dll --installation-root $FOXWARM_DIR"|\
-        "$FOXWARM_DIR/Foxwarm.dll --installation-root $FOXWARM_DIR "*) return 0 ;;
+        *"Foxwarm.dll --installation-root $FOXWARM_DIR"|\
+        *"Foxwarm.dll --installation-root $FOXWARM_DIR "*|\
+        *"Foxwarm --installation-root $FOXWARM_DIR"|\
+        *"Foxwarm --installation-root $FOXWARM_DIR "*) return 0 ;;
     esac
     return 1
 }
