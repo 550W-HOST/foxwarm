@@ -42,6 +42,13 @@ internal sealed record ToolAuthorizationRequest(
 
 internal sealed record AuthorizationDecision(bool Allowed, JsonObject? Rule);
 
+internal enum CreationTargetDecision
+{
+    Allow,
+    Deny,
+    Indeterminate,
+}
+
 internal static class ToolAuthorizationEvaluation
 {
     private static bool Equal(JsonNode? expected, AuthorizationFact actual)
@@ -232,17 +239,81 @@ internal static class ToolAuthorizationEvaluation
         return true;
     }
 
+    private static bool ArgumentMatches(
+        string key,
+        JsonNode? matcher,
+        ToolAuthorizationRequest request
+    ) =>
+        matcher is JsonObject wrapper && wrapper["session"] is JsonObject session
+            ? SessionMatch(session, request)
+        : matcher is JsonObject task && task.ContainsKey("task")
+            ? request.Principal == "internal"
+                && request.TaskOwnerSession is not null
+                && request.TaskOwnerSession == request.Session
+        : matcher is JsonObject agent && agent["agent"] is JsonObject comparison
+            ? request.Principal == "internal"
+                && request.Agent is not null
+                && SessionWait.Text(Argument(request.Args, key).Value) is { Length: > 0 } target
+                && (target == request.Agent) == comparison["sameAgent"]!.GetValue<bool>()
+        : Scalar(matcher, Argument(request.Args, key));
+
     private static bool Arguments(JsonObject? match, ToolAuthorizationRequest request) =>
-        match is null
-        || match.All(pair =>
-            pair.Value is JsonObject wrapper && wrapper["session"] is JsonObject session
-                ? SessionMatch(session, request)
-            : pair.Value is JsonObject task && task.ContainsKey("task")
-                ? request.Principal == "internal"
-                    && request.TaskOwnerSession is not null
-                    && request.TaskOwnerSession == request.Session
-            : Scalar(pair.Value, Argument(request.Args, pair.Key))
-        );
+        match is null || match.All(pair => ArgumentMatches(pair.Key, pair.Value, request));
+
+    // Timer registration knows the creation Agent, not future names or settings. Preserve
+    // every possible first-match outcome; a mixed result is not an authorization grant.
+    internal static CreationTargetDecision EvaluateCreationTarget(
+        ToolAuthorizationPolicy policy,
+        ToolAuthorizationRequest request
+    )
+    {
+        if (
+            request.Source != "builtin"
+            || request.Name != "create_session"
+            || SessionWait.Text(request.Args["agentName"]) is not { Length: > 0 }
+        )
+            throw new InvalidDataException("Creation target authorization requires an Agent.");
+        var allow = false;
+        var deny = false;
+        foreach (var rule in policy.Value["rules"]!.AsArray().OfType<JsonObject>())
+        {
+            var match = rule["match"]!.AsObject();
+            if (
+                !rule["enabled"]!.GetValue<bool>()
+                || !Identity(match, request, deny: SessionWait.Text(rule["action"]) == "deny")
+                || !Paths(match["path"] as JsonObject, request)
+            )
+                continue;
+            var unknown = false;
+            var matches = true;
+            foreach (var pair in match["args"] as JsonObject ?? new())
+            {
+                if (
+                    pair.Key == "agentName"
+                    || pair.Key.StartsWith("agentName.", StringComparison.Ordinal)
+                )
+                    matches &= ArgumentMatches(pair.Key, pair.Value, request);
+                else
+                    unknown = true;
+            }
+            if (!matches)
+                continue;
+            allow |= SessionWait.Text(rule["action"]) == "allow";
+            deny |= SessionWait.Text(rule["action"]) == "deny";
+            if (!unknown)
+                return allow && deny ? CreationTargetDecision.Indeterminate
+                    : allow ? CreationTargetDecision.Allow
+                    : CreationTargetDecision.Deny;
+        }
+        var fallback =
+            request.Principal == "internal"
+            && SessionWait.Text(policy.Value["defaultAction"]) == "allow";
+        allow |= fallback;
+        deny |= !fallback;
+        return allow && deny ? CreationTargetDecision.Indeterminate
+            : allow ? CreationTargetDecision.Allow
+            : CreationTargetDecision.Deny;
+    }
 
     internal static bool Within(string? path, string root)
     {

@@ -185,6 +185,18 @@ Each table row is a separate resolver family; combine names only within the same
 
 Registered target resolution uses authoritative catalog IDs and direct-parent facts, not ID prefixes. Scalar argument matching instead compares the supplied value, before tool-local defaults/normalization. For example, `{ exists: false }` requires absence, not an empty string or `null` accepted as a default by some handlers. `session`, `skill.agentName`, timer new-session Agent fields, and channel attachment ownership do not gain relationship matching merely by having target-like arguments. A permitted Session list exposes its bounded catalog; individual read grants do not project that list into a private subset.
 
+### Session creation targets
+
+To restrict direct and scheduled creation to the caller's Agent without granting other tools, place this deny patch before broader matching allows:
+
+```yaml
+- action: deny
+  tool: {source: builtin, name: create_session}
+  args: {agentName: {agent: {sameAgent: false}}}
+```
+
+The Agent matcher is registered only for this exact builtin/argument pair; `sameAgent: true` is also supported. New-Session timer creation/updates reuse generic creation-target policy after normalization, including inherited targets. Their own timer permissions still apply. Future name/settings conditions can make the ordered check indeterminate and reject registration; this does not add trigger-time authorization or change human timer commands. See the [policy contract](../../../docs/code-index/units/tool-authorization.md#session-creation-agent-targets) and [scheduled-work boundary](../../../docs/code-index/behaviors/automation-and-scheduled-work.md#schedule-a-message-or-execute-a-quiet-script).
+
 ### Discovery visibility
 
 Discovery and default tool injection conservatively project the ordered policy without knowing every future argument or path. A definite identity-only deny can hide a tool; an argument/path/unknown-target denial does not prove that all invocations are denied. Conditional allows may keep the tool visible. Do not diagnose a rule by assuming every denied call removes its tool schema.
