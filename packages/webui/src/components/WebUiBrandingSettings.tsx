@@ -128,7 +128,7 @@ export default function WebUiBrandingSettings({ value, onInstanceNameChange, onT
             disabled={savingTabIcon}
             className={inputClass}
           />
-          <p className="mt-1 text-xs text-fw-text-muted">Use an emoji or very short text. Leave empty to use 🦊.</p>
+          <p className="mt-1 text-xs text-fw-text-muted">Use an emoji or very short text. Leave empty to use the Foxwarm icon.</p>
           {tabIconError && <p role="alert" className="mt-1 text-xs text-fw-danger">{tabIconError}</p>}
           <div className="mt-3 flex flex-wrap justify-end gap-2">
             <button

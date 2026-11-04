@@ -15,7 +15,7 @@
 .theme-scene svg { width: 13px; height: 13px; flex-shrink: 0; stroke-width: 1.7; }
 .theme-scene-sidebar { display: flex; flex-direction: column; width: 150px; flex-shrink: 0; border-right: 1px solid var(--foxwarm-color-border); background: var(--foxwarm-color-sidebar-surface); }
 .theme-scene-brand { display: flex; align-items: center; gap: 7px; padding: 16px 12px 13px; color: var(--foxwarm-color-text-strong); }
-.theme-scene-brand > span:first-child { font-size: 17px; }
+.theme-scene-brand-mark { width: 17px; height: 17px; flex-shrink: 0; }
 .theme-scene-brand strong { font-size: 13px; font-weight: 650; }
 .theme-scene-brand-settings { margin-left: auto; color: var(--foxwarm-color-text-muted); }
 .theme-scene-launchers { display: grid; gap: 5px; padding: 0 10px 14px; }

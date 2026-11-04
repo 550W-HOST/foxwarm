@@ -14,6 +14,12 @@ namespace Foxwarm;
 
 internal sealed class HttpServer
 {
+    internal static bool IsBrandAsset(PathString path) => path.Value is
+        "/favicon.svg" or "/favicon-32x32.png" or "/favicon-64x64.png"
+        or "/favicon-128x128.png" or "/icon.svg" or "/icon-192.png"
+        or "/icon-512.png" or "/icon-maskable-192.png" or "/icon-maskable-512.png"
+        or "/apple-touch-icon.png" or "/manifest.json";
+
     public WebApplication App { get; }
     internal McpInboundHttp InboundMcp { get; }
     internal bool WebUiEnabled { get; }
@@ -255,6 +261,14 @@ internal sealed class HttpServer
                     FileProvider = new PhysicalFileProvider(Path.Combine(distRoot, "assets")),
                     RequestPath = "/assets",
                 }
+            );
+            app.UseWhen(
+                context => IsBrandAsset(context.Request.Path),
+                branch => branch.UseStaticFiles(new StaticFileOptions
+                {
+                    FileProvider = new PhysicalFileProvider(distRoot),
+                    OnPrepareResponse = context => context.Context.Response.Headers.CacheControl = "private, no-cache",
+                })
             );
             var indexPath = Path.Combine(distRoot, "index.html");
             app.Use(

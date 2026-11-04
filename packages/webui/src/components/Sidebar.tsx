@@ -3,6 +3,7 @@ import SessionListCore from './SessionListCore'
 import type { BoundedSessionListPresentationProps, Session } from './SessionListCore'
 import type { SessionIdleNotificationMode } from '../sessionIdleNotifications'
 import CreateTabButton from './CreateTabButton'
+import { FoxwarmMark } from './FoxwarmMark'
 import CodeLaunchButton from './CodeLaunchButton'
 import GlobalUiSettingsMenu from './GlobalUiSettingsMenu'
 import { useState } from 'react'
@@ -90,7 +91,7 @@ export default function Sidebar({
     <div className="foxwarm-sidebar-panel h-full bg-fw-sidebar-surface border-r border-fw-border flex flex-col">
       <div className="shrink-0 p-4 border-b border-fw-border space-y-3">
         <div className="flex items-center justify-between gap-2">
-          <h1 className="text-xl font-bold text-fw-text-strong">🦊 Foxwarm</h1>
+          <h1 className="flex items-center gap-2 text-xl font-bold text-fw-text-strong"><FoxwarmMark className="h-6 w-6 shrink-0" />Foxwarm</h1>
           <div className="flex items-center gap-1">
             <button
               type="button"

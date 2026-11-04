@@ -85,7 +85,8 @@ internal sealed partial class SessionManager
             if (!await FileToolWrite.WriteBytesAtomic(path, bytes, false, () => { }, token))
                 throw new IOException("Inbound file already exists.");
         }
-        var descriptor = ChannelFileNames.Descriptor(filename, path, mime, node, isImage);
+        var image = isImage ?? Foxwarm.Images.ImageInputPolicy.IsImageInput(mime);
+        var descriptor = ChannelFileNames.Descriptor(filename, path, mime, node, image);
         var parts = new List<JsonObject>
         {
             new()
@@ -95,7 +96,7 @@ internal sealed partial class SessionManager
                     : caption + "\n\n" + descriptor,
             },
         };
-        if (isImage ?? mime.StartsWith("image/", StringComparison.Ordinal))
+        if (image)
         {
             var imageId = "image_" + Guid.NewGuid();
             var reference = await Images.PutAsync(bytes, mime, imageId, token);

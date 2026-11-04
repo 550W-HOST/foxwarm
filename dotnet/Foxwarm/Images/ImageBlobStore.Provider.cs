@@ -103,6 +103,13 @@ internal sealed partial class ImageBlobStore
                 var variant = new RasterCodec.Variant(bytes, mime);
                 if (!nativeReplay && !nonvisual)
                 {
+                    if (!ImageInputPolicy.IsProviderImage(mime))
+                    {
+                        var unsupported = AppendFileFallback(parts, part, mime, true);
+                        if (SessionWait.Text(message["role"]) == "tool")
+                            toolFiles.Add((unsupported, SessionWait.Text(part["toolUseId"])));
+                        continue;
+                    }
                     try
                     {
                         if (
@@ -223,7 +230,8 @@ internal sealed partial class ImageBlobStore
     private static JsonObject AppendFileFallback(
         List<JsonObject> parts,
         JsonObject part,
-        string mime
+        string mime,
+        bool unsupported = false
     )
     {
         var own = FileDescriptor(SessionWait.Text(part["text"]), mime);
@@ -256,7 +264,13 @@ internal sealed partial class ImageBlobStore
                 new[]
                 {
                     SessionWait.Text(part["text"]),
-                    "Image content was not sent because it exceeds the image input limit. "
+                    (
+                        unsupported
+                            ? "Image content was not sent because "
+                                + mime
+                                + " is not a supported image input format. "
+                            : "Image content was not sent because it exceeds the image input limit. "
+                    )
                         + (
                             imageId is not null
                                 ? "The original is retained as image "
