@@ -162,7 +162,9 @@ try {
       headless: true, acceptInsecureCerts: true, args: browserName === 'firefox' ? [] : ['--no-sandbox', '--disable-dev-shm-usage'] })
     const page = await browser.newPage(); await login(page)
     const cookie = (await page.cookies()).find(cookie => cookie.name === 'foxwarm_token')
-    assert.equal(cookie.path, '/preview/'); assert.equal(cookie.sameSite, 'Strict'); assert.equal(cookie.secure, true)
+    assert.equal(cookie.path, '/preview/'); assert.equal(cookie.sameSite, 'Lax'); assert.equal(cookie.secure, true)
+    // Retain coverage for existing Strict-cookie clients on the first three flows.
+    await page.browserContext().setCookie({ ...cookie, sameSite: 'Strict' })
     assert((await pageApi(page, 'setup/authorizations')).body.callbackUrl.includes('/preview/api/mcp/oauth/callback'))
     await configure(page, 'static'); peer.state.registration = 'dcr'
     await configure(page, 'oauth'); await authorize(page)
@@ -179,6 +181,8 @@ try {
     await configure(page, 'oauth', 'pre-registered', 'pre-registered-secret'); await authorize(page)
     assert.equal((await pageApi(page, 'setup/authorizations')).body.servers[0].hasClientSecret, true)
     assert(!JSON.stringify((await pageApi(page, 'setup/authorizations')).body).includes('pre-registered-secret'))
+    // New Lax cookies also complete the standalone cross-site OAuth return.
+    await page.browserContext().setCookie({ ...cookie, sameSite: 'Lax' })
     const standalone = await browser.newPage()
     const admitted = await pageApi(page, 'setup/authorizations/Fixture%20MCP/authorize', {})
     assert.equal(admitted.status, 200)
@@ -193,7 +197,9 @@ try {
     await browser.close(); browser = null
   }
   const callbacks = records.filter(record => record.path === '/preview/api/mcp/oauth/callback' && record.site === 'cross-site')
-  assert(callbacks.length >= 4); assert(callbacks.every(record => !record.cookie), 'Strict admin cookie is absent on genuine cross-site redirect')
+  assert(callbacks.length >= 4)
+  assert(callbacks.some(record => !record.cookie), 'Legacy Strict clients still complete a cross-site return without a cookie')
+  assert(callbacks.some(record => record.cookie), 'Lax clients carry their cookie on a top-level cross-site GET return')
   assert(records.filter(record => record.path === '/preview/api/mcp/oauth/complete').every(record => record.cookie), 'first-party POST authenticates completion')
   const first = (await api('POST', '/api/sessions', { agentId: 'main', sessionId: 'oauth-first' })).body.sessionId
   const second = (await api('POST', '/api/sessions', { agentId: 'main', sessionId: 'oauth-second' })).body.sessionId

@@ -1,15 +1,33 @@
 import test, { before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
-import { readFile, mkdir } from 'node:fs/promises'
+import { readFile, mkdir, mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import puppeteer from 'puppeteer-core'
 
 let browser, server, origin, html
 let status = 200, held = null, disconnect = false
 const requests = []
+const coldRequests = []
+let coldAuthStatus = 200, coldAlwaysLogin = false
 before(async () => {
   html = await readFile(new URL('../public/login.html', import.meta.url), 'utf8')
   server = createServer(async (req, res) => {
+    if (req.url.startsWith('/external')) {
+      res.writeHead(200, { 'Content-Type': 'text/html' })
+      res.end(`<a id="launch" href="${origin}/cold/">Open app</a><form method="post" action="${origin}/cold/probe"><button id="post">Post</button></form><iframe src="${origin}/cold/frame"></iframe>`); return
+    }
+    if (req.url.startsWith('/cold/')) {
+      const hasCookie = (req.headers.cookie || '').includes('foxwarm_token=valid-cold-token')
+      coldRequests.push({ path: req.url, method: req.method, hasCookie })
+      if (req.url === '/cold/api/auth/session') {
+        res.writeHead(hasCookie ? coldAuthStatus : 401, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ role: 'admin' })); return
+      }
+      res.writeHead(200, { 'Content-Type': 'text/html' })
+      res.end(req.url === '/cold/' ? (hasCookie && !coldAlwaysLogin ? '<h1>Signed in</h1>' : html) : 'probe'); return
+    }
     if (req.url.endsWith('/api/auth')) {
       let body = ''; for await (const chunk of req) body += chunk
       requests.push({ path: req.url, method: req.method, token: JSON.parse(body).token })
@@ -113,7 +131,7 @@ test('pending authentication prevents duplicate submits, persists the scoped tok
     await page.waitForFunction(() => location.pathname === '/nested/')
     assert.deepEqual(requests.slice(start), [{ path: '/nested/api/auth', method: 'POST', token: 'demo-admin-token' }])
     assert.equal(await page.evaluate(() => localStorage.getItem('foxwarm_token')), 'demo-admin-token')
-    assert.ok((await context.cookies()).some(cookie => cookie.name === 'foxwarm_token' && cookie.path === '/nested/' && cookie.sameSite === 'Strict'))
+    assert.ok((await context.cookies()).some(cookie => cookie.name === 'foxwarm_token' && cookie.path === '/nested/' && cookie.sameSite === 'Lax'))
   } finally { release(); held = null; await context.close() }
 })
 
@@ -153,4 +171,94 @@ test('authentication timeout returns to a usable form', async () => {
     assert.equal(await page.$eval('#token', el => !el.readOnly), true)
     assert.equal(await page.$eval('#submit', el => !el.disabled), true)
   } finally { release(); held = null; await context.close() }
+})
+
+async function coldContext(sameSite = 'Strict') {
+  const { context, page } = await pageFor()
+  await context.setCookie({ name: 'foxwarm_token', value: 'valid-cold-token', domain: '127.0.0.1', path: '/cold/', sameSite, expires: Date.now() / 1000 + 86400 })
+  return { context, page }
+}
+
+const externalUrl = () => origin.replace('127.0.0.1', 'localhost') + '/external'
+
+test('external cold navigation migrates existing Strict cookie through validated same-origin recovery', async () => {
+  const { context, page } = await coldContext()
+  try {
+    coldRequests.length = 0
+    await page.goto(externalUrl())
+    await page.click('#launch')
+    await page.waitForFunction(() => document.querySelector('h1')?.textContent === 'Signed in')
+    const launches = coldRequests.filter(r => r.path === '/cold/')
+    assert.equal(launches[0].hasCookie, false, 'external first navigation omits Strict cookie')
+    assert.equal(launches.at(-1).hasCookie, true)
+    assert(coldRequests.some(r => r.path === '/cold/api/auth/session' && r.hasCookie))
+    assert.equal((await context.cookies()).find(c => c.path === '/cold/').sameSite, 'Lax')
+    assert.equal(await page.evaluate(() => localStorage.getItem('foxwarm_token')), null, 'recovery needs no localStorage token')
+  } finally { await context.close() }
+})
+
+test('Lax cookie authenticates external top-level GET but not cross-site POST or iframe', async () => {
+  const { context, page } = await coldContext('Lax')
+  try {
+    coldRequests.length = 0
+    await page.goto(externalUrl(), { waitUntil: 'networkidle0' })
+    assert(coldRequests.some(r => r.path === '/cold/frame' && !r.hasCookie))
+    await page.click('#post'); await page.waitForFunction(() => location.pathname === '/cold/probe')
+    assert(coldRequests.some(r => r.method === 'POST' && !r.hasCookie))
+    await page.goto(externalUrl())
+    await page.click('#launch'); await page.waitForFunction(() => document.querySelector('h1')?.textContent === 'Signed in')
+    assert(coldRequests.some(r => r.path === '/cold/' && r.hasCookie))
+    assert(!coldRequests.some(r => r.path === '/cold/api/auth/session'), 'new Lax login needs no recovery roundtrip')
+  } finally { await context.close() }
+})
+
+test('failed legacy recovery preserves credentials and leaves manual sign-in usable', async () => {
+  for (const code of [401, 503]) {
+    const { context, page } = await coldContext()
+    try {
+      coldAuthStatus = code
+      await page.goto(externalUrl()); await page.click('#launch')
+      await page.waitForResponse(r => r.url().endsWith('/cold/api/auth/session'))
+      assert.equal(await page.$eval('#submit', el => el.disabled), false)
+      assert.equal((await context.cookies()).find(c => c.path === '/cold/').value, 'valid-cold-token')
+      assert.equal(new URL(page.url()).pathname, '/cold/')
+    } finally { coldAuthStatus = 200; await context.close() }
+  }
+})
+
+test('legacy recovery redirect guard prevents a loop if the root still serves login', async () => {
+  const { context, page } = await coldContext()
+  try {
+    coldAlwaysLogin = true; coldRequests.length = 0
+    await page.goto(externalUrl()); await page.click('#launch')
+    await page.waitForFunction(() => sessionStorage.getItem('foxwarm_cookie_recovery:/cold/') === '1')
+    await new Promise(resolve => setTimeout(resolve, 600))
+    assert.equal(coldRequests.filter(r => r.path === '/cold/api/auth/session').length, 1)
+    assert.equal(await page.$eval('#submit', el => el.disabled), false)
+  } finally { coldAlwaysLogin = false; await context.close() }
+})
+
+test('persistent browser profile keeps Lax login across process shutdown and external relaunch', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'foxwarm-pwa-auth-'))
+  let instance
+  const launch = () => puppeteer.launch({ executablePath: process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium', headless: true, userDataDir: dir, args: ['--no-sandbox'] })
+  try {
+    instance = await launch()
+    let page = await instance.newPage()
+    await page.goto(`${origin}/nested/login.html`)
+    await page.type('#token', 'valid-cold-token'); await page.click('#submit')
+    await page.waitForFunction(() => location.pathname === '/nested/')
+    await instance.close(); instance = await launch()
+    page = await instance.newPage()
+    const requests = []
+    page.on('request', request => { if (request.url() === `${origin}/nested/`) requests.push(request) })
+    await page.goto(externalUrl())
+    await page.evaluate(url => { const a = document.querySelector('#launch'); a.href = url }, `${origin}/nested/`)
+    await page.click('#launch'); await page.waitForFunction(() => location.pathname === '/nested/')
+    const cookie = (await instance.cookies()).find(c => c.name === 'foxwarm_token' && c.path === '/nested/')
+    assert(cookie); assert.equal(cookie.sameSite, 'Lax'); assert.equal(cookie.session, false)
+    assert.equal(await page.evaluate(() => localStorage.getItem('foxwarm_token')), 'valid-cold-token')
+    // The server's received headers are checked in the separate cross-site GET test.
+    assert.equal(requests.length, 1)
+  } finally { await instance?.close(); await rm(dir, { recursive: true, force: true }) }
 })
