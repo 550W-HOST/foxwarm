@@ -31,7 +31,7 @@ before(async () => {
     const response = (id, seq, name, data) => ({role:'tool',parts:[{functionResponse:{tool_use_id:id,name,response:data}}],__meta:{seq,timestamp:1700000000000+seq}})
     const toolBody = 'A'.repeat(900) + ' CJK目标尾部 & <safe>'
     const history = [...old,
-      call('exec-a',109,'exec',{command:'echo command-needle'}), response('exec-a',110,'exec',{output:toolBody}),
+      call('exec-a',109,'exec',{command:'echo command-needle',cwd:'/workspace/EXEC_CWD_NEEDLE',timeout:0,extra:false}), response('exec-a',110,'exec',{output:toolBody}),
       call('read-b',111,'read',{filePath:'search-target.txt'}), response('read-b',112,'read',{output:'read-file-needle\\nagain'}),
       call('custom-c',113,'unknown_tool',{payload:{needle:'fallback-needle'}}), response('custom-c',114,'unknown_tool',{output:{data:'json-needle'}}),
       {role:'model',parts:[{thinking:'First reasoning summary'},{thinking:'Reasoning **thought-needle** here'},{thinking:'',providerMeta:{thinkingSummaries:[],encryptedThinking:'opaque-search-not-visible'}},{text:'Final hello **world** &amp; safe content'},{text:'Text plus image keeps visible-needle',inlineData:{mimeType:'image/png',data:'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='}}],__meta:{seq:115,timestamp:1700000000115,usage:{reasoningTokens:31}}},
@@ -47,6 +47,14 @@ before(async () => {
       {role:'model',parts:[{text:'start\\n\\n\\\\[\\nZ\\n\\\\]\\n\\nZ after'}],__meta:{seq:128,timestamp:1700000000128}},
       {role:'model',modelVisible:false,parts:[{text:'⚠️ LLM Error: Attempt 1/5 failed: LLM_RETRY_SEARCH_TARGET\\nAttempt 2/5 failed: second retry'}],__meta:{seq:129,timestamp:1700000000129,noticeType:'llm-retry'}},
     ]
+    history.find(row => row.__meta.seq === 109).parts.push(
+      { functionCall: { id: 'script-inline', name: 'run_script', args: { summary: 'SCRIPT_PURPOSE_NEEDLE', code: 'value = "SCRIPT_SOURCE_NEEDLE"\\nreturn value', args: { marker: 'SCRIPT_INPUT_NEEDLE', enabled: false }, mode: 'foreground' } } },
+      { functionCall: { id: 'script-file', name: 'run_script', args: { filePath: './scripts/SCRIPT_PATH_NEEDLE.py', node: 'SCRIPT_NODE_NEEDLE', argsJson: '{"value":"SCRIPT_JSON_NEEDLE"}' } } },
+    )
+    history.find(row => row.__meta.seq === 110).parts.push(
+      { functionResponse: { tool_use_id: 'script-inline', name: 'run_script', response: { status: 'completed', result: 1 } } },
+      { functionResponse: { tool_use_id: 'script-file', name: 'run_script', response: { status: 'completed', result: 2 } } },
+    )
     const channelAttrs = {type:'channel',channelType:'webui',time:'METADATA_ONLY',hint:'direct user message via channel'}
     const wrapperBodies = ${JSON.stringify(wrapperBodies)}
     // Text-only channel ingress stores the complete envelope in one system part; attachments use split boundaries.
@@ -240,6 +248,20 @@ test('finds already-loaded older unmounted rows, read results, reasoning, render
   }
   const state=await snapshot();assert.equal(state.oldMounted,true);assert.equal(state.archive,0)
   assert.equal(await page.$eval('.foxwarm-context-block-card [aria-label="Expand CTX-BLOCK B#7"]',el=>el.getAttribute('aria-expanded')),'false')
+  await page.click('[aria-label="Close search"]')
+})
+
+test('execution argument Search reaches supplied options, full script code and input objects', async () => {
+  await page.click('button[aria-label="Find in chat"]')
+  for (const needle of ['EXEC_CWD_NEEDLE', 'timeout: 0', 'extra: false', 'SCRIPT_PURPOSE_NEEDLE', 'SCRIPT_SOURCE_NEEDLE', 'SCRIPT_INPUT_NEEDLE', 'SCRIPT_PATH_NEEDLE', 'SCRIPT_NODE_NEEDLE', 'SCRIPT_JSON_NEEDLE']) {
+    await query(needle)
+    await page.waitForFunction(value => [...CSS.highlights].some(([name, highlights]) => name.startsWith('foxwarm-chat-search-') && [...highlights][0]?.toString() === value), { timeout: 4000 }, needle)
+    const state = await snapshot()
+    assert.equal(state.hits, '1/1', needle)
+    assert.equal(state.surface, 'call', needle)
+    assert.equal(state.visible, true, needle)
+  }
+  assert.equal((await snapshot()).archive, 0)
   await page.click('[aria-label="Close search"]')
 })
 

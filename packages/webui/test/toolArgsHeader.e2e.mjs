@@ -1,7 +1,7 @@
 import test, { after, before } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
-import { readdir, readFile } from 'node:fs/promises'
+import { readdir, readFile, mkdir } from 'node:fs/promises'
 import { build } from './browserFixtureBundle.mjs'
 import puppeteer from 'puppeteer-core'
 
@@ -39,12 +39,24 @@ async function buildFixtureBundle() {
     const longResult = 'long result content '.repeat(70)
     const fixtures = {
       summarizedExec: {
-        call: { id: 'summary-exec', name: 'exec', args: { summary: 'Inspect source layout', command: 'export SETUP=1; printf source' } },
+        call: { id: 'summary-exec', name: 'exec', args: { summary: 'Inspect source layout', command: 'export SETUP=1; printf source\\n' + longCommand + '\\nprintf finished', cwd: '/workspace/source', timeout: 0, option: false, extra: null } },
         response: { tool_use_id: 'summary-exec', name: 'exec', response: { output: 'source result' } },
       },
       summarizedScript: {
-        call: { id: 'summary-script', name: 'run_script', args: { summary: 'Collect task evidence', code: 'return 42' } },
+        call: { id: 'summary-script', name: 'run_script', args: { summary: 'Collect task evidence', code: '\\n# Collect evidence\\nrecords = call_tool(\"task\", {\"action\": \"list\"})\\nreturn records', args: { enabled: false, limit: 0, marker: null }, mode: 'foreground', timeoutSecs: 30 } },
         response: { tool_use_id: 'summary-script', name: 'run_script', response: { status: 'completed', result: 42 } },
+      },
+      fileScript: {
+        call: { id: 'file-script', name: 'run_script', args: { summary: 'Run the source audit', filePath: './scripts/audit.py', node: 'other-node', argsJson: '{"limit":0,"enabled":false}', timeoutSecs: 0 } },
+        response: { tool_use_id: 'file-script', name: 'run_script', response: { status: 'completed', result: { count: 2 } } },
+      },
+      unusualExec: {
+        call: { id: 'unusual-exec', name: 'exec', args: { summary: null, command: { shell: 'historical command' }, cwd: null, timeout: 0, enabled: false } },
+        response: { tool_use_id: 'unusual-exec', name: 'exec', response: { error: 'Invalid historical arguments' } },
+      },
+      unusualScript: {
+        call: { id: 'unusual-script', name: 'run_script', args: { summary: '', code: false, filePath: null, args: 0, argsJson: '', mode: null } },
+        response: { tool_use_id: 'unusual-script', name: 'run_script', response: { error: 'Invalid historical arguments' } },
       },
       unifiedExec: {
         call: { id: 'summary-unified', name: 'call_tool', args: { toolId: 'node:provider/worker/exec', argsJson: JSON.stringify({ summary: 'Compile source', command: 'build-project' }) } },
@@ -97,11 +109,16 @@ async function buildFixtureBundle() {
     }
     window.openedCodePaths = []
     const onOpenCodeFile = (filePath, lines) => window.openedCodePaths.push({ filePath, lines })
-    for (const [id, fixture] of Object.entries(fixtures)) {
+    window.toolFixtures = fixtures
+    const toolRoots = {}
+    window.updateToolFixture = (id, changes = {}) => {
+      const fixture = fixtures[id] = { ...fixtures[id], ...changes }
       const msg = { role: 'model', parts: [{ functionCall: fixture.call }], __meta: { timestamp: Date.now() } }
-      const nextMsg = { role: 'tool', parts: [{ functionResponse: fixture.response }] }
-      createRoot(document.getElementById(id)).render(React.createElement(InterleavedToolGroup, { msg, nextMsg, messageKeyPrefix: id, onOpenCodeFile }))
+      const nextMsg = { role: 'tool', parts: fixture.response ? [{ functionResponse: fixture.response }] : [] }
+      toolRoots[id] ||= createRoot(document.getElementById(id))
+      toolRoots[id].render(React.createElement(InterleavedToolGroup, { msg, nextMsg, messageKeyPrefix: id, onOpenCodeFile, hideCollapsedContent: fixture.hideCollapsedContent, neutralSuccess: fixture.neutralSuccess }))
     }
+    for (const id of Object.keys(fixtures)) window.updateToolFixture(id)
     const timelineRoot = createRoot(document.getElementById('timeline'))
     const timelineMessages = [
       { role: 'model', parts: [{ functionCall: { id: 'timeline-call', name: 'exec', args: { command: 'printf selectable-command' } } }], __meta: { seq: 1 } },
@@ -135,7 +152,7 @@ async function mountFixture({ width, height, style = 'default', dark = false }) 
   await page.evaluate(({ style, dark }) => {
     window.setFixtureTheme(style, dark)
   }, { style, dark })
-  await page.waitForFunction(() => document.querySelectorAll('.foxwarm-tool-card').length === 14)
+  await page.waitForFunction(() => document.querySelectorAll('.foxwarm-tool-card').length === 17)
 }
 
 async function readVisualState(id) {
@@ -314,7 +331,7 @@ before(async () => {
   const bundle = await buildFixtureBundle()
   server = createServer((_request, response) => {
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-  response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}</style><style>html,body{margin:0;width:100%;overflow-x:hidden}main{width:100%;padding:12px}.fixture{width:100%;min-width:0}</style></head><body><main>${['summarizedExec', 'summarizedScript', 'unifiedExec', 'exec', 'edit', 'error', 'send', 'sendAlias', 'child', 'malformedPatch', 'malformedExec', 'rawNoError', 'rawMissing', 'noResult', 'timeline'].map(id => `<div id="${id}" class="fixture"></div>`).join('')}</main><script>${bundle}</script></body></html>`)
+  response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}</style><style>html,body{margin:0;width:100%;overflow-x:hidden}main{width:100%;padding:12px}.fixture{width:100%;min-width:0}</style></head><body><main>${['fileScript', 'unusualExec', 'unusualScript', 'summarizedExec', 'summarizedScript', 'unifiedExec', 'exec', 'edit', 'error', 'send', 'sendAlias', 'child', 'malformedPatch', 'malformedExec', 'rawNoError', 'rawMissing', 'noResult', 'timeline'].map(id => `<div id="${id}" class="fixture"></div>`).join('')}</main><script>${bundle}</script></body></html>`)
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   fixtureUrl = `http://127.0.0.1:${server.address().port}`
@@ -557,17 +574,90 @@ test('Detailed and expanded-group member result clicks use the Timeline manual d
 })
 
 
-test('tool activity headers show supplied purposes and keep original execution arguments on expansion', async () => {
-  await mountFixture({ width: 1280, height: 900 })
-  for (const [id, expected] of [['summarizedExec', 'Inspect source layout'], ['summarizedScript', 'Collect task evidence'], ['unifiedExec', 'Compile source']]) {
-    const summary = await page.$eval(`#${id} .foxwarm-tool-call-summary`, element => element.textContent)
-    assert.equal(summary, expected)
+async function argumentScreenshot(name) {
+  const directory = process.env.FOXWARM_E2E_ARGUMENT_SCREENSHOT_DIR
+  if (!directory) return
+  await mkdir(directory, { recursive: true })
+  await page.evaluate(() => {
+    const ids = ['summarizedExec', 'summarizedScript', 'fileScript']
+    document.querySelectorAll('.fixture').forEach(element => { element.style.display = ids.includes(element.id) ? '' : 'none' })
+    for (const id of ids) {
+      document.querySelector('main').appendChild(document.getElementById(id))
+      window.updateToolFixture(id, { neutralSuccess: true })
+    }
+    window.scrollTo(0, 0)
+  })
+  await waitForCardTransitions()
+  const clip = await page.evaluate(() => ({ x: 0, y: 0, width: window.innerWidth, height: Math.ceil(Math.max(...['summarizedExec', 'summarizedScript', 'fileScript'].map(id => document.getElementById(id).getBoundingClientRect().bottom))) + 12 }))
+  await page.screenshot({ path: `${directory}/${name}.png`, clip, captureBeyondViewport: true })
+}
+
+test('single-line execution headers follow the caller presentation mode, not result arrival', async () => {
+  await mountFixture({ width: 1100, height: 780, style: '550a', dark: true })
+  const expected = { summarizedExec: 'export SETUP=1; printf source', summarizedScript: '# Collect evidence', fileScript: './scripts/audit.py', unifiedExec: 'build-project' }
+  for (const [id, prefix] of Object.entries(expected)) {
+    assert.ok((await page.$eval(`#${id} .foxwarm-tool-call-summary`, element => element.textContent)).startsWith(prefix))
+    const geometry = await page.$eval(`#${id} .foxwarm-tool-call-summary`, element => ({ height: element.getBoundingClientRect().height, lineHeight: parseFloat(getComputedStyle(element).lineHeight) }))
+    assert.ok(geometry.height <= geometry.lineHeight + 1)
+    assert.equal(await page.$(`#${id} .foxwarm-tool-call-args`), null)
   }
-  assert.match(await page.$eval('#exec .foxwarm-tool-call-summary', element => element.textContent), /^printf long-command-argument/)
-  assert.match(await page.$eval('#unifiedExec .foxwarm-tool-tag', element => element.textContent), /exec/)
-  assert.equal(await page.$eval('#unifiedExec .foxwarm-tool-header', element => element.dataset.toolHeaderTone), 'error')
-  await page.click('#summarizedExec .foxwarm-tool-call-summary')
-  const expanded = await page.$eval('#summarizedExec .foxwarm-tool-call-args', element => element.textContent)
-  assert.match(expanded, /Inspect source layout/)
-  assert.match(expanded, /export SETUP=1; printf source/)
+  const before = await page.$eval('#summarizedExec .foxwarm-tool-call-summary', element => element.textContent)
+  await argumentScreenshot('collapsed-with-results')
+  await page.evaluate(() => window.updateToolFixture('summarizedExec', { response: null }))
+  await page.waitForFunction(() => !document.querySelector('#summarizedExec .foxwarm-tool-result-preview'))
+  assert.equal(await page.$eval('#summarizedExec .foxwarm-tool-call-summary', element => element.textContent), before)
+  await page.evaluate(() => {
+    for (const id of ['summarizedExec', 'summarizedScript', 'fileScript', 'unifiedExec']) window.updateToolFixture(id, { hideCollapsedContent: true })
+  })
+  await page.waitForFunction(() => document.querySelector('#summarizedExec .foxwarm-tool-call-summary').textContent === 'Inspect source layout')
+  for (const [id, purpose] of [['summarizedExec', 'Inspect source layout'], ['summarizedScript', 'Collect task evidence'], ['fileScript', 'Run the source audit'], ['unifiedExec', 'Compile source']]) {
+    assert.equal(await page.$eval(`#${id} .foxwarm-tool-call-summary`, element => element.textContent), purpose)
+    assert.equal(await page.$(`#${id} .foxwarm-tool-result-preview`), null)
+  }
+  await argumentScreenshot('collapsed-purpose-only')
+})
+
+test('expanded execution arguments retain complete copyable source, inputs and explicit options', async () => {
+  await mountFixture({ width: 1100, height: 780, style: '550a', dark: true })
+  await page.evaluate(() => {
+    window.copiedSources = []
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async text => window.copiedSources.push(text) } })
+  })
+  const beforeResult = await page.$eval('#summarizedExec .foxwarm-tool-result-preview', element => element.textContent)
+  for (const id of ['summarizedExec', 'summarizedScript', 'fileScript']) await page.click(`#${id} .foxwarm-tool-call-summary`)
+  for (const [id, key, title] of [['summarizedExec', 'command', 'Copy command'], ['summarizedScript', 'code', 'Copy script']]) {
+    const original = await page.evaluate((id, key) => window.toolFixtures[id].call.args[key], id, key)
+    assert.equal(await page.$eval(`#${id} .foxwarm-tool-execution-code pre`, element => element.textContent), original)
+    const selected = await page.$eval(`#${id} .foxwarm-tool-execution-code pre`, element => {
+      const range = document.createRange(); range.selectNodeContents(element)
+      const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range)
+      return selection.toString()
+    })
+    assert.equal(selected, original)
+    await clickSurface(`#${id} button[title="${title}"]`)
+    assert.equal(await page.evaluate(() => window.copiedSources.at(-1)), original)
+    assert.ok(await page.$(`#${id} .foxwarm-tool-call-args`), 'copy must not collapse the card')
+  }
+  assert.ok(await page.$('#summarizedScript .foxwarm-tool-execution-code .text-fw-syntax-keyword'))
+  const options = await page.$eval('#summarizedExec .foxwarm-tool-execution-options', element => element.textContent)
+  for (const value of ['cwd: /workspace/source', 'timeout: 0', 'option: false', 'extra: null']) assert.ok(options.includes(value))
+  const input = await page.$eval('#summarizedScript .foxwarm-tool-execution-input', element => element.textContent)
+  for (const value of ['"enabled": false', '"limit": 0', '"marker": null']) assert.ok(input.includes(value))
+  assert.equal(await page.$('#fileScript .foxwarm-tool-execution-code'), null)
+  assert.equal(await page.$('#fileScript .foxwarm-tool-code-open'), null)
+  const fileArgs = await page.$eval('#fileScript .foxwarm-tool-call-args', element => element.textContent)
+  for (const value of ['filePath: ./scripts/audit.py', 'node: other-node', 'argsJson: {"limit":0,"enabled":false}', 'timeoutSecs: 0']) assert.ok(fileArgs.includes(value))
+  assert.equal(await page.$eval('#summarizedExec .foxwarm-tool-result-content', element => element.textContent), beforeResult)
+  await page.evaluate(() => window.getSelection().removeAllRanges())
+  await argumentScreenshot('expanded-arguments')
+})
+
+test('unusual historical execution field values remain readable without code coercion', async () => {
+  await mountFixture({ width: 900, height: 800 })
+  for (const id of ['unusualExec', 'unusualScript']) await page.click(`#${id} .foxwarm-tool-call-summary`)
+  const exec = await page.$eval('#unusualExec .foxwarm-tool-call-args', element => element.textContent)
+  for (const value of ['summary: null', 'command: {', '"shell": "historical command"', 'cwd: null', 'timeout: 0', 'enabled: false']) assert.ok(exec.includes(value))
+  const script = await page.$eval('#unusualScript .foxwarm-tool-call-args', element => element.textContent)
+  for (const value of ['summary: ""', 'code: false', 'filePath: null', 'args: 0', 'argsJson: ""', 'mode: null']) assert.ok(script.includes(value))
+  assert.equal(await page.$$eval('#unusualExec .foxwarm-tool-execution-code, #unusualScript .foxwarm-tool-execution-code', elements => elements.length), 0)
 })
