@@ -18,6 +18,9 @@ import testEnvironment from './test-process-env.cjs'
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(scriptDir, '../..')
+// A failed Chromium fixture gets the original attempt plus exactly eight retries.
+// Keep this runner-local: retries do not apply to preparation, other groups, or shards.
+const BROWSER_FIXTURE_RETRY_COUNT = 8
 const target = process.argv[2] || 'unit'
 const validTargets = new Set(['inventory', 'unit', 'reference', 'managed', 'published', 'browser', 'app', 'all'])
 let shard = null
@@ -233,6 +236,7 @@ function browserGroup() {
         }),
         // This fixture rebuilds the WebUI dist consumed by its peers.
         exclusive: path.basename(file) === 'setupModels.e2e.mjs',
+        browserFixture: true,
       })),
     ],
     env: {
@@ -362,24 +366,57 @@ for (const group of groups) {
   const groupLog = group.stepArtifacts ? null : fs.createWriteStream(path.join(runBase, 'logs', `${group.name}.log`), { flags: 'w' })
   async function executeStep(order) {
     const original = group.steps[order]
-    const step = { ...original }
-    const log = groupLog || fs.createWriteStream(path.join(logDirectory, `${step.name}.log`), { flags: 'w' })
-    if (group.stepArtifacts && !step.prepareDependencies) {
-      const screenshots = path.join(runBase, 'screenshots', step.name)
-      await fsp.mkdir(screenshots, { recursive: true })
-      step.env = { ...step.env, FOXWARM_E2E_SCREENSHOT_DIR: screenshots }
-    }
-    const started = Date.now()
-    try {
-      if (interrupted) return
-      const result = await runStep(group, step, log)
-      summary.push({ order, group: group.name, step: step.name, durationMs: Date.now() - started, ...result })
-      if (result.code !== 0) {
-        groupCode = result.code
-        if (step.prepareDependencies) preparationFailed = true
+    const retryable = group.name === 'webui-browser' && original.browserFixture
+    const attempts = retryable ? BROWSER_FIXTURE_RETRY_COUNT + 1 : 1
+    let allRetriesPassed = true
+    for (let attempt = 0; attempt < attempts && !interrupted; attempt++) {
+      const step = { ...original }
+      const suffix = retryable && attempt > 0 ? `.retry-${attempt}` : ''
+      const logName = `${step.name}${suffix}.log`
+      const log = groupLog || fs.createWriteStream(path.join(logDirectory, logName), { flags: 'w' })
+      if (group.stepArtifacts && !step.prepareDependencies) {
+        const screenshots = path.join(runBase, 'screenshots', `${step.name}${suffix}`)
+        await fsp.mkdir(screenshots, { recursive: true })
+        step.env = {
+          ...step.env,
+          FOXWARM_E2E_SCREENSHOT_DIR: screenshots,
+          ...(retryable ? { FOXWARM_BROWSER_FIXTURE_ATTEMPT: String(attempt) } : {}),
+        }
       }
-    } finally {
-      if (!groupLog) await new Promise(resolve => log.end(resolve))
+      const started = Date.now()
+      try {
+        const result = await runStep(group, step, log)
+        summary.push({
+          order,
+          group: group.name,
+          step: step.name,
+          attempt,
+          retry: attempt > 0,
+          durationMs: Date.now() - started,
+          ...result,
+        })
+        if (result.code === 0) {
+          if (attempt === 0) return
+          // A retry only recovers the fixture after every retry has passed.
+          // Continue running the remaining attempts even after a pass.
+        } else {
+          if (attempt > 0) allRetriesPassed = false
+          if (!retryable) {
+            groupCode = result.code
+            if (step.prepareDependencies) preparationFailed = true
+          }
+        }
+        if (!retryable && result.code !== 0) return
+      } finally {
+        if (!groupLog) await new Promise(resolve => log.end(resolve))
+      }
+    }
+    if (retryable) {
+      const effectiveCode = !interrupted && allRetriesPassed ? 0 : 1
+      for (const row of summary) {
+        if (row.group === group.name && row.order === order) row.effectiveCode = effectiveCode
+      }
+      if (effectiveCode !== 0) groupCode = effectiveCode
     }
   }
   try {
@@ -416,4 +453,4 @@ for (const group of [...new Set(summary.map(item => item.group))]) {
 printInventory()
 console.log(`Test artifacts: ${path.relative(repoRoot, runBase)}`)
 await fsp.rm(shortTempBase, { recursive: true, force: true })
-process.exit(interrupted || summary.some(item => item.code !== 0) ? 1 : 0)
+process.exit(interrupted || summary.some(item => (item.effectiveCode ?? item.code) !== 0) ? 1 : 0)

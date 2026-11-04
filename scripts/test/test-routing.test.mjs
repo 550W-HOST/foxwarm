@@ -280,18 +280,64 @@ if (name === 'c.e2e.mjs') process.exit(7);
   const summary = await f.summary()
   assert.notEqual(summary.find(step => step.step === 'c.e2e.mjs').code, 0)
   assert(summary.filter(step => step.step !== 'c.e2e.mjs').every(step => step.code === 0))
-  assert.deepEqual(rows.slice(6).map(row => [row.name, row.event]), [
+  assert.deepEqual(rows.slice(-4).map(row => [row.name, row.event]), [
     ['setupModels.e2e.mjs', 'start'], ['setupModels.e2e.mjs', 'end'], ['z.e2e.mjs', 'start'], ['z.e2e.mjs', 'end'],
   ])
   const starts = rows.filter(row => row.event === 'start')
-  assert.equal(new Set(starts.map(row => row.data)).size, files.length)
-  assert.equal(new Set(starts.map(row => row.screenshots)).size, files.length)
+  assert.equal(new Set(starts.map(row => row.data)).size, starts.length)
+  assert.equal(new Set(starts.map(row => row.screenshots)).size, starts.length)
   const [run] = await fs.readdir(path.join(f.root, 'artifacts'))
   for (const row of starts) {
     assert.equal(await fs.readFile(path.join(row.screenshots, 'same-name.png'), 'utf8'), row.name)
-    const log = await fs.readFile(path.join(f.root, 'artifacts', run, 'logs', 'webui-browser', row.name + '.log'), 'utf8')
+    const attempt = starts.filter(candidate => candidate.name === row.name).indexOf(row)
+    const logName = row.name + (attempt ? `.retry-${attempt}` : '') + '.log'
+    const log = await fs.readFile(path.join(f.root, 'artifacts', run, 'logs', 'webui-browser', logName), 'utf8')
     assert(log.includes('OUTPUT:' + row.name))
     for (const other of files.filter(file => file !== row.name)) assert(!log.includes('OUTPUT:' + other))
+  }
+})
+
+test('failed browser fixture recovers only after all eight retries pass', unix, async t => {
+  const f = await fixture(t)
+  await f.write('packages/webui/test/example.e2e.mjs', `
+import fs from 'node:fs';
+const attempt = Number(process.env.FOXWARM_BROWSER_FIXTURE_ATTEMPT);
+fs.appendFileSync(${JSON.stringify(f.journal)}, JSON.stringify('attempt:' + attempt) + '\\n');
+if (attempt === 0) process.exit(7);
+`)
+  const result = await f.run('browser')
+  assert.equal(result.code, 0, result.stdout + result.stderr)
+  assert.deepEqual(await f.calls(), ['browser-prepare', 'browser-ready', ...Array.from({ length: 9 }, (_, attempt) => `attempt:${attempt}`)])
+  const rows = (await f.summary()).filter(step => step.step === 'example.e2e.mjs')
+  assert.equal(rows.length, 9)
+  assert.equal(rows[0].code, 1)
+  assert.deepEqual(rows.map(row => row.attempt), Array.from({ length: 9 }, (_, attempt) => attempt))
+  assert.deepEqual(rows.map(row => row.retry), [false, ...Array(8).fill(true)])
+})
+
+test('a failed retry retains browser fixture failure and owns each retry artifact', unix, async t => {
+  const f = await fixture(t)
+  await f.write('packages/webui/test/example.e2e.mjs', `
+import fs from 'node:fs';
+const attempt = Number(process.env.FOXWARM_BROWSER_FIXTURE_ATTEMPT);
+fs.writeFileSync(process.env.FOXWARM_E2E_SCREENSHOT_DIR + '/attempt.txt', String(attempt));
+if (attempt === 0 || attempt === 2) process.exit(7);
+`)
+  const result = await f.run('browser')
+  assert.equal(result.code, 1, result.stdout + result.stderr)
+  const rows = (await f.summary()).filter(step => step.step === 'example.e2e.mjs')
+  assert.equal(rows.length, 9)
+  assert(rows.some(row => row.code !== 0 && row.attempt === 2))
+  const [run] = await fs.readdir(path.join(f.root, 'artifacts'))
+  const logDir = path.join(f.root, 'artifacts', run, 'logs', 'webui-browser')
+  const screenshotDir = path.join(f.root, 'artifacts', run, 'screenshots')
+  const logs = (await fs.readdir(logDir)).filter(name => name !== 'prepare.log')
+  assert.deepEqual(logs.sort(), ['example.e2e.mjs.log', ...Array.from({ length: 8 }, (_, index) => `example.e2e.mjs.retry-${index + 1}.log`)].sort())
+  const screenshots = await fs.readdir(screenshotDir)
+  assert.deepEqual(screenshots.sort(), ['example.e2e.mjs', ...Array.from({ length: 8 }, (_, index) => `example.e2e.mjs.retry-${index + 1}`)].sort())
+  for (const name of screenshots) {
+    const actual = await fs.readFile(path.join(screenshotDir, name, 'attempt.txt'), 'utf8')
+    assert.equal(actual, String(name === 'example.e2e.mjs' ? 0 : Number(name.match(/\.retry-(\d+)/)[1])))
   }
 })
 
