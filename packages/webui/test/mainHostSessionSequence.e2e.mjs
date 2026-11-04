@@ -254,6 +254,10 @@ try {
   await page.mouse.move(0, 0)
   await page.click(`[data-sequence-cell="worker"] [data-sequence-link="${toWorker.key}"] p`)
   await page.waitForSelector('.foxwarm-chat-root')
+  // Conversation may fold the received delivery into Activity; open its exact source row.
+  const receivedActivity = `[data-timeline-activity][data-chat-message-anchor-key="seq-local-${toWorker.to.seq}"] [aria-label="Expand activity"]`
+  await page.waitForSelector(receivedActivity)
+  await page.click(receivedActivity)
   await until(async () => page.evaluate(() => document.body.textContent.includes('please check the build')), 'Receiver conversation opens')
   // Denser synthetic window: several buckets, Tasks, a timer, a waiting delivery and running work.
   await page.setRequestInterception(true)

@@ -132,6 +132,8 @@ try {
   browser = await puppeteer.launch({ executablePath: process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium',
     headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'], userDataDir: join(root, 'browser') })
   const page = await browser.newPage()
+  // Nested CTX cards inspect the active compacted context, not Archive originals.
+  await page.evaluateOnNewDocument(() => localStorage.setItem('foxwarm_timeline_view_v1', 'detailed'))
   page.on('pageerror', error => errors.push('browser ' + String(error)))
   await page.goto(`http://127.0.0.1:${hostPort}/`, { waitUntil: 'load' })
   await page.waitForSelector('#token')

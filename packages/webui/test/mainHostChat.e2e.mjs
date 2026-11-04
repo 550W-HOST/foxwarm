@@ -179,6 +179,7 @@ try {
   assert.equal((await json(port, 'GET', '/api/sessions')).body.sessions.length, 1)
   await send(page, 'Make a note')
   await timeline(page, 'The note is héllo.')
+  await page.waitForSelector('[aria-label="Expand activity"]'); await page.click('[aria-label="Expand activity"]')
   await page.waitForFunction(() => document.querySelectorAll('[data-tool-header-tone]').length >= 2)
   await until(async () => (await browserHistory(page, id)).messages.length >= 6, 'first tool loop persistence')
   const first = await browserHistory(page, id)

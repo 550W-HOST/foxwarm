@@ -1,5 +1,5 @@
-// Saved prompt history through authenticated routes and the original App. The timeline does not
-// show the memory snapshot in any view; the Session debug view exposes the persisted snapshot.
+// Saved prompt history through authenticated routes and the original App. Technical views
+// show the snapshot, Conversation omits it, and Session debug exposes the persisted bytes.
 import assert from 'node:assert/strict'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -84,6 +84,16 @@ async function assertNoSnapshotRow(label, continuous = false) {
   assert.equal(await page.$(snapshotCard), null, label)
 }
 
+async function assertSnapshotRow(expected) {
+  await page.waitForFunction(() => document.body.innerText.includes('Retained row 104'))
+  await page.waitForSelector(snapshotCard)
+  const expand = snapshotCard + ' [aria-label="Expand snapshot message"]'
+  if (await page.$(expand)) await page.click(expand)
+  await page.waitForSelector(snapshotCard + ' .foxwarm-system-message-body')
+  const body = await page.$eval(snapshotCard + ' .foxwarm-system-message-body', element => element.textContent)
+  for (const line of expected.trim().split(/\r?\n/)) assert(body.includes(line), 'snapshot row retains saved prompt content')
+}
+
 try {
   await fixture.start()
   assert.equal((await fetch(fixture.origin + route)).status, 401)
@@ -99,12 +109,12 @@ try {
   page.on('response', response => { if (response.url().includes('/saved-prompt/history')) requests.push(new URL(response.url()).search) })
   await page.evaluate(() => window.foxwarmTest.switchToSession('saved-prompt'))
   await waitChat()
-  await assertNoSnapshotRow('detailed timeline omits the memory snapshot')
+  await assertSnapshotRow(stored)
   assert.equal(await debugSnapshot('saved-prompt'), stored)
   const firstReconnect = await page.evaluate(() => window.fixtureSubscriptionAcks)
   await page.evaluate(() => { for (const socket of window.fixtureSockets) socket.close() })
   await page.waitForFunction(previous => window.fixtureSubscriptionAcks > previous, {}, firstReconnect)
-  await assertNoSnapshotRow('reconnect does not restore a snapshot row')
+  await assertSnapshotRow(stored)
   await page.evaluate(() => window.foxwarmTest.switchToSession('empty-prompt'))
   await waitChat()
   await assertNoSnapshotRow('empty snapshot has no row')
@@ -113,7 +123,8 @@ try {
   await waitChat()
   for (const name of ['grouped', 'conversation', 'detailed']) {
     await view(name)
-    await assertNoSnapshotRow(name + ' timeline omits the memory snapshot', name === 'conversation')
+    if (name === 'conversation') await assertNoSnapshotRow('Conversation omits the memory snapshot', true)
+    else await assertSnapshotRow(stored)
   }
   // Explicit refresh persists a new prompt; ordinary App reload rereads that authority.
   const refresh = await fixture.api('POST', '/api/sessions/saved-prompt/refresh-memory', {})
@@ -122,10 +133,10 @@ try {
   assert(refreshed.includes(diskMarker))
   await page.reload({ waitUntil: 'domcontentloaded' })
   await waitChat()
-  await assertNoSnapshotRow('reload keeps the snapshot out of the timeline')
+  await assertSnapshotRow(diskMarker)
   assert.equal(await debugSnapshot('saved-prompt'), refreshed)
   assert.equal(JSON.parse(await readFile(join(sessionDir, 'saved-prompt.json'), 'utf8')).persistentMemorySnapshot, refreshed)
-  console.log(JSON.stringify({ exactSavedText: true, emptySnapshot: true, timelineRowsOmitted: true, reconnect: true, refreshedSnapshotAfterReload: true, historyRequests: requests, errors }))
+  console.log(JSON.stringify({ exactSavedText: true, emptySnapshot: true, modeAwareSnapshotRows: true, reconnect: true, refreshedSnapshotAfterReload: true, historyRequests: requests, errors }))
   assert.deepEqual(errors, [])
   await fixture.stop()
 } catch (error) {

@@ -9,7 +9,8 @@ import sharp from 'sharp'
 import WebSocket, { WebSocketServer } from 'ws'
 import { createHostFixture, until, sleep } from './mainHostFixture.mjs'
 
-const fixture = await createHostFixture('node-files', { env: {} })
+// Inspect historical transfer receipts through their original technical tool rows.
+const fixture = await createHostFixture('node-files', { env: {}, onPage: page => page.evaluateOnNewDocument(() => localStorage.setItem('foxwarm_timeline_view_v1', 'detailed')) })
 const plans = new Map(), rounds = new Map(), requests = [], wire = [], failures = [], clients = [], sockets = new Set(), connections = new Map()
 const held = new Map(), holdWrites = new Set(), credentialsByNode = new Map()
 const exists = path => access(path).then(() => true, () => false)

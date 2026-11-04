@@ -62,6 +62,8 @@ try {
   assert.equal(await readFile(join(home, 'owned.txt'), 'utf8'), 'owned home'); assert.equal(await readFile(join(owned.work, ' spaced '), 'utf8'), 'literal spaces')
   assert.equal((await owned.api('POST', route('main') + '/cwd', { cwd: changed })).status, 200)
   const navigation = []; page.on('request', request => { if (request.url().includes('/vscode-web/')) navigation.push(request.url()) })
+  await page.waitForSelector('[aria-label="Expand activity"]'); await page.click('[aria-label="Expand activity"]')
+  await page.waitForFunction(() => document.querySelector('[data-activity-expanded="true"]')?.style.height === '')
   await page.waitForSelector('[aria-label="Open $fw_tmp/native.txt in Code"]'); await page.click('[aria-label="Open $fw_tmp/native.txt in Code"]')
   await until(() => navigation.length, 'actual Code navigation intent')
   const target = new URL(navigation[0]); assert.equal(target.searchParams.get('initialFolderUri'), 'foxwarm://node+master' + join(owned.work, 'tmp'))

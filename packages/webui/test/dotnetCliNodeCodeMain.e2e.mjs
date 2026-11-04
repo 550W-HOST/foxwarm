@@ -84,6 +84,8 @@ for (const runtime of ['source', 'dotnet']) {
     await page.waitForFunction(id => [...document.querySelectorAll('[data-session-header-subtitle]')].some(header => header.textContent.includes(id)) && (window.codeAlreadySelected || window.foxwarmTest !== window.codePreviousHelper), {}, id)
     await page.evaluate(() => window.foxwarmTest.sendMessage('CLI-CODE'))
     await until(async () => { const state = JSON.parse(await readFile(join(fixture.data, 'state/sessions', id + '.json'), 'utf8')); return state.history.some(row => row.parts?.some(part => part.text?.includes('CLI-CODE-DONE'))) }, 'normal model remote file turn', 30000)
+    await page.waitForSelector('[aria-label="Expand activity"]'); await page.click('[aria-label="Expand activity"]')
+    await page.waitForFunction(() => document.querySelector('[data-activity-expanded="true"]')?.style.height === '')
     await page.waitForSelector('button[title$="renamed.txt in Code"]')
     if (assets) {
       await page.click('button[title$="renamed.txt in Code"]'); let code = await codeFrame()

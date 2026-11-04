@@ -224,7 +224,10 @@ try {
   assert.equal(await readFile(join(appTerminal.cwd, 'app-remote.txt'), 'utf8'), 'APP-REMOTE\n')
   await fixture.api('DELETE', '/api/terminals/' + encodeURIComponent(appTerminal.id))
   if (hasCode) {
-    await page.evaluate(() => window.foxwarmTest.switchToSession('main')); await page.waitForSelector('button[title$="renamed.txt in Code"]'); await page.click('button[title$="renamed.txt in Code"]')
+    await page.evaluate(() => window.foxwarmTest.switchToSession('main'))
+    await page.waitForSelector('[aria-label="Expand activity"]'); await page.click('[aria-label="Expand activity"]')
+    await page.waitForFunction(() => document.querySelector('[data-activity-expanded="true"]')?.style.height === '')
+    await page.waitForSelector('button[title$="renamed.txt in Code"]'); await page.click('button[title$="renamed.txt in Code"]')
     let code = await codeFrame(); await code.waitForSelector('.editor-instance .view-lines', { timeout: 45000 }); await code.waitForFunction(() => document.querySelector('.editor-instance .view-lines')?.textContent.replaceAll('\u00a0', ' ').includes('selected second'))
     await code.click('.editor-instance .view-lines'); await page.keyboard.down('Control'); await page.keyboard.press('End'); await page.keyboard.up('Control'); await page.keyboard.type('\nSaved remotely in original Code'); await page.keyboard.down('Control'); await page.keyboard.press('S'); await page.keyboard.up('Control')
     await until(async () => (await readFile(join(repo, 'renamed.txt'), 'utf8')).includes('Saved remotely in original Code'), 'official browser FS provider saved remotely')

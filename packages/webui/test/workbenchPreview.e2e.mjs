@@ -50,7 +50,7 @@ after(async () => {
   await new Promise(resolve => server?.close(resolve))
 })
 
-async function openFixture({ freshBrowser = false, tabs = [system, chat('e2e-a')], activeTabId = 'chat:e2e-a', hash = '', split = false, splitSecondChat = false, splitDirection = 'row', layout = null, themeId, colorMode = 'light', nodeDirectory = [], taskRows = null, codeNewWindow, responsiveChat = false, chatMessages = null, timelineView = 'grouped', mobileTimelineView, showScrollbar, terminal = null, width = 1400, height = 900, reducedMotion = false, waitForSplash = true } = {}) {
+async function openFixture({ freshBrowser = false, tabs = [system, chat('e2e-a')], activeTabId = 'chat:e2e-a', hash = '', split = false, splitSecondChat = false, splitDirection = 'row', layout = null, themeId, colorMode = 'light', nodeDirectory = [], taskRows = null, codeNewWindow, responsiveChat = false, chatMessages = null, timelineView, mobileTimelineView, showScrollbar, terminal = null, width = 1400, height = 900, reducedMotion = false, waitForSplash = true } = {}) {
   const page = await browser.newPage()
   if (reducedMotion) await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }])
   const pageErrors = []
@@ -73,7 +73,7 @@ async function openFixture({ freshBrowser = false, tabs = [system, chat('e2e-a')
       localStorage.setItem('foxwarm_sidebar_collapsed_v1', 'false')
       if(freshBrowser) for(const key of ['foxwarm_workbench_state_v4','foxwarm_workbench_tabs_v3','foxwarm_last_active_tab_v1','foxwarm_last_visited_session_v1'])localStorage.removeItem(key)
     }
-    if (chatMessages && timelineView) localStorage.setItem('foxwarm_timeline_view_v1', timelineView)
+    if (timelineView || (chatMessages && timelineView !== null)) localStorage.setItem('foxwarm_timeline_view_v1', timelineView || 'grouped')
     if (timelineView === null) for (const key of ['foxwarm_timeline_view_v1', 'foxwarm_mobile_timeline_view_v1', 'foxwarm_group_tools_v1']) localStorage.removeItem(key)
     if (mobileTimelineView) localStorage.setItem('foxwarm_mobile_timeline_view_v1', mobileTimelineView)
     if (showScrollbar !== undefined) localStorage.setItem('foxwarm.contextScrollbar.showScrollbar', String(showScrollbar))
@@ -1552,7 +1552,7 @@ test('Application menu icons precede their labels and retain Setup, Logs, and re
 
 
 test('Chat follows each pane through real divider dragging without changing desktop navigation or drafts', async () => {
-  const page = await openFixture({ tabs: [chat('e2e-a', false), chat('e2e-b', false)], split: true, splitSecondChat: true, responsiveChat: true, width: 1800 })
+  const page = await openFixture({ tabs: [chat('e2e-a', false), chat('e2e-b', false)], split: true, splitSecondChat: true, responsiveChat: true, timelineView: 'detailed', width: 1800 })
   const main = ':is([data-pane-id="pane-main"], [data-workbench-content-pane="pane-main"])'
   const other = ':is([data-pane-id="pane-other"], [data-workbench-content-pane="pane-other"])'
   const editor = ' [role="textbox"][aria-label="Message"]'
@@ -2010,10 +2010,10 @@ test('Full width defaults on, remembers its toggle, and bounds only the message 
     assert.ok(await readWidth() > 1100, 'new browsers retain the full-width message layout')
     await page.click('button[aria-label="Open session options"]')
     await page.waitForSelector('[data-session-ui-settings-menu]', { visible: true })
-    const toggle = '[data-session-ui-settings-menu] button[role="switch"]'
+    const toggle = '::-p-aria(Full width[role="switch"])'
     assert.equal(await page.$eval(toggle, element => element.textContent.trim()), 'Full width')
     assert.equal(await page.$eval(toggle, element => element.getAttribute('aria-checked')), 'true')
-    await clickReadyControl(page, toggle)
+    await page.locator(toggle).click()
     await page.waitForFunction(() => document.querySelector('.foxwarm-chat-messages-content').dataset.fullWidth === 'false')
     assert.ok(await readWidth() <= 1100)
     assert.equal(await page.evaluate(() => localStorage.getItem('foxwarm_chat_full_width_v1')), 'false')
@@ -2025,7 +2025,7 @@ test('Full width defaults on, remembers its toggle, and bounds only the message 
     await page.setViewport({ width: 900, height: 900 })
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true)
     await page.click('button[aria-label="Open session options"]')
-    await clickReadyControl(page, toggle)
+    await page.locator(toggle).click()
     await page.setViewport({ width: 1800, height: 900 })
     await page.waitForFunction(() => document.querySelector('.foxwarm-chat-messages-content').getBoundingClientRect().width > 1100)
   } finally { await page.close() }
@@ -2034,7 +2034,7 @@ test('Full width defaults on, remembers its toggle, and bounds only the message 
 test('Timeline, Composer, History and Tasks share the reading column and pane-local minimap clearance', async () => {
   const history = { id: 'system:search', type: 'search', title: 'History' }
   const tasks = { id: 'system:tasks', type: 'tasks', title: 'Tasks' }
-  const page = await openFixture({ tabs: [chat('e2e-a', false), history, tasks], responsiveChat: true, width: 1800 })
+  const page = await openFixture({ tabs: [chat('e2e-a', false), history, tasks], responsiveChat: true, timelineView: 'detailed', width: 1800 })
   const alignedGeometry = () => {
     const rect = selector => {
       const box = document.querySelector(selector).getBoundingClientRect()
@@ -2066,7 +2066,7 @@ test('Timeline, Composer, History and Tasks share the reading column and pane-lo
   try {
     await page.waitForSelector('.foxwarm-chat-messages-content')
     await page.click('button[aria-label="Open session options"]')
-    await clickReadyControl(page, '[data-session-ui-settings-menu] button[role="switch"]')
+    await page.locator('::-p-aria(Full width[role="switch"])').click()
     await page.waitForFunction(() => document.querySelector('.foxwarm-chat-messages-content').dataset.fullWidth === 'false')
     await page.click('button[aria-label="Open session options"]')
     assert.equal((await aligned()).timeline.width, 1100)

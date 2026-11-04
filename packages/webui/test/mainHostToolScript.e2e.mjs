@@ -61,6 +61,8 @@ try {
   assert.match(outputText(projected('source-run')), /^--- print ---\nbefore\n---\n/m)
   const subcallNames = paused.__meta.toolScriptSubCalls.map(subcall => subcall.name)
   async function inspectScriptCard() {
+    await page.waitForSelector('[aria-label="Expand activity"]'); await page.click('[aria-label="Expand activity"]')
+    await page.waitForFunction(() => document.querySelector('[data-activity-expanded="true"]')?.style.height === '')
     const toggle = '.foxwarm-tool-card button[aria-label="Expand run_script tool"]'
     await page.waitForSelector(toggle, { visible: true })
     await page.click(toggle)

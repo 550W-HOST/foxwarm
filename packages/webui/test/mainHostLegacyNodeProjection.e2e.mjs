@@ -7,7 +7,8 @@ import WebSocket from 'ws'
 import { createHostFixture, until } from './mainHostFixture.mjs'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
 
-const options = { env: {} }
+// Seeded legacy authority has active history, without an Archive fixture.
+const options = { env: {}, onPage: page => page.evaluateOnNewDocument(() => localStorage.setItem('foxwarm_timeline_view_v1', 'detailed')) }
 const fixture = await createHostFixture('legacy-node-projection', options)
 options.cwd = fixture.root
 options.publicRoot = fixture.origin + '/preview/#session/legacy-absent'
