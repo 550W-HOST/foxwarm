@@ -129,7 +129,7 @@ public sealed partial class ClaudeRuntimeTests
         Assert.Equal(expected, names);
         Assert.Contains("write", names);
         Assert.Contains("call_tool", names);
-        Assert.DoesNotContain("exec", names);
+        Assert.Contains("exec", names);
         Assert.DoesNotContain("wait", names);
         var schemas = new JsonArray(
             listed.Select(t => (JsonNode)t.DeepClone()).ToArray()

@@ -30,13 +30,7 @@ internal sealed partial class SessionManager
         ChatResult? result = null;
         try
         {
-            var definitions = ModelDefinitions(
-                source,
-                selectedNode: ResolveExecutionNode(
-                    snapshot.AuthorityEnvelope,
-                    BoundNode(source.Agent)
-                )
-            );
+            var definitions = ModelDefinitions(source);
             var requestId = Guid.NewGuid().ToString();
             var catalog = models.Capture();
             var selected = catalog.Select(snapshot.AuthorityEnvelope);
