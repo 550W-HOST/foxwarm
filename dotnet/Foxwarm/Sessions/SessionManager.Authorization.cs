@@ -299,6 +299,50 @@ internal sealed partial class SessionManager
         return new(true, null);
     }
 
+    private async Task AuthorizeCreateSessionTargetAsync(
+        SessionOwner source,
+        string agent,
+        CancellationToken token
+    )
+    {
+        source.Entry.RequireIdentityAuthority();
+        if (!IsCurrentOwner(source))
+            throw new InvalidOperationException(
+                "Creation source is no longer the current Session owner."
+            );
+        var request = AuthorizationRequest(
+            source,
+            "builtin",
+            "create_session",
+            null,
+            new JsonObject { ["agentName"] = agent },
+            []
+        );
+        var policies = EffectivePolicies(source.Agent, await authorization.LoadAsync(token));
+        var indeterminate = false;
+        foreach (var policy in policies)
+        {
+            var decision = ToolAuthorizationEvaluation.EvaluateCreationTarget(policy, request);
+            if (decision == CreationTargetDecision.Deny)
+                throw new ToolAuthorizationDeniedException(
+                    $"Tool authorization rules deny creating a Session in Agent '{agent}'."
+                );
+            indeterminate |= decision == CreationTargetDecision.Indeterminate;
+        }
+        if (indeterminate)
+            throw new ToolAuthorizationDeniedException(
+                "Future Session parameters make create_session target authorization indeterminate at timer registration. "
+                    + "Place a decisive creation-target rule before rules depending on future names or settings."
+            );
+        // Only generic policy is shared. Legacy structural create_session denial must not
+        // replace the timer's independent isolation and creator-target checks.
+        source.Entry.RequireIdentityAuthority();
+        if (!IsCurrentOwner(source))
+            throw new InvalidOperationException(
+                "Creation source is no longer the current Session owner."
+            );
+    }
+
     private ToolAuthorizationRequest PopulateEffectiveTargets(
         ToolAuthorizationRequest request,
         SessionOwner owner,

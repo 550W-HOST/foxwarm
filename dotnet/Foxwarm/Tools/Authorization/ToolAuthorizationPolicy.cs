@@ -267,6 +267,20 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
 
     private static JsonNode? Argument(JsonNode? node)
     {
+        if (node is JsonObject agentWrapper && agentWrapper.ContainsKey("agent"))
+        {
+            Fields(agentWrapper, "agent");
+            if (
+                agentWrapper["agent"] is not JsonObject agent
+                || agent.Count != 1
+                || !agent.ContainsKey("sameAgent")
+            )
+                throw new InvalidDataException("Agent matcher requires { sameAgent: boolean }.");
+            return new JsonObject
+            {
+                ["agent"] = new JsonObject { ["sameAgent"] = Boolean(agent["sameAgent"]) },
+            };
+        }
         if (node is JsonObject taskWrapper && taskWrapper.ContainsKey("task"))
         {
             Fields(taskWrapper, "task");
@@ -425,6 +439,23 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
                             throw new InvalidDataException("Unsafe dotted policy argument.");
                         arguments[pair.Key] = Argument(pair.Value);
                     }
+                    var agents = arguments
+                        .Where(pair => pair.Value is JsonObject agent && agent.ContainsKey("agent"))
+                        .ToArray();
+                    if (
+                        agents.Length > 0
+                        && (
+                            agents.Length != 1
+                            || agents[0].Key != "agentName"
+                            || match["tool"] is not JsonObject agentSelector
+                            || agentSelector.ContainsKey("server")
+                            || SessionWait.Text(agentSelector["source"]) != "builtin"
+                            || SessionWait.Text(agentSelector["name"]) != "create_session"
+                        )
+                    )
+                        throw new InvalidDataException(
+                            "Agent matcher requires agentName and exact builtin create_session selector."
+                        );
                     var tasks = arguments
                         .Where(pair => pair.Value is JsonObject task && task.ContainsKey("task"))
                         .ToArray();
