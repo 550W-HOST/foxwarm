@@ -16,7 +16,7 @@ const unix = { skip: process.platform === 'win32' && 'Unix executable fixture' }
 
 // Exercise the real CLI and inventory against a small tracked checkout. Test
 // programs record which component ran; no production application is started.
-async function fixture(t, { pendingPreparation = false } = {}) {
+async function fixture(t, { pendingPreparation = false, browsers = ['example.e2e.mjs'], timer = '' } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'fw-test-routing-'))
   t.after(() => fs.rm(root, { recursive: true, force: true }))
   const journal = path.join(root, 'calls.jsonl')
@@ -54,7 +54,7 @@ require('node:test')(${JSON.stringify(title)}, () => {
     ['scripts/test/reference-isolation.test.mjs', 'reference-isolation'],
     ['skills/example/example.test.js', 'skill-node'],
     ['packages/webui/test/example.test.mjs', 'webui-unit'],
-    ['packages/webui/test/example.e2e.mjs', 'webui-browser'],
+    ...browsers.map(name => [`packages/webui/test/${name}`, name === 'example.e2e.mjs' ? 'webui-browser' : name]),
     ['packages/webui/test/publishedCore.e2e.mjs', 'published-app'],
     ['test/app-e2e/run-app-e2e.mjs', 'app-browser'],
     ['lib/selftest/queueDrainSelfTest.js', 'queue-selftest'],
@@ -85,6 +85,8 @@ global.setTimeout = (callback, delay, ...args) => original(callback, delay === 9
 `)
   }
 
+  if (timer) await write('timer.cjs', timer)
+
   await write('scripts/multicaBridge.test.js', program('published-bin', 'public package bin fixture'))
   await write('packages/vscode-web/test/example.test.mjs', '// owned by the npm group\n')
   await write('dotnet/Foxwarm.Tests/Example.cs', '// owned by dotnet test\n')
@@ -104,12 +106,12 @@ if (${JSON.stringify(name)} === 'dotnet' && args[0] === 'test' && process.env.FI
   await execute('git', ['add', 'src', 'scripts', 'packages', 'skills', 'dotnet', 'test'], { cwd: root })
   await execute('git', ['rm', '-q', '--cached', '-r', 'packages/shared/dist', 'packages/cli-node/dist'], { cwd: root })
   return {
-    root,
-    async run(target, managedFail = false) {
+    root, journal, write,
+    async run(target, managedFail = false, args = []) {
       try {
-        const result = await execute(process.execPath, ['scripts/test/run-tests.mjs', target], {
+        const result = await execute(process.execPath, ['scripts/test/run-tests.mjs', target, ...args], {
           cwd: root, timeout: 30_000, maxBuffer: 4 * 1024 * 1024,
-          env: { ...process.env, NODE_OPTIONS: pendingPreparation ? `--require=${path.join(root, 'timer.cjs')}` : '', NODE_TEST_CONTEXT: undefined, FOXWARM_TEST_RUN_ROOT: '',
+          env: { ...process.env, NODE_OPTIONS: pendingPreparation || timer ? `--require=${path.join(root, 'timer.cjs')}` : '', NODE_TEST_CONTEXT: undefined, FOXWARM_TEST_RUN_ROOT: '',
             FOXWARM_TEST_ARTIFACT_DIR: path.join(root, 'artifacts'),
             FOXWARM_E2E_CHROMIUM: path.join(root, 'chromium'),
             PATH: path.join(root, 'bin') + path.delimiter + process.env.PATH,
@@ -121,6 +123,10 @@ if (${JSON.stringify(name)} === 'dotnet' && args[0] === 'test' && process.env.FI
       } catch (error) { return error }
     },
     async calls() { return (await fs.readFile(journal, 'utf8')).trim().split('\n').map(JSON.parse) },
+    async inventory() {
+      const [run] = await fs.readdir(path.join(root, 'artifacts'))
+      return JSON.parse(await fs.readFile(path.join(root, 'artifacts', run, 'inventory.json'), 'utf8'))
+    },
     async summary() {
       const [run] = await fs.readdir(path.join(root, 'artifacts'))
       return JSON.parse(await fs.readFile(path.join(root, 'artifacts', run, 'summary.json'), 'utf8'))
@@ -192,4 +198,136 @@ test('browser preparation deadline fences fixtures even when the terminated prod
   assert.equal(summary[0].step, 'prepare')
   assert.equal(summary[0].timedOut, true)
   assert.equal(summary[0].code, 1)
+})
+
+test('browser shards are disjoint, complete and ordered, while the unsharded command keeps every file', unix, async t => {
+  const files = ['setupModels.e2e.mjs', ...Array.from({ length: 16 }, (_, index) => `case-${String(index).padStart(2, '0')}.e2e.mjs`)].sort()
+  const selected = []
+  for (let index = 1; index <= 8; index++) {
+    const f = await fixture(t, { browsers: files })
+    const result = await f.run('browser', false, [`--shard=${index}/8`, '--workers=2'])
+    assert.equal(result.code, 0, result.stdout + result.stderr)
+    const expected = files.filter((_, position) => position % 8 === index - 1)
+    const selection = (await f.inventory()).browserSelection
+    assert.deepEqual(selection, { shard: { index, total: 8 }, workers: 2, files: expected.map(file => `packages/webui/test/${file}`) })
+    const calls = await f.calls()
+    assert.deepEqual(calls.slice(0, 2), ['browser-prepare', 'browser-ready'])
+    assert.deepEqual(calls.slice(2).sort(), expected)
+    assert.deepEqual((await f.summary()).map(step => step.step), ['prepare', ...expected])
+    selected.push(...expected)
+  }
+  assert.deepEqual(selected.sort(), files)
+  const f = await fixture(t, { browsers: files })
+  const result = await f.run('browser')
+  assert.equal(result.code, 0, result.stdout + result.stderr)
+  assert.deepEqual(await f.calls(), ['browser-prepare', 'browser-ready', ...files])
+  assert.equal((await f.inventory()).browserSelection.shard, null)
+})
+
+test('browser options reject malformed or misplaced selections before creating artifacts or starting children', unix, async t => {
+  const f = await fixture(t)
+  for (const [target, args] of [
+    ['browser', ['--shard=0/8']], ['browser', ['--shard=9/8']], ['browser', ['--shard=1/0']],
+    ['browser', ['--shard=1.5/8']], ['browser', ['--shard=1/9007199254740992']],
+    ['browser', ['--shard=1/8', '--shard=2/8']], ['browser', ['--workers=0']],
+    ['browser', ['--workers=-1']], ['browser', ['--workers=2', '--workers=2']],
+    ['browser', ['--unknown=1']], ['unit', ['--shard=1/8']], ['all', ['--workers=2']],
+  ]) {
+    const result = await f.run(target, false, args)
+    assert.equal(result.code, 2, `${target} ${args}: ${result.stdout}${result.stderr}`)
+  }
+  await assert.rejects(fs.access(path.join(f.root, 'artifacts')), { code: 'ENOENT' })
+  await assert.rejects(fs.access(f.journal), { code: 'ENOENT' })
+})
+
+test('browser workers stay bounded, retain sibling results and drain around a shared-output writer', unix, async t => {
+  const files = ['a.e2e.mjs', 'b.e2e.mjs', 'c.e2e.mjs', 'setupModels.e2e.mjs', 'z.e2e.mjs']
+  const f = await fixture(t, { browsers: files })
+  const events = path.join(f.root, 'events.jsonl')
+  for (const file of files) {
+    const peer = file === 'a.e2e.mjs' ? 'b.e2e.mjs' : file === 'b.e2e.mjs' ? 'a.e2e.mjs' : null
+    await f.write(`packages/webui/test/${file}`, `
+import fs from 'node:fs'; import assert from 'node:assert/strict';
+const name = ${JSON.stringify(file)}, events = ${JSON.stringify(events)}, root = ${JSON.stringify(f.root)};
+const mark = event => fs.appendFileSync(events, JSON.stringify({name, event, data: process.env.FOXWARM_DATA_DIR, screenshots: process.env.FOXWARM_E2E_SCREENSHOT_DIR}) + '\\n');
+mark('start'); console.log('OUTPUT:' + name);
+fs.writeFileSync(process.env.FOXWARM_E2E_SCREENSHOT_DIR + '/same-name.png', name);
+const peer = ${JSON.stringify(peer)};
+if (peer) {
+  const end = Date.now() + 4000;
+  while (!fs.readFileSync(events, 'utf8').includes('"name":"' + peer + '"')) {
+    assert(Date.now() < end, 'the second worker must start before the first finishes');
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  await new Promise(resolve => setTimeout(resolve, 100));
+}
+mark('end');
+if (name === 'c.e2e.mjs') process.exit(7);
+`)
+  }
+  const result = await f.run('browser', false, ['--workers=2'])
+  assert.equal(result.code, 1, result.stdout + result.stderr)
+  const rows = (await fs.readFile(events, 'utf8')).trim().split('\n').map(JSON.parse)
+  assert.deepEqual(rows.slice(0, 2).map(row => row.event), ['start', 'start'])
+  const active = new Set()
+  for (const row of rows) {
+    if (row.event === 'start') {
+      if (row.name === 'setupModels.e2e.mjs') assert.equal(active.size, 0)
+      active.add(row.name)
+      assert(active.size <= 2)
+    } else active.delete(row.name)
+  }
+  const summary = await f.summary()
+  assert.notEqual(summary.find(step => step.step === 'c.e2e.mjs').code, 0)
+  assert(summary.filter(step => step.step !== 'c.e2e.mjs').every(step => step.code === 0))
+  assert.deepEqual(rows.slice(6).map(row => [row.name, row.event]), [
+    ['setupModels.e2e.mjs', 'start'], ['setupModels.e2e.mjs', 'end'], ['z.e2e.mjs', 'start'], ['z.e2e.mjs', 'end'],
+  ])
+  const starts = rows.filter(row => row.event === 'start')
+  assert.equal(new Set(starts.map(row => row.data)).size, files.length)
+  assert.equal(new Set(starts.map(row => row.screenshots)).size, files.length)
+  const [run] = await fs.readdir(path.join(f.root, 'artifacts'))
+  for (const row of starts) {
+    assert.equal(await fs.readFile(path.join(row.screenshots, 'same-name.png'), 'utf8'), row.name)
+    const log = await fs.readFile(path.join(f.root, 'artifacts', run, 'logs', 'webui-browser', row.name + '.log'), 'utf8')
+    assert(log.includes('OUTPUT:' + row.name))
+    for (const other of files.filter(file => file !== row.name)) assert(!log.includes('OUTPUT:' + other))
+  }
+})
+
+for (const interrupted of [false, true]) {
+  test(`browser ${interrupted ? 'interruption stops both active workers and queued files' : 'file deadline fails even with zero-exit termination handlers'}`, unix, async t => {
+    const timer = `const original = global.setTimeout;
+global.setTimeout = (callback, delay, ...args) => original(delay === 240_000 && ${interrupted} ? () => process.kill(process.pid, 'SIGTERM') : callback, delay === 240_000 ? 1000 : delay, ...args);
+`
+    const files = ['a.e2e.mjs', 'b.e2e.mjs', 'queued.e2e.mjs']
+    const f = await fixture(t, { browsers: files, timer })
+    for (const file of files.slice(0, 2)) await f.write(`packages/webui/test/${file}`, `
+import fs from 'node:fs';
+const journal = ${JSON.stringify(f.journal)}, name = ${JSON.stringify(file)};
+fs.appendFileSync(journal, JSON.stringify('started:' + name) + '\\n');
+process.on('SIGTERM', () => { fs.appendFileSync(journal, JSON.stringify('stopped:' + name) + '\\n'); process.exit(0); });
+setInterval(() => {}, 1000);
+`)
+    const result = await f.run('browser', false, ['--workers=2'])
+    assert.equal(result.code, 1, result.stdout + result.stderr)
+    const calls = await f.calls(), summary = await f.summary()
+    for (const file of files.slice(0, 2)) {
+      assert(calls.includes('started:' + file))
+      assert(calls.includes('stopped:' + file))
+      const step = summary.find(step => step.step === file)
+      assert.equal(step.code, 1)
+      assert.equal(step.timedOut, !interrupted)
+      assert.equal(step.interrupted, interrupted)
+    }
+    assert.equal(calls.includes('queued.e2e.mjs'), !interrupted)
+  })
+}
+
+test('sharded browser preparation failure fences the entire worker pool', unix, async t => {
+  const f = await fixture(t, { pendingPreparation: true, browsers: ['a.e2e.mjs', 'b.e2e.mjs', 'c.e2e.mjs'] })
+  const result = await f.run('browser', false, ['--shard=1/2', '--workers=2'])
+  assert.equal(result.code, 1, result.stdout + result.stderr)
+  assert.deepEqual(await f.calls(), ['browser-prepare', 'browser-stopped-with-zero'])
+  assert.deepEqual((await f.summary()).map(step => step.step), ['prepare'])
 })
