@@ -118,9 +118,11 @@ test('directory and resolved package execution keep installation identity, confi
     assert(fs.existsSync(path.join(f.data, 'agents/main/memory')));
     assert(!fs.existsSync(path.join(f.cwd, 'state')));
     assert(!fs.existsSync(path.join(f.app, 'state')));
+    assert.equal(fs.readFileSync(path.join(f.app, 'foxwarm.pid'), 'utf8'), `${pid}\n`);
     instance.child.kill(signal);
     assert.deepEqual(await instance.exited, { code: 0, signal: null }, instance.text);
     await until(() => !running(pid), 'Managed Main survived foreground launcher shutdown.');
+    assert(!fs.existsSync(path.join(f.app, 'foxwarm.pid')));
   }
 });
 
@@ -308,14 +310,14 @@ function tmuxFixture(t) {
   const bin = path.join(f.root, 'bin');
   const socket = path.join(f.root, 'tmux.socket');
   fs.mkdirSync(bin);
-  for (const file of ['start.sh', 'restart.sh', 'build-source.js'])
+  for (const file of ['start.sh', 'restart.sh', 'stop.sh', 'source-process.sh', 'build-source.js'])
     fs.copyFileSync(path.join(__dirname, file), path.join(f.app, 'scripts', file));
   const tmuxBin = execFileSync('bash', ['-c', 'command -v tmux'], { encoding: 'utf8' }).trim();
   // Only build acquisition is stubbed; the launcher and managed Main are real.
   fs.writeFileSync(path.join(bin, 'npm'), '#!/bin/sh\nmkdir -p build\nln -s "$TEST_CORE_OUTPUT" build/core\n', { mode: 0o755 });
-  fs.writeFileSync(path.join(bin, 'tmux'), `#!/bin/sh\nexec "$TEST_TMUX_BIN" -S "$TEST_TMUX_SOCKET" -f /dev/null "$@"\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, 'tmux'), `#!/bin/sh\nunset TMUX\nexec "$TEST_TMUX_BIN" -S "$TEST_TMUX_SOCKET" -f /dev/null "$@"\n`, { mode: 0o755 });
   const env = { ...f.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`,
-    TEST_TMUX_BIN: tmuxBin, TEST_TMUX_SOCKET: socket, TEST_CORE_OUTPUT: fs.realpathSync(output), TMUX: '',
+    TEST_TMUX_BIN: tmuxBin, TEST_TMUX_SOCKET: socket, TEST_CORE_OUTPUT: fs.realpathSync(output), TMUX: undefined,
     FOXWARM_NODE_BIN: process.execPath, FOXWARM_TMUX_SESSION: 'root-selection',
     FOXWARM_DATA_DIR: 'selected data',
     FOXWARM_SYNC_FILE_LOG: '0' };
@@ -323,7 +325,7 @@ function tmuxFixture(t) {
     return execFileSync(tmuxBin, ['-S', socket, '-f', '/dev/null', ...args], { env, encoding: 'utf8' }).trim();
   }
   t.after(async () => {
-    spawnSync(tmuxBin, ['-S', socket, 'kill-server']);
+    spawnSync(tmuxBin, ['-S', socket, 'kill-server'], { env });
     for (const release of cleanup) await release();
   });
   tmux('new-session', '-d', '-s', 'fixture');
@@ -349,13 +351,13 @@ function tmuxFixture(t) {
   }
   async function stop() {
     const before = (text().match(/Main stopped\./g) || []).length;
-    tmux('send-keys', '-t', pane(), 'C-c');
+    run('stop.sh');
     await until(() => (text().match(/Main stopped\./g) || []).length === before + 1, 'Managed Main did not stop.');
   }
   return { ...f, env, tmux, install, run, ready, stop, pane, text };
 }
 
-const tmuxMain = { skip: process.platform !== 'linux' || spawnSync('tmux', ['-V']).status !== 0
+const tmuxMain = { skip: process.platform !== 'linux' || spawnSync('bash', ['-c', 'command -v tmux']).status !== 0
   ? 'Requires Linux, Bash and tmux' : false };
 test('Bash restart drains the running Main before starting its replacement', tmuxMain, async t => {
   const f = tmuxFixture(t);
@@ -365,9 +367,11 @@ test('Bash restart drains the running Main before starting its replacement', tmu
   const shell = f.tmux('display-message', '-p', '-t', f.pane(), '#{pane_pid}');
   const launcher = execFileSync('pgrep', ['-P', shell], { encoding: 'utf8' }).trim();
   const main = Number(execFileSync('pgrep', ['-P', launcher], { encoding: 'utf8' }).trim());
+  assert.equal(fs.readFileSync(path.join(f.app, 'foxwarm.pid'), 'utf8'), `${main}\n`);
   f.run('restart.sh');
   await f.ready(2);
   assert(!running(main), 'Previous managed Main survived restart.');
+  assert(!running(Number(launcher)), 'Previous launcher survived restart.');
   const log = f.text();
   assert(log.indexOf('Main stopped.') < log.lastIndexOf('Main started without HTTP.'), log);
   assert(fs.existsSync(path.join(f.app, 'owned agents/main/memory')));

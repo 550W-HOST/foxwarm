@@ -42,10 +42,16 @@ git pull --ff-only
 Use the installation's existing `FOXWARM_TMUX_SESSION`, `FOXWARM_DATA_DIR`, PATH
 and other launch settings. Restart installs the root/WebUI lockfiles and builds
 the complete resources in staging while the old Main continues running. Only a
-successful build proceeds to Ctrl+C, waits for the exact dedicated tmux pane's
-foreground Main to drain, promotes the output, and sends the new launch command.
-A Main that has not exited 60 seconds after Ctrl+C is killed; this is equivalent
-to a crash, and busy Sessions resume at the next start.
+successful build stops Main using its PID in the checkout-root `foxwarm.pid`,
+waits for Main and its launcher to exit, promotes the output, and sends the new
+launch command to the same interactive tmux pane. The PID is checked against this
+installation before signalling; stale or unrelated PIDs are ignored. On the first
+restart of an older PID-less launch, the script finds and validates Main in the
+exact pane's foreground process group.
+A Main that has not exited 60 seconds after SIGTERM receives SIGKILL; this is
+equivalent to a crash, and busy Sessions resume at the next start.
+`./scripts/stop.sh` uses the same stop-and-wait path, leaving the tmux shell and
+window available. Stopping works while the pane is in copy mode.
 For first startup, `./scripts/start.sh` uses the same staging and promotion; it
 refuses an existing exact session. Restart also creates the session if absent.
 
