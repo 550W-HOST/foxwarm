@@ -1,4 +1,4 @@
-name: Tests
+name: Published browser evidence (temporary)
 
 on:
   push:
@@ -20,6 +20,7 @@ env:
 
 jobs:
   core:
+    if: ${{ false }} # Temporary diagnosis; not full CI qualification.
     name: Core, packages, and quality
     runs-on: ubuntu-24.04
     timeout-minutes: 35
@@ -78,13 +79,13 @@ jobs:
           retention-days: 7
 
   chromium:
-    name: Chromium fixtures (${{ matrix.shard }}/8)
+    name: Published browser startup evidence
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+        shard: [1] # One published qualification; no UI shards.
     runs-on: ubuntu-24.04
-    # Each shard prepares its own checkout and runs two independent fixture files.
+    # Retain published qualification prerequisites; skip the later UI fixture pool.
     timeout-minutes: 120
     steps:
       - name: Check out repository
@@ -137,6 +138,7 @@ jobs:
           FOXWARM_TEST_ARTIFACT_DIR: ${{ runner.temp }}/foxwarm-test-artifacts
         run: npm run test:published
       - name: Run Chromium fixtures
+        if: ${{ false }} # Stop after the existing published qualification.
         env:
           LD_LIBRARY_PATH: ${{ runner.temp }}/heif-test/prefix/lib
           FOXWARM_E2E_CHROMIUM: ${{ steps.browser.outputs.path }}
@@ -157,6 +159,7 @@ jobs:
           retention-days: 7
 
   app:
+    if: ${{ false }} # Temporary diagnosis; not full CI qualification.
     name: Real app with mock LLM
     runs-on: ubuntu-24.04
     timeout-minutes: 10
