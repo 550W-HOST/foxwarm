@@ -30,7 +30,6 @@ import {
   CHAT_BOTTOM_FOLLOW_REJOIN_THRESHOLD_PX,
   CHAT_MESSAGE_ANCHOR_SELECTOR,
   CONTEXT_SCROLLBAR_ANCHOR_SELECTOR,
-  PERSISTENT_MEMORY_SNAPSHOT_CONTEXT_SCROLLBAR_ANCHOR_KEY,
   chooseChatViewportState,
   getChatViewportAnchorAdjustment,
   getChatViewportAnchorSeq,
@@ -191,7 +190,7 @@ type StreamingAsrSession = {
   cancel: () => void
 }
 
-const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessionMessageMode = false, sessionMessageAttachments = false, canonicalSessionId, sessionDisplayName, webUiIdentityMode = false, onBack, onNewSession, onOpenTerminal, onOpenCode, onOpenCodeFile, onOpenCodeCommit, onOpenModelSettings, sendKeyMode = 'modEnter', timelineView = 'detailed', historyMode = historyModeForTimelineView(timelineView), showUsageBadge = true, showUserMessageMetadata = false, showInterAgentMessages = true, onShowInterAgentMessagesChange = () => {}, showCommentary = true, onShowCommentaryChange = () => {}, fullWidth = true, onFullWidthChange = () => {}, onSendKeyModeChange = () => {}, onTimelineViewChange = () => {}, onShowUsageBadgeChange = () => {}, onShowUserMessageMetadataChange = () => {} }: ChatProps) {
+const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessionMessageMode = false, sessionMessageAttachments = false, canonicalSessionId, sessionDisplayName, webUiIdentityMode = false, onBack, onNewSession, onOpenTerminal, onOpenCode, onOpenCodeFile, onOpenCodeCommit, onOpenModelSettings, sendKeyMode = 'modEnter', timelineView = 'conversation', historyMode = historyModeForTimelineView(timelineView), showUsageBadge = true, showUserMessageMetadata = false, showInterAgentMessages = true, onShowInterAgentMessagesChange = () => {}, showCommentary = true, onShowCommentaryChange = () => {}, fullWidth = true, onFullWidthChange = () => {}, onSendKeyModeChange = () => {}, onTimelineViewChange = () => {}, onShowUsageBadgeChange = () => {}, onShowUserMessageMetadataChange = () => {} }: ChatProps) {
   const viewportSessionId = canonicalSessionId || sessionId
   const initialContinuousAnchorSeq = useMemo(() => getChatViewportAnchorSeq(getStoredChatViewportState(viewportSessionId, 'continuous')), [viewportSessionId])
   const {
@@ -628,11 +627,6 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
     // latch as wheel/touch/scrollbar interaction before moving native scroll.
     leaveBottomFollow()
     if (scrollToContextScrollbarAnchor(anchorKey, fraction)) return
-    // The memory snapshot precedes the history but has no timeline row.
-    if (anchorKey === PERSISTENT_MEMORY_SNAPSHOT_CONTEXT_SCROLLBAR_ANCHOR_KEY) {
-      scrollToTop()
-      return
-    }
     pendingContextScrollbarNavigationRef.current = { anchorKey, fraction }
     if (historyMode === 'continuous') {
       const index = messages.findIndex(message => getMessageViewportAnchorKey(message) === anchorKey)
@@ -641,7 +635,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
         setContinuousWindowKey(getMessageStableKey(messages[Math.max(0, index - 20)], 0))
       }
     } else setShowFullTimeline(true)
-  }, [leaveBottomFollow, scrollToContextScrollbarAnchor, scrollToTop, historyMode, messages])
+  }, [leaveBottomFollow, scrollToContextScrollbarAnchor, historyMode, messages])
 
   const readProtectedHistoryRange = useCallback((): ProtectedHistoryRange | null => {
     const container = messagesContainerRef.current
@@ -993,11 +987,13 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
     buildStreamingAssistantMessage(streamingAssistantDraft)
   ), [streamingAssistantDraft])
 
-  // The memory snapshot and other internal rows stay available in the Session debug view.
+  // Conversation hides model bookkeeping; technical views retain the existing snapshot and rows.
   const timelineMessages = useMemo(() => {
-    const baseMessages = visibleMessages.some(isInternalTimelineMessage) ? visibleMessages.filter(message => !isInternalTimelineMessage(message)) : visibleMessages
+    const baseMessages = timelineView === 'conversation'
+      ? visibleMessages.filter(message => !isInternalTimelineMessage(message))
+      : snapshotSystemMessage ? [snapshotSystemMessage, ...visibleMessages] : visibleMessages
     return streamingAssistantMessage && displayingLatest ? [...baseMessages, streamingAssistantMessage] : baseMessages
-  }, [streamingAssistantMessage, visibleMessages, displayingLatest])
+  }, [timelineView, snapshotSystemMessage, streamingAssistantMessage, visibleMessages, displayingLatest])
 
   const navigateSearch = useCallback((match: typeof selectedSearchMatch) => {
     if (!match) return

@@ -28,7 +28,7 @@ The workbench's floating Chat header does not apply those safe-area insets again
 
 [2026-10-16] Mobile Session ordering defaults to Flat/recent activity and uses `foxwarm_session_list_mobile_view_mode_v1`; desktop preferences remain separate. Flat rows omit the tree disclosure placeholder but retain 12px content inset, aligned for selected and unselected rows. Pin/Unpin belongs in each row's menu on both desktop and mobile.
 
-Mobile Timeline defaults to Conversation and stores explicit choices in `foxwarm_mobile_timeline_view_v1`. Desktop's `foxwarm_timeline_view_v1` and legacy grouping fallback remain unchanged. Shared preferences still synchronize across roots, but one viewport family's Timeline selection does not overwrite the other. Per-request usage, reasoning-token badges, and assistant Rendered/Raw/JSON/Copy action rows are hidden only by the root mobile policy; measurements and desktop preferences are retained. The ordinary composer hint is absent on mobile; missing-Session error text remains visible.
+Both viewport families default to Conversation when no valid preference exists. Mobile stores explicit choices in `foxwarm_mobile_timeline_view_v1`; desktop uses `foxwarm_timeline_view_v1` and honors the legacy grouping boolean (`true` selects Grouped, `false` selects Detailed) only when no valid desktop mode exists. Shared preferences still synchronize across roots, but one viewport family's Timeline selection does not overwrite the other. Per-request usage, reasoning-token badges, and assistant Rendered/Raw/JSON/Copy action rows are hidden only by the root mobile policy; measurements and desktop preferences are retained. The ordinary composer hint is absent on mobile; missing-Session error text remains visible.
 
 ## Verification
 

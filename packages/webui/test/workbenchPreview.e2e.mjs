@@ -73,7 +73,8 @@ async function openFixture({ freshBrowser = false, tabs = [system, chat('e2e-a')
       localStorage.setItem('foxwarm_sidebar_collapsed_v1', 'false')
       if(freshBrowser) for(const key of ['foxwarm_workbench_state_v4','foxwarm_workbench_tabs_v3','foxwarm_last_active_tab_v1','foxwarm_last_visited_session_v1'])localStorage.removeItem(key)
     }
-    if (chatMessages) localStorage.setItem('foxwarm_timeline_view_v1', timelineView)
+    if (chatMessages && timelineView) localStorage.setItem('foxwarm_timeline_view_v1', timelineView)
+    if (timelineView === null) for (const key of ['foxwarm_timeline_view_v1', 'foxwarm_mobile_timeline_view_v1', 'foxwarm_group_tools_v1']) localStorage.removeItem(key)
     if (mobileTimelineView) localStorage.setItem('foxwarm_mobile_timeline_view_v1', mobileTimelineView)
     if (showScrollbar !== undefined) localStorage.setItem('foxwarm.contextScrollbar.showScrollbar', String(showScrollbar))
     if (themeId) localStorage.setItem('foxwarm_theme_selection_v3', JSON.stringify({ version: 3, themeId, lightThemeId: themeId, darkThemeId: themeId, colorMode }))
@@ -3831,3 +3832,26 @@ for (const width of [390, 1400]) for (const keptTarget of [false, true]) {
     } finally { await page.close() }
   })
 }
+
+test('fresh App, popup and embedded Chat roots open Conversation on desktop and mobile', async () => {
+  const chatMessages = [
+    { role: 'user', parts: [{ system: '<foxwarm-system kind="session-boundary" event="first-run">\nOPENING_INTERNAL\n</foxwarm-system>' }], __meta: { seq: 1 } },
+    { role: 'user', parts: [{ system: '<foxwarm-system kind="session-settings-changed">\nSETTINGS_INTERNAL\n</foxwarm-system>' }], __meta: { seq: 2 } },
+    { role: 'model', parts: [{ text: 'Fresh conversation answer' }], __meta: { seq: 3 } },
+  ]
+  for (const width of [1400, 390]) {
+    const page = await openFixture({ width, height: 900, chatMessages, responsiveChat: true, timelineView: null, hash: '#session/e2e-a' })
+    try {
+      for (const route of [null, '?foxwarmPopup=chat&foxwarmPopupVersion=1&sessionId=e2e-a', '?foxwarmEmbed=chat&foxwarmEmbedNonce=container-fixture-nonce&sessionId=e2e-a']) {
+        if (route) await page.goto(`${baseUrl}${route}`, { waitUntil: 'domcontentloaded' })
+        await page.waitForFunction(() => document.querySelector('.foxwarm-chat-messages')?.textContent.includes('Fresh conversation answer'))
+        assert.equal(await page.$('[data-system-message-card]'), null)
+        assert.equal(await page.$('.foxwarm-context-scrollbar'), null)
+        await clickReadyControl(page, '.foxwarm-chat-root button[aria-label="Open session options"]')
+        await page.waitForFunction(() => document.querySelector('[role="radiogroup"][aria-label="Timeline view"] [aria-checked="true"]')?.textContent === 'Conversation')
+        assert.deepEqual(await page.evaluate(() => [localStorage.getItem('foxwarm_timeline_view_v1'), localStorage.getItem('foxwarm_mobile_timeline_view_v1')]), [null, null])
+        await page.keyboard.press('Escape')
+      }
+    } finally { await page.close() }
+  }
+})

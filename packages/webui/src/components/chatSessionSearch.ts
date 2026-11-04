@@ -59,7 +59,7 @@ export function projectSessionSearchFields(messages: Message[], timelineView: Ti
   const committed: Message[] = []
   const sourceIndices = new Map<Message, number>()
   messages.forEach((message, index) => {
-    if (!isCommittedHistoryMessage(message) || message.__meta?.synthetic || isInternalTimelineMessage(message)) return
+    if (!isCommittedHistoryMessage(message) || message.__meta?.synthetic || (timelineView === 'conversation' && isInternalTimelineMessage(message))) return
     committed.push(message)
     sourceIndices.set(message, index)
   })

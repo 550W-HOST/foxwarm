@@ -71,7 +71,7 @@ before(async () => {
         const wrapped = url.includes('fixture%2Fwrapped')
         const compact = url.includes('fixture%2Fcompact-')
         const messages = compact ? window.fixture.compactHistory : wrapped ? wrappedHistory : history
-        return new Response(JSON.stringify({session:{id:compact?window.fixture.compactSessionId:wrapped?'fixture/wrapped':'fixture/main',busy:compact?window.fixture.compactRuntime.busy:false,busyStartedAt:compact?window.fixture.compactBusyStartedAt:null,runtimeState:compact?window.fixture.compactRuntime:{state:'idle'},queueLength:0,messageCount:messages.length,historyVersion:0,modelKey:'fixture/model'},messages,queuedMessages:[],queueLength:0,latestSeq:compact?messages.at(-1).__meta.seq:wrapped?503:129,historyVersion:0,prefixLength:0,historyComplete:true}),{status:200,headers:{'Content-Type':'application/json'}})
+        return new Response(JSON.stringify({session:{id:compact?window.fixture.compactSessionId:wrapped?'fixture/wrapped':'fixture/main',busy:compact?window.fixture.compactRuntime.busy:false,busyStartedAt:compact?window.fixture.compactBusyStartedAt:null,runtimeState:compact?window.fixture.compactRuntime:{state:'idle'},queueLength:0,messageCount:messages.length,historyVersion:0,modelKey:'fixture/model'},messages,persistentMemorySnapshot:compact?'SNAPSHOT_SEARCH_EXCLUDED':undefined,queuedMessages:[],queueLength:0,latestSeq:compact?messages.at(-1).__meta.seq:wrapped?503:129,historyVersion:0,prefixLength:0,historyComplete:true}),{status:200,headers:{'Content-Type':'application/json'}})
       }
       if (url.includes('/models')) return new Response(JSON.stringify({models:[{key:'fixture/model',contextLimit:128000}]}),{status:200})
       if (url.includes('/asr/status')) return new Response(JSON.stringify({configured:false,available:false}),{status:200})
@@ -686,4 +686,37 @@ test('a leading execution origin is usable without an input, but unknown earlier
   assert.match(await page.$$eval('[data-timeline-activity]', nodes => nodes.at(-1).textContent), /Elapsed 30s/)
   assert.doesNotMatch(await page.$$eval('[data-timeline-activity]', nodes => nodes.at(-1).textContent), /Worked|Waited/)
   assert.deepEqual(await page.$$eval('[data-timeline-time-separator] time', nodes => nodes.map(node => node.dateTime)), [new Date(base - 400000).toISOString()])
+})
+
+test('internal history and Search follow mode switches while the active snapshot stays synthetic', async () => {
+  await page.reload({ waitUntil: 'load' })
+  await page.waitForFunction(() => !!window.fixture?.showCompactTiming)
+  const history = [
+    { role: 'user', parts: [{ system: '<foxwarm-system kind="session-boundary" event="first-run">\nFIRST_RUN_TARGET\n</foxwarm-system>' }], __meta: { seq: 901 } },
+    { role: 'model', parts: [{ text: 'Welcome to the conversation' }], __meta: { seq: 902 } },
+    { role: 'user', parts: [{ system: '<foxwarm-system kind="session-settings-changed">\nSETTINGS_TARGET\n</foxwarm-system>' }], __meta: { seq: 903 } },
+    { role: 'user', parts: [{ text: 'Visible user message' }], __meta: { seq: 904 } },
+  ]
+  await page.evaluate(history => window.fixture.showCompactTiming(history, 1700000000000, { state: 'idle', busy: false }), history)
+  await page.waitForFunction(() => document.querySelector('.foxwarm-chat-messages')?.textContent.includes('Visible user message'))
+  await page.click('button[aria-label="Find in chat"]')
+  for (const view of ['conversation', 'detailed', 'grouped', 'conversation']) {
+    await page.evaluate(view => window.fixture.setTimelineView(view), view)
+    for (const [seq, term] of [[901, 'FIRST_RUN_TARGET'], [903, 'SETTINGS_TARGET']]) {
+      await query(term)
+      if (view === 'conversation') {
+        await page.waitForFunction(() => document.querySelector('[role="search"] [aria-live]')?.textContent === '0/0')
+        assert.equal(await page.$(`[data-search-row="seq-local-${seq}"]`), null)
+      } else {
+        await page.waitForFunction(term => [...CSS.highlights].some(([name, highlights]) => name.startsWith('foxwarm-chat-search-') && [...highlights][0]?.toString() === term), {}, term)
+        assert.equal((await snapshot()).hits, '1/1')
+        assert.equal((await snapshot()).visible, true)
+      }
+    }
+    assert.equal(!!await page.$('[data-context-scrollbar-anchor-key="persistent-memory-snapshot"]'), view !== 'conversation')
+    await query('SNAPSHOT_SEARCH_EXCLUDED')
+    await page.waitForFunction(() => document.querySelector('[role="search"] [aria-live]')?.textContent === '0/0')
+    assert.deepEqual(await page.evaluate(() => window.fixture.compactHistory), history, 'projection leaves source history unchanged')
+  }
+  await page.click('[aria-label="Close search"]')
 })

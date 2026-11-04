@@ -74,13 +74,17 @@ async function buildFixtureBundle() {
   return result.outputFiles[0].text
 }
 
-async function mountFixture(width = 900) {
+async function mountFixture(width = 900, timelineView) {
   await page.setViewport({ width, height: 720, isMobile: width < 768, hasTouch: width < 768, deviceScaleFactor: 1 })
   await page.goto(fixtureUrl, { waitUntil: 'load' })
   const renderedChildren = await page.evaluate(() => document.querySelector('#root')?.childElementCount || 0)
   assert.ok(renderedChildren > 0, 'React fixture mounts before querying session preferences')
   await page.waitForSelector('button[aria-label="Open session options"]')
   await page.waitForFunction(() => !!window.chatSettingsFixture)
+  if (timelineView) {
+    await page.evaluate(view => window.chatSettingsFixture.setTimelineView(view), timelineView)
+    await page.waitForFunction(view => window.chatSettingsFixture.timelineView === view, {}, timelineView)
+  }
 }
 
 async function openMenu() {
@@ -119,8 +123,8 @@ after(async () => {
   await new Promise(resolve => server?.close(resolve))
 })
 
-test('user metadata defaults hidden while bodies, attachment tags, and old system cards remain visible', async () => {
-  await mountFixture()
+test('Detailed user metadata defaults hidden while bodies, attachment tags, and old system cards remain visible', async () => {
+  await mountFixture(900, 'detailed')
   assert.notEqual(await page.evaluate(() => localStorage.getItem('foxwarm_show_user_message_metadata_v1')), 'true')
   const text = await page.$eval('main', element => element.textContent || '')
   assert.equal(text.includes('<foxwarm-message'), false)
@@ -134,7 +138,7 @@ test('user metadata defaults hidden while bodies, attachment tags, and old syste
 })
 
 test('direct, wrapped, and optimistic user text preserves authored blank lines without changing copied text', async () => {
-  await mountFixture()
+  await mountFixture(900, 'detailed')
   const evidence = await page.evaluate(() => {
     const pres = [...document.querySelectorAll('pre')]
     const find = text => pres.find(pre => pre.textContent?.includes(text))
@@ -160,7 +164,7 @@ test('direct, wrapped, and optimistic user text preserves authored blank lines w
 })
 
 test('visible XML metadata keeps compact line spacing while authored blank lines keep full body spacing', async () => {
-  await mountFixture()
+  await mountFixture(900, 'detailed')
   await page.evaluate(() => localStorage.setItem('foxwarm_show_user_message_metadata_v1', 'true'))
   await page.reload({ waitUntil: 'load' })
   await page.waitForFunction(() => !!window.chatSettingsFixture?.showUserMessageMetadata)

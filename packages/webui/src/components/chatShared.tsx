@@ -439,7 +439,7 @@ export const isLightweightFoxwarmMetadataLine = (text: string): boolean => {
 /**
  * Runtime bookkeeping that is written for the model, not for the person reading the
  * conversation: model/Node selection changes and the first-run opening that precedes the
- * prepared welcome. The timeline omits them; the Session debug view keeps the raw history.
+ * prepared welcome. Conversation omits them; technical views and Session debug retain them.
  */
 const isInternalSystemPart = (part: MessagePart): boolean => {
   if (typeof part.system !== 'string' || Object.keys(part).some(key => key !== 'system')) return false
