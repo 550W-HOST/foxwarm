@@ -36,7 +36,6 @@ test('built-in themes validate and canonical serialization is stable', () => {
   assert.ok(theme.BUILTIN_THEMES.includes(theme.DEFAULT_THEME))
   assert.ok(theme.BUILTIN_THEMES.includes(theme.THEME_550A))
   assert.ok(theme.BUILTIN_THEMES.includes(theme.THEME_550A_MONO))
-  assert.equal(theme.BUILTIN_THEMES.length, 8)
   assert.deepEqual(
     theme.BUILTIN_THEMES.map(item => [item.id, item.name]),
     [
