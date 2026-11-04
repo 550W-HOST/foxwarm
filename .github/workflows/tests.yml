@@ -78,10 +78,13 @@ jobs:
           retention-days: 7
 
   chromium:
-    name: Chromium fixtures
+    name: Chromium fixtures (${{ matrix.shard }}/8)
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     runs-on: ubuntu-24.04
-    # Allow setup/build, the full serial fixture suite and cleanup; measured
-    # hosted completion already reaches the previous 90-minute job budget.
+    # Each shard prepares its own checkout and runs two independent fixture files.
     timeout-minutes: 120
     steps:
       - name: Check out repository
@@ -128,6 +131,7 @@ jobs:
       - name: Prepare owned SSH daemon prerequisite
         run: sudo install -d -o root -g root -m 0755 /run/sshd
       - name: Qualify complete managed publish
+        if: ${{ matrix.shard == 1 }}
         env:
           FOXWARM_E2E_CHROMIUM: ${{ steps.browser.outputs.path }}
           FOXWARM_TEST_ARTIFACT_DIR: ${{ runner.temp }}/foxwarm-test-artifacts
@@ -137,12 +141,12 @@ jobs:
           LD_LIBRARY_PATH: ${{ runner.temp }}/heif-test/prefix/lib
           FOXWARM_E2E_CHROMIUM: ${{ steps.browser.outputs.path }}
           FOXWARM_TEST_ARTIFACT_DIR: ${{ runner.temp }}/foxwarm-test-artifacts
-        run: npm run test:webui:e2e
+        run: npm run test:webui:e2e -- --shard=${{ matrix.shard }}/8 --workers=2
       - name: Upload failure diagnostics
         if: ${{ failure() || cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: diagnostics-chromium
+          name: diagnostics-chromium-${{ matrix.shard }}
           path: |
             ${{ runner.temp }}/foxwarm-test-artifacts/*/inventory.json
             ${{ runner.temp }}/foxwarm-test-artifacts/*/summary.json
