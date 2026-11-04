@@ -1,5 +1,5 @@
 import { waitForWebUiReady } from './webuiReadiness.mjs'
-import test, { after, before } from 'node:test'
+import test, { after, before, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
@@ -23,6 +23,8 @@ let viteCacheDir
 let preview
 let productionBaseUrl
 let browser
+let browserPhase = 'fixture setup'
+let intentionalBrowserClose = false
 let page
 let savedRequest
 // The first-run welcome language; kept apart so body assertions cover the installed models input.
@@ -552,6 +554,30 @@ before(async () => {
     headless: true,
     args: ['--no-sandbox', '--disable-setuid-sandbox'],
   })
+  const child = browser.process()
+  const observedAt = Date.now()
+  let stderrTail = Buffer.alloc(0)
+  let disconnectedPhase
+  child.stderr?.on('data', bytes => {
+    stderrTail = Buffer.concat([stderrTail, Buffer.from(bytes).subarray(-8192)]).subarray(-8192)
+  })
+  browser.once('disconnected', () => {
+    if (intentionalBrowserClose) return
+    disconnectedPhase = browserPhase
+    console.error(JSON.stringify({
+      fixture: 'setupModels', event: 'browser-disconnected', phase: disconnectedPhase,
+      pid: child.pid, connected: browser.connected, exitCode: child.exitCode,
+      signalCode: child.signalCode, elapsedMs: Date.now() - observedAt,
+      stderrTail: stderrTail.toString('utf8'),
+    }))
+  })
+  child.once('exit', (exitCode, signalCode) => {
+    if (!disconnectedPhase) return
+    console.error(JSON.stringify({
+      fixture: 'setupModels', event: 'browser-process-exit', phase: disconnectedPhase,
+      pid: child.pid, exitCode, signalCode, elapsedMs: Date.now() - observedAt,
+    }))
+  })
   page = await browser.newPage()
   await page.setBypassServiceWorker(true)
   await attachRequestMocks(page)
@@ -562,7 +588,10 @@ before(async () => {
   await page.waitForSelector('[data-monaco-model-uri][data-editor-ready="true"]', { timeout: 15_000 })
 })
 
+beforeEach(context => { browserPhase = context.name.slice(0, 256) })
+
 after(async () => {
+  intentionalBrowserClose = true
   await browser?.close()
   if (vite && vite.exitCode === null) {
     await new Promise(resolve => {
