@@ -303,7 +303,7 @@ internal static class ArchiveRecallTool
                 var fingerprint = string.Join("|", query, scope.Scope, scope.SessionId ?? "", startTime?.ToString() ?? "", endTime?.ToString() ?? "", pageSize);
                 var page = ParseCursor(args["cursor"], fingerprint);
                 var offset = page?.Offset ?? 0;
-                var limit = Math.Min(1024, Math.Max(pageSize + offset, pageSize) * 4);
+                var limit = (int)Math.Min(1024L, Math.Max((long)pageSize + offset, pageSize) * 4L);
                 var semanticRenderer = new ContextPreviewRenderer(args, 1000);
                 var result = await Foxwarm.Vector.VectorRecall.SearchAsync(
                     manager.Vector,
