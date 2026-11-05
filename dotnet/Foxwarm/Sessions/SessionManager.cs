@@ -251,6 +251,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
             foreach (var definition in ToolScriptToolDefinitions.Definitions())
                 definitions.Add(definition?.DeepClone());
         definitions.Add(WaitToolDefinitions.Definition());
+        definitions.Add(AskUserToolDefinitions.Definition());
         foreach (var definition in KnowledgeToolDefinitions.Definitions())
             definitions.Add(definition);
         foreach (var definition in ObservationToolDefinitions.Definitions())

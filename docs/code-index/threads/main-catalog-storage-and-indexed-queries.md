@@ -123,6 +123,11 @@ their real relation. Opaque cursors bind mode/scope/parent/agent plus a
 process-instance catalog revision and volatile sequence; a matching mutation
 returns a first-page reset instead of applying a stale key.
 
+The first `/api/session-list/sidebar` page (no cursor) also carries
+`questionSessions`: up to 50 rows of Sessions with open `ask_user` questions
+from the question-presence partial index, so the Sidebar can elevate them
+wherever they sit in the tree in the same request, without hydrating Sessions ([structured user questions](../units/session-questions.md)).
+
 Root, child, agent, exact, alias, and by-ID queries use concrete indexes and
 bounded batches. Initial child previews and multi-parent continuation each use
 one bounded compound `UNION ALL` request composed of per-parent indexed

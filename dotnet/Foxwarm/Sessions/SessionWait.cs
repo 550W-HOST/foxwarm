@@ -160,7 +160,7 @@ internal static class SessionWait
             )
         )
             throw SessionAuthorityErrors.Invalid("Invalid wait timeout.");
-        foreach (var key in new[] { "waitAnySessions", "waitExecIds" })
+        foreach (var key in new[] { "waitAnySessions", "waitExecIds", "waitQuestionIds" })
             if (wait.ContainsKey(key))
                 ValidateIds(wait[key], key, 1);
         if (wait.ContainsKey("waitForInput") && wait["waitForInput"]?.GetValue<bool>() != true)

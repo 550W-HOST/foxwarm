@@ -2,7 +2,7 @@ import { getSessionRuntimeTone } from '../sessionRuntimeState'
 import { useState, useRef, useEffect, useMemo, type ReactNode } from 'react'
 import { useDndContext, useDraggable, useDroppable } from '@dnd-kit/core'
 import { API_BASE_PATH } from '../config'
-import { SlidersHorizontal, MoreVertical, Plus, Settings, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X, CornerDownRight, ListTree, Clock3, Rows3, Pin, PinOff, Bell, BellRing, GitBranch, Server, Copy, SquarePlus } from 'lucide-react'
+import { SlidersHorizontal, MoreVertical, Plus, Settings, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X, CornerDownRight, ListTree, Clock3, Rows3, Pin, PinOff, Bell, BellRing, GitBranch, Server, Copy, SquarePlus, MessageCircleQuestion } from 'lucide-react'
 import RuntimeBusySpinner from './RuntimeBusySpinner'
 import MobilePageHeader from './MobilePageHeader'
 import ContextMenu, { type ContextMenuAnchorRect, type ContextMenuEntry } from './ContextMenu'
@@ -10,13 +10,14 @@ import SessionListSectionHeader, { sessionRowTitleX } from './SessionListSection
 import { copyTextToClipboard } from './chatShared'
 import { getSessionRuntimeSummary, getSessionRuntimeStateName, type SessionRuntimeState } from '../sessionRuntimeState'
 import { type SessionIdleNotificationMode } from '../sessionIdleNotifications'
-import { collapseSessionListExpandedBranch, compareSessionListSessions, getSessionListAutoExpandedPath, getSessionListChildDisclosure, getSessionListAgentTag, getSessionListDisplayId, assignSessionListGroupRoots, shouldElevateSessionToRoot, SESSION_LIST_GROUPING_KEY, loadStoredSessionListGrouping, type SessionListGrouping, type SessionListOrderMode } from '../sessionListPresentation'
+import { collapseSessionListExpandedBranch, compareSessionListSessions, getSessionListAutoExpandedPath, getSessionListChildDisclosure, getSessionListAgentTag, getSessionListDisplayId, assignSessionListGroupRoots, shouldElevateSessionToRoot, orderQuestionSessions, SESSION_LIST_GROUPING_KEY, loadStoredSessionListGrouping, type SessionListGrouping, type SessionListOrderMode } from '../sessionListPresentation'
 import type { SessionCreationRequest } from './AgentCreationMenu'
 import { GROUP_PAGE_STEP, type BoundedSessionGroupView } from '../boundedSessionList'
 import { shouldActivateSessionListDrag, shouldEnableSessionListDrag } from '../sessionListDrag'
 import { useSessionListCompact } from '../sessionListDensity'
 import { getResolvedSessionNodeId } from '../sessionNode'
 import { dispatchSessionIdleDeleted } from '../sessionIdleAttention'
+import { getSessionQuestionAttention, questionAttentionLabel, type SessionQuestionsProjection } from '../sessionQuestions'
 
 export interface Session {
   id: string
@@ -45,6 +46,7 @@ export interface Session {
   childModelDefault?: string | null
   effectiveChildModelKey?: string
   isolated?: boolean
+  questions?: SessionQuestionsProjection
   tokenUsage?: {
     cachedTokens: number
     inputTokens: number
@@ -706,7 +708,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   const groupedRoots = useMemo(
     () => grouping === 'none' || !groupView
       ? null
-      : assignSessionListGroupRoots(rootSessions.filter(session => !session.pinned).map(session => session.id), groupView.pages, groupView.presentationGroups),
+      : assignSessionListGroupRoots(rootSessions.filter(session => !session.pinned && !getSessionQuestionAttention(session)).map(session => session.id), groupView.pages, groupView.presentationGroups),
     [grouping, groupView, rootSessions],
   )
   // The group of every rendered row: a top-level row's group, inherited by its subtree.
@@ -731,8 +733,11 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   const [displayAnchor, setDisplayAnchor] = useState<ContextMenuAnchorRect | null>(null)
   const displayButtonRef = useRef<HTMLButtonElement>(null)
 
-  const visibleRootSessions = bounded ? rootSessions : rootSessions.slice(0, visibleRootCount)
-  const hiddenRootCount = bounded ? (bounded.hasMoreRoots ? MORE_VISIBLE_ROOTS_STEP : 0) : rootSessions.length - visibleRootSessions.length
+  // Open questions lift a Session above Pinned; the Agent is waiting on the strongest of them.
+  const questionRoots = useMemo(() => orderQuestionSessions(rootSessions), [rootSessions])
+  const listedRootSessions = useMemo(() => rootSessions.filter(session => !getSessionQuestionAttention(session)), [rootSessions])
+  const visibleRootSessions = bounded ? listedRootSessions : listedRootSessions.slice(0, visibleRootCount)
+  const hiddenRootCount = bounded ? (bounded.hasMoreRoots ? MORE_VISIBLE_ROOTS_STEP : 0) : listedRootSessions.length - visibleRootSessions.length
 
   const resolvedCurrentSessionId = currentSession ? resolveSessionId(currentSession) || currentSession : undefined
 
@@ -1215,6 +1220,12 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       )}
     </section>
   )
+  const renderQuestionSection = () => questionRoots.length > 0 && (
+    <section aria-label="Needs your answer" data-session-section="questions" className="mb-2">
+      <SessionListSectionHeader label="Needs your answer" disclosureColumn={disclosureColumn} />
+      {questionRoots.map(session => renderSession(session))}
+    </section>
+  )
   const renderGroups = ({ byGroup, ungrouped }: { byGroup: Map<string, string[]>; ungrouped: string[] }) => {
     const view = groupView!
     const pinnedRoots = visibleRootSessions.filter(session => session.pinned)
@@ -1318,6 +1329,14 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       </span>
     )
 
+    const questionAttention = getSessionQuestionAttention(session)
+    const questionLabel = questionAttentionLabel(questionAttention, session.questions?.open)
+    const questionBadge = questionAttention && (
+      <span role="img" aria-label={questionLabel} title={questionLabel} data-session-question={questionAttention}
+        className={`inline-flex shrink-0 items-center justify-center ${questionAttention === 'waiting' ? 'h-5 w-5 rounded-full bg-fw-warning-surface text-fw-warning ring-1 ring-fw-warning-border dark:bg-fw-warning-surface-strong/30' : 'h-3.5 w-3.5 text-fw-accent'}`}>
+        <MessageCircleQuestion className="h-3.5 w-3.5" strokeWidth={questionAttention === 'waiting' ? 2.25 : 1.75} aria-hidden="true" />
+      </span>
+    )
     const isCurrentSession = resolvedCurrentSessionId === session.id
     const runtimeStateName = getSessionRuntimeStateName(session)
     const showRuntimeBadge = session.runtimeState ? runtimeStateName !== 'idle' || !!session.runtimeState.compaction : !!session.busy
@@ -1456,6 +1475,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                     {mobileList && activityTime(session.lastMessageTime) && <span className="mt-0.5 block truncate text-xs font-normal text-fw-text-muted">{session.agent ? `${session.agent} · ` : ''}{activityTime(session.lastMessageTime)}</span>}
                   </span>
                   {agentTagBadge}
+                  {questionBadge}
                   {session.archived && <Archive className="h-3 w-3 shrink-0 text-fw-text-muted" aria-label="Archived session" />}
                   {unreadSessionIds.has(session.id) && (
                     <span className="h-2 w-2 shrink-0 rounded-full bg-fw-accent" role="img" aria-label="Unread idle completion" title="Unread idle completion" />
@@ -1494,6 +1514,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                         <span className="ml-2 text-xs text-fw-text-muted">[Archived]</span>
                       )}
                     </span>
+                    {questionBadge}
                     {agentTagBadge}
                   </div>
                   {session.displayName && (
@@ -1775,6 +1796,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
           <div className={listContainerClassName}>
             {rootSessions.length > 0 || (groupedRoots && groupView!.groups.length > 0) ? (
               <>
+                {renderQuestionSection()}
                 {groupedRoots ? renderGroups(groupedRoots) : [
                   { label: 'Pinned', pinned: true },
                   { label: 'Sessions', pinned: false },

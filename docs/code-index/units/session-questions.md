@@ -1,0 +1,30 @@
+# Unit: Structured user questions (`ask_user`)
+
+Files: `dotnet/Foxwarm/Sessions/SessionQuestions.cs`, `dotnet/Foxwarm/Sessions/SessionManager.Questions.cs`, `dotnet/Foxwarm/Tools/AskUserToolDefinitions.cs`, `dotnet/Foxwarm/Channels/WebUi/WebUIChannel.Questions.cs`, `packages/webui/src/sessionQuestions.ts`, `packages/webui/src/sessionQuestionsState.ts`, `packages/webui/src/components/QuestionCard.tsx`
+
+## Purpose
+
+Lets an Agent ask the user one to four questions, optionally with choices, and either end its turn until the user answers or keep working and receive the answer later as user input. The Session owns the question records, so the WebUI can render an answerable card or dock after the originating tool call has been compacted, and the records survive restart.
+
+## Key contracts
+
+- **Tool.** `ask_user` is available in every Session. `questions` (1-4; each with up to 6 options, `multiSelect`, per-option `description`/`recommended`) and `close` are mutually exclusive; `closeNote` accompanies `close`. The result is `{ questionId, status }`. `afterAsk:"wait"` (the default) is a terminal control with exactly the `wait` semantics: it takes effect after the tool batch, a sibling tool error suppresses it, and inside a ToolScript it follows the nested-wait rule. The Claude Code runtime projects the enum to `continue` only. The tool and parameter wording is coordinator-owned model-facing copy.
+- **Wait source.** `wait.waitQuestionIds` names open questions of the calling Session. It is a real progress source like `waitForInput` (no automatic fallback deadline). `ask_user` with `afterAsk:"wait"` is equivalent to asking and then waiting on that ID. The runtime presentation reports `waitingFor:"question"`.
+- **Authority.** `meta.questions = { revision, items[] }` in Session JSON. Each record holds `id` (`q-` plus 10 hex), `status` (`open`, `answered`, `skipped`, `closed`), the full question payload, `toolCallId`, `afterAsk`, and the resolution (`answer`, `closeNote`, `resolvedAt`). At most 32 open records; the 20 most recent resolved records are retained. `SessionAuthorityDocument` validates the shape on load and save.
+- **Answers are user input.** The WebUI card/dock answer (`POST .../questions/{id}/answer`, body `{answers:[{selected[],text}], note, skip}`) becomes an ordinary user queue item from the WebUI channel with `questionAnswer` metadata and a model-facing rendering that names the question ID and pairs each question with its answer. It is admitted through the normal user-input path: it joins at a safe point while busy and starts a turn while idle, whether or not the question was waited on. Skipping produces the same kind of message, marked skipped.
+- **Plain messages answer waited questions.** While the current wait lists `waitQuestionIds`, an ordinary user message (WebUI composer or external channel, `OpenFields.userInput`) answers those questions with its text and carries a `question-answer` system part. Messages from other Sessions, timers, task notices and system events never answer questions. Attachments remain ordinary message attachments.
+- **First answer wins.** `SessionQuestions.ApplyAdmission` runs inside the save lane before `SessionWait.Apply`; a structured answer to a question that is no longer open fails with `QUESTION_NOT_OPEN` (HTTP 409). Answers cannot be edited.
+- **Reminder.** While questions are open, each normal provider request receives request-only `question-reminder` context listing them (ID, short text, waited-on or not), after the Task reminder, so the Agent can close stale asynchronous questions. It is not persisted history.
+- **Projection.** The catalog row carries `questions: { open, revision, waiting? }`; the partial index `idx_session_catalog_question_presence` serves the `questionSessions` rows of the first Sidebar page without hydrating Sessions. Session state and `session-state` events carry the same projection.
+- **External channels.** Asking broadcasts a plain-text rendering (numbered questions, numbered options with descriptions and a recommended marker, "Reply to answer.") to the Session's attached normal-mode channels, excluding the WebUI. Closing sends nothing. A reply is an ordinary message; with a waited question it is the answer.
+- **No defaults.** There is no automatic default answer or timeout choice.
+
+## WebUI
+
+- `QuestionCard.tsx` renders `ask_user` calls in the timeline (`AskUserToolCard`): option rows with descriptions and a Recommended badge, radio/checkbox per `multiSelect`, an "Other" free-text field, an optional note, Skip and Submit; several questions are stepped through and submitted together. Number keys select options and Enter advances or submits. Resolved records collapse to their outcome (answered with the answer, skipped, or closed with the note). The record comes from Session state, not from the tool result.
+- `QuestionDock` sits above the composer, driven by `GET /api/sessions/{id}/questions`, refetched when the Session state's `questions.revision` changes. It is expanded by default while the Session waits on a question; the composer then shows that sending a message answers it.
+- The Session list adds a "Needs your answer" section above Pinned for Sessions with open questions (waiting first) without changing the pin flag, and marks rows; waiting is visually stronger than asynchronous-open. Watched Sessions raise a "Question for you" notification when they gain an open question.
+
+## Tests
+
+`dotnet/Foxwarm.Tests/Sessions/AskUserTests.cs` (blocking ask and structured answer, first-answer-wins, plain-message answer, Session events not answering, asynchronous ask with reminder and close, sibling-error suppression, restart survival, validation, channel text); `InContextCompactTests.Questions.cs` (open questions survive compaction); `packages/webui/test/sessionQuestions.test.mjs` (draft/answer bodies, list ordering, runtime label, notifications); `packages/webui/test/askUser.e2e.mjs` (real .NET Main: card keyboard flow, dock, list elevation, composer answer, asynchronous answer, narrow layout).

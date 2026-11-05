@@ -74,6 +74,11 @@ internal static class WaitToolDefinitions
                         1,
                         "Execution ID returned by exec."
                     ),
+                    ["waitQuestionIds"] = Array(
+                        "Questions from ask_user whose answers you need. While waiting on them, any message the user sends is treated as the answer.",
+                        1,
+                        "Question ID returned by ask_user."
+                    ),
                     ["waitForInput"] = new JsonObject
                     {
                         ["type"] = "boolean",

@@ -66,8 +66,8 @@ internal sealed partial class SessionCatalog
             result["reason"] = Bounded(Trim(reason), 500);
         if (Number(wait["timeoutSeconds"]) is > 0 and var timeout)
             result["timeoutSeconds"] = timeout;
-        foreach (var key in new[] { "waitExecIds", "waitAnySessions" })
-            if (Strings(wait[key], 64, key == "waitExecIds" ? 256 : 512) is { } entries)
+        foreach (var key in new[] { "waitExecIds", "waitAnySessions", "waitQuestionIds" })
+            if (Strings(wait[key], 64, key == "waitAnySessions" ? 512 : 256) is { } entries)
                 result[key] = entries;
         if (Flag(wait["waitForInput"]))
             result["waitForInput"] = true;
@@ -80,6 +80,30 @@ internal sealed partial class SessionCatalog
                 projected["satisfiedSessions"] = satisfied;
             result["waitAll"] = projected;
         }
+        return result;
+    }
+
+    // Accepts either authority meta.questions or an already bounded projection.
+    internal static JsonObject? QuestionProjection(JsonNode? value, JsonNode? wait = null)
+    {
+        if (value is not JsonObject questions)
+            return null;
+        if (questions["items"] is JsonArray)
+        {
+            var meta = new JsonObject { ["questions"] = questions.DeepClone() };
+            if (wait is not null)
+                meta["wait"] = wait.DeepClone();
+            return SessionQuestions.Projection(meta);
+        }
+        if (Number(questions["open"]) is not { } open || open < 0)
+            return null;
+        var result = new JsonObject
+        {
+            ["open"] = (long)Math.Min(open, SessionQuestions.MaxOpen),
+            ["revision"] = (long)(Number(questions["revision"]) ?? 0),
+        };
+        if (Flag(questions["waiting"]))
+            result["waiting"] = true;
         return result;
     }
 
@@ -171,6 +195,8 @@ internal sealed partial class SessionCatalog
         }
         if (WaitProjection(inputMeta?["wait"]) is { } wait)
             meta["wait"] = wait;
+        if (QuestionProjection(inputMeta?["questions"], inputMeta?["wait"]) is { } questions)
+            meta["questions"] = questions;
         var result = new JsonObject
         {
             ["id"] = id,

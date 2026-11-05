@@ -152,6 +152,8 @@ internal static class SessionStatus
                 name += "; pending: " + string.Join(", ", pending);
             if (SessionWait.Strings(wait["waitExecIds"]) is { Length: > 0 } exec)
                 name += "; exec: " + string.Join(", ", exec);
+            if (SessionWait.Strings(wait["waitQuestionIds"]) is { Length: > 0 } questions)
+                name += "; questions: " + string.Join(", ", questions);
         }
         var queued = SessionWait.Number(state["queueLength"]) ?? 0;
         return "Session execution state: " + name + (queued > 0 ? "; queue: " + queued : "") + ".";

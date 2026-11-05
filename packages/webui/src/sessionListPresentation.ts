@@ -84,8 +84,18 @@ export function compareSessionListSessions(
   return a.id.localeCompare(b.id)
 }
 
-export function shouldElevateSessionToRoot(session: Pick<SessionListSortable, 'pinned'>, mode: SessionListOrderMode): boolean {
-  return mode === 'flat-time' || !!session.pinned
+export function shouldElevateSessionToRoot(session: Pick<SessionListSortable, 'pinned'> & { questions?: { open?: number } | null }, mode: SessionListOrderMode): boolean {
+  // Open questions elevate a Session like pinning, without changing its pinned flag.
+  return mode === 'flat-time' || !!session.pinned || (session.questions?.open ?? 0) > 0
+}
+
+/** Sessions with open questions, those the agent is waiting on first; otherwise input order. */
+export function orderQuestionSessions<T extends { questions?: { open?: number; waiting?: boolean } | null }>(sessions: readonly T[]): T[] {
+  return sessions
+    .map((session, index) => ({ session, index }))
+    .filter(({ session }) => (session.questions?.open ?? 0) > 0)
+    .sort((a, b) => Number(!!b.session.questions?.waiting) - Number(!!a.session.questions?.waiting) || a.index - b.index)
+    .map(({ session }) => session)
 }
 
 export function getSessionListDisplayId(sessionId: string, parentSessionId?: string | null, isDirectChild: boolean = true): string {

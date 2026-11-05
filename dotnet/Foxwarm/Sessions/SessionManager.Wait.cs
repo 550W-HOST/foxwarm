@@ -28,6 +28,7 @@ internal sealed partial class SessionManager
                 "waitAnySessions",
                 "waitExecIds",
                 "waitForInput",
+                "waitQuestionIds",
             ],
             []
         );
@@ -35,6 +36,7 @@ internal sealed partial class SessionManager
         var all = ParseIds(args, "waitAllSessions", 2);
         var any = ParseIds(args, "waitAnySessions", 1);
         var exec = ParseIds(args, "waitExecIds", 1);
+        var questions = ParseIds(args, "waitQuestionIds", 1);
         if (all is not null && any is not null)
             throw new InvalidDataException(
                 "waitAllSessions and waitAnySessions are mutually exclusive."
@@ -56,7 +58,14 @@ internal sealed partial class SessionManager
         }
         if (!args.ContainsKey("wakeIfNoActivityAfterSeconds") && exec is not null && input != true)
             seconds = 600;
-        if (all is null && any is null && exec is null && input != true && seconds is null)
+        if (
+            all is null
+            && any is null
+            && exec is null
+            && questions is null
+            && input != true
+            && seconds is null
+        )
             throw new InvalidDataException(
                 "wait requires at least one progress source or fallback; reason alone is not sufficient."
             );
@@ -102,6 +111,21 @@ internal sealed partial class SessionManager
                         $"waitExecIds entry `{id}` is not an active exec owned by this Session and has no queued completion. Use the exact execId, never a PID, log path, or command text."
                     );
         }
+        if (questions is not null)
+        {
+            var open = source.Entry.WithState(state =>
+                SessionQuestions
+                    .Open(state.Meta)
+                    .Select(record => SessionWait.Text(record["id"]))
+                    .OfType<string>()
+                    .ToHashSet(StringComparer.Ordinal)
+            );
+            foreach (var id in questions)
+                if (!open.Contains(id))
+                    throw new InvalidDataException(
+                        $"waitQuestionIds entry `{id}` is not an open question of this Session."
+                    );
+        }
         var wait = NewWait();
         if (!string.IsNullOrWhiteSpace(reason))
             wait["reason"] = reason.Trim();
@@ -111,6 +135,8 @@ internal sealed partial class SessionManager
             wait["waitForInput"] = true;
         if (exec is not null)
             wait["waitExecIds"] = IdArray(exec);
+        if (questions is not null)
+            wait["waitQuestionIds"] = IdArray(questions);
         if (any is not null)
             wait["waitAnySessions"] = IdArray(any);
         if (all is not null)

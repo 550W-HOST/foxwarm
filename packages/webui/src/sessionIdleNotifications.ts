@@ -9,6 +9,7 @@ export interface SessionIdleNotificationSession extends RuntimeStateSessionLike 
   displayName?: string
   aliases?: string[]
   queueLength?: number
+  questions?: { open?: number; revision?: number } | null
 }
 
 export interface SessionIdleNotificationHandle {
@@ -89,6 +90,15 @@ export function showSessionIdleNotification(session: SessionIdleNotificationSess
   }
 }
 
+export function showSessionQuestionNotification(session: SessionIdleNotificationSession): SessionIdleNotificationHandle | null {
+  if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return null
+  try {
+    return new Notification('Question for you', { body: session.displayName || session.id })
+  } catch {
+    return null
+  }
+}
+
 /** Owns only the page-created Notification handles registered by one live WebUI root. */
 export class SessionIdleNotificationRegistry {
   private notifications = new Map<string, SessionIdleNotificationHandle>()
@@ -157,6 +167,24 @@ export class SessionIdleNotificationRegistry {
 
 export class SessionIdleNotificationTracker {
   private baselines = new Map<string, SessionIdleNotificationBaseline>()
+  private questionBaselines = new Map<string, { open: number; revision: number }>()
+
+  /** Watched Sessions that gained an open question since the previous observation. */
+  observeQuestions(sessions: SessionIdleNotificationSession[], modes: SessionIdleNotificationModes): SessionIdleNotificationSession[] {
+    const result: SessionIdleNotificationSession[] = []
+    const seen = new Set<string>()
+    for (const session of sessions) {
+      seen.add(session.id)
+      if (!modes[session.id]) { this.questionBaselines.delete(session.id); continue }
+      const open = Math.max(0, session.questions?.open ?? 0)
+      const revision = session.questions?.revision ?? 0
+      const previous = this.questionBaselines.get(session.id)
+      this.questionBaselines.set(session.id, { open, revision })
+      if (previous && open > previous.open && revision !== previous.revision) result.push(session)
+    }
+    for (const sessionId of [...this.questionBaselines.keys()]) if (!seen.has(sessionId)) this.questionBaselines.delete(sessionId)
+    return result
+  }
 
   arm(session: SessionIdleNotificationSession): void {
     this.baselines.set(session.id, {
@@ -266,6 +294,11 @@ export function useSessionIdleNotifications(sessions: SessionIdleNotificationSes
           return remaining
         })
       }
+    }
+    for (const session of trackerRef.current.observeQuestions(sessions, modesRef.current)) {
+      if (!shouldMarkSessionIdleUnread(session.id, canonicalVisibleSessionIds, document.visibilityState)) continue
+      const notification = showSessionQuestionNotification(session)
+      if (notification) notificationRegistryRef.current?.retain(session.id, notification, canonicalSessionId => openSessionRef.current?.(canonicalSessionId))
     }
   }, [sessions, updateModes, [...canonicalVisibleSessionIds].join('\0')])
 

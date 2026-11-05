@@ -253,7 +253,9 @@ internal sealed partial class MessageRouter(SessionRuntime runtime)
         var item = new QueueItem(
             QueueItemType.User,
             SessionBoundary.ChannelInput(parts, context.Platform),
-            ClientMessageId: message.ClientMessageId
+            ClientMessageId: message.ClientMessageId,
+            // Direct user input; while the Session waits on a question it is the answer.
+            OpenFields: new JsonObject { ["userInput"] = true }
         );
         if (attachmentOwner is null)
             await runtime.SubmitAndRunAsync(context.SessionId, item);

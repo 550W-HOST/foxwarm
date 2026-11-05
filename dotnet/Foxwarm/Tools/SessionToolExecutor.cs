@@ -825,6 +825,41 @@ internal sealed partial class SessionToolExecutor(
         }
     }
 
+    private async Task<JsonObject> ExecuteAskUserAsync(JsonObject args)
+    {
+        try
+        {
+            var asked = await sessions.AskUserAsync(hosted, args, CurrentCallId);
+            if (asked.WaitQuestionId is not { } questionId)
+                return asked.Response;
+            // afterAsk "wait" is the same terminal control as wait({ waitQuestionIds: [id] }).
+            var wait = new JsonObject { ["waitQuestionIds"] = new JsonArray(questionId) };
+            if (scriptScope.Value is { } script)
+            {
+                sessions.ValidateWait(hosted, wait);
+                script.WaitScope.Pending = wait;
+                return asked.Response;
+            }
+            try
+            {
+                var id = await sessions.DeclareWaitAsync(hosted, wait);
+                if (id is not null)
+                    explicitWaitIds.Add(id);
+            }
+            catch (CommittedWaitDeclarationException committed)
+            {
+                explicitWaitIds.Add(committed.WaitId);
+                throw;
+            }
+            return asked.Response;
+        }
+        catch (Exception error)
+            when (error is InvalidDataException or InvalidOperationException or IOException)
+        {
+            return UnsupportedTurnToolExecutor.ToolError("ask_user_error", error.Message);
+        }
+    }
+
     internal static ToolRegistry CreateRegistry(
         JsonArray definitions,
         Foxwarm.McpClient mcp,
@@ -851,6 +886,7 @@ internal sealed partial class SessionToolExecutor(
         handlers["stop_session"] = (owner, args, token) =>
             ArchiveControlTools.StopAsync(owner.Manager, owner.Hosted, args, token);
         handlers["wait"] = (owner, args, _) => owner.ExecuteWaitAsync(args);
+        handlers["ask_user"] = (owner, args, _) => owner.ExecuteAskUserAsync(args);
         handlers["submit_compact_plan"] = (owner, args, token) =>
             owner.SubmitCompactPlanAsync(args, token);
         handlers["task"] = (owner, args, token) => owner.ExecuteTaskAsync(args, token);

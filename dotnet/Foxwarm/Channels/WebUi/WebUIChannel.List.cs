@@ -94,6 +94,9 @@ internal sealed partial class WebUIChannel
                         "results"
                     ]!.DeepClone();
                     result["forcedChildren"] = forced;
+                    // The first page also carries Sessions with open questions, wherever they sit.
+                    if (Query(query, "cursor") is null)
+                        result["questionSessions"] = view.QuestionSessions(50);
                     if (grouping is not null)
                     {
                         result["groups"] = view.Groups(grouping, mode, GroupNodes());

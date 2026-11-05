@@ -1,6 +1,7 @@
 import ArtifactView from '../artifacts/ArtifactView'
 import { buildArtifactGroups } from '../artifacts/projection'
 import SessionMessageCard from './SessionMessageCard'
+import { AskUserToolCard } from './QuestionCard'
 import SystemEventCard from './SystemEventCard'
 import { getSessionNotice } from '../sessionNotices'
 import ReplyFileGrid from './ReplyFileGrid'
@@ -1054,7 +1055,7 @@ const MessageRow = memo(function MessageRow({
             : ''
         }`}
       >
-        {row.communication ? <SessionMessageCard communication={row.communication} searchReveal={rowSearchTarget?.surface === 'communication'}><MarkdownContent citations={false} text={row.communication.message} className="prose prose-sm dark:prose-invert max-w-none break-words text-fw-text" /></SessionMessageCard> : sessionNotice ? <SystemEventCard notice={sessionNotice} reveal={!!rowSearchTarget} /> : systemLikeMessage ? (
+        {row.question ? <AskUserToolCard call={row.question} response={pairedToolResponse?.parts.find(part => part.functionResponse?.tool_use_id === row.question!.id)?.functionResponse} /> : row.communication ? <SessionMessageCard communication={row.communication} searchReveal={rowSearchTarget?.surface === 'communication'}><MarkdownContent citations={false} text={row.communication.message} className="prose prose-sm dark:prose-invert max-w-none break-words text-fw-text" /></SessionMessageCard> : sessionNotice ? <SystemEventCard notice={sessionNotice} reveal={!!rowSearchTarget} /> : systemLikeMessage ? (
           <SystemLikeMessageCard msg={msg} messageKey={messageKey} searchReveal={rowSearchTarget?.surface === 'system'} />
         ) : msg.role === 'user' ? (
           <>

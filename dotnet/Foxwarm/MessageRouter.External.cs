@@ -77,7 +77,8 @@ internal sealed partial class MessageRouter
                 source.Conversation,
                 source.Username,
                 source.Sender
-            )
+            ),
+            OpenFields: new JsonObject { ["userInput"] = true }
         );
         // Ordinary channel input uses the existing best-effort queue lane; external identity is not Session authority.
         await runtime.SubmitChannelAsync(owner, item);

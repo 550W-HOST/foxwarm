@@ -67,6 +67,7 @@ internal sealed partial class SessionCatalog : IDisposable
                 "PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON"
             );
             Execute(connection, WaitPresenceIndexSql);
+            Execute(connection, QuestionPresenceIndexSql);
             EnsureGroupObjects(connection);
             db = connection;
             Volatile.Write(
@@ -205,6 +206,17 @@ internal sealed partial class SessionCatalog : IDisposable
                     $"SELECT {Columns} FROM session_catalog ORDER BY recent_rank,session_id LIMIT $p0 OFFSET $p1",
                     limit,
                     offset
+                )
+                .ToArray();
+    }
+
+    /// <summary>Rows with open questions, most recent first, through the partial presence index.</summary>
+    internal JsonObject[] QuestionRows(int limit)
+    {
+        lock (gate)
+            return Rows(
+                    $"SELECT {Columns} FROM session_catalog WHERE json_extract(metadata_json,'$.meta.questions.open')>0 ORDER BY recent_rank,session_id LIMIT $p0",
+                    limit
                 )
                 .ToArray();
     }

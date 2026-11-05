@@ -78,36 +78,49 @@ internal sealed class SessionChatService(
         var retainedTaskIds = new List<string>();
         async Task<IReadOnlyList<JsonObject>> RequestContext()
         {
+            var context = new List<JsonObject>();
+            if (TaskReminder() is { } task)
+                context.Add(task);
+            // Open ask_user questions are request-only context, like the Task reminder.
+            if (hosted.Entry.WithState(state => SessionQuestions.Reminder(state.Meta)) is { } open)
+                context.Add(
+                    new JsonObject
+                    {
+                        ["role"] = "user",
+                        ["parts"] = new JsonArray(new JsonObject { ["system"] = open }),
+                    }
+                );
+            return context;
+        }
+        JsonObject? TaskReminder()
+        {
             if (tasks is null)
-                return [];
+                return null;
             var visible = hosted.Entry.WithState(state => TaskProgress.Sequences(state.History));
             var context = tasks.TaskContext(hosted.Id, visible, true, retainedTaskIds);
             var current = context["tasks"]!.AsArray();
             retainedTaskIds = current.Select(item => item!["id"]!.GetValue<string>()).ToList();
             if (current.Count == 0)
-                return [];
+                return null;
             var lines = current.Select(item =>
                 $"{item!["id"]!.GetValue<string>()} — {item["title"]!.GetValue<string>()} ({item["status"]!.GetValue<string>()})"
             );
             var omitted = context["omitted"]?.GetValue<int>() ?? 0;
             var omittedText = omitted > 0 ? $"\n{omitted} more tasks." : "";
-            return
-            [
-                new JsonObject
-                {
-                    ["role"] = "user",
-                    ["parts"] = new JsonArray(
-                        new JsonObject
-                        {
-                            ["system"] =
-                                "<foxwarm-system kind=\"task-reminder\">Continue the active tasks:\n"
-                                + string.Join('\n', lines)
-                                + omittedText
-                                + "</foxwarm-system>",
-                        }
-                    ),
-                },
-            ];
+            return new JsonObject
+            {
+                ["role"] = "user",
+                ["parts"] = new JsonArray(
+                    new JsonObject
+                    {
+                        ["system"] =
+                            "<foxwarm-system kind=\"task-reminder\">Continue the active tasks:\n"
+                            + string.Join('\n', lines)
+                            + omittedText
+                            + "</foxwarm-system>",
+                    }
+                ),
+            };
         }
         async Task<string> Prompt(ConcreteHostModel leaf, CancellationToken token)
         {

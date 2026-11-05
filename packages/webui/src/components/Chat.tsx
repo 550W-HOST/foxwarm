@@ -26,6 +26,8 @@ import { isSessionTurnIncomplete } from '../../../shared/src/sessionContinuation
 import { formatSessionHeaderSubtitle } from '../sessionHeader'
 import { createLatestRequestGate, loadPageOnce, MODEL_OPTIONS_CHANGED_EVENT, refreshModelOptions, runLatestModelOptionsRequest } from '../modelOptionsLoader'
 import SessionUiSettingsMenu from './SessionUiSettingsMenu'
+import { SessionQuestionsContext, useSessionQuestions } from '../sessionQuestionsState'
+import { QuestionDock } from './QuestionCard'
 import {
   CHAT_BOTTOM_FOLLOW_REJOIN_THRESHOLD_PX,
   CHAT_MESSAGE_ANCHOR_SELECTOR,
@@ -1532,6 +1534,10 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
 
   const turnIncomplete = useMemo(() => sessionRecord?.runtime === 'claude-code' ? sessionRecord.externalRuntime?.canContinue === true : isSessionTurnIncomplete(activeMessages), [activeMessages, sessionRecord?.runtime, sessionRecord?.externalRuntime?.canContinue])
 
+  // Session-owned questions drive the answer dock and the timeline cards.
+  const sessionQuestions = useSessionQuestions(sessionId, sessionRecord?.questions)
+  const waitingOnQuestion = sessionRecord?.runtimeState?.state === 'waiting' && sessionRecord.runtimeState.waiting?.waitingFor === 'question'
+
   const renderQueuedFooter = (alignment: 'left' | 'right') => <QueuedMessageStatus
     count={sessionQueueLength}
     disabled={!!pendingControl || !!sessionRecord?.runtimeState?.stopping}
@@ -1541,6 +1547,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
   />
 
   return (
+    <SessionQuestionsContext.Provider value={sessionQuestions}>
     <div ref={chatRootRef} data-mobile-chat-ui={mobileUi || undefined} data-chat-connection-state={connectionState} data-compact-composer={compactComposer ? "true" : undefined} className="foxwarm-chat-root relative flex h-full flex-col overflow-hidden">
       {searchOpen && <style>{`::highlight(${searchHighlightName}) { background-color: #facc15; color: #171717; }`}</style>}
       <ContentHeader
@@ -1819,6 +1826,8 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
         onHeightChange={handleComposerHeightChange}
         onSend={handleSend}
         onCreateStreamingTranscriber={handleCreateStreamingTranscriber}
+        aboveInput={displayingLatest ? <QuestionDock isMobile={isMobile} /> : null}
+        answersQuestion={waitingOnQuestion}
       />
 
       {!webUiIdentityMode && showDebugInfo && (
@@ -1847,6 +1856,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
         />
       )}
     </div>
+    </SessionQuestionsContext.Provider>
   )
 }, (prev, next) => (
   prev.sessionId === next.sessionId &&

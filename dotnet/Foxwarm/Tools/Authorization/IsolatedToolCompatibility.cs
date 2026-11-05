@@ -35,6 +35,7 @@ internal static class IsolatedToolCompatibility
         "send_to_session",
         "send_to_channel",
         "wait",
+        "ask_user",
         "submit_compact_plan",
         "search_tools",
         "create_timer",

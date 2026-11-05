@@ -14,6 +14,7 @@ Projects validated Session snapshots into bounded Main-owned list/architecture/p
 - `Get`, `GetMany`, `List`, `Resolve`, `Presentation`, and `PathIds` implement exact identity/alias and presentation navigation; `Resolve` preserves missing versus ambiguous aliases.
 - `RestartIds` selects indexed busy, queue and managed-pending work only; a declared wait alone does not admit its history.
 - `RecentWaitIds` returns wait-bearing IDs through an indexed recency cutoff for startup liveness observation. It does not replace the complete startup binding-validation read or restrict unrelated recovery. Activity eligibility and authoritative rechecks are owned by [wait liveness](./session-domain.md#wait-liveness-observation-and-admission).
+- `QuestionRows` returns Sessions whose projection has open `ask_user` questions through the additive partial index `idx_session_catalog_question_presence`, ordered by recency. The metadata projection carries `questions: { open, revision, waiting? }` and the row signature includes it; see [structured user questions](./session-questions.md).
 - Projection helpers overlay runtime `busy`, queue, managed-pending, and Main presentation fields into query rows while leaving authority files untouched.
 
 Callers: `SessionListQueries`, `WebUIChannel` session/list/architecture routes, `MessageRouter` presentation commands, and `SessionManager` catalog publication. These paths are catalog-only; exact semantic mutations use the owner/save lane.
@@ -30,6 +31,6 @@ Ordinary `Get` and `Resolve` calls no longer acquire the writer monitor after in
 
 ## Tests
 
-`dotnet/Foxwarm.Tests/Sessions/SessionCatalogTests.cs`; `SessionCatalogPublicationTests.cs`; `SessionCatalogSourceTests.cs`; `SessionIdentityBoundaryTests.cs`. `SessionCatalogSourceTests` compares every query with the Source oracle (Node 24.21.0 / Unicode 17 required); its schema comparison excludes only the additive grouping objects.
+`dotnet/Foxwarm.Tests/Sessions/SessionCatalogTests.cs`; `SessionCatalogPublicationTests.cs`; `SessionCatalogSourceTests.cs`; `SessionIdentityBoundaryTests.cs`. `SessionCatalogSourceTests` compares every query with the Source oracle (Node 24.21.0 / Unicode 17 required); its schema comparison excludes only the additive grouping objects and the question-presence index.
 `SessionSidebarGroupsTests.cs` covers group counts and pages by own Agent/Node (tree and Flat), saved order and keyset continuation, the pinned-only page, maintained Node counts against a full recount through topology changes, trigger-only writers and re-creation, and retiring the earlier Sidebar objects without a version change. `WebUiStartupTests.SidebarGroups.cs` covers the grouped HTTP routes.
 `SessionCatalogConcurrencyTests.cs` covers held-writer exact/resolution reads, retained children rows/count exclusion, concurrent first reads, identity/parent transitions, and disposal/reopen.

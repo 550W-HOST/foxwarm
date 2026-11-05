@@ -40,7 +40,8 @@ internal sealed class ChannelProgress(TimeProvider? clock = null)
         bool start
     )
     {
-        if (tool == "wait")
+        // The question itself is delivered as text, so ask_user needs no progress line.
+        if (tool is "wait" or "ask_user")
             return;
         lock (gate)
         {

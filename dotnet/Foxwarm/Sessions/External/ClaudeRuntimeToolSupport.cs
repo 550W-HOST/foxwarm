@@ -40,6 +40,15 @@ internal static class ClaudeRuntimeToolSupport
                     + (framing < 0 ? "" : " " + description[framing..]);
             }
         }
+        if (
+            name == "ask_user"
+            && projected["parameters"]?["properties"]?["afterAsk"] is JsonObject afterAsk
+        )
+        {
+            afterAsk["enum"] = new JsonArray("continue");
+            afterAsk["description"] =
+                "This runtime supports only continue (the default): the answer arrives later as a user message.";
+        }
         return projected;
     }
 
@@ -63,6 +72,14 @@ internal static class ClaudeRuntimeToolSupport
         )
             throw new InvalidOperationException(
                 "Claude Code runtime supports only afterSend=continue."
+            );
+        if (
+            resolved.Name == "ask_user"
+            && SessionWait.Text(args["afterAsk"]) is { } afterAsk
+            && afterAsk != "continue"
+        )
+            throw new InvalidOperationException(
+                "Claude Code runtime supports only afterAsk=continue."
             );
         bool IsSelf(JsonNode? input, bool specialReferences = false)
         {

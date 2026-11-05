@@ -87,6 +87,8 @@ public sealed partial class SessionSaveLane
                             .ToArray()
                     );
                 }
+                // Question answers resolve in the same staged meta as the wait they release.
+                item = SessionQuestions.ApplyAdmission(meta, item);
                 var items = SessionWait.Apply(meta, item);
                 if (items.Count == 0 && JsonNode.DeepEquals(meta, snapshot.Meta))
                     return (Snapshot: (SessionSnapshot?)null, Items: items);
@@ -211,7 +213,12 @@ public sealed partial class SessionSaveLane
                 var existing = queue.ToArray();
                 queue.Clear();
                 foreach (var item in existing)
-                    queue.AddRange(SessionWait.Apply(meta, item));
+                    queue.AddRange(
+                        SessionWait.Apply(
+                            meta,
+                            SessionQuestions.ApplyAdmission(meta, item, structured: false)
+                        )
+                    );
                 return SessionWait.Text(wait["id"]);
             }
         );
@@ -238,6 +245,10 @@ public sealed partial class SessionSaveLane
                 return SessionWait.Text(wait["id"]);
             }
         );
+
+    // Question records share the strict wait/queue lane so ask, answer and close stay ordered.
+    internal Task<string?> MutateQuestionsAsync(Func<JsonObject, string?> mutate) =>
+        MutateWaitAsync((meta, _, _) => mutate(meta));
 
     private async Task<string?> MutateWaitAsync(
         Func<JsonObject, List<QueueItem>, bool, string?> mutate
@@ -288,7 +299,7 @@ public sealed partial class SessionSaveLane
 
     private static void PublishMeta(JsonObject target, JsonObject source)
     {
-        foreach (var key in new[] { "wait", "acceptedExternalEventIds" })
+        foreach (var key in new[] { "wait", "acceptedExternalEventIds", "questions" })
         {
             if (source.TryGetPropertyValue(key, out var value))
                 target[key] = value?.DeepClone();

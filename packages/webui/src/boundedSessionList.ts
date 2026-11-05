@@ -14,14 +14,16 @@ export interface BoundedGroupPage { key: string; ids: string[]; total: number; n
 interface SidebarPayload { version: 1; sessions: Session[]; nextCursor: string | null; reset?: boolean
   children?: Array<{ parentSessionId: string; sessions: Session[]; total: number }>
   focus?: Array<{ session: Session | null }>; pathContext?: Array<{ session: Session | null }>; forcedChildren?: Record<string, string[]>
-  groups?: SessionListGroup[]; presentationGroups?: Record<string, string> }
+  groups?: SessionListGroup[]; presentationGroups?: Record<string, string>; questionSessions?: Session[] }
 interface CacheState { rows: Map<string, Session>; rootIds: string[]; rootCursor: string | null; rootTarget: number
   childPages: Map<string, BoundedChildPage>; previewParents: Set<string>; ownedBranches: Map<string, number>
   forcedChildren: Record<string, string[]>; searchIds: string[] | null; descendantBusy: Map<string, number>; invalidationVersion: number
-  groups: SessionListGroup[]; groupPages: Map<string, BoundedGroupPage>; rootGroups: Record<string, string>; exactGroups: Record<string, string> }
+  groups: SessionListGroup[]; groupPages: Map<string, BoundedGroupPage>; rootGroups: Record<string, string>; exactGroups: Record<string, string>
+  /** Sessions with open questions, from the first Sidebar page; elevated wherever they sit. */
+  questionIds: string[] }
 const emptyState = (rootTarget: number): CacheState => ({ rows: new Map(), rootIds: [], rootCursor: null, rootTarget,
   childPages: new Map(), previewParents: new Set(), ownedBranches: new Map(), forcedChildren: {}, searchIds: null,
-  descendantBusy: new Map(), invalidationVersion: 0, groups: [], groupPages: new Map(), rootGroups: {}, exactGroups: {} })
+  descendantBusy: new Map(), invalidationVersion: 0, groups: [], groupPages: new Map(), rootGroups: {}, exactGroups: {}, questionIds: [] })
 const GROUP_PAGE_TARGET = 10; export const GROUP_PAGE_STEP = 20
 const COLLAPSED_GROUPS_KEY = 'foxwarm_session_list_collapsed_groups_v1'
 function loadCollapsedGroups(grouping: SessionListGrouping): Set<string> {
@@ -38,8 +40,8 @@ async function fetchJson(path: string, init?: RequestInit): Promise<any> { const
 function currentWatchIds(): string[] { try { const value = JSON.parse(localStorage.getItem('foxwarm_session_idle_notifications_v1') || '{}'); return value && typeof value === 'object' && !Array.isArray(value) ? Object.keys(value) : [] } catch { return [] } }
 function currentUnreadIds(): string[] { return getSessionIdleUnreadIds(localStorage) }
 function currentAttentionIds(includeIdleWatches: boolean, unreadIds = currentUnreadIds()): string[] { return dedupe([...(includeIdleWatches ? currentWatchIds() : []), ...unreadIds]) }
-function structuralIds(state: Pick<CacheState, 'rootIds'|'childPages'|'forcedChildren'|'groupPages'>): string[] {
-  const ids = [...state.rootIds]
+function structuralIds(state: Pick<CacheState, 'rootIds'|'childPages'|'forcedChildren'|'groupPages'|'questionIds'>): string[] {
+  const ids = [...state.rootIds, ...state.questionIds]
   for (const page of state.groupPages.values()) ids.push(...page.ids)
   for (const page of state.childPages.values()) ids.push(page.parentSessionId, ...page.ids)
   for (const [parent, children] of Object.entries(state.forcedChildren)) ids.push(parent, ...children)
@@ -128,9 +130,10 @@ export function useBoundedSessionList(options: { focusIds: string[]; exactIds?: 
     const childPages = new Map<string, BoundedChildPage>(); const previewParents = new Set<string>(); let forcedChildren: Record<string, string[]> = {}
     // A grouped Sidebar pages its pinned rows here; group headers come with the first page.
     const groups = grouping === 'none' ? [] : pages[0]?.groups || []; let rootGroups: Record<string, string> = {}
+    const questionSessions = pages[0]?.questionSessions || []; rows.push(...questionSessions)
     for (const page of pages) { for (const group of page.children || []) { previewParents.add(group.parentSessionId); childPages.set(group.parentSessionId, { parentSessionId: group.parentSessionId, ids: group.sessions.map(row => row.id), total: group.total, nextCursor: null }); rows.push(...group.sessions) }
       rows.push(...(page.focus || []).flatMap(item => item.session ? [item.session] : []), ...(page.pathContext || []).flatMap(item => item.session ? [item.session] : [])); forcedChildren = { ...forcedChildren, ...(page.forcedChildren || {}) }; rootGroups = { ...rootGroups, ...(page.presentationGroups || {}) } }
-    return { rootIds: result.items.map(row => row.id), rootCursor: result.nextCursor, childPages, previewParents, forcedChildren, rows, revision: result.revision, groups, rootGroups }
+    return { rootIds: result.items.map(row => row.id), rootCursor: result.nextCursor, childPages, previewParents, forcedChildren, rows, revision: result.revision, groups, rootGroups, questionIds: questionSessions.map(row => row.id) }
   }, [mode, grouping, childLimit, focusIds.join('\0')])
 
   // Member windows of every expanded group, with the child previews of their rows.
@@ -172,7 +175,7 @@ export function useBoundedSessionList(options: { focusIds: string[]; exactIds?: 
     const { roots, branches: { groups, branches } } = replay
     const current = stateRef.current; const next: CacheState = { ...current, rootIds: roots.rootIds, rootCursor: roots.rootCursor, rootTarget,
       childPages: new Map(roots.childPages), previewParents: new Set(roots.previewParents), ownedBranches: new Map(branchTargets), forcedChildren: roots.forcedChildren,
-      descendantBusy: new Map(current.descendantBusy), rows: new Map(), groups: roots.groups, groupPages: groups.pages, rootGroups: roots.rootGroups }
+      descendantBusy: new Map(current.descendantBusy), rows: new Map(), groups: roots.groups, groupPages: groups.pages, rootGroups: roots.rootGroups, questionIds: roots.questionIds }
     const rows = [...roots.rows, ...groups.rows]
     for (const [parent, preview] of groups.previews) { next.previewParents.add(parent); next.childPages.set(parent, { parentSessionId: parent, ids: preview.sessions.map(row => row.id), total: preview.total, nextCursor: null }); rows.push(...preview.sessions) }
     for (const [parent, replay] of branches) { next.childPages.set(parent, { parentSessionId: parent, ids: replay.items.map(row => row.id), total: replay.total, nextCursor: replay.nextCursor }); rows.push(...replay.items) }

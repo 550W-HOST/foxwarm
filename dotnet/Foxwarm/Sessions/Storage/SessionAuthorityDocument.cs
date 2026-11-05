@@ -360,6 +360,7 @@ public sealed class SessionAuthorityDocument
                 "Session authority meta.llmFailed must be boolean.",
                 "meta.llmFailed"
             );
+        SessionQuestions.Validate(meta);
         try
         {
             SessionWait.Validate(meta);

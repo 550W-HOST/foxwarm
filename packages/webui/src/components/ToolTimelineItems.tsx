@@ -43,6 +43,8 @@ import { getLegacyEditLineCounts } from './legacyEditCounts'
 import { useThreadCardOverflowFade } from './useThreadCardOverflowFade'
 import { useThreadCardHeightTransition } from './useThreadCardHeightTransition'
 import ReasoningTokenBadge from './ReasoningTokenBadge'
+import { AskUserToolCard } from './QuestionCard'
+import { isAskUserCall } from '../sessionQuestions'
 import type { ReasoningBadgeInfo } from './reasoningParts'
 
 const formatToolResponseText = (resp: FunctionResponse): string => resp.__meta?.toolScriptSubCalls !== undefined
@@ -1071,7 +1073,9 @@ export const InterleavedToolGroup = memo(function InterleavedToolGroup({ msg, ne
 
   return (
     <div>
-      {entries.map((entry, index) => (
+      {entries.map((entry, index) => entry.call && isAskUserCall(entry.call) ? (
+        <AskUserToolCard key={entry.key} call={entry.call} response={entry.responses[0]} />
+      ) : (
         <ToolCallResponseItem
           key={entry.key}
           reasoningBadges={entry.call ? reasoningBadges?.[index] : undefined}
@@ -1099,7 +1103,9 @@ export const ToolCallsBlock = memo(function ToolCallsBlock({ msg, runningTool, o
 
   return (
     <div>
-      {functionCalls.map((call, callIdx) => (
+      {functionCalls.map((call, callIdx) => isAskUserCall(call) ? (
+        <AskUserToolCard key={`call-${call.id || callIdx}`} call={call} />
+      ) : (
         <ToolCallResponseItem
           key={`call-${call.id || callIdx}`}
           reasoningBadges={reasoningBadges?.[callIdx]}

@@ -63,6 +63,8 @@ internal static class SessionPresentation
         };
         if (meta.Cost is double cost)
             result["tokenUsage"]!["cost"] = cost;
+        if (meta.Questions is { } questions)
+            result["questions"] = questions.DeepClone();
         var policyModel = meta.Runtime == ClaudeRuntimeState.Kind ? null : meta.Model;
         var settings = new JsonObject
         {

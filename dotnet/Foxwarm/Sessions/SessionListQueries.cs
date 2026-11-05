@@ -72,6 +72,16 @@ internal sealed partial class SessionListQueries
 
     internal JsonArray ProjectionRows(string[] ids) => Array(runtime.Projections(ids));
 
+    /// <summary>Sessions with open ask_user questions, most recent first; the Sidebar elevates them above pinned rows.</summary>
+    public JsonArray QuestionSessions(int limit) =>
+        ProjectionRows(
+            runtime
+                .Catalog.QuestionRows(limit)
+                .Select(row => SessionCatalog.Text(row["id"]))
+                .OfType<string>()
+                .ToArray()
+        );
+
     private static JsonArray Array(IEnumerable<JsonObject> rows) =>
         new(rows.Select(row => (JsonNode?)row).ToArray());
 

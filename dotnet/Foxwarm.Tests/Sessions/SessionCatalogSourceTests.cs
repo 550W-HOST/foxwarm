@@ -307,11 +307,13 @@ public sealed class SessionCatalogSourceTests
             index["sql"]!.GetValue<string>()
         );
         all.Remove(index);
-        // Sidebar grouping adds its indexes and maintained Node counts beside the Source core.
+        // Sidebar grouping adds its indexes and maintained Node counts beside the Source core;
+        // the question-presence index serves open-question elevation.
         foreach (
             var name in new[]
             {
                 "catalog_node_count",
+                "idx_session_catalog_question_presence",
                 "idx_session_catalog_agent_root_default",
                 "idx_session_catalog_node_root_default",
                 "idx_session_catalog_node_root_time",

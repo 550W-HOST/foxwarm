@@ -64,6 +64,8 @@ internal static class WebUiContract
             ),
             ["effortDefault"] = defaultEffort,
         };
+        if (SessionQuestions.Projection(snapshot.Meta) is { } questions)
+            result["questions"] = questions;
         foreach (
             var (key, value) in SessionModelSettings.Presentation(
                 snapshot.AuthorityEnvelope,
