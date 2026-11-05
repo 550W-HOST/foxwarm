@@ -16,6 +16,8 @@ Composes the .NET executable, captures environment/configuration, builds ASP.NET
 
 ## Contract and side effects
 
+Main runs with workstation concurrent GC (`ServerGarbageCollection=false` in `Foxwarm.csproj`, overriding the Web SDK's Server GC default). Main is a long-lived, mostly I/O-bound single process; Server GC's per-core heaps and large gen0 budgets let transient allocation bursts commit several GiB before collection. The in-process Desktop host already uses the plain SDK's workstation default. Operators can still override the mode through standard .NET runtime configuration.
+
 Configured Vector initialization is optional in both local and child placement; the [Vector owner](./vector-owner.md) retains the unavailable service without blocking unrelated Main startup. Global Catalog/Archive/identity failures remain fatal; [Session-local recovery failures](./session-manager-bootstrap.md#local-recovery-failure-boundary) leave only their owners unavailable. The global boundary follows the [placement failure boundary](../threads/process-topology-and-rpc.md#vector-placement).
 
 HTTP authorization happens before state-changing routes and static application content. Browser login follows [the frontend cookie ownership contract](./webui-login.md#d-login-cookie-ownership). Existing valid raw and derived administrator cookies remain accepted; scoped credentials resolve through the live access snapshot.

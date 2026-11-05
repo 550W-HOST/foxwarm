@@ -4,6 +4,12 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <!-- The Web SDK defaults to Server GC. Main is a long-lived, mostly I/O-bound single
+         process; workstation concurrent GC keeps transient allocation peaks and retained
+         committed memory proportional to the live set. The in-process Desktop host already
+         uses the plain SDK's workstation default. -->
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../Foxwarm.NodePrimitives/Foxwarm.NodePrimitives.csproj" />
