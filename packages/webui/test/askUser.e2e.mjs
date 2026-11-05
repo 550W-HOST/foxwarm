@@ -82,9 +82,16 @@ test('ask_user questions are answered from the card, the dock and an ordinary me
     assert.ok(await page.evaluate(() => document.body.innerText.includes('Waiting for your answer')))
     await screenshot(page, 'desktop-blocking-card-dock')
 
-    // Keyboard flow in the timeline card: 1 selects the first option, Enter advances, Enter submits.
-    const form = `[data-ask-user-card="${questionId}"] [data-question-form]`
-    await page.focus(form)
+    // The timeline card is read-only while open: it shows the question and opens the dock.
+    assert.equal(await page.$(`[data-ask-user-card="${questionId}"] [data-question-form]`), null)
+    assert.match(await page.$eval(`[data-ask-user-card="${questionId}"]`, node => node.textContent), /PostgreSQL.*SQLite/)
+    await page.click('[data-question-dock] > button')
+    await page.waitForSelector('[data-question-dock][data-question-dock-expanded="false"]')
+    await page.click(`[data-ask-user-card="${questionId}"]`)
+    await page.waitForSelector('[data-question-dock][data-question-dock-expanded="true"]')
+    // Keyboard flow in the dock, which the card focused: 1 selects the first option, Enter advances, Enter submits.
+    const form = `[data-question-dock] [data-question-form="${questionId}"]`
+    await page.waitForFunction(selector => document.activeElement === document.querySelector(selector), {}, form)
     await page.keyboard.press('1')
     assert.equal(await page.$eval(`${form} [data-question-option="PostgreSQL"]`, node => node.getAttribute('aria-checked')), 'true')
     await page.keyboard.press('Enter')
@@ -99,6 +106,12 @@ test('ask_user questions are answered from the card, the dock and an ordinary me
     assert.match(answerInput, /svc-data/)
     await page.waitForSelector(`[data-ask-user-card="${questionId}"][data-question-status="answered"]`)
     await page.waitForSelector('[data-question-dock]', { hidden: true })
+    // The answering message shows question/answer pairs, not the model-facing protocol text.
+    const bubble = await page.waitForSelector('[data-question-answer-bubble="answered"]')
+    const bubbleText = await bubble.evaluate(node => node.textContent)
+    assert.match(bubbleText, /Which database should the service use\?PostgreSQL/)
+    assert.match(bubbleText, /svc-data/)
+    assert.doesNotMatch(bubbleText, new RegExp(questionId + '|Answer to question'))
     // A second answer for the same question is rejected.
     const again = await fixture.api('POST', route(blocking) + '/questions/' + questionId + '/answer', { skip: true })
     assert.equal(again.status, 409)
@@ -116,6 +129,10 @@ test('ask_user questions are answered from the card, the dock and an ordinary me
     const replyRecord = (await view(replyId)).questions.find(item => item.id === replyQuestion)
     assert.equal(replyRecord.answer.text, 'Tomorrow morning, please.')
     await until(async () => (inputs.get('reply') || []).some(text => text.includes('question-answer')), 'message answer reached the model')
+    await page.waitForSelector('[data-question-answered-by-message]')
+    assert.equal(await page.evaluate(() => document.body.innerText.includes("The user's message above answers")), false)
+    assert.ok(await page.evaluate(() => document.body.innerText.includes('Tomorrow morning, please.')))
+    await screenshot(page, 'desktop-message-answer')
 
     // The asynchronous question is answered from the dock; it starts a turn on the idle Session.
     await page.evaluate(id => window.foxwarmTest.switchToSession(id), asyncId)
@@ -127,6 +144,16 @@ test('ask_user questions are answered from the card, the dock and an ordinary me
     await until(async () => (await view(asyncId)).questions[0].status === 'answered', 'dock answer recorded')
     await until(async () => (inputs.get('async') || []).some(text => text.includes('Yes, include it.')), 'asynchronous answer started a turn')
     await page.waitForSelector('[data-session-section="questions"]', { hidden: true })
+
+    // Skipping from the dock records a skipped answer, shown as such in the user bubble.
+    await send(asyncId, 'skip', [[call('ask-5', 'ask_user', { questions: [{ question: 'Add charts to the report?' }], afterAsk: 'continue' })]])
+    await page.waitForSelector('[data-question-dock]')
+    if (await page.$('[data-question-dock][data-question-dock-expanded="false"]')) await page.click('[data-question-dock] > button')
+    await page.waitForSelector('[data-question-dock] [data-question-form]')
+    await page.evaluate(() => [...document.querySelectorAll('[data-question-dock] button')].find(button => button.textContent === 'Skip').click())
+    await until(async () => (await view(asyncId)).questions.some(item => item.status === 'skipped'), 'skip recorded')
+    const skipped = await page.waitForSelector('[data-question-answer-bubble="skipped"]')
+    assert.match(await skipped.evaluate(node => node.textContent), /Skipped the question.*Add charts to the report\?/)
 
     // Narrow layout: a new waiting question keeps the dock and card usable.
     await send(blocking, 'mobile', [[call('ask-4', 'ask_user', { questions: [{ question: 'Pick the regions to deploy to', multiSelect: true, options: [{ label: 'Europe' }, { label: 'Asia', recommended: true }, { label: 'Americas' }] }] })]])

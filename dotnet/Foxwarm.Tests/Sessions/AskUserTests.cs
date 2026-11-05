@@ -222,13 +222,20 @@ public sealed class AskUserTests
                 SessionWait.Text(row["role"]) == "user"
                 && row["__meta"]?["questionAnswer"] is not null
             );
-        Assert.Equal(id, SessionWait.Text(answerRow["__meta"]!["questionAnswer"]!["questionId"]));
+        var answerMeta = answerRow["__meta"]!["questionAnswer"]!;
+        Assert.Equal(id, SessionWait.Text(answerMeta["questionId"]));
+        Assert.Equal(
+            SessionWait.Strings(answerMeta["questions"]).Length,
+            answerMeta["answers"]!.AsArray().Count
+        );
+        Assert.All(SessionWait.Strings(answerMeta["questions"]), text => Assert.NotEmpty(text));
         var persisted = JsonNode.Parse(
             await File.ReadAllTextAsync(
                 Path.Combine(h.F.Data, "state", "sessions", h.Owner.Id + ".json")
             )
         )!["meta"]!["questions"]!;
         Assert.Equal("answered", SessionWait.Text(persisted["items"]![0]!["status"]));
+        Assert.Null(persisted["items"]![0]!["answer"]!["questions"]);
     }
 
     [Fact]

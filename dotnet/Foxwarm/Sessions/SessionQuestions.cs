@@ -254,6 +254,7 @@ internal static class SessionQuestions
             var status = SessionWait.Text(answer["status"]) == "skipped" ? "skipped" : "answered";
             answer.Remove("questionId");
             answer.Remove("status");
+            answer.Remove("questions");
             if (!Resolve(meta, id, status, answer))
                 throw new QuestionNotOpenException(NotOpenMessage(meta, id));
             return item;
@@ -299,10 +300,10 @@ internal static class SessionQuestions
                     ["system"] =
                         "<foxwarm-system kind=\"question-answer\" questionIds=\""
                         + LocalSessionTurnHost.EscapeFoxwarmAttribute(ids)
-                        + "\">The user's message above answers "
+                        + "\">\nThe user's message above answers "
                         + (answered.Count == 1 ? "question " : "questions ")
                         + ids
-                        + ", which this Session was waiting on.</foxwarm-system>",
+                        + ", which this Session was waiting on.\n</foxwarm-system>",
                 }
             )
             .ToArray();

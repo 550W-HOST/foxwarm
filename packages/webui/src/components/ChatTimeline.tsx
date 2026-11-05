@@ -1,7 +1,7 @@
 import ArtifactView from '../artifacts/ArtifactView'
 import { buildArtifactGroups } from '../artifacts/projection'
 import SessionMessageCard from './SessionMessageCard'
-import { AskUserToolCard } from './QuestionCard'
+import { AskUserToolCard, isQuestionAnswerMarker, isStructuredQuestionAnswer, QuestionAnswerBubble } from './QuestionCard'
 import SystemEventCard from './SystemEventCard'
 import { getSessionNotice } from '../sessionNotices'
 import ReplyFileGrid from './ReplyFileGrid'
@@ -1060,8 +1060,11 @@ const MessageRow = memo(function MessageRow({
         ) : msg.role === 'user' ? (
           <>
           <AttachmentHistoryGrid correlations={attachmentCorrelations} imageParts={imageParts} pending={!!msg.__meta?.queuedPreview} />
+          {msg.__meta?.questionAnswer?.viaMessage && <div data-question-answered-by-message className="mb-1 text-right text-xs text-fw-text-muted">Answered the question</div>}
           {hasUserBody && <div className={`${row.literalUserText !== undefined ? 'foxwarm-conversation-user' : ''} foxwarm-user-message-bubble min-w-0 max-w-full rounded-lg bg-fw-user-surface px-3 py-2 text-fw-user-text`}>
-            {textLikeParts.map((part, partIdx) => (
+            {textLikeParts.map((part, partIdx) => part.system && isQuestionAnswerMarker(part.system) ? null : isStructuredQuestionAnswer(msg.__meta?.questionAnswer) && (!part.system || isWrappedDirectChannelText(part.system)) ? (
+              <QuestionAnswerBubble key={`user-part-${partIdx}`} answer={msg.__meta!.questionAnswer} />
+            ) : (
               <div key={`user-part-${partIdx}`} className={hasInlineAttachmentFlow ? 'contents' : undefined}>
                 {showUserMessageMetadata && inlineUserWrapperBoundaries?.close === partIdx && <UserWrapperBoundaryBreak afterMetadata={false} />}
                 {part.system

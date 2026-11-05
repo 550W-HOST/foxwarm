@@ -434,6 +434,8 @@ export const isLightweightFoxwarmMetadataLine = (text: string): boolean => {
   return kind === 'time'
     || kind === 'session'
     || kind === 'channel-mode'
+    // Marks an ordinary user message that answered an ask_user question.
+    || kind === 'question-answer'
 }
 
 /**

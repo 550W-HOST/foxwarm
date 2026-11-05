@@ -23,10 +23,11 @@ import type { FunctionCall, FunctionResponse } from './chatShared'
 const isTextEntry = (target: EventTarget | null) => target instanceof HTMLElement && (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT' && (target as HTMLInputElement).type === 'text')
 
 /** Answer form for one open question set: step through the questions, then submit together. */
-export function QuestionAnswerForm({ record, onSubmit, autoFocus = false, compact = false }: {
+export function QuestionAnswerForm({ record, onSubmit, focusToken = 0, compact = false }: {
   record: QuestionRecord
   onSubmit: (body: QuestionAnswerBody) => Promise<void>
-  autoFocus?: boolean
+  /** Changing a nonzero value moves keyboard focus into the form. */
+  focusToken?: number
   compact?: boolean
 }) {
   const [draft, setDraft] = useState<QuestionDraftEntry[]>(() => emptyQuestionDraft(record))
@@ -42,7 +43,11 @@ export function QuestionAnswerForm({ record, onSubmit, autoFocus = false, compac
   const entry = draft[step]
   const last = step === total - 1
   useEffect(() => { setDraft(emptyQuestionDraft(record)); setStep(0); setNote(''); setError(null) }, [record.id])
-  useEffect(() => { if (autoFocus) rootRef.current?.focus({ preventScroll: true }) }, [autoFocus, record.id])
+  useEffect(() => {
+    if (!focusToken) return
+    rootRef.current?.scrollIntoView({ block: 'nearest' })
+    rootRef.current?.focus({ preventScroll: true })
+  }, [focusToken])
 
   const update = (next: QuestionDraftEntry) => setDraft(current => current.map((item, index) => index === step ? next : item))
   const send = async (body: QuestionAnswerBody) => {
@@ -199,14 +204,31 @@ export function QuestionOutcome({ record }: { record: QuestionRecord }) {
 }
 
 function QuestionPreview({ questions }: { questions: QuestionItem[] }) {
+  const [details, setDetails] = useState(false)
+  const hasDetails = questions.some(question => question.options?.some(option => option.description))
   return (
     <div className="flex flex-col gap-2 text-sm">
       {questions.map((question, index) => (
         <div key={index} className="min-w-0">
           <div className="whitespace-pre-wrap break-words font-medium text-fw-text-strong">{question.question}</div>
-          {!!question.options?.length && <ul className="mt-1 list-disc pl-5 text-fw-text-muted">{question.options.map(option => <li key={option.label}>{option.label}</li>)}</ul>}
+          {!!question.options?.length && (
+            <ul className="mt-1 flex flex-col gap-0.5 pl-1 text-fw-text-muted">
+              {question.options.map(option => (
+                <li key={option.label} className="min-w-0 break-words">
+                  <span className="text-fw-text">{option.label}</span>
+                  {option.recommended && <span className="ml-1.5 rounded bg-fw-accent-surface px-1 py-0.5 text-[10px] font-medium uppercase tracking-wide text-fw-accent dark:bg-fw-accent-surface-strong/40">Recommended</span>}
+                  {details && option.description && <span className="block text-xs">{option.description}</span>}
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       ))}
+      {hasDetails && (
+        <button type="button" aria-expanded={details} onClick={event => { event.stopPropagation(); setDetails(value => !value) }} className="self-start text-xs text-fw-text-muted hover:text-fw-text hover:underline">
+          {details ? 'Hide option details' : 'Show option details'}
+        </button>
+      )}
     </div>
   )
 }
@@ -240,16 +262,24 @@ export function AskUserToolCard({ call, response }: { call: FunctionCall; respon
   const waiting = !!record && questions?.waitingIds.has(record.id)
   const tone = !record || record.status !== 'open' ? 'resolved' : waiting ? 'waiting' : 'open'
   return (
-    <div data-ask-user-card={record?.id || call.id} data-question-status={record?.status || (error ? 'error' : 'pending')} className={cardClass(tone)}>
+    <div data-ask-user-card={record?.id || call.id} data-question-status={record?.status || (error ? 'error' : 'pending')} className={`${cardClass(tone)} ${tone !== 'resolved' ? 'cursor-pointer' : ''}`}
+      onClick={tone !== 'resolved' && record && questions ? event => { if (!(event.target instanceof HTMLElement && event.target.closest('button'))) questions.requestDock(record.id) } : undefined}>
       <header className="mb-2 flex min-w-0 items-center gap-1.5 text-xs text-fw-text-muted">
         <MessageCircleQuestion size={14} aria-hidden="true" className={`shrink-0 ${tone === 'waiting' ? 'text-fw-warning' : tone === 'open' ? 'text-fw-accent' : ''}`} />
         <span>{asked.length > 1 ? 'Questions for you' : 'Question for you'}</span>
         {tone === 'waiting' && <span className="ml-auto shrink-0 font-medium text-fw-warning">Waiting for your answer</span>}
+        {tone === 'open' && <span className="ml-auto shrink-0">Pending</span>}
       </header>
       {error ? (
         <><QuestionPreview questions={asked} /><div className="mt-2 text-xs text-fw-danger">The question could not be asked.</div></>
       ) : record?.status === 'open' && questions ? (
-        <QuestionAnswerForm record={record} onSubmit={body => questions.submit(record.id, body)} />
+        <>
+          <QuestionPreview questions={record.questions} />
+          <button type="button" data-question-answer-open={record.id} onClick={() => questions.requestDock(record.id)}
+            className="mt-2 inline-flex items-center gap-1 rounded-md border border-fw-border bg-fw-surface px-2.5 py-1 text-sm text-fw-text-strong hover:bg-fw-hover">
+            Answer below
+          </button>
+        </>
       ) : record ? (
         <QuestionOutcome record={record} />
       ) : (
@@ -267,7 +297,15 @@ export function QuestionDock({ isMobile = false }: { isMobile?: boolean }) {
   const [expanded, setExpanded] = useState<boolean | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const sessionId = questions?.sessionId
+  const [focusToken, setFocusToken] = useState(0)
   useEffect(() => { setExpanded(null); setSelectedId(null) }, [sessionId])
+  const request = questions?.dockRequest
+  useEffect(() => {
+    if (!request) return
+    setExpanded(true)
+    setSelectedId(request.questionId)
+    setFocusToken(request.nonce)
+  }, [request])
   if (!questions || open.length === 0) return null
   const ordered = [...open].sort((a, b) => Number(questions.waitingIds.has(b.id)) - Number(questions.waitingIds.has(a.id)))
   const current = ordered.find(record => record.id === selectedId) || ordered[0]
@@ -296,9 +334,50 @@ export function QuestionDock({ isMobile = false }: { isMobile?: boolean }) {
             </div>
           )}
           {!currentWaiting && <div className="mb-1 text-xs text-fw-text-muted">The agent keeps working while this is open.</div>}
-          <QuestionAnswerForm key={current.id} record={current} compact={isMobile} autoFocus={false} onSubmit={body => questions.submit(current.id, body)} />
+          <QuestionAnswerForm key={current.id} record={current} compact={isMobile} focusToken={current.id === request?.questionId ? focusToken : 0} onSubmit={body => questions.submit(current.id, body)} />
         </div>
       )}
+    </div>
+  )
+}
+
+/** Structured answer metadata stored on the answering user message. */
+export interface QuestionAnswerMeta {
+  questionId?: string
+  questionIds?: string[]
+  status?: 'answered' | 'skipped'
+  questions?: string[]
+  answers?: Array<{ selected?: string[]; text?: string }>
+  note?: string
+  viaMessage?: boolean
+}
+
+/** The model-facing marker on a message that answered a waited question; the bubble shows its own label. */
+export const isQuestionAnswerMarker = (system: string): boolean => /^\s*<foxwarm-system\b[^>]*\bkind="question-answer"/.test(system)
+
+export function isStructuredQuestionAnswer(meta: unknown): meta is QuestionAnswerMeta {
+  return !!meta && typeof meta === 'object' && typeof (meta as QuestionAnswerMeta).questionId === 'string' && !(meta as QuestionAnswerMeta).viaMessage
+}
+
+/** User-bubble content for a card or dock answer: question and answer pairs, without protocol text. */
+export function QuestionAnswerBubble({ answer }: { answer: QuestionAnswerMeta }) {
+  const questions = useSessionQuestionsContext()
+  const texts = answer.questions?.length ? answer.questions : questions?.byId.get(answer.questionId || '')?.questions.map(item => item.question) || []
+  const skipped = answer.status === 'skipped'
+  return (
+    <div data-question-answer-bubble={skipped ? 'skipped' : 'answered'} className="flex min-w-0 flex-col gap-1.5 text-sm">
+      {skipped && <div className="font-medium">Skipped {texts.length > 1 ? 'the questions' : 'the question'}</div>}
+      {texts.map((question, index) => {
+        const entry = answer.answers?.[index]
+        const value = [...(entry?.selected || []), ...(entry?.text ? [entry.text] : [])].join('; ')
+        return (
+          <div key={index} className="min-w-0">
+            <div className="whitespace-pre-wrap break-words text-xs opacity-75">{question}</div>
+            {!skipped && <div className="whitespace-pre-wrap break-words">{value || 'No answer'}</div>}
+          </div>
+        )
+      })}
+      {answer.note && <div className="whitespace-pre-wrap break-words text-xs"><span className="opacity-75">Note: </span>{answer.note}</div>}
     </div>
   )
 }

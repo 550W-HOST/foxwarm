@@ -9,6 +9,9 @@ export interface SessionQuestionsState {
   waitingIds: ReadonlySet<string>
   submit: (questionId: string, body: QuestionAnswerBody) => Promise<void>
   reload: () => void
+  /** Latest request from a timeline card to open the dock on one question. */
+  dockRequest: { questionId: string; nonce: number } | null
+  requestDock: (questionId: string) => void
 }
 
 export const SessionQuestionsContext = createContext<SessionQuestionsState | null>(null)
@@ -21,6 +24,7 @@ export const useSessionQuestionsContext = () => useContext(SessionQuestionsConte
 export function useSessionQuestions(sessionId: string, projection: SessionQuestionsProjection | null | undefined): SessionQuestionsState {
   const [view, setView] = useState<SessionQuestionsView | null>(null)
   const [reloadToken, setReloadToken] = useState(0)
+  const [dockRequest, setDockRequest] = useState<{ questionId: string; nonce: number } | null>(null)
   const viewSessionRef = useRef(sessionId)
   const revision = projection?.revision ?? -1
   const hasState = !!projection
@@ -34,6 +38,7 @@ export function useSessionQuestions(sessionId: string, projection: SessionQuesti
     return () => controller.abort()
   }, [sessionId, revision, hasState, reloadToken])
   const reload = useCallback(() => setReloadToken(value => value + 1), [])
+  const requestDock = useCallback((questionId: string) => setDockRequest(current => ({ questionId, nonce: (current?.nonce ?? 0) + 1 })), [])
   const submit = useCallback(async (questionId: string, body: QuestionAnswerBody) => {
     try { await submitQuestionAnswer(sessionId, questionId, body) }
     finally { reload() }
@@ -48,6 +53,8 @@ export function useSessionQuestions(sessionId: string, projection: SessionQuesti
       waitingIds: new Set(view?.waitingQuestionIds || []),
       submit,
       reload,
+      dockRequest,
+      requestDock,
     }
-  }, [sessionId, view, submit, reload])
+  }, [sessionId, view, submit, reload, dockRequest, requestDock])
 }

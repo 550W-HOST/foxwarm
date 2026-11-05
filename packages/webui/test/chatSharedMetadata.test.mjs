@@ -151,7 +151,7 @@ test('new and persisted external-input headers are heavy system cards, not direc
       kind: 'external-input', source: 'foxwarm-system', previewPrefix: '',
     })
   }
-  for (const kind of ['time', 'session', 'channel-mode']) {
+  for (const kind of ['time', 'session', 'channel-mode', 'question-answer']) {
     assert.equal(isLightweightStructuredSystem(`<foxwarm-system kind="${kind}" />`), true)
   }
 })

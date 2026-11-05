@@ -131,6 +131,16 @@ internal sealed partial class SessionManager
         var text = SessionQuestions.RenderAnswer(questionId, record, answer);
         var stored = (JsonObject)answer.DeepClone();
         stored["questionId"] = questionId;
+        // The message carries its question texts so the WebUI can show the answer as Q/A
+        // pairs after the record itself has been pruned.
+        stored["questions"] = new JsonArray(
+            record["questions"]!
+                .AsArray()
+                .Select(question =>
+                    (JsonNode?)JsonValue.Create(SessionWait.Text(question?["question"]) ?? "")
+                )
+                .ToArray()
+        );
         var item = new QueueItem(
             QueueItemType.User,
             SessionBoundary.ChannelInput([new JsonObject { ["text"] = text }], "webui"),
