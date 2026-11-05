@@ -361,7 +361,23 @@ internal static class VectorRecall
                 continue;
             items.Add(item);
             if (bounded)
-                sources.Add(source);
+            {
+                if (source is not null)
+                {
+                    source["rank"] = sources.Count + 1;
+                    source["denseDistance"] = hit["_distance"]?.DeepClone();
+                    source["lexicalScore"] = hit["lexical_score"]?.DeepClone();
+                    source["lexicalRank"] = hit["lexical_rank"]?.DeepClone();
+                    source["fusionScore"] = hit["fusion_score"]?.DeepClone();
+                    source["locator"] = new JsonObject
+                    {
+                        ["sessionId"] = Text(source["sessionId"]),
+                        ["kind"] = Text(source["kind"]),
+                        ["sourceRange"] = source["sourceRange"]?.DeepClone()
+                    };
+                    sources.Add(source);
+                }
+            }
             if (items.Count >= (bounded ? limit : candidateLimit))
                 break;
         }

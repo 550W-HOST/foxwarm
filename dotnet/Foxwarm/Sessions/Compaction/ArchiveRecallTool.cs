@@ -1,3 +1,6 @@
+using System.Globalization;
+using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 
@@ -31,6 +34,18 @@ internal static class ArchiveRecallTool
                       "limit": {
                         "type": "number",
                         "description": "Maximum search results. Defaults to 5, up to 20."
+                      },
+                      "cursor": {
+                        "type": "string",
+                        "description": "Opaque continuation cursor returned by structured semantic recall. Use only with the same query, scope, and time range."
+                      },
+                      "startTime": {
+                        "type": "string",
+                        "description": "Inclusive ISO-8601 timestamp lower bound for semantic results. Date/time filters use UTC and the half-open [startTime,endTime) interval."
+                      },
+                      "endTime": {
+                        "type": "string",
+                        "description": "Exclusive ISO-8601 timestamp upper bound for semantic results. Date/time filters use UTC and the half-open [startTime,endTime) interval."
                       },
                       "scope": {
                         "type": "string",
@@ -142,11 +157,76 @@ internal static class ArchiveRecallTool
         throw new InvalidDataException($"Could not parse recall target `{text}`. " + Help);
     }
 
+    private sealed record RecallPage(long Offset, string Fingerprint);
+
+    private static long? TimeBound(JsonNode? value, string name)
+    {
+        if (value is null) return null;
+        var text = SessionWait.Text(value);
+        if (text is null || !DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var parsed))
+            throw new InvalidDataException($"{name} must be an ISO-8601 timestamp.");
+        return parsed.ToUniversalTime().ToUnixTimeMilliseconds();
+    }
+
+    private static string CursorToken(long offset, string fingerprint)
+    {
+        var payload = JsonSerializer.SerializeToUtf8Bytes(new { offset, fingerprint });
+        return Convert.ToBase64String(payload).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+    }
+
+    private static RecallPage? ParseCursor(JsonNode? value, string fingerprint)
+    {
+        if (value is null) return null;
+        var text = SessionWait.Text(value);
+        if (string.IsNullOrWhiteSpace(text)) throw new InvalidDataException("cursor must be a nonempty opaque continuation cursor.");
+        try
+        {
+            var padded = text.Replace('-', '+').Replace('_', '/');
+            padded = padded.PadRight((padded.Length + 3) / 4 * 4, '=');
+            var obj = JsonNode.Parse(Encoding.UTF8.GetString(Convert.FromBase64String(padded)))?.AsObject();
+            var offset = obj? ["offset"]?.GetValue<long>();
+            var cursorFingerprint = obj? ["fingerprint"]?.GetValue<string>();
+            if (offset is null or < 0 || cursorFingerprint != fingerprint)
+                throw new InvalidDataException("cursor does not match this recall query and filter set.");
+            return new(offset.Value, cursorFingerprint);
+        }
+        catch (InvalidDataException) { throw; }
+        catch (Exception) { throw new InvalidDataException("cursor is invalid or expired."); }
+    }
+
+    private static JsonObject StructuredExact(string id, Target target, IReadOnlyList<ArchiveMessageRecord> records, ArchiveStats stats, int budget)
+    {
+        var messages = new JsonArray();
+        var complete = true;
+        foreach (var record in records)
+        {
+            var node = record.Message.DeepClone();
+            var json = node.ToJsonString();
+            if (messages.ToJsonString().Length + json.Length > budget)
+            { complete = false; break; }
+            messages.Add(node);
+        }
+        return new JsonObject
+        {
+            ["kind"] = "exact-archive-messages",
+            ["sessionId"] = id,
+            ["target"] = $"msg#{target.First}-{target.Last}",
+            ["complete"] = complete && messages.Count == records.Count,
+            ["truncated"] = !complete || messages.Count < records.Count,
+            ["fullAvailable"] = true,
+            ["availableCount"] = records.Count,
+            ["range"] = new JsonObject { ["startSeq"] = target.First, ["endSeq"] = target.Last },
+            ["messages"] = messages,
+            ["availableRange"] = new JsonObject { ["firstSeq"] = stats.First, ["lastSeq"] = stats.Last, ["count"] = stats.Count }
+        };
+    }
+
     public static async Task<JsonObject> ExecuteAsync(
         SessionManager manager,
         SessionOwner source,
         JsonObject? args,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken = default,
+        bool programmatic = false
     )
     {
         try
@@ -160,6 +240,9 @@ internal static class ArchiveRecallTool
                 "text_query",
                 "beforeSeq",
                 "limit",
+                "cursor",
+                "startTime",
+                "endTime",
                 "scope",
                 "agentName",
                 "preferBlocks",
@@ -211,22 +294,52 @@ internal static class ArchiveRecallTool
             )
             {
                 var query = SessionGoal.Trim(semantic);
-                var limit = Foxwarm.Vector.VectorRecall.Limit(args["limit"]);
+                var pageSize = Foxwarm.Vector.VectorRecall.Limit(args["limit"]);
                 var scope = manager.ResolveVectorScope(source, args);
+                var startTime = TimeBound(args["startTime"], "startTime");
+                var endTime = TimeBound(args["endTime"], "endTime");
+                if (startTime is not null && endTime is not null && startTime >= endTime)
+                    throw new InvalidDataException("startTime must be earlier than endTime.");
+                var fingerprint = string.Join("|", query, scope.Scope, scope.SessionId ?? "", startTime?.ToString() ?? "", endTime?.ToString() ?? "", pageSize);
+                var page = ParseCursor(args["cursor"], fingerprint);
+                var offset = page?.Offset ?? 0;
+                var limit = Math.Min(1024, Math.Max(pageSize + offset, pageSize) * 4);
                 var semanticRenderer = new ContextPreviewRenderer(args, 1000);
                 var result = await Foxwarm.Vector.VectorRecall.SearchAsync(
                     manager.Vector,
                     manager.ArchiveReader,
                     query,
                     limit,
-                    scope.Options,
+                    scope.Options with { StartTime = startTime, EndTime = endTime },
                     scope.Scope,
                     scope.SessionId,
                     args,
                     args["preferBlocks"]?.GetValue<bool>() == true,
+                    bounded: programmatic,
                     sourceAllowed: sourceId =>
                         manager.VectorCanonicalSourceAllowed(sourceId, scope.Options)
                 );
+                if (programmatic)
+                {
+                    var sources = result.Sources.OfType<JsonObject>().Skip((int)offset).Take(pageSize).ToArray();
+                    var response = new JsonObject
+                    {
+                        ["kind"] = "semantic-archive-recall",
+                        ["query"] = query,
+                        ["scope"] = scope.Scope,
+                        ["sessionId"] = scope.SessionId,
+                        ["dateRange"] = new JsonObject { ["startTime"] = startTime, ["endTime"] = endTime, ["timezone"] = "UTC", ["interval"] = "[startTime,endTime)" },
+                        ["pageSize"] = pageSize,
+                        ["items"] = new JsonArray(sources.Select(item => (JsonNode?)item.DeepClone()).ToArray()),
+                        ["totalRanked"] = result.HitCount,
+                        ["complete"] = offset + sources.Length >= result.Sources.Count,
+                        ["fullAvailable"] = true,
+                        ["availableCount"] = result.Sources.Count
+                    };
+                    if (offset + sources.Length < result.Sources.Count)
+                        response["nextCursor"] = CursorToken(offset + sources.Length, fingerprint);
+                    return response;
+                }
                 return Output(
                     semanticRenderer.RenderItems(
                         result.Items,
@@ -235,7 +348,7 @@ internal static class ArchiveRecallTool
                             $"Recall {result.SearchLabel} for `{query}` ({scope.Scope}; source archive ranges loaded before preview) - showing {matched} unique source group(s) from {result.HitCount} ranked source group(s).",
                         "No archived source messages or blocks found for this vector_query.",
                         result.Notices,
-                        maxItems: limit
+                        maxItems: pageSize
                     )
                 );
             }
@@ -408,6 +521,8 @@ internal static class ArchiveRecallTool
             }
             var records = reader.Messages(target.First, target.Last);
             var available = reader.Stats();
+            if (programmatic)
+                return StructuredExact(id, target, records, available, 20000);
             var header =
                 $"Archived messages for session `{id}` at msg#{target.First}-{target.Last}.";
             if (block is not null)

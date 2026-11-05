@@ -173,6 +173,28 @@ public sealed class LiteralRecallTests
     }
 
     [Fact]
+    public async Task Programmatic_exact_recall_returns_bounded_canonical_json_metadata()
+    {
+        await using var f = await OutboundMcpFixture.CreateAsync();
+        await ForkClearLifecycleTests.AppendAsync(
+            f.First,
+            VectorFixture.Message("structured exact evidence")
+        );
+        var result = await ArchiveRecallTool.ExecuteAsync(
+            f.Manager,
+            f.First,
+            new JsonObject { ["target"] = "msg#1", ["previewLength"] = 1000 },
+            programmatic: true
+        );
+        Assert.Equal("exact-archive-messages", result["kind"]!.GetValue<string>());
+        Assert.True(result["complete"]!.GetValue<bool>());
+        Assert.False(result["truncated"]!.GetValue<bool>());
+        Assert.True(result["fullAvailable"]!.GetValue<bool>());
+        Assert.Single(result["messages"]!.AsArray());
+        Assert.DoesNotContain("output", result);
+    }
+
+    [Fact]
     public async Task Literal_mode_direct_unified_and_native_script_obey_current_legacy_policy_and_target_scope()
     {
         await using var f = await MainToolScriptTests.Fixture.Create();

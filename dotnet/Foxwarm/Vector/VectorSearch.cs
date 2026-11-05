@@ -11,7 +11,9 @@ internal sealed record VectorSearchOptions(
     IReadOnlyList<ArchiveVectorScope>? LineageSessions = null,
     string? IncludeRegex = null,
     string? ExcludeRegex = null,
-    bool PreferBlocks = false
+    bool PreferBlocks = false,
+    long? StartTime = null,
+    long? EndTime = null
 );
 
 internal sealed record VectorSearchResult(IReadOnlyList<JsonObject> Hits, JsonObject Lexical);
@@ -175,7 +177,11 @@ internal sealed partial class VectorRuntime
             });
             clauses.Add("(" + string.Join(" OR ", branches) + ")");
         }
-        else if (options.SessionIds is { Length: > 0 } ids)
+        if (options.StartTime is { } startTime)
+            clauses.Add($"(end_timestamp >= {startTime} OR timestamp >= {startTime})");
+        if (options.EndTime is { } endTime)
+            clauses.Add($"(start_timestamp < {endTime} OR timestamp < {endTime})");
+        if (options.SessionIds is { Length: > 0 } ids)
             clauses.Add(
                 "("
                     + string.Join(

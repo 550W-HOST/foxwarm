@@ -843,7 +843,7 @@ internal sealed partial class SessionToolExecutor(
         handlers["exec"] = (owner, args, token) => owner.ExecuteExecAsync(args, token);
         handlers["artifact"] = (owner, args, token) => owner.ExecuteArtifactAsync(args, token);
         handlers["recall"] = (owner, args, token) =>
-            ArchiveRecallTool.ExecuteAsync(owner.Manager, owner.Hosted, args, token);
+            ArchiveRecallTool.ExecuteAsync(owner.Manager, owner.Hosted, args, token, owner.Programmatic);
         handlers["get_archived_messages"] = (owner, args, token) =>
             ArchiveControlTools.ReadMessagesAsync(owner.Manager, owner.Hosted, args, token);
         handlers["get_archived_blocks"] = (owner, args, token) =>
