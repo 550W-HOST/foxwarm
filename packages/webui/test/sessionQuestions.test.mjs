@@ -82,13 +82,37 @@ test('a question wait reads as waiting for the user rather than external activit
   assert.equal(view.details.some(([, value]) => /external/i.test(value)), false)
 })
 
-test('watched Sessions notify once when they gain an open question', () => {
-  const tracker = new notifications.SessionIdleNotificationTracker()
-  const modes = { s: 'always' }
-  const row = (open, revision) => ({ id: 's', runtimeState: { state: 'waiting', queueLength: 0, busy: false }, questions: { open, revision } })
-  assert.deepEqual(tracker.observeQuestions([row(0, 0)], modes), [])
-  assert.equal(tracker.observeQuestions([row(1, 1)], modes).length, 1)
-  assert.deepEqual(tracker.observeQuestions([row(1, 1)], modes), [])
-  assert.deepEqual(tracker.observeQuestions([row(0, 2)], modes), [])
-  assert.deepEqual(tracker.observeQuestions([row(1, 3)], {}), [], 'unwatched Sessions do not notify')
+test('question notifications follow the browser-local mode', () => {
+  const row = (id, open, revision) => ({ id, runtimeState: { state: 'waiting', queueLength: 0, busy: false }, questions: { open, revision } })
+  const watched = { s: 'always' }
+  const all = new notifications.SessionIdleNotificationTracker()
+  assert.deepEqual(all.observeQuestions([row('s', 0, 0), row('t', 1, 1)], {}, 'all'), [], 'questions open at page load do not notify')
+  assert.deepEqual(all.observeQuestions([row('s', 1, 1), row('t', 1, 1)], {}, 'all').map(item => item.id), ['s'], 'all sessions notify without a per-session toggle')
+  assert.deepEqual(all.observeQuestions([row('s', 1, 1)], {}, 'all'), [], 'an unchanged question notifies once')
+  assert.deepEqual(all.observeQuestions([row('s', 0, 2), row('u', 1, 1)], {}, 'all').map(item => item.id), ['u'], 'a session first seen with an open question notifies')
+  assert.deepEqual(all.observeQuestions([row('t', 1, 1)], {}, 'all'), [], 'a row re-entering the list does not notify again')
+
+  const onlyWatched = new notifications.SessionIdleNotificationTracker()
+  onlyWatched.observeQuestions([row('s', 0, 0), row('t', 0, 0)], watched, 'watched')
+  assert.deepEqual(onlyWatched.observeQuestions([row('s', 1, 1), row('t', 1, 1)], watched, 'watched').map(item => item.id), ['s'])
+
+  const off = new notifications.SessionIdleNotificationTracker()
+  off.observeQuestions([row('s', 0, 0)], watched, 'off')
+  assert.deepEqual(off.observeQuestions([row('s', 1, 1)], watched, 'off'), [])
+  assert.deepEqual(off.observeQuestions([row('s', 2, 2)], watched, 'all').map(item => item.id), ['s'], 'baselines continue while notifications are off')
+})
+
+test('question notification mode is stored per browser with All sessions as the default', () => {
+  const store = new Map()
+  const storage = { getItem: key => store.get(key) ?? null, setItem: (key, value) => store.set(key, value), removeItem: key => store.delete(key) }
+  assert.equal(notifications.readQuestionNotificationMode(storage), 'all')
+  notifications.writeQuestionNotificationMode(storage, 'off')
+  assert.equal(store.get(notifications.QUESTION_NOTIFICATIONS_STORAGE_KEY), 'off')
+  assert.equal(notifications.readQuestionNotificationMode(storage), 'off')
+  notifications.writeQuestionNotificationMode(storage, 'watched')
+  assert.equal(notifications.readQuestionNotificationMode(storage), 'watched')
+  notifications.writeQuestionNotificationMode(storage, 'all')
+  assert.equal(store.has(notifications.QUESTION_NOTIFICATIONS_STORAGE_KEY), false)
+  assert.equal(notifications.readQuestionNotificationMode({ getItem: () => 'garbage' }), 'all')
+  assert.equal(notifications.readQuestionNotificationMode({ getItem() { throw new Error('blocked') } }), 'all')
 })

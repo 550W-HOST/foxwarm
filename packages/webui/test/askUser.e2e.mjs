@@ -24,7 +24,16 @@ const questions = [
 ]
 
 test('ask_user questions are answered from the card, the dock and an ordinary message', { timeout: 180000 }, async () => {
-  const fixture = await createHostFixture('ask-user')
+  // Page notifications are recorded instead of shown; permission is granted.
+  const fixture = await createHostFixture('ask-user', { onPage: page => page.evaluateOnNewDocument(() => {
+    window.__notifications = []
+    window.Notification = class {
+      static permission = 'granted'
+      static requestPermission() { return Promise.resolve('granted') }
+      constructor(title, options) { window.__notifications.push({ title, body: options?.body }); this.onclick = null; this.onclose = null }
+      close() {}
+    }
+  }) })
   const plans = new Map(), rounds = new Map(), inputs = new Map(), errors = []
   const model = createServer(async (request, response) => {
     try {
@@ -154,6 +163,38 @@ test('ask_user questions are answered from the card, the dock and an ordinary me
     await until(async () => (await view(asyncId)).questions.some(item => item.status === 'skipped'), 'skip recorded')
     const skipped = await page.waitForSelector('[data-question-answer-bubble="skipped"]')
     assert.match(await skipped.evaluate(node => node.textContent), /Skipped the question.*Add charts to the report\?/)
+
+    // Question notifications follow the browser-local Setup choice; the Session is not visible.
+    const notified = () => page.evaluate(() => window.__notifications.filter(item => item.title === 'Question for you').map(item => item.body))
+    const askReply = async key => {
+      const before = (await session(replyId)).questions?.open ?? 0
+      await send(replyId, key, [[call('ask-' + key, 'ask_user', { questions: [{ question: 'Notification check ' + key }], afterAsk: 'continue' })]])
+      await until(async () => ((await session(replyId)).questions?.open ?? 0) > before, key + ' question open')
+    }
+    await askReply('notify-all')
+    await until(async () => (await notified()).includes('reply'), 'all-sessions question notification')
+    const setQuestionNotifications = async value => {
+      await page.evaluate(() => { location.hash = 'setup' })
+      await page.waitForSelector('[data-setup-tab="notifications"]')
+      await page.click('[data-setup-tab="notifications"]')
+      await page.waitForSelector('[data-notification-permission="granted"]')
+      await page.click(`[data-question-notification-choice="${value}"] input`)
+      await page.waitForSelector(`[data-question-notification-choice="${value}"] input:checked`)
+      assert.equal(await page.evaluate(() => localStorage.getItem('foxwarm_question_notifications_v1')), value === 'all' ? null : value)
+      if (value === 'off') await screenshot(page, 'setup-notifications')
+      await page.evaluate(() => { location.hash = 'chat' })
+      await page.waitForSelector('.foxwarm-chat-root')
+    }
+    for (const value of ['off', 'watched']) {
+      await setQuestionNotifications(value)
+      const count = (await notified()).length
+      await askReply('notify-' + value)
+      await sleep(1500)
+      assert.equal((await notified()).length, count, value + ' sends no notification for an unwatched Session')
+    }
+    await setQuestionNotifications('all')
+    await askReply('notify-again')
+    await until(async () => (await notified()).filter(body => body === 'reply').length >= 2, 'notifications resume for all sessions')
 
     // Narrow layout: a new waiting question keeps the dock and card usable.
     await send(blocking, 'mobile', [[call('ask-4', 'ask_user', { questions: [{ question: 'Pick the regions to deploy to', multiSelect: true, options: [{ label: 'Europe' }, { label: 'Asia', recommended: true }, { label: 'Americas' }] }] })]])

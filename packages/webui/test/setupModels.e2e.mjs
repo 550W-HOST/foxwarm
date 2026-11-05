@@ -603,7 +603,7 @@ after(async () => {
   preview?.kill('SIGTERM')
 })
 
-test('Setup uses accessible Appearance, Models and Config tabs with status icons and product copy', async () => {
+test('Setup uses accessible Appearance, Models, Config and Notifications tabs with status icons and product copy', async () => {
   const setupPage = await browser.newPage()
   const requestStart = requestPaths.length
   await setupPage.setBypassServiceWorker(true)
@@ -633,6 +633,7 @@ test('Setup uses accessible Appearance, Models and Config tabs with status icons
       { tab: 'appearance', selected: 'true', status: null },
       { tab: 'models', selected: 'false', status: 'complete' },
       { tab: 'config', selected: 'false', status: null },
+      { tab: 'notifications', selected: 'false', status: null },
     ])
     assert.deepEqual(await setupPage.$$eval('[data-monaco-model-uri]', (elements) => elements.map((element) => element.getAttribute('data-monaco-model-uri'))), [
       'inmemory://foxwarm/setup/foxwarm-models.yaml',
@@ -663,6 +664,10 @@ test('Setup uses accessible Appearance, Models and Config tabs with status icons
     await setupPage.waitForFunction(() => document.body.textContent?.includes('Connected as weixin-e2e-user. Channel config saved and reloaded.'))
 
     await setupPage.focus('[data-setup-tab="config"]')
+    await setupPage.keyboard.press('ArrowRight')
+    await setupPage.waitForSelector('[data-setup-tab="notifications"][aria-selected="true"]')
+    assert.equal(await setupPage.$eval('[data-setup-section="notifications"]', (panel) => panel.hidden), false)
+    await setupPage.waitForSelector('[data-question-notification-choice="all"] input:checked')
     await setupPage.keyboard.press('ArrowRight')
     await setupPage.waitForSelector('[data-setup-tab="appearance"][aria-selected="true"]')
     assert.equal(await setupPage.$eval('[data-theme-manager]', element => element.textContent?.includes('Appearance')), true)
@@ -707,11 +712,11 @@ test('Setup uses accessible Appearance, Models and Config tabs with status icons
     await setupPage.keyboard.press('Home')
     await setupPage.waitForSelector('[data-setup-tab="appearance"][aria-selected="true"]')
     await setupPage.keyboard.press('ArrowLeft')
-    await setupPage.waitForSelector('[data-setup-tab="config"][aria-selected="true"]')
+    await setupPage.waitForSelector('[data-setup-tab="notifications"][aria-selected="true"]')
     await setupPage.keyboard.press('Home')
     await setupPage.waitForSelector('[data-setup-tab="appearance"][aria-selected="true"]')
     await setupPage.keyboard.press('End')
-    await setupPage.waitForSelector('[data-setup-tab="config"][aria-selected="true"]')
+    await setupPage.waitForSelector('[data-setup-tab="notifications"][aria-selected="true"]')
     await setupPage.click('[data-setup-tab="models"]')
     await setupPage.waitForSelector('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-models.yaml"][data-editor-ready="true"]', { timeout: 15_000 })
     assert.ok(requestPaths.includes('/preview/api/setup/status'))
