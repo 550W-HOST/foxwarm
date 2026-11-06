@@ -29,6 +29,49 @@ internal static class CodeFileOperations
         internal uint ModifiedNanoseconds;
     }
 
+    [StructLayout(LayoutKind.Explicit, Size = 144)]
+    private struct DarwinStat
+    {
+        [FieldOffset(4)]
+        internal ushort Mode;
+
+        [FieldOffset(48)]
+        internal long ModifiedSeconds;
+
+        [FieldOffset(56)]
+        internal long ModifiedNanoseconds;
+
+        [FieldOffset(64)]
+        internal long ChangeSeconds;
+
+        [FieldOffset(72)]
+        internal long ChangeNanoseconds;
+
+        [FieldOffset(96)]
+        internal long Size;
+    }
+
+    private readonly record struct UnixStat(
+        ushort Mode,
+        ulong Size,
+        long ChangeSeconds,
+        long ChangeNanoseconds,
+        long ModifiedSeconds,
+        long ModifiedNanoseconds
+    );
+
+    [DllImport("libc", EntryPoint = "stat", SetLastError = true)]
+    private static extern int StatDarwin(string path, out DarwinStat info);
+
+    [DllImport("libc", EntryPoint = "lstat", SetLastError = true)]
+    private static extern int LStatDarwin(string path, out DarwinStat info);
+
+    [DllImport("libc", EntryPoint = "stat$INODE64", SetLastError = true)]
+    private static extern int StatDarwinIntel(string path, out DarwinStat info);
+
+    [DllImport("libc", EntryPoint = "lstat$INODE64", SetLastError = true)]
+    private static extern int LStatDarwinIntel(string path, out DarwinStat info);
+
     [DllImport("libc", EntryPoint = "statx", SetLastError = true)]
     private static extern int Statx(
         int directory,
@@ -65,6 +108,7 @@ internal static class CodeFileOperations
                 13 or 1 => "NoPermissions",
                 17 => "FileExists",
                 39 => "DirectoryNotEmpty",
+                66 when OperatingSystem.IsMacOS() => "DirectoryNotEmpty",
                 _ => "Unknown",
             };
         return FileError(code, path, new System.ComponentModel.Win32Exception(errno).Message);
@@ -86,6 +130,7 @@ internal static class CodeFileOperations
                 5 or 13 => "NoPermissions",
                 17 or 80 or 183 => "FileExists",
                 39 or 145 => "DirectoryNotEmpty",
+                66 when OperatingSystem.IsMacOS() => "DirectoryNotEmpty",
                 _ => "Unknown",
             },
             _ => "Unknown",
@@ -119,16 +164,43 @@ internal static class CodeFileOperations
     )]
     private static extern bool MakeDirectoryWindows(string path, IntPtr securityAttributes);
 
-    private static LinuxStat Stat(string path, bool link)
+    private static UnixStat Stat(string path, bool link)
     {
+        if (OperatingSystem.IsMacOS())
+        {
+            // Match the Darwin stat64 ABI used by OpenFileMetadata: Intel has
+            // suffixed symbols; Apple Silicon uses the unsuffixed entry points.
+            DarwinStat info;
+            var result =
+                RuntimeInformation.ProcessArchitecture == Architecture.X64
+                    ? (link ? LStatDarwinIntel(path, out info) : StatDarwinIntel(path, out info))
+                    : (link ? LStatDarwin(path, out info) : StatDarwin(path, out info));
+            if (result != 0)
+                throw NativeError(path);
+            return new(
+                info.Mode,
+                checked((ulong)info.Size),
+                info.ChangeSeconds,
+                info.ChangeNanoseconds,
+                info.ModifiedSeconds,
+                info.ModifiedNanoseconds
+            );
+        }
         if (!OperatingSystem.IsLinux())
             throw new CodeServiceException(
                 "Unavailable",
                 "Code filesystem services require a supported native host."
             );
-        if (Statx(-100, path, link ? 0x100 : 0, 0x7ff, out var info) != 0)
+        if (Statx(-100, path, link ? 0x100 : 0, 0x7ff, out var linux) != 0)
             throw NativeError(path);
-        return info;
+        return new(
+            linux.Mode,
+            linux.Size,
+            linux.ChangeSeconds,
+            linux.ChangeNanoseconds,
+            linux.ModifiedSeconds,
+            linux.ModifiedNanoseconds
+        );
     }
 
     internal static JsonObject StatFile(string path)
@@ -220,7 +292,7 @@ internal static class CodeFileOperations
                 // Source falls back to the directory entry itself, never follows a broken link.
                 try
                 {
-                    if (OperatingSystem.IsLinux())
+                    if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
                         type = (Stat(child, true).Mode & 0xf000) switch
                         {
                             0x8000 => 1,
