@@ -3,6 +3,7 @@ import { getCollapsedReasoningPreview, handleMarkdownLinkClick, renderMarkdownSe
 import MarkdownHtmlSegment from './MarkdownHtmlSegment'
 import ModelThreadCard, { modelThreadBodyClasses } from './ModelThreadCard'
 import type { ReasoningRunPart } from './reasoningParts'
+import { extractOpenAIReasoningSummaryTitles } from '../reasoningSummary'
 
 type ReasoningTone = 'message' | 'processing'
 
@@ -15,22 +16,6 @@ interface ReasoningCardProps {
   searchPartIndex?: number
   parts?: ReasoningRunPart[]
   reasoningTokens?: number
-}
-
-const extractOpenAIReasoningSummaryTitles = (text: string): string[] => {
-  const trimmed = text.trimStart()
-  if (!/^\*\*[^*\n]+\*\*\s*(?:\r?\n|$)/.test(trimmed)) {
-    return []
-  }
-
-  const titles: string[] = []
-  const titleLinePattern = /^\*\*([^*\n]+)\*\*\s*$/gm
-  let match: RegExpExecArray | null
-  while ((match = titleLinePattern.exec(trimmed)) !== null) {
-    const title = match[1].trim()
-    if (title) titles.push(title)
-  }
-  return titles
 }
 
 const getReasoningPreview = (text: string): { text: string; isOpenAISummary: boolean } => {

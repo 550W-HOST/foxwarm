@@ -2962,3 +2962,61 @@ test('real Chat routes per-call activity without refetching history or flashing 
   await page.waitForFunction(() => document.body.textContent.includes('settled-c'))
   assert.deepEqual(await states(), [false, false, false])
 })
+
+test('real Chat status follows live reasoning headings, timeline mode and active tool summaries', async t => {
+  const page = await browser.newPage()
+  t.after(() => page.close())
+  await page.setViewport({ width: 390, height: 800 })
+  await page.goto(fixtureUrl, { waitUntil: 'load' })
+  await page.waitForFunction(() => window.fixtureHistoryRequestCount === 1)
+  await page.evaluate(() => {
+    window.fixtureTimelineView = 'conversation'
+    window.renderFixtureChats()
+    window.resolveFixtureHistory(0, undefined, 0, { busy: true })
+    window.setCaptionRuntime = runtimeState => window.emitFixtureEvent({ type: 'session-state', session: {
+      id: 'fixture/main', busy: runtimeState.busy, queueLength: 0, messageCount: 1, historyVersion: 0, runtimeState,
+    } })
+    window.setCaptionRuntime({ state: 'requesting-model', busy: true, queueLength: 0, active: { phase: 'normal-turn', streamId: 'caption-stream' } })
+  })
+  await page.waitForSelector('[data-fox-thinking-copy]')
+  const emit = event => page.evaluate(event => window.emitFixtureEvent({ type: 'session-event', event }), event)
+  const stream = { streamVersion: 2, streamId: 'caption-stream', llmRequestId: 'caption-request', startedAt: 100 }
+  await emit({ ...stream, type: 'model-stream-reset', sequence: 0 })
+  await emit({ ...stream, type: 'model-stream-update', sequence: 1, partDeltas: [
+    { outputIndex: 0, kind: 'reasoning', summaryIndex: 0, textDelta: { offset: 0, text: '**Inspecting the source**\nBody.' } },
+  ] })
+  const caption = '[data-runtime-caption]'
+  await page.waitForFunction(() => document.querySelector('[data-runtime-caption]')?.textContent === 'Inspecting the source')
+  assert.equal(await page.$('[data-fox-thinking-copy]'), null)
+  assert.equal(await page.$eval('[data-processing-runtime-state]', el => el.getAttribute('aria-label')), 'Requesting model…')
+  const longTitle = 'Checking the implementation and its streaming lifecycle '.repeat(5).trim()
+  await emit({ ...stream, type: 'model-stream-update', sequence: 2, partDeltas: [
+    { outputIndex: 0, kind: 'reasoning', summaryIndex: 1, textDelta: { offset: 0, text: `**${longTitle}**\nBody.` } },
+  ] })
+  await page.waitForFunction(title => document.querySelector('[data-runtime-caption]')?.textContent === title, {}, longTitle)
+  assert.equal(await page.$eval(`${caption} span[title]`, el => el.title), longTitle)
+  assert.equal(await page.$eval(caption, el => el.getBoundingClientRect().right <= innerWidth), true)
+  for (const mode of ['detailed', 'grouped', 'conversation']) {
+    await page.evaluate(mode => { window.fixtureTimelineView = mode; window.renderFixtureChats() }, mode)
+    await page.waitForFunction(mode => mode === 'conversation'
+      ? !document.querySelector('[data-fox-thinking-copy]')
+      : !!document.querySelector('[data-fox-thinking-copy]'), {}, mode)
+  }
+  await emit({ ...stream, type: 'model-stream-update', sequence: 3, partDeltas: [
+    { outputIndex: 1, kind: 'text', contentIndex: 0, textDelta: { offset: 0, text: 'The answer begins.' } },
+  ] })
+  await page.waitForSelector('[data-fox-thinking-copy]')
+  await page.evaluate(() => window.setCaptionRuntime({ state: 'running-tool', busy: true, queueLength: 0,
+    tool: { id: 'script', name: 'run_script', source: 'builtin', argsPreview: 'Validate streaming updates', startedAt: 200 },
+  }))
+  await page.waitForFunction(() => document.querySelector('[data-runtime-caption]')?.textContent === 'Validate streaming updates')
+  await page.click(caption)
+  await page.waitForSelector('[data-runtime-details]')
+  assert.match(await page.$eval('[data-runtime-details]', el => el.textContent), /run_script/)
+  await page.keyboard.press('Escape')
+  await page.evaluate(() => window.setCaptionRuntime({ state: 'waiting', busy: false, queueLength: 0,
+    waiting: { waitId: 'pause', waitingFor: 'input' },
+  }))
+  await page.waitForFunction(() => document.querySelector('[data-runtime-caption]')?.textContent === 'Waiting for input')
+  assert.equal(await page.evaluate(() => window.fixtureHistoryRequestCount), 1)
+})

@@ -155,3 +155,50 @@ test('settled LLM failure remains an explicit static outcome with eligible Conti
   assert.doesNotMatch(render({ ...props, turnIncomplete: false }), />Continue</)
   assert.match(render({ ...props, pendingControl: 'continue' }), /Continuing/)
 })
+
+
+test('exec and run_script captions use their summary in every timeline mode while retaining runtime identity', () => {
+  for (const timelineView of ['detailed', 'grouped', 'conversation']) {
+    for (const [name, source] of [['exec', 'node'], ['run_script', 'builtin']]) {
+      const runtimeState = activeRuntimeState('running-tool', { tool: { name, source, argsPreview: 'Inspect <source> & tests', executionNode: 'compute', startedAt: 1 } })
+      const html = render({ timelineView, runtimeState })
+      assert.match(html, />Inspect &lt;source&gt; &amp; tests<\/span>/)
+      assert.match(html, /aria-label="Runtime details: (Executing exec|Running script) · compute"/)
+      assert.doesNotMatch(html, /data-fox-thinking-copy/)
+      const stopping = render({ timelineView, runtimeState, pendingControl: 'stop' })
+      assert.doesNotMatch(stopping, /Inspect &lt;source&gt;/)
+    }
+  }
+  for (const tool of [
+    { name: 'read', source: 'node', argsPreview: 'Do not use as a caption' },
+    { name: 'exec', source: 'mcp', argsPreview: 'Do not use as a caption' },
+    { name: 'exec', source: 'node', argsPreview: '   ' },
+  ]) {
+    assert.doesNotMatch(render({ runtimeState: activeRuntimeState('running-tool', { tool: { ...tool, startedAt: 1 } }) }), /Do not use as a caption|title="   "/)
+  }
+})
+
+test('only an ordinary Conversation request uses the current stream reasoning title', () => {
+  const streamingAssistantDraft = { streamId: 'current', reasoning: '**First**\nBody.\n**Latest**\nMore body.', text: '', toolCalls: [] }
+  const runtimeState = activeRuntimeState('requesting-model', { active: { phase: 'normal-turn', streamId: 'current' } })
+  const props = { timelineView: 'conversation', runtimeState, streamingAssistantDraft }
+  const html = render(props)
+  assert.match(html, />Latest<\/span>/)
+  assert.match(html, /aria-label="Requesting model…"/)
+  assert.doesNotMatch(html, /data-fox-thinking-copy|First/)
+  for (const override of [
+    { timelineView: 'detailed' },
+    { timelineView: 'grouped' },
+    { streamingAssistantDraft: null },
+    { streamingAssistantDraft: { ...streamingAssistantDraft, streamId: 'previous' } },
+    { pendingControl: 'stop' },
+    { runtimeState: { ...runtimeState, retry: { attempt: 1, maxAttempts: 3 } } },
+    { runtimeState: { ...runtimeState, active: { phase: 'compaction' } } },
+    { runtimeState: activeRuntimeState('waiting') },
+    { runtimeState: activeRuntimeState('idle') },
+  ]) assert.doesNotMatch(render({ ...props, ...override }), />Latest<\/span>/)
+  assert.match(render({ ...props, timelineView: 'grouped' }), /data-fox-thinking-copy/)
+  const tool = render({ ...props, runtimeState: activeRuntimeState('running-tool', { tool: { name: 'exec', source: 'node', argsPreview: 'Run checks', startedAt: 1 } }) })
+  assert.match(tool, />Run checks<\/span>/)
+  assert.doesNotMatch(tool, /Latest/)
+})

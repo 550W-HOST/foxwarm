@@ -4,7 +4,7 @@ import { build } from 'esbuild'
 
 const sourcePath = new URL('../src/streamingAssistantDraft.ts', import.meta.url).pathname
 const bundle = await build({ entryPoints: [sourcePath], bundle: true, platform: 'node', format: 'esm', write: false, logLevel: 'silent' })
-const { applyModelStreamEvent, applyModelStreamSnapshot, buildStreamingAssistantMessage, parseStreamingToolArguments, reconcileCommittedModelDraft, shouldClearDraftAfterHistory, shouldClearDraftForCommittedModel } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`)
+const { getStreamingReasoningTitle, applyModelStreamEvent, applyModelStreamSnapshot, buildStreamingAssistantMessage, parseStreamingToolArguments, reconcileCommittedModelDraft, shouldClearDraftAfterHistory, shouldClearDraftForCommittedModel } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`)
 
 test('synthetic assistant messages retain the canonical request identity for render reconciliation', () => {
   const message = buildStreamingAssistantMessage({
@@ -309,4 +309,39 @@ test('ordered empty reasoning items survive without inventing a loading-only rea
   ]})
   assert.deepEqual(message.parts,[{thinking:''},{thinking:''},{text:'Final answer'}])
   assert.equal(message.__meta.usage,undefined)
+})
+
+
+test('live reasoning caption follows complete headings and retires when later output begins', () => {
+  let draft = applyModelStreamSnapshot({ streamId: 'headings', iteration: 1, sequence: 1, startedAt: 100,
+    reasoning: '', text: '', toolCalls: [], parts: [
+      { outputIndex: 0, kind: 'reasoning', summaryIndex: 0, text: '  **First heading**\nBody.' },
+    ],
+  })
+  assert.equal(getStreamingReasoningTitle(draft), 'First heading')
+  const nextSummary = '**Next heading'
+  draft = applyModelStreamEvent(draft, { type: 'model-stream-update', streamVersion: 2, streamId: 'headings', sequence: 2,
+    partDeltas: [{ outputIndex: 0, kind: 'reasoning', summaryIndex: 1, textDelta: { offset: 0, text: nextSummary } }],
+  })
+  assert.equal(getStreamingReasoningTitle(draft), 'First heading')
+  draft = applyModelStreamEvent(draft, { type: 'model-stream-update', streamVersion: 2, streamId: 'headings', sequence: 3,
+    partDeltas: [{ outputIndex: 0, kind: 'reasoning', summaryIndex: 1, textDelta: { offset: nextSummary.length, text: '**\nBody.' } }],
+  })
+  assert.equal(getStreamingReasoningTitle(draft), 'Next heading')
+  for (const kind of ['text', 'tool-call', 'image-generation']) {
+    assert.equal(getStreamingReasoningTitle({ ...draft, parts: [...draft.parts, { outputIndex: 1, kind }] }), undefined)
+  }
+  assert.equal(getStreamingReasoningTitle({ ...draft, parts: [...draft.parts, { outputIndex: 1, kind: 'reasoning', text: '' }] }), undefined)
+  assert.equal(getStreamingReasoningTitle(applyModelStreamSnapshot(null)), undefined)
+  assert.equal(getStreamingReasoningTitle(applyModelStreamEvent(draft, { type: 'model-stream-reset', streamId: 'new' })), undefined)
+})
+
+test('reasoning caption shares the card first-line rule and accepts legacy reasoning-only streams', () => {
+  const draft = { streamId: 'legacy', reasoning: '**Title**\nBody.\n**Last title**\nBody.', text: '', toolCalls: [] }
+  assert.equal(getStreamingReasoningTitle(draft), 'Last title')
+  for (const reasoning of ['Plain reasoning', 'Plain first line\n**Later bold line**', '**Incomplete', '**Title** trailing prose']) {
+    assert.equal(getStreamingReasoningTitle({ ...draft, reasoning }), undefined)
+  }
+  assert.equal(getStreamingReasoningTitle({ ...draft, text: 'Answer' }), undefined)
+  assert.equal(getStreamingReasoningTitle({ ...draft, toolCalls: [{ index: 0, name: 'exec' }] }), undefined)
 })

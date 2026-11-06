@@ -183,7 +183,7 @@ test('exec shows real identity, special ink and details without decorative capti
     assert.equal(await page.$('[data-fox-thinking-copy]'),null)
     const ink=await page.$eval('[data-runtime-caption]', el=>getComputedStyle(el).color)
     assert.notEqual(ink,thinking)
-    assert.match(await page.$eval('[data-runtime-caption]', el=>el.textContent),/Executing exec.*fixture-node/)
+    assert.match(await page.$eval('[data-runtime-caption]', el=>el.textContent),/echo WORK/)
     assert.equal(await page.$eval('[data-runtime-fox="tool"]',el=>getComputedStyle(el).stroke),ink)
     assert.equal(await page.evaluate(()=>window.thinkingTimers.size),0)
     await page.click('[data-runtime-caption]');await page.waitForSelector('[data-runtime-details]')

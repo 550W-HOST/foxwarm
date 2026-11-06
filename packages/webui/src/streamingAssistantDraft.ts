@@ -1,4 +1,5 @@
 import type { Message, ModelStreamPart, ModelStreamToolCall, SessionStreamEvent } from './components/chatShared'
+import { extractOpenAIReasoningSummaryTitles } from './reasoningSummary'
 
 export type StreamingAssistantDraft = {
   streamId: string
@@ -12,6 +13,22 @@ export type StreamingAssistantDraft = {
   startedAt?: number
   llmRequestId?: string
   incompletePrefix?: boolean
+}
+
+/** Only the live reasoning tail supplies a caption; later output retires its title. */
+export function getStreamingReasoningTitle(draft: StreamingAssistantDraft | null | undefined): string | undefined {
+  if (!draft) return undefined
+  let reasoning: string
+  if (draft.parts) {
+    const tail = draft.parts.at(-1)
+    if (tail?.kind !== 'reasoning') return undefined
+    reasoning = draft.parts.filter(part => part.kind === 'reasoning' && part.outputIndex === tail.outputIndex)
+      .map(part => part.text || '').filter(Boolean).join('\n')
+  } else {
+    if (draft.text || draft.toolCalls.length) return undefined
+    reasoning = draft.reasoning
+  }
+  return extractOpenAIReasoningSummaryTitles(reasoning).at(-1)
 }
 
 export function buildStreamingAssistantMessage(draft: StreamingAssistantDraft | null): Message | null {

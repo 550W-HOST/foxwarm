@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import RuntimeFox from './RuntimeFox'
 import FoxThinkingText from './FoxThinkingText'
 import type { TimelineView } from '../chatPreferences'
+import { getStreamingReasoningTitle, type StreamingAssistantDraft } from '../streamingAssistantDraft'
 import { isRuntimeStateInactiveName, type SessionRuntimeState } from '../sessionRuntimeState'
 import { getRuntimeStatusView, type RuntimeStatusView } from '../runtimeStatus'
 
@@ -16,6 +17,7 @@ interface ProcessingStatusProps {
   loading: boolean
   isMobile: boolean
   timelineView?: TimelineView
+  streamingAssistantDraft?: StreamingAssistantDraft | null
   pendingControl?: SessionControlAction | null
   controlFeedback?: SessionControlFeedback | null
   failure?: { title: string; details?: string } | null
@@ -27,7 +29,7 @@ const controlButtonClass = 'inline-flex shrink-0 items-center rounded-md px-2 te
 const toneClasses = { accent: 'text-fw-accent', special: 'text-fw-special', warning: 'text-fw-warning', danger: 'text-fw-danger', muted: 'text-fw-text-muted' }
 const useBrowserLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect
 
-const ProcessingStatus = memo(function ProcessingStatus({ sessionBusy, runtimeState, sessionQueueLength, turnIncomplete, loading, isMobile, pendingControl, controlFeedback, failure, onContinue, onCancelCompaction }: ProcessingStatusProps) {
+const ProcessingStatus = memo(function ProcessingStatus({ sessionBusy, runtimeState, sessionQueueLength, turnIncomplete, loading, isMobile, timelineView, streamingAssistantDraft, pendingControl, controlFeedback, failure, onContinue, onCancelCompaction }: ProcessingStatusProps) {
   const [now, setNow] = useState(Date.now)
   const [open, setOpen] = useState(false)
   const [position, setPosition] = useState<{ left: number; bottom?: number; top?: number; width: number; maxHeight: number } | null>(null)
@@ -86,9 +88,17 @@ const ProcessingStatus = memo(function ProcessingStatus({ sessionBusy, runtimeSt
 
   useEffect(() => { if (open && position) panel.current?.focus({ preventScroll: true }) }, [open, position !== null])
 
+  const tool = runtimeState?.tool
+  const toolName = tool?.name.split(/[.:/]/).at(-1)
+  const toolSummary = view?.kind === 'tool' && tool?.source !== 'mcp' && (toolName === 'exec' || toolName === 'run_script')
+    ? tool?.argsPreview?.trim() : undefined
+  const reasoningTitle = view?.playful && timelineView === 'conversation'
+    && (!runtimeState?.active?.streamId || runtimeState.active.streamId === streamingAssistantDraft?.streamId)
+    ? getStreamingReasoningTitle(streamingAssistantDraft) : undefined
+  const liveCaption = toolSummary || reasoningTitle
   const caption = view && <>
     <RuntimeFox kind={view.kind} />
-    {view.playful ? <FoxThinkingText label={view.label} title={view.label} /> : <span className="min-w-0 truncate" title={view.label}>{view.label}</span>}
+    {liveCaption ? <span className="min-w-0 truncate" title={liveCaption}>{liveCaption}</span> : view.playful ? <FoxThinkingText label={view.label} title={view.label} /> : <span className="min-w-0 truncate" title={view.label}>{view.label}</span>}
   </>
   return <div data-processing-status-slot className={sessionQueueLength > 0 ? 'flex min-h-14 items-end pt-4' : 'flex min-h-14 items-end'}>
     {(view || controlFeedback && controlFeedback.status !== 'accepted') && <div className={`flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 ${isMobile ? 'w-full' : 'w-full max-w-[80%]'}`}>
