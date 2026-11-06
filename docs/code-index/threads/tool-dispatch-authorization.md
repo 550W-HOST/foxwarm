@@ -48,6 +48,12 @@ Policy unavailability is fatal only to the current turn, not the Session or proc
 
 [2026-09-19] The same version-1 ordered policy now also accepts `match.externalId` for authenticated inbound identities. An identity-neutral rule may match external requests in its existing first-match position. An external request with no matching rule is denied even when the policy's configured internal default is `allow`, including when the policy file is absent. Internal Session matches, cache, atomic installation, and policy-unavailable behavior are unchanged. External principal identity is minted by Bearer verification; it never supplies a fabricated Agent. An inbound transport now owns a real, ephemeral external execution context; its ID can later supply a `session` fact at a concrete execution boundary. External requests without a concrete Node have no `targetNode` fact and cannot match a master-only allow. Agent-derived path and same-Agent/Session-relation facts cannot be inferred for an external source. The inbound catalog exposes only compatible first-party CLI Node tools with live scoped exec results; internal Session handlers remain separate, as specified by [D-dispatch-mcp-inbound-bridge](./tool-dispatch-mcp.md#d-dispatch-mcp-inbound-bridge).
 
+### D-dispatch-authorization-explanation
+
+**Directly requested diagnostic, with user-selected caller authority and scope.** It serves safe policy updates under [generic authorization](#d-dispatch-generic-tool-authorization) without a second evaluator that could drift from enforcement.
+
+[2026-11-06] `explain_tool_authorization` evaluates probes through the same assessment that enforcement uses and reports each layer, isolation and facts without executing the call. The user chose: tool-rules governs the builtin and the caller must also be able to read the active policy file (and any candidate), so an explanation reveals nothing beyond a direct read; only real Sessions are callers; candidate comparison includes a static rule ID diff. The builtin is hidden from default injection. Contract and output shape: [tool authorization unit](../units/tool-authorization.md#authorization-explanation).
+
 ### D-dispatch-resolved-target
 
 **Derived enforcement design; adopted to give all invocation forms the same [authorization subject](#d-dispatch-generic-tool-authorization).** Resolve the concrete operation once so wrappers, placement selectors and same-name external tools cannot substitute identities. Field-specific normalization follows real callers rather than a new universal argument convention.

@@ -1006,6 +1006,13 @@ internal sealed partial class SessionToolExecutor(
                 args,
                 token
             );
+        handlers["explain_tool_authorization"] = (owner, args, token) =>
+            owner.Manager.ExplainToolAuthorizationAsync(
+                owner.Hosted,
+                owner.Files ?? throw new NotSupportedException("This executor has no file reader."),
+                args,
+                token
+            );
         handlers["node"] = (owner, args, token) =>
             owner.Manager.ExecuteNodeToolAsync(owner.Hosted, args, token, owner.Programmatic);
         handlers["node_create_auth_token"] = (owner, args, token) =>
@@ -1076,6 +1083,7 @@ internal sealed partial class SessionToolExecutor(
                         or "list_mcp_servers"
                         or "delete_session"
                         or "set_config"
+                        or "explain_tool_authorization"
                         or "move_session"
                         or "create_timer"
                         or "list_timers"

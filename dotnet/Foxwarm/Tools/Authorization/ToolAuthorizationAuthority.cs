@@ -29,6 +29,7 @@ internal sealed class ToolAuthorizationAuthority(
     private long loadedAt;
     private long Now => clock?.Invoke() ?? Environment.TickCount64;
     internal Action<string>? InstallBoundary { get; set; }
+    internal string PolicyPath => path;
 
     private ToolAuthorizationPolicy? Hit()
     {

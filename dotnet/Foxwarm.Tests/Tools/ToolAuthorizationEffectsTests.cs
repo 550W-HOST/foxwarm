@@ -86,6 +86,7 @@ public sealed partial class ToolAuthorizationEffectsTests
         foreach (var definition in UnifiedToolDefinitions.All())
             definitions.Add(definition?.DeepClone());
         definitions.Add(ToolAuthorizationToolDefinition.Definition());
+        definitions.Add(ToolAuthorizationToolDefinition.ExplainDefinition());
         foreach (var definition in LocalExecManager.Definitions())
             definitions.Add(definition?.DeepClone());
         definitions.Add(ArchiveRecallTool.Definition());
