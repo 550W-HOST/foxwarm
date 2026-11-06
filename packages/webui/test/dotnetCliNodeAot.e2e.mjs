@@ -19,7 +19,7 @@ const powershell = windows ? join(process.env.SystemRoot, 'System32/WindowsPower
 const executable = process.env.FOXWARM_CLI_EXECUTABLE
 assert(executable, 'Set FOXWARM_CLI_EXECUTABLE to the native executable')
 assert(process.env.FOXWARM_TEST_TLS_CERT && process.env.FOXWARM_TEST_TLS_KEY, 'Supply an owned trusted localhost TLS certificate and key')
-const clients = [], sockets = new Set(), frames = []
+const clients = [], sockets = new Set(), frames = [], terminals = []
 const http = createServer({ cert: await readFile(process.env.FOXWARM_TEST_TLS_CERT), key: await readFile(process.env.FOXWARM_TEST_TLS_KEY) }), peer = new WebSocketServer({ server: http })
 let current, generation = 0, sequence = 0, acknowledge = false
 http.listen(0, '127.0.0.1'); await once(http, 'listening')
@@ -112,6 +112,27 @@ async function stop(client) {
   try { await Promise.race([exited, new Promise((_, reject) => { timer = setTimeout(() => { client.child.kill('SIGKILL'); reject(new Error('Native shutdown did not drain')) }, 6000) })]) }
   finally { clearTimeout(timer) }
 }
+async function waitForWindowsProcessExit(pid, label) {
+  if (!windows) return
+  assert(Number.isSafeInteger(pid) && pid > 0, 'fixture process identity: ' + label)
+  // A published status/ACK is not a Windows process-exit receipt. Open the
+  // actual fixture process and wait for its handle before deleting its cwd.
+  execFileSync(powershell, ['-NoProfile', '-Command', `
+    $ErrorActionPreference = 'Stop'
+    $process = Get-Process -Id ${pid} -ErrorAction SilentlyContinue
+    if ($process) {
+      try {
+        if (-not $process.WaitForExit(5000)) {
+          $process.Kill()
+          $process.WaitForExit()
+          throw 'Owned ${label} process ${pid} did not exit after completion'
+        }
+      } finally { $process.Dispose() }
+    }
+    exit 0
+  `], { encoding: 'utf8', timeout: 8000 })
+}
+
 async function rejectedTlsControls() {
   if (windows || darwin) {
     assert(process.env.FOXWARM_TEST_UNTRUSTED_CERT && process.env.FOXWARM_TEST_UNTRUSTED_KEY)
@@ -206,6 +227,7 @@ async function optionalServices(client) {
   }
   if (ptyExpected) {
     const terminal = (await service(client, 'vscode-pty', 'create', { cwd: project, cols: 91, rows: 37 })).terminal
+    const ownedTerminal = { client, terminal, closed: false }; terminals.push(ownedTerminal)
     await service(client, 'vscode-pty', 'attach', { terminalId: terminal.id })
     client.socket.send(JSON.stringify({ type: 'node_service_command', service: 'vscode-pty', operation: 'input', args: { terminalId: terminal.id, data: windows ? '[Console]::OutputEncoding = [Text.UTF8Encoding]::new(); Write-Output ("{0} {1}" -f $Host.UI.RawUI.WindowSize.Height,$Host.UI.RawUI.WindowSize.Width); Write-Output "NATIVE-PTY-é🙂"; code --add .; Write-Output "CODE-RESULT=$LASTEXITCODE"\r' : "stty size; printf 'NATIVE-PTY-é🙂\\n'; code --add .; printf 'CODE-RESULT=%s\\n' \"$?\"\n" } }))
     const request = await until(() => frames.find(row => row.socket === client.socket && row.value.type === 'node_service_event' && row.value.event.type === 'code-request')?.value.event, 'same-executable Code helper')
@@ -215,6 +237,8 @@ async function optionalServices(client) {
     await until(() => /CODE-RESULT=0(?:\r?\n)/.test(output()), 'PTY helper completion')
     assert(output().includes('37 91')); assert(output().includes('NATIVE-PTY-é🙂'))
     await service(client, 'vscode-pty', 'close', { terminalId: terminal.id })
+    ownedTerminal.closed = true
+    await waitForWindowsProcessExit(terminal.pid, 'PTY')
     evidence.ptyShellDimensionsUnicodeAndCodeHelper = true
   }
   if (process.env.PUPPETEER_EXECUTABLE_PATH) {
@@ -263,13 +287,13 @@ try {
   assert(!written.error, JSON.stringify(written))
   const read = await tool(client, 'read', { filePath: 'ordinary.txt' }, { programmatic: true })
   assert.equal(read.content, 'native file\né🙂')
-  const foreground = await tool(client, 'exec', { command: windows ? 'Write-Output "$env:EXECTEST_INHERITED|$env:fw_agentdir|$env:fw_tmp"; Write-Output "  é🙂"; [IO.File]::AppendAllText((Join-Path $PWD "foreground-effect"), "x"); Set-Location next; exit 7' : 'printf "%s|%s|%s\\n" "$EXECTEST_INHERITED" "$fw_agentdir" "$fw_tmp"; printf "  é🙂\\n"; printf x >> foreground-effect; cd next; exit 7', timeout: windows ? 10 : 2 }, { sessionCwd: project, programmatic: true, backgroundExecId: 'native-foreground', completionCapability: 'synthetic-foreground-grant' })
+  const foreground = await tool(client, 'exec', { command: windows ? '[IO.File]::WriteAllText((Join-Path $PWD "foreground.pid"), [string]$PID); Write-Output "$env:EXECTEST_INHERITED|$env:fw_agentdir|$env:fw_tmp"; Write-Output "  é🙂"; [IO.File]::AppendAllText((Join-Path $PWD "foreground-effect"), "x"); Set-Location next; exit 7' : 'printf "%s|%s|%s\\n" "$EXECTEST_INHERITED" "$fw_agentdir" "$fw_tmp"; printf "  é🙂\\n"; printf x >> foreground-effect; cd next; exit 7', timeout: windows ? 10 : 2 }, { sessionCwd: project, programmatic: true, backgroundExecId: 'native-foreground', completionCapability: 'synthetic-foreground-grant' })
   assert.equal(foreground.status, 'completed'); assert.equal(foreground.exitCode, 7)
   assert.equal(foreground.content.replaceAll('\r\n', '\n'), `native-inherited|${agent}|${join(agent, 'tmp')}\n  é🙂\n`)
   assert.equal(await readFile(join(project, 'foreground-effect'), 'utf8'), 'x')
   assert.equal((await readFile(foreground.logPath + '.cwd.txt', 'utf8')).trim(), join(project, 'next'))
   assert.equal(JSON.parse(await readFile(foreground.logPath + '.exit.json', 'utf8')).exitCode, 7)
-  const background = await tool(client, 'exec', { command: windows ? '[IO.File]::AppendAllText((Join-Path $PWD "background-effect"), "x"); Write-Output "started native"; while (-not (Test-Path release)) { Start-Sleep -Milliseconds 50 }; Write-Output "finished native"' : 'printf x >> background-effect; printf "started native\\n"; while [ ! -f release ]; do sleep .05; done; printf "finished native\\n"', timeout: 1 }, { sessionCwd: project, programmatic: true, backgroundExecId: 'native-background', completionCapability: 'synthetic-original-grant' })
+  const background = await tool(client, 'exec', { command: windows ? '[IO.File]::WriteAllText((Join-Path $PWD "background.pid"), [string]$PID); [IO.File]::AppendAllText((Join-Path $PWD "background-effect"), "x"); Write-Output "started native"; while (-not (Test-Path release)) { Start-Sleep -Milliseconds 50 }; Write-Output "finished native"' : 'printf x >> background-effect; printf "started native\\n"; while [ ! -f release ]; do sleep .05; done; printf "finished native\\n"', timeout: 1 }, { sessionCwd: project, programmatic: true, backgroundExecId: 'native-background', completionCapability: 'synthetic-original-grant' })
   assert.equal(background.status, 'running'); assert.equal(background.execId, 'native-background')
   const original = JSON.parse(await readFile(registry, 'utf8')).execs.find(entry => entry.id === 'native-background'); assert(original)
   assert.equal(original.completionCapability, 'synthetic-original-grant')
@@ -302,10 +326,27 @@ try {
   assert.equal(await readFile(join(project, 'background-effect'), 'utf8'), 'x')
   console.log(JSON.stringify({ ...evidence, actualExecutable: executable, format: windows ? 'PE' : darwin ? 'Mach-O' : 'ELF', trustedTlsRegistration: true, os: { platform: platform(), release: release(), arch: arch() }, distro: windows || darwin ? null : await readFile('/etc/os-release', 'utf8').catch(error => { if (error.code === 'ENOENT') return 'not exposed by this execution environment'; throw error }), shutdown: windows ? 'forced process interruption; detached command survives' : 'SIGTERM drained', linkage: windows || darwin ? 'native platform image; module snapshots recorded' : staticExpected ? 'static-musl: ELF and library-open trace checked separately' : execFileSync('ldd', ['--version'], { encoding: 'utf8' }).split('\n')[0], noCoreClrLoaded: true, firstPid, secondPid: client.child.pid, foreground: { status: foreground.status, exitCode: foreground.exitCode, content: foreground.content }, ordinaryFileRead: read.content, backgroundOriginal: original, backgroundCompletion: event, wrapperNativePathsAndStatusHelpers: true, helperAfterParentExit: true, effectsExactlyOnce: true, ackRemovedRecoveredTracking: true }, null, 2))
   await stop(client)
+} catch (error) {
+  // Report the original assertion even if subsequent teardown also finds a leak.
+  console.error('Native qualification failed before cleanup:', error)
+  throw error
 } finally {
   await writeFile(join(project, 'release'), 'finish')
+  for (const owned of terminals) {
+    if (!owned.closed && owned.client.socket.readyState === 1) {
+      await service(owned.client, 'vscode-pty', 'close', { terminalId: owned.terminal.id })
+      owned.closed = true
+    }
+  }
   for (const client of clients) await stop(client)
   for (const socket of sockets) socket.terminate()
   await new Promise(done => peer.close(done)); await new Promise(done => http.close(done))
+  if (windows) {
+    for (const name of ['foreground', 'background']) {
+      const path = join(project, name + '.pid')
+      if (await exists(path)) await waitForWindowsProcessExit(Number(await readFile(path, 'utf8')), name)
+    }
+    for (const owned of terminals) await waitForWindowsProcessExit(owned.terminal.pid, 'PTY')
+  }
   await rm(root, { recursive: true, force: true })
 }
