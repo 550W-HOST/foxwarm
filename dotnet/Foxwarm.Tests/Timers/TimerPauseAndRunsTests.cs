@@ -255,10 +255,17 @@ public sealed class TimerPauseAndRunsTests
         Assert.Equal("failed", SessionWait.Text(fullRuns[0]!["outcome"]));
         Assert.Equal("target unavailable", SessionWait.Text(fullRuns[0]!["error"]));
         Assert.True(SessionWait.Number(fullRuns[0]!["at"]) > 1000);
-        // The oldest entry dropped off the end.
+        // New failures come first; the oldest seeded entries dropped off the end. A slow
+        // poll can observe more than one new failure, so count them rather than assume one.
+        var added = fullRuns.TakeWhile(run => SessionWait.Number(run!["at"]) > 1000).Count();
+        Assert.InRange(added, 1, MainTimers.RecentRunLimit - 1);
+        Assert.All(
+            fullRuns.Take(added),
+            run => Assert.Equal("failed", SessionWait.Text(run!["outcome"]))
+        );
         Assert.Equal(
-            1000 - (MainTimers.RecentRunLimit - 2),
-            SessionWait.Number(fullRuns[^1]!["at"])
+            Enumerable.Range(0, MainTimers.RecentRunLimit - added).Select(index => 1000.0 - index),
+            fullRuns.Skip(added).Select(run => SessionWait.Number(run!["at"])!.Value)
         );
         // A failed message delivery records its result but not a trigger time.
         Assert.Null(rows["full"]["lastTriggeredAt"]);
