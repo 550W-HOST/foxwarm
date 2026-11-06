@@ -87,8 +87,10 @@ async function assertNoSnapshotRow(label, continuous = false) {
 async function assertSnapshotRow(expected) {
   await page.waitForFunction(() => document.body.innerText.includes('Retained row 104'))
   await page.waitForSelector(snapshotCard)
-  const expand = snapshotCard + ' [aria-label="Expand snapshot message"]'
-  if (await page.$(expand)) await page.click(expand)
+  // This checks saved content, not pointer geometry. Viewport restoration can move
+  // the top card between Puppeteer's scroll/coordinate lookup and mouse dispatch.
+  // Resolve and activate the disclosure in one browser turn so the click reaches it.
+  await page.$eval(snapshotCard, card => card.querySelector('[aria-label="Expand snapshot message"]')?.click())
   await page.waitForSelector(snapshotCard + ' .foxwarm-system-message-body')
   const body = await page.$eval(snapshotCard + ' .foxwarm-system-message-body', element => element.textContent)
   for (const line of expected.trim().split(/\r?\n/)) assert(body.includes(line), 'snapshot row retains saved prompt content')
