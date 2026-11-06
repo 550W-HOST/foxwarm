@@ -51,7 +51,8 @@ options.env = { HOME: join(owned.root, 'home') }
 await mkdir(options.env.HOME)
 const git = (...args) => execFileSync('git', ['-C', owned.work, ...args], { encoding: 'utf8' }).trim()
 git('init', '-q'); git('config', 'user.name', 'Code Fixture'); git('config', 'user.email', 'code@example.invalid')
-await writeFile(join(owned.work, 'old.txt'), 'first\nselected second\nselected third\nlast\n')
+const committedNotes = 'first\nselected second\nselected third\nlast\n'
+await writeFile(join(owned.work, 'old.txt'), committedNotes)
 git('add', 'old.txt'); git('commit', '-qm', 'root fixture')
 const rootCommit = git('rev-parse', 'HEAD')
 git('mv', 'old.txt', 'notes.txt'); await writeFile(join(owned.work, 'binary.bin'), Buffer.from([0, 17, 255])); git('add', '.'); git('commit', '-qm', 'rename and binary fixture')
@@ -160,9 +161,24 @@ try {
   await page.evaluate(() => window.foxwarmTest.switchToSession('main')); await page.waitForSelector('button[title="Open commit details in Code"]'); await page.click('button[title="Open commit details in Code"]')
   const detailsFrame = await until(() => frameText(page, /rename and binary fixture[\s\S]*Changed files/), 'real SCM commit webview', 45000)
   assert((await detailsFrame.evaluate(() => document.body.innerText)).includes(owned.work)); assert((await detailsFrame.evaluate(() => document.body.innerText)).includes('binary'))
-  const diffButton = await detailsFrame.$('button.file:not([disabled])'); assert(diffButton); await diffButton.click()
-  code = await codeFrame(page); await code.waitForSelector('.monaco-diff-editor', { timeout: 30000 })
-  assert(codeResponses.some(row => row.url.includes('/api/vscode-web/git/content') && row.url.includes('ref=')))
+  const diffButton = await detailsFrame.$('button.file:not([disabled])'); assert(diffButton)
+  // The editor shell mounts before its asynchronous immutable content has loaded.
+  const diffDeadline = Date.now() + 30000
+  const [gitContent] = await Promise.all([
+    page.waitForResponse(response => {
+      const url = new URL(response.url())
+      return url.pathname.endsWith('/api/vscode-web/git/content') && url.searchParams.get('nodeId') === 'master'
+        && url.searchParams.get('workspace') === owned.work && url.searchParams.get('path') === 'notes.txt'
+        && url.searchParams.get('side') === 'base' && url.searchParams.get('ref') === commit
+    }, { timeout: 30000 }),
+    (async () => {
+      await diffButton.click(); code = await codeFrame(page)
+      await code.waitForSelector('.monaco-diff-editor', { timeout: Math.max(1, diffDeadline - Date.now()) })
+    })(),
+  ])
+  assert.equal(gitContent.status(), 200); assert.equal(await gitContent.text(), committedNotes)
+  await code.waitForFunction(() => [...document.querySelectorAll('.monaco-diff-editor .modified .view-lines')].some(node => node.textContent.replaceAll('\u00a0', ' ').includes('selected second')), { timeout: Math.max(1, diffDeadline - Date.now()) })
+  assert.doesNotMatch(await code.$$eval('.monaco-diff-editor .modified .view-lines', nodes => nodes.map(node => node.textContent).join('')), /Code saved line/)
   await page.evaluate(() => window.foxwarmTest.switchToSession('main'))
   await page.waitForSelector('code[title="' + rootCommit + '"]')
   await page.evaluate(id => document.querySelector('code[title="' + id + '"]').parentElement.parentElement.querySelector('button').click(), rootCommit)
