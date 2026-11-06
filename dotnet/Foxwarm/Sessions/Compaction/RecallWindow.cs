@@ -23,6 +23,7 @@ internal sealed class RecallWindowStore
     internal RecallWindow Add(
         string fingerprint,
         IReadOnlyList<JsonObject> candidates,
+        JsonArray sources,
         int totalRanked
     )
     {
@@ -47,14 +48,22 @@ internal sealed class RecallWindowStore
         };
         var locators = candidates
             .Take(SourceLimit)
-            .Select(hit =>
-            {
-                var locator = new JsonObject();
-                foreach (var field in fields)
-                    if (hit.TryGetPropertyValue(field, out var value))
-                        locator[field] = value?.DeepClone();
-                return locator;
-            })
+            .Select(
+                (hit, index) =>
+                {
+                    if (SessionWait.Text(sources[index]?["kind"]) == "unavailable")
+                        return new JsonObject
+                        {
+                            ["session_id"] = hit["session_id"]?.DeepClone(),
+                            ["compatibility"] = sources[index]!.DeepClone(),
+                        };
+                    var locator = new JsonObject();
+                    foreach (var field in fields)
+                        if (hit.TryGetPropertyValue(field, out var value))
+                            locator[field] = value?.DeepClone();
+                    return locator;
+                }
+            )
             .ToArray();
         var window = new RecallWindow(
             Guid.NewGuid().ToString("N"),

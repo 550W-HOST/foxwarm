@@ -53,8 +53,9 @@ internal sealed partial class VectorRuntime : IAsyncDisposable
         catch { }
     }
 
-    internal async Task StartAsync()
+    internal async Task StartAsync(CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         await table.OpenAsync(databaseRoot);
         await table.RepairSourceTimesAsync(
             (session, blockId) =>
@@ -66,9 +67,12 @@ internal sealed partial class VectorRuntime : IAsyncDisposable
                 var hydrated = ArchiveContextReader.HydrateBlock(archive, block);
                 return (hydrated.RawStartTimestamp, hydrated.RawEndTimestamp);
             },
-            session => Warn("VECTOR_SOURCE_TIME_UNAVAILABLE", session)
+            session => Warn("VECTOR_SOURCE_TIME_UNAVAILABLE", session),
+            cancellationToken
         );
+        cancellationToken.ThrowIfCancellationRequested();
         await Lexical.StartAsync();
+        cancellationToken.ThrowIfCancellationRequested();
         maintenance = new(
             config.MaintenanceEnabled,
             clock,

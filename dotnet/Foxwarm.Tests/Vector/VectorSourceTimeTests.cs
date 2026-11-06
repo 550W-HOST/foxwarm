@@ -163,11 +163,22 @@ public sealed class VectorSourceTimeTests
             4,
             partial.Count(row => VectorRuntime.Number(row["start_timestamp"]) == 900000)
         );
+        var versions = Directory
+            .GetFiles(Path.Combine(f.Dense, "messages_v7.lance", "_versions"), "*.manifest")
+            .Length;
         using (var table = new VectorTable())
         {
             await table.OpenAsync(f.Dense);
             await table.RepairSourceTimesAsync((_, _) => (1000, 2000));
         }
+        // Two remaining locator updates plus the completion marker; the completed
+        // locator from the interrupted attempt is not rewritten.
+        Assert.Equal(
+            versions + 3,
+            Directory
+                .GetFiles(Path.Combine(f.Dense, "messages_v7.lance", "_versions"), "*.manifest")
+                .Length
+        );
         Assert.All(
             await ReadRows(f.Dense),
             row => Assert.Equal(1000, VectorRuntime.Number(row["start_timestamp"]))
@@ -318,5 +329,50 @@ public sealed class VectorSourceTimeTests
             lexical.Query("violet", new(SessionIds: [session], StartTime: 1500, EndTime: 2500), 5)
         );
         Assert.Empty(lexical.Query("violet", new(SessionIds: [session], StartTime: 800000), 5));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Already_correct_known_or_unknown_source_ranges_only_write_the_completion_marker(
+        bool unknown
+    )
+    {
+        await using var f = await VectorFixture.CreateAsync();
+        const string session = "main/current-ranges";
+        var block = f.Block(session) with
+        {
+            RawStartTimestamp = unknown ? null : 1000,
+            RawEndTimestamp = unknown ? null : 2000,
+        };
+        if (!unknown)
+            f.Archive(session).WriteBlocks([block]);
+        var rows = VectorRows.Facts(block);
+        foreach (var row in rows)
+            row["vector"] = new JsonArray(
+                VectorEmbeddingPeer
+                    .Embedding("violet")
+                    .Select(value => (JsonNode?)JsonValue.Create((double)value))
+                    .ToArray()
+            );
+        using var table = new VectorTable();
+        await table.OpenAsync(f.Dense);
+        await table.AddAsync(rows, merge: false);
+        var versions = Directory
+            .GetFiles(Path.Combine(f.Dense, "messages_v7.lance", "_versions"), "*.manifest")
+            .Length;
+        await table.RepairSourceTimesAsync(
+            (id, blockId) =>
+            {
+                var source = new ArchiveContextReader(f.Archive(id)).Block(blockId);
+                return (source?.RawStartTimestamp, source?.RawEndTimestamp);
+            }
+        );
+        Assert.Equal(
+            versions + 1,
+            Directory
+                .GetFiles(Path.Combine(f.Dense, "messages_v7.lance", "_versions"), "*.manifest")
+                .Length
+        );
     }
 }

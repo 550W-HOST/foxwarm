@@ -26,6 +26,7 @@ internal sealed class VectorService : IAsyncDisposable
     private long requestId;
     private volatile bool ready;
     private volatile bool stopping;
+    private readonly CancellationTokenSource shutdown = new();
     private int restartDelay = 250;
     private CancellationTokenSource? restart;
     private readonly VectorLexicalRuntime preinitLexical;
@@ -86,7 +87,7 @@ internal sealed class VectorService : IAsyncDisposable
                     Diagnostic = (code, session) => Diagnostic?.Invoke(code, session),
                 };
                 local = runtime;
-                await runtime.StartAsync();
+                await runtime.StartAsync(shutdown.Token);
                 ready = !stopping;
             }
         }
@@ -163,8 +164,9 @@ internal sealed class VectorService : IAsyncDisposable
         _ = ObserveExitAsync(process, transport);
         try
         {
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            await transport.WaitForConnectionAsync(timeout.Token);
+            using var connection = CancellationTokenSource.CreateLinkedTokenSource(shutdown.Token);
+            connection.CancelAfter(TimeSpan.FromSeconds(10));
+            await transport.WaitForConnectionAsync(connection.Token);
             _ = ReadResponsesAsync(process, transport);
             await ChildCallAsync(
                     "init",
@@ -177,7 +179,7 @@ internal sealed class VectorService : IAsyncDisposable
                         ),
                     }
                 )
-                .WaitAsync(timeout.Token);
+                .WaitAsync(shutdown.Token);
             lock (lifecycle)
             {
                 if (stopping || child != process)
@@ -571,6 +573,7 @@ internal sealed class VectorService : IAsyncDisposable
         {
             stopping = true;
             ready = false;
+            shutdown.Cancel();
             restart?.Cancel();
             pendingStart = starting;
         }

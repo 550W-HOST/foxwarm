@@ -359,6 +359,7 @@ internal static class ArchiveRecallTool
                         window = source.RecallWindows.Add(
                             fingerprint,
                             selected.Candidates!,
+                            selected.Sources,
                             selected.HitCount
                         );
                     }

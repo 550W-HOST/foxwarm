@@ -179,6 +179,16 @@ internal static class VectorRecall
                 continue;
             }
             var readId = bounded && resolvedSessionId is not null ? resolvedSessionId : sourceId;
+            if (strict && hit["compatibility"] is JsonObject compatibility)
+            {
+                // This source was already unavailable when the filtered window was made.
+                // Preserve that classification/excerpt, not a newly substituted source.
+                var excerpt = Text(compatibility["fallbackExcerpt"]);
+                items.Add(new("", excerpt, excerpt, null));
+                sources.Add(compatibility.DeepClone());
+                candidates.Add(hit);
+                continue;
+            }
             var archive = archiveReader(readId);
             var kind = Text(hit["kind"]);
             var blockId = SessionWait.Number(hit["block_id"]);
@@ -431,7 +441,14 @@ internal static class VectorRecall
         IReadOnlyList<string> notices = [];
         if (filterSources)
         {
-            var filtered = renderer.FilterItems(items);
+            // A cursor already selected these immutable sources with the bound filters.
+            // In particular, its bounded compatibility excerpt may omit the original match.
+            var filtered = strict
+                ? (
+                    Items: (IReadOnlyList<PreviewItem>)items,
+                    Notices: (IReadOnlyList<string>)Array.Empty<string>()
+                )
+                : renderer.FilterItems(items);
             notices = filtered.Notices;
             var selected = filtered.Items.Take(limit).ToHashSet(ReferenceEqualityComparer.Instance);
             for (var index = items.Count - 1; index >= 0; index--)

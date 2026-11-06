@@ -50,45 +50,64 @@ internal sealed class VectorTable : IDisposable
 
     internal async Task RepairSourceTimesAsync(
         Func<string, long, (double? Start, double? End)> sourceTimes,
-        Action<string>? missingSource = null
+        Action<string>? missingSource = null,
+        CancellationToken cancellationToken = default
     )
     {
         const string marker = "foxwarm.block-source-times";
+        cancellationToken.ThrowIfCancellationRequested();
         var field = (await table.Schema()).GetFieldByName("start_timestamp");
         if (field.Metadata?.GetValueOrDefault(marker) == "1")
             return;
         // Collect only unique locators before mutation; updating Lance fragments can change
         // scan order. No text, vectors, or candidate limits participate in this repair.
-        var locators = new HashSet<(string Session, long Block)>();
+        var locators =
+            new Dictionary<
+                (string Session, long Block),
+                (double? Start, double? End, bool Mixed)
+            >();
         for (var offset = 0; ; offset += 128)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var rows = await table
                 .Query()
                 .Where("memory_kind IN ('block','fact') AND block_id IS NOT NULL")
-                .Select(new[] { "session_id", "block_id" })
+                .Select(new[] { "session_id", "block_id", "start_timestamp", "end_timestamp" })
                 .Limit(128)
                 .Offset(offset)
                 .ToList();
             foreach (var row in rows)
             {
                 var locator = JsonSerializer.SerializeToNode(row)!;
-                locators.Add(
-                    (
-                        locator["session_id"]!.GetValue<string>(),
-                        checked((long)Sessions.SessionWait.Number(locator["block_id"])!.Value)
-                    )
+                var key = (
+                    locator["session_id"]!.GetValue<string>(),
+                    checked((long)Sessions.SessionWait.Number(locator["block_id"])!.Value)
                 );
+                var range = (
+                    Start: Sessions.SessionWait.Number(locator["start_timestamp"]),
+                    End: Sessions.SessionWait.Number(locator["end_timestamp"])
+                );
+                var mixed =
+                    locators.TryGetValue(key, out var existing)
+                    && (
+                        existing.Mixed || existing.Start != range.Start || existing.End != range.End
+                    );
+                locators[key] = (range.Start, range.End, mixed);
             }
             if (rows.Count < 128)
                 break;
         }
-        foreach (var (session, block) in locators)
+        foreach (var ((session, block), existing) in locators)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var range = sourceTimes(session, block);
             if (range.Start is null || range.End is null)
                 missingSource?.Invoke(session);
+            if (!existing.Mixed && existing.Start == range.Start && existing.End == range.End)
+                continue;
             string Sql(double? value) =>
                 value?.ToString("R", System.Globalization.CultureInfo.InvariantCulture) ?? "NULL";
+            cancellationToken.ThrowIfCancellationRequested();
             await table.Update(
                 new Dictionary<string, string>
                 {
@@ -98,6 +117,7 @@ internal sealed class VectorTable : IDisposable
                 $"memory_kind IN ('block','fact') AND session_id = '{VectorRuntime.Escape(session)}' AND block_id = {block}"
             );
         }
+        cancellationToken.ThrowIfCancellationRequested();
         var metadata = field.Metadata is null
             ? new Dictionary<string, string>()
             : new Dictionary<string, string>(field.Metadata);
