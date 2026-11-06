@@ -50,7 +50,8 @@ public sealed partial class SessionCreationParityTests
         Assert.Equal("low", SessionWait.Text(envelope["effort"]));
         Assert.Equal("local/future", SessionWait.Text(envelope["childModelDefault"]));
         Assert.Equal("high", SessionWait.Text(envelope["childEffortDefault"]));
-        Assert.Equal("caller-offline", f.Manager.CurrentNode(created));
+        // The caller's Node is not a placement fallback.
+        Assert.Equal("master", f.Manager.CurrentNode(created));
         Assert.Null(envelope["cwd"]);
         Assert.Empty(created.Entry.Snapshot().History);
         var source = await f.Manager.CreateNamedAsync(
@@ -84,12 +85,13 @@ public sealed partial class SessionCreationParityTests
         var disk = JsonNode.Parse(
             await File.ReadAllTextAsync(explicitOwner.AuthorityStore.AuthorityPath)
         )!;
-        // The tool supplies the caller's model/Node; the selected source supplies effort and future-child policy.
+        // The tool supplies the caller's model; the selected source supplies effort and future-child policy.
         Assert.Equal("local/wire", SessionWait.Text(disk["model"]));
         Assert.Equal("medium", SessionWait.Text(disk["effort"]));
         Assert.Equal("max", SessionWait.Text(disk["childEffortDefault"]));
         Assert.Null(disk["childModelDefault"]);
-        Assert.Equal("caller-offline", f.Manager.CurrentNode(explicitOwner));
+        // Neither the caller's nor the source's Node is a placement fallback.
+        Assert.Equal("master", f.Manager.CurrentNode(explicitOwner));
     }
 
     [Fact]
@@ -135,7 +137,8 @@ public sealed partial class SessionCreationParityTests
         Assert.Equal("local/wire", SessionWait.Text(envelope["model"]));
         Assert.Null(envelope["effort"]);
         Assert.Null(envelope["childEffortDefault"]);
-        Assert.Equal("caller-offline", f.Manager.CurrentNode(created));
+        // The caller's Node is not a placement fallback.
+        Assert.Equal("master", f.Manager.CurrentNode(created));
         await f.Manager.CreateAgentAsync("reserved-target");
         await f.Manager.DeleteAgentAsync("reserved-target");
         var reserved = await f.ToolAsync(

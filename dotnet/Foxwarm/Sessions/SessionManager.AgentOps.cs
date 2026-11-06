@@ -121,10 +121,7 @@ internal sealed partial class SessionManager
                         SessionWait.Text(source?["effort"])
                     ),
                     null,
-                    initialNode: initialNode
-                        ?? defaultNode
-                        ?? agents.InstallDefaultNode
-                        ?? (sourceSession is null ? null : CurrentNode(sourceSession)),
+                    initialNode: initialNode,
                     childDefaults: (
                         SessionWait.Text(source?["childModelDefault"]),
                         SessionWait.Text(source?["childEffortDefault"])
@@ -397,9 +394,9 @@ internal sealed partial class SessionManager
                     forceModel,
                     candidate,
                     targetAgent == parent.Agent ? AgentMemory.Selection(parentEnvelope) : null,
+                    // Only a same-Agent parent supplies its Node; the target's defaults follow.
                     initialNode: initialNode
-                        ?? agents.EffectiveDefaultNode(targetAgent)
-                        ?? CurrentNode(parent),
+                        ?? (targetAgent == parent.Agent ? CurrentNode(parent) : null),
                     runtime: runtime
                 );
                 try
@@ -675,19 +672,13 @@ internal sealed partial class SessionManager
             throw new InvalidDataException($"Session ID '{id}' is already reserved.");
         if (parentId is not null && Find(parentId) is null)
             throw new InvalidDataException("Parent Session does not exist.");
+        // User decision 2026-11-06: binding, explicit or same-Agent parent (supplied by the
+        // caller as initialNode; a timer's stored owner Node counts as one), Agent default,
+        // installation default, then master.
         var selectedNode =
             BoundNode(agentName)
-            ?? (
-                timerCreation
-                    ? agents.EffectiveDefaultNode(agentName) ?? timerNode
-                    : initialNode ?? agents.EffectiveDefaultNode(agentName)
-            );
-        if (selectedNode is null && agentName != "main")
-        {
-            var main = await GetExistingAsync(SessionIdentity.Build(agentName, "main"));
-            if (main is not null && CurrentNode(main) is { } mainNode && mainNode != "master")
-                selectedNode = mainNode;
-        }
+            ?? (timerCreation ? timerNode : initialNode)
+            ?? agents.EffectiveDefaultNode(agentName);
         return await WithCreationIdentityAsync(
             id,
             async () =>
