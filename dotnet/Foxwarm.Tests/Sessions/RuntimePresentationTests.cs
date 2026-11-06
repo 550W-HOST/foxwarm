@@ -9,6 +9,36 @@ namespace Foxwarm.Tests;
 public sealed partial class RuntimePresentationTests
 {
     [Fact]
+    public void Tool_call_snapshots_keep_concurrent_leases_and_never_enter_history()
+    {
+        var owner = Owner(new InMemorySessionAuthorityStore());
+        var first = owner.BeginTool(new JsonObject { ["id"] = "a", ["name"] = "exec" });
+        var second = owner.BeginTool(new JsonObject { ["id"] = "b", ["name"] = "exec" });
+        var snapshot = owner.ToolCallActivitySnapshot();
+        Assert.Equal(2, snapshot["sequence"]!.GetValue<long>());
+        Assert.Equal(
+            new[] { "a", "b" },
+            snapshot["runningCallIds"]!.AsArray().Select(id => id!.ToString())
+        );
+        owner.EndTool(second);
+        Assert.Equal(
+            "a",
+            Assert.Single(owner.ToolCallActivitySnapshot()["runningCallIds"]!.AsArray())!.ToString()
+        );
+        owner.EndTool(first);
+        Assert.Empty(owner.ToolCallActivitySnapshot()["runningCallIds"]!.AsArray());
+        Assert.Equal(4, owner.ToolCallActivitySnapshot()["sequence"]!.GetValue<long>());
+        Assert.Empty(owner.History());
+        Assert.Equal(2, snapshot["runningCallIds"]!.AsArray().Count);
+        Assert.NotEqual(
+            snapshot["activityId"]!.ToString(),
+            Owner(new InMemorySessionAuthorityStore()).ToolCallActivitySnapshot()[
+                "activityId"
+            ]!.ToString()
+        );
+    }
+
+    [Fact]
     public async Task Completed_foreground_retry_does_not_reappear_during_next_input_preparation()
     {
         using var temp = new TempDirectory();

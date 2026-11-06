@@ -2924,3 +2924,41 @@ test('continuous Chat includes a racing older page before publishing compacted m
     assert.deepEqual(await chatPage.evaluate(() => window.fixtureRequests.filter(url => url.includes('/context-blocks/')).map(url => Number(url.match(/context-blocks\/(\d+)/)[1]))), [20, 22, 21])
   } finally { await chatPage.close() }
 })
+
+test('real Chat routes per-call activity without refetching history or flashing all pending calls', async t => {
+  const page = await browser.newPage()
+  t.after(() => page.close())
+  await page.goto(fixtureUrl, { waitUntil: 'load' })
+  await page.waitForFunction(() => window.fixtureHistoryRequestCount === 1)
+  await page.evaluate(() => {
+    window.toolBatch = { role: 'model', parts: ['a', 'b', 'c'].map(id => ({ functionCall: { id, name: 'exec', args: { command: id } } })), __meta: { seq: 1, timestamp: 10 } }
+    window.resolveFixtureHistory(0, [window.toolBatch])
+    window.toolRuntime = (state = 'running-tool') => window.emitFixtureEvent({ type: 'session-state', session: {
+      id: 'fixture/main', busy: true, queueLength: 0, messageCount: 1, historyVersion: 0,
+      runtimeState: { state, busy: true, queueLength: 0, perCallToolActivity: true },
+    } })
+    window.toolRuntime()
+  })
+  await page.waitForSelector('.foxwarm-tool-card')
+  const states = () => page.$$eval('.foxwarm-tool-card', cards => cards.map(card => card.textContent.includes('Running...')))
+  assert.deepEqual(await states(), [false, false, false])
+  async function event(event, expected) {
+    await page.evaluate(event => window.emitFixtureEvent({ type: 'session-event', event }), event)
+    await page.waitForFunction(expected => JSON.stringify([...document.querySelectorAll('.foxwarm-tool-card')].map(card => card.textContent.includes('Running...'))) === JSON.stringify(expected), {}, expected)
+  }
+  await event({ type: 'tool-call-snapshot', activityId: 'owner', sequence: 0, runningCallIds: [] }, [false, false, false])
+  await event({ type: 'tool-call-state', activityId: 'owner', sequence: 1, callId: 'a', status: 'running' }, [true, false, false])
+  await event({ type: 'tool-call-state', activityId: 'owner', sequence: 2, callId: 'a', status: 'finished' }, [false, false, false])
+  await page.evaluate(() => window.toolRuntime('requesting-model'))
+  await event({ type: 'tool-call-state', activityId: 'owner', sequence: 3, callId: 'b', status: 'running' }, [false, true, false])
+  assert.equal(await page.evaluate(() => window.fixtureHistoryRequestCount), 1)
+  await page.evaluate(() => window.failFixtureEventSource())
+  await page.waitForFunction(() => window.fixtureEventSourceCount() === 2)
+  await page.evaluate(() => window.toolRuntime())
+  await event({ type: 'tool-call-snapshot', activityId: 'owner', sequence: 3, runningCallIds: ['b'] }, [false, true, false])
+  await event({ type: 'tool-call-state', activityId: 'owner', sequence: 1, callId: 'a', status: 'running' }, [false, true, false])
+  await event({ type: 'tool-call-state', activityId: 'owner', sequence: 4, callId: 'b', status: 'finished' }, [false, false, false])
+  await page.evaluate(() => window.emitFixtureMessage({ role: 'tool', parts: ['a', 'b', 'c'].map(id => ({ functionResponse: { tool_use_id: id, name: 'exec', response: { output: 'settled-' + id } } })), __meta: { seq: 2, timestamp: 20 } }))
+  await page.waitForFunction(() => document.body.textContent.includes('settled-c'))
+  assert.deepEqual(await states(), [false, false, false])
+})

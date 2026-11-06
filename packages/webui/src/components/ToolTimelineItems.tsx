@@ -26,6 +26,7 @@ import {
   type ToolScriptSubCall,
   type ToolTagItem,
 } from './chatShared'
+import { ToolCallActivityContext } from './ToolCallActivityContext'
 import { ToolScriptProgressContext } from './ToolScriptProgressContext'
 import JsonInspectorDialog from './JsonInspectorDialog'
 import { toolActivitySummary, toolActivityTarget } from '../../../shared/src/toolActivity'
@@ -844,7 +845,8 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
   const primaryName = call?.name || primaryResponse?.name || (imageParts.length > 0 ? 'image' : 'tool')
   const primaryLabel = call ? getToolDisplayLabel(call) : primaryName
   const hasResponseContent = responses.length > 0 || imageParts.length > 0
-  const showRunning = runningTool && !!call && !hasResponseContent && !partialToolCall
+  const runningCallIds = useContext(ToolCallActivityContext)
+  const showRunning = (runningCallIds ? !!call?.id && runningCallIds.has(call.id) : runningTool) && !!call && !hasResponseContent && !partialToolCall
   const showDiffToggles = !!call && !partialToolCall && (isLegacyDiffToolName(call.name) || isPatchCall(call))
 
   const responsePreview = useMemo(() => {

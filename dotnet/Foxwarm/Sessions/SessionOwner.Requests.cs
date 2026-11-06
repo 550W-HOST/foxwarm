@@ -571,6 +571,7 @@ internal sealed partial class SessionOwner
             foregroundRuntime = projection;
         try
         {
+            SetToolCallActivity(projection, true);
             PublishStateChanged();
         }
         catch
@@ -583,6 +584,8 @@ internal sealed partial class SessionOwner
 
     internal void EndTool(object? lease = null)
     {
+        if (lease is JsonObject projection)
+            SetToolCallActivity(projection, false);
         Interlocked.Decrement(ref activeTools);
         lock (runtimeGate)
             if (lease is null || ReferenceEquals(foregroundRuntime, lease))

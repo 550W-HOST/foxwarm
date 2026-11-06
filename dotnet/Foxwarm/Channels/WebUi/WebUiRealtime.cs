@@ -561,6 +561,7 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
                         },
                         requested
                     );
+                    await Send(WebUiContract.ToolCalls(owner), requested);
                     await Send(draft, requested);
                 }
                 // Queue buffered events and applied together under the initialization gate.

@@ -205,6 +205,7 @@ internal sealed partial class SessionOwner
                 foregroundRuntime,
                 compactRuntime
             );
+            runtime["perCallToolActivity"] = true;
             if (Processing)
                 runtime["processing"] = true;
             return runtime;

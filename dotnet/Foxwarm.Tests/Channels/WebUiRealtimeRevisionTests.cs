@@ -12,6 +12,114 @@ namespace Foxwarm.Tests;
 public sealed class WebUiRealtimeRevisionTests
 {
     [Fact]
+    public async Task Tool_call_bootstrap_covers_buffered_lifecycle_and_reconnects_without_history_payloads()
+    {
+        using var temp = new TempDirectory();
+        var options = new ResponsesClientOptions(
+            new Uri("http://127.0.0.1:1"),
+            "wire",
+            "a",
+            "",
+            "",
+            713
+        );
+        await using var manager = new SessionManager(
+            temp.Path + "/data",
+            temp.Path + "/work",
+            options,
+            HostModels.ForTest(options)
+        );
+        await manager.LoadAsync();
+        var owner = await manager.CreateNamedAsync("main", "current", null, null);
+        using var stopped = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var socket = new ProbeSocket();
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var paused = false;
+        socket.BeforeSend = async (frame, token) =>
+        {
+            if (SessionWait.Text(frame["type"]) == "session-state" && !paused)
+            {
+                paused = true;
+                reached.TrySetResult();
+                await release.Task.WaitAsync(token);
+            }
+        };
+        var running = new WebUiRealtime(new SessionRuntime(manager)).RunAsync(
+            socket,
+            stopped.Token
+        );
+        async Task Until(Func<bool> condition)
+        {
+            while (!condition())
+                await Task.Delay(2, stopped.Token);
+        }
+        try
+        {
+            socket.SetSessionUnion(1, [owner.Id]);
+            await reached.Task.WaitAsync(stopped.Token);
+            var first = owner.BeginTool(new JsonObject { ["id"] = "a", ["name"] = "read" });
+            owner.EndTool(first);
+            var second = owner.BeginTool(new JsonObject { ["id"] = "b", ["name"] = "exec" });
+            release.TrySetResult();
+            await Until(() =>
+                socket.Frames.Any(frame =>
+                    SessionWait.Text(frame["type"]) == "subscriptions-applied"
+                )
+            );
+            var frames = socket.Frames.ToArray();
+            var snapshotIndex = Array.FindIndex(
+                frames,
+                frame => SessionWait.Text(frame["event"]?["type"]) == "tool-call-snapshot"
+            );
+            var snapshot = frames[snapshotIndex]["event"]!;
+            Assert.Equal(3, snapshot["sequence"]!.GetValue<long>());
+            Assert.Equal("b", Assert.Single(snapshot["runningCallIds"]!.AsArray())!.ToString());
+            Assert.True(
+                Array.FindIndex(
+                    frames,
+                    frame => SessionWait.Text(frame["event"]?["type"]) == "tool-call-state"
+                ) > snapshotIndex
+            );
+            owner.EndTool(second);
+            await Until(() =>
+                socket.Frames.Any(frame => frame["event"]?["sequence"]?.ToString() == "4")
+            );
+            socket.SetSessionUnion(2, [owner.Id]);
+            await Until(() =>
+                socket.Frames.Count(frame =>
+                    SessionWait.Text(frame["event"]?["type"]) == "tool-call-snapshot"
+                ) == 2
+            );
+            var reconnected = socket.Frames.Last(frame =>
+                SessionWait.Text(frame["event"]?["type"]) == "tool-call-snapshot"
+            )["event"]!;
+            Assert.Equal(4, reconnected["sequence"]!.GetValue<long>());
+            Assert.Empty(reconnected["runningCallIds"]!.AsArray());
+            Assert.DoesNotContain(
+                socket.Frames,
+                frame => SessionWait.Text(frame["type"]) == "message"
+            );
+            Assert.All(
+                socket.Frames.Where(frame =>
+                    SessionWait.Text(frame["event"]?["type"]) == "tool-call-state"
+                ),
+                frame =>
+                {
+                    Assert.Null(frame["event"]!["response"]);
+                    Assert.Null(frame["event"]!["history"]);
+                }
+            );
+        }
+        finally
+        {
+            release.TrySetResult();
+            stopped.Cancel();
+            await running;
+        }
+    }
+
+    [Fact]
     public async Task Registered_channel_delivery_before_cold_admission_is_flushed_after_snapshots()
     {
         using var temp = new TempDirectory();

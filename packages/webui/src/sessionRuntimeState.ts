@@ -19,6 +19,7 @@ export interface SessionRuntimeCompactionDetails {
 }
 
 export interface SessionRuntimeState {
+  perCallToolActivity?: true
   state: SessionRuntimeStateName
   since?: number
   note?: string

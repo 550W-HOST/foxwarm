@@ -326,6 +326,14 @@ internal static class WebUiContract
             },
         };
 
+    public static JsonObject ToolCalls(SessionOwner owner) =>
+        new()
+        {
+            ["type"] = "session-event",
+            ["sessionId"] = owner.Id,
+            ["event"] = owner.ToolCallActivitySnapshot(),
+        };
+
     public static JsonObject Draft(SessionOwner owner)
     {
         var data = owner.DraftSnapshot();

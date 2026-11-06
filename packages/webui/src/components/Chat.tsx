@@ -19,6 +19,7 @@ import { buildStreamingAssistantMessage } from '../streamingAssistantDraft'
 import { useChatConversationSync } from './useChatConversationSync'
 import { isRuntimeStateInactiveName, isSessionRuntimeActive } from '../sessionRuntimeState'
 import SessionDebugModal from './SessionDebugModal'
+import { ToolCallActivityContext } from './ToolCallActivityContext'
 import { ToolScriptProgressContext } from './ToolScriptProgressContext'
 import { OpenModelSettingsContext } from './SystemEventCard'
 import { ThreadCardHeightContext } from './useThreadCardHeightTransition'
@@ -49,6 +50,7 @@ function getAsrStreamUrl() {
   return base.replace(/^http/i, 'ws')
 }
 
+const NO_RUNNING_TOOL_CALLS: ReadonlySet<string> = new Set()
 const ASR_CONTEXT_MAX_CHARS = 2400
 const ASR_CONTEXT_MAX_MESSAGES = 8
 const DEFAULT_VISIBLE_TIMELINE_MESSAGES = 100
@@ -197,7 +199,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
   const initialContinuousAnchorSeq = useMemo(() => getChatViewportAnchorSeq(getStoredChatViewportState(viewportSessionId, 'continuous')), [viewportSessionId])
   const {
     messages: activeMessages, continuousMessages, continuousHistoryReady, archivePage, loadArchivePage, queuedMessages, sessionRecord, sessionMissing, sessionBusy, sessionQueueLength,
-    persistentMemorySnapshot, memorySize, streamingAssistantDraft, toolScriptProgress,
+    persistentMemorySnapshot, memorySize, streamingAssistantDraft, toolScriptProgress, toolCallActivity,
     historyLoaded, isFullHistoryLoaded, earlierHistoryError, connectionState, reconnectCountdown,
     pendingControl, controlFeedback, loading, retryEarlierHistory, sendMessage: handleSend, sendSessionCommand, mergeConfirmedSettings,
   } = useChatConversationSync(sessionId, webUiIdentityMode, historyMode, initialContinuousAnchorSeq)
@@ -1724,9 +1726,11 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
             <div ref={committedTimelineRef} data-chat-timeline="committed" className="min-w-0 max-w-full">
               <ThreadCardHeightContext.Provider value={cardHeightContext}>
                 <OpenModelSettingsContext.Provider value={webUiIdentityMode ? null : onOpenModelSettings ?? null}>
+                <ToolCallActivityContext.Provider value={!displayingLatest ? NO_RUNNING_TOOL_CALLS : toolCallActivity?.runningCallIds ?? (sessionRecord?.runtimeState?.perCallToolActivity ? NO_RUNNING_TOOL_CALLS : undefined)}>
                 <ToolScriptProgressContext.Provider value={toolScriptProgress}>
                   <ChatTimeline sessionId={sessionId} historyMessages={messages} currentHistoryMessages={activeMessages} runtimeState={displayingLatest ? sessionRecord?.runtimeState : undefined} busyStartedAt={displayingLatest ? sessionRecord?.busyStartedAt : undefined} isRunningTool={displayingLatest && sessionRecord?.runtimeState?.state === 'running-tool'} messages={timelineMessages} isMobile={isMobile} timelineView={timelineView} showInterAgentMessages={showInterAgentMessages} showCommentary={showCommentary} showUsageBadge={showUsageBadge} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} searchTarget={searchOpen && selectedSearchMatch?.id === searchMatchId ? selectedSearchMatch : null} renderMessageFooter={displayingLatest && sessionQueueLength > 0 && queuedMessages.length === 0 ? renderQueuedFooter : undefined} />
                 </ToolScriptProgressContext.Provider>
+                </ToolCallActivityContext.Provider>
                 </OpenModelSettingsContext.Provider>
               </ThreadCardHeightContext.Provider>
             </div>

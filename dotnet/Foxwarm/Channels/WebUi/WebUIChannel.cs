@@ -506,6 +506,7 @@ internal sealed partial class WebUIChannel(
                             )!
                             .AsObject()
                     );
+                    await SendSse(context, WebUiContract.ToolCalls(hosted));
                     var available = reader.WaitToReadAsync(lifetime.Token).AsTask();
                     var keepAlive = Task.Delay(TimeSpan.FromSeconds(30), lifetime.Token);
                     var deleted = false;

@@ -1,3 +1,4 @@
+import { applyToolCallActivity, type ToolCallActivity, type ToolCallActivityEvent } from '../toolCallActivity'
 import type { SessionQuestionsProjection } from '../sessionQuestions'
 import { CHAT_BOOTSTRAP_TAIL_LENGTH, peekPreparedChatHistory, peekPreparedChatArchive, discardPreparedChatHistory } from '../preparedChatHistory'
 import { createLocalSessionNotice } from '../sessionNotices'
@@ -290,6 +291,7 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
     streamingAssistantDraftRef.current = null
     setStreamingAssistantDraft(null)
   }, [])
+  const [toolCallActivity, setToolCallActivity] = useState<ToolCallActivity>()
   const [toolScriptProgress, setToolScriptProgress] = useState<Record<string, ToolScriptSubCall[]>>({})
   const [sessionRecord, setSessionRecord] = useState<ChatSessionRecord | null>(prepared?.session || null)
   const [persistentMemorySnapshot, setPersistentMemorySnapshot] = useState('')
@@ -340,6 +342,7 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
     setEarlierHistoryError(false)
     clearStreamingAssistantDraft()
     setToolScriptProgress({})
+    setToolCallActivity(undefined)
     setQueuedMessages(prepared?.queuedMessages || [])
     setSessionRecord(prepared?.session || null)
     setSessionBusy(!!prepared?.session && isSessionRuntimeActive(prepared.session))
@@ -893,6 +896,7 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
             historyRefreshTimeoutRef.current = null
           }
           setSessionMissing(true)
+          setToolCallActivity(undefined)
           setSessionBusy(false)
           setSessionQueueLength(0)
           setQueuedMessages([])
@@ -929,6 +933,10 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
         }
 
         if (data.type === 'session-event') {
+          if (data.event?.type === 'tool-call-snapshot' || data.event?.type === 'tool-call-state') {
+            setToolCallActivity(previous => applyToolCallActivity(previous, data.event as ToolCallActivityEvent))
+            return
+          }
           const sessionEvent = data.event as SessionStreamEvent
           if (sessionEvent.type === 'model-stream-reset') {
             historyModelStreamEventVersionRef.current += 1
@@ -1283,6 +1291,7 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
     memorySize,
     streamingAssistantDraft,
     toolScriptProgress,
+    toolCallActivity,
     historyLoaded,
     isFullHistoryLoaded,
     earlierHistoryError: earlierHistoryError || contextHistoryError === contextDemandKey,

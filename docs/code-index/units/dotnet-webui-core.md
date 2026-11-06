@@ -18,6 +18,8 @@ Ordinary Session creation and Agent-main creation place the newly committed root
 
 The authenticated model-settings HTTP boundary normalizes trimmed model selections and case-insensitive trimmed effort selections before entering the existing strict settings owner. Empty/default/unset effort clears the raw setting; model selections also recognize clear. Child settings accept `childModelDefault`/`model` and `childEffortDefault`/`effort`, with canonical child fields taking precedence even when null. An explicit model takes precedence over `clear=true`. Unknown fields and invalid values retain validation errors; this does not loosen internal settings DTOs or model/runtime effort validation. `AgentSettingsParityHttpTests` covers actual HTTP bodies, persistence, alias precedence, invalid controls, strict internal callers and shared isolated-source inheritance rejection through Agent PUT.
 
+`WebUiContract.ToolCalls` projects the exact-owner [per-call activity snapshot](../threads/streaming-pipeline.md#d-streaming-tool-call-activity) for WebSocket and SSE initialization. Live lifecycle updates use the additive `session-event` envelope without republishing message bodies.
+
 Canonical message content is projected through [WebUI message transport](./webui-message-transport.md) before browser delivery, independently of the shared image converter. Internal Session and provider consumers retain full canonical messages.
 
 Routes are registered behind `HttpServer` normal auth. DTO validation precedes manager/runtime calls; this file does not write Session JSON, Archive, or catalog directly. Accepted/committed/partial failures retain explicit status fields for browser state reconciliation.
