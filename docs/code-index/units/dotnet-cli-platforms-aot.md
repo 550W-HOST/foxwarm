@@ -33,15 +33,17 @@ Native archive upload follows successful qualification. Failure artifacts contai
 
 ## Measured results and limits
 
-| Target | Source revision | Hosted qualification |
-| --- | --- | --- |
-| osx-arm64 | `501183d4` | Passed the complete extracted-package headless probe with SDK 10.0.403/runtime 10.0.14 on the Apple Silicon macos-15 runner. |
-| win-x64 | `0ad18af1` | Passed the complete extracted-package headless probe on Windows Server 2025 with SDK 10.0.403/runtime 10.0.14; the following onboarding suite is still pending. |
+Hosted run `42268387251` qualified source revision `af49ae92` on November 6, 2026 (UTC), using SDK 10.0.403/runtime 10.0.14. Each probe ran the executable extracted from its complete archive, not the publish directory.
 
-The Windows success log records PE x64 identity, no CLR, trusted and negative TLS, files, Code/Git/PTY, native helpers, foreground exit/output and original-grant background recovery/ACK. The complete ZIP was 7,704,347 bytes. Its subsequent PowerShell onboarding fixture failed before bootstrap execution because GNU tar interpreted a drive-qualified archive path as a remote host. Both fixture archive creation and production source fallback now use owned cwd-relative paths. Onboarding must pass before the Windows distribution is uploaded as qualified.
+| Target | Actual runner / kernel | Complete archive | Native headless probe | Onboarding evidence |
+| --- | --- | --- | --- | --- |
+| win-x64 | Windows Server 2025, 10.0.26100, x64 | 7,704,349-byte ZIP | Passed | Four real PowerShell cases passed, none skipped: native with Node absent from PATH, unpublished fallback, unsupported architecture and server error. |
+| osx-arm64 | macOS 15.8.2 (24H232), Darwin 24.6.0, arm64 | 7,506,244-byte tar.gz | Passed | Apple Silicon selection/fallback/error paths are covered by shared shell-template tests on Linux; no separate real macOS bootstrap execution is claimed. |
 
-Earlier hosted attempts exposed SDK-selection precedence, noninteractive Windows CurrentUser certificate consent, missing shared Darwin Code stat support, unbounded certificate cleanup, Windows short-path fixture differences and a real live-capture read-sharing defect. Those failures were fixed without dropping capabilities, disabling TLS verification, retrying reads or changing independent exec lifetime.
+Both native runs passed trusted registration and independent untrusted/hostname rejection, PE/Mach-O identity and three no-CLR module snapshots, ordinary files/culture, Code filesystem, real Git, PTY dimensions/Unicode, Code/trigger helpers, foreground exit/output and original-grant background recovery/ACK with exactly-once effects. Git versions were 2.56.0.windows.4 and 2.56.0 respectively. macOS additionally exercised POSIX metadata, readonly flags, symlink targets and broken-link listing. Both retained missing-browser isolation; neither installed a browser. The complete archives fit the 25 MiB asset limit, and both qualified distribution artifacts uploaded successfully.
 
-On November 6, 2026, a Linux x64 Native AOT build using SDK 10.0.401/runtime 10.0.12 passed the shared probe in a development execution environment, including trusted/negative TLS, files, Code filesystem/Git, PTY/Code and trigger helpers, foreground exec and background recovery/ACK. No CLR was mapped. This checks the shared-probe refactor; it is not a new distribution baseline or a Windows/macOS measurement. The execution environment did not expose `/etc/os-release`. Historical Linux distribution measurements remain in the [Linux delivery unit](./dotnet-cli-linux-aot.md).
+Hosted failures during development identified the native Darwin metadata gap and Windows live-capture reader sharing defect. Their maintained regressions are the actual Code/file operations and live background-log read, not removed or relaxed assertions. Windows teardown waits for owned processes rather than retrying directory deletion. The PowerShell source fallback uses cwd-relative tar paths so both GNU tar and Windows tar handle drive-qualified installation roots.
 
-Browser-installed operations remain qualified separately in the Linux lane. The new platform lanes check missing-browser isolation, not installed-browser support, arbitrary callbacks or every historical OS version. Interactive console parity is not established by the headless probe.
+Linux managed/bootstrap/packaging tests and a fresh Linux Native AOT shared-probe regression also passed during implementation. Those local native runs used SDK 10.0.401/runtime 10.0.12 and did not expose `/etc/os-release`; they are regression evidence, not a new supported distribution baseline. Historical Linux distribution measurements remain in the [Linux delivery unit](./dotnet-cli-linux-aot.md).
+
+Browser-installed operations remain qualified separately in the Linux lane. The new platform lanes check missing-browser isolation, not installed-browser support, arbitrary callbacks or every historical OS version. Interactive console parity is not established by the headless probe. Signing/notarization, public publication and deployment remain separate release operations.

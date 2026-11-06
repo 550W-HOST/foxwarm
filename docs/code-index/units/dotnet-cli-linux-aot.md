@@ -42,7 +42,7 @@ The ordinary UBI 8.10 **build** also failed: the SDK and restore worked, but the
 - PTY requires the adjacent `libfoxwarm-pty.so`, a real shell, temporary IPC and the existing Linux syscalls. `pidfd_open` is mandatory at spawn (upstream Linux 5.3); failure kills/reaps the child rather than falling back. Shell signalling uses `pidfd_send_signal`. Vendor kernel backports can differ, and a loaded shim does not establish that PTY creation will work.
 - Chromium and its matching distro libraries are optional and separately provisioned. CLI executable selection and no-download behavior remain owned by the browser adapter. The representative Debian 13 proof does not qualify all browser actions/distributions.
 
-Every container above shared the same **6.12.101+deb13-amd64** host kernel. No older kernel/VM matrix or minimum CPU execution probe was run. The ELF GNU/Linux 3.2 ABI note is not a whole-program minimum-kernel guarantee. ARM64, Windows, macOS, Main Native AOT and unlisted distro versions remain unqualified. This dynamic matrix does not qualify musl; the separate static result is below.
+Every container above shared the same **6.12.101+deb13-amd64** host kernel. No older kernel/VM matrix or minimum CPU execution probe was run. The ELF GNU/Linux 3.2 ABI note is not a whole-program minimum-kernel guarantee. These measurements do not qualify Linux ARM64, Main Native AOT or unlisted distro versions. Windows/macOS CLI measurements are owned by the [separate platform delivery unit](./dotnet-cli-platforms-aot.md). This dynamic matrix does not qualify musl; the separate static result is below.
 
 ## Probe and ownership boundaries
 
