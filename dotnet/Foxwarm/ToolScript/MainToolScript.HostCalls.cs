@@ -66,6 +66,7 @@ internal sealed partial class MainToolScript
                     record["subCallTotal"] = runOrdinal;
                     Emit();
                     var previousDeliveryCapture = context.SessionMessageDelivered;
+                    var previousPlacementCapture = context.ExecPlacementObserved;
                     var previousRunId = context.ToolScriptRunId;
                     var previousOrdinal = context.SubCallOrdinal;
                     var previousRunOrdinal = context.RunSubCallOrdinal;
@@ -78,6 +79,8 @@ internal sealed partial class MainToolScript
                             evidence["id"] = subcall["id"]!.DeepClone();
                             subcall["sessionMessage"] = evidence;
                         };
+                        context.ExecPlacementObserved = placement =>
+                            subcall["exec"] = placement.DeepClone();
                         context.ToolScriptRunId = Required(record, "runId");
                         context.SubCallOrdinal = ordinal;
                         context.RunSubCallOrdinal = runOrdinal;
@@ -86,6 +89,7 @@ internal sealed partial class MainToolScript
                     finally
                     {
                         context.SessionMessageDelivered = previousDeliveryCapture;
+                        context.ExecPlacementObserved = previousPlacementCapture;
                         context.ToolScriptRunId = previousRunId;
                         context.SubCallOrdinal = previousOrdinal;
                         context.RunSubCallOrdinal = previousRunOrdinal;

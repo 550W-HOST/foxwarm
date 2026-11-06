@@ -156,11 +156,16 @@ internal sealed partial class NodeClient
         {
             try
             {
-                return await NodeExecManager.Result(
+                return await WithPlacement(
+                    await NodeExecManager.Result(
+                        entry,
+                        status,
+                        await NodeExecManager.Foreground(entry, status, timeout.Warning),
+                        NodeFileTools.Flag(frame, "programmatic")
+                    ),
                     entry,
-                    status,
-                    await NodeExecManager.Foreground(entry, status, timeout.Warning),
-                    NodeFileTools.Flag(frame, "programmatic")
+                    frame,
+                    completed: true
                 );
             }
             finally
@@ -185,12 +190,47 @@ internal sealed partial class NodeClient
             timeout.Warning,
             stop.IsCancellationRequested
         );
-        return await NodeExecManager.Result(
+        return await WithPlacement(
+            await NodeExecManager.Result(
+                entry,
+                null,
+                output,
+                NodeFileTools.Flag(frame, "programmatic")
+            ),
             entry,
-            null,
-            output,
-            NodeFileTools.Flag(frame, "programmatic")
+            frame,
+            completed: false
         );
+    }
+
+    // Only a Main that requested it receives the sidecar; older Main would expose it to the model.
+    internal static async Task<JsonObject> WithPlacement(
+        JsonObject result,
+        JsonObject entry,
+        JsonObject frame,
+        bool completed
+    )
+    {
+        if (!NodeFileTools.Flag(frame, ExecPlacement.Feature))
+            return result;
+        string? finalCwd = null;
+        if (completed)
+            try
+            {
+                var text = (
+                    await File.ReadAllTextAsync(NodeExecManager.Text(entry, "cwdPath")!)
+                ).Trim();
+                finalCwd = text.Length > 0 ? text : null;
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+        result[ExecPlacement.Field] = ExecPlacement.Create(
+            NodeExecManager.Text(entry, "initialCwd")!,
+            NodeExecManager.Text(entry, "cwdSource")!,
+            NodeExecManager.Text(entry, "id")!,
+            NodeExecManager.Text(entry, "logPath")!,
+            finalCwd
+        );
+        return result;
     }
 
     private static void CancelWait(CancellationTokenSource cancellation)

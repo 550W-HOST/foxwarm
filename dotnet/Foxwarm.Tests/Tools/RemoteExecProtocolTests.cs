@@ -33,7 +33,8 @@ public sealed class RemoteExecProtocolTests
         internal async Task Start(
             bool legacy = false,
             bool cancel = true,
-            bool advertiseExec = true
+            bool advertiseExec = true,
+            bool execPlacement = false
         )
         {
             Manager = new(
@@ -51,14 +52,15 @@ public sealed class RemoteExecProtocolTests
                 return Task.CompletedTask;
             };
             Credential = Manager.Nodes.Registry.Create("remote");
-            await Connect(legacy, cancel, advertiseExec);
+            await Connect(legacy, cancel, advertiseExec, execPlacement);
             await Manager.SelectNodeAsync(Owner, "remote");
         }
 
         internal async Task Connect(
             bool legacy = false,
             bool cancel = true,
-            bool advertiseExec = true
+            bool advertiseExec = true,
+            bool execPlacement = false
         )
         {
             var builder = WebApplication.CreateBuilder();
@@ -93,6 +95,7 @@ public sealed class RemoteExecProtocolTests
                     {
                         ["remoteExecBackgroundRegistration"] = true,
                         ["execWaitCancellation"] = cancel,
+                        [ExecPlacement.Feature] = execPlacement,
                     },
                 },
             };
@@ -557,5 +560,39 @@ public sealed class RemoteExecProtocolTests
         Assert.Single(
             SessionWait.Strings(fixture.Owner.Entry.Snapshot().Meta["acceptedExternalEventIds"])
         );
+    }
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Exec_placement_is_requested_only_from_an_advertising_peer_and_stripped_from_results(
+        bool advertised
+    )
+    {
+        await using var fixture = new Fixture();
+        await fixture.Start(execPlacement: advertised);
+        JsonNode? raw = null;
+        var execution = fixture.Manager.Nodes.ExecuteAsync(
+            "remote",
+            "exec",
+            new JsonObject { ["command"] = "owned-effect" },
+            fixture.Owner.Id,
+            fixture.Owner.Agent,
+            "remote",
+            "/remote/cwd",
+            false,
+            default,
+            fixture.Owner,
+            value => raw = value?.DeepClone()
+        );
+        var request = await fixture.Read();
+        Assert.Equal(advertised, request[ExecPlacement.Feature]?.GetValue<bool>() == true);
+        var placement = ExecPlacement.Create("/remote/cwd", "session", "quiet-otter", "/remote/a.log");
+        await fixture.Respond(
+            request,
+            new JsonObject { ["output"] = "done", [ExecPlacement.Field] = placement }
+        );
+        var result = (await execution)!.AsObject();
+        Assert.False(result.ContainsKey(ExecPlacement.Field));
+        Assert.True(JsonNode.DeepEquals(placement, ExecPlacement.Parse(raw![ExecPlacement.Field])));
     }
 }
