@@ -21,7 +21,8 @@ fetch PuppeteerSharp-LICENSE.txt https://raw.githubusercontent.com/hardkoded/pup
 fetch ReactiveExtensionsSharp-LICENSE.txt https://raw.githubusercontent.com/hardkoded/ReactiveExtensions-Sharp/787712268f4bedf5945d43082d450042be275bce/LICENSE
 fetch RecyclableMemoryStream-LICENSE.txt https://raw.githubusercontent.com/microsoft/Microsoft.IO.RecyclableMemoryStream/e29a28387da9018fa9605a1dcb3f7a0435aa9974/LICENSE
 fetch musl-COPYRIGHT.txt "https://git.musl-libc.org/cgit/musl/plain/COPYRIGHT?h=v$(version musl)"
-icu=$(version icu-static | tr . -)
+# Current ICU release tags retain the packaged version's dots.
+icu=$(version icu-static)
 fetch ICU-LICENSE.txt "https://raw.githubusercontent.com/unicode-org/icu/release-$icu/LICENSE"
 fetch OpenSSL-LICENSE.txt "https://raw.githubusercontent.com/openssl/openssl/openssl-$(version openssl-libs-static)/LICENSE.txt"
 fetch zlib-LICENSE.txt "https://raw.githubusercontent.com/madler/zlib/v$(version zlib-static)/LICENSE"
