@@ -123,6 +123,7 @@ internal static class AppConfigurationRules
             llm.ContainsKey("compactKeepPercent") ? "compactKeepPercent" : "compactPercent"
         );
         Fraction(llm, "compactThresholdPercent", "compactThresholdPercent");
+        Fraction(llm, "memoryWarningThresholdPercent", "memoryWarningThresholdPercent");
         if (llm.ContainsKey("providerImageOutputFormat"))
         {
             var format = Text(llm["providerImageOutputFormat"]);

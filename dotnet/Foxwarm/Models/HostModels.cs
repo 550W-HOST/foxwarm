@@ -45,6 +45,7 @@ internal sealed partial class HostModels
     internal double PresentationContextLimit { get; private init; } = 200000;
     internal double CompactKeepFraction { get; private init; } = .3;
     internal double CompactThresholdFraction { get; private init; } = .85;
+    internal double MemoryWarningThresholdFraction { get; private init; } = .15;
 
     internal HostModels(ModelConfiguration owner)
     {
@@ -351,6 +352,8 @@ internal sealed partial class HostModels
             CompactKeepFraction =
                 SessionWait.Number(llm["compactKeepPercent"] ?? llm["compactPercent"]) ?? .3,
             CompactThresholdFraction = SessionWait.Number(llm["compactThresholdPercent"]) ?? .85,
+            MemoryWarningThresholdFraction =
+                SessionWait.Number(llm["memoryWarningThresholdPercent"]) ?? .15,
         };
     }
 

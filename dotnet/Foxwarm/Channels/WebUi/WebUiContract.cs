@@ -139,6 +139,12 @@ internal static class WebUiContract
             ["persistentMemorySnapshot"] =
                 snapshot.AuthorityEnvelope["persistentMemorySnapshot"]?.DeepClone()
                 ?? JsonValue.Create(""),
+            ["memorySize"] = MemorySize
+                .Measure(
+                    SessionWait.Text(snapshot.AuthorityEnvelope["persistentMemorySnapshot"]) ?? "",
+                    models.Capture()
+                )
+                .ToJson(),
             ["queuedMessages"] = preview,
             ["queueLength"] = snapshot.Queue.Count(SessionCompactor.Ordinary),
             ["latestSeq"] = snapshot.NextMessageSeq - 1,

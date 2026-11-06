@@ -377,6 +377,7 @@ internal sealed class ModelRequestOwner(
                 );
                 cancellationToken.ThrowIfCancellationRequested();
                 ModelAttemptFailure failure;
+                string? sizeDiagnostic = null;
                 ChatResult? result = null;
                 var succeeded = false;
                 try
@@ -501,6 +502,16 @@ internal sealed class ModelRequestOwner(
                         ),
                         _ => new ModelAttemptFailure(error.Message, "request-error", true, true),
                     };
+                    if (
+                        journalPurpose == "compact-plan"
+                        || RequestSizeDiagnostics.IsSizeFailure(failure)
+                    )
+                        sizeDiagnostic = RequestSizeDiagnostics.Breakdown(
+                            instructions,
+                            requestDefaults.Instructions,
+                            requestDefaults.Tools,
+                            history
+                        );
                     if (journal is not null && currentJournalRequestId is not null)
                         try
                         {
@@ -513,7 +524,9 @@ internal sealed class ModelRequestOwner(
                                     new JsonObject
                                     {
                                         ["kind"] = failure.Kind,
-                                        ["message"] = failure.Message,
+                                        ["message"] =
+                                            failure.Message
+                                            + (sizeDiagnostic is null ? "" : "\n" + sizeDiagnostic),
                                         ["retryable"] = failure.Retryable,
                                         ["countable"] = failure.Countable,
                                     }
@@ -548,9 +561,10 @@ internal sealed class ModelRequestOwner(
                     || terminalTarget
                     || attempt == maxAttempts
                     || cause is not null && !failsOver;
-                var reason = ModelAttemptFailure.Summary(
-                    ConfiguredModelRequests.SafeReason(failure.Message, leaf)
-                );
+                var reason =
+                    ModelAttemptFailure.Summary(
+                        ConfiguredModelRequests.SafeReason(failure.Message, leaf)
+                    ) + (sizeDiagnostic is null ? "" : "\n" + sizeDiagnostic);
                 var explanation = cause is null
                     ? null
                     : ModelAttemptFailure.ConfigurationExplanation(cause, leaf);

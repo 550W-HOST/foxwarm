@@ -197,7 +197,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
   const initialContinuousAnchorSeq = useMemo(() => getChatViewportAnchorSeq(getStoredChatViewportState(viewportSessionId, 'continuous')), [viewportSessionId])
   const {
     messages: activeMessages, continuousMessages, continuousHistoryReady, archivePage, loadArchivePage, queuedMessages, sessionRecord, sessionMissing, sessionBusy, sessionQueueLength,
-    persistentMemorySnapshot, streamingAssistantDraft, toolScriptProgress,
+    persistentMemorySnapshot, memorySize, streamingAssistantDraft, toolScriptProgress,
     historyLoaded, isFullHistoryLoaded, earlierHistoryError, connectionState, reconnectCountdown,
     pendingControl, controlFeedback, loading, retryEarlierHistory, sendMessage: handleSend, sendSessionCommand, mergeConfirmedSettings,
   } = useChatConversationSync(sessionId, webUiIdentityMode, historyMode, initialContinuousAnchorSeq)
@@ -1676,6 +1676,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
                 messages={messages}
                 contextMessages={activeMessages}
                 persistentMemorySnapshot={snapshotSystemMessage}
+                memorySize={webUiIdentityMode ? null : memorySize}
                 contextLimit={contextLimit}
                 historyComplete={isFullHistoryLoaded}
                 containerId={chatMessageContainerId}

@@ -27,6 +27,12 @@ Pruning is a provider-free rewrite of direct history. Under Session-worker place
 
 Configuration defaults: `compactBlockLevelMinTokens=3000`, `compactBlockLevelForceTokens=5000`, `compactBlockCandidateFraction=0.4`, `compactBlockForceCompactFraction=0.2`, and `compactMessageForceCompactFraction=0.2`.
 
+## Request-size failure diagnostics
+
+The maintained `ModelRequestOwner` adds estimated token counts for base instructions, the memory snapshot, tool declarations, and the history/request remainder to compact-plan provider failures and ordinary context-length/request-too-large failures. The same breakdown reaches existing retry/error presentation and attempt journal diagnostics, after the bounded provider-error summary so it is not truncated away. It uses the existing compaction text and image estimators over the effective instructions, declarations and repaired request history; these are estimates, not provider token accounting. No retry policy, automatic trimming, compaction scheduling, or hard request limit is added. `RequestSizeDiagnosticsTests` and `CompactLifecycleTests.MemoryDiagnostics` cover ordinary rejections and both actual awaited/background planner failure paths.
+
+The [memory warning](./conditional-memory-snapshots.md#d-memory-size-warning) identifies an oversized reusable snapshot before a request fails.
+
 ## Modules and units
 
 - [src-session-history](../units/src-session-history.md)

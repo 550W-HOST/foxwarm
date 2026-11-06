@@ -68,10 +68,19 @@ type ChatSessionRecord = {
   questions?: SessionQuestionsProjection
 }
 
+export type MemorySize = {
+  bytes: number
+  estimatedTokens: number
+  contextFraction: number | null
+  thresholdFraction: number
+  overThreshold: boolean
+}
+
 export type HistoryResponse = {
   session?: ChatSessionRecord
   messages?: Message[]
   persistentMemorySnapshot?: string
+  memorySize?: MemorySize
   queuedMessages?: Message[]
   queueLength?: number
   latestSeq?: number
@@ -284,6 +293,7 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
   const [toolScriptProgress, setToolScriptProgress] = useState<Record<string, ToolScriptSubCall[]>>({})
   const [sessionRecord, setSessionRecord] = useState<ChatSessionRecord | null>(prepared?.session || null)
   const [persistentMemorySnapshot, setPersistentMemorySnapshot] = useState('')
+  const [memorySize, setMemorySize] = useState<MemorySize | null>(null)
   const [historyLoaded, setHistoryLoaded] = useState(!!prepared)
   const [isFullHistoryLoaded, setIsFullHistoryLoaded] = useState(false)
   const [earlierHistoryError, setEarlierHistoryError] = useState(false)
@@ -362,6 +372,7 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
     historyModelStreamEventVersionRef.current = 0
     historyEventsRef.current = []
     setPersistentMemorySnapshot('')
+    setMemorySize(null)
   }, [clearStreamingAssistantDraft, sessionId])
 
   useEffect(() => {
@@ -470,6 +481,7 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
         setQueuedMessages([])
         setSessionQueueLength(0)
         setPersistentMemorySnapshot('')
+        setMemorySize(null)
         lastKnownTimestampRef.current = 0
         representedMessageCountRef.current = 0
         latestCommittedSeqRef.current = 0
@@ -545,6 +557,7 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
           queueRefreshNeededRef.current = false
         }
         setPersistentMemorySnapshot(typeof data.persistentMemorySnapshot === 'string' ? data.persistentMemorySnapshot : '')
+        setMemorySize(data.memorySize ?? null)
         if (!hasNewerStreamState && typeof data.queueLength === 'number') setSessionQueueLength(data.queueLength)
         return hasNewerMismatchedQueue
       }
@@ -885,6 +898,7 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
           setQueuedMessages([])
           setMessages([])
           setPersistentMemorySnapshot('')
+          setMemorySize(null)
           clearStreamingAssistantDraft()
           setHistoryLoaded(true)
           lastKnownTimestampRef.current = 0
@@ -1266,6 +1280,7 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
     pendingControl,
     controlFeedback,
     persistentMemorySnapshot,
+    memorySize,
     streamingAssistantDraft,
     toolScriptProgress,
     historyLoaded,

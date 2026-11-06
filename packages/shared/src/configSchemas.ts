@@ -620,6 +620,7 @@ export const APP_CONFIG_SCHEMA = {
         contextLimit: { ...modelDefaultProperties.contextLimit, deprecated: true, description: 'Legacy fallback. Prefer defaults in models.yaml.' },
         compactKeepPercent: { type: 'number', exclusiveMinimum: 0, maximum: 1, default: 0.3 },
         compactThresholdPercent: { type: 'number', exclusiveMinimum: 0, maximum: 1, default: 0.85 },
+        memoryWarningThresholdPercent: { type: 'number', exclusiveMinimum: 0, maximum: 1, default: 0.15, description: 'Warn when injected Agent memory exceeds this fraction of the model context window.' },
         compactBlockLevelMinTokens: { type: 'integer', minimum: 1 },
         compactBlockLevelForceTokens: { type: 'integer', minimum: 1 },
         compactBlockCandidateFraction: { type: 'number', minimum: 0, maximum: 1 },

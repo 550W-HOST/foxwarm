@@ -467,6 +467,11 @@ html[data-foxwarm-display-effect="crt"] .foxwarm-display-effect-overlay::after {
     touch-action: none;
   }
 
+  .foxwarm-context-scrollbar-info-button[data-memory-warning="true"] {
+    color: var(--foxwarm-color-warning);
+    border-color: var(--foxwarm-color-warning);
+  }
+
   .foxwarm-context-scrollbar-info-button:hover,
   .foxwarm-context-scrollbar-info-button:focus-visible {
     background: var(--foxwarm-color-surface-raised);

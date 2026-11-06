@@ -13,12 +13,14 @@ import {
   type ContextScrollbarVerticalScale,
 } from './contextScrollbarModel'
 import type { Message } from './chatShared'
+import type { MemorySize } from './useChatConversationSync'
 
 type ContextScrollbarProps = {
   settings: ContextScrollbarSettings
   messages: Message[]
   contextMessages?: Message[]
   persistentMemorySnapshot?: Message | null
+  memorySize?: MemorySize | null
   contextLimit: number | null | undefined
   historyComplete?: boolean
   containerId: string
@@ -65,7 +67,7 @@ const getBoundaryToken = (segments: ContextScrollbarSegment[], timeline: HTMLEle
  * Desktop context overview.  It deliberately reads the native scroll geometry
  * and asks Chat to perform scrolling; it never becomes a scroll container.
  */
-const ContextScrollbar = memo(function ContextScrollbar({ settings, messages, contextMessages = messages, persistentMemorySnapshot, contextLimit, historyComplete = true, containerId, containerRef, timelineRef, onNavigate }: ContextScrollbarProps) {
+const ContextScrollbar = memo(function ContextScrollbar({ settings, messages, contextMessages = messages, persistentMemorySnapshot, memorySize, contextLimit, historyComplete = true, containerId, containerRef, timelineRef, onNavigate }: ContextScrollbarProps) {
   const rawSegments = useMemo(() => buildContextScrollbarSegments(messages, persistentMemorySnapshot), [messages, persistentMemorySnapshot])
   const [verticalScale, setVerticalScale] = useState<ContextScrollbarVerticalScale>(() => {
     const value = window.localStorage.getItem(VERTICAL_SCALE_STORAGE_KEY)
@@ -345,15 +347,20 @@ const ContextScrollbar = memo(function ContextScrollbar({ settings, messages, co
         <button
           type="button"
           draggable={false}
-          className="foxwarm-context-scrollbar-info-button"
+          className={`foxwarm-context-scrollbar-info-button ${memorySize?.overThreshold ? "text-fw-warning" : ""}`}
+          data-memory-warning={memorySize?.overThreshold || undefined}
           aria-label="Context overview legend"
           onPointerDown={(event) => { event.preventDefault(); event.stopPropagation() }}
           onClick={(event) => event.stopPropagation()}
           onDragStart={(event) => event.preventDefault()}
         >
-          i
+          {memorySize?.overThreshold ? "!" : "i"}
         </button>
         <div className="foxwarm-context-scrollbar-tooltip" role="tooltip">
+          {memorySize && <div className={`foxwarm-memory-size mb-2 text-xs leading-5 border-b border-fw-border pb-2 ${memorySize.overThreshold ? "text-fw-warning" : ""}`} data-memory-warning={memorySize.overThreshold}>
+            <div>Agent memory: {(memorySize.bytes / 1024).toFixed(1)} KB · ~{memorySize.estimatedTokens.toLocaleString()} tokens</div>
+            {memorySize.overThreshold && <div>Above the {(memorySize.thresholdFraction * 100).toLocaleString()}% memory limit</div>}
+          </div>}
           {tooltipLegendStats.map(stat => (
             <div key={stat.category} className="foxwarm-context-scrollbar-legend-row">
               <span className={`foxwarm-context-scrollbar-legend-swatch foxwarm-context-scrollbar-category-${stat.category}`} />

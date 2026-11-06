@@ -44,6 +44,15 @@ public sealed class WebUiPromptSnapshotTests
         {
             var history = (await f.Admin.GetFromJsonAsync<JsonObject>(route + query))!;
             Assert.Equal(saved, history["persistentMemorySnapshot"]!.GetValue<string>());
+            Assert.Equal(
+                System.Text.Encoding.UTF8.GetByteCount(saved),
+                history["memorySize"]!["bytes"]!.GetValue<int>()
+            );
+            Assert.Equal(
+                CompactCandidateBuilder.Tokens(saved),
+                history["memorySize"]!["estimatedTokens"]!.GetValue<int>()
+            );
+            Assert.Null(history["memorySize"]!["contextFraction"]);
             Assert.False(history["session"]!.AsObject().ContainsKey("persistentMemorySnapshot"));
         }
         var authority = JsonNode.Parse(

@@ -2,3 +2,7 @@
 
 # Name new Sessions automatically after their first reply.
 sessionAutoTitle: true
+
+llm:
+  # Warn when injected Agent memory exceeds 15% of the model context window.
+  memoryWarningThresholdPercent: 0.15

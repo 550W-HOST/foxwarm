@@ -41,6 +41,8 @@ History-compatible missing generated blob and other local preparation/persistenc
 
 Attempt-start persistence is required before provider transport; failure to make it durable is `LlmJournalPreparationException` and prevents sending that attempt. Result-write failure after a successful provider result is diagnostic-only: the result is returned and provider retry is not duplicated. Journal records are not active Session authority or child-handoff receipts.
 
+Compact-plan failures and context-length/too-large request rejections append the existing-estimator [fixed-prefix breakdown](./context-compaction.md#request-size-failure-diagnostics) to retry/error and journal diagnostics.
+
 Raw request/response/error/stream diagnostics remain a separate best-effort debugging surface with existing recent-file housekeeping, not a second journal. Their producer/redaction contract belongs to [raw diagnostics](../units/model-raw-diagnostics.md).
 
 ## D-model-usage-cost

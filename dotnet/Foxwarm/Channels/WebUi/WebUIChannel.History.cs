@@ -165,6 +165,7 @@ internal sealed partial class WebUIChannel
                 {
                     scoped.Require(hosted.Id);
                     result["persistentMemorySnapshot"] = null;
+                    result.Remove("memorySize");
                     result["session"] = scoped.Session(result["session"]!.AsObject());
                     WebUiSessionImages.Project(result, hosted.Id, archive: false);
                 }

@@ -34,7 +34,7 @@ async function buildFixtureBundle() {
     }))
     window.fetch = async (input) => {
       const url = String(input)
-      if (url.includes('/history')) { const params = new URL(location.href).searchParams; const compact = params.get('compact') === '1' || params.get('short') === '1'; const messages = compact ? allMessages.slice(-101).map(message => message.__meta.seq === 1101 ? { ...message, modelVisible: false } : message) : allMessages; const persistentMemorySnapshot = params.get('snapshot') === '1' ? 'expanded persistent snapshot '.repeat(800) : undefined; return new Response(JSON.stringify({ session: { id: 'fixture/main', busy: true, runtimeState: { state: 'requesting-model' }, queueLength: 0, modelKey: 'fixture/model' }, messages, persistentMemorySnapshot, queuedMessages: [], queueLength: 0 }), { status: 200, headers: { 'Content-Type': 'application/json' } }) }
+      if (url.includes('/history')) { const params = new URL(location.href).searchParams; const compact = params.get('compact') === '1' || params.get('short') === '1'; const messages = compact ? allMessages.slice(-101).map(message => message.__meta.seq === 1101 ? { ...message, modelVisible: false } : message) : allMessages; const persistentMemorySnapshot = params.get('snapshot') === '1' ? 'expanded persistent snapshot '.repeat(800) : undefined; return new Response(JSON.stringify({ session: { id: 'fixture/main', busy: true, runtimeState: { state: 'requesting-model' }, queueLength: 0, modelKey: 'fixture/model' }, messages, persistentMemorySnapshot, memorySize: persistentMemorySnapshot ? { bytes: 21600, estimatedTokens: 7128, contextFraction: 7128 / (Number(params.get('contextLimit')) || 1000), thresholdFraction: .15, overThreshold: 7128 > (Number(params.get('contextLimit')) || 1000) * .15 } : undefined, queuedMessages: [], queueLength: 0 }), { status: 200, headers: { 'Content-Type': 'application/json' } }) }
       if (url.includes('/models')) { const params = new URL(location.href).searchParams; const contextLimit = params.get('unknownFree') === '1' ? null : Number(params.get('contextLimit')) || 1000; return new Response(JSON.stringify({ models: [{ key: 'fixture/model', contextLimit }] }), { status: 200, headers: { 'Content-Type': 'application/json' } }) }
       if (url.includes('/asr/status')) return new Response(JSON.stringify({ configured: false, available: false }), { status: 200, headers: { 'Content-Type': 'application/json' } })
       return new Response('{}', { status: 404 })
@@ -539,3 +539,29 @@ for (const preferences of [{ showScrollbar: false, showMinimap: true }, { showSc
     }
   })
 }
+
+
+test('memory size appears in the context overview and highlights the configured limit', async () => {
+  await page.goto(fixtureUrl, { waitUntil: 'load' })
+  await page.evaluate(() => { localStorage.setItem('foxwarm.contextScrollbar.showMinimap', 'true') })
+  await mount(1000, 30000, 720, false, true, false, true)
+  await page.hover('.foxwarm-context-scrollbar-info-button')
+  const warning = await page.$eval('.foxwarm-memory-size', el => ({ text: el.textContent, warning: el.dataset.memoryWarning, color: getComputedStyle(el).color }))
+  assert.match(warning.text, /21.1 KB/)
+  assert.match(warning.text, /7,128 tokens/)
+  assert.match(warning.text, /15% memory limit/)
+  assert.equal(warning.warning, 'true')
+  assert.equal(await page.$eval('.foxwarm-context-scrollbar-info-button', el => el.textContent), '!')
+  if (process.env.FOXWARM_MEMORY_SCREENSHOT_DIR) {
+    await page.screenshot({ path: process.env.FOXWARM_MEMORY_SCREENSHOT_DIR + '/memory-warning.png' })
+  }
+  await mount(1000, 200000, 720, false, true, false, true)
+  await page.hover('.foxwarm-context-scrollbar-info-button')
+  const normal = await page.$eval('.foxwarm-memory-size', el => ({ text: el.textContent, warning: el.dataset.memoryWarning, color: getComputedStyle(el).color }))
+  assert.equal(normal.warning, 'false')
+  assert.doesNotMatch(normal.text, /Above/)
+  assert.notEqual(normal.color, warning.color)
+  if (process.env.FOXWARM_MEMORY_SCREENSHOT_DIR) {
+    await page.screenshot({ path: process.env.FOXWARM_MEMORY_SCREENSHOT_DIR + '/memory-normal.png' })
+  }
+})

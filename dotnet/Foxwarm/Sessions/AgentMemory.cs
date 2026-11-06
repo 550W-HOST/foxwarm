@@ -2,6 +2,7 @@ using System.Collections;
 using System.Text;
 using System.Text.RegularExpressions;
 using Foxwarm;
+using Foxwarm.Models;
 using YamlDotNet.Serialization;
 
 namespace Foxwarm.Sessions;
@@ -9,7 +10,9 @@ namespace Foxwarm.Sessions;
 internal sealed partial class AgentMemory(
     AgentCatalog agents,
     Skills skills,
-    string? frameworkTemplatePath = null
+    string? frameworkTemplatePath = null,
+    HostModels? models = null,
+    Action<string>? warning = null
 )
 {
     public async Task<string> BuildAsync(
@@ -130,10 +133,17 @@ internal sealed partial class AgentMemory(
         var bodyText = blocks.ToString().Trim();
         if (externalRuntime)
             return bodyText.Length == 0 ? directory : bodyText + "\n\n" + directory;
-        return ConditionalMemory.BuildCurrentModelSnapshot(
+        var snapshot = ConditionalMemory.BuildCurrentModelSnapshot(
             concreteModelId,
             bodyText.Length == 0 ? directory : bodyText + "\n\n" + directory
         );
+        var size = MemorySize.Measure(snapshot, models?.Capture());
+        if (!size.OverThreshold)
+            return snapshot;
+        (warning ?? Console.Error.WriteLine)(
+            $"Memory warning: Agent={agentName} Session={sessionId} bytes={size.Bytes} estimatedTokens={size.EstimatedTokens} contextPercent={MemorySize.Percent(size.ContextFraction!.Value)} thresholdPercent={MemorySize.Percent(size.ThresholdFraction)}"
+        );
+        return snapshot + "\n\n" + size.Notice();
     }
 
     private static string Xml(string value) =>

@@ -49,6 +49,16 @@ Tool catalogs remain independent of memory snapshots. The [canonical default dec
 - Exact-target refresh resolves an existing lifetime before assembly and uses its saved selection and Agent-relative path base. The maintained reader does not reapply destination isolation to [creator-admitted custom sources](../behaviors/conversation-and-history.md#custom-prompt-files-and-legacy-isolation). Default targeting and refresh admission are governed by [instruction adoption](../behaviors/conversation-and-history.md#when-do-changed-instructions-reach-the-model); refreshing does not choose an arbitrary virtual leaf.
 - Compaction commit keeps its existing memory reread behavior when a truthful live snapshot identity exists. Detached compact prompts are never copied back over live authority.
 
+## Memory size warning
+
+### D-memory-size-warning
+
+**Directly requested observability for excessive fixed memory.** [2026-11-07] The maintained C# host estimates the materialized snapshot with the existing compaction token estimator. `llm.memoryWarningThresholdPercent` is a fraction in `(0, 1]`, defaults to `0.15`, and compares strictly against the concrete model's effective context window, including the normal 200000 fallback. If no effective window can be resolved, size remains available but the fraction check is skipped. Setup's application schema and the shipped configuration template expose the setting; there is no environment override.
+
+`AgentMemory.BuildAsync` appends one advisory line only when the newly built snapshot exceeds the threshold and writes one Main diagnostic identifying Agent, Session, byte count and estimated tokens. The advisory uses the snapshot size before adding its own line. Matching snapshots reuse their exact bytes without another log; refresh timing, model/runtime filtering, detached ownership, first-line identity and cache lineage are unchanged. This warning never trims or blocks memory. Default source discovery still includes only top-level `memory/*.md` across the inheritance chain; reference subdirectories are not injected.
+
+`MemorySize` also measures the saved snapshot for authenticated WebUI history responses. The context overview shows its UTF-8 KB and estimated tokens, with an over-limit highlight; these display estimates include an existing advisory line. Scoped identity responses omit these memory details with the snapshot. Request failures separately expose [fixed-prefix estimates](./context-compaction.md#request-size-failure-diagnostics), without changing the reusable prefix. Retained TypeScript Main is a reference target, not a second maintained request path for this feature.
+
 ## Journal linkage
 
 Exact request and attempt prompt durability is owned by [canonical LLM request journal](./llm-request-journal.md). The prompt-cache key remains stable across snapshot rebuilds and continues to own prefix lineage and session-hash routing.
