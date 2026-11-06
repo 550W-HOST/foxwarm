@@ -31,7 +31,7 @@ Owns persisted MCP server configuration, safe summaries, transport connection li
 |---|---|
 | config normalization | Current `transport` plus legacy `type` reader and validated persisted server shapes |
 | live config snapshot | First-load cache, store-reset invalidation, and persist-before-publish managed updates |
-| server summary | Names/counts only for secret-bearing args/env/header fields |
+| server summary | Names/counts only for secret-bearing args/env/header fields; redacted URL credentials |
 | caller-owned HTTP connection | Streamable HTTP, SSE, and `auto` lifecycle shared with opt-in notification reception |
 | stdio pool | Config-signature keyed reuse with idle cleanup |
 | `listTools` / `callTool` | Resolve enabled server, acquire caller connection, invoke once, and update idle state |
@@ -89,6 +89,8 @@ Normalize internal results immediately after MCP invocation: remove plain JSON d
 ### D-mcp-safe-summary
 
 Model/admin summaries expose configuration shape, names, and counts, never token/header/env values or command argument content.
+
+[2026-11-06] The maintained C# `list_mcp_servers` summary keeps the URL scheme, host, port and path but drops user info and fragment and replaces each query value (or bare query item) with `REDACTED`; an unparseable URL becomes `REDACTED`. Retained TypeScript returned the URL verbatim. Path-embedded credentials are not detected. The administrator OAuth status API keeps the configured URL.
 
 ### D-mcp-unified-tools
 

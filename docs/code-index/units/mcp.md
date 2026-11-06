@@ -1,7 +1,7 @@
 # Unit: Outbound MCP client
 
 Files: `dotnet/Foxwarm/McpClient.Connections.cs`, `dotnet/Foxwarm/McpClient.External.cs`, `dotnet/Foxwarm/McpClient.ExternalResults.cs`, `dotnet/Foxwarm/McpClient.cs`, `dotnet/Foxwarm/McpClient.Authorizations.cs`, `dotnet/Foxwarm/McpConfiguration.cs`
-Secondary files: `dotnet/Foxwarm.Tests/Mcp/OutboundMcpFixture.cs`, `dotnet/Foxwarm.Tests/Mcp/OutboundMcpLifecycleTests.cs`, `dotnet/Foxwarm.Tests/Mcp/OutboundMcpResultsTests.cs`, `dotnet/Foxwarm.Tests/Mcp/Fixtures/outbound-peer.mjs`, `packages/webui/test/mainHostMcp.e2e.mjs`, `packages/webui/test/mainHostMcp.peer.mjs`
+Secondary files: `dotnet/Foxwarm.Tests/Mcp/McpServerSummaryTests.cs`, `dotnet/Foxwarm.Tests/Mcp/OutboundMcpFixture.cs`, `dotnet/Foxwarm.Tests/Mcp/OutboundMcpLifecycleTests.cs`, `dotnet/Foxwarm.Tests/Mcp/OutboundMcpResultsTests.cs`, `dotnet/Foxwarm.Tests/Mcp/Fixtures/outbound-peer.mjs`, `packages/webui/test/mainHostMcp.e2e.mjs`, `packages/webui/test/mainHostMcp.peer.mjs`
 
 ## Purpose
 
@@ -9,7 +9,7 @@ Loads configured outbound MCP servers, maintains official SDK clients/transports
 
 ## Stable methods and callers
 
-- `McpConfiguration.Get`, `Snapshot`, and `UpdateAsync` own validated, persist-before-publish live server configuration and redacted summaries. Manual file edits are startup-only.
+- `McpConfiguration.Get`, `Snapshot`, and `UpdateAsync` own validated, persist-before-publish live server configuration; `McpClient.Summaries` builds the [redacted summaries](./src-mcp-client.md#d-mcp-safe-summary). Manual file edits are startup-only.
 - `McpClient.ListToolsAsync` and `CallAsync` accept the actual trusted Session owner and its captured connection generation from `UnifiedTools`/`ToolRegistry`; nested ToolScript uses the same Session executor. List/call admission requires that trusted Session owner or a verified external context; there is no unowned HTTP connection mode.
 - `WithClientAsync`, `ConnectEntryAsync`, and `ObserveDisconnectAsync` acquire/release pooled bindings for every connection, fence late initialization, and remove disconnected clients. `MatchesConfiguration` rechecks the live configuration at acquisition and publication, including concurrent publication before the mutation hook runs.
 - `InvalidateServer` runs after committed managed configuration changes; `InvalidateOwner` advances the exact owner's connection generation during real identity move/deletion. `BeginShutdown`, `DrainAsync`, and `DisposeAsync` fence new calls and drain admitted operations, initializers, disposal, and disconnect observers.
@@ -32,6 +32,8 @@ Secrets are redacted using the exact configuration which supplied a connection's
 ## Tests
 
 `OutboundMcpEnvironmentTests` exercises the actual stdio peer for safe defaults, explicit overlay, shell-function exclusion and unrelated credential isolation on the executing platform; Linux execution does not qualify Windows process startup.
+
+`McpServerSummaryTests` checks that server summaries omit URL, header, token, env and argument credentials.
 
 `OutboundMcpDiscoveryTests` qualifies the real 60-second discovery boundary against a delayed official SDK peer, subsequent discovery, no hidden retries/effects, and independence from the tool-call override.
 

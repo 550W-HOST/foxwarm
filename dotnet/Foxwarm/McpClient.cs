@@ -208,13 +208,42 @@ internal sealed partial class McpClient : IAsyncDisposable
                         ["authentication"] = config["oauth"] is not null ? "oauth" : "static",
                         ["timeoutSeconds"] = config["timeoutSeconds"]?.DeepClone(),
                     };
-                    foreach (var key in new[] { "description", "url", "command", "cwd", "stderr" })
+                    foreach (var key in new[] { "description", "command", "cwd", "stderr" })
                         if (config[key] is not null)
                             summary[key] = config[key]!.DeepClone();
+                    if (SessionWait.Text(config["url"]) is string url)
+                        summary["url"] = SummaryUrl(url);
                     return (JsonNode?)summary;
                 })
                 .ToArray()
         );
+
+    // Summaries keep the endpoint but not URL-embedded credentials: user info
+    // and fragments are dropped and query values are replaced.
+    private static string SummaryUrl(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+            return "REDACTED";
+        var safe = uri.GetComponents(
+            UriComponents.SchemeAndServer | UriComponents.Path,
+            UriFormat.UriEscaped
+        );
+        var query = uri.GetComponents(UriComponents.Query, UriFormat.UriEscaped);
+        if (query.Length == 0)
+            return safe;
+        return safe
+            + "?"
+            + string.Join(
+                "&",
+                query
+                    .Split('&')
+                    .Select(part =>
+                        part.IndexOf('=') is var equals and > 0
+                            ? part[..equals] + "=REDACTED"
+                            : "REDACTED"
+                    )
+            );
+    }
 
     internal Task<IReadOnlyList<JsonObject>> ListToolsAsync(
         string server,
