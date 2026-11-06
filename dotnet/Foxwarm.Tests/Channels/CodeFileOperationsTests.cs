@@ -23,14 +23,11 @@ public sealed class CodeFileOperationsTests
         Assert.Equal(1, file["type"]!.GetValue<int>());
         Assert.Equal(3UL, file["size"]!.GetValue<ulong>());
         Assert.True(Number(file["ctime"]!) > 0);
-        Assert.Equal(
-            new DateTimeOffset(modified).ToUnixTimeMilliseconds(),
-            Number(file["mtime"]!)
-        );
+        Assert.Equal(new DateTimeOffset(modified).ToUnixTimeMilliseconds(), Number(file["mtime"]!));
         var directory = CodeFileOperations.StatFile(temp.Path);
         Assert.Equal(2, directory["type"]!.GetValue<int>());
         Assert.True(Number(directory["ctime"]!) > 0);
-        if (OperatingSystem.IsMacOS() || OperatingSystem.IsWindows())
+        if (OperatingSystem.IsWindows())
             Assert.Equal(0UL, directory["size"]!.GetValue<ulong>());
     }
 
@@ -65,8 +62,11 @@ public sealed class CodeFileOperationsTests
                 )
             );
             Assert.Equal(66, CodeFileOperations.StatFile(directoryLink)["type"]!.GetValue<int>());
+            await Task.Delay(1100);
             File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-            Assert.Null(CodeFileOperations.StatFile(link)["permissions"]);
+            var writable = CodeFileOperations.StatFile(link);
+            Assert.Null(writable["permissions"]);
+            Assert.True(Number(writable["ctime"]!) > Number(stat["ctime"]!));
         }
         finally
         {
@@ -86,9 +86,19 @@ public sealed class CodeFileOperationsTests
         File.CreateSymbolicLink(link, missing);
         foreach (var path in new[] { missing, link })
         {
-            var error = Assert.Throws<CodeServiceException>(() => CodeFileOperations.StatFile(path));
+            var error = Assert.Throws<CodeServiceException>(() =>
+                CodeFileOperations.StatFile(path)
+            );
             Assert.Equal("FileNotFound", error.Code);
         }
+        var file = Path.Combine(temp.Path, "file");
+        File.WriteAllText(file, "content");
+        var nonDirectoryLink = Path.Combine(temp.Path, "non-directory-link");
+        File.CreateSymbolicLink(nonDirectoryLink, Path.Combine(file, "child"));
+        var nonDirectory = Assert.Throws<CodeServiceException>(() =>
+            CodeFileOperations.StatFile(nonDirectoryLink)
+        );
+        Assert.Equal("FileNotADirectory", nonDirectory.Code);
         var entries = CodeFileOperations.ReadDirectory(temp.Path)["entries"]!.AsArray();
         Assert.Equal(
             0,
@@ -96,6 +106,28 @@ public sealed class CodeFileOperationsTests
                 "type"
             ]!.GetValue<int>()
         );
+    }
+
+    [Fact]
+    public async Task Unix_special_files_are_not_admitted_as_regular_Code_files()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        using var temp = new TempDirectory();
+        var pipe = Path.Combine(temp.Path, "pipe");
+        using (var process = System.Diagnostics.Process.Start("mkfifo", new[] { pipe })!)
+        {
+            await process.WaitForExitAsync();
+            Assert.Equal(0, process.ExitCode);
+        }
+        Assert.Equal(0, CodeFileOperations.StatFile(pipe)["type"]!.GetValue<int>());
+        var link = Path.Combine(temp.Path, "pipe-link");
+        File.CreateSymbolicLink(link, pipe);
+        Assert.Equal(64, CodeFileOperations.StatFile(link)["type"]!.GetValue<int>());
+        var error = await Assert.ThrowsAsync<CodeServiceException>(() =>
+            CodeFileOperations.ReadFileAsync(pipe, CancellationToken.None)
+        );
+        Assert.Equal("FileIsADirectory", error.Code);
     }
 
     [Fact]
@@ -107,7 +139,11 @@ public sealed class CodeFileOperationsTests
         var path = Path.Combine(directory, "file.bin");
         using var content = new MemoryStream([0, 255, 17]);
         var result = await CodeFileOperations.WriteFileAsync(
-            path, content, true, false, CancellationToken.None
+            path,
+            content,
+            true,
+            false,
+            CancellationToken.None
         );
         Assert.Equal(1, result["stat"]!["type"]!.GetValue<int>());
         Assert.Equal(

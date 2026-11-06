@@ -29,6 +29,49 @@ internal static class CodeFileOperations
         internal uint ModifiedNanoseconds;
     }
 
+    [StructLayout(LayoutKind.Explicit, Size = 144)]
+    private struct DarwinStat
+    {
+        [FieldOffset(4)]
+        internal ushort Mode;
+
+        [FieldOffset(48)]
+        internal long ModifiedSeconds;
+
+        [FieldOffset(56)]
+        internal long ModifiedNanoseconds;
+
+        [FieldOffset(64)]
+        internal long ChangeSeconds;
+
+        [FieldOffset(72)]
+        internal long ChangeNanoseconds;
+
+        [FieldOffset(96)]
+        internal long Size;
+    }
+
+    private readonly record struct UnixStat(
+        ushort Mode,
+        ulong Size,
+        long ChangeSeconds,
+        long ChangeNanoseconds,
+        long ModifiedSeconds,
+        long ModifiedNanoseconds
+    );
+
+    [DllImport("libc", EntryPoint = "stat", SetLastError = true)]
+    private static extern int StatDarwin(string path, out DarwinStat info);
+
+    [DllImport("libc", EntryPoint = "lstat", SetLastError = true)]
+    private static extern int LStatDarwin(string path, out DarwinStat info);
+
+    [DllImport("libc", EntryPoint = "stat$INODE64", SetLastError = true)]
+    private static extern int StatDarwinIntel(string path, out DarwinStat info);
+
+    [DllImport("libc", EntryPoint = "lstat$INODE64", SetLastError = true)]
+    private static extern int LStatDarwinIntel(string path, out DarwinStat info);
+
     [DllImport("libc", EntryPoint = "statx", SetLastError = true)]
     private static extern int Statx(
         int directory,
@@ -87,6 +130,7 @@ internal static class CodeFileOperations
                 5 or 13 => "NoPermissions",
                 17 or 80 or 183 => "FileExists",
                 39 or 145 => "DirectoryNotEmpty",
+                66 when OperatingSystem.IsMacOS() => "DirectoryNotEmpty",
                 _ => "Unknown",
             },
             _ => "Unknown",
@@ -120,24 +164,48 @@ internal static class CodeFileOperations
     )]
     private static extern bool MakeDirectoryWindows(string path, IntPtr securityAttributes);
 
-    private static LinuxStat Stat(string path, bool link)
+    private static UnixStat Stat(string path, bool link)
     {
+        if (OperatingSystem.IsMacOS())
+        {
+            // Match the Darwin stat64 ABI used by OpenFileMetadata: Intel has
+            // suffixed symbols; Apple Silicon uses the unsuffixed entry points.
+            DarwinStat info;
+            var result =
+                RuntimeInformation.ProcessArchitecture == Architecture.X64
+                    ? (link ? LStatDarwinIntel(path, out info) : StatDarwinIntel(path, out info))
+                    : (link ? LStatDarwin(path, out info) : StatDarwin(path, out info));
+            if (result != 0)
+                throw NativeError(path);
+            return new(
+                info.Mode,
+                checked((ulong)info.Size),
+                info.ChangeSeconds,
+                info.ChangeNanoseconds,
+                info.ModifiedSeconds,
+                info.ModifiedNanoseconds
+            );
+        }
         if (!OperatingSystem.IsLinux())
             throw new CodeServiceException(
                 "Unavailable",
                 "Code filesystem services require a supported native host."
             );
-        if (Statx(-100, path, link ? 0x100 : 0, 0x7ff, out var info) != 0)
+        if (Statx(-100, path, link ? 0x100 : 0, 0x7ff, out var linux) != 0)
             throw NativeError(path);
-        return info;
+        return new(
+            linux.Mode,
+            linux.Size,
+            linux.ChangeSeconds,
+            linux.ChangeNanoseconds,
+            linux.ModifiedSeconds,
+            linux.ModifiedNanoseconds
+        );
     }
 
     internal static JsonObject StatFile(string path)
     {
-        // Keep Linux statx metadata (including special-file types and status-change
-        // time) intact. Darwin uses the runtime's portable filesystem APIs rather
-        // than interpreting a platform-specific struct stat ABI.
-        if (OperatingSystem.IsWindows() || OperatingSystem.IsMacOS())
+        if (OperatingSystem.IsWindows())
         {
             try
             {
@@ -147,40 +215,14 @@ internal static class CodeFileOperations
                 var isLink = (attributes & FileAttributes.ReparsePoint) != 0;
                 if (isLink && info.ResolveLinkTarget(true) is { } target)
                     info = target;
-                // ResolveLinkTarget may return a descriptor for a missing target.
-                // GetAttributes throws in that case instead of treating its -1
-                // sentinel Attributes value as a directory.
-                if (OperatingSystem.IsMacOS())
-                    attributes = File.GetAttributes(info.FullName);
-                else
-                    attributes = info.Attributes;
-                directory = (attributes & FileAttributes.Directory) != 0;
-                var metadata = new JsonObject
+                directory = (info.Attributes & FileAttributes.Directory) != 0;
+                return new()
                 {
                     ["type"] = (directory ? 2 : 1) | (isLink ? 64 : 0),
                     ["ctime"] = new DateTimeOffset(info.CreationTimeUtc).ToUnixTimeMilliseconds(),
                     ["mtime"] = new DateTimeOffset(info.LastWriteTimeUtc).ToUnixTimeMilliseconds(),
                     ["size"] = directory ? 0UL : checked((ulong)((FileInfo)info).Length),
                 };
-                if (
-                    OperatingSystem.IsMacOS()
-                    && (File.GetUnixFileMode(info.FullName) & UnixFileMode.UserWrite) == 0
-                )
-                    metadata["permissions"] = 1;
-                return metadata;
-            }
-            catch (DirectoryNotFoundException error) when (OperatingSystem.IsMacOS())
-            {
-                // .NET folds ENOTDIR into DirectoryNotFoundException on Unix.
-                // Preserve the filesystem API's distinct non-directory error.
-                for (
-                    var parent = Path.GetDirectoryName(path);
-                    parent is not null;
-                    parent = Path.GetDirectoryName(parent)
-                )
-                    if (File.Exists(parent) && !Directory.Exists(parent))
-                        throw FileError("FileNotADirectory", path, error.Message);
-                throw FileError(error, path);
             }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException)
             {
@@ -250,7 +292,7 @@ internal static class CodeFileOperations
                 // Source falls back to the directory entry itself, never follows a broken link.
                 try
                 {
-                    if (OperatingSystem.IsLinux())
+                    if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
                         type = (Stat(child, true).Mode & 0xf000) switch
                         {
                             0x8000 => 1,
