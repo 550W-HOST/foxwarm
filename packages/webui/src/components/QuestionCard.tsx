@@ -18,6 +18,8 @@ import {
   type QuestionRecord,
 } from '../sessionQuestions'
 import { useSessionQuestionsContext } from '../sessionQuestionsState'
+import { questionContentSummary } from '../questionContent'
+import QuestionContent from './QuestionContent'
 import type { FunctionCall, FunctionResponse } from './chatShared'
 
 const isTextEntry = (target: EventTarget | null) => target instanceof HTMLElement && (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT' && (target as HTMLInputElement).type === 'text')
@@ -178,8 +180,8 @@ function QuestionBody({ question, entry, onChange, otherId, compact, disabled }:
 export function QuestionOutcome({ record }: { record: QuestionRecord }) {
   const [expanded, setExpanded] = useState(false)
   const summary = record.status === 'answered'
-    ? record.questions.length === 1 ? describeQuestionAnswer(record, 0) : `${record.questions.length} questions answered`
-    : record.status === 'closed' ? record.closeNote || '' : ''
+    ? record.questions.length === 1 ? questionContentSummary(describeQuestionAnswer(record, 0), record.answer?.viaMessage) : `${record.questions.length} questions answered`
+    : record.status === 'closed' ? questionContentSummary(record.closeNote || '') : ''
   return (
     <div className="min-w-0">
       <button type="button" aria-expanded={expanded} onClick={() => setExpanded(value => !value)} className="flex w-full min-w-0 items-center gap-1.5 text-left text-sm">
@@ -191,12 +193,12 @@ export function QuestionOutcome({ record }: { record: QuestionRecord }) {
         <dl className="mt-2 flex flex-col gap-2 text-sm">
           {record.questions.map((question, index) => (
             <div key={index} className="min-w-0">
-              <dt className="whitespace-pre-wrap break-words text-fw-text-muted">{question.question}</dt>
-              {record.status === 'answered' && <dd className="whitespace-pre-wrap break-words text-fw-text-strong">{describeQuestionAnswer(record, index) || 'No answer'}</dd>}
+              <dt className="mb-1 text-fw-text-muted"><QuestionContent text={question.question} /></dt>
+              {record.status === 'answered' && <dd className="min-w-0 rounded-md border border-fw-border-muted bg-fw-surface-sunken/50 px-2.5 py-1.5"><QuestionContent text={describeQuestionAnswer(record, index) || 'No answer'} viaMessage={record.answer?.viaMessage} /></dd>}
             </div>
           ))}
-          {record.answer?.note && <div className="text-fw-text-muted">Note: <span className="text-fw-text-strong">{record.answer.note}</span></div>}
-          {record.status === 'closed' && record.closeNote && <div className="text-fw-text-muted">{record.closeNote}</div>}
+          {record.answer?.note && <div className="text-fw-text-muted"><span className="text-xs">Note</span><QuestionContent text={record.answer.note} /></div>}
+          {record.status === 'closed' && record.closeNote && <div className="text-fw-text-muted"><QuestionContent text={record.closeNote} /></div>}
         </dl>
       )}
     </div>
@@ -372,12 +374,12 @@ export function QuestionAnswerBubble({ answer }: { answer: QuestionAnswerMeta })
         const value = [...(entry?.selected || []), ...(entry?.text ? [entry.text] : [])].join('; ')
         return (
           <div key={index} className="min-w-0">
-            <div className="whitespace-pre-wrap break-words text-xs opacity-75">{question}</div>
-            {!skipped && <div className="whitespace-pre-wrap break-words">{value || 'No answer'}</div>}
+            <div className="text-xs opacity-75"><QuestionContent text={question} userBubble /></div>
+            {!skipped && <QuestionContent text={value || 'No answer'} userBubble />}
           </div>
         )
       })}
-      {answer.note && <div className="whitespace-pre-wrap break-words text-xs"><span className="opacity-75">Note: </span>{answer.note}</div>}
+      {answer.note && <div className="text-xs"><span className="opacity-75">Note: </span><QuestionContent text={answer.note} userBubble /></div>}
     </div>
   )
 }

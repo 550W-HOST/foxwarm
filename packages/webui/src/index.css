@@ -276,6 +276,12 @@ html[data-foxwarm-display-effect="crt"] .foxwarm-display-effect-overlay::after {
   box-shadow: var(--foxwarm-accent-glow);
 }
 
+/* Question answers inside a user bubble must retain its readable foreground,
+ * including links whose regular/console Markdown rules set an explicit color. */
+html .foxwarm-markdown.foxwarm-question-user-content :is(a, a:hover) {
+  color: var(--foxwarm-color-user-text) !important;
+}
+
 .foxwarm-assistant-message-markdown {
   --tw-prose-body: var(--foxwarm-color-assistant-text);
   --tw-prose-headings: var(--foxwarm-color-text-strong);

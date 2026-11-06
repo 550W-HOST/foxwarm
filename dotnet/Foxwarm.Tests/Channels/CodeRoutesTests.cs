@@ -150,7 +150,7 @@ public sealed class CodeRoutesTests
     [Fact]
     public async Task Local_Code_native_metadata_and_link_errors_follow_the_filesystem_service_contract()
     {
-        if (!OperatingSystem.IsLinux())
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
             return;
         await using var f = await Fixture.Create();
         var file = Path.Combine(f.Work, "readonly");
@@ -509,7 +509,11 @@ public sealed class CodeRoutesTests
                 "/api/vscode-web/git/status?workspace=" + Uri.EscapeDataString(repo)
             )
         );
-        Assert.Equal(repo, status["topLevel"]!.ToString());
+        // Git canonicalizes parent symlinks (notably /var -> /private/var on macOS).
+        Assert.Equal(
+            (await Git("rev-parse", "--show-toplevel")).Trim(),
+            status["topLevel"]!.ToString()
+        );
         Assert.Contains(
             status["changes"]!.AsArray(),
             row => row!["kind"]!.ToString() == "untracked"

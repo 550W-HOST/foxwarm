@@ -283,24 +283,27 @@ function queryString(params) {
   return search.toString();
 }
 function mapFileSystemError(uri, status, code, message) {
+  const detail = message ? `${message}
+
+${uri.toString()}` : uri;
   switch (code || status) {
     case "FileNotFound":
     case 404:
-      return vscode.FileSystemError.FileNotFound(uri);
+      return vscode.FileSystemError.FileNotFound(detail);
     case "FileExists":
     case 409:
-      return vscode.FileSystemError.FileExists(uri);
+      return vscode.FileSystemError.FileExists(detail);
     case "FileNotADirectory":
-      return vscode.FileSystemError.FileNotADirectory(uri);
+      return vscode.FileSystemError.FileNotADirectory(detail);
     case "FileIsADirectory":
-      return vscode.FileSystemError.FileIsADirectory(uri);
+      return vscode.FileSystemError.FileIsADirectory(detail);
     case "NoPermissions":
     case 401:
     case 403:
-      return vscode.FileSystemError.NoPermissions(uri);
+      return vscode.FileSystemError.NoPermissions(detail);
     case "Unavailable":
     case 503:
-      return vscode.FileSystemError.Unavailable(uri);
+      return vscode.FileSystemError.Unavailable(detail);
     default:
       return new vscode.FileSystemError(message || `Foxwarm filesystem request failed (${status}).`);
   }

@@ -118,7 +118,7 @@ test('ask_user questions are answered from the card, the dock and an ordinary me
     // The answering message shows question/answer pairs, not the model-facing protocol text.
     const bubble = await page.waitForSelector('[data-question-answer-bubble="answered"]')
     const bubbleText = await bubble.evaluate(node => node.textContent)
-    assert.match(bubbleText, /Which database should the service use\?PostgreSQL/)
+    assert.match(bubbleText, /Which database should the service use\?\s*PostgreSQL/)
     assert.match(bubbleText, /svc-data/)
     assert.doesNotMatch(bubbleText, new RegExp(questionId + '|Answer to question'))
     // A second answer for the same question is rejected.
