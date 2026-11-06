@@ -139,11 +139,11 @@ if (-not $NativeExecutable) {
 
     Write-Host "Extracting source ..."
     # GNU tar on PATH interprets a drive-qualified archive as a remote host.
-    # Extract from the owned source directory so both GNU tar and Windows tar
-    # receive local relative paths.
+    # Keep the archive name relative for GNU tar, while the explicit destination
+    # preserves the source root independently of PowerShell/process cwd differences.
     Push-Location -LiteralPath $SourceDir
     try {
-        & tar -xzf './source.tar.gz' -C '.'
+        & tar -xzf './source.tar.gz' -C $SourceDir
         if ($LASTEXITCODE -ne 0) { throw 'Node source extraction failed.' }
     } finally {
         Pop-Location
