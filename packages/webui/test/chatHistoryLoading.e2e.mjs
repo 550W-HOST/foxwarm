@@ -3038,6 +3038,8 @@ test('real Chat captions connect reasoning, generated summaries, execution and t
   await page.evaluate(() => window.emitFixtureMessage({role:'model',parts:[{functionCall:{id:'script',name:'run_script',args:{summary:'Validate streaming updates',code:'return 1'}}}],__meta:{seq:2,timestamp:200,llmRequestId:'caption-stream',llmSegment:{outputStart:0,outputEndExclusive:4,complete:true}}}))
   await expect('Validate streaming updates')
   await runtime({state:'running-tool',tool:{id:'script',name:'run_script',source:'builtin',argsPreview:'Validate streaming updates',startedAt:200}})
+  // Retained text already matches before React commits the new runtime state.
+  await page.waitForSelector('[data-processing-runtime-state="running-tool"]')
   await expect('Validate streaming updates')
   assert.equal(await page.$eval('[data-processing-runtime-state]',el=>el.dataset.runtimePresentation),'tool')
   assert.notEqual(await page.$eval('[data-runtime-caption]',el=>getComputedStyle(el).color),requestInk)
@@ -3048,6 +3050,7 @@ test('real Chat captions connect reasoning, generated summaries, execution and t
   assert.match(await page.$eval('[data-runtime-details]',el=>el.textContent),/run_script/)
   await page.keyboard.press('Escape')
   await request('next-request')
+  await page.waitForSelector('[data-processing-runtime-state="requesting-model"]')
   const nextUpdate = (sequence,text) => emit({type:'model-stream-update',streamVersion:2,streamId:'next-request',sequence,partDeltas:[{outputIndex:0,kind:'reasoning',summaryIndex:0,textDelta:{offset:0,text}}]})
   await nextUpdate(1,'**Intermediate heading**\nBody.')
   await expect('Validate streaming updates')
