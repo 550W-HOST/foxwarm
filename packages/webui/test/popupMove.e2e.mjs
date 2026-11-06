@@ -196,6 +196,7 @@ test('moves each supported tab to the expected URL and terminal move never delet
       assert.equal(opened.pathname.startsWith('/prefix/ui/'), true)
       if (kind === 'code') {
         assert.equal(opened.pathname, '/prefix/ui/vscode-web/')
+        assert.equal(opened.searchParams.has('embedded'), false)
         assert.equal(opened.searchParams.get('nodeId'), tabs[tabId].nodeId)
         assert.equal(opened.searchParams.get('initialFolderUri'), `foxwarm://node+${tabs[tabId].nodeId}${tabs[tabId].path}`)
       }

@@ -39,6 +39,7 @@ test('Code paths normalize absolute POSIX paths', () => {
 test('new Code windows use their Node persistent workspace', () => {
   const url = makeVscodeWebUrl('/proxy/api', 'https://example.test', { nodeId: 'master', path: '/app/src' })
   assert.equal(url.pathname, '/proxy/vscode-web/')
+  assert.equal(url.searchParams.has('embedded'), false)
   assert.equal(url.searchParams.get('initialFolderUri'), 'foxwarm://node+master/app/src')
 })
 
@@ -48,7 +49,7 @@ test('Code workspace URLs preserve remote node identity', () => {
 })
 
 test('embedded Code starts from a persistent workspace URL', () => {
-  const url = makeVscodeWebUrl('/api', 'https://example.test', { nodeId: 'master', path: '/app' })
+  const url = makeVscodeWebUrl('/api', 'https://example.test', { nodeId: 'master', path: '/app' }, { embedded: true })
   assert.equal(url.searchParams.get('embedded'), 'true')
   assert.equal(url.searchParams.get('initialFolderUri'), 'foxwarm://node+master/app')
   assert.equal(url.searchParams.has('folderUri'), false)
@@ -74,6 +75,7 @@ test('new-tab file targets are encoded as startup URL parameters', () => {
   assert.ok(request)
   const url = makeVscodeWebUrl('/api', 'https://example.test', { nodeId: 'master', path: '/app' }, { openFile: request })
   assert.equal(url.searchParams.get('initialFolderUri'), 'foxwarm://node+master/app')
+  assert.equal(url.searchParams.has('embedded'), false)
   assert.equal(url.searchParams.get('openFilePath'), '/app/src/index.ts')
   assert.equal(url.searchParams.get('openFileNodeId'), 'master')
   assert.equal(url.searchParams.get('startLine'), '7')
@@ -82,7 +84,7 @@ test('new-tab file targets are encoded as startup URL parameters', () => {
 test('new-tab commit targets are encoded as typed startup URL parameters', () => {
   const target = { nodeId: 'worker-a', path: '/repo', commitId: '85ad4d1b' }
   const url = makeVscodeWebUrl('/api', 'https://example.test', target, { openCommit: target })
-  assert.equal(url.searchParams.get('embedded'), 'true')
+  assert.equal(url.searchParams.has('embedded'), false)
   assert.equal(url.searchParams.get('initialFolderUri'), null)
   assert.equal(url.searchParams.get('openCommitPath'), '/repo')
   assert.equal(url.searchParams.get('openCommitNodeId'), 'worker-a')

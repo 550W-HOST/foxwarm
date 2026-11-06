@@ -544,7 +544,7 @@ function App() {
     if (tab.type !== 'vscode') continue
     let frame = codeFrames.get(tab.nodeId)
     if (!frame) {
-      frame = createCodeFrame(makeVscodeWebUrl(API_BASE_PATH, window.location.origin, tab).toString())
+      frame = createCodeFrame(makeVscodeWebUrl(API_BASE_PATH, window.location.origin, tab, { embedded: true }).toString())
       codeFrames.set(tab.nodeId, frame)
     }
     const pane = findPaneContainingTab(root, tab.id)
@@ -968,7 +968,7 @@ function App() {
   const requestEmbeddedCode = (target: CodeTarget, request: CodeOpenRequest): Promise<unknown> => {
     let frame = codeFrames.get(target.nodeId)
     if (!frame) {
-      frame = createCodeFrame(makeVscodeWebUrl(API_BASE_PATH, window.location.origin, request.kind === 'openCommit' ? undefined : target, { nodeId: target.nodeId }).toString())
+      frame = createCodeFrame(makeVscodeWebUrl(API_BASE_PATH, window.location.origin, request.kind === 'openCommit' ? undefined : target, { embedded: true, nodeId: target.nodeId }).toString())
       codeFrames.set(target.nodeId, frame)
     }
     const tab = makeVscodeWebTab(target)

@@ -276,9 +276,13 @@ if (hostname === parentOriginHash || hostname.startsWith(parentOriginHash + '.')
       const repeatedEmbedded = await fetch(`${baseUrl}/vscode-web?embedded=true&initialFolderUri=${encodeURIComponent(folderUri)}`, { headers: cookieHeaders() });
       assert.equal(repeatedEmbedded.status, 200);
       assert.equal((await fs.readJson(workspacePath) as { settings: Record<string, unknown> }).settings['redhat.telemetry.enabled'], true);
-      const commitLaunch = await fetch(`${baseUrl}/vscode-web?embedded=true&nodeId=commit-peer&openCommitPath=%2Frepository`, { headers: cookieHeaders() });
+      const commitLaunch = await fetch(`${baseUrl}/vscode-web?nodeId=commit-peer&openCommitPath=%2Frepository`, { headers: cookieHeaders() });
       assert.equal(commitLaunch.status, 200);
       assert.deepEqual((await fs.readJson(path.join(STATE_DIR, 'vscode-web/node-commit-peer.code-workspace'))).folders, []);
+      const standaloneFolder = 'foxwarm://node+standalone-peer/remote/project';
+      const standaloneLaunch = await fetch(`${baseUrl}/vscode-web?nodeId=standalone-peer&initialFolderUri=${encodeURIComponent(standaloneFolder)}`, { headers: cookieHeaders() });
+      assert.equal(standaloneLaunch.status, 200);
+      assert.deepEqual((await fs.readJson(path.join(STATE_DIR, 'vscode-web/node-standalone-peer.code-workspace'))).folders, [{ uri: standaloneFolder }]);
     }, installation);
   });
 });

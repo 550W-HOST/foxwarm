@@ -46,7 +46,7 @@ Master Git uses argument-array process spawning. Remote status/content use `vsco
 ## Workbench bootstrap
 
 - Uses `foxwarm://node+<encoded-node-id>/<absolute-path>` folder URIs. Qualified Provider IDs are encoded as one identity, never replaced with master; accepting the identity does not add Code filesystem/Git capabilities to primitive providers.
-- Current WebUI launches, including new windows, select a Node-specific persistent workspace. Legacy bare folder URLs remain readable.
+- Current WebUI launches select a Node-specific persistent workspace with `nodeId`, independently of `embedded=true`. New windows omit the embedded flag. Legacy bare folder URLs remain readable.
 - The bootstrap installs fixed browser extensions as additional builtins.
 - The persistent workspace supplies opt-out defaults for Red Hat telemetry, SchemaStore, Kubernetes CRD fetching, and extension recommendations while preserving explicit values already stored in that workspace.
 - A versioned same-origin parent-source-checked request/ack bridge accepts fixed add-folder/open-file/open-commit/master-root requests; reverse master-root routing also checks exact source and origin.

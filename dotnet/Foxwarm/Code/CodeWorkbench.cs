@@ -240,11 +240,12 @@ internal sealed partial class CodeWorkbench
     {
         var address = publicAddress;
         var origin = address.Origin;
+        var persistentWorkspace =
+            context.Request.Query.ContainsKey("nodeId")
+            || context.Request.Query["embedded"] == "true";
         var folder =
             context
-                .Request.Query[
-                    context.Request.Query["embedded"] == "true" ? "initialFolderUri" : "folderUri"
-                ]
+                .Request.Query[persistentWorkspace ? "initialFolderUri" : "folderUri"]
                 .FirstOrDefault() ?? defaultFolder;
         if (!folder.StartsWith("foxwarm://", StringComparison.Ordinal))
             throw new CodeServiceException(
@@ -268,8 +269,8 @@ internal sealed partial class CodeWorkbench
             extensions.Add(UriParts(origin + route + "/extensions/redhat-vscode-yaml"));
         var configuration = new JsonObject
         {
-            [context.Request.Query["embedded"] == "true" ? "workspaceUri" : "folderUri"] = UriParts(
-                context.Request.Query["embedded"] == "true"
+            [persistentWorkspace ? "workspaceUri" : "folderUri"] = UriParts(
+                persistentWorkspace
                     ? Workspace(
                         folder,
                         nodeId,

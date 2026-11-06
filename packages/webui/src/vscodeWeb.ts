@@ -154,10 +154,10 @@ export function makeCodeWorkspaceUri(target: CodeTarget): string {
   return `foxwarm://node+${encodeURIComponent(target.nodeId)}${encodedPath || '/'}`
 }
 
-export function makeVscodeWebUrl(apiBasePath: string, origin: string, target?: CodeTarget, options: { nodeId?: string; openFile?: CodeFileTarget; openCommit?: CodeCommitTarget } = {}): URL {
+export function makeVscodeWebUrl(apiBasePath: string, origin: string, target?: CodeTarget, options: { embedded?: boolean; nodeId?: string; openFile?: CodeFileTarget; openCommit?: CodeCommitTarget } = {}): URL {
   const url = new URL(getVscodeWebPath(apiBasePath), origin)
   url.searchParams.set('nodeId', options.nodeId || options.openCommit?.nodeId || options.openFile?.nodeId || target?.nodeId || 'master')
-  url.searchParams.set('embedded', 'true')
+  if (options.embedded) url.searchParams.set('embedded', 'true')
   if (target && !options.openCommit) url.searchParams.set('initialFolderUri', makeCodeWorkspaceUri(target))
   if (options.openFile) {
     url.searchParams.set('openFilePath', options.openFile.path)

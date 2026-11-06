@@ -274,7 +274,6 @@
         } else {
           const target = new URL(window.location.href);
           target.search = '';
-          target.searchParams.set('embedded', 'true');
           target.searchParams.set('nodeId', 'master');
           target.searchParams.set('initialFolderUri', 'foxwarm://node+master' + request.path.split('/').map(encodeURIComponent).join('/'));
           target.searchParams.set('openRoot', request.root);

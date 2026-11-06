@@ -751,8 +751,8 @@ function escapeHtmlText(value: string): string {
 
 function buildWorkbenchConfiguration(req: express.Request) {
   const origin = getRequestOrigin(req);
-  const embeddedWorkspace = getSingleQueryValue(req.query.embedded) === 'true';
-  let requestedFolderUri = getSingleQueryValue(embeddedWorkspace ? req.query.initialFolderUri : req.query.folderUri) ?? getDefaultFolderUri();
+  const persistentWorkspace = req.query.nodeId !== undefined || getSingleQueryValue(req.query.embedded) === 'true';
+  let requestedFolderUri = getSingleQueryValue(persistentWorkspace ? req.query.initialFolderUri : req.query.folderUri) ?? getDefaultFolderUri();
   const nodeId = normalizeNodeId(getSingleQueryValue(req.query.nodeId) ?? folderNode(requestedFolderUri));
   if (folderNode(requestedFolderUri) !== nodeId) requestedFolderUri = `foxwarm://node+${encodeURIComponent(nodeId)}/`;
   const staticBasePath = getExternalPath(req, VSCODE_WEB_STATIC_ROUTE);
@@ -784,7 +784,7 @@ function buildWorkbenchConfiguration(req: express.Request) {
     webviewBaseUrl,
     webviewOriginTemplate,
     configuration: {
-      ...(embeddedWorkspace
+      ...(persistentWorkspace
         ? { workspaceUri: toUriComponents(ensureFoxwarmWorkspace(requestedFolderUri, nodeId, req.query.initialFolderUri !== undefined || req.query.nodeId === undefined)) }
         : { folderUri: toFoxwarmFolderUriComponents(requestedFolderUri) }),
       callbackRoute,
@@ -1093,7 +1093,6 @@ function buildVscodeWorkbenchHtml(req: express.Request): string {
         } else {
           const target = new URL(window.location.href);
           target.search = '';
-          target.searchParams.set('embedded', 'true');
           target.searchParams.set('nodeId', 'master');
           target.searchParams.set('initialFolderUri', 'foxwarm://node+master' + request.path.split('/').map(encodeURIComponent).join('/'));
           target.searchParams.set('openRoot', request.root);

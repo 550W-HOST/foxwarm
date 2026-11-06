@@ -192,6 +192,11 @@ try {
   const popupReady = once(page, 'popup'); await click('.foxwarm-chat-root button[title="Code"]'); const [popup] = await popupReady
   await popup.waitForSelector('.monaco-workbench', { timeout: 45000 })
   assert.equal(new URL(popup.url()).searchParams.get('embedded'), null)
+  assert.equal(new URL(popup.url()).searchParams.get('nodeId'), 'master')
+  const popupConfig = await popup.evaluate(() => JSON.parse(document.querySelector('#vscode-workbench-web-configuration').getAttribute('data-settings')))
+  assert.equal(popupConfig.workspaceUri.authority, 'node+master')
+  assert(popupConfig.workspaceUri.path.endsWith('/node-master.code-workspace'))
+  assert.equal(popupConfig.folderUri, undefined)
   await popup.close()
   assert.deepEqual(errors, [])
   assert(!http.some(row => row.status >= 500 && row.path !== '/api/history/search'), JSON.stringify(http.filter(row => row.status >= 500)))
