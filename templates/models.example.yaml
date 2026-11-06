@@ -16,7 +16,7 @@ default: openai/gpt-5.6-sol
 defaults:
   # Delays in milliseconds; later retries reuse the last entry.
   # Saves apply to the next retry wait; an active wait keeps its deadline.
-  retryIntervalsMs: [2000, 5000, 10000, 20000, 40000, 60000]
+  # retryIntervalsMs: [2000, 5000, 10000, 20000, 40000, 60000]
   contextLimit: 200000
   maxOutput: 32768
   providerImageOutputFormat: webp # or jpeg; transparent input images use PNG
