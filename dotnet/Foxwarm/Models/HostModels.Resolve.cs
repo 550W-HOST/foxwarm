@@ -178,7 +178,13 @@ internal sealed partial class HostModels
             effort.Default,
             config,
             []
-        );
+        )
+        {
+            RetryIntervalsMs = ReadRetryIntervals(
+                model,
+                ReadRetryIntervals(provider, ReadRetryIntervals(defaults))
+            ),
+        };
     }
 
     internal static void ValidateDefaults(
@@ -197,9 +203,12 @@ internal sealed partial class HostModels
                         or "maxOutput"
                         or "providerImageOutputFormat"
                         or "imageInput"
+                        or "retryIntervalsMs"
                     )
                 )
                     throw new InvalidDataException(label + " has unsupported field " + field + ".");
+        if (modelsScope && scope.ContainsKey("retryIntervalsMs"))
+            _ = ReadRetryIntervals(scope);
         foreach (var field in new[] { "contextLimit", "maxOutput" })
             if (scope.ContainsKey(field))
             {
@@ -223,6 +232,39 @@ internal sealed partial class HostModels
             && (scope["imageInput"] is not JsonValue flag || !flag.TryGetValue<bool>(out _))
         )
             throw new InvalidDataException(label + ".imageInput must be boolean.");
+    }
+
+    internal static IReadOnlyList<int> DefaultRetryIntervalsMs { get; } =
+    [2000, 5000, 10000, 20000, 40000, 60000];
+
+    private static IReadOnlyList<int> ReadRetryIntervals(
+        JsonObject? scope,
+        IReadOnlyList<int>? fallback = null
+    )
+    {
+        if (scope?.ContainsKey("retryIntervalsMs") != true)
+            return fallback ?? DefaultRetryIntervalsMs;
+        if (scope["retryIntervalsMs"] is not JsonArray { Count: > 0 } intervals)
+            throw new InvalidDataException(
+                "retryIntervalsMs must be a nonempty array of integers between 0 and 2147483647."
+            );
+        return intervals
+            .Select(raw =>
+            {
+                var value = SessionWait.Number(raw);
+                if (
+                    value is null
+                    || !double.IsFinite(value.Value)
+                    || value < 0
+                    || value > int.MaxValue
+                    || value != Math.Truncate(value.Value)
+                )
+                    throw new InvalidDataException(
+                        "retryIntervalsMs must be a nonempty array of integers between 0 and 2147483647."
+                    );
+                return (int)value.Value;
+            })
+            .ToArray();
     }
 
     private static JsonObject Map(JsonNode? node, string label) =>

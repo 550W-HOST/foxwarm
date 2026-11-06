@@ -585,7 +585,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
             websockets: websockets,
             images: Images,
             journal: Journal,
-            diagnostics: diagnostics
+            diagnostics: diagnostics,
+            retryIntervals: models.GetRetryIntervals
         );
         var chat = new SessionChatService(
             requests,

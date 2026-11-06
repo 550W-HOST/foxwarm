@@ -41,7 +41,8 @@ internal sealed partial class SessionManager
                 websockets: websockets,
                 images: Images,
                 journal: Journal,
-                diagnostics: diagnostics
+                diagnostics: diagnostics,
+                retryIntervals: models.GetRetryIntervals
             );
             var history = RequestHistory
                 .FromSnapshot(snapshot.History)

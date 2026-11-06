@@ -26,7 +26,7 @@ A virtual entry uses `targets`, containing model lookup keys that resolve strict
 
 Virtual entries do not accept `models`, legacy `model`, `baseUrl`, `apiKey`, `requestCompression`, `extraFields`, `extraHeaders`, `webSearch`, `imageGeneration`, `contextLimit`, `maxOutput`, `providerImageOutputFormat`, `imageInput`, `effort`, `historyReasoningField`, `asyncCompact`, or `disallowEmptyResponse`. `session-hash` also rejects failover-only threshold/cooldown fields. Concrete entries reject virtual routing fields. Provider entries must be plain objects, and failover threshold/cooldown values are positive integers. Request connection and serialization fields always come from the selected concrete leaf.
 
-The three model settings `contextLimit`, `maxOutput`, and `providerImageOutputFormat` resolve once per concrete leaf from model → provider → root `defaults` → startup-owned legacy app `llm` → built-in defaults. The root defaults object accepts only these three fields. Effective limits and image formats participate in the existing leaf fingerprint, while virtual entries expose only their derived safe context limit. Canonical configuration ownership is [src-config](../units/src-config.md#model-resolution).
+The three model settings `contextLimit`, `maxOutput`, and `providerImageOutputFormat` resolve once per concrete leaf from model → provider → root `defaults` → startup-owned legacy app `llm` → built-in defaults. The root defaults object also accepts `imageInput` and `retryIntervalsMs`. Effective limits and image formats participate in the existing leaf fingerprint, while virtual entries expose only their derived safe context limit. Canonical configuration ownership is [src-config](../units/src-config.md#model-resolution).
 
 The [configuration unit](../units/model-configuration.md#contract-and-side-effects) owns `asyncCompact` and `disallowEmptyResponse` provider/model precedence. Virtual async eligibility uses the resolved leaves; each attempted leaf supplies its own empty-response policy.
 
@@ -50,6 +50,8 @@ The resolved virtual model reports:
 4. One optional provider-neutral requested effort is captured with the selected model; only an explicit owner model change captures a replacement pair. Each concrete attempt uses it when allowed by that leaf, otherwise it falls back to that leaf's configured default. An omitted request also uses each selected leaf's default.
 5. A successful result records the concrete provider-qualified model ID. The session's selected model remains the virtual key.
 6. Retry callbacks retain the compatibility `maxRetries` field, whose value is the total attempt limit. The default total attempt limit is six.
+
+The maintained request owner reads live retry intervals for the selected route key before each new wait. Concrete model/provider overrides and virtual-provider isolation follow [retry interval configuration](../units/model-configuration.md#retry-interval-configuration); interval-only edits do not recapture routing or leaf request parameters.
 
 Virtual providers add no retry loop of their own. The one LLM outer loop remains the owner of attempts, delay, abort handling, diagnostics, and terminal `LlmRequestError` creation.
 

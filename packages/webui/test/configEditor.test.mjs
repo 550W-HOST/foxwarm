@@ -649,12 +649,18 @@ test('history compatibility completions suggest whole configured concrete keys w
 })
 
 
-test('app config schema validates LLM retry interval arrays', () => {
+test('models schema validates retry interval arrays at defaults, provider, model and virtual scopes', () => {
+  const documents = (value) => [
+    { defaults: { retryIntervalsMs: value }, providers: { p: {} } },
+    { providers: { p: { retryIntervalsMs: value, models: ['m'] } } },
+    { providers: { p: { models: [{ id: 'm', retryIntervalsMs: value }] } } },
+    { providers: { route: { providerType: 'failover', targets: ['a', 'b'], retryIntervalsMs: value } } },
+    { providers: { route: { providerType: 'session-hash', targets: ['a'], retryIntervalsMs: value } } },
+  ]
   for (const value of [[0], [17000, 25000], [2147483647]]) {
-    assert.equal(validateAppConfigSchema({ llm: { retryIntervalsMs: value } }), true)
+    for (const document of documents(value)) assert.equal(validateModelsSchema(document), true)
   }
-  assert.equal(validateAppConfigSchema({ llm: {} }), true)
   for (const value of [null, 1000, '1000', true, [], {}, [null], [-1], [0.5], [2147483648], ['1000'], [true]]) {
-    assert.equal(validateAppConfigSchema({ llm: { retryIntervalsMs: value } }), false)
+    for (const document of documents(value)) assert.equal(validateModelsSchema(document), false)
   }
 })

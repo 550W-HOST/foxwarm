@@ -12,14 +12,15 @@ internal sealed class ModelRequestOwner(
     ResponsesWsTransport? websockets = null,
     Foxwarm.Images.ImageBlobStore? images = null,
     LlmRequestJournalStore? journal = null,
-    ModelInteractionDiagnostics? diagnostics = null
+    ModelInteractionDiagnostics? diagnostics = null,
+    Func<string, IReadOnlyList<int>>? retryIntervals = null
 )
 {
     internal const int DefaultMaxAttempts = 6;
 
     internal static int RetryDelay(int failedAttempt, IReadOnlyList<int>? intervals = null)
     {
-        var delays = intervals ?? AppConfigurationRules.DefaultRetryIntervalsMs;
+        var delays = intervals ?? HostModels.DefaultRetryIntervalsMs;
         return delays[Math.Clamp(failedAttempt - 1, 0, delays.Count - 1)];
     }
 
@@ -563,7 +564,12 @@ internal sealed class ModelRequestOwner(
                 var explanation = cause is null
                     ? null
                     : ModelAttemptFailure.ConfigurationExplanation(cause, leaf);
-                var retryDelay = RetryDelay(attempt, catalog.RetryIntervalsMs);
+                var retryDelay = final
+                    ? 0
+                    : RetryDelay(
+                        attempt,
+                        retryIntervals?.Invoke(captured.RouteKey) ?? route.RetryIntervalsMs
+                    );
                 var value = new ModelRetryEvent(
                     attempt,
                     maxAttempts,

@@ -546,6 +546,7 @@ var modelEffortConfig = {
   }
 };
 var modelDefaultProperties = {
+  retryIntervalsMs: { type: "array", minItems: 1, items: { type: "integer", minimum: 0, maximum: 2147483647 }, default: [2e3, 5e3, 1e4, 2e4, 4e4, 6e4], description: "Delays in milliseconds for successive LLM retries; later retries reuse the last entry. Model overrides provider, then defaults. Virtual providers use only their own value or defaults. Saves apply to the next retry wait; an active wait keeps its deadline." },
   contextLimit: { ...positiveInteger, description: "Context limit in tokens." },
   maxOutput: { ...positiveInteger, description: "Maximum output tokens requested from the provider. Provider-specific extraFields may override this value." },
   providerImageOutputFormat: { enum: ["webp", "jpeg"], description: "Format used for optimized input images: webp, or jpeg with PNG for transparent images." },

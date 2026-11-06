@@ -14,28 +14,25 @@ public sealed class RoutingAttemptsTests
         int threshold = 5,
         string token = "old",
         int[]? retryIntervalsMs = null
-    ) =>
-        HostModels.Parse(
-            Obj(
-                """
-                {"default":"route","providers":{"a":{"providerType":"openai-responses","baseUrl":"http://localhost/a","apiKey":"TOKEN","effort":{"allowed":["none","low"],"default":"low"},"models":["m"]},"b":{"providerType":"anthropic","extraFields":{"stream":false},"baseUrl":"http://localhost/b","effort":{"allowed":["high","max"],"default":"high"},"models":["m"]},"route":{"providerType":"failover","targets":["a","b/m"],"failureThreshold":THRESHOLD,"cooldownMs":1000},"pool":{"providerType":"session-hash","targets":["a/m","b"]}}}
-                """.Replace("TOKEN", token).Replace(
-                    "THRESHOLD",
-                    threshold.ToString(System.Globalization.CultureInfo.InvariantCulture)
-                )
-            ),
-            retryIntervalsMs is { } intervals
-                ? new JsonObject
-                {
-                    ["llm"] = new JsonObject
-                    {
-                        ["retryIntervalsMs"] = new JsonArray(
-                            intervals.Select(value => (JsonNode?)JsonValue.Create(value)).ToArray()
-                        ),
-                    },
-                }
-                : new JsonObject()
+    )
+    {
+        var root = Obj(
+            """
+            {"default":"route","providers":{"a":{"providerType":"openai-responses","baseUrl":"http://localhost/a","apiKey":"TOKEN","effort":{"allowed":["none","low"],"default":"low"},"models":["m"]},"b":{"providerType":"anthropic","extraFields":{"stream":false},"baseUrl":"http://localhost/b","effort":{"allowed":["high","max"],"default":"high"},"models":["m"]},"route":{"providerType":"failover","targets":["a","b/m"],"failureThreshold":THRESHOLD,"cooldownMs":1000},"pool":{"providerType":"session-hash","targets":["a/m","b"]}}}
+            """.Replace("TOKEN", token).Replace(
+                "THRESHOLD",
+                threshold.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            )
         );
+        if (retryIntervalsMs is { } intervals)
+            root["defaults"] = new JsonObject
+            {
+                ["retryIntervalsMs"] = new JsonArray(
+                    intervals.Select(value => (JsonNode?)JsonValue.Create(value)).ToArray()
+                ),
+            };
+        return HostModels.Parse(root, new JsonObject());
+    }
 
     private static ResponsesClientOptions Defaults() =>
         new(new Uri("http://localhost"), "m", "a/m", "", "", 50);

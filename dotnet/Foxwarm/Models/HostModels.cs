@@ -25,6 +25,8 @@ internal sealed record ConcreteHostModel(
     internal string ProviderImageOutputFormat =>
         HostModels.Text(Configuration, "providerImageOutputFormat") ?? "webp";
     internal bool ImageInput => !ModelRoutingFingerprint.False(Configuration["imageInput"]);
+    internal IReadOnlyList<int> RetryIntervalsMs { get; init; } =
+        HostModels.DefaultRetryIntervalsMs;
     internal bool IsVirtual => ProviderType is "session-hash" or "failover";
     internal Uri BaseUri =>
         new(
@@ -42,8 +44,7 @@ internal sealed partial class HostModels
     private readonly ModelConfiguration? owner;
     internal ModelConfiguration? ConfigurationOwner => owner;
     internal bool HandoffConfirmationEnabled { get; private init; }
-    internal IReadOnlyList<int> RetryIntervalsMs { get; private init; } =
-        AppConfigurationRules.DefaultRetryIntervalsMs;
+    private IReadOnlyList<int> defaultRetryIntervals = DefaultRetryIntervalsMs;
     internal double PresentationContextLimit { get; private init; } = 200000;
     internal double CompactKeepFraction { get; private init; } = .3;
     internal double CompactThresholdFraction { get; private init; } = .85;
@@ -63,6 +64,15 @@ internal sealed partial class HostModels
     }
 
     internal HostModels Capture() => owner?.Capture() ?? this;
+
+    internal IReadOnlyList<int> GetRetryIntervals(string key)
+    {
+        if (owner is not null)
+            return Capture().GetRetryIntervals(key);
+        return entries.TryGetValue(key, out var model)
+            ? model.RetryIntervalsMs
+            : defaultRetryIntervals;
+    }
 
     public string DefaultKey => owner is null ? defaultKey : Capture().DefaultKey;
 
@@ -329,7 +339,10 @@ internal sealed partial class HostModels
                 null,
                 resolved,
                 leaves.Select(leaf => leaf.Key).ToArray()
-            );
+            )
+            {
+                RetryIntervalsMs = ReadRetryIntervals(config, ReadRetryIntervals(defaults)),
+            };
             display.Add(key);
         }
         var compatibility = ModelHistoryCompatibility.Build(models);
@@ -346,7 +359,7 @@ internal sealed partial class HostModels
         return new HostModels(selected, models, ordered)
         {
             HandoffConfirmationEnabled = Foxwarm.Tools.HandoffConfirmation.Enabled(app),
-            RetryIntervalsMs = AppConfigurationRules.RetryIntervalsMs(llm),
+            defaultRetryIntervals = ReadRetryIntervals(defaults),
             PresentationContextLimit = PositiveSetting(
                 llm["contextLimit"],
                 200000,

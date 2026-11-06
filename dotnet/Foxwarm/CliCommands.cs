@@ -95,7 +95,8 @@ internal static class CliCommands
             new ModelRouting(),
             websockets: websockets,
             journal: journal,
-            diagnostics: new ModelInteractionDiagnostics(root)
+            diagnostics: new ModelInteractionDiagnostics(root),
+            retryIntervals: configuration.Models.GetRetryIntervals
         );
         var result = await owner.RequestAsync(
             "",

@@ -100,7 +100,8 @@ internal sealed partial class SessionManager
             websockets: websockets,
             images: Images,
             journal: Journal,
-            diagnostics: diagnostics
+            diagnostics: diagnostics,
+            retryIntervals: models.GetRetryIntervals
         );
         var captured = requests.Capture(catalog, route, selection.RawEffort);
         var cache = await owner.Entry.SaveLane.EnsurePromptCacheKeyAsync();

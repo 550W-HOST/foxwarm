@@ -117,7 +117,6 @@ internal static class AppConfigurationRules
         if (value is not JsonObject llm)
             return;
         HostModels.ValidateDefaults(llm, "llm", modelsScope: false);
-        _ = RetryIntervalsMs(llm);
         Fraction(
             llm,
             llm.ContainsKey("compactKeepPercent") ? "compactKeepPercent" : "compactPercent",
@@ -133,36 +132,6 @@ internal static class AppConfigurationRules
                     "app config `llm.providerImageOutputFormat` must be `webp` or `jpeg`."
                 );
         }
-    }
-
-    internal static IReadOnlyList<int> DefaultRetryIntervalsMs { get; } =
-    [2000, 5000, 10000, 20000, 40000, 60000];
-
-    internal static IReadOnlyList<int> RetryIntervalsMs(JsonObject llm)
-    {
-        if (!llm.ContainsKey("retryIntervalsMs"))
-            return DefaultRetryIntervalsMs;
-        if (llm["retryIntervalsMs"] is not JsonArray { Count: > 0 } intervals)
-            throw new InvalidDataException(
-                "app config `llm.retryIntervalsMs` must be a nonempty array of integers between 0 and 2147483647."
-            );
-        return intervals
-            .Select(raw =>
-            {
-                var value = Foxwarm.Sessions.SessionWait.Number(raw);
-                if (
-                    value is null
-                    || !double.IsFinite(value.Value)
-                    || value < 0
-                    || value > int.MaxValue
-                    || value != Math.Truncate(value.Value)
-                )
-                    throw new InvalidDataException(
-                        "app config `llm.retryIntervalsMs` must be a nonempty array of integers between 0 and 2147483647."
-                    );
-                return (int)value.Value;
-            })
-            .ToArray();
     }
 
     private static void Fraction(JsonObject llm, string key, string errorKey)
