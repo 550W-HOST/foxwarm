@@ -159,7 +159,8 @@ internal sealed class VectorFixture : IAsyncDisposable
         bool lexical = false,
         Uri? modelPeer = null,
         Action<string, AtomicJsonWriteStage>? authorityStageHook = null,
-        bool waitForVector = true
+        bool waitForVector = true,
+        Action<VectorService>? configureVector = null
     )
     {
         var config = new JsonObject
@@ -212,6 +213,7 @@ internal sealed class VectorFixture : IAsyncDisposable
             Path.Combine(Temp.Path, "skills"),
             authorityStageHook: authorityStageHook
         );
+        configureVector?.Invoke(manager.Vector);
         await manager.LoadAsync();
         if (waitForVector)
             await manager.Vector.StartAsync();

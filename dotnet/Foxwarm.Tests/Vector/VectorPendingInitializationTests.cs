@@ -1,5 +1,3 @@
-using System.Diagnostics;
-using System.Runtime.InteropServices;
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
 using Foxwarm.Vector;
@@ -9,54 +7,55 @@ namespace Foxwarm.Tests;
 [Collection("Vector native")]
 public sealed class VectorPendingInitializationTests
 {
-    [DllImport("libc", SetLastError = true)]
-    private static extern int kill(int pid, int signal);
-
-    private sealed class PausedChild(Process process) : IDisposable
+    private sealed class InitializationGate : IDisposable
     {
-        internal Process Process => process;
+        private const string MissingSource = "main/repair-gate";
+        private readonly TaskCompletionSource entered = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        private readonly TaskCompletionSource release = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
 
-        public void Dispose()
+        internal static async Task<InitializationGate> CreateAsync(VectorFixture fixture)
         {
-            if (!process.HasExited)
-                kill(process.Id, 18); // SIGCONT, including assertion-failure cleanup.
-            process.Dispose();
+            // An unavailable source exercises the existing diagnostic after all Archive
+            // read connections have closed, before initialization can finish.
+            var row = VectorRows.Block(
+                fixture.Block(MissingSource),
+                fixture.Archive(MissingSource)
+            )!;
+            row["vector"] = new JsonArray(
+                VectorEmbeddingPeer
+                    .Embedding("violet")
+                    .Select(value => (JsonNode?)JsonValue.Create((double)value))
+                    .ToArray()
+            );
+            using var table = new VectorTable();
+            await table.OpenAsync(fixture.Dense);
+            await table.AddAsync([row], merge: false);
+            return new();
         }
+
+        internal void Attach(VectorService service) =>
+            service.Diagnostic = (code, session) =>
+            {
+                if (code != "VECTOR_SOURCE_TIME_UNAVAILABLE" || session != MissingSource)
+                    return;
+                entered.TrySetResult();
+                release.Task.GetAwaiter().GetResult();
+            };
+
+        internal Task WaitAsync() => entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        internal void Release() => release.TrySetResult();
+
+        public void Dispose() => Release();
     }
-
-    private static async Task<PausedChild> PauseAsync(
-        VectorFixture fixture,
-        VectorService service,
-        int versions
-    )
-    {
-        await VectorStorageTests.UntilAsync(() => Versions(fixture) > versions);
-        var process = Process.GetProcessById(service.ChildPid!.Value);
-        Assert.Equal(0, kill(process.Id, 19)); // SIGSTOP after the handshake and first repair commit.
-        var paused = new PausedChild(process);
-        try
-        {
-            Assert.False(service.Ready);
-            Assert.True(service.Initializing);
-            return paused;
-        }
-        catch
-        {
-            paused.Dispose();
-            throw;
-        }
-    }
-
-    private static int Versions(VectorFixture fixture) =>
-        Directory
-            .GetFiles(Path.Combine(fixture.Dense, "messages_v7.lance", "_versions"), "*.manifest")
-            .Length;
 
     [Fact]
     public async Task Pending_mutations_dispatch_after_repair_without_losing_facts_baselines_or_indexing()
     {
-        if (!OperatingSystem.IsLinux())
-            return;
         await using var f = await VectorFixture.CreateAsync();
         f.Append("main/rename", 1, "violet moved checkpoint");
         f.Append("main/parent", 1, "violet inherited source");
@@ -86,13 +85,13 @@ public sealed class VectorPendingInitializationTests
             await table.AddAsync(orphanRows, merge: false);
         }
         await VectorInitializationTests.SeedAsync(f, 4096);
-        var versions = Versions(f);
-        await using var service = new VectorService(
-            f.Data,
-            f.Configuration(child: true, lexical: true)
-        );
+        await using var service = new VectorService(f.Data, f.Configuration(lexical: true));
+        using var gate = await InitializationGate.CreateAsync(f);
+        gate.Attach(service);
         var starting = service.StartAsync();
-        using var paused = await PauseAsync(f, service, versions);
+        await gate.WaitAsync();
+        Assert.False(service.Ready);
+        Assert.True(service.Initializing);
         f.Append("main/scheduled", 1, "violet scheduled while repair pending");
         f.Archive("main/fork").EnsureBranch("main/parent", 1, 0);
         var block = f.Block("main/facts") with { RawStartTimestamp = 1000, RawEndTimestamp = 2000 };
@@ -109,7 +108,7 @@ public sealed class VectorPendingInitializationTests
         var mutations = new Task[] { facts, schedule, force, rename, fork, reset };
         await Task.Delay(100);
         Assert.All(mutations, task => Assert.False(task.IsCompleted));
-        Assert.Equal(0, kill(paused.Process.Id, 18));
+        gate.Release();
         await Task.WhenAll(mutations.Append(starting)).WaitAsync(TimeSpan.FromSeconds(20));
         await service.WaitForStartupAsync();
         Assert.Equal(1, await force);
@@ -132,8 +131,6 @@ public sealed class VectorPendingInitializationTests
     [Fact]
     public async Task Main_move_waits_before_moving_Archive_and_fork_keeps_its_captured_baseline()
     {
-        if (!OperatingSystem.IsLinux())
-            return;
         await using var f = await VectorFixture.CreateAsync();
         await using (var seed = await f.ManagerAsync())
         {
@@ -151,13 +148,16 @@ public sealed class VectorPendingInitializationTests
             await seed.ForceVectorIndexAsync(parent);
         }
         await VectorInitializationTests.SeedAsync(f, 4096);
-        var versions = Versions(f);
+        var gate = await InitializationGate.CreateAsync(f);
         await using var manager = await f.ManagerAsync(
-            child: true,
             lexical: true,
-            waitForVector: false
+            waitForVector: false,
+            configureVector: gate.Attach
         );
-        using var paused = await PauseAsync(f, manager.Vector, versions);
+        using var held = gate;
+        await gate.WaitAsync();
+        Assert.False(manager.Vector.Ready);
+        Assert.True(manager.Vector.Initializing);
         var owner = await manager.RequiredAsync("upgrade");
         var parentOwner = await manager.RequiredAsync("parent");
         var movingTask = manager.MoveIdentityAsync(
@@ -171,7 +171,7 @@ public sealed class VectorPendingInitializationTests
         Assert.Equal(4096, f.Archive("upgrade").ReadBlocks().Count);
         Assert.Empty(f.Archive("renamed").ReadBlocks());
         Assert.Equal("upgrade", owner.Id);
-        Assert.Equal(0, kill(paused.Process.Id, 18));
+        gate.Release();
         await Task.WhenAll(movingTask, forkingTask).WaitAsync(TimeSpan.FromSeconds(20));
         var fork = await forkingTask;
         Assert.Equal("renamed", owner.Id);
@@ -202,8 +202,6 @@ public sealed class VectorPendingInitializationTests
     [Fact]
     public async Task Main_shutdown_cancels_pending_hook_waits_before_disposing_the_initializing_owner()
     {
-        if (!OperatingSystem.IsLinux())
-            return;
         await using var f = await VectorFixture.CreateAsync();
         await using (var seed = await f.ManagerAsync())
         {
@@ -214,9 +212,15 @@ public sealed class VectorPendingInitializationTests
             );
         }
         await VectorInitializationTests.SeedAsync(f, 4096);
-        var versions = Versions(f);
-        await using var manager = await f.ManagerAsync(child: true, waitForVector: false);
-        using var paused = await PauseAsync(f, manager.Vector, versions);
+        var gate = await InitializationGate.CreateAsync(f);
+        await using var manager = await f.ManagerAsync(
+            waitForVector: false,
+            configureVector: gate.Attach
+        );
+        using var held = gate;
+        await gate.WaitAsync();
+        Assert.False(manager.Vector.Ready);
+        Assert.True(manager.Vector.Initializing);
         var writer = await manager.RequiredAsync("writer");
         await ForkClearLifecycleTests.AppendAsync(
             writer,
@@ -224,9 +228,13 @@ public sealed class VectorPendingInitializationTests
         );
         var force = manager.ForceVectorIndexAsync(writer);
         Assert.False(force.IsCompleted);
-        await manager.ShutdownAsync().WaitAsync(TimeSpan.FromSeconds(10));
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => force);
-        Assert.True(paused.Process.HasExited);
+        var shutdown = manager.ShutdownAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            force.WaitAsync(TimeSpan.FromSeconds(10))
+        );
+        gate.Release();
+        await shutdown;
+        Assert.False(manager.Vector.Ready);
         Assert.Null(manager.Vector.ChildPid);
         Assert.Equal(2, f.Archive("writer").ReadMessages().Count);
     }
