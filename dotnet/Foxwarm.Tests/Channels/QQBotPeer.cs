@@ -48,7 +48,7 @@ internal sealed class QQBotPeer : IAsyncDisposable
 
     internal ChannelTransportDependencies Dependencies =>
         new(
-            CreateQQBotHttp: () => new HttpClient(new PrivateTransport(Address)),
+            CreateQQBotHttp: () => new HttpClient(CreateHttpHandler()),
             Now: () => Now,
             Delay: (span, token) =>
             {
@@ -61,6 +61,8 @@ internal sealed class QQBotPeer : IAsyncDisposable
             QQBotMediaTimeout: MediaTimeout,
             QQBotPartTimeout: PartTimeout
         );
+
+    internal HttpMessageHandler CreateHttpHandler() => new PrivateTransport(Address);
 
     // Only test transport rewrites the network destination. Production validators still receive the
     // exact HTTPS asset/COS URLs, and the peer records all headers sent to each logical authority.

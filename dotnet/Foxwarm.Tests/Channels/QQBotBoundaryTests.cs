@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Text.Json.Nodes;
 using Foxwarm.Channels;
@@ -82,7 +83,11 @@ public sealed class QQBotBoundaryTests
     )
     {
         await using var peer = await QQBotPeer.StartAsync();
-        peer.PartTimeout = TimeSpan.FromMilliseconds(75);
+        // Only the timeout case injects a short part deadline. Other failures must
+        // reach their intended protocol stage using the ordinary upload budget.
+        var putAttempts = new ConcurrentQueue<Uri>();
+        if (kind == "put-timeout")
+            peer.PartTimeout = TimeSpan.FromMilliseconds(75);
         var prepareEntered = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
@@ -120,16 +125,21 @@ public sealed class QQBotBoundaryTests
             }
             if (call.Path == "/put")
             {
-                if (kind == "put-timeout")
-                    await Task.Delay(250);
                 if (kind == "put-failure")
                     return Results.StatusCode(500);
             }
             return null;
         };
+        var dependencies = peer.Dependencies;
+        if (kind == "put-timeout")
+            dependencies = dependencies with
+            {
+                CreateQQBotHttp = () =>
+                    new HttpClient(new PendingPut(peer.CreateHttpHandler(), putAttempts)),
+            };
         await using var f = await ExternalChannelFixture.CreateAsync(
             new() { ["qq"] = peer.Config() },
-            dependencies: peer.Dependencies
+            dependencies: dependencies
         );
         await QQBotChannelTests.Start(f, peer);
         var path = Path.Combine(f.Work, "large.bin");
@@ -150,6 +160,16 @@ public sealed class QQBotBoundaryTests
         }
         var error = await Record.ExceptionAsync(() => sending);
         Assert.True(error is IOException or OperationCanceledException, error?.ToString());
+        if (kind == "put-failure")
+            Assert.Equal(
+                "QQ Bot media part upload failed (500).",
+                Assert.IsType<IOException>(error).Message
+            );
+        if (kind == "put-timeout")
+            Assert.Equal(
+                "QQ Bot media part upload timed out.",
+                Assert.IsType<IOException>(error).Message
+            );
         Assert.Single(peer.Calls, call => call.Path.EndsWith("/upload_prepare"));
         Assert.DoesNotContain(
             peer.Calls,
@@ -158,8 +178,29 @@ public sealed class QQBotBoundaryTests
         Assert.Empty(peer.Sent);
         if (kind is "unsafe-url" or "out-of-order" or "oversized-response" or "generation")
             Assert.DoesNotContain(peer.Calls, call => call.Method == "PUT");
+        else if (kind == "put-timeout")
+            Assert.Equal("https://cos.myqcloud.com/put", Assert.Single(putAttempts).AbsoluteUri);
         else
             Assert.Single(peer.Calls, call => call.Method == "PUT");
+    }
+
+    private sealed class PendingPut(HttpMessageHandler inner, ConcurrentQueue<Uri> attempts)
+        : DelegatingHandler(inner)
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken token
+        )
+        {
+            if (request.Method == HttpMethod.Put)
+            {
+                // The deadline covers transmission as well as the response. Record
+                // the attempt before cancellation, not after a loopback body read.
+                attempts.Enqueue(request.RequestUri!);
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            }
+            return await base.SendAsync(request, token);
+        }
     }
 
     [Fact]
