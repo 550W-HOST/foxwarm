@@ -12,14 +12,33 @@ Foxwarm releases are prebuilt packages. Installing one compiles nothing and need
 | `foxwarm-osx-arm64-self-contained.tar.gz` | Server for Apple Silicon Macs including the .NET runtime |
 | `foxwarm-win-x64.zip` | Server for Windows x64; runs on the installed ASP.NET Core 10 runtime |
 | `foxwarm-win-x64-self-contained.zip` | Server for Windows x64 including the .NET runtime |
-| `foxwarm-desktop-win-x64.zip` | Windows desktop app including the .NET runtime |
+| `foxwarm-desktop-win-x64.zip` | Windows desktop app including the .NET runtime, Code OSS and YAML support |
+| `foxwarm-code-<version>.tar.gz` | Platform-independent Code OSS workbench and YAML extension for server installations |
 | `SHA256SUMS` | SHA-256 checksums of the assets |
 
-Asset names carry no version, so `releases/latest/download/<asset>` always names the newest release; each archive has a single top-level directory such as `foxwarm-0.9.0-linux-x64/`. Every package contains `release.json` (version, target, runtime identifier, whether it is self-contained, its asset name and source commit). Server packages also contain the installation control script: `foxwarmctl` on Linux and macOS, `foxwarmctl.ps1` and `foxwarmctl.cmd` on Windows.
+Server and Desktop asset names carry no version, so `releases/latest/download/<asset>` always names the newest release; each application archive has a single top-level directory such as `foxwarm-0.9.0-linux-x64/`. Every application package contains `release.json` (version, target, runtime identifier, whether it is self-contained, its asset name and source commit). Server packages also contain the installation control script: `foxwarmctl` on Linux and macOS, `foxwarmctl.ps1` and `foxwarmctl.cmd` on Windows.
 
-Each server package is the complete published Core: WebUI, skills, templates, Node client bundles, browser and Code extensions, artifact compiler resources, ToolScript worker and native libraries for its platform. Artifact preparation still runs the collected compiler under a `node` found on `PATH`; it is optional at runtime. The Code workbench assets and HEIF decoders remain separate optional installations.
+Each server package is the complete published Core: WebUI, skills, templates, Node client bundles, browser and Code extensions, artifact compiler resources, ToolScript worker and native libraries for its platform. Artifact preparation still runs the collected compiler under a `node` found on `PATH`; it is optional at runtime. Server packages keep the Code workbench assets and HEIF decoders as separate optional installations. Desktop includes the complete pinned Code OSS workbench, all built-in language extensions, the pinned YAML extension, and their licenses and third-party notices.
 
 macOS packages require **macOS 15 or later**, following the [.NET 10 supported operating systems](https://github.com/dotnet/core/blob/main/release-notes/10.0/supported-os.md). They use the system ICU and Apple cryptography libraries; no Homebrew ICU or OpenSSL installation is required. The native qualification checks bundled dylibs and entry executables for Homebrew library dependencies. Intel Macs and macOS Desktop are not packaged. These archives are not signed or notarized as distribution packages; browser downloads can carry Gatekeeper quarantine. See the [installation guide](https://foxwarm.net/docs/installing/#macos-apple-silicon) before using a browser-downloaded archive. The curl installer does not add quarantine.
+
+## Code for server installations
+
+Open Code in the running Foxwarm installation. If its assets are missing, the setup page provides Linux/macOS and PowerShell commands for that exact Foxwarm version. The commands download `foxwarm-code-<version>.tar.gz` and the same release's `SHA256SUMS`, verify SHA-256, and extract into the selected installation asset directory. Reload Code after extraction; Main does not need a restart.
+
+The Code archive has `vscode-web/` and `extensions/redhat.vscode-yaml/` at its root, ready to extract into `packages/vscode-web/assets`. It does not include or replace Main or instance data. The existing `npm run build:code` source option remains available. `npm run download:code` continues to select Microsoft's separately licensed development/internal-use distribution; it is not an alias for the Foxwarm release asset.
+
+Measured with Foxwarm 0.9.2 and the pinned Code OSS 1.141.0 build (all 80 built-in extensions retained):
+
+| Output | Size |
+| --- | ---: |
+| Unpacked Code OSS, including upstream notices | 182.73 MiB |
+| Unpacked YAML extension | 3.54 MiB |
+| Standalone Code release tar.gz | 49.17 MiB |
+| Desktop ZIP before adding Code | 139.24 MiB |
+| Desktop ZIP with Code and YAML | 189.55 MiB |
+
+These are local archive-assembly measurements; later builds can differ with source or compression changes.
 
 ## Installed layout
 
@@ -47,6 +66,8 @@ Windows uses the background launch and the data-root-specific control pipe of th
 
 ```bash
 npm ci && npm --prefix packages/webui ci
+node scripts/test/prepare-browser.mjs --code-only  # required for Desktop, or restore the pinned CI assets
+node scripts/release/package.mjs --code-only --output dist
 node scripts/release/package.mjs --build-assets --output dist
 node scripts/release/package.mjs --output dist --target linux-x64   # one package
 ```
@@ -64,7 +85,9 @@ The **Release packages** workflow builds all packages on every push to `testing`
 - both Windows server packages, and the Desktop package through its validation and WebView2 acceptance;
 - the container image built from the Linux package.
 
-The Linux/Windows and macOS build jobs upload separate artifacts. An aggregation job merges their assets and regenerates one `SHA256SUMS` covering all seven packages before uploading `release-packages`; the tag-only release job waits for aggregation and every qualification job. The packages remain available as the `release-packages` workflow artifact for 14 days. To publish:
+Tests and Release call the same `code-resources.yml` producer once per workflow run. It restores an exact cache of pinned Code/YAML outputs or builds on a miss, validates and packages them, then shares the archive as a per-run artifact. Desktop and Chromium consumers never rebuild Code. The key includes the pins and build/packaging inputs. Tag runs may reuse default-branch caches; a cache that exists only on another branch is not required, because the producer builds once on a miss.
+
+The Linux/Windows and macOS build jobs upload separate artifacts. The Linux/Windows artifact also carries the shared Code release archive. An aggregation job merges their assets and regenerates one `SHA256SUMS` covering all seven application packages and the Code archive before uploading `release-packages`; the tag-only release job waits for aggregation and every qualification job. The packages remain available as the `release-packages` workflow artifact for 14 days. To publish:
 
 1. Set `version` in the root `package.json` (and the root entries of `package-lock.json`) to the release version.
 2. Push a tag `v<version>` for that commit. The workflow refuses a tag that differs from `package.json`.

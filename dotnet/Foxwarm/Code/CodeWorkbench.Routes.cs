@@ -17,7 +17,7 @@ internal sealed partial class CodeWorkbench
             <head>
               <meta charset="utf-8" />
               <meta name="viewport" content="width=device-width, initial-scale=1" />
-              <title>Code is not built · Foxwarm</title>
+              <title>Code is not installed · Foxwarm</title>
               <style>
                 :root { color-scheme: light dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
                 * { box-sizing: border-box; }
@@ -28,7 +28,7 @@ internal sealed partial class CodeWorkbench
                 p { color: #4b5563; line-height: 1.6; }
                 .option { margin-top: 18px; border: 1px solid #e5e7eb; border-radius: 12px; padding: 16px; }
                 .option strong { display: block; margin-bottom: 8px; }
-                code { display: block; overflow-x: auto; border-radius: 8px; background: #111827; color: #f9fafb; padding: 12px 14px; white-space: nowrap; }
+                code { display: block; overflow-x: auto; border-radius: 8px; background: #111827; color: #f9fafb; padding: 12px 14px; white-space: pre; }
                 .hint { margin-top: 20px; font-size: 13px; color: #6b7280; }
                 .path { overflow-wrap: anywhere; }
                 @media (prefers-color-scheme: dark) {
@@ -43,8 +43,14 @@ internal sealed partial class CodeWorkbench
             <body>
               <main>
                 <p class="eyebrow">Optional component</p>
-                <h1>Code is not built</h1>
+                <h1>Code is not installed</h1>
                 <p>This Foxwarm installation does not currently include the optional browser workbench assets. Choose one preparation method, then reload this page.</p>
+                <section class="option">
+                  <strong>Download Code OSS for Foxwarm {{WebUtility.HtmlEncode(ProductVersion.Value)}}</strong>
+                  <p>Run on the computer running Foxwarm, then reload this page.</p>
+                  <details><summary>Linux / macOS</summary><code>{{WebUtility.HtmlEncode(InstallCommand(Assets, false))}}</code></details>
+                  <details><summary>Windows PowerShell</summary><code>{{WebUtility.HtmlEncode(InstallCommand(Assets, true))}}</code></details>
+                </section>
                 <section class="option">
                   <strong>Build the MIT-licensed Code - OSS workbench from source</strong>
                   <code>npm run build:code</code>
@@ -53,9 +59,7 @@ internal sealed partial class CodeWorkbench
                   <strong>Download Microsoft's prebuilt workbench for development or licensed internal use</strong>
                   <code>npm run download:code</code>
                 </section>
-                <p class="hint">Both commands are intentionally excluded from the normal <code style="display:inline;padding:2px 5px">npm run build</code> because preparing Code is large and slow. Assets are expected at <span class="path">{{WebUtility.HtmlEncode(
-                AssetRoot
-            )}}</span>.</p>
+                <p class="hint">The npm commands require a source checkout. Install Code assets into <span class="path">{{WebUtility.HtmlEncode(Assets)}}</span>.</p>
               </main>
             </body>
             </html>

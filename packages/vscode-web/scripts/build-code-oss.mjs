@@ -167,6 +167,9 @@ async function publishAssets(sourceDir, outDir, metadata) {
   await fs.rm(tmpOutDir, { recursive: true, force: true })
   await fs.mkdir(path.dirname(tmpOutDir), { recursive: true })
   await fs.cp(packageOutputDir, tmpOutDir, { recursive: true })
+  for (const file of ['LICENSE.txt', 'ThirdPartyNotices.txt']) {
+    await fs.copyFile(path.join(sourceDir, file), path.join(tmpOutDir, file))
+  }
   await fs.writeFile(path.join(tmpOutDir, 'foxwarm-vscode-web-assets.json'), JSON.stringify(metadata, null, 2))
   await fs.rm(outDir, { recursive: true, force: true })
   await fs.rename(tmpOutDir, outDir)

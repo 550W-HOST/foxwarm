@@ -11,6 +11,9 @@ testEnvironment.initializeTestEnvironment()
 const root = fileURLToPath(new URL('../../', import.meta.url))
 const workflow = yaml.load(await fs.readFile(path.join(root, '.github/workflows/tests.yml'), 'utf8'))
 const { jobs } = workflow
+const shared = yaml.load(await fs.readFile(path.join(root, '.github/workflows/code-resources.yml'), 'utf8'))
+const release = yaml.load(await fs.readFile(path.join(root, '.github/workflows/release.yml'), 'utf8'))
+const codeProducer = shared.jobs['code-resources']
 const restore = job => job.steps.filter(step => step.uses?.startsWith('actions/cache/restore@'))
 
 // Exercise the workflow's actual hashFiles inputs, not a second hand-maintained key list.
@@ -33,7 +36,7 @@ function digest(inputs) {
 }
 
 test('resource cache keys change with pins, build inputs and runner/toolchain configuration', async () => {
-  const code = await keyInputs(jobs['code-resources'])
+  const code = await keyInputs(codeProducer)
   const heif = await keyInputs(jobs['native-test-resources'])
   for (const [inputs, required] of [[code, [
     'packages/vscode-web/code-oss-version.json',
@@ -46,7 +49,8 @@ test('resource cache keys change with pins, build inputs and runner/toolchain co
     'package.json',
     'package-lock.json',
     'scripts/test/prepare-browser.mjs',
-    '.github/workflows/tests.yml',
+    'scripts/release/package.mjs',
+    '.github/workflows/code-resources.yml',
   ]], [heif, ['dotnet/scripts/build-image-decoder.sh', '.github/workflows/tests.yml']]]) {
     const original = digest(inputs)
     for (const file of required) {
@@ -60,7 +64,6 @@ test('resource cache keys change with pins, build inputs and runner/toolchain co
 
 test('only resource producers build pins; consumers require the exact validated cache', () => {
   for (const [producerId, consumerIds] of [
-    ['code-resources', ['chromium']],
     ['native-test-resources', ['core', 'chromium']],
   ]) {
     const producer = jobs[producerId]
@@ -94,4 +97,28 @@ test('only resource producers build pins; consumers require the exact validated 
   const published = jobs.chromium.steps.filter(step => step.run === 'npm run test:published')
   assert.equal(published.length, 1)
   assert.equal(published[0].if, '${{ matrix.shard == 1 }}')
+})
+
+test('Tests and Release reuse one cache-backed Code producer and consume its per-run archive', () => {
+  assert.equal(jobs['code-resources'].uses, './.github/workflows/code-resources.yml')
+  assert.equal(release.jobs['code-resources'].uses, jobs['code-resources'].uses)
+  assert.ok(jobs.chromium.needs.includes('code-resources'))
+  assert.equal(release.jobs.packages.needs, 'code-resources')
+  const cache = restore(codeProducer)[0]
+  assert.equal(cache.with['restore-keys'], undefined)
+  assert.equal(cache.with['fail-on-cache-miss'], undefined)
+  const build = codeProducer.steps.find(step => step.run?.includes('--code-only') && step.run.includes('prepare-browser'))
+  assert.equal(build.if, "${{ steps.cache.outputs.cache-hit != 'true' }}")
+  const uploaded = codeProducer.steps.find(step => step.uses?.startsWith('actions/upload-artifact@'))
+  assert.equal(uploaded.with.name, 'code-resources')
+  const packaged = codeProducer.steps.findIndex(step => step.run?.includes('package.mjs --code-only'))
+  assert.ok(packaged > codeProducer.steps.indexOf(build))
+  assert.ok(packaged < codeProducer.steps.indexOf(uploaded))
+  for (const job of [jobs.chromium, release.jobs.packages]) {
+    const download = job.steps.find(step => step.uses?.startsWith('actions/download-artifact@') && step.with.name === uploaded.with.name)
+    assert.ok(download)
+    const extraction = job.steps.find(step => step.run?.includes('tar -xzf') && step.run.includes('foxwarm-code-'))
+    assert.ok(job.steps.indexOf(download) < job.steps.indexOf(extraction))
+    assert.ok(!job.steps.some(step => /build:code|prepare-browser.mjs --code-only/.test(step.run || '')))
+  }
 })

@@ -32,9 +32,50 @@ export function assetName(name) {
   return `foxwarm-${name}.${TARGETS[name].archive}`
 }
 
+export const codeAssetName = `foxwarm-code-${version}.tar.gz`
+const codeAssets = path.join(root, 'packages/vscode-web/assets')
+
+export function validateCodeAssets(source = codeAssets) {
+  const pin = JSON.parse(fs.readFileSync(path.join(root, 'packages/vscode-web/code-oss-version.json'), 'utf8'))
+  const yaml = JSON.parse(fs.readFileSync(path.join(root, 'packages/vscode-web/yaml-extension-version.json'), 'utf8'))
+  const metadata = JSON.parse(fs.readFileSync(path.join(source, 'vscode-web/foxwarm-vscode-web-assets.json'), 'utf8'))
+  const extension = JSON.parse(fs.readFileSync(path.join(source, 'extensions/redhat.vscode-yaml/foxwarm-extension-assets.json'), 'utf8'))
+  if (metadata.kind !== 'code-oss-source-build' || metadata.commit !== pin.commit
+      || extension.version !== yaml.version || extension.sha256 !== yaml.sha256) {
+    throw new Error('Release Code assets must match the pinned Code OSS and YAML source builds.')
+  }
+  for (const file of [
+    'vscode-web/out/nls.messages.js',
+    'vscode-web/out/vs/workbench/workbench.web.main.internal.css',
+    'vscode-web/out/vs/workbench/workbench.web.main.internal.js',
+    'vscode-web/LICENSE.txt', 'vscode-web/ThirdPartyNotices.txt',
+    'extensions/redhat.vscode-yaml/package.json',
+    'extensions/redhat.vscode-yaml/LICENSE.txt', 'extensions/redhat.vscode-yaml/thirdpartynotices.txt',
+  ]) {
+    const stat = fs.statSync(path.join(source, file))
+    if (!stat.isFile() || !stat.size) throw new Error(`Missing or empty Code resource: ${file}`)
+  }
+}
+
+export function installCodeAssets(directory, source = codeAssets) {
+  validateCodeAssets(source)
+  const destination = path.join(directory, 'packages/vscode-web/assets')
+  for (const entry of ['vscode-web', 'extensions/redhat.vscode-yaml']) {
+    fs.cpSync(path.join(source, entry), path.join(destination, entry), { recursive: true })
+  }
+}
+
+export function archiveCode(output, source = codeAssets) {
+  validateCodeAssets(source)
+  fs.mkdirSync(output, { recursive: true })
+  const file = path.join(output, codeAssetName)
+  tarArchive(source, ['extensions/redhat.vscode-yaml', 'vscode-web'], file)
+  return file
+}
+
 function usage(message) {
   if (message) console.error(message)
-  console.error(`Usage: node scripts/release/package.mjs --output DIR [--target NAME]... [--build-assets] [--directory-only] [--checksums-only]
+  console.error(`Usage: node scripts/release/package.mjs --output DIR [--target NAME]... [--build-assets] [--directory-only] [--checksums-only | --code-only]
 Targets: ${Object.keys(TARGETS).join(', ')} (default: macOS targets on macOS, Linux/Windows targets elsewhere)`)
   process.exit(2)
 }
@@ -102,6 +143,7 @@ function publish(name, directory) {
     }
   }
   removeDebugFiles(directory)
+  if (target.kind === 'desktop') installCodeAssets(directory)
   const commit = capture('git', ['rev-parse', 'HEAD'])
   fs.writeFileSync(path.join(directory, 'release.json'), JSON.stringify({
     version, target: name, kind: target.kind, rid: target.rid, selfContained: target.selfContained,
@@ -125,12 +167,17 @@ with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as archive
             archive.write(full, os.path.relpath(full, base))
 `, path.dirname(staging), top, file])
   } else {
-    const epoch = capture('git', ['show', '-s', '--format=%ct', 'HEAD'])
-    // Python supplies the same sorted, fixed-time archive on GNU and BSD hosts.
-    // Clear the gzip filename/time as well as tar ownership and PAX timestamps.
-    run('python3', ['-c', `
+    tarArchive(path.dirname(staging), [top], file)
+  }
+  return file
+}
+
+function tarArchive(base, entries, file) {
+  const epoch = capture('git', ['show', '-s', '--format=%ct', 'HEAD'])
+  // Normalize metadata on both GNU and BSD hosts, retaining all shipped resources.
+  run('python3', ['-c', `
 import gzip, os, sys, tarfile
-base, top, out, epoch = sys.argv[1:5]
+base, out, epoch, *entries = sys.argv[1:]
 epoch = int(epoch)
 def normalized(info):
     info.uid = info.gid = 0
@@ -141,10 +188,9 @@ def normalized(info):
 with open(out, 'wb') as raw:
     with gzip.GzipFile(filename='', mode='wb', fileobj=raw, mtime=epoch) as compressed:
         with tarfile.open(fileobj=compressed, mode='w', format=tarfile.PAX_FORMAT) as archive:
-            archive.add(os.path.join(base, top), arcname=top, filter=normalized)
-`, path.dirname(staging), top, file, epoch])
-  }
-  return file
+            for entry in entries:
+                archive.add(os.path.join(base, entry), arcname=entry, filter=normalized)
+`, base, file, epoch, ...entries])
 }
 
 export function writeChecksums(output) {
@@ -159,6 +205,7 @@ function main(argv) {
   let buildAssets = false
   let directoryOnly = false
   let checksumsOnly = false
+  let codeOnly = false
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
     if (arg === '--output') output = argv[++i]
@@ -166,11 +213,18 @@ function main(argv) {
     else if (arg === '--build-assets') buildAssets = true
     else if (arg === '--directory-only') directoryOnly = true
     else if (arg === '--checksums-only') checksumsOnly = true
+    else if (arg === '--code-only') codeOnly = true
     else usage(`Unknown argument: ${arg}`)
   }
   if (!output) usage('--output is required')
   for (const name of targets) if (!TARGETS[name]) usage(`Unknown target: ${name}`)
   output = path.resolve(output)
+  if (codeOnly) {
+    if (targets.length || buildAssets || directoryOnly || checksumsOnly) usage('--code-only cannot be combined with other build options')
+    console.log(`Packaged ${archiveCode(output)}`)
+    writeChecksums(output)
+    return
+  }
   if (checksumsOnly) {
     if (targets.length || buildAssets || directoryOnly) usage('--checksums-only cannot be combined with build options')
     writeChecksums(output)
@@ -181,6 +235,7 @@ function main(argv) {
   if (selected.some(name => name.startsWith('osx-')) && (process.platform !== 'darwin' || process.arch !== 'arm64')) {
     throw new Error('macOS packages require an arm64 macOS build host for the native PTY library and helper.')
   }
+  if (selected.some(name => TARGETS[name].kind === 'desktop')) validateCodeAssets()
   if (buildAssets) run('npm', ['run', 'build:assets'], { shell: process.platform === 'win32' })
   fs.mkdirSync(output, { recursive: true })
   const work = path.join(output, '.work')

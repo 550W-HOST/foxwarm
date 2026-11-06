@@ -98,10 +98,17 @@ public sealed class CodeRoutesTests
         Assert.True(response.Headers.CacheControl!.NoStore);
         var html = await response.Content.ReadAsStringAsync();
         Assert.Contains("<!doctype html>", html);
-        Assert.Contains("Code is not built", html);
+        Assert.Contains("Code is not installed", html);
         Assert.Contains("npm run build:code", html);
         Assert.Contains("npm run download:code", html);
-        Assert.Contains(WebUtility.HtmlEncode(f.InstalledAssets), html);
+        Assert.Contains(WebUtility.HtmlEncode(Path.GetDirectoryName(f.InstalledAssets)!), html);
+        Assert.Contains($"releases/download/v{ProductVersion.Value}", html);
+        Assert.Contains($"foxwarm-code-{ProductVersion.Value}.tar.gz", html);
+        Assert.Contains("SHA256SUMS", html);
+        Assert.Contains("sha256sum -c", html);
+        Assert.Contains("shasum -a 256 -c", html);
+        Assert.Contains("Get-FileHash", html);
+        Assert.Contains("tar -xzf", html);
         using var asset = await f.Client.GetAsync("/vscode-web/static/out/nls.messages.js");
         Assert.Equal(HttpStatusCode.NotFound, asset.StatusCode);
     }
@@ -133,7 +140,7 @@ public sealed class CodeRoutesTests
         using var response = await f.Client.GetAsync("/vscode-web");
         Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
         Assert.Contains(
-            WebUtility.HtmlEncode(f.Assets),
+            WebUtility.HtmlEncode(Path.GetDirectoryName(f.Assets)!),
             await response.Content.ReadAsStringAsync()
         );
         using var asset = await f.Client.GetAsync("/vscode-web/static/out/nls.messages.js");

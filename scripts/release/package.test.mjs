@@ -5,7 +5,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
-import { archive, assetName, writeChecksums } from './package.mjs'
+import { archive, assetName, archiveCode, codeAssetName, installCodeAssets, validateCodeAssets, writeChecksums } from './package.mjs'
 
 const root = path.resolve(import.meta.dirname, '../..')
 const unix = { skip: process.platform === 'win32' }
@@ -43,7 +43,7 @@ with tarfile.open(sys.argv[1]) as archive:
 
 test('checksum aggregation replaces partial lists and covers all platform assets', unix, t => {
   const work = scratch(t)
-  const files = ['foxwarm-linux-x64.tar.gz', 'foxwarm-win-x64.zip', 'foxwarm-osx-arm64.tar.gz', 'foxwarm-osx-arm64-self-contained.tar.gz']
+  const files = ['foxwarm-linux-x64.tar.gz', 'foxwarm-win-x64.zip', 'foxwarm-osx-arm64.tar.gz', 'foxwarm-osx-arm64-self-contained.tar.gz', codeAssetName]
   for (const name of files) fs.writeFileSync(path.join(work, name), name)
   fs.writeFileSync(path.join(work, 'SHA256SUMS'), 'partial build list\n')
   writeChecksums(work)
@@ -108,4 +108,56 @@ test('Darwin --package install rejects another RID before upgrade inspection', u
   assert.notEqual(result.status, 0)
   assert.match(result.stderr, /for linux-x64, not osx-arm64/)
   assert(!fs.existsSync(path.join(f.work, 'inspected')))
+})
+
+function preparedCode(t) {
+  const directory = scratch(t)
+  const pin = JSON.parse(fs.readFileSync(path.join(root, 'packages/vscode-web/code-oss-version.json')))
+  const yaml = JSON.parse(fs.readFileSync(path.join(root, 'packages/vscode-web/yaml-extension-version.json')))
+  const files = {
+    'vscode-web/foxwarm-vscode-web-assets.json': JSON.stringify({ kind: 'code-oss-source-build', commit: pin.commit }),
+    'extensions/redhat.vscode-yaml/foxwarm-extension-assets.json': JSON.stringify(yaml),
+    'vscode-web/out/nls.messages.js': 'messages',
+    'vscode-web/out/vs/workbench/workbench.web.main.internal.js': 'workbench',
+    'vscode-web/out/vs/workbench/workbench.web.main.internal.css': 'styles',
+    'vscode-web/LICENSE.txt': 'Code license',
+    'vscode-web/ThirdPartyNotices.txt': 'Code notices',
+    'vscode-web/extensions/language-one/package.json': '{"name":"language-one"}',
+    'vscode-web/extensions/language-two/syntax.xml': '<grammar/>',
+    'extensions/redhat.vscode-yaml/package.json': '{"name":"vscode-yaml"}',
+    'extensions/redhat.vscode-yaml/LICENSE.txt': 'YAML license',
+    'extensions/redhat.vscode-yaml/thirdpartynotices.txt': 'YAML notices',
+  }
+  for (const [file, text] of Object.entries(files)) {
+    fs.mkdirSync(path.dirname(path.join(directory, file)), { recursive: true })
+    fs.writeFileSync(path.join(directory, file), text)
+  }
+  return { directory, files }
+}
+
+test('Code archive extracts directly into assets and Desktop retains every resource and notice', unix, t => {
+  const { directory, files } = preparedCode(t)
+  const output = scratch(t), desktop = scratch(t), extracted = scratch(t)
+  const archive = archiveCode(output, directory)
+  assert.equal(path.basename(archive), codeAssetName)
+  const extraction = spawnSync('tar', ['-xzf', archive, '-C', extracted], { encoding: 'utf8' })
+  assert.equal(extraction.status, 0, extraction.stderr)
+  assert.deepEqual(fs.readdirSync(extracted).sort(), ['extensions', 'vscode-web'])
+  installCodeAssets(desktop, directory)
+  for (const [file, text] of Object.entries(files)) {
+    assert.equal(fs.readFileSync(path.join(extracted, file), 'utf8'), text)
+    assert.equal(fs.readFileSync(path.join(desktop, 'packages/vscode-web/assets', file), 'utf8'), text)
+  }
+  writeChecksums(output)
+  assert.match(fs.readFileSync(path.join(output, 'SHA256SUMS'), 'utf8'), new RegExp('  ' + codeAssetName.replaceAll('.', '\\.') + '\n$'))
+})
+
+test('release Code validation rejects another pin and missing redistribution notices', t => {
+  const { directory } = preparedCode(t)
+  validateCodeAssets(directory)
+  fs.rmSync(path.join(directory, 'vscode-web/ThirdPartyNotices.txt'))
+  assert.throws(() => validateCodeAssets(directory), /ENOENT/)
+  fs.writeFileSync(path.join(directory, 'vscode-web/ThirdPartyNotices.txt'), 'notices')
+  fs.writeFileSync(path.join(directory, 'vscode-web/foxwarm-vscode-web-assets.json'), JSON.stringify({ kind: 'code-oss-source-build', commit: 'wrong' }))
+  assert.throws(() => validateCodeAssets(directory), /pinned/)
 })

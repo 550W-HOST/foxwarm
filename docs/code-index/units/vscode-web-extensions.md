@@ -18,7 +18,7 @@ Cross-module contract: [Code integration](../threads/code-integration.md).
 - `npm run download:code` fetches the pinned Microsoft `web-standalone` product build for licensed/internal use; its product license is distinct from Code - OSS MIT.
 - Asset regression coverage distinguishes the root server's pinned Node 24 trixie build/runtime stages, required by its native runtime dependencies, from the Code OSS builder, node runtime, and unrelated test images that remain on bookworm.
 - Package-local `prepare:assets` remains an alias of pinned download.
-- Workbench assets and source/dependency caches are intentionally absent from Git and ordinary `npm run build`.
+- Workbench assets and source/dependency caches are intentionally absent from Git and ordinary `npm run build`. The source producer includes upstream LICENSE.txt and ThirdPartyNotices.txt in its complete output; [release packaging](./release-packages.md) bundles that output in Desktop and publishes a standalone Code asset for servers.
 - Both workbench preparation paths also download, SHA-256 verify, license-check, and extract the pinned stable `redhat.vscode-yaml` Web extension from Open VSX. The reviewed MIT license and notices are tracked; the artifact remains in ignored optional assets. Preparation applies only a fail-closed exact bundle patch so the telemetry library recognizes the effective disabled default; all other vendor files remain byte-for-byte unchanged.
 
 ## `foxwarm-fs`

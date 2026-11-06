@@ -41,6 +41,14 @@ export async function validateDesktopPackage(directory) {
     'ToolScript/THIRD-PARTY-NOTICES.md', 'Timers/THIRD-PARTY-NOTICES.md',
     'SkiaSharp-LICENSE.txt', 'SkiaSharp-native-LICENSE.txt', 'SkiaSharp-THIRD-PARTY-NOTICES.txt',
     'LanceDB-LICENSE.txt', 'Apache-Arrow-LICENSE.txt',
+    'packages/vscode-web/assets/vscode-web/out/nls.messages.js',
+    'packages/vscode-web/assets/vscode-web/out/vs/workbench/workbench.web.main.internal.js',
+    'packages/vscode-web/assets/vscode-web/out/vs/workbench/workbench.web.main.internal.css',
+    'packages/vscode-web/assets/vscode-web/LICENSE.txt',
+    'packages/vscode-web/assets/vscode-web/ThirdPartyNotices.txt',
+    'packages/vscode-web/assets/extensions/redhat.vscode-yaml/package.json',
+    'packages/vscode-web/assets/extensions/redhat.vscode-yaml/LICENSE.txt',
+    'packages/vscode-web/assets/extensions/redhat.vscode-yaml/thirdpartynotices.txt',
   ]) await required(file)
   for (const extension of ['foxwarm-fs', 'foxwarm-scm', 'foxwarm-terminal', 'foxwarm-webui']) {
     await required(`packages/vscode-web/${extension}/package.json`)
@@ -75,7 +83,7 @@ export async function validateDesktopPackage(directory) {
     assert(!excluded.test(normalized), `Console entry, source cache or runtime in package: ${file}`)
     assert(!/(?:^|\/)(?:\.env|token|config\.yaml|models\.yaml|\.npm|\.cache)(?:\/|$)/i.test(normalized), `Private state or cache in package: ${file}`)
     assert(!/^node_modules\/(?:\.package-lock\.json|\.bin)(?:\/|$)/.test(normalized), `Source dependency tree in package: ${file}`)
-    assert(!/\.(?:pdb|xml)$/i.test(normalized), `Debug/reference artifact in package: ${file}`)
+    assert(normalized.startsWith('packages/vscode-web/assets/') || !/\.(?:pdb|xml)$/i.test(normalized), `Debug/reference artifact in package: ${file}`)
   }
   return { platform: 'win-x64', selfContained, entries: files.length }
 }

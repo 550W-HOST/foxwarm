@@ -20,35 +20,7 @@ env:
 
 jobs:
   code-resources:
-    name: Prepare shared Code workbench
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    outputs:
-      cache-key: ${{ steps.cache.outputs.cache-primary-key }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24.21.0
-      - name: Restore pinned Code resources
-        id: cache
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: packages/vscode-web/assets
-          key: code-oss-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('packages/vscode-web/code-oss-version.json', 'packages/vscode-web/yaml-extension-version.json', 'packages/vscode-web/scripts/**', 'packages/vscode-web/Dockerfile.code-oss', 'packages/vscode-web/package*.json', 'package*.json', 'scripts/test/prepare-browser.mjs', '.github/workflows/tests.yml') }}
-      - name: Build missing Code resources once
-        if: ${{ steps.cache.outputs.cache-hit != 'true' }}
-        run: node scripts/test/prepare-browser.mjs --code-only
-      - name: Check Code resources
-        run: node scripts/test/prepare-browser.mjs --check-code
-      - name: Save complete Code resources
-        if: ${{ steps.cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: packages/vscode-web/assets
-          key: ${{ steps.cache.outputs.cache-primary-key }}
+    uses: ./.github/workflows/code-resources.yml
 
   native-test-resources:
     name: Prepare shared HEIF prerequisite
@@ -207,12 +179,15 @@ jobs:
         run: |
           test -s "$RUNNER_TEMP/heif-test/prefix/lib/libheif.so"
           test -s "$RUNNER_TEMP/heif-test/prefix/lib/libde265.so"
-      - name: Restore shared Code resources
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      - name: Download shared Code resources
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          path: packages/vscode-web/assets
-          key: ${{ needs.code-resources.outputs.cache-key }}
-          fail-on-cache-miss: true
+          name: code-resources
+          path: ${{ runner.temp }}/code-resources
+      - name: Extract shared Code resources
+        run: |
+          mkdir -p packages/vscode-web/assets
+          tar -xzf "$RUNNER_TEMP"/code-resources/foxwarm-code-*.tar.gz -C packages/vscode-web/assets
       - name: Check shared Code resources
         run: node scripts/test/prepare-browser.mjs --check-code
       - name: Prepare owned SSH daemon prerequisite
