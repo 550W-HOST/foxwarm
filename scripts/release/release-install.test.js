@@ -286,11 +286,34 @@ test('an exited Main pane is restarted in place or removed', linux, t => {
   const dir = path.join(f.root, 'foxwarm');
   ok(f.install(['--package', f.makePackage('0.9.0'), '--no-start']));
   ok(f.control(dir, 'start'));
-  const [pane] = mainWindow(f)[0].split(' ');
-  process.kill(mainPid(dir), 'SIGKILL');
+  const initialPane = mainWindow(f)[0];
+  const [pane, panePid] = initialPane.split(' ');
+  const killedPid = mainPid(dir);
+  process.kill(killedPid, 'SIGKILL');
   // tmux can mark the pane dead when its terminal closes, before it reaps the process and
   // records how it ended. Wait for that record, which the status line reports.
-  waitFor(() => f.tmux('display-message', '-p', '-t', pane, '#{pane_dead_signal}') === '9');
+  let lastSignal;
+  try {
+    waitFor(() => {
+      lastSignal = f.tmux('display-message', '-p', '-t', pane, '#{pane_dead_signal}');
+      return lastSignal === '9';
+    });
+  } catch (error) {
+    // Capture the failed condition before fixture cleanup destroys the pane. Keep
+    // command failures as evidence rather than masking the original assertion.
+    const output = result => ({ status: result.status, signal: result.signal,
+      error: result.error?.message, stdout: result.stdout, stderr: result.stderr });
+    t.diagnostic(JSON.stringify({
+      initialPane, killedPid, killedProcessState: processState(killedPid), lastSignal,
+      tmuxVersion: output(f.run('tmux', ['-V'])),
+      panes: output(f.run('tmux', ['list-panes', '-a', '-F',
+        '#{pane_id}|#{pane_pid}|#{pane_dead}|#{pane_dead_signal}|#{pane_dead_status}|#{pane_current_command}|#{pane_current_path}'])),
+      processes: output(f.run('ps', ['-ww', '-o', 'pid,ppid,pgid,sid,stat,args', '-p', `${killedPid},${panePid}`])),
+      status: output(f.control(dir, 'status')),
+      terminal: output(f.run('tmux', ['capture-pane', '-p', '-t', pane])),
+    }, null, 2));
+    throw error;
+  }
   const exited = f.control(dir, 'status');
   assert.equal(exited.status, 3);
   assert.match(exited.stdout, /Exited with signal 9/);
