@@ -8,7 +8,7 @@ export type WorkbenchTab =
   | (WorkbenchTabBase & { type: 'terminal'; terminalId?: string; nodeId?: string; cwd?: string; createMode?: 'new' | 'reuse' })
   | (WorkbenchTabBase & { type: 'vscode'; nodeId: string; path: string })
   /** The System page (Agents, Sessions, Nodes); its ID and type predate the page's name. */
-  | (WorkbenchTabBase & { type: 'agents'; section?: 'agents' | 'sessions' | 'nodes' })
+  | (WorkbenchTabBase & { type: 'agents'; section?: 'agents' | 'sessions' | 'nodes' | 'timers' })
   | (WorkbenchTabBase & {
       type: 'search'
       /** Browser-local draft metadata; archive results remain ephemeral to the tab instance. */

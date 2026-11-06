@@ -296,7 +296,7 @@ export function sanitizeTabsById(tabsById: Record<string, WorkbenchTab>, root: W
     // current single-row tab model.
     const { pinned: _legacyPinned, ...sanitizedTab } = tab as WorkbenchTab & { pinned?: unknown }
     if (sanitizedTab.type === 'agents') {
-      const section = sanitizedTab.section === 'agents' || sanitizedTab.section === 'sessions' || sanitizedTab.section === 'nodes' ? sanitizedTab.section : undefined
+      const section = sanitizedTab.section === 'agents' || sanitizedTab.section === 'sessions' || sanitizedTab.section === 'nodes' || sanitizedTab.section === 'timers' ? sanitizedTab.section : undefined
       return [[tabId, { id: sanitizedTab.id, type: 'agents', title: 'System', ...(section ? { section } : {}) } as WorkbenchTab]]
     }
     if (sanitizedTab.type === 'vscode') {

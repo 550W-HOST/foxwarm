@@ -5,6 +5,7 @@ import type { Session } from './SessionListCore'
 import type { TokenUsage } from './TokenUsageDetails'
 import AgentCreationMenu from './AgentCreationMenu'
 import SystemNodes from './SystemNodes'
+import SystemTimers, { SessionTimersSection } from './SystemTimers'
 import { AgentRegistryCard, AgentRegistryInspector, type AgentMemoryFile, type AgentRegistryChanges, type AgentRegistryEntry } from './SystemAgents'
 import { SessionFilterBar, SessionInspector, SessionOperationRow } from './SystemSessions'
 import { addLoadedUsage, emptyLoadedUsage, renderMetaBadge, type LoadedUsage } from './SystemShared'
@@ -21,18 +22,20 @@ import { makeVscodeWebUrl } from '../vscodeWeb'
 // The Timeline shares Chat rendering pieces; load them only when it is opened.
 const SessionSequenceView = lazy(() => import('./SessionSequenceView'))
 
-export type SystemSection = 'agents' | 'sessions' | 'nodes'
+export type SystemSection = 'agents' | 'sessions' | 'nodes' | 'timers'
 
 export const SYSTEM_SECTIONS: Array<{ id: SystemSection; label: string }> = [
   { id: 'agents', label: 'Agents' },
   { id: 'sessions', label: 'Sessions' },
   { id: 'nodes', label: 'Nodes' },
+  { id: 'timers', label: 'Timers' },
 ]
 
 const SECTION_SUBTITLES: Record<SystemSection, string> = {
   agents: 'Agent workspaces, inheritance, isolation and memory.',
   sessions: 'Session state, placement and usage, and how sessions work together.',
   nodes: 'Connected nodes, the sessions running on them, and new node setup.',
+  timers: 'Scheduled messages and scripts, their next runs and recent results.',
 }
 
 interface SystemViewProps {
@@ -102,6 +105,11 @@ export default function SystemView({
     setSearchQuery(''); setNodeFilter(null); setModelFilter(null)
     setStatusFilter(sessionsRequest.status)
   }, [sessionsRequest?.status, sessionsRequest?.nonce])
+  const [timersSessionFilter, setTimersSessionFilter] = useState<string | null>(null)
+  const showSessionTimers = (sessionId: string) => {
+    setTimersSessionFilter(sessionId)
+    setSection('timers')
+  }
   const [agentMemoryFiles, setAgentMemoryFiles] = useState<AgentMemoryFile[]>([])
   const [agentMemoryLoading, setAgentMemoryLoading] = useState(false)
   const [agentMemoryError, setAgentMemoryError] = useState('')
@@ -539,6 +547,7 @@ export default function SystemView({
                   onInspect={inspectSession}
                   onOpen={onSelectSession}
                   onLoadMoreChildren={(sessionId) => loadSessionRelationships(sessionId, 20)}
+                  extra={inspectedSession ? <SessionTimersSection key={inspectedSession.id} sessionId={inspectedSession.id} onShowTimers={showSessionTimers} /> : null}
                 />
               </div>
             </>}
@@ -558,6 +567,8 @@ export default function SystemView({
             </main>
             <AgentRegistryInspector agent={selectedRegistryAgent} allAgents={agentRegistry} nodes={displayNodes} memoryFiles={agentMemoryFiles} memoryLoading={agentMemoryLoading} memoryError={agentMemoryError} onOpenMemory={openAgentMemory} onSave={saveRegistryAgent} onDelete={deleteRegistryAgent} />
           </div>
+        ) : section === 'timers' ? (
+          <SystemTimers sessionFilter={timersSessionFilter} onSessionFilterChange={setTimersSessionFilter} onInspectSession={sessionId => sessionMap.has(sessionId) ? showSessionFromNode(sessionId) : onSelectSession(sessionId)} onOpenSession={onSelectSession} />
         ) : (
           <SystemNodes nodes={nodeTargets} error={nodeTargetsError} sessions={sessions} onNodesChanged={reloadNodes} onSelectSession={showSessionFromNode} />
         )}

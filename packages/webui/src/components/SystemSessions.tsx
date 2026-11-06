@@ -76,7 +76,7 @@ const InspectorField = ({ label, value, mono = false }: { label: string; value: 
   </div>
 )
 
-export function SessionInspector({ session, parent, children, childTotal, hasMoreChildren, now, current, node, onInspect, onOpen, onLoadMoreChildren }: {
+export function SessionInspector({ session, parent, children, childTotal, hasMoreChildren, now, current, node, onInspect, onOpen, onLoadMoreChildren, extra }: {
   session: Session | null
   parent: Session | null
   children: Session[]
@@ -88,6 +88,8 @@ export function SessionInspector({ session, parent, children, childTotal, hasMor
   onInspect: (sessionId: string) => void
   onOpen: (sessionId: string) => void
   onLoadMoreChildren: (sessionId: string) => void
+  /** Further sections for the inspected Session, shown after its relationships. */
+  extra?: ReactNode
 }) {
   if (!session) {
     return (
@@ -200,6 +202,7 @@ export function SessionInspector({ session, parent, children, childTotal, hasMor
             {hasMoreChildren ? <button type="button" onClick={() => onLoadMoreChildren(session.id)} className="w-full rounded-lg px-2.5 py-1.5 text-xs font-medium text-fw-accent hover:bg-fw-accent-surface dark:text-fw-accent dark:hover:bg-fw-accent-surface-strong/30">Load more relationships…</button> : null}
           </div>
         </section>
+        {extra}
       </div>
     </aside>
   )
