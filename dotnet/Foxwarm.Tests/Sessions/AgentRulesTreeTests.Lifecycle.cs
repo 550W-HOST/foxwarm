@@ -478,9 +478,9 @@ public sealed partial class AgentRulesTreeTests
             initialNode: "master"
         );
         Assert.Equal(("master", "/home/repo"), f.Manager.ExecutionPlacement(onMaster));
-        // The existing main-Session Node fallback is not the directory's Node.
+        // The main Session's Node is not a fallback, so it starts on master with the directory.
         var fallback = await f.Manager.CreateNamedAsync("workspace", "fallback", null, null);
-        Assert.Equal(("dev-offline", (string?)null), f.Manager.ExecutionPlacement(fallback));
+        Assert.Equal(("master", "/home/repo"), f.Manager.ExecutionPlacement(fallback));
         Assert.Equal(("dev-offline", Repo), f.Manager.ExecutionPlacement(main));
     }
 
@@ -497,8 +497,9 @@ public sealed partial class AgentRulesTreeTests
         );
         var legacyMain = await f.Manager.RequiredAsync("legacy/main");
         await f.Manager.SetAgentDefaultPlacementAsync("legacy", true, null, false, null);
+        // The main Session's Node is no longer a fallback.
         var before = await f.Manager.CreateNamedAsync("legacy", "before", null, null);
-        Assert.Equal("legacy-offline", Node(before));
+        Assert.Equal("master", Node(before));
 
         var saved = await f.Configuration.SaveAppAsync("agentDefaultNode: install-offline\n");
         Assert.Contains("agentDefaultNode", saved["applied"]!.AsArray().Select(v => v!.ToString()));
@@ -506,7 +507,7 @@ public sealed partial class AgentRulesTreeTests
             "agentDefaultNode",
             saved["restartRequired"]!.AsArray().Select(v => v!.ToString())
         );
-        // Existing selections stay; it outranks the main-Session and caller Node fallbacks.
+        // Existing selections stay; the caller's Node is not a fallback.
         Assert.Equal("legacy-offline", Node(legacyMain));
         Assert.Equal(
             "install-offline",
@@ -519,7 +520,8 @@ public sealed partial class AgentRulesTreeTests
         var plain = await f.Manager.RequiredAsync("plain/main");
         Assert.Equal("install-offline", Node(plain));
         Assert.Null(f.Manager.AgentMetadata["plain"]?["defaultNode"]);
-        Assert.Equal("install-offline", Node(await f.Manager.ForkAsync(f.Owner, "fork")));
+        // A same-Agent fork follows its parent before any default.
+        Assert.Equal("master", Node(await f.Manager.ForkAsync(f.Owner, "fork")));
         // A cross-Agent child of a master caller uses the target's installation default.
         Successful(
             await f.ToolAsync(
@@ -562,11 +564,102 @@ public sealed partial class AgentRulesTreeTests
             )
         );
 
-        // Clearing it restores the previous fallbacks.
+        // Clearing it leaves master.
         await f.Configuration.SaveAppAsync("bot:\n  name: fox\n");
         Assert.Equal(
-            "legacy-offline",
+            "master",
             Node(await f.Manager.CreateNamedAsync("legacy", "cleared", null, null))
+        );
+    }
+
+    [Fact]
+    public async Task Same_Agent_parent_Node_outranks_Agent_and_installation_defaults()
+    {
+        await using var f = await Fixture();
+        string Node(SessionOwner owner) => f.Manager.CurrentNode(owner);
+        await f.Configuration.SaveAppAsync("agentDefaultNode: install-offline\n");
+        Successful(
+            await f.ToolAsync(
+                "create_agent",
+                new JsonObject
+                {
+                    ["agentName"] = "fam",
+                    ["defaultNode"] = "fam-default",
+                    ["defaultCwd"] = "/srv/fam",
+                }
+            )
+        );
+        Successful(
+            await f.ToolAsync(
+                "create_agent",
+                new JsonObject { ["agentName"] = "other", ["defaultNode"] = "other-default" }
+            )
+        );
+        Successful(await f.ToolAsync("create_agent", new JsonObject { ["agentName"] = "plain" }));
+        var main = await f.Manager.RequiredAsync("fam/main");
+        Assert.Equal(("fam-default", "/srv/fam"), f.Manager.ExecutionPlacement(main));
+        await main.Entry.SaveLane.CommitNodeAsync("moved-offline", clearCwd: true);
+
+        // Children, forks and WebUI children of a same-Agent parent follow its current Node;
+        // the default directory belongs to the default Node only.
+        Successful(
+            await f.ToolAsync("create_child_session", new JsonObject { ["suffix"] = "c" }, main)
+        );
+        Assert.Equal(
+            ("moved-offline", (string?)null),
+            f.Manager.ExecutionPlacement(await f.Manager.RequiredAsync("fam/c"))
+        );
+        Assert.Equal("moved-offline", Node(await f.Manager.ForkAsync(main, "fork")));
+        Assert.Equal(
+            "moved-offline",
+            Node(await f.Manager.CreateUserChildAsync("fam", "web", main.Id))
+        );
+        Successful(
+            await f.ToolAsync(
+                "create_child_session",
+                new JsonObject { ["suffix"] = "pinned", ["node"] = "master" },
+                main
+            )
+        );
+        Assert.Equal("master", Node(await f.Manager.RequiredAsync("fam/pinned")));
+
+        // Cross-Agent children start from the target Agent's defaults, not the parent's Node.
+        await f.Owner.Entry.SaveLane.CommitNodeAsync("owner-offline", clearCwd: true);
+        Successful(
+            await f.ToolAsync(
+                "create_child_session",
+                new JsonObject { ["suffix"] = "x", ["agentName"] = "other" }
+            )
+        );
+        Successful(
+            await f.ToolAsync(
+                "create_child_session",
+                new JsonObject { ["suffix"] = "y", ["agentName"] = "plain" }
+            )
+        );
+        Assert.Equal("install-offline", Node(await f.Manager.RequiredAsync("plain/y")));
+        Assert.Equal("other-default", Node(await f.Manager.RequiredAsync("other/x")));
+        Assert.Equal(
+            "other-default",
+            Node(await f.Manager.CreateUserChildAsync("other", "web", main.Id))
+        );
+
+        // create_session is not a child: neither its caller nor a recorded parent places it.
+        Successful(
+            await f.ToolAsync(
+                "create_session",
+                new JsonObject
+                {
+                    ["agentName"] = "fam",
+                    ["sessionName"] = "tool",
+                    ["parentSessionId"] = main.Id,
+                },
+                main
+            )
+        );
+        Assert.Equal(
+            ("fam-default", "/srv/fam"),
+            f.Manager.ExecutionPlacement(await f.Manager.RequiredAsync("fam/tool"))
         );
     }
 
@@ -631,8 +724,9 @@ public sealed partial class AgentRulesTreeTests
             initialNode: "master"
         );
         Assert.Equal("master", f.Manager.CurrentNode(explicitMain));
+        // A same-Agent fork follows its parent, not the updated Agent default.
         var fork = await f.Manager.ForkAsync(main, "fork");
-        Assert.Equal("updated-offline", f.Manager.CurrentNode(fork));
+        Assert.Equal("default-offline", f.Manager.CurrentNode(fork));
         Successful(
             await f.ToolAsync(
                 "create_child_session",

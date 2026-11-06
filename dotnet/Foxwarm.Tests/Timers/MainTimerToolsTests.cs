@@ -239,11 +239,14 @@ public sealed class MainTimerToolsTests
         );
     }
 
+    // The stored owner Node acts as a parent Node: used only within the owner's Agent.
     [Theory]
-    [InlineData(null, "main-remote")]
-    [InlineData("master", "master")]
-    [InlineData("captured-remote", "captured-remote")]
-    public async Task Persisted_timer_omission_uses_Agent_main_but_captured_selection_remains_explicit(
+    [InlineData("timed/source", null, "master")]
+    [InlineData("timed/source", "master", "master")]
+    [InlineData("timed/source", "captured-remote", "captured-remote")]
+    [InlineData("source", "captured-remote", "master")]
+    public async Task Persisted_timer_owner_Node_places_only_same_Agent_new_sessions(
+        string ownerId,
         string? node,
         string expected
     )
@@ -261,11 +264,12 @@ public sealed class MainTimerToolsTests
             await seed.CreateNamedAsync("main", "source", null, null);
             await seed.CreateAgentAsync("timed", false);
             await seed.CreateNamedAsync("timed", "main", null, null, initialNode: "main-remote");
+            await seed.CreateNamedAsync("timed", "source", null, null);
         }
         var timer = new JsonObject
         {
             ["id"] = "legacy-timer",
-            ["sessionId"] = "source",
+            ["sessionId"] = ownerId,
             ["message"] = "timer placement",
             ["createdAt"] = 1,
             ["at"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - 1,

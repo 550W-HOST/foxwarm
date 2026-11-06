@@ -231,7 +231,8 @@ public sealed partial class SessionCreationParityTests
         var created = await f.Manager.RequiredAsync("target/Explicit_ID");
         Assert.Equal(parent.Id, created.Metadata().ParentSessionId);
         Assert.Equal("  readable / name  ", created.Metadata().DisplayName);
-        Assert.Equal("caller-node", f.Manager.CurrentNode(created));
+        // Neither the caller's Node nor the recorded parent's Node places it.
+        Assert.Equal("master", f.Manager.CurrentNode(created));
         var snapshot = created.Entry.Snapshot();
         Assert.Null(snapshot.AuthorityEnvelope["cwd"]);
         Assert.Equal("local/wire", SessionWait.Text(snapshot.AuthorityEnvelope["model"]));

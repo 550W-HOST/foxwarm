@@ -283,7 +283,7 @@ internal static class AgentToolDefinitions
                             "Copy memory files from the source agent once. Use inherit for ongoing shared-memory inheritance."
                         ),
                         ["sourceSessionId"] = String(
-                            "Session whose current Node and model provide creation defaults. Defaults to this session."
+                            "Session whose model provides creation defaults. Defaults to this session."
                         ),
                         ["convertSession"] = Boolean(
                             "Convert an existing session into this agent's main session. Requires createMainSession=true."
@@ -340,7 +340,7 @@ internal static class AgentToolDefinitions
                             "Existing session to record as the new session's parent."
                         ),
                         ["node"] = String(
-                            "Node for the new Session. If omitted, use the target Agent's default Node when set; otherwise inherit this Session's current Node. An isolated target Agent uses its bound Node."
+                            "Node for the new Session. If omitted, use the target Agent's default Node, then the installation default, then master. An isolated target Agent uses its bound Node."
                         ),
                         ["systemPromptFiles"] = new JsonObject
                         {
@@ -398,7 +398,7 @@ internal static class AgentToolDefinitions
                             "wait"
                         ),
                         ["node"] = String(
-                            "Node for the new child Session. If omitted, use the target Agent's default Node when set; otherwise inherit the parent's current Node. An isolated target Agent uses its bound Node."
+                            "Node for the new child Session. If omitted, a child in this Session's Agent uses this Session's current Node; a child in another Agent uses that Agent's default Node, then the installation default, then master. An isolated target Agent uses its bound Node."
                         ),
                         ["forceModel"] = ForceModel(),
                         ["handoffConfirmation"] = String(HandoffConfirmation.Description),

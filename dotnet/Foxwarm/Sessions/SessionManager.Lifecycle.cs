@@ -154,14 +154,9 @@ internal sealed partial class SessionManager
                 foreach (var field in new[] { "systemPromptFiles", "verbose", "currentNode" })
                     if (original.AuthorityEnvelope.ContainsKey(field))
                         envelope[field] = original.AuthorityEnvelope[field]?.DeepClone();
-                var selectedNode =
-                    BoundNode(parent.Agent)
-                    ?? initialNode
-                    ?? agents.EffectiveDefaultNode(parent.Agent);
-                if (selectedNode is not null)
-                {
-                    envelope["currentNode"] = selectedNode;
-                }
+                // A fork stays in its Agent, so it follows the parent's current Node.
+                envelope["currentNode"] =
+                    BoundNode(parent.Agent) ?? initialNode ?? CurrentNode(parent);
                 if (
                     agents.DefaultCwdFor(parent.Agent, SessionWait.Text(envelope["currentNode"])) is
                     { } defaultCwd
@@ -351,11 +346,13 @@ internal sealed partial class SessionManager
         string runtime = "foxwarm"
     )
     {
+        var parent = await RequiredAsync(parentSessionId);
         var child = await CreateNamedAsync(
             agentName,
             sessionName,
             null,
             null,
+            initialNode: parent.Agent == agentName ? CurrentNode(parent) : null,
             parentSessionId: parentSessionId,
             runtime: runtime
         );
