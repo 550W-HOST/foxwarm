@@ -303,10 +303,7 @@ internal sealed partial class SessionManager
             {
                 NodeForest = await NodeProviders.PrepareAuthorizationForestAsync(endpoints, token),
             };
-        var layers = EffectiveLayers(
-            owner.Agent,
-            global ?? await authorization.LoadAsync(token)
-        );
+        var layers = EffectiveLayers(owner.Agent, global ?? await authorization.LoadAsync(token));
         request = PopulateEffectiveTargets(
             request,
             owner,
@@ -316,13 +313,11 @@ internal sealed partial class SessionManager
         return new(
             request,
             layers
-                .Select(layer =>
-                    new AuthorizationLayerDecision(
-                        layer.Name,
-                        layer.Policy,
-                        ToolAuthorizationEvaluation.Evaluate(layer.Policy, request)
-                    )
-                )
+                .Select(layer => new AuthorizationLayerDecision(
+                    layer.Name,
+                    layer.Policy,
+                    ToolAuthorizationEvaluation.Evaluate(layer.Policy, request)
+                ))
                 .ToArray()
         );
     }
@@ -332,7 +327,9 @@ internal sealed partial class SessionManager
         ToolAuthorizationPolicy global
     ) =>
         new (string?, ToolAuthorizationPolicy)[] { (null, global) }
-            .Concat(agents.NamedRuleLayers(agent).Select(layer => ((string?)layer.Agent, layer.Policy)))
+            .Concat(
+                agents.NamedRuleLayers(agent).Select(layer => ((string?)layer.Agent, layer.Policy))
+            )
             .ToArray();
 
     private ToolAuthorizationPolicy[] EffectivePolicies(
