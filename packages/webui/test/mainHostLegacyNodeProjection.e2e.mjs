@@ -56,11 +56,14 @@ async function observe(page, id, expected, revision) {
   assert(realtime)
   await page.evaluate(id => window.foxwarmTest.switchToSession(id), id)
   await waitForWebUiReady(page)
-  await page.waitForSelector('.foxwarm-node-picker-trigger')
-  await page.waitForFunction(() => document.body.innerText.includes('Retained historical reply'))
-  await page.click('.foxwarm-node-picker-trigger')
+  // Selection prepares history before replacing the outgoing, inert Chat.
+  const chat = `[data-workbench-content-tab=${JSON.stringify('chat:' + id)}]`
+  const nodeTrigger = `${chat} .foxwarm-node-picker-trigger`
+  await page.waitForSelector(nodeTrigger, { visible: true })
+  await page.waitForFunction(selector => document.querySelector(selector)?.innerText.includes('Retained historical reply'), {}, chat)
+  await page.click(nodeTrigger)
   await page.waitForSelector('[data-node-option="master"]')
-  const trigger = await page.$eval('.foxwarm-node-picker-trigger', el => el.getAttribute('aria-label'))
+  const trigger = await page.$eval(nodeTrigger, el => el.getAttribute('aria-label'))
   const masterPressed = await page.$eval('[data-node-option="master"]', el => el.getAttribute('aria-pressed'))
   await page.keyboard.press('Escape')
   observations.push({ id, revision, historyNode: history.body.session.currentNode, realtimeNode: realtime.session.currentNode, trigger, masterPressed })
