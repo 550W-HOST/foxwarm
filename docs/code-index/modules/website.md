@@ -14,13 +14,14 @@ Owns the static public project homepage, user documentation, root installer down
 - `https://foxwarm.net/` — project homepage.
 - `/docs/` — English user documentation with the standard Starlight article layout and navigation sidebar.
 - `/install-foxwarm.sh` and `/install-foxwarm.ps1` — byte-exact build copies of the repository-root installers.
+- `/demo/` — unindexed static [WebUI demo](../units/webui-demo.md) replaying recorded data; it has no server and accepts no writes.
 - `npm ci`, `npm run build`, and `npm run check` from `website/` — standalone dependency, production-build, and validation boundaries.
 
 ## Invariants
 
-- Website dependencies and Node requirements remain confined to `website/`; normal Foxwarm runtime install/build commands do not install or build the site.
+- Website dependencies and Node requirements remain confined to `website/`, plus the existing `packages/webui` lockfile used only to build the `/demo/` bundle; normal Foxwarm runtime install/build commands do not install or build the site.
 - The site describes public `main` behavior and links to deeper repository references instead of publishing the full mixed-purpose `docs/` tree.
-- The domain serves only static project content and downloads; it does not claim to host user Agents, WebUI, APIs, credentials, or runtime data.
+- The domain serves only static project content and downloads; it does not claim to host user Agents, WebUI, APIs, credentials, or runtime data. The `/demo/` WebUI is a read-only replay of fictional recorded data, not a hosted instance.
 - Installer output is copied from the root scripts during the site build and validated byte-for-byte.
 - Pull requests may build and check the site but cannot deploy it. Production deployment consumes the Actions artifact only from public `main`; no branch-output commit or push credential is used.
 

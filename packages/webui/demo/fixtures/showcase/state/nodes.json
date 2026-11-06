@@ -1,0 +1,15 @@
+{
+  "approvedNodes": {
+    "build-box": {
+      "nodeId": "build-box",
+      "parentNode": null,
+      "nodeType": "cli-node",
+      "displayName": "build-box",
+      "tokenHash": "48e781ac9768c363ac37a76595cf05d9e7d0456b33379b147b5f9a9485853f20",
+      "createdAt": 1793486900000,
+      "updatedAt": 1793486900000
+    }
+  },
+  "providerNodes": {},
+  "pendingPairings": {}
+}

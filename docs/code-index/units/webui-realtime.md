@@ -57,6 +57,7 @@ Logs starts after ordinary subscription initialization and does not enter the Se
 - Browser transport tests prove N logical consumers use one socket, disjoint list deltas remain isolated, later subscribers bootstrap on an already-open socket, reconnect resubscribes the union, and dispose fences stale callbacks.
 - Hub tests cover authentication, alias resolution, snapshot-before-buffered-live ordering, superseded revisions, cleanup, and the real HTTP WebSocket upgrade path.
 - Chat browser fixtures use the revisioned WebSocket handshake and preserve register-before-history behavior across reconnect.
+- The static [WebUI demo](./webui-demo.md) replays recorded `session-state`, `tool-call-snapshot` and `model-stream-snapshot` frames through a browser stand-in for this handshake; its e2e test fails if the WebUI's subscription use outgrows what the stand-in answers.
 
 ## Canonical ownership
 

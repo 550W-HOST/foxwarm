@@ -1,0 +1,376 @@
+{
+  "currentNode": "build-box",
+  "persistentMemorySnapshot": "<foxwarm-current-model model-id=\"demo/demo-model\" />\n\n<memory_file agent=framework; ownership=inherited; path=/app/test/agents/00_SYSTEM.md>\nYou are running in Foxwarm, a custom agent framework.\n\n--- CAPABILITIES ---\n- Persistence: Session state and history are persisted.\n- Compaction: When the conversation gets too long, it will be summarized to save context space.\n- Tools: Use the available tools to work with files, run commands, and retrieve earlier context with `recall`.\n- For `apply_patch` syntax, follow the tool description; load the `apply-patch-guide` skill if you need more help.\n- WebUI math rendering: use `\\(...\\)` for inline LaTeX math and `\\[...\\]` for display math.\n- Memory files: For long-term memory under `agent-folder/memory/`, prefer the dedicated `read_memory` / `write_memory` / `edit_memory` / `delete_memory` / `apply_patch_memory` tools.\n- **Queue**: Incoming messages can queue while a Session is busy. Queue processing is serialized per Session.\n- **Multi-Agent**: In Foxwarm, subagents are implemented as child sessions; you can create child sessions to handle heavy tasks in parallel:\n  - `create_child_session(suffix)` - Start a child session to handle a delegated task; use a short suffix that names the task or scope\n  - `send_to_session(sessionId, message)` - Send a message to another Session when permitted.\n  - Follow the current tool schemas. If handoff confirmation is required, use its exact framing and write your own review.\n  - Wait only when no useful work remains, and declare a wake source or timeout. For background commands, use the exact returned exec ID, never a PID or path. Give the user a brief status update before waiting when appropriate.\n  - For completed Task assignments, put the result in `task.complete`; its creator notification is the completion report. Do not also message that recipient. Use `send_to_session` for non-Task work, blockers, or a coordinator not covered by that notification. Use `afterSend=\"finish\"` for a completed report, and `afterSend=\"wait\"` only when a reply is needed.\n  - **Child sessions should NOT create further child sessions** unless the task explicitly allows it or can be clearly decomposed\n  - **Child session reuse decision**: reuse an existing child when the new work is a direct follow-up to its current/recent task, implements a plan it already investigated, or belongs to a branch/worktree/service it owns. Create a new child for unrelated work, stale or confusing context, independent review, or work needing a separate mutable environment. If the user says “after A, do B”, wait for A to finish; then reuse only if B continues A.\n  - **Delegation and coordination rule**:\n    - Before assigning work to child sessions, first decide the collaboration plan: what can run in parallel, what must stay serial, what depends on earlier results, and which session owns each part.\n    - Define each child’s scope clearly enough to avoid overlap in files, directories, branches, worktrees, environments, running services, or test targets, unless overlap is explicitly intended and coordinated.\n    - Avoid sending multiple sessions to operate on the same mutable environment, workspace, branch, or service at the same time when that could cause conflicts, confusing results, or environment drift.\n    - If shared state or a shared environment is involved, prefer one session to own that area and let other sessions wait or work elsewhere.\n  - **Context-aware handoff rule**:\n    - Avoid repeating context the recipient already has. Shared Agent membership alone does not establish shared conversation history.\n    - After deciding the collaboration plan, choose the handoff style based on how much context the target session already has.\n    - If the target session does not clearly share the needed context (for example `fork=false`, or an older unrelated session), restate the necessary background, the user’s request, the goal or task breakdown, the working scope, and the expected report format.\n    - If the target session already shares the relevant context (for example `fork=true`, or a clearly continuing child task), do not restate all prior background. Instead, send only the new task, the latest decision, and any new constraints or user follow-up since the shared context point.\n    - `fork=true` only preserves context up to the moment of creation; later parent reasoning or later user messages must still be sent explicitly.\n    - Do not over-prescribe implementation details unless they are real constraints; let the child inspect the code and reason independently within its assigned scope.\n\n--- AGENT, SESSION & SKILLS MODEL ---\n- **agent** = long-lived workspace + memory container\n- **session** = runnable conversation thread bound to an agent\n- **skill** = reusable workflow/capability pack, discovered by catalog and loaded on demand\n- `agent.inherit` is for shared memory inheritance, **not** reporting hierarchy\n- Default snapshots combine framework memory, inherited Agent memory, the Agent's own memory, a visible skill catalog, and runtime hints. Full skill documents load on demand with `skill({ action: \"load\", skillName: ... })`.\n- Reuse knowledge with agents / `agent.inherit`; create a new **session** when you need a new thread without duplicating the agent\n\n--- PROGRESSIVE DISCLOSURE ---\nChoose the smallest durable layer that lets future sessions find the right knowledge:\n- **Framework/system prompt**: universal rules every agent must know. Keep this tiny and generic.\n- **Agent memory**: always-needed, stable behavior, user preferences, durable environment facts, and short pointers. Do not use it as a progress log.\n- **Agent docs**: detailed analysis, historical notes, deliverables, and references that should be available but not injected by default.\n- **Skills**: reusable procedures/capabilities. The catalog gives name + description; `skill({ action: \"load\", skillName: ... })` loads the skill entry and shows resource paths.\n- **Skill resources**: detailed references, scripts, assets, examples, or nested files read only when the skill entry points to them or the task needs them.\nIf a directory has `SKILL.md`, treat it as a skill boundary: internal references/scripts/examples are resources of that skill, not more always-loaded instructions.\n\n--- DIRECTORIES ---\n```\nagents/{agent-name}/ ← current agent folder (actual paths are injected dynamically at runtime)\n├── memory/          ← agent-internal rules, state, lessons (injected into system prompt across sessions)\n├── docs/            ← technical analysis, deliverables, references (NOT injected)\n├── skills/          ← reusable workflows for the current agent\n└── ...              ← temporary files, working artifacts\n\nfoxwarm/             ← foxwarm framework code root\n├── skills/          ← global reusable skills\n└── ...\n```\n\n</memory_file>\n\n--- DIRECTORIES ---\n- agent_folder: /app/test/agents/tidepool",
+  "promptCacheKey": "422fffd1-714b-4a20-9567-5fa02f4a8fbe",
+  "childHandoffState": {
+    "boundary": "direct-user",
+    "resolved": true
+  },
+  "stats": {
+    "totalCachedTokens": 113740,
+    "totalInputTokens": 7014,
+    "totalOutputTokens": 764,
+    "totalCost": 0.2888714,
+    "lastUsage": {
+      "inputTokens": 395,
+      "outputTokens": 267,
+      "cachedTokens": 24542,
+      "reasoningTokens": 0,
+      "cost": 0.06272950000000001
+    }
+  },
+  "agent": "tidepool",
+  "aliases": [],
+  "displayName": "Set up the CI runner",
+  "sessionStateVersion": 1,
+  "history": [
+    {
+      "role": "user",
+      "parts": [
+        {
+          "system": "<foxwarm-system kind=\"session\" currentSessionId=\"tidepool/runner\" />"
+        },
+        {
+          "system": "<foxwarm-message type=\"channel\" channelType=\"webui\" time=\"2026-10-31 23:08:08 +0000\" hint=\"direct user message via channel\" seq=\"1\">\nbuild-box just joined as a Node; it will be our CI runner. Switch this session to it and check that it is ready for tidepool: Node.js version, free disk and CPU count. The repo is already checked out at /srv/build/tidepool, so run the test suite there and give me a short readiness report.\n</foxwarm-message>"
+        }
+      ],
+      "__meta": {
+        "timestamp": 1793488088272,
+        "seq": 1
+      }
+    },
+    {
+      "role": "model",
+      "parts": [
+        {
+          "functionCall": {
+            "id": "call_01SyNJKRaNmMqxYjUQvT4K3h",
+            "name": "node",
+            "args": {
+              "action": "list"
+            },
+            "rawArgsText": "{\"action\": \"list\"}"
+          }
+        }
+      ],
+      "__meta": {
+        "modelId": "demo/demo-model",
+        "llmRequestTiming": {
+          "startedAt": 1793488088300.285,
+          "completedAt": 1793488091449,
+          "durationMs": 3148.7151
+        },
+        "usage": {
+          "inputTokens": 2673,
+          "outputTokens": 58,
+          "cachedTokens": 20756,
+          "reasoningTokens": 0,
+          "cost": 0.052447299999999995
+        },
+        "timestamp": 1793488091449,
+        "llmRequestId": "3093443c-5acc-4993-a636-6aa92c63fc86",
+        "llmAttempt": 1,
+        "seq": 2
+      }
+    },
+    {
+      "role": "tool",
+      "parts": [
+        {
+          "functionResponse": {
+            "tool_use_id": "call_01SyNJKRaNmMqxYjUQvT4K3h",
+            "name": "node",
+            "response": {
+              "output": "Current node: `master`.\n- `master` (master) — ready\n- `build-box` (remote) — ready\nProviders:\n- `master` (inspect)\n- `authenticated-remote` (inspect)"
+            },
+            "executionTiming": {
+              "startedAt": 1793488091459,
+              "completedAt": 1793488091460,
+              "durationMs": 1.0637
+            },
+            "previousLlmRequest": {
+              "time": "2026-10-31 23:08:11 +0000",
+              "durationMs": 3148.7151
+            }
+          }
+        }
+      ],
+      "__meta": {
+        "timestamp": 1793488091461,
+        "seq": 3
+      }
+    },
+    {
+      "role": "model",
+      "parts": [
+        {
+          "functionCall": {
+            "id": "call_01MhbLCJjHdUYFK5CbNhXgoX",
+            "name": "node",
+            "args": {
+              "action": "select",
+              "nodeId": "build-box"
+            },
+            "rawArgsText": "{\"action\": \"select\", \"nodeId\": \"build-box\"}"
+          }
+        },
+        {
+          "functionCall": {
+            "id": "call_01TV4rzrL46WvERETBbqpev6",
+            "name": "exec",
+            "args": {
+              "command": "node --version; npm --version; df -h /srv/build/tidepool; nproc"
+            },
+            "rawArgsText": "{\"command\": \"node --version; npm --version; df -h /srv/build/tidepool; nproc\"}"
+          }
+        }
+      ],
+      "__meta": {
+        "modelId": "demo/demo-model",
+        "llmRequestTiming": {
+          "startedAt": 1793488091468.6455,
+          "completedAt": 1793488093915,
+          "durationMs": 2446.3546
+        },
+        "usage": {
+          "inputTokens": 182,
+          "outputTokens": 165,
+          "cachedTokens": 23427,
+          "reasoningTokens": 0,
+          "cost": 0.059410700000000004
+        },
+        "timestamp": 1793488093915,
+        "llmRequestId": "9c88b126-3592-45ba-9822-10782718d9b6",
+        "llmAttempt": 1,
+        "seq": 4
+      }
+    },
+    {
+      "role": "tool",
+      "parts": [
+        {
+          "functionResponse": {
+            "tool_use_id": "call_01MhbLCJjHdUYFK5CbNhXgoX",
+            "name": "node",
+            "response": {
+              "output": "Current node changed to `build-box`. Session cwd cleared. Node default cwd: `/srv/foxwarm-node/foxwarm-node`.",
+              "nodeId": "build-box",
+              "defaultCwd": "/srv/foxwarm-node/foxwarm-node"
+            },
+            "executionTiming": {
+              "startedAt": 1793488093924,
+              "completedAt": 1793488093948,
+              "durationMs": 23.8689
+            },
+            "previousLlmRequest": {
+              "time": "2026-10-31 23:08:13 +0000",
+              "durationMs": 2446.3546
+            }
+          }
+        },
+        {
+          "functionResponse": {
+            "tool_use_id": "call_01TV4rzrL46WvERETBbqpev6",
+            "name": "exec",
+            "response": {
+              "output": "v24.17.0\n11.13.0\nFilesystem      Size  Used Avail Use% Mounted on\noverlay         197G  150G   39G  80% /\n8\n---\nExit code: 0\nDuration: 78ms"
+            },
+            "executionTiming": {
+              "startedAt": 1793488093948,
+              "completedAt": 1793488094229,
+              "durationMs": 281.1128
+            }
+          }
+        }
+      ],
+      "__meta": {
+        "timestamp": 1793488094230,
+        "seq": 5
+      }
+    },
+    {
+      "role": "user",
+      "parts": [
+        {
+          "system": "<foxwarm-system kind=\"session-settings-changed\" reason=\"effective-selection\" modelId=\"demo/demo-model\" effectiveEffort=\"high\" oldNode=\"master\" newNode=\"build-box\" time=\"2026-10-31 23:08:14 +0000\" seq=\"6\" />"
+        }
+      ],
+      "__meta": {
+        "timestamp": 1793488094239,
+        "seq": 6
+      }
+    },
+    {
+      "role": "model",
+      "parts": [
+        {
+          "functionCall": {
+            "id": "call_01EqvSXgjBjEi2S91URWy3PB",
+            "name": "exec",
+            "args": {
+              "command": "cat package.json | head -40; ls; git status -sb | head; git log -1 --oneline",
+              "cwd": "/srv/build/tidepool"
+            },
+            "rawArgsText": "{\"command\": \"cat package.json | head -40; ls; git status -sb | head; git log -1 --oneline\", \"cwd\": \"/srv/build/tidepool\"}"
+          }
+        }
+      ],
+      "__meta": {
+        "modelId": "demo/demo-model",
+        "llmRequestTiming": {
+          "startedAt": 1793488094258.496,
+          "completedAt": 1793488097206,
+          "durationMs": 2947.504
+        },
+        "usage": {
+          "inputTokens": 3451,
+          "outputTokens": 120,
+          "cachedTokens": 20784,
+          "reasoningTokens": 0,
+          "cost": 0.052905100000000004
+        },
+        "timestamp": 1793488097206,
+        "llmRequestId": "ad39e5d9-c1e3-4ed8-baea-46ce7cdff066",
+        "llmAttempt": 1,
+        "seq": 7
+      }
+    },
+    {
+      "role": "tool",
+      "parts": [
+        {
+          "functionResponse": {
+            "tool_use_id": "call_01EqvSXgjBjEi2S91URWy3PB",
+            "name": "exec",
+            "response": {
+              "output": "{\n  \"name\": \"tidepool\",\n  \"version\": \"0.4.2\",\n  \"description\": \"Tiny invoice and subscription billing helpers\",\n  \"type\": \"module\",\n  \"scripts\": { \"test\": \"node --test\" }\n}\nREADME.md\npackage.json\nsrc\ntest\n## main\n69a5f78 Round invoice line totals, tax and total to cents\n---\nExit code: 0\nDuration: 32ms"
+            },
+            "executionTiming": {
+              "startedAt": 1793488097217,
+              "completedAt": 1793488097497,
+              "durationMs": 280.4629
+            },
+            "previousLlmRequest": {
+              "time": "2026-10-31 23:08:17 +0000",
+              "durationMs": 2947.504
+            }
+          }
+        }
+      ],
+      "__meta": {
+        "timestamp": 1793488097498,
+        "seq": 8
+      }
+    },
+    {
+      "role": "model",
+      "parts": [
+        {
+          "text": "Dependencies aren't needed (no deps listed), so I'll run the tests."
+        },
+        {
+          "functionCall": {
+            "id": "call_01KGnm56kX3yCKcPXUhugqB4",
+            "name": "exec",
+            "args": {
+              "command": "npm test 2>&1 | tail -40",
+              "cwd": "/srv/build/tidepool",
+              "timeout": 60
+            },
+            "rawArgsText": "{\"command\": \"npm test 2>&1 | tail -40\", \"cwd\": \"/srv/build/tidepool\", \"timeout\": 60}"
+          }
+        }
+      ],
+      "__meta": {
+        "modelId": "demo/demo-model",
+        "llmRequestTiming": {
+          "startedAt": 1793488097506.5376,
+          "completedAt": 1793488100132,
+          "durationMs": 2625.4625
+        },
+        "usage": {
+          "inputTokens": 313,
+          "outputTokens": 154,
+          "cachedTokens": 24231,
+          "reasoningTokens": 0,
+          "cost": 0.0613788
+        },
+        "timestamp": 1793488100132,
+        "llmRequestId": "e45f6bab-c5fa-4896-aa24-c7bcbd950f65",
+        "llmAttempt": 1,
+        "seq": 9
+      }
+    },
+    {
+      "role": "tool",
+      "parts": [
+        {
+          "functionResponse": {
+            "tool_use_id": "call_01KGnm56kX3yCKcPXUhugqB4",
+            "name": "exec",
+            "response": {
+              "output": "\n> tidepool@0.4.2 test\n> node --test\n\n✔ applies line discounts before tax (0.816851ms)\n✔ formats currency (15.4782ms)\n✔ credits the unused half of a 30-day period (0.69465ms)\nℹ tests 3\nℹ suites 0\nℹ pass 3\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 78.280867\n---\nExit code: 0\nDuration: 408ms"
+            },
+            "executionTiming": {
+              "startedAt": 1793488100159,
+              "completedAt": 1793488100693,
+              "durationMs": 533.5159
+            },
+            "previousLlmRequest": {
+              "time": "2026-10-31 23:08:20 +0000",
+              "durationMs": 2625.4625
+            }
+          }
+        }
+      ],
+      "__meta": {
+        "timestamp": 1793488100694,
+        "seq": 10
+      }
+    },
+    {
+      "role": "model",
+      "parts": [
+        {
+          "text": "**build-box is ready for tidepool.** This session is now running on it.\n\n| Check | Result |\n|---|---|\n| Node.js | v24.17.0 (npm 11.13.0) |\n| Free disk | 39 GB available of 197 GB (80% used) |\n| CPUs | 8 |\n| Repo | `/srv/build/tidepool`, branch `main`, at `69a5f78` (\"Round invoice line totals, tax and total to cents\"), clean working tree |\n| Tests | `npm test` (`node --test`) passed 3 of 3 with no failures or skips, in about 0.4 s |\n\n- **Dependencies:** tidepool has none, so no install step was needed.\n- **Disk:** at 80% used, it has room for now, but it's worth watching if builds or artifacts accumulate."
+        }
+      ],
+      "__meta": {
+        "modelId": "demo/demo-model",
+        "llmRequestTiming": {
+          "startedAt": 1793488100733.1853,
+          "completedAt": 1793488104158,
+          "durationMs": 3424.8146
+        },
+        "usage": {
+          "inputTokens": 395,
+          "outputTokens": 267,
+          "cachedTokens": 24542,
+          "reasoningTokens": 0,
+          "cost": 0.06272950000000001
+        },
+        "timestamp": 1793488104158,
+        "llmRequestId": "c804cd33-d3da-43de-a20f-d79d0fd78832",
+        "llmAttempt": 1,
+        "seq": 11
+      }
+    }
+  ],
+  "queue": [],
+  "meta": {
+    "lastMessageTime": 1793488088272,
+    "messageCount": 11,
+    "lastEffectiveRequest": {
+      "modelId": "demo/demo-model",
+      "nodeId": "build-box",
+      "effort": "high"
+    }
+  },
+  "busy": false,
+  "busyStartedAt": null,
+  "stopping": false,
+  "historyVersion": 0,
+  "lastAppliedMailboxId": 0,
+  "nextMessageSeq": 12,
+  "nextBlockId": 1
+}

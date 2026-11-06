@@ -137,6 +137,18 @@ test('installer downloads are byte-exact copies of repository scripts', async ()
   }
 });
 
+test('the WebUI demo is built, unindexed, and not linked from the site', async () => {
+  const html = await readFile(path.join(distRoot, 'demo', 'index.html'), 'utf8');
+  assert.match(html, /<meta name="robots" content="noindex, nofollow"/);
+  assert.match(html, /<script type="module" crossorigin src="\.\/assets\/[^"]+\.js"><\/script>/);
+  const linking = [];
+  for (const filePath of await htmlFiles()) {
+    if (filePath.startsWith(path.join(distRoot, 'demo') + path.sep)) continue;
+    if (/(?:href|src)="(?:https:\/\/foxwarm\.net)?\/demo[/"]/.test(await readFile(filePath, 'utf8'))) linking.push(path.relative(distRoot, filePath));
+  }
+  assert.deepEqual(linking, []);
+});
+
 test('the custom 404 is excluded from indexing', async () => {
   const html = await readFile(path.join(distRoot, '404.html'), 'utf8');
   assert.match(html, /<meta name="robots" content="noindex"/);
@@ -147,6 +159,7 @@ test('robots, sitemap, and search artifacts are present', async () => {
   const robots = await readFile(path.join(distRoot, 'robots.txt'), 'utf8');
   assert.match(robots, /^User-agent: \*$/m);
   assert.match(robots, /^Allow: \/$/m);
+  assert.match(robots, /^Disallow: \/demo\/$/m);
   assert.match(robots, new RegExp(`Sitemap: ${siteOrigin.replaceAll('.', '\\.')}\/sitemap-index\\.xml`));
 
   const sitemapIndex = await readFile(path.join(distRoot, 'sitemap-index.xml'), 'utf8');
@@ -154,6 +167,7 @@ test('robots, sitemap, and search artifacts are present', async () => {
   const sitemap = await readFile(path.join(distRoot, 'sitemap-0.xml'), 'utf8');
   for (const route of requiredRoutes) assert.match(sitemap, new RegExp(`${siteOrigin.replaceAll('.', '\\.')}${route}`));
   assert.doesNotMatch(sitemap, /\/404\//);
+  assert.doesNotMatch(sitemap, /\/demo\//);
 
   assert.equal(await exists(path.join(distRoot, 'pagefind', 'pagefind.js')), true, 'missing Pagefind search bundle');
   const docsHome = await readFile(routeToFile('/docs/'), 'utf8');

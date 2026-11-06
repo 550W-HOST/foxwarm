@@ -8,7 +8,7 @@ export default defineConfig({
   site: 'https://foxwarm.net',
   output: 'static',
   integrations: [
-    sitemap({ filter: (page) => page !== 'https://foxwarm.net/404/' }),
+    sitemap({ filter: (page) => page !== 'https://foxwarm.net/404/' && !page.startsWith('https://foxwarm.net/demo/') }),
     starlight({
       title: 'Foxwarm',
       description: 'Self-hosted AI agents with persistent sessions, tools, and optional nodes and channels.',

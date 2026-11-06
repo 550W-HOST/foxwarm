@@ -8,9 +8,8 @@ on:
       - 'README.md'
       - 'install-foxwarm.sh'
       - 'install-foxwarm.ps1'
-      - 'packages/webui/public/favicon.svg'
-      - 'packages/webui/public/favicon-32x32.png'
-      - 'packages/webui/public/favicon-128x128.png'
+      - 'packages/webui/**'
+      - 'packages/shared/src/**'
       - '.github/workflows/website.yml'
   pull_request:
     paths:
@@ -18,9 +17,8 @@ on:
       - 'README.md'
       - 'install-foxwarm.sh'
       - 'install-foxwarm.ps1'
-      - 'packages/webui/public/favicon.svg'
-      - 'packages/webui/public/favicon-32x32.png'
-      - 'packages/webui/public/favicon-128x128.png'
+      - 'packages/webui/**'
+      - 'packages/shared/src/**'
       - '.github/workflows/website.yml'
   workflow_dispatch:
 
@@ -43,7 +41,9 @@ jobs:
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: website/package-lock.json
+          cache-dependency-path: |
+            website/package-lock.json
+            packages/webui/package-lock.json
       - name: Install website dependencies
         run: npm ci
         working-directory: website
