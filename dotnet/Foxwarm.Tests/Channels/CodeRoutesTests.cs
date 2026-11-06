@@ -143,7 +143,7 @@ public sealed class CodeRoutesTests
     [Fact]
     public async Task Local_Code_native_metadata_and_link_errors_follow_the_filesystem_service_contract()
     {
-        if (!OperatingSystem.IsLinux())
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
             return;
         await using var f = await Fixture.Create();
         var file = Path.Combine(f.Work, "readonly");

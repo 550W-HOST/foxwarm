@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { createServer } from 'node:https'
 import { once } from 'node:events'
 import { spawn, execFileSync } from 'node:child_process'
-import { mkdir, readFile, writeFile, readlink, readdir, rm } from 'node:fs/promises'
+import { mkdir, readFile, writeFile, readlink, readdir, rm, chmod, symlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { platform, release, arch } from 'node:os'
 import { createRequire } from 'node:module'
@@ -173,6 +173,22 @@ async function optionalServices(client) {
   const codeFile = join(project, 'code-file.txt'), codeContent = Buffer.from('native Code file é🙂').toString('base64')
   await service(client, 'vscode-fs', 'write-file', { path: codeFile, contentBase64: codeContent, create: true, overwrite: false })
   assert.equal((await service(client, 'vscode-fs', 'read-file', { path: codeFile })).contentBase64, codeContent)
+  const codeStat = await service(client, 'vscode-fs', 'stat', { path: codeFile })
+  assert.equal(codeStat.type, 1)
+  assert.equal(codeStat.size, Buffer.byteLength('native Code file é🙂'))
+  assert(Math.abs(codeStat.mtime - Date.now()) < 60000, 'native modification timestamp')
+  assert(Math.abs(codeStat.ctime - Date.now()) < 60000, 'native change timestamp')
+  if (!windows) {
+    await chmod(codeFile, 0o444)
+    assert.equal((await service(client, 'vscode-fs', 'stat', { path: codeFile })).permissions, 1)
+    await chmod(codeFile, 0o644)
+    await symlink(codeFile, join(project, 'code-link'))
+    await symlink(join(project, 'absent-target'), join(project, 'code-broken-link'))
+    const link = await service(client, 'vscode-fs', 'stat', { path: join(project, 'code-link') })
+    assert.equal(link.type, 65); assert.equal(link.size, codeStat.size)
+    const listing = await service(client, 'vscode-fs', 'read-directory', { path: project })
+    assert.equal(listing.entries.find(entry => entry.name === 'code-broken-link').type, 0)
+  }
   const ptyExpected = process.env.FOXWARM_TEST_EXPECT_PTY !== '0'
   assert.equal(registration.capabilities.services['vscode-pty'], ptyExpected ? 1 : undefined)
   evidence.ptyBackend = ptyExpected ? 'loaded' : 'absent: other services remain usable'

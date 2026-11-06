@@ -286,7 +286,8 @@ python3 scripts/native-aot/qualify-platform.py .temp/native-extracted/native-cli
 ```
 
 This qualification creates owned TLS certificates, temporarily adds the positive
-certificate to the runner's OS trust store, and removes it afterward. macOS needs
+certificate to the runner's OS trust store, and removes the certificate afterward.
+On macOS, residual trust-settings metadata is discarded with the disposable runner. macOS needs
 `sudo` for this operation. Do not use the runner qualification script as an end-user
 installer. It verifies trusted/negative TLS, process module snapshots without CLR,
 files, exec lifetime/recovery, helpers, Git, PTY, Code and missing-browser isolation.
