@@ -618,6 +618,7 @@ export const APP_CONFIG_SCHEMA = {
       properties: {
         ollamaBaseUrl: { type: 'string', description: 'Legacy vector endpoint root. Prefer top-level vector.baseUrl.' },
         contextLimit: { ...modelDefaultProperties.contextLimit, deprecated: true, description: 'Legacy fallback. Prefer defaults in models.yaml.' },
+        retryIntervalsMs: { type: 'array', minItems: 1, items: { type: 'integer', minimum: 0, maximum: 2147483647 }, default: [2000, 5000, 10000, 20000, 40000, 60000], description: 'Delays in milliseconds for successive LLM retries. Later retries reuse the last entry. Zero retries immediately. Requires restart.' },
         compactKeepPercent: { type: 'number', exclusiveMinimum: 0, maximum: 1, default: 0.3 },
         compactThresholdPercent: { type: 'number', exclusiveMinimum: 0, maximum: 1, default: 0.85 },
         memoryWarningThresholdPercent: { type: 'number', exclusiveMinimum: 0, maximum: 1, default: 0.15, description: 'Warn when injected Agent memory exceeds this fraction of the model context window.' },

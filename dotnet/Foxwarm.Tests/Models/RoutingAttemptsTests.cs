@@ -10,7 +10,11 @@ public sealed class RoutingAttemptsTests
 {
     private static JsonObject Obj(string value) => JsonNode.Parse(value)!.AsObject();
 
-    private static HostModels Catalog(int threshold = 5, string token = "old") =>
+    private static HostModels Catalog(
+        int threshold = 5,
+        string token = "old",
+        int[]? retryIntervalsMs = null
+    ) =>
         HostModels.Parse(
             Obj(
                 """
@@ -20,7 +24,17 @@ public sealed class RoutingAttemptsTests
                     threshold.ToString(System.Globalization.CultureInfo.InvariantCulture)
                 )
             ),
-            new JsonObject()
+            retryIntervalsMs is { } intervals
+                ? new JsonObject
+                {
+                    ["llm"] = new JsonObject
+                    {
+                        ["retryIntervalsMs"] = new JsonArray(
+                            intervals.Select(value => (JsonNode?)JsonValue.Create(value)).ToArray()
+                        ),
+                    },
+                }
+                : new JsonObject()
         );
 
     private static ResponsesClientOptions Defaults() =>
@@ -98,15 +112,21 @@ public sealed class RoutingAttemptsTests
         );
     }
 
-    [Fact]
-    public async Task One_outer_six_attempts_rebuild_each_leaf_and_preserve_lineage_effort_and_success_attribution()
+    [Theory]
+    [InlineData(null)]
+    [InlineData(new int[] { 17000, 25000 })]
+    [InlineData(new int[] { 0 })]
+    [InlineData(new int[] { 1, 2, 3, 4, 5, 6, 7 })]
+    public async Task One_outer_six_attempts_rebuild_each_leaf_and_preserve_lineage_effort_and_success_attribution(
+        int[]? retryIntervalsMs
+    )
     {
         var calls = 0;
         var warnings = 0;
         var delays = new List<int>();
         var prompts = new List<string>();
         var events = new List<ModelRetryEvent>();
-        var catalog = Catalog();
+        var catalog = Catalog(retryIntervalsMs: retryIntervalsMs);
         using var client = new HttpClient(
             new Handler(
                 async (request, token) =>
@@ -171,8 +191,15 @@ public sealed class RoutingAttemptsTests
         );
         Assert.Equal(1, warnings);
         Assert.Equal(6, calls);
-        Assert.Equal(new[] { 2000, 5000, 10000, 20000, 40000 }, delays);
-        Assert.Equal(77000, delays.Sum());
+        Assert.Equal(
+            retryIntervalsMs is { } intervals
+                ? Enumerable
+                    .Range(0, 5)
+                    .Select(index => intervals[Math.Min(index, intervals.Length - 1)])
+                : new[] { 2000, 5000, 10000, 20000, 40000 },
+            delays
+        );
+        Assert.Equal(delays, events.Select(value => value.DelayMs!.Value));
         Assert.Equal(new[] { "a/m", "a/m", "a/m", "a/m", "a/m", "b/m" }, prompts);
         Assert.Equal(5, events.Count);
         Assert.All(events, value => Assert.Equal(6, value.MaxRetries));
@@ -307,8 +334,12 @@ public sealed class RoutingAttemptsTests
         Assert.Equal((true, false), ModelAttemptFailure.ClassifyHttp(418, "teapot"));
     }
 
-    [Fact]
-    public async Task Caller_stop_during_real_backoff_ends_without_another_provider_call_or_health_increment()
+    [Theory]
+    [InlineData(null)]
+    [InlineData(new int[] { 600000 })]
+    public async Task Caller_stop_during_real_backoff_ends_without_another_provider_call_or_health_increment(
+        int[]? retryIntervalsMs
+    )
     {
         var calls = 0;
         using var stop = new CancellationTokenSource();
@@ -327,7 +358,7 @@ public sealed class RoutingAttemptsTests
                 }
             )
         );
-        var catalog = Catalog(2);
+        var catalog = Catalog(2, retryIntervalsMs: retryIntervalsMs);
         var routing = new ModelRouting();
         var owner = new ModelRequestOwner(
             client,

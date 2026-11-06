@@ -647,3 +647,14 @@ test('history compatibility completions suggest whole configured concrete keys w
   }
   support.dispose()
 })
+
+
+test('app config schema validates LLM retry interval arrays', () => {
+  for (const value of [[0], [17000, 25000], [2147483647]]) {
+    assert.equal(validateAppConfigSchema({ llm: { retryIntervalsMs: value } }), true)
+  }
+  assert.equal(validateAppConfigSchema({ llm: {} }), true)
+  for (const value of [null, 1000, '1000', true, [], {}, [null], [-1], [0.5], [2147483648], ['1000'], [true]]) {
+    assert.equal(validateAppConfigSchema({ llm: { retryIntervalsMs: value } }), false)
+  }
+})

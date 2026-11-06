@@ -4,5 +4,8 @@
 sessionAutoTitle: true
 
 llm:
+  # LLM retry delays in milliseconds; later retries reuse the last entry.
+  # Requires restart. Omit to use these defaults.
+  # retryIntervalsMs: [2000, 5000, 10000, 20000, 40000, 60000]
   # Warn when injected Agent memory exceeds 15% of the model context window.
   memoryWarningThresholdPercent: 0.15

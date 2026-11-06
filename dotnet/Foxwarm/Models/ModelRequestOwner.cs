@@ -17,16 +17,11 @@ internal sealed class ModelRequestOwner(
 {
     internal const int DefaultMaxAttempts = 6;
 
-    internal static int RetryDelay(int failedAttempt) =>
-        failedAttempt switch
-        {
-            <= 1 => 2000,
-            2 => 5000,
-            3 => 10000,
-            4 => 20000,
-            5 => 40000,
-            _ => 60000,
-        };
+    internal static int RetryDelay(int failedAttempt, IReadOnlyList<int>? intervals = null)
+    {
+        var delays = intervals ?? AppConfigurationRules.DefaultRetryIntervalsMs;
+        return delays[Math.Clamp(failedAttempt - 1, 0, delays.Count - 1)];
+    }
 
     internal sealed record CapturedRequest(
         HostModels Catalog,
@@ -568,6 +563,7 @@ internal sealed class ModelRequestOwner(
                 var explanation = cause is null
                     ? null
                     : ModelAttemptFailure.ConfigurationExplanation(cause, leaf);
+                var retryDelay = RetryDelay(attempt, catalog.RetryIntervalsMs);
                 var value = new ModelRetryEvent(
                     attempt,
                     maxAttempts,
@@ -577,7 +573,7 @@ internal sealed class ModelRequestOwner(
                     request is null ? null : route.Key,
                     failure.Status,
                     final ? null : attempt + 1,
-                    final ? null : RetryDelay(attempt),
+                    final ? null : retryDelay,
                     final,
                     cause,
                     explanation
@@ -611,9 +607,9 @@ internal sealed class ModelRequestOwner(
                         TerminalNoticeDelivered = delivered,
                     };
                 if (delay is null)
-                    await Task.Delay(RetryDelay(attempt), cancellationToken);
+                    await Task.Delay(retryDelay, cancellationToken);
                 else
-                    await delay(RetryDelay(attempt), cancellationToken);
+                    await delay(retryDelay, cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();
                 // Semantic owner preparation is awaited outside provider failure/health handling.
                 if (scope == ModelRequestScope.Canonical && prepareRetry is not null)

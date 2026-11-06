@@ -42,6 +42,8 @@ internal sealed partial class HostModels
     private readonly ModelConfiguration? owner;
     internal ModelConfiguration? ConfigurationOwner => owner;
     internal bool HandoffConfirmationEnabled { get; private init; }
+    internal IReadOnlyList<int> RetryIntervalsMs { get; private init; } =
+        AppConfigurationRules.DefaultRetryIntervalsMs;
     internal double PresentationContextLimit { get; private init; } = 200000;
     internal double CompactKeepFraction { get; private init; } = .3;
     internal double CompactThresholdFraction { get; private init; } = .85;
@@ -344,6 +346,7 @@ internal sealed partial class HostModels
         return new HostModels(selected, models, ordered)
         {
             HandoffConfirmationEnabled = Foxwarm.Tools.HandoffConfirmation.Enabled(app),
+            RetryIntervalsMs = AppConfigurationRules.RetryIntervalsMs(llm),
             PresentationContextLimit = PositiveSetting(
                 llm["contextLimit"],
                 200000,
