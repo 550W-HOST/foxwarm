@@ -9,6 +9,7 @@
 3. Preserve unrelated rules, IDs, `defaultAction`, and intended ordering. Merge only the requested change. Decide whether this is a deny patch or a caller allowlist; a generated rules fragment is neither a complete policy nor an automatic merge. Review earlier broad rules and all external exposure before inserting a new allow. Do not blindly append/prepend a fragment: earlier allows can bypass its restrictions, while new allows ahead of existing denies can expand access. If another operator changed the policy while you prepared the candidate, merge again from the current file rather than replacing their work.
 4. Write the full candidate to a new permitted private path on `master`, for example `$fw_tmp/tool-authorization-candidate.yaml`. Native file tools on another selected Node do not write a master candidate; use an explicit master tool descriptor. Do not overwrite the active authority directly.
 5. Inspect the complete candidate and validate version-1 syntax when a local parser is available. Verify expected allowed and denied cases, including unrelated callers and external-unmatched behavior. Keep an authorized recovery path when tightening rules; do not assume an in-Session rollback will remain allowed afterward.
+   When permitted, use `explain_tool_authorization` with `policyFilePath` and `compare: true` (see below) to check those cases and the rule ID diff against the active policy before installing.
 6. Discover `set_config` and call it with `target: tool-rules` and the candidate path. Successful installation validates the captured bytes and atomically replaces the fixed authority; invalid candidates or installation failures leave the active file unchanged.
 7. Check the installed policy and exercise a small permitted read/status call plus a relevant denied call without running a forbidden mutation. Do not equate discovery visibility with permission for every argument set.
 
@@ -54,6 +55,25 @@ Persisted generic policy and legacy Agent rules naming `set_tool_rules` fail val
 Main invalidates its policy cache immediately after a successful setter. Other processes, including Session workers, retain their own successful-parse cache for less than ten seconds. They observe the new file on their next authorization after that cache expires, not through an immediate cross-process broadcast. When checking a Worker, allow that cache window before a relevant authorization attempt; repeatedly querying status is not a cache-invalidation operation.
 
 Identity edits use `set_config` with `target: config` or WebUI Setup Config and apply supported access changes immediately. Other app settings can require restart, as reported by the save result. Outbound MCP updates through `mcp_config` are different again: they publish live connection configuration without restarting. Do not use one lifecycle as a substitute for another.
+
+## Explain a decision before or without calling
+
+`explain_tool_authorization` is a hidden builtin found through `search_tools`. Each probe names an existing caller Session and the concrete tool in `call_tool` form; the call is resolved at that Session's current Node and evaluated with its real Agent layers, paths, relations and isolation, without running it. The result shows, per layer, the matching rule (position, ID, action, reason, match) or the default, the isolation outcome and the facts used. Pre-policy Node/path boundary denials appear as `precheck`; tool-local validation is not evaluated.
+
+```json
+{
+  "toolId": "builtin:explain_tool_authorization",
+  "args": {
+    "policyFilePath": "$fw_tmp/tool-authorization-candidate.yaml",
+    "compare": true,
+    "probes": [
+      { "sessionId": "<caller-session>", "toolId": "node:<node>/exec", "args": { "command": "true" } }
+    ]
+  }
+}
+```
+
+Without `policyFilePath` it explains the active policy. A candidate replaces only the global layer and is never installed. `compare` adds per-probe `active`/`candidate`/`changed` and a `ruleDiff` of normalized rules by ID (`added`, `removed`, `changed`, `moved`, and a changed `defaultAction`); layout-only YAML changes are not reported, and omitted IDs (`rule-N`) shift with position. The caller needs the builtin grant plus master `read` of the active policy and of the candidate. Up to 32 probes per call.
 
 ## Diagnose a denial
 

@@ -238,6 +238,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         foreach (var definition in ArchiveControlTools.Definitions())
             definitions.Add(definition?.DeepClone());
         definitions.Add(ToolAuthorizationToolDefinition.Definition());
+        definitions.Add(ToolAuthorizationToolDefinition.ExplainDefinition());
         foreach (var definition in FileDeliveryDefinitions.Definitions())
             definitions.Add(definition?.DeepClone());
         foreach (var definition in MainLocalToolDefinitions.Definitions())
