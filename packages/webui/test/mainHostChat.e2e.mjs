@@ -11,6 +11,7 @@ import { join, resolve } from 'node:path'
 import { once } from 'node:events'
 import puppeteer from 'puppeteer-core'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
+import { NEW_SESSION_DIALOG_TRIGGER } from './mainHostFixture.mjs'
 
 const token = 'local-browser-test-api-token'
 const providerToken = 'local-browser-test-provider-token'
@@ -168,7 +169,7 @@ try {
   assert.equal(await page.evaluate(() => localStorage.getItem('foxwarm_token')), token)
   assert((await page.cookies()).some(cookie => cookie.name === 'foxwarm_token' && cookie.value === token && cookie.path === '/' && !cookie.httpOnly && cookie.sameSite === 'Lax'))
   assert(!(page.url().includes(token)))
-  await page.click('button[aria-label="New session"]')
+  await page.click(NEW_SESSION_DIALOG_TRIGGER)
   await page.waitForSelector('form[role="dialog"]')
   await page.click('form[role="dialog"] button[type="submit"]')
   await page.waitForSelector('form[role="dialog"]', { hidden: true })
@@ -178,6 +179,7 @@ try {
   assert.equal((await json(port, 'GET', '/api/sessions')).body.sessions.length, 1)
   await send(page, 'Make a note')
   await timeline(page, 'The note is héllo.')
+  await page.waitForSelector('[aria-label="Expand activity"]'); await page.click('[aria-label="Expand activity"]')
   await page.waitForFunction(() => document.querySelectorAll('[data-tool-header-tone]').length >= 2)
   await until(async () => (await browserHistory(page, id)).messages.length >= 6, 'first tool loop persistence')
   const first = await browserHistory(page, id)

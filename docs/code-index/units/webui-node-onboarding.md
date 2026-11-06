@@ -1,11 +1,11 @@
 # Unit: webui-node-onboarding
 
 Files: packages/webui/src/components/NodeOnboardingModal.tsx, packages/webui/test/nodeOnboarding.e2e.mjs
-Secondary files: packages/webui/src/components/NodesView.tsx, src/channels/webuiNodeOnboarding.ts, dotnet/Foxwarm.Tests/scripts/qualify-shell-onboarding.mjs, packages/webui/test/mainHostNodeOnboarding.e2e.mjs
+Secondary files: packages/webui/src/components/SystemNodes.tsx, src/channels/webuiNodeOnboarding.ts, dotnet/Foxwarm.Tests/scripts/qualify-shell-onboarding.mjs, packages/webui/test/mainHostNodeOnboarding.e2e.mjs
 
 ## Purpose
 
-Provides friendly, explicitly invoked Node setup and pending approval inside the independent Nodes page. The canonical onboarding contract is [D-node-thread-onboarding-options](../threads/node-communication.md#d-node-thread-onboarding-options).
+Provides friendly, explicitly invoked Node setup and pending approval inside the Nodes section of the System page. The canonical onboarding contract is [D-node-thread-onboarding-options](../threads/node-communication.md#d-node-thread-onboarding-options).
 
 ## Exports and function index
 

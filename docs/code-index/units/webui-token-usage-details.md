@@ -1,7 +1,7 @@
 # Unit: webui-token-usage-details
 
 Files: packages/webui/src/components/TokenUsageDetails.tsx, packages/webui/src/usageCost.ts, packages/webui/test/usageCost.e2e.mjs
-Secondary files: packages/webui/src/components/ArchitectureView.tsx, packages/webui/src/components/WorkbenchStatusBar.tsx, packages/webui/test/workbenchPreview.e2e.mjs
+Secondary files: packages/webui/src/components/SystemShared.tsx, packages/webui/src/components/WorkbenchStatusBar.tsx, packages/webui/test/workbenchPreview.e2e.mjs
 
 ## Purpose
 

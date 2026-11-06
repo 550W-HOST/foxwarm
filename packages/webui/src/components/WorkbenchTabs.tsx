@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 
 import { useDroppable } from '@dnd-kit/core'
 import { CSS } from '@dnd-kit/utilities'
 import { SortableContext, horizontalListSortingStrategy, useSortable } from '@dnd-kit/sortable'
-import { Server, ClipboardList, Code2, FileText, MessageSquareText, History, Settings, SquareTerminal, Users, X } from 'lucide-react'
+import { ClipboardList, Code2, FileText, MessageSquareText, History, Network, Settings, SquareTerminal, X } from 'lucide-react'
 import { useWorkbenchTabMenu, type WorkbenchTabMenuOptions } from './useWorkbenchTabMenu'
 import type { WorkbenchTab } from '../workbench/types'
 import WorkbenchPaneDragArea from './WorkbenchPaneDragArea'
@@ -25,8 +25,7 @@ interface WorkbenchTabsProps extends WorkbenchTabMenuOptions {
 function TabIcon({ type }: { type: WorkbenchTab['type'] }) {
   if (type === 'chat') return <MessageSquareText className="h-4 w-4 shrink-0" />
   if (type === 'vscode') return <Code2 className="h-4 w-4 shrink-0" />
-  if (type === 'agents') return <Users className="h-4 w-4 shrink-0" />
-  if (type === 'nodes') return <Server className="h-4 w-4 shrink-0" />
+  if (type === 'agents') return <Network className="h-4 w-4 shrink-0" />
   if (type === 'tasks') return <ClipboardList className="h-4 w-4 shrink-0" />
   if (type === 'logs') return <FileText className="h-4 w-4 shrink-0" />
   if (type === 'search') return <History className="h-4 w-4 shrink-0" />
@@ -300,7 +299,8 @@ function SortableTab({
       {...listeners}
     >
       <TabIcon type={tab.type} />
-      <span className={`min-w-0 flex-1 truncate text-left [direction:rtl] ${isPreview ? 'italic' : ''}`}>{tab.title}</span>
+      {/* RTL direction moves the ellipsis to the start; the LRM marks keep IDs such as `1103_9t0ea` in their written order. */}
+      <span className={`min-w-0 flex-1 truncate text-left [direction:rtl] ${isPreview ? 'italic' : ''}`}>{`\u200E${tab.title}\u200E`}</span>
       <button
         onPointerDown={(event) => event.stopPropagation()}
         onMouseDown={(event) => event.stopPropagation()}

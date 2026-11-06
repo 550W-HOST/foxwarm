@@ -133,7 +133,11 @@ internal sealed class ModelRouting(Func<long>? clock = null)
             request.Health.Remove(target);
     }
 
-    internal Failure Failed(Request request, Selection selection)
+    /// <param name="exhausted">
+    /// The target failed for a configuration reason that retrying it cannot repair, so a
+    /// non-final failover target cools immediately instead of after its failure threshold.
+    /// </param>
+    internal Failure Failed(Request request, Selection selection, bool exhausted = false)
     {
         if (request.Strategy != "failover")
             return new(false, false, 0);
@@ -158,7 +162,7 @@ internal sealed class ModelRouting(Func<long>? clock = null)
             }
             request.Health.TryGetValue(selection.TargetKey, out var previous);
             var streak = (previous?.ConsecutiveFailures ?? 0) + 1;
-            var cooled = streak >= request.FailureThreshold;
+            var cooled = exhausted || streak >= request.FailureThreshold;
             request.Health[selection.TargetKey] = new Health(
                 streak,
                 cooled ? now + request.CooldownMs : 0

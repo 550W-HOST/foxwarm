@@ -14,6 +14,8 @@ Task methods resolve target/actor and pass live/persisted anchor sequence to `Ta
 
 Task/timer API/UI is implemented, including task-id child attachment, owner-save legacy Goal migration, request-local reminders, compaction checkpoints, and typed child-handoff receipts. Timer enqueue follows best-effort admission semantics. ToolScript host effects still pass authorization/save-lane boundaries; run records are not handoff receipts, while a linked task completion callback is forwarded only within the current foreground/continued execution slice.
 
+Model timer mutations repeat [creation-target policy](./tool-authorization.md#session-creation-agent-targets) inside the existing store `prepare` callback using the same normalized candidate that will be written. This shares generic creation policy without importing `create_session` legacy structural denial; timer isolation and creator-target guards remain independent. The store's existing snapshot-update and literal-owner semantics are unchanged.
+
 ## Tests
 
 TaskStore/TaskService, timer scheduler/CRUD, ToolScript launch/record, and Session manager operation tests.

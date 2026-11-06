@@ -1,6 +1,6 @@
 import { getRuntimeStatusView } from './runtimeStatus'
 export type SessionRuntimeStateName = 'requesting-model' | 'running-tool' | 'waiting' | 'idle' | 'llm-failed'
-export type SessionRuntimeWaitingFor = 'all-sessions' | 'any-session' | 'exec' | 'input' | 'fallback'
+export type SessionRuntimeWaitingFor = 'question' | 'all-sessions' | 'any-session' | 'exec' | 'input' | 'fallback'
 
 export interface SessionRuntimeRetryDetails {
   final?: true;
@@ -59,6 +59,7 @@ export interface SessionRuntimeState {
     timeoutSeconds?: number
     timeoutAt?: number
     waitExecIds?: string[]
+    waitQuestionIds?: string[]
     waitForInput?: true
   }
 }

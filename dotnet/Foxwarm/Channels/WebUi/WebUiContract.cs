@@ -64,6 +64,8 @@ internal static class WebUiContract
             ),
             ["effortDefault"] = defaultEffort,
         };
+        if (SessionQuestions.Projection(snapshot.Meta) is { } questions)
+            result["questions"] = questions;
         foreach (
             var (key, value) in SessionModelSettings.Presentation(
                 snapshot.AuthorityEnvelope,
@@ -348,6 +350,7 @@ internal static class WebUiContract
                                 ["label"] = model.Key,
                                 ["isDefault"] = model.Key == config.DefaultKey,
                                 ["contextLimit"] = model.ContextLimit,
+                                ["imageInput"] = model.ImageInput,
                                 ["providerKey"] = model.ProviderKey,
                                 ["modelId"] = model.ModelId,
                                 ["providerType"] = model.ProviderType,

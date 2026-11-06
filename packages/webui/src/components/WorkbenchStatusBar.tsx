@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { CirclePlay, ClipboardList, Clock3, Server, ChartPie, SquareTerminal } from 'lucide-react'
+import { CirclePlay, ClipboardList, Clock3, Server, ChartPie, PanelBottom } from 'lucide-react'
 import { makeApiUrl } from '../config'
 import type { WebUiNodeTarget } from '../nodeTargets'
 import type { Session } from './SessionListCore'
@@ -16,10 +16,12 @@ function validCount(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
 }
 
-export default function WorkbenchStatusBar({ running, sessions, nodes, totalUsage, currentSession, currentSessionId, onOpenTasks, onOpenNodes, onToggleTerminal, terminalVisible = false }: {
+export default function WorkbenchStatusBar({ running, sessions, nodes, totalUsage, currentSession, currentSessionId, onOpenTasks, onOpenNodes, onOpenSessions, onToggleTerminal, terminalVisible = false }: {
   running: number; sessions: readonly Session[]; nodes: readonly WebUiNodeTarget[]
   totalUsage?: TokenUsage; currentSession?: Session; currentSessionId?: string
   onOpenTasks: () => void; onOpenNodes: () => void
+  /** Opens System › Sessions filtered by this state. */
+  onOpenSessions?: (status: 'active' | 'waiting') => void
   onToggleTerminal?: () => void; terminalVisible?: boolean
 }) {
   const [tasks, setTasks] = useState<TaskCounts | null>(null)
@@ -140,10 +142,10 @@ export default function WorkbenchStatusBar({ running, sessions, nodes, totalUsag
   return <>
     <footer data-workbench-status-bar className="foxwarm-status-bar" aria-label="Workbench status">
       <div className="flex h-full items-center gap-0.5">
-        {onToggleTerminal && <button type="button" className="foxwarm-status-item" title="Terminal" aria-label="Toggle terminal" aria-expanded={terminalVisible} data-active={terminalVisible || undefined} onClick={() => { setOpen(null); onToggleTerminal() }}><SquareTerminal aria-hidden="true" /><span>Terminal</span></button>}
+        {onToggleTerminal && <button type="button" className="foxwarm-status-item" title={terminalVisible ? 'Hide the terminal panel' : 'Show the terminal panel below the tabs'} aria-label="Toggle terminal panel" aria-expanded={terminalVisible} data-active={terminalVisible || undefined} data-status-terminal-panel onClick={() => { setOpen(null); onToggleTerminal() }}><PanelBottom aria-hidden="true" /><span>Terminal panel</span></button>}
         <button {...itemProps('running', `Running sessions: ${running}`)}><CirclePlay aria-hidden="true" /><span>Running</span><span>{running}</span></button>
         <button {...itemProps('waiting', `Waiting in loaded sessions: ${waiting.length}`)}><Clock3 aria-hidden="true" /><span>Waiting</span><span>{waiting.length}</span></button>
-        {tasks && <button {...itemProps('tasks', `Tasks: ${tasks.active} active, ${tasks.open + tasks.active} unfinished`)}><ClipboardList aria-hidden="true" /><span>Tasks</span><span>{tasks.active}/{tasks.open + tasks.active}</span></button>}
+        {tasks && <button {...itemProps('tasks', `Tasks: ${tasks.active} active, ${tasks.open} open`)}><ClipboardList aria-hidden="true" /><span>Tasks</span><span data-status-task-counts>{tasks.active} active · {tasks.open} open</span></button>}
       </div>
       <div className="foxwarm-status-usage-group flex h-full items-center gap-0.5">
         <button {...itemProps('total-usage', 'Total token usage')}><ChartPie aria-hidden="true" /><span>Total</span><span>{usageValue(totalUsage)}</span></button>
@@ -176,12 +178,14 @@ export default function WorkbenchStatusBar({ running, sessions, nodes, totalUsag
           </div>)}
         </div>
       </>}
-      {(open === 'tasks' || open === 'nodes') && <div className="foxwarm-status-popup-section shrink-0">
-        <button type="button" className="w-full rounded-md px-2 py-1.5 text-left text-xs font-medium text-fw-accent hover:bg-fw-hover" onClick={() => {
-          const navigate = open === 'tasks' ? onOpenTasks : onOpenNodes
+      {(open === 'tasks' || open === 'nodes' || (onOpenSessions && (open === 'running' || open === 'waiting'))) && <div className="foxwarm-status-popup-section shrink-0">
+        <button type="button" data-status-open className="w-full rounded-md px-2 py-1.5 text-left text-xs font-medium text-fw-accent hover:bg-fw-hover" onClick={() => {
+          const section = open
           setOpen(null)
-          navigate()
-        }}>{open === 'tasks' ? 'Open Tasks' : 'Open Nodes'}</button>
+          if (section === 'tasks') onOpenTasks()
+          else if (section === 'nodes') onOpenNodes()
+          else onOpenSessions?.(section === 'running' ? 'active' : 'waiting')
+        }}>{open === 'tasks' ? 'Open Tasks' : open === 'nodes' ? 'Open in System › Nodes' : 'Open in System › Sessions'}</button>
       </div>}
     </div>, document.body)}
   </>

@@ -14,12 +14,7 @@ Foxwarm is a self-hosted runtime for AI agents. It combines persistent conversat
 
 ## Get started
 
-Install Foxwarm on **Linux x64** (including x64 WSL) or **Windows x64**. The source installer needs Git, Node.js 20.19+ (20.x) or 22.12+ with npm, a .NET SDK supporting `net10.0`, and the ASP.NET Core 10 runtime.
-
-- **Linux:** also install tmux, Python 3, make, GCC/G++, and libc/libutil development files.
-- **Windows:** also install Python 3 for the native worker build.
-
-The installer checks these prerequisites but does not install system packages. For a container installation, use [Docker Compose](https://foxwarm.net/docs/installing/#docker-compose).
+Install Foxwarm on **Linux x64** (including x64 WSL) or **Windows x64**. The installers download a prebuilt [release](https://github.com/550W-HOST/foxwarm/releases); nothing is compiled. When the ASP.NET Core 10 runtime is not installed, they use the package that includes .NET. On Linux, tmux runs Foxwarm in the background. Windows also has a desktop app, and a [container image](#docker) is available.
 
 ### Linux x64 or x64 WSL
 
@@ -33,9 +28,9 @@ curl -fsSL https://foxwarm.net/install-foxwarm.sh | bash
 irm https://foxwarm.net/install-foxwarm.ps1 | iex
 ```
 
-For a new installation, the installer creates `./foxwarm` for the program and `./foxwarm-data` for data, builds the app, and starts it. The program's `data_dir` file remembers that location for later starts and installer reruns. Open the printed WebUI URL and configure your provider in **Setup → Models** to start chatting.
+For a new installation, the installer creates `./foxwarm` for the program and `./foxwarm-data` for data, then starts Foxwarm. The program's `data_dir` file remembers the data location. Open the printed WebUI URL and configure your provider in **Setup → Models** to start chatting. `foxwarm/foxwarmctl` (`foxwarmctl.cmd` on Windows) starts, stops and updates the installation.
 
-See the [installation guide](https://foxwarm.net/docs/installing/) for prerequisites, custom paths, manual installation, and startup commands. The installer scripts are available to inspect: [Bash](install-foxwarm.sh) and [PowerShell](install-foxwarm.ps1).
+See the [installation guide](https://foxwarm.net/docs/installing/) for packages, requirements, custom paths, the desktop app and control commands. The installer scripts are available to inspect: [Bash](install-foxwarm.sh) and [PowerShell](install-foxwarm.ps1).
 
 Keep access tokens private. Back up the whole data directory; see [data, updates, and backups](https://foxwarm.net/docs/data-upgrades-backups/). Optional [semantic history search](https://foxwarm.net/docs/history-search/#enable-semantic-search) has additional platform and embedding-service requirements.
 
@@ -83,7 +78,12 @@ Start with the [documentation site](https://foxwarm.net/docs/) for installation,
 
 ## Docker
 
-The Linux x64 image builds Foxwarm from source and includes the ASP.NET Core 10 runtime, Node.js and Chromium. Data is mounted at `/data`; the default port is 3001. See the [Docker Compose installation steps](https://foxwarm.net/docs/installing/#docker-compose). Optional Code workbench and HEIC/HEIF support need additional assets.
+```bash
+docker run -d --name foxwarm --init -p 3001:3001 \
+  -v "$PWD/foxwarm-data:/data" ghcr.io/550w-host/foxwarm:latest
+```
+
+The Linux x64 image contains a release package plus the ASP.NET Core 10 runtime, Node.js and Chromium. Data is mounted at `/data`; the default port is 3001. The repository's `docker-compose.yml` runs the same image; `docker build .` builds it from a checkout. See the [Docker installation steps](https://foxwarm.net/docs/installing/#docker). Optional Code workbench and HEIC/HEIF support need additional assets.
 
 ## Development
 
@@ -95,6 +95,8 @@ cd foxwarm
 npm run build-all
 npm run start:notmux
 ```
+
+`node scripts/release/package.mjs --build-assets --output dist` builds every release package; see [release packages](docs/releasing.md).
 
 See the [development guide](docs/development.md) and [local test guide](docs/testing.md) for the workflow and test commands. The repository's [Code Index](docs/code-index/overview.md) maps the implementation and records design decisions. Read the relevant entries before changing source, update them with affected behavior, and run `npm run quality:code-index`.
 

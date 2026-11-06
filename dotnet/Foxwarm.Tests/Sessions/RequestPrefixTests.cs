@@ -6,7 +6,7 @@ using Foxwarm.Sessions;
 
 namespace Foxwarm.Tests;
 
-public sealed class RequestPrefixTests
+public sealed partial class RequestPrefixTests
 {
     [Theory]
     [InlineData(false, false, false, false)]
@@ -209,14 +209,14 @@ public sealed class RequestPrefixTests
     }
 
     [Fact]
-    public async Task Node_selection_cwd_and_connection_changes_leave_ordinary_and_BTW_instructions_stable()
+    public async Task Node_selection_cwd_and_connection_changes_leave_ordinary_and_BTW_prefix_stable()
     {
         if (!OperatingSystem.IsLinux())
             return;
         using var temp = new TempDirectory();
         var captures = new List<JsonObject>();
         await using var peer = new ScriptedResponsesSequenceServer(
-            8,
+            9,
             async (_, stream, captured) =>
             {
                 captures.Add(JsonNode.Parse(captured.Body)!.AsObject());
@@ -235,6 +235,8 @@ public sealed class RequestPrefixTests
         await manager.RunBtwAsync(owner, "Synthetic side question.");
         var original = owner.Entry.Snapshot();
         await owner.UpdateCwdAsync(Path.Combine(temp.Path, "work"));
+        await Turn(owner);
+        await manager.SelectNodeAsync(owner, "fixture/readonly");
         await Turn(owner);
         await manager.NodeProviders.LifecycleAsync(
             "create",
@@ -267,7 +269,7 @@ public sealed class RequestPrefixTests
         await Turn(owner);
         await manager.RunBtwAsync(owner, "Synthetic offline side question.");
 
-        Assert.Equal(8, captures.Count);
+        Assert.Equal(9, captures.Count);
         Assert.All(
             captures,
             request => Assert.Equal(Instructions(captures[0]), Instructions(request))
@@ -284,13 +286,10 @@ public sealed class RequestPrefixTests
                 owner.Entry.Snapshot().AuthorityEnvelope["promptCacheKey"]
             )
         );
-        Assert.Contains(
-            captures[4]["tools"]!.AsArray(),
-            tool => tool?["name"]?.GetValue<string>() == "read"
-        );
-        Assert.DoesNotContain(
-            captures[6]["tools"]!.AsArray(),
-            tool => tool?["name"]?.GetValue<string>() == "read"
+        Assert.All(
+            captures,
+            request =>
+                Assert.Equal(captures[0]["tools"]!.ToJsonString(), request["tools"]!.ToJsonString())
         );
         Assert.Equal("fixture/selected", manager.ExecutionPlacement(owner).Node);
         Assert.Equal("opaque://root/changed", manager.ExecutionPlacement(owner).Cwd);

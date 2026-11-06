@@ -15,6 +15,7 @@ WebUI/task tool/timer creation or Session wait request
 - **Producers:** `WebUIChannel.Tasks`, task/timer/wait tool definitions, `SessionManager`, and `MainTimers` CRUD receive explicit owner/session/task arguments.
 - **Owner:** `TaskService` validates task authority/ownership/notifications; `TaskStore` persists task records and the current `anchorSeq` reminder fields; `MainTimers` owns cron scheduling/store/best-effort restart; `SessionSaveLane.Wait` owns declared wait/queue transitions for a Session.
 - **Durable boundary:** task store records status/description/owner/assignee/parent/result and current notification state; timer store records schedule/arguments/status; Session JSON records declared waits/queue/busy/stopping. A timer/task enqueue still follows queue admission semantics.
+- **Questions:** `ask_user` records live in Session JSON (`meta.questions`); answer admission runs in `SessionSaveLane.Wait` before the wait transition, and `wait.waitQuestionIds` is a declared input source. See [structured user questions](../units/session-questions.md).
 - **Consumers:** WebUI TasksView/list/realtime, task/notification tools, timer scheduler, Session admission/turn runner, and restart bootstrap.
 
 ## Ordering and failure behavior
@@ -33,6 +34,7 @@ A consumed canonical queue item updates persisted `childHandoffState`; passive/u
 
 - [Task service/timers](../units/tasks-timers.md)
 - [Wait/queue save operations](../units/session-save-lane-wait.md)
+- [Structured user questions](../units/session-questions.md)
 - [Wait-liveness observation and admission](../units/session-domain.md#wait-liveness-observation-and-admission)
 - [Session manager services](../units/session-manager-services.md)
 - `TaskStoreTests`, `MainTimersStoreTests`, `MainTimerToolsTests`, `SessionAdmissionTests`, and wait/retry tests.

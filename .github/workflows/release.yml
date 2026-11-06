@@ -1,0 +1,313 @@
+name: Release packages
+
+# Every push to testing/main builds and qualifies the packages as workflow artifacts.
+# A v* tag additionally publishes them as a GitHub release and pushes the container image.
+on:
+  push:
+    branches: [testing, main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  packages:
+    name: Build Linux and Windows packages
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.21.0
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            packages/webui/package-lock.json
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+      - name: Check tag version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          version="$(node -p 'require("./package.json").version')"
+          [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "Tag $GITHUB_REF_NAME does not match package.json $version"; exit 1; }
+      - name: Install dependencies
+        run: npm ci && npm --prefix packages/webui ci
+      - name: Build Linux and Windows packages
+        run: node scripts/release/package.mjs --build-assets --output dist
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-packages-linux-windows
+          path: dist/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  macos:
+    name: Build and qualify macOS arm64 packages
+    # The standard macos-15 label is arm64; macos-15-intel is a different image.
+    runs-on: macos-15
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.21.0
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            packages/webui/package-lock.json
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+      - name: Confirm native runner and install test prerequisites
+        run: |
+          test "$(uname -m)" = arm64
+          command -v tmux || brew install tmux
+          npm ci && npm --prefix packages/webui ci
+      - name: Build both macOS packages natively
+        run: node scripts/release/package.mjs --build-assets --output dist --target osx-arm64 --target osx-arm64-self-contained
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-packages-macos
+          path: dist/*.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+      - name: Qualify the archived Main, detached exec, PTY and native ToolScript
+        run: |
+          for package in dist/foxwarm-osx-arm64*.tar.gz; do
+            extracted="$(mktemp -d "$RUNNER_TEMP/macos-package.XXXXXX")"
+            tar -xzf "$package" -C "$extracted"
+            payload="$(find "$extracted" -mindepth 1 -maxdepth 1 -type d -print -quit)"
+            test -f "$payload/libfoxwarm-pty.dylib"
+            test -x "$payload/foxwarm-pty-helper"
+            # Published natives must not depend on the runner's Homebrew installation.
+            find "$payload" -name '*.dylib' -exec otool -L {} \; > "$extracted/native-libraries.txt"
+            otool -L "$payload/Foxwarm" "$payload/foxwarm-pty-helper" >> "$extracted/native-libraries.txt"
+            cat "$extracted/native-libraries.txt"
+            if grep -E '/(opt/homebrew|usr/local)/(opt|Cellar|lib)/' "$extracted/native-libraries.txt"; then exit 1; fi
+            node scripts/release/qualify-macos-package.mjs "$payload"
+            FOXWARM_PUBLISHED_CORE="$payload" node packages/webui/test/mainHostNativeExec.e2e.mjs
+            rm -rf "$extracted"
+          done
+      - name: Installer and control smoke with system Bash and tmux
+        shell: /bin/bash -e {0}
+        run: |
+          for package in dist/foxwarm-osx-arm64*.tar.gz; do
+            /bin/bash scripts/release/smoke-server.sh "$package"
+          done
+      - name: Installer and control smoke without tmux
+        shell: /bin/bash -e {0}
+        run: |
+          for package in dist/foxwarm-osx-arm64*.tar.gz; do
+            /bin/bash scripts/release/smoke-server.sh "$package" 3001 --without-tmux
+          done
+
+  aggregate:
+    name: Aggregate release assets and checksums
+    needs: [packages, macos]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.21.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: release-packages-*
+          merge-multiple: true
+          path: dist
+      - name: Write one checksum list covering every platform
+        run: node scripts/release/package.mjs --output dist --checksums-only
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-packages
+          path: dist/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  linux:
+    name: Qualify Linux packages
+    needs: packages
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-packages-linux-windows
+          path: dist
+      - name: Install tmux
+        run: sudo apt-get update && sudo apt-get install -y tmux
+      - name: Framework-dependent package with the installed runtime
+        run: bash scripts/release/smoke-server.sh dist/foxwarm-linux-x64.tar.gz
+      - name: Self-contained package on Ubuntu 22.04 without .NET
+        run: |
+          docker run --rm -v "$PWD:/repo:ro" ubuntu:22.04 bash -c '
+            set -e
+            apt-get update -qq && apt-get install -y -qq tmux curl ca-certificates libicu70 >/dev/null
+            ! command -v dotnet
+            bash /repo/scripts/release/smoke-server.sh /repo/dist/foxwarm-linux-x64-self-contained.tar.gz'
+
+  windows:
+    name: Qualify Windows packages
+    needs: packages
+    runs-on: windows-2025
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.21.0
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-packages-linux-windows
+          path: dist
+      - name: Install the Desktop acceptance driver
+        run: npm ci
+      - name: Framework-dependent server package
+        shell: pwsh
+        run: ./scripts/release/smoke-server.ps1 -Package dist/foxwarm-win-x64.zip
+      - name: Self-contained server package
+        shell: pwsh
+        run: ./scripts/release/smoke-server.ps1 -Package dist/foxwarm-win-x64-self-contained.zip -Port 3002
+      - name: Prepare WebView2 Evergreen runtime for acceptance
+        shell: pwsh
+        run: |
+          $client = 'Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          $versions = @(
+            (Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\$client" -ErrorAction SilentlyContinue).pv
+            (Get-ItemProperty "HKCU:\SOFTWARE\$client" -ErrorAction SilentlyContinue).pv
+          )
+          if (-not ($versions | Where-Object { $_ -and [version]$_ -gt [version]'0.0.0.0' })) {
+            $installer = Join-Path $env:RUNNER_TEMP 'MicrosoftEdgeWebview2Setup.exe'
+            Invoke-WebRequest 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile $installer
+            $setup = Start-Process $installer -ArgumentList '/silent', '/install' -Wait -PassThru
+            if ($setup.ExitCode -ne 0) { throw "WebView2 installation failed: $($setup.ExitCode)" }
+          }
+      - name: Extract the Desktop package
+        shell: pwsh
+        run: Expand-Archive -LiteralPath dist/foxwarm-desktop-win-x64.zip -DestinationPath "$env:RUNNER_TEMP/desktop-extracted"
+      - name: Validate and launch the extracted Desktop package
+        shell: pwsh
+        run: |
+          $app = (Get-ChildItem "$env:RUNNER_TEMP/desktop-extracted" -Directory | Select-Object -First 1).FullName
+          # Elevated WebView2 hosts honor HKLM policy, not environment overrides.
+          # This app-specific policy exists only on the disposable acceptance runner.
+          $policy = 'HKLM:\SOFTWARE\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments'
+          New-Item -Path $policy -Force | Out-Null
+          New-ItemProperty -Path $policy -Name 'Foxwarm.Desktop.exe' -PropertyType String -Value '--remote-debugging-port=0' -Force | Out-Null
+          try {
+            node dotnet/scripts/qualify-desktop-package.mjs $app "$env:RUNNER_TEMP/desktop-acceptance.json"
+            if ($LASTEXITCODE -ne 0) { throw "Desktop acceptance failed: $LASTEXITCODE" }
+          } finally {
+            Remove-ItemProperty -Path $policy -Name 'Foxwarm.Desktop.exe'
+          }
+      - name: Upload Desktop acceptance summary
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-acceptance
+          path: ${{ runner.temp }}/desktop-acceptance.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+  image:
+    name: Container image
+    needs: packages
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-packages-linux-windows
+          path: dist
+      - name: Build from the Linux package
+        run: |
+          mkdir -p "$RUNNER_TEMP/package"
+          tar -xzf dist/foxwarm-linux-x64.tar.gz -C "$RUNNER_TEMP/package"
+          docker build --target release --build-context "package=$(ls -d "$RUNNER_TEMP"/package/*/)" -t foxwarm:ci .
+      - name: Start and serve the sign-in page
+        run: |
+          mkdir -p "$RUNNER_TEMP/data"
+          docker run -d --name foxwarm -p 127.0.0.1:3001:3001 -v "$RUNNER_TEMP/data:/data" foxwarm:ci
+          for i in $(seq 120); do
+            if curl -fsS -o /dev/null http://127.0.0.1:3001/login.html; then ready=1; break; fi
+            sleep 1
+          done
+          docker logs foxwarm
+          [ "${ready:-}" = 1 ]
+          docker stop -t 30 foxwarm
+      - name: Push to GitHub Container Registry
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          for tag in "$version" "${version%.*}" latest; do
+            docker tag foxwarm:ci "$image:$tag"
+            docker push "$image:$tag"
+          done
+
+  release:
+    name: Publish GitHub release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [linux, windows, image, macos, aggregate]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-packages
+          path: dist
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: docs/release-notes
+          path: source
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Reviewed notes in docs/release-notes/<tag>.md take precedence over generated ones.
+          notes="source/docs/release-notes/$GITHUB_REF_NAME.md"
+          if [ -f "$notes" ]; then set -- --notes-file "$notes"; else set -- --generate-notes; fi
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" \
+            --title "Foxwarm ${GITHUB_REF_NAME#v}" --latest "$@"

@@ -348,9 +348,11 @@ test('ImageParts uses authenticated deployment-relative blob URLs and never rend
       const fitAgain=await geometry()
       assert.ok(Math.abs(fitAgain.width-before.width)<1)
       // Swiping fit-mode empty space must not become a backdrop click.
-      await input('touchStart',[[1,25,150]])
-      await input('touchMove',[[1,25,200]])
-      await input('touchEnd',[])
+      // Complete the swipe without inertia: Chromium consumes a tap that stops
+      // an active fling before the image can receive its native click.
+      await touch.send('Input.synthesizeScrollGesture', {
+        x: 25, y: 150, yDistance: 50, gestureSourceType: 'touch', preventFling: true,
+      })
       assert.ok(await page.$('[data-image-preview][open]'))
       // A subsequent deliberate tap still toggles and can reset to fit.
       await page.touchscreen.tap(180,440)

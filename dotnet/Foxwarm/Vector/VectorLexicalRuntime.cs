@@ -207,7 +207,10 @@ internal sealed partial class VectorLexicalRuntime : IAsyncDisposable
             var rows = loaded.Where(row => blockTarget is null || row.Id <= blockTarget).ToArray();
             if (rows.Length == 0)
                 break;
-            var documents = rows.Select(BlockDocuments).ToArray();
+            var documents = rows.Select(row =>
+                    BlockDocuments(ArchiveContextReader.HydrateBlock(Archive(id), row))
+                )
+                .ToArray();
             lock (lane)
             {
                 current.Blocks(id, documents, rows[^1].Id);
@@ -249,6 +252,8 @@ internal sealed partial class VectorLexicalRuntime : IAsyncDisposable
                 ["raw_start_seq"] = record.RawStartSeq,
                 ["raw_end_seq"] = record.RawEndSeq,
                 ["timestamp"] = record.CreatedAt,
+                ["start_timestamp"] = record.RawStartTimestamp,
+                ["end_timestamp"] = record.RawEndTimestamp,
                 ["block_id"] = record.Id,
                 ["block_level"] = record.Level,
             };

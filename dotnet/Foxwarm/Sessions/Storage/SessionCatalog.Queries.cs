@@ -127,7 +127,14 @@ internal sealed partial class SessionCatalog
         }
     }
 
-    internal CatalogPage Page(string mode, int limit, JsonArray? after, bool roots, string? agent)
+    internal CatalogPage Page(
+        string mode,
+        int limit,
+        JsonArray? after,
+        bool roots,
+        string? agent,
+        bool pinnedOnly = false
+    )
     {
         lock (gate)
         {
@@ -142,12 +149,15 @@ internal sealed partial class SessionCatalog
             var forest = agent is not null && roots;
             if (agent is not null)
                 terms.Add("c.agent=" + Param(agent));
-            if (forest)
+            if (pinnedOnly)
+                // Grouped Sidebars list the pinned partition alone; every pinned row is a root.
+                terms.Add("c.presentation_root=1 AND c.pinned_rank=0");
+            else if (forest)
                 terms.Add(
                     "(c.parent_session_id IS NULL OR parent.session_id IS NULL OR parent.agent<>c.agent)"
                 );
             else if (roots && mode != "flat-time")
-                terms.Add("c.sidebar_parent IS NULL");
+                terms.Add("c.presentation_root=1");
             if (after is not null)
                 terms.Add(
                     "("
@@ -199,14 +209,14 @@ internal sealed partial class SessionCatalog
             }
             var index =
                 agent is not null ? "idx_session_catalog_parent_agent_architecture"
-                : mode == "default" ? "idx_session_catalog_sidebar_default"
-                : "idx_session_catalog_sidebar_time";
+                : mode == "default" ? "idx_session_catalog_parent_default"
+                : "idx_session_catalog_parent_time";
             foreach (var request in requests)
             {
-                // Sidebar branches use presentation parents; agent forests keep real parents.
-                var where = agent is null
-                    ? "sidebar_parent=" + Param(request.Id) + " AND pinned_rank=1"
-                    : "parent_session_id=" + Param(request.Id) + " AND agent=" + Param(agent);
+                var where =
+                    "parent_session_id="
+                    + Param(request.Id)
+                    + (agent is null ? " AND pinned=0" : " AND agent=" + Param(agent));
                 if (request.After is not null)
                     where +=
                         " AND ("
@@ -215,7 +225,7 @@ internal sealed partial class SessionCatalog
                         + string.Join(',', CursorArgs(request.After).Select(Param))
                         + ")";
                 branches.Add(
-                    $"SELECT * FROM (SELECT {Columns},{(agent is null ? "sidebar_parent" : "parent_session_id")} FROM session_catalog INDEXED BY {index} WHERE {where} ORDER BY {string.Join(',', columns)} LIMIT {Param(limit + 1)})"
+                    $"SELECT * FROM (SELECT {Columns},parent_session_id FROM session_catalog INDEXED BY {index} WHERE {where} ORDER BY {string.Join(',', columns)} LIMIT {Param(limit + 1)})"
                 );
             }
             var sql = string.Join(" UNION ALL ", branches);
@@ -265,7 +275,7 @@ internal sealed partial class SessionCatalog
                 agent is null ? ids.Cast<object?>() : new object?[] { agent }.Concat(ids)
             ).ToArray();
             var sql = agent is null
-                ? $"SELECT parent_key,session_count FROM catalog_sidebar_count WHERE parent_key IN ({Parameters(ids.Length)})"
+                ? $"SELECT parent_key,unpinned_session_count FROM catalog_parent_count WHERE parent_key IN ({Parameters(ids.Length)})"
                 : $"SELECT parent_key,session_count FROM catalog_parent_agent_count WHERE agent=$p0 AND parent_key IN ({Parameters(ids.Length, 1)})";
             using var command = Command(db!, sql, args);
             using var reader = command.ExecuteReader();
@@ -287,7 +297,7 @@ internal sealed partial class SessionCatalog
         {
             EnsureInitialized();
             var sql =
-                $"SELECT c.session_id,c.parent_session_id,parent.agent,c.pinned,c.agent,c.sidebar_parent FROM session_catalog c LEFT JOIN session_catalog parent ON parent.session_id=c.parent_session_id WHERE c.session_id IN ({Parameters(ids.Length)})";
+                $"SELECT c.session_id,c.parent_session_id,parent.agent,c.pinned,c.agent FROM session_catalog c LEFT JOIN session_catalog parent ON parent.session_id=c.parent_session_id WHERE c.session_id IN ({Parameters(ids.Length)})";
             using var command = Command(db!, sql, ids.Cast<object?>().ToArray());
             using var reader = command.ExecuteReader();
             var result = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
@@ -298,7 +308,6 @@ internal sealed partial class SessionCatalog
                     ["parentAgent"] = reader.IsDBNull(2) ? null : reader.GetString(2),
                     ["pinned"] = reader.GetInt64(3) == 1,
                     ["agent"] = reader.GetString(4),
-                    ["sidebarParentId"] = reader.IsDBNull(5) ? null : reader.GetString(5),
                 };
             QueryObserved?.Invoke(sql, result.Count);
             return result;
@@ -355,10 +364,7 @@ internal sealed partial class SessionCatalog
         }
     }
 
-    internal Dictionary<string, string[]> Paths(string[] ids) => Paths(ids, "parent_session_id");
-
-    // Root-first paths following one parent column: the real parent or the Sidebar parent.
-    private Dictionary<string, string[]> Paths(string[] ids, string parentColumn)
+    internal Dictionary<string, string[]> Paths(string[] ids)
     {
         if (ids.Length == 0)
             return new(StringComparer.Ordinal);
@@ -368,12 +374,12 @@ internal sealed partial class SessionCatalog
         {
             EnsureInitialized();
             var sql = $"""
-WITH RECURSIVE paths(focus_id,session_id,next_id,depth,trail) AS (
-SELECT session_id,session_id,{parentColumn},0,'|'||hex(session_id)||'|' FROM session_catalog WHERE session_id IN ({Parameters(
+WITH RECURSIVE paths(focus_id,session_id,parent_session_id,depth,trail) AS (
+SELECT session_id,session_id,parent_session_id,0,'|'||hex(session_id)||'|' FROM session_catalog WHERE session_id IN ({Parameters(
                     ids.Length
                 )})
-UNION ALL SELECT paths.focus_id,parent.session_id,parent.{parentColumn},paths.depth+1,paths.trail||hex(parent.session_id)||'|'
-FROM paths JOIN session_catalog parent ON parent.session_id=paths.next_id
+UNION ALL SELECT paths.focus_id,parent.session_id,parent.parent_session_id,paths.depth+1,paths.trail||hex(parent.session_id)||'|'
+FROM paths JOIN session_catalog parent ON parent.session_id=paths.parent_session_id
 WHERE paths.depth<127 AND instr(paths.trail,'|'||hex(parent.session_id)||'|')=0)
 SELECT focus_id,session_id,depth FROM paths ORDER BY focus_id,depth DESC
 """;
@@ -576,7 +582,6 @@ SELECT {Columns},total,busyTotal,queuedTotal,cachedTokens,inputTokens,outputToke
         }
     }
 
-    // Collapsed-row activity follows Sidebar presentation parents.
     internal Dictionary<string, int> BusyDescendants(string[] roots, string[] busy)
     {
         var result = roots.ToDictionary(id => id, _ => 0, StringComparer.Ordinal);
@@ -586,11 +591,11 @@ SELECT {Columns},total,busyTotal,queuedTotal,cachedTokens,inputTokens,outputToke
         {
             EnsureInitialized();
             var sql = $"""
-WITH RECURSIVE ancestors(busy_id,session_id,next_id,trail) AS (
-SELECT session_id,session_id,sidebar_parent,'|'||hex(session_id)||'|' FROM session_catalog WHERE session_id IN ({Parameters(
+WITH RECURSIVE ancestors(busy_id,session_id,parent_session_id,trail) AS (
+SELECT session_id,session_id,parent_session_id,'|'||hex(session_id)||'|' FROM session_catalog WHERE session_id IN ({Parameters(
                     busy.Length
                 )})
-UNION ALL SELECT a.busy_id,p.session_id,p.sidebar_parent,a.trail||hex(p.session_id)||'|' FROM ancestors a JOIN session_catalog p ON p.session_id=a.next_id
+UNION ALL SELECT a.busy_id,p.session_id,p.parent_session_id,a.trail||hex(p.session_id)||'|' FROM ancestors a JOIN session_catalog p ON p.session_id=a.parent_session_id
 WHERE instr(a.trail,'|'||hex(p.session_id)||'|')=0)
 SELECT session_id,count(DISTINCT busy_id) FROM ancestors WHERE session_id<>busy_id AND session_id IN ({Parameters(
                     roots.Length,

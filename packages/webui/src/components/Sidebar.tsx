@@ -1,4 +1,5 @@
-import { PanelLeftClose, PanelLeftOpen, History, Workflow, ClipboardList } from 'lucide-react'
+import { PanelLeftClose, PanelLeftOpen, Search, Network, ClipboardList } from 'lucide-react'
+import { SidebarNavItem } from './SidebarNav'
 import SessionListCore from './SessionListCore'
 import type { BoundedSessionListPresentationProps, Session } from './SessionListCore'
 import type { SessionIdleNotificationMode } from '../sessionIdleNotifications'
@@ -7,7 +8,7 @@ import { FoxwarmMark } from './FoxwarmMark'
 import CodeLaunchButton from './CodeLaunchButton'
 import GlobalUiSettingsMenu from './GlobalUiSettingsMenu'
 import { useState } from 'react'
-import AgentCreationMenu, { type ChildSessionRequest } from './AgentCreationMenu'
+import AgentCreationMenu, { type SessionCreationRequest } from './AgentCreationMenu'
 import type { AgentSettingsChanges, AgentSummary } from '../agentCreation'
 import type { WebUiNodeTarget } from '../nodeTargets'
 
@@ -15,12 +16,17 @@ interface SidebarProps {
   sessions: Session[]
   agents: AgentSummary[]
   currentSession: string
-  currentView: 'session' | 'agents' | 'setup' | 'logs' | 'tasks' | 'nodes'
+  currentView: 'session' | 'agents' | 'setup' | 'logs' | 'tasks'
   currentSessionRecord?: Session
   onSelectSession: (sessionId: string) => void
   onKeepSession?: (sessionId: string) => void
   onSelectArchitecture: () => void
+  onOpenAgentSettings?: (agent: string) => void
   onSelectSearch: () => void
+  /** Opens message search prefilled with the session filter text. */
+  onSearchMessages?: (query: string) => void
+  /** Type of the focused workbench tab, for the active navigation row. */
+  activeTabType?: string
   onSelectSetup: () => void
   onSelectLogs?: () => void
   onSelectTasks?: () => void
@@ -55,7 +61,10 @@ export default function Sidebar({
   onSelectSession,
   onKeepSession,
   onSelectArchitecture,
+  onOpenAgentSettings,
   onSelectSearch,
+  onSearchMessages,
+  activeTabType,
   onSelectSetup,
   onSelectLogs,
   onSelectTasks,
@@ -80,19 +89,23 @@ export default function Sidebar({
   onToggleIdleNotificationMode,
   bounded,
 }: SidebarProps) {
-  const [childRequest, setChildRequest] = useState<ChildSessionRequest | null>(null)
+  const [creationRequest, setCreationRequest] = useState<SessionCreationRequest | null>(null)
   const defaultNodeId = currentSessionRecord?.currentNode || 'master'
   const defaultPath = currentSessionRecord?.cwd || '/'
 
-  const agentsBtnClass = currentView === 'agents'
-    ? 'bg-fw-accent-surface text-fw-accent dark:bg-fw-accent-surface-strong/40 dark:text-fw-accent'
-    : 'bg-fw-neutral-surface text-fw-text hover:bg-fw-hover dark:bg-fw-surface-raised/60 dark:text-fw-text-strong dark:hover:bg-fw-hover'
+  // Brand row with settings, then navigation rows (icon + text), then the Session list.
   return (
     <div className="foxwarm-sidebar-panel h-full bg-fw-sidebar-surface border-r border-fw-border flex flex-col">
-      <div className="shrink-0 p-4 border-b border-fw-border space-y-3">
-        <div className="flex items-center justify-between gap-2">
+      <div className="shrink-0 px-3 pb-2 pt-3 border-b border-fw-border">
+        <div className="mb-2 flex items-center justify-between gap-2 pl-1" data-sidebar-brand>
           <h1 className="flex items-center gap-2 text-xl font-bold text-fw-text-strong"><FoxwarmMark className="h-6 w-6 shrink-0" />Foxwarm</h1>
           <div className="flex items-center gap-1">
+            <GlobalUiSettingsMenu
+              menuAlign="end"
+              menuSide="bottom"
+              onOpenSetup={onSelectSetup} onOpenLogs={onSelectLogs}
+              setupActive={currentView === 'setup' || currentView === 'logs'}
+            />
             <button
               type="button"
               onClick={onToggleCollapsed}
@@ -104,26 +117,10 @@ export default function Sidebar({
           </div>
         </div>
 
-        <div className="space-y-2">
-          <div className="flex items-stretch gap-1">
-            <button
-              onClick={onSelectArchitecture}
-              className={`inline-flex flex-1 items-center justify-center gap-2 rounded-lg border border-fw-border-strong px-3 py-2 text-sm font-medium transition-colors ${agentsBtnClass}`}
-              title="Open agents overview"
-            >
-              <Workflow className="w-4 h-4" />
-              <span>Agents</span>
-            </button>
-            <AgentCreationMenu
-              agents={agents}
-              currentAgent={currentSessionRecord?.agent}
-              compact
-              onCreateAgent={onCreateAgent}
-              onCreateSession={onCreateSession}
-              childRequest={childRequest}
-              onChildRequestHandled={() => setChildRequest(null)}
-            />
-          </div>
+        <nav className="space-y-0.5" aria-label="Workspace" data-sidebar-nav-list>
+          <SidebarNavItem icon={Network} label="System" active={currentView === 'agents'} onClick={onSelectArchitecture} title="Open System" dataNav="system" />
+          {onSelectTasks && <SidebarNavItem icon={ClipboardList} label="Tasks" active={currentView === 'tasks'} onClick={onSelectTasks} dataNav="tasks" />}
+          <SidebarNavItem icon={Search} label="Search" active={activeTabType === 'search'} onClick={onSelectSearch} title="Search history" dataNav="search" />
           <CodeLaunchButton
             path={codePath}
             nodeId={codeNodeId}
@@ -138,6 +135,7 @@ export default function Sidebar({
             onRefreshNodeTargets={onRefreshNodeTargets}
           />
           <CreateTabButton
+            variant="nav"
             defaultNodeId={defaultNodeId}
             defaultPath={defaultPath}
             onCreate={(options) => onCreateTerminalTab(options)}
@@ -145,10 +143,10 @@ export default function Sidebar({
             nodeTargetsError={nodeTargetsError}
             onRefreshNodeTargets={onRefreshNodeTargets}
           />
-        </div>
+        </nav>
       </div>
 
-      <div className="flex-1 min-h-0 border-t border-fw-border">
+      <div className="flex-1 min-h-0">
         <SessionListCore
           sessions={sessions}
           currentSession={currentSession}
@@ -158,26 +156,25 @@ export default function Sidebar({
           unreadSessionIds={unreadSessionIds}
           onToggleIdleNotificationMode={onToggleIdleNotificationMode}
           bounded={bounded}
-          onCreateChildSession={setChildRequest}
+          onRequestSession={setCreationRequest}
+          onOpenAgentSettings={onOpenAgentSettings}
+          onStartSession={() => { void onCreateSession('main').catch(error => window.alert(`Failed to create session: ${error instanceof Error ? error.message : String(error)}`)) }}
+          onSearchMessages={onSearchMessages}
+          toolbarActions={
+            <AgentCreationMenu
+              agents={agents}
+              currentAgent={currentSessionRecord?.agent}
+              onCreateAgent={onCreateAgent}
+              onCreateSession={onCreateSession}
+              creationRequest={creationRequest}
+              onCreationRequestHandled={() => setCreationRequest(null)}
+              directCreate
+              triggerClassName="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-fw-border bg-fw-surface text-fw-text-muted transition hover:border-fw-accent-border hover:text-fw-accent focus:outline-none focus:ring-2 focus:ring-fw-focus-ring/30 dark:border-fw-border dark:bg-fw-canvas dark:text-fw-text"
+              optionsTriggerClassName="inline-flex h-7 w-5 shrink-0 items-center justify-center rounded-lg border border-l-0 border-fw-border bg-fw-surface text-fw-text-muted transition hover:border-fw-accent-border hover:text-fw-accent focus:outline-none focus:ring-2 focus:ring-fw-focus-ring/30 dark:border-fw-border dark:bg-fw-canvas dark:text-fw-text"
+            />
+          }
           toolbarContainerClassName="p-2 pb-1"
           listContainerClassName="p-2 pt-1"
-        />
-      </div>
-      <div data-sidebar-footer className="flex shrink-0 justify-end gap-1 border-t border-fw-border bg-fw-surface p-2">
-        {onSelectTasks && (
-          <button type="button" onClick={onSelectTasks} title="Open tasks" aria-label="Open tasks" className="mr-auto inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-lg border border-fw-border-strong px-3 text-sm text-fw-text transition hover:bg-fw-hover hover:text-fw-text-strong dark:border-fw-border dark:text-fw-text dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse">
-            <ClipboardList className="h-4 w-4" aria-hidden="true" />
-            <span>Tasks</span>
-          </button>
-        )}
-        <button type="button" onClick={onSelectSearch} title="Search history" aria-label="Search history" className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-fw-border text-fw-text transition hover:bg-fw-hover hover:text-fw-text-strong dark:border-fw-border dark:text-fw-text dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse">
-          <History className="h-4 w-4" />
-        </button>
-        <GlobalUiSettingsMenu
-          menuAlign="end"
-          menuSide="top"
-          onOpenSetup={onSelectSetup} onOpenLogs={onSelectLogs}
-          setupActive={currentView === 'setup'}
         />
       </div>
     </div>

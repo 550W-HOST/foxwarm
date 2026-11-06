@@ -2,19 +2,22 @@ import { getSessionRuntimeTone } from '../sessionRuntimeState'
 import { useState, useRef, useEffect, useMemo, type ReactNode } from 'react'
 import { useDndContext, useDraggable, useDroppable } from '@dnd-kit/core'
 import { API_BASE_PATH } from '../config'
-import { SlidersHorizontal, MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X, CornerDownRight, ListTree, Clock3, Rows3, Pin, PinOff, Bell, BellRing, List, GitBranch, Server, Copy, SquarePlus } from 'lucide-react'
+import { SlidersHorizontal, MoreVertical, Plus, Settings, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X, CornerDownRight, ListTree, Clock3, Rows3, Pin, PinOff, Bell, BellRing, GitBranch, Server, Copy, SquarePlus, MessageCircleQuestion } from 'lucide-react'
 import RuntimeBusySpinner from './RuntimeBusySpinner'
 import MobilePageHeader from './MobilePageHeader'
 import ContextMenu, { type ContextMenuAnchorRect, type ContextMenuEntry } from './ContextMenu'
+import SessionListSectionHeader, { sessionRowTitleX } from './SessionListSectionHeader'
 import { copyTextToClipboard } from './chatShared'
 import { getSessionRuntimeSummary, getSessionRuntimeStateName, type SessionRuntimeState } from '../sessionRuntimeState'
 import { type SessionIdleNotificationMode } from '../sessionIdleNotifications'
-import { collapseSessionListExpandedBranch, compareSessionListSessions, getSessionListAutoExpandedPath, getSessionListChildDisclosure, getSessionListAgentTag, getSessionListDisplayId, getSessionListGroupedDisplayId, shouldElevateSessionToRoot, type SessionListOrderMode } from '../sessionListPresentation'
-import type { ChildSessionRequest } from './AgentCreationMenu'
+import { collapseSessionListExpandedBranch, compareSessionListSessions, getSessionListAutoExpandedPath, getSessionListChildDisclosure, getSessionListAgentTag, getSessionListDisplayId, assignSessionListGroupRoots, shouldElevateSessionToRoot, orderQuestionSessions, SESSION_LIST_GROUPING_KEY, loadStoredSessionListGrouping, type SessionListGrouping, type SessionListOrderMode } from '../sessionListPresentation'
+import type { SessionCreationRequest } from './AgentCreationMenu'
+import { GROUP_PAGE_STEP, type BoundedSessionGroupView } from '../boundedSessionList'
 import { shouldActivateSessionListDrag, shouldEnableSessionListDrag } from '../sessionListDrag'
 import { useSessionListCompact } from '../sessionListDensity'
 import { getResolvedSessionNodeId } from '../sessionNode'
 import { dispatchSessionIdleDeleted } from '../sessionIdleAttention'
+import { getSessionQuestionAttention, questionAttentionLabel, type SessionQuestionsProjection } from '../sessionQuestions'
 
 export interface Session {
   id: string
@@ -23,8 +26,6 @@ export interface Session {
   sequenceMessageCount?: number
   lastMessageTime: number
   parentSessionId: string | null
-  /** Sidebar presentation parent: a real parent or the Agent's main Session. */
-  sidebarParentId?: string | null
   childSessions?: string[]
   childTotal?: number
   aliases?: string[]
@@ -45,6 +46,7 @@ export interface Session {
   childModelDefault?: string | null
   effectiveChildModelKey?: string
   isolated?: boolean
+  questions?: SessionQuestionsProjection
   tokenUsage?: {
     cachedTokens: number
     inputTokens: number
@@ -68,6 +70,7 @@ export interface BoundedSessionListPresentationProps {
   onExpandBranches: (parentSessionIds: string[]) => void
   onRetryBranch: (parentSessionId: string) => void
   onCollapseBranch: (parentSessionId: string) => void
+  groupView?: BoundedSessionGroupView
 }
 
 interface SessionListCoreProps {
@@ -76,13 +79,22 @@ interface SessionListCoreProps {
   onSelectSession: (sessionId: string) => void
   onKeepSession?: (sessionId: string) => void
   mobileHeaderActions?: ReactNode
+  /** Desktop toolbar controls between the search field and the display options. */
+  toolbarActions?: ReactNode
+  /** Opens message search for the session filter text, offered after the filtered list. */
+  onSearchMessages?: (query: string) => void
   toolbarContainerClassName?: string
   listContainerClassName?: string
   dragEnabled?: boolean
   idleNotificationModes?: Record<string, SessionIdleNotificationMode>
   unreadSessionIds?: ReadonlySet<string>
   onToggleIdleNotificationMode?: (sessionId: string, mode: SessionIdleNotificationMode) => void
-  onCreateChildSession?: (request: ChildSessionRequest) => void
+  /** Opens the New session dialog with presets. */
+  onRequestSession?: (request: SessionCreationRequest) => void
+  /** Opens an Agent's settings. */
+  onOpenAgentSettings?: (agent: string) => void
+  /** Starts a conversation from the empty list. */
+  onStartSession?: () => void
   bounded?: BoundedSessionListPresentationProps
 }
 
@@ -98,6 +110,7 @@ type SessionListViewMode = SessionListOrderMode
 
 const SESSION_LIST_VIEW_MODE_KEY = 'foxwarm_session_list_view_mode_v1'
 const MOBILE_SESSION_LIST_VIEW_MODE_KEY = 'foxwarm_session_list_mobile_view_mode_v1'
+const PINNED_COLLAPSED_KEY = 'foxwarm_session_list_pinned_collapsed_v1'
 
 interface ContextMenuState {
   sessionId: string
@@ -114,6 +127,12 @@ const DEFAULT_VISIBLE_ROOTS = 50
 const MORE_VISIBLE_ROOTS_STEP = 50
 
 const SESSION_LIST_VIEW_MODES: SessionListViewMode[] = ['default', 'time', 'flat-time']
+
+const SESSION_LIST_GROUPING_LABELS: Record<SessionListGrouping, string> = {
+  none: 'No grouping',
+  agent: 'By Agent',
+  node: 'By Node',
+}
 
 const SESSION_LIST_VIEW_MODE_LABELS: Record<SessionListViewMode, string> = {
   default: 'Default',
@@ -149,11 +168,6 @@ const activityTime = (timestamp: number): string => {
   if (minutes < 1440) return `${Math.floor(minutes / 60)}h ago`
   if (minutes < 10080) return `${Math.floor(minutes / 1440)}d ago`
   return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(timestamp)
-}
-
-const getNextSessionListViewMode = (mode: SessionListViewMode): SessionListViewMode => {
-  const index = SESSION_LIST_VIEW_MODES.indexOf(mode)
-  return SESSION_LIST_VIEW_MODES[(index + 1) % SESSION_LIST_VIEW_MODES.length] || 'default'
 }
 
 const getSessionFilterFields = (session: Session): string[] => {
@@ -484,7 +498,7 @@ function DraggableSessionRow({
   )
 }
 
-export default function SessionListCore({ sessions, currentSession, onSelectSession, onKeepSession, mobileHeaderActions, toolbarContainerClassName = 'p-2 pb-1', listContainerClassName = 'p-2 pt-1', dragEnabled = true, idleNotificationModes = {}, unreadSessionIds = new Set(), onToggleIdleNotificationMode, onCreateChildSession, bounded }: SessionListCoreProps) {
+export default function SessionListCore({ sessions, currentSession, onSelectSession, onKeepSession, mobileHeaderActions, toolbarActions, onSearchMessages, toolbarContainerClassName = 'p-2 pb-1', listContainerClassName = 'p-2 pt-1', dragEnabled = true, idleNotificationModes = {}, unreadSessionIds = new Set(), onToggleIdleNotificationMode, onRequestSession, onOpenAgentSettings, onStartSession, bounded }: SessionListCoreProps) {
   const { active } = useDndContext()
   const [compact, toggleCompact] = useSessionListCompact()
   const [primaryPointerCoarse, setPrimaryPointerCoarse] = useState(() => window.matchMedia?.('(pointer: coarse)').matches ?? false)
@@ -605,14 +619,11 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     return aliasMap.get(sessionId) || null
   }
 
-  // Bounded tree modes place rows by the server's Sidebar presentation parent; search
-  // and Flat keep real relations. Real parents remain the authority for every action.
-  const usePresentationParents = !!bounded && !isFiltering && viewMode !== 'flat-time'
-  const buildParentMap = (parentOf: (session: Session) => string | null | undefined) => {
+  const normalizedParentMap = useMemo(() => {
     const map = new Map<string, string | null>()
 
     for (const session of sessions) {
-      const resolvedParentId = resolveSessionId(parentOf(session))
+      const resolvedParentId = resolveSessionId(session.parentSessionId)
       map.set(
         session.id,
         resolvedParentId && resolvedParentId !== session.id && sessionMap.has(resolvedParentId)
@@ -622,14 +633,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     }
 
     return map
-  }
-  const realParentMap = useMemo(() => buildParentMap(session => session.parentSessionId), [sessions, sessionMap, aliasMap])
-  const normalizedParentMap = useMemo(
-    () => usePresentationParents
-      ? buildParentMap(session => session.sidebarParentId === undefined ? session.parentSessionId : session.sidebarParentId)
-      : realParentMap,
-    [sessions, sessionMap, aliasMap, usePresentationParents, realParentMap],
-  )
+  }, [sessions, sessionMap, aliasMap])
 
   const visibleSessionIds = useMemo(() => {
     if (!isFiltering || bounded) {
@@ -696,8 +700,44 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     [visibleSessions, visibleParentMap, viewMode]
   )
 
-  const visibleRootSessions = bounded ? rootSessions : rootSessions.slice(0, visibleRootCount)
-  const hiddenRootCount = bounded ? (bounded.hasMoreRoots ? MORE_VISIBLE_ROOTS_STEP : 0) : rootSessions.length - visibleRootSessions.length
+  // Agent/Node groups of the bounded desktop list. Search, the mobile list and pinned rows
+  // stay ungrouped; the server assigns every group member, the list only places loaded rows.
+  const groupView = bounded?.groupView
+  const grouping: SessionListGrouping = groupView && !isFiltering && !mobileList ? groupView.grouping : 'none'
+  const showAgentTags = !!bounded && !isFiltering && !mobileList && viewMode !== 'flat-time' && grouping !== 'agent'
+  const groupedRoots = useMemo(
+    () => grouping === 'none' || !groupView
+      ? null
+      : assignSessionListGroupRoots(rootSessions.filter(session => !session.pinned && !getSessionQuestionAttention(session)).map(session => session.id), groupView.pages, groupView.presentationGroups),
+    [grouping, groupView, rootSessions],
+  )
+  // The group of every rendered row: a top-level row's group, inherited by its subtree.
+  const rowGroupKeys = useMemo(() => {
+    const keys = new Map<string, string>()
+    if (!groupedRoots) return keys
+    const pending: Array<[string, string]> = [...groupedRoots.byGroup].flatMap(([key, ids]) => ids.map(id => [id, key] as [string, string]))
+    while (pending.length) {
+      const [id, key] = pending.pop()!
+      if (keys.has(id)) continue
+      keys.set(id, key)
+      for (const child of childrenMap.get(id) || []) pending.push([child.id, key])
+    }
+    return keys
+  }, [groupedRoots, childrenMap])
+  const [groupMenu, setGroupMenu] = useState<{ agent: string; x: number; y: number } | null>(null)
+  const [pinnedCollapsed, setPinnedCollapsed] = useState(() => { try { return localStorage.getItem(PINNED_COLLAPSED_KEY) === '1' } catch { return false } })
+  const togglePinnedCollapsed = () => setPinnedCollapsed(value => {
+    try { localStorage.setItem(PINNED_COLLAPSED_KEY, value ? '0' : '1') } catch { /* Keep the in-memory choice. */ }
+    return !value
+  })
+  const [displayAnchor, setDisplayAnchor] = useState<ContextMenuAnchorRect | null>(null)
+  const displayButtonRef = useRef<HTMLButtonElement>(null)
+
+  // Open questions lift a Session above Pinned; the Agent is waiting on the strongest of them.
+  const questionRoots = useMemo(() => orderQuestionSessions(rootSessions), [rootSessions])
+  const listedRootSessions = useMemo(() => rootSessions.filter(session => !getSessionQuestionAttention(session)), [rootSessions])
+  const visibleRootSessions = bounded ? listedRootSessions : listedRootSessions.slice(0, visibleRootCount)
+  const hiddenRootCount = bounded ? (bounded.hasMoreRoots ? MORE_VISIBLE_ROOTS_STEP : 0) : listedRootSessions.length - visibleRootSessions.length
 
   const resolvedCurrentSessionId = currentSession ? resolveSessionId(currentSession) || currentSession : undefined
 
@@ -714,22 +754,6 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     return false
   }
 
-  // Drop validity follows real relations: grouping never makes a row a real descendant.
-  const isRealDescendantOf = (candidateSessionId: string | null | undefined, ancestorSessionId: string | null | undefined): boolean => {
-    if (!candidateSessionId || !ancestorSessionId || candidateSessionId === ancestorSessionId) return false
-    let cursor = realParentMap.get(candidateSessionId) || null
-    const seen = new Set<string>()
-    while (cursor && !seen.has(cursor)) {
-      if (cursor === ancestorSessionId) return true
-      seen.add(cursor)
-      cursor = realParentMap.get(cursor) || null
-    }
-    return false
-  }
-  const isGroupedSession = (session: Session | undefined): boolean => {
-    if (!session || !usePresentationParents || session.sidebarParentId === undefined || session.pinned) return false
-    return (resolveSessionId(session.sidebarParentId) || session.sidebarParentId) !== (resolveSessionId(session.parentSessionId) || session.parentSessionId || null)
-  }
 
   useEffect(() => {
     try { localStorage.setItem(mobileList ? MOBILE_SESSION_LIST_VIEW_MODE_KEY : SESSION_LIST_VIEW_MODE_KEY, viewMode) } catch { /* Keep the in-memory choice. */ }
@@ -738,6 +762,12 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   }, [viewMode, normalizedFilterQuery, mobileList])
 
   useEffect(() => { bounded?.onFilterChange(filterText) }, [filterText, bounded?.onFilterChange])
+  // The mobile list stays ungrouped; the desktop list restores the stored grouping.
+  useEffect(() => { groupView?.setGrouping(mobileList ? 'none' : loadStoredSessionListGrouping()) }, [mobileList, groupView?.setGrouping])
+  const selectGrouping = (next: SessionListGrouping) => {
+    try { localStorage.setItem(SESSION_LIST_GROUPING_KEY, next) } catch { /* Keep the in-memory choice. */ }
+    groupView?.setGrouping(next)
+  }
   // Presentation changes reset disclosure; selection only adds the new active path below.
   useEffect(() => { if (bounded) setExpandedSessions(new Set()) }, [viewMode, filterText])
   useEffect(() => {
@@ -873,10 +903,6 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       bounded?.onExpandBranch(sessionId)
     }
     setExpandedSessions(newExpanded)
-  }
-
-  const cycleViewMode = () => {
-    setViewPreference(current => ({ ...current, mode: getNextSessionListViewMode(current.mode) }))
   }
 
   const toggleShowMoreRoots = () => {
@@ -1177,6 +1203,92 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     }
   }
 
+  // Sections, not a tree level: members are level-0 rows, and the header's chevron and label
+  // sit on the rows' disclosure and title columns. Pinned rows keep their own section above the
+  // groups; each group lists its members in the current mode's order (an Agent group starts with
+  // the Agent's main Session).
+  const disclosureColumn = compact && viewMode !== 'flat-time' && !isFiltering
+  const sectionTitleX = sessionRowTitleX(disclosureColumn)
+  const renderPinnedSection = (pinnedRoots: Session[], showMore: boolean) => (
+    <section aria-label="Pinned" data-session-section="pinned" className="mb-2">
+      <SessionListSectionHeader label="Pinned" disclosureColumn={disclosureColumn} collapsed={pinnedCollapsed} onToggle={togglePinnedCollapsed} toggleLabel={`${pinnedCollapsed ? 'Expand' : 'Collapse'} pinned sessions`} count={pinnedCollapsed ? pinnedRoots.length : undefined} />
+      {!pinnedCollapsed && pinnedRoots.map(session => renderSession(session))}
+      {!pinnedCollapsed && showMore && hiddenRootCount > 0 && (
+        <button onClick={toggleShowMoreRoots} className="w-full p-2 text-left text-xs text-fw-text-muted hover:text-fw-text dark:hover:text-fw-text-strong" style={{ paddingLeft: sectionTitleX }}>
+          {`▼ Show ${Math.min(hiddenRootCount, MORE_VISIBLE_ROOTS_STEP)} more...`}
+        </button>
+      )}
+    </section>
+  )
+  const renderQuestionSection = () => questionRoots.length > 0 && (
+    <section aria-label="Needs your answer" data-session-section="questions" className="mb-2">
+      <SessionListSectionHeader label="Needs your answer" disclosureColumn={disclosureColumn} />
+      {questionRoots.map(session => renderSession(session))}
+    </section>
+  )
+  const renderGroups = ({ byGroup, ungrouped }: { byGroup: Map<string, string[]>; ungrouped: string[] }) => {
+    const view = groupView!
+    const pinnedRoots = visibleRootSessions.filter(session => session.pinned)
+    const rootFor = (id: string) => sessionMap.get(id)
+    return (
+      <>
+        {pinnedRoots.length > 0 && renderPinnedSection(pinnedRoots, true)}
+        {view.groups.map(group => {
+          const collapsed = view.collapsed.has(group.key)
+          const members = (byGroup.get(group.key) || []).map(rootFor).filter((session): session is Session => !!session)
+          const page = view.pages.get(group.key)
+          const remaining = page?.nextCursor ? Math.max(1, Math.min(GROUP_PAGE_STEP, page.total - page.ids.length)) : 0
+          const agentGroup = view.grouping === 'agent'
+          const label = group.label
+          return (
+            <section key={group.key} aria-label={label} data-session-group={group.key} data-session-group-kind={view.grouping} className="mb-1">
+              <SessionListSectionHeader
+                label={label}
+                disclosureColumn={disclosureColumn}
+                collapsed={collapsed}
+                onToggle={() => view.toggleGroup(group.key)}
+                toggleLabel={`${collapsed ? 'Expand' : 'Collapse'} ${label}`}
+                title={agentGroup ? `Agent: ${group.key}` : group.key === label ? `Node: ${group.key}` : `Node: ${label} · ${group.key}`}
+                count={group.count}
+                toggleAttributes={{ 'data-session-group-toggle': group.key }}
+                labelAttributes={{ 'data-session-group-label': '' }}
+                onContextMenu={agentGroup && (onOpenAgentSettings || onRequestSession) ? event => { event.preventDefault(); setGroupMenu({ agent: group.key, x: event.clientX, y: event.clientY }) } : undefined}
+                status={!agentGroup ? (
+                  <span
+                    role="img"
+                    data-session-group-online={group.online ? 'true' : 'false'}
+                    aria-label={group.online ? 'Online' : 'Offline'}
+                    title={group.online ? 'Online' : 'Offline'}
+                    className={`h-2 w-2 shrink-0 rounded-full ${group.online ? 'bg-fw-success' : 'bg-fw-text-muted/50'}`}
+                  />
+                ) : undefined}
+                actions={agentGroup && onRequestSession ? (
+                  <button
+                    type="button"
+                    onClick={() => onRequestSession({ agent: group.key })}
+                    aria-label={`New session in ${group.key}`}
+                    title={`New session in ${group.key}`}
+                    data-session-group-create={group.key}
+                    className="mr-1 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-fw-text-muted opacity-0 hover:bg-fw-selected hover:text-fw-text-strong focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-fw-focus-ring/40 group-hover/header:opacity-100"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                  </button>
+                ) : undefined}
+              />
+              {!collapsed && members.map(session => renderSession(session))}
+              {!collapsed && remaining > 0 && (
+                <button onClick={() => view.loadMoreGroup(group.key)} data-session-group-more={group.key} className="w-full p-2 text-left text-xs text-fw-text-muted hover:text-fw-text dark:hover:text-fw-text-strong" style={{ paddingLeft: sectionTitleX }}>
+                  {`▼ Show ${remaining} more...`}
+                </button>
+              )}
+            </section>
+          )
+        })}
+        {ungrouped.map(id => rootFor(id)).filter((session): session is Session => !!session).map(session => renderSession(session))}
+      </>
+    )
+  }
+
   const renderSession = (session: Session, level: number = 0, parentSession: Session | null = null, lastInBranch = false) => {
     const children = childrenMap.get(session.id) || []
     const boundedChildPage = bounded?.childPages.get(session.id)
@@ -1202,14 +1314,10 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
 
     // Get display ID (with parent prefix removed if applicable)
     const isDirectChild = !!parentSession && resolveSessionId(session.parentSessionId) === parentSession.id
-    // A grouped row is shown under its Agent host without being its real child.
-    const groupedRow = !!parentSession && !isDirectChild && isGroupedSession(session)
-    const displayId = groupedRow
-      ? getSessionListGroupedDisplayId(session.id, parentSession!.id)
-      : getSessionListDisplayId(session.id, parentSession?.id, isDirectChild)
+    const displayId = getSessionListDisplayId(session.id, parentSession?.id, isDirectChild)
     const title = session.displayName || displayId
-    // Top-level tree rows of an Agent without a main host name their Agent.
-    const agentTag = usePresentationParents && !mobileList && !parentSession ? getSessionListAgentTag(session, title) : null
+    // Top-level tree rows name their Agent, except inside an Agent group.
+    const agentTag = showAgentTags && !parentSession ? getSessionListAgentTag(session, title) : null
     // The title truncates first; the tag keeps up to 45% of the row so the Agent stays readable.
     const agentTagBadge = agentTag && (
       <span
@@ -1221,14 +1329,21 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       </span>
     )
 
+    const questionAttention = getSessionQuestionAttention(session)
+    const questionLabel = questionAttentionLabel(questionAttention, session.questions?.open)
+    const questionBadge = questionAttention && (
+      <span role="img" aria-label={questionLabel} title={questionLabel} data-session-question={questionAttention}
+        className={`inline-flex shrink-0 items-center justify-center ${questionAttention === 'waiting' ? 'h-5 w-5 rounded-full bg-fw-warning-surface text-fw-warning ring-1 ring-fw-warning-border dark:bg-fw-warning-surface-strong/30' : 'h-3.5 w-3.5 text-fw-accent'}`}>
+        <MessageCircleQuestion className="h-3.5 w-3.5" strokeWidth={questionAttention === 'waiting' ? 2.25 : 1.75} aria-hidden="true" />
+      </span>
+    )
     const isCurrentSession = resolvedCurrentSessionId === session.id
     const runtimeStateName = getSessionRuntimeStateName(session)
     const showRuntimeBadge = session.runtimeState ? runtimeStateName !== 'idle' || !!session.runtimeState.compaction : !!session.busy
     const resolvedNodeId = getResolvedSessionNodeId(session)
     const rowParentSessionId = visibleParentMap.get(session.id) || null
-    const realRowParentSessionId = groupedRow ? realParentMap.get(session.id) || null : rowParentSessionId
-    const targetParentWouldCreateCycle = realRowParentSessionId
-      ? realRowParentSessionId === draggingSessionId || isRealDescendantOf(realRowParentSessionId, draggingSessionId)
+    const targetParentWouldCreateCycle = rowParentSessionId
+      ? rowParentSessionId === draggingSessionId || isDescendantOf(rowParentSessionId, draggingSessionId)
       : false
     const disableSidebarDrop = !draggingSessionId
       || !sessionDragEnabled
@@ -1237,14 +1352,10 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       || draggingPinnedSession
       || !!session.pinned
       || draggingSessionId === session.id
-      || isRealDescendantOf(session.id, draggingSessionId)
+      || isDescendantOf(session.id, draggingSessionId)
       || targetParentWouldCreateCycle
-    // Sibling order drops write the real parent. They are unavailable where that would
-    // silently reparent a row that only appears in the same Sidebar group.
-    const draggingSession = draggingSessionId ? sessionMap.get(draggingSessionId) : undefined
-    const reorderWouldReparent = groupedRow || (isGroupedSession(draggingSession)
-      && !!rowParentSessionId
-      && rowParentSessionId === (resolveSessionId(draggingSession?.sidebarParentId) || draggingSession?.sidebarParentId))
+      // A drop across groups would change a Session's Agent or Node.
+      || !!draggingSessionId && rowGroupKeys.get(session.id) !== rowGroupKeys.get(draggingSessionId)
 
     const nodeBadge = resolvedNodeId !== 'master' && (
       <span
@@ -1295,23 +1406,21 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     )
 
     // Tree lines: every expanded branch has one continuous vertical line under its parent's
-    // disclosure. Real children join it with a short horizontal connector; rows that are only
-    // shown in an Agent group sit beside the line without one. The line ends at the middle of
-    // the branch's last row.
+    // disclosure. Children join it with a short horizontal connector. The line ends at the
+    // middle of the branch's last row.
     const rowGap = compact ? 2 : 4
     const lineX = (lineLevel: number) => 20 + lineLevel * 16
     const trunk = (lineLevel: number, owner: string) => (
       <span aria-hidden="true" data-session-branch-line={owner} className="pointer-events-none absolute inset-y-0 z-[1] w-px bg-fw-border-strong" style={{ left: `${lineX(lineLevel)}px` }} />
     )
-    // Drawn inside a row: the last row's part of the line, and a real child's connector. The
+    // Drawn inside a row: the last row's part of the line, and the child's connector. The
     // connector meets the title line (the row middle in Normal density) and stops short of the
     // row's content.
     const connectorY = compact ? '50%' : '22px'
-    const connectorWidth = compact && !hasChildren ? 10 : 6
+    // One length for every connector: it ends where a disclosure can appear, so rows match whether or not theirs is shown.
+    const connectorWidth = 6
     const rowConnector = parentSession ? (
-      groupedRow
-        ? lastInBranch && <span aria-hidden="true" data-session-branch-line={parentSession.id} className="pointer-events-none absolute z-[1] w-px bg-fw-border-strong" style={{ left: `${lineX(level - 1)}px`, top: `-${rowGap}px`, height: `calc(${connectorY} + ${rowGap}px)` }} />
-        : lastInBranch
+      lastInBranch
           ? <span aria-hidden="true" data-session-branch-line={parentSession.id} data-session-branch-connector className="pointer-events-none absolute z-[1] rounded-bl border-b border-l border-fw-border-strong" style={{ left: `${lineX(level - 1)}px`, top: `-${rowGap}px`, width: `${connectorWidth}px`, height: `calc(${connectorY} + ${rowGap + 1}px)` }} />
           : <span aria-hidden="true" data-session-branch-connector className="pointer-events-none absolute z-[1] h-px bg-fw-border-strong" style={{ left: `${lineX(level - 1)}px`, top: connectorY, width: `${connectorWidth}px` }} />
     ) : null
@@ -1334,7 +1443,6 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       <div
         key={session.id}
         className="relative flow-root"
-        data-session-grouped={groupedRow || undefined}
       >
         {parentSession && !lastInBranch && trunk(level - 1, parentSession.id)}
         <DraggableSessionRow
@@ -1356,7 +1464,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                 session={session}
                 parentSessionId={rowParentSessionId}
                 disabled={disableSidebarDrop}
-                allowReorder={allowSidebarOrder && !reorderWouldReparent}
+                allowReorder={allowSidebarOrder}
                 allowParentDrop={allowParentDrop}
               />
               {compact ? (
@@ -1367,6 +1475,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                     {mobileList && activityTime(session.lastMessageTime) && <span className="mt-0.5 block truncate text-xs font-normal text-fw-text-muted">{session.agent ? `${session.agent} · ` : ''}{activityTime(session.lastMessageTime)}</span>}
                   </span>
                   {agentTagBadge}
+                  {questionBadge}
                   {session.archived && <Archive className="h-3 w-3 shrink-0 text-fw-text-muted" aria-label="Archived session" />}
                   {unreadSessionIds.has(session.id) && (
                     <span className="h-2 w-2 shrink-0 rounded-full bg-fw-accent" role="img" aria-label="Unread idle completion" title="Unread idle completion" />
@@ -1405,6 +1514,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                         <span className="ml-2 text-xs text-fw-text-muted">[Archived]</span>
                       )}
                     </span>
+                    {questionBadge}
                     {agentTagBadge}
                   </div>
                   {session.displayName && (
@@ -1549,13 +1659,13 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
         label: 'Fork',
         onSelect: () => { void forkSession(contextMenu.sessionId) },
       },
-      ...(onCreateChildSession ? [{
+      ...(onRequestSession ? [{
         key: 'create-child',
         icon: <SquarePlus size={14} />,
         label: 'Create child session',
         onSelect: () => {
           setContextMenu(null)
-          onCreateChildSession({ parentSessionId: contextMenu.sessionId, parentLabel: session?.displayName || contextMenu.sessionId, agent: session?.agent })
+          onRequestSession({ parent: { sessionId: contextMenu.sessionId, label: session?.displayName || contextMenu.sessionId }, agent: session?.agent })
         },
       }] : []),
       {
@@ -1612,18 +1722,23 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       setArchiveIncludeDescendants(false)
     }
   }, [archiveConfirm, archiveDescendantCount, archiveIncludeDescendants])
-  const ViewModeIcon = SESSION_LIST_VIEW_MODE_ICONS[viewMode]
   const customMobileHeader = mobileList && mobileHeaderActions !== undefined
-  const mobileViewEntries: ContextMenuEntry[] = [
-    ...SESSION_LIST_VIEW_MODES.map(mode => ({key: mode, label: `${SESSION_LIST_VIEW_MODE_LABELS[mode]} view`, checked: mode === viewMode, onSelect: () => setViewPreference(current => ({...current, mode}))})),
-    {key: 'sep', type: 'separator'},
+  // One display menu on desktop and mobile: list mode, grouping (desktop) and row density.
+  const displayEntries: ContextMenuEntry[] = [
+    {key: 'head-view', type: 'header', label: 'View'},
+    ...SESSION_LIST_VIEW_MODES.map(mode => ({key: mode, label: SESSION_LIST_VIEW_MODE_LABELS[mode], title: SESSION_LIST_VIEW_MODE_TITLES[mode], icon: (() => { const Icon = SESSION_LIST_VIEW_MODE_ICONS[mode]; return <Icon size={14} /> })(), checked: mode === viewMode, selection: 'radio' as const, onSelect: () => setViewPreference(current => ({...current, mode}))})),
+    ...(groupView && !mobileList ? [
+      {key: 'head-group', type: 'header' as const, label: 'Group by'},
+      ...(['none', 'agent', 'node'] as const).map(value => ({ key: `group-${value}`, label: SESSION_LIST_GROUPING_LABELS[value], checked: groupView.grouping === value, selection: 'radio' as const, onSelect: () => selectGrouping(value) })),
+    ] : []),
+    {key: 'head-rows', type: 'header', label: 'Rows'},
     {key: 'density', label: 'Detailed rows', checked: !compact, onSelect: toggleCompact},
   ]
 
 
   return (
     <>
-      <div className={`relative flex h-full min-h-0 flex-col ${customMobileHeader ? 'mobile-page-root' : ''}`} data-session-list-density={compact ? 'normal' : 'detailed'} data-session-list-mobile={mobileList || undefined}>
+      <div className={`relative flex h-full min-h-0 flex-col ${customMobileHeader ? 'mobile-page-root' : ''}`} data-session-list-density={compact ? 'normal' : 'detailed'} data-session-list-mode={viewMode} data-session-list-mobile={mobileList || undefined}>
         {customMobileHeader ? <MobilePageHeader title="Sessions" actions={<>
           <button type="button" aria-label="Search sessions" data-filtered={!!filterText || undefined} aria-expanded={mobileSearchOpen} onClick={() => { setMobileSearchOpen(value => !value); requestAnimationFrame(() => mobileSearchRef.current?.focus({preventScroll:true})) }} className="mobile-header-circle"><Search size={20} /></button>
           <button ref={mobileViewRef} type="button" aria-label="Session display options" aria-haspopup="menu" aria-expanded={!!mobileViewAnchor} onClick={() => setMobileViewAnchor(mobileViewRef.current!.getBoundingClientRect())} className="mobile-header-circle"><SlidersHorizontal size={20} /></button>
@@ -1655,36 +1770,34 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                 </button>
               )}
             </div>
+            {toolbarActions}
             <button
+              ref={displayButtonRef}
               type="button"
-              onClick={cycleViewMode}
-              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-fw-border bg-fw-surface text-fw-text-muted transition hover:border-fw-accent-border hover:text-fw-accent focus:outline-none focus:ring-2 focus:ring-fw-focus-ring/30 dark:border-fw-border dark:bg-fw-canvas dark:text-fw-text dark:hover:border-fw-accent-border/70 dark:hover:text-fw-accent"
-              title={`${SESSION_LIST_VIEW_MODE_LABELS[viewMode]} mode. ${SESSION_LIST_VIEW_MODE_TITLES[viewMode]} Click to switch mode.`}
-              aria-label={`Session list mode: ${SESSION_LIST_VIEW_MODE_LABELS[viewMode]}`}
+              onClick={() => setDisplayAnchor(displayButtonRef.current!.getBoundingClientRect())}
+              aria-label="Session display options"
+              aria-haspopup="menu"
+              aria-expanded={!!displayAnchor}
+              data-session-list-display-options
+              data-session-list-grouping={groupView?.grouping}
+              title="Display options"
+              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-fw-border bg-fw-surface text-fw-text-muted transition hover:border-fw-accent-border hover:text-fw-accent focus:outline-none focus:ring-2 focus:ring-fw-focus-ring/30 dark:border-fw-border dark:bg-fw-canvas dark:text-fw-text"
             >
-              <ViewModeIcon className="h-3.5 w-3.5" />
-            </button>
-            <button
-              type="button"
-              onClick={toggleCompact}
-              aria-label="Detailed session rows"
-              aria-pressed={!compact}
-              title={compact ? 'Use detailed session rows' : 'Use normal session rows'}
-              className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border focus:outline-none focus:ring-2 focus:ring-fw-focus-ring/30 ${!compact ? 'border-fw-accent-border bg-fw-accent-surface text-fw-accent' : 'border-fw-border bg-fw-surface text-fw-text-muted hover:text-fw-accent hover:border-fw-accent-border'}`}
-            >
-              <List className="h-3.5 w-3.5" />
+              <SlidersHorizontal className="h-3.5 w-3.5" />
             </button>
           </div>
           <SidebarRootDropZone visible={sessionDragEnabled && !!draggingSessionId && allowParentDrop} disabled={!sessionDragEnabled || isFiltering || draggingPinnedSession} allowOrder={allowSidebarOrder} />
         </div>
 
         )}
-        <ContextMenu open={!!mobileViewAnchor} entries={mobileViewEntries} anchorRect={mobileViewAnchor} preferredPlacement="bottom-end" onClose={() => {setMobileViewAnchor(null); mobileViewRef.current?.focus({preventScroll:true})}} />
+        <ContextMenu open={!!displayAnchor} entries={displayEntries} anchorRect={displayAnchor} preferredPlacement="bottom-end" onClose={() => { setDisplayAnchor(null); displayButtonRef.current?.focus({ preventScroll: true }) }} />
+        <ContextMenu open={!!mobileViewAnchor} entries={displayEntries} anchorRect={mobileViewAnchor} preferredPlacement="bottom-end" onClose={() => {setMobileViewAnchor(null); mobileViewRef.current?.focus({preventScroll:true})}} />
         <div className="min-h-0 flex-1 touch-pan-y overflow-y-auto" data-session-list-scroll-container>
           <div className={listContainerClassName}>
-            {rootSessions.length > 0 ? (
+            {rootSessions.length > 0 || (groupedRoots && groupView!.groups.length > 0) ? (
               <>
-                {[
+                {renderQuestionSection()}
+                {groupedRoots ? renderGroups(groupedRoots) : [
                   { label: 'Pinned', pinned: true },
                   { label: 'Sessions', pinned: false },
                 ].map(({ label, pinned }) => {
@@ -1693,15 +1806,18 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                   const sectionRoots = visibleRootSessions.filter(session => !!session.pinned === pinned)
                   return sectionRoots.length > 0 ? (
                     <section key={label} aria-label={label} data-session-section={pinned ? 'pinned' : 'sessions'} className="mb-2 last:mb-0">
-                      <h3 className="px-2 py-1 text-xs font-medium text-fw-text-muted">{label}</h3>
-                      {sectionRoots.map(session => renderSession(session))}
+                      {pinned
+                        ? <SessionListSectionHeader label={label} disclosureColumn={disclosureColumn} collapsed={pinnedCollapsed} onToggle={togglePinnedCollapsed} toggleLabel={`${pinnedCollapsed ? 'Expand' : 'Collapse'} pinned sessions`} count={pinnedCollapsed ? sectionRoots.length : undefined} />
+                        : <SessionListSectionHeader label={label} disclosureColumn={disclosureColumn} />}
+                      {!(pinned && pinnedCollapsed) && sectionRoots.map(session => renderSession(session))}
                     </section>
                   ) : null
                 })}
-                {hiddenRootCount > 0 && (
+                {!groupedRoots && hiddenRootCount > 0 && (
                   <button
                     onClick={toggleShowMoreRoots}
                     className="w-full text-left p-2 text-xs text-fw-text-muted hover:text-fw-text dark:hover:text-fw-text-strong"
+                    style={{ paddingLeft: sessionRowTitleX(disclosureColumn) }}
                   >
                     {`▼ Show ${Math.min(hiddenRootCount, MORE_VISIBLE_ROOTS_STEP)} more...`}
                   </button>
@@ -1710,6 +1826,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                   <button
                     onClick={toggleShowMoreRoots}
                     className="w-full text-left p-2 text-xs text-fw-text-muted hover:text-fw-text dark:hover:text-fw-text-strong"
+                    style={{ paddingLeft: sessionRowTitleX(disclosureColumn) }}
                   >
                     ▲ Show less
                   </button>
@@ -1718,12 +1835,40 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
             ) : (
               <div className="px-2 py-6 text-center text-sm text-fw-text-muted">
                 {isFiltering ? 'No sessions match your search.' : 'No sessions yet.'}
+                {!isFiltering && onStartSession && (
+                  <button type="button" data-session-list-start onClick={onStartSession}
+                    className="mt-2 block w-full rounded-md px-2 py-1 text-sm font-medium text-fw-accent hover:bg-fw-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-fw-focus-ring/40">
+                    Start a conversation
+                  </button>
+                )}
               </div>
+            )}
+            {/* Names filter live here; message contents need the submitted history search. */}
+            {isFiltering && onSearchMessages && (
+              <button
+                type="button"
+                onClick={() => onSearchMessages(filterText.trim())}
+                className="mt-1 flex w-full min-w-0 items-center gap-2 rounded px-3 py-2 text-left text-sm text-fw-text-muted hover:bg-fw-hover hover:text-fw-text-strong"
+                data-session-list-search-messages
+              >
+                <Search className="h-4 w-4 shrink-0" aria-hidden="true" />
+                <span className="min-w-0 truncate">Search messages for ‘{filterText.trim()}’</span>
+              </button>
             )}
           </div>
         </div>
       </div>
 
+      <ContextMenu
+        open={!!groupMenu}
+        entries={groupMenu ? [
+          ...(onRequestSession ? [{ key: 'new-session', icon: <Plus size={14} />, label: 'New session', onSelect: () => { onRequestSession({ agent: groupMenu.agent }) } }] : []),
+          ...(onOpenAgentSettings ? [{ key: 'agent-settings', icon: <Settings size={14} />, label: 'Agent settings', onSelect: () => { onOpenAgentSettings(groupMenu.agent) } }] : []),
+        ] : []}
+        point={groupMenu ? { x: groupMenu.x, y: groupMenu.y } : null}
+        preferredPlacement="point"
+        onClose={() => setGroupMenu(null)}
+      />
       <ContextMenu
         open={!!contextMenu}
         entries={contextMenuEntries}

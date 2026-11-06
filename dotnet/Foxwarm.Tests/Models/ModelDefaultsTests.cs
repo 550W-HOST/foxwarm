@@ -74,7 +74,7 @@ public sealed class ModelDefaultsTests
         Directory.CreateDirectory(Path.Combine(temp.Path, "state"));
         await File.WriteAllTextAsync(
             Path.Combine(temp.Path, "state/config.yaml"),
-            "llm:\n  contextLimit: 4000\n  maxOutput: 400\n"
+            "llm:\n  contextLimit: 4000\n  maxOutput: 400\n  openaiApiKey: synthetic-key\n"
         );
         var config = new ModelConfiguration(temp.Path);
         var root = Obj(

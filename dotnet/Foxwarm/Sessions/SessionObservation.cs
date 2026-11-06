@@ -152,6 +152,8 @@ internal static class SessionStatus
                 name += "; pending: " + string.Join(", ", pending);
             if (SessionWait.Strings(wait["waitExecIds"]) is { Length: > 0 } exec)
                 name += "; exec: " + string.Join(", ", exec);
+            if (SessionWait.Strings(wait["waitQuestionIds"]) is { Length: > 0 } questions)
+                name += "; questions: " + string.Join(", ", questions);
         }
         var queued = SessionWait.Number(state["queueLength"]) ?? 0;
         return "Session execution state: " + name + (queued > 0 ? "; queue: " + queued : "") + ".";
@@ -382,7 +384,7 @@ internal sealed partial class SessionManager
                 )
                 + (meta.Archived ? "- 📦 archived\n" : "")
                 + $"- model: `{leaf?.Key ?? catalog.DefaultKey}`\n- effort: raw={meta.Effort ?? "unset"}, effective={(SessionWait.Text(dto["effectiveEffort"]) ?? "per-leaf default")}, allowed={string.Join('|', leaf?.AllowedEfforts ?? HostModels.Efforts)}, default={(leaf is null ? "high" : leaf.DefaultEffort)}\n"
-                + $"- messages: {meta.MessageCount}\n- token estimate: ~{summary.Estimate} / {leaf?.ContextLimit ?? catalog.PresentationContextLimit}\n- images: {summary.Images}\n- last usage: {usageText}\n- last message: {SessionStatus.Date(meta.LastMessageTime)}\n- auto-compact threshold: ~{dto["effectiveCompactThresholdTokens"]} tokens ({(summary.Threshold is > 0 ? "override" : "model default")})\n"
+                + $"- messages: {meta.MessageCount}\n- token estimate: ~{summary.Estimate} / {leaf?.ContextLimit ?? catalog.PresentationContextLimit}\n- images: {summary.Images}{(summary.Images > 0 && leaf?.ImageInput == false ? " (not sent: the current model does not support image input)" : "")}\n- last usage: {usageText}\n- last message: {SessionStatus.Date(meta.LastMessageTime)}\n- auto-compact threshold: ~{dto["effectiveCompactThresholdTokens"]} tokens ({(summary.Threshold is > 0 ? "override" : "model default")})\n"
                 + (
                     meta.Cost is double totalCost
                         ? $"- total estimated cost: {ModelUsageCost.FormatUsd(totalCost)}\n"

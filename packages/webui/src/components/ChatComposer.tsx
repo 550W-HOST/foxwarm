@@ -1,5 +1,6 @@
 import { useMobileChatViewport } from '../chatPreferences'
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { ArrowUp, Check, ChevronDown, GitBranch, Link2, SlidersHorizontal, Mic, Paperclip, Plus, RefreshCw, Settings, Square } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
@@ -21,6 +22,7 @@ import { buildChildModelComposerState, type ChildPolicyChainEntry } from './chil
 import InlineComposerEditor, { type InlineComposerEditorHandle } from './InlineComposerEditor'
 import NodePicker from './NodePicker'
 import ComposerAttachmentGrid from './ComposerAttachmentGrid'
+import { IMAGE_INPUT_UNSUPPORTED_HINT, shouldShowImageInputHint } from '../imageInputSupport'
 import {
   clearComposerDraft,
   getPlainComposerDraftText,
@@ -44,6 +46,7 @@ export type ModelOption = {
   targets?: string[]
   allowedEfforts?: string[]
   defaultEffort?: string | null
+  imageInput?: boolean
 }
 
 interface ChatComposerProps {
@@ -89,6 +92,10 @@ interface ChatComposerProps {
   onOpenModelSettings: () => void
   sendKeyMode?: 'modEnter' | 'enter'
   onHeightChange?: (height: number) => void
+  /** Pinned content above the input, such as the open-question dock. */
+  aboveInput?: ReactNode
+  /** The Session is waiting on a question, so a sent message answers it. */
+  answersQuestion?: boolean
   onSend: (payload: { text: string; attachments: Array<{ ref: string; file: File }> }) => Promise<boolean>
   onCreateStreamingTranscriber: (options: {
     signal: AbortSignal
@@ -744,6 +751,8 @@ const ChatComposer = memo(function ChatComposer({
   onOpenModelSettings,
   sendKeyMode = 'modEnter',
   onHeightChange,
+  aboveInput,
+  answersQuestion = false,
   onSend,
   onCreateStreamingTranscriber,
 }: ChatComposerProps) {
@@ -1034,6 +1043,8 @@ const ChatComposer = memo(function ChatComposer({
     return file ? [{ ref: segment.ref, file }] : []
   }), [attachmentSegments, sessionId])
   const hasMissingAttachments = availableAttachments.length !== attachmentSegments.length
+  const showImageInputHint = sessionRuntime !== 'claude-code'
+    && shouldShowImageInputHint(modelOptions, currentModelKey || defaultModelKey, attachmentSegments)
 
   const handleSubmit = useCallback(async (e?: React.FormEvent) => {
     if (e) e.preventDefault()
@@ -1455,6 +1466,8 @@ const ChatComposer = memo(function ChatComposer({
           </div>
         )}
 
+        {aboveInput}
+        {answersQuestion && <div data-composer-answer-hint className="mb-1 px-1 text-xs text-fw-warning">Your next message answers the question.</div>}
         <div className="foxwarm-chat-composer-form-anchor relative">
           {showSlashCommandMenu && (
             <div className="absolute inset-x-0 bottom-[calc(100%+0.5rem)] z-10 flex max-h-[min(20rem,calc(100vh-1rem))] flex-col overflow-hidden rounded-lg border border-fw-border bg-fw-surface shadow-lg dark:border-fw-border dark:bg-fw-canvas" data-slash-command-overlay="true">
@@ -1549,6 +1562,7 @@ const ChatComposer = memo(function ChatComposer({
           disabled={loading || sessionMissing || recordingLocked}
           placeholder={sessionMissing
             ? 'Session not found'
+            : answersQuestion ? 'Reply to answer the question'
             : mobileUi ? '' : webUiIdentityMode ? 'Send a message' : sessionMessageMode ? 'Message this session' : 'Ask Foxwarm anything, + to add files, / for commands'}
           onChange={(nextDraft) => {
             commitDraft(nextDraft)
@@ -1568,6 +1582,7 @@ const ChatComposer = memo(function ChatComposer({
           onCommandKeyDown={handleCommandKeyDownBridge}
         />
         {draftPersistenceError && <div className="px-3 pb-1 text-xs text-fw-danger" role="alert">{draftPersistenceError}</div>}
+        {showImageInputHint && <div className="px-3 pb-1 text-xs text-fw-warning" role="status" data-image-input-hint="true">{IMAGE_INPUT_UNSUPPORTED_HINT}</div>}
         <div className="flex items-center justify-between gap-2 px-2 pb-1">
           <div className="flex min-w-0 flex-1 items-center gap-1">
             <div className="flex min-w-0 shrink-0 items-center gap-1 overflow-x-auto pb-0.5">

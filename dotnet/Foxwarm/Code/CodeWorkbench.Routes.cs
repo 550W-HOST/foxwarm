@@ -54,7 +54,7 @@ internal sealed partial class CodeWorkbench
                   <code>npm run download:code</code>
                 </section>
                 <p class="hint">Both commands are intentionally excluded from the normal <code style="display:inline;padding:2px 5px">npm run build</code> because preparing Code is large and slow. Assets are expected at <span class="path">{{WebUtility.HtmlEncode(
-                assetRoot
+                AssetRoot
             )}}</span>.</p>
               </main>
             </body>
@@ -76,7 +76,7 @@ internal sealed partial class CodeWorkbench
         if (relative.Length == 0)
             relative = "index.html";
         var root = Path.Combine(
-            assetRoot,
+            AssetRoot,
             "out",
             "vs",
             "workbench",
@@ -572,7 +572,7 @@ internal sealed partial class CodeWorkbench
                     () =>
                         Static(
                             context,
-                            assetRoot,
+                            AssetRoot,
                             context.Request.RouteValues["path"]?.ToString(),
                             workbench: true
                         )
@@ -593,13 +593,18 @@ internal sealed partial class CodeWorkbench
             )
         )
         {
-            var root = name == "redhat-vscode-yaml" ? yamlRoot : Path.Combine(extensionRoot, name);
+            var extension = Path.Combine(extensionRoot, name);
             app.MapGet(
                 "/vscode-web/extensions/" + name + "/{**path}",
                 context =>
                     Guard(
                         context,
-                        () => Static(context, root, context.Request.RouteValues["path"]?.ToString())
+                        () =>
+                            Static(
+                                context,
+                                name == "redhat-vscode-yaml" ? YamlRoot : extension,
+                                context.Request.RouteValues["path"]?.ToString()
+                            )
                     )
             );
         }

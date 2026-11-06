@@ -23,7 +23,8 @@ internal sealed partial class ImageBlobStore
         string outputFormat = "webp",
         CancellationToken token = default,
         string? concreteModelId = null,
-        ModelHistoryCompatibility? compatibility = null
+        ModelHistoryCompatibility? compatibility = null,
+        bool imageInput = true
     )
     {
         var result = new List<JsonObject>();
@@ -75,6 +76,20 @@ internal sealed partial class ImageBlobStore
                     parts.Add(part);
                     continue;
                 }
+                var nonvisual =
+                    SessionWait.Text(message["role"]) == "model"
+                    && !nativeReplay
+                    && (
+                        protocol == "responses"
+                        || SessionWait.Text(part["imageMeta"]?["origin"]) == "generated"
+                    );
+                if (!imageInput && !nativeReplay && !nonvisual)
+                {
+                    // Text-only target: the stored part keeps its image for later capable models.
+                    ProviderImageParts.MarkUnsupported(part);
+                    parts.Add(part);
+                    continue;
+                }
                 byte[] bytes;
                 if (reference is not null)
                     bytes = await ReadAsync(reference, token);
@@ -91,13 +106,6 @@ internal sealed partial class ImageBlobStore
                     }
                 }
                 var mime = Mime(reference ?? inline!);
-                var nonvisual =
-                    SessionWait.Text(message["role"]) == "model"
-                    && !nativeReplay
-                    && (
-                        protocol == "responses"
-                        || SessionWait.Text(part["imageMeta"]?["origin"]) == "generated"
-                    );
                 if (nonvisual && RasterCodec.IsHeif(mime))
                     _ = HeifDecoder.DecodeImage(bytes);
                 var variant = new RasterCodec.Variant(bytes, mime);

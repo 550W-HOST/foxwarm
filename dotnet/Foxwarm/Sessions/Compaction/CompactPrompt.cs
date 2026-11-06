@@ -59,7 +59,7 @@ internal static partial class CompactPrompt
             reason,
             "Use only ranges shown in one Segment header; do not cross segment boundaries, different block levels, or different source kinds. Block ids may be non-consecutive or decreasing; use only listed B# endpoints in history order.",
             "Use preserveMessages only for raw messages covered by a newly created message-source block; use removePreservedMessages only for messages listed as previously preserved in the prompt.",
-            "Fix only the layered-context plan and call submit_compact_plan again. Do not read or write agent memory during compaction; attach durable facts to the matching replaceAsBlocks entry's memoryFacts instead."
+            "Fix only the compact plan and call submit_compact_plan again. Do not read or write agent memory during compaction; attach durable facts to the matching replaceAsBlocks entry's memoryFacts instead."
         );
 
     public static string InvalidTool(string? wrongName, int count, bool repairPending = false)

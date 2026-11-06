@@ -388,7 +388,7 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
             return Error("exec_unavailable", "Host is shutting down.");
         if (
             args is null
-            || args.Count is < 1 or > 3
+            || args.Count - (args.ContainsKey("summary") ? 1 : 0) is < 1 or > 3
             || Text(args, "command") is not string command
             || (args.ContainsKey("cwd") && Text(args, "cwd") is null)
         )

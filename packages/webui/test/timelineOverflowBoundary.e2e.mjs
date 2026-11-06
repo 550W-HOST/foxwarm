@@ -80,6 +80,7 @@ async function buildFixtureBundle() {
       sessionId: 'fixture/main',
       canonicalSessionId: 'fixture/main',
       sessionDisplayName: 'Fixture',
+      timelineView: 'detailed', // Exercise ordinary and nested technical-card gutters.
       showUsageBadge: true,
     }))
   `

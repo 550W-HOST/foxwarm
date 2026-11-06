@@ -60,7 +60,7 @@ try {
           { id: 'setup-discovered-model' },
           { id: 'setup-discovered-model' },
           { id: '' },
-          { id: 'setup-second-model' },
+          { id: 'setup-second-model', max_input_tokens: 200000, max_tokens: 64000, capabilities: { image_input: { supported: true } } },
         ],
       })
     }
@@ -112,7 +112,10 @@ try {
     apiKey: listToken,
   })
   assert.equal(listed.status, 200, JSON.stringify(listed))
-  assert.deepEqual(listed.body.models, ['setup-discovered-model', 'setup-second-model'])
+  assert.deepEqual(listed.body.models, [
+    { id: 'setup-discovered-model' },
+    { id: 'setup-second-model', contextLimit: 200000, maxOutput: 64000, imageInput: true },
+  ])
   const overridden = await fixture.api('POST', '/api/setup/models/list', {
     providerType: 'openai-responses',
     baseUrl: providerRoot,

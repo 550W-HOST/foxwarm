@@ -39,29 +39,6 @@ public sealed partial class WebUiStartupTests
                 .ToArray();
         }
 
-        // Top-level Sessions of an Agent with a main Session are shown under that host.
-        async Task<string[]> Under(string host)
-        {
-            using var response = await h.Client.PostAsJsonAsync(
-                "/api/session-list/children",
-                new { limit = 20, parents = new[] { new { parentSessionId = host } } }
-            );
-            var page = await response.Content.ReadFromJsonAsync<JsonObject>();
-            return page!["children"]![0]!["sessions"]!
-                .AsArray()
-                .Select(row => row!["id"]!.GetValue<string>())
-                .ToArray();
-        }
-
-        async Task<string[]> Tree()
-        {
-            var roots = await Roots();
-            var tree = new List<string>(roots);
-            foreach (var root in roots)
-                tree.AddRange((await Under(root)).Select(child => root + ">" + child));
-            return tree.ToArray();
-        }
-
         async Task<HttpResponseMessage> Post(HttpContent? content, HttpClient? client = null)
         {
             using var request = new HttpRequestMessage(HttpMethod.Post, "/api/sessions")
@@ -73,7 +50,7 @@ public sealed partial class WebUiStartupTests
             return await (client ?? h.Client).SendAsync(request);
         }
 
-        var previous = await Under("framing/main");
+        var previous = await Roots();
         var identity = new { agentId = "framing", sessionId = "requested" };
         using var content = chunked
             ? (HttpContent)JsonContent.Create(identity)
@@ -100,7 +77,7 @@ public sealed partial class WebUiStartupTests
             ),
             receipt?.ToJsonString()
         );
-        Assert.Equal(new[] { "framing/requested" }.Concat(previous), await Under("framing/main"));
+        Assert.Equal(new[] { "framing/requested" }.Concat(previous), await Roots());
         var catalog = await h.Client.GetFromJsonAsync<JsonObject>("/api/sessions");
         Assert.Contains(
             catalog!["sessions"]!.AsArray(),
@@ -127,7 +104,7 @@ public sealed partial class WebUiStartupTests
             Assert.Equal(new[] { generated }.Concat(previous), await Roots());
         }
 
-        previous = await Under("framing/main");
+        previous = await Roots();
         using (var response = await Post(JsonContent.Create(new { agentId = "framing" })))
         {
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -135,10 +112,10 @@ public sealed partial class WebUiStartupTests
                 "sessionId"
             ]!.GetValue<string>();
             Assert.Matches(@"^framing/\d{4}_[a-z0-9]{5}$", generated);
-            Assert.Equal(new[] { generated }.Concat(previous), await Under("framing/main"));
+            Assert.Equal(new[] { generated }.Concat(previous), await Roots());
         }
 
-        previous = await Tree();
+        previous = await Roots();
         foreach (var text in new[] { "{", " \n ", "null", "{\"agentId\":17}" })
         {
             using var response = await Post(
@@ -152,7 +129,7 @@ public sealed partial class WebUiStartupTests
                     ]!.GetValue<string>()
                 )
             );
-            Assert.Equal(previous, await Tree());
+            Assert.Equal(previous, await Roots());
         }
         using var denied = new HttpClient(new HttpClientHandler { UseCookies = false })
         {
@@ -171,7 +148,7 @@ public sealed partial class WebUiStartupTests
                 token is null ? HttpStatusCode.Unauthorized : HttpStatusCode.Forbidden,
                 response.StatusCode
             );
-            Assert.Equal(previous, await Tree());
+            Assert.Equal(previous, await Roots());
         }
         previous = await Roots();
         using (
@@ -181,7 +158,7 @@ public sealed partial class WebUiStartupTests
             Assert.Equal(HttpStatusCode.Created, response.StatusCode);
             Assert.Equal(new[] { "newest/main" }.Concat(previous), await Roots());
         }
-        previous = await Tree();
+        previous = await Roots();
         using (var duplicate = await Post(JsonContent.Create(identity)))
             Assert.Equal(HttpStatusCode.Conflict, duplicate.StatusCode);
         using (
@@ -190,7 +167,7 @@ public sealed partial class WebUiStartupTests
             )
         )
             Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
-        Assert.Equal(previous, await Tree());
+        Assert.Equal(previous, await Roots());
         using (
             var invalid = await h.Client.PostAsJsonAsync(
                 "/api/sessions/framing%2Frequested/fork",
@@ -263,7 +240,7 @@ public sealed partial class WebUiStartupTests
             "session"
         ]!;
         Assert.Equal("kids/main", row["parentSessionId"]!.GetValue<string>());
-        Assert.Equal("kids/main", row["sidebarParentId"]!.GetValue<string>());
+        Assert.False(row.AsObject().ContainsKey("sidebarParentId"));
         var history = await h.Client.GetFromJsonAsync<JsonObject>(
             "/api/sessions/kids%2Fpicked/history"
         );

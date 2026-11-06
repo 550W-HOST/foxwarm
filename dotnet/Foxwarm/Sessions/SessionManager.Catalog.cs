@@ -61,6 +61,8 @@ internal sealed partial class SessionManager
         SessionCatalog.Copy(snapshot.Meta, meta, "llmFailed");
         if (SessionCatalog.WaitProjection(snapshot.Meta["wait"]) is { } wait)
             meta["wait"] = wait;
+        if (SessionQuestions.Projection(snapshot.Meta) is { } questions)
+            meta["questions"] = questions;
         raw["meta"] = meta;
         raw["busy"] = snapshot.Busy;
         raw["stopping"] = snapshot.Stopping;
@@ -122,7 +124,8 @@ internal sealed partial class SessionManager
             Cost: SessionCatalog.Number(row["stats"]?["totalCost"]),
             LlmFailed: SessionCatalog.Flag(row["meta"]?["llmFailed"]),
             Runtime: T(row["runtime"]) ?? "foxwarm",
-            ExternalRuntime: row["externalRuntime"]?.DeepClone() as JsonObject
+            ExternalRuntime: row["externalRuntime"]?.DeepClone() as JsonObject,
+            Questions: SessionCatalog.QuestionProjection(row["meta"]?["questions"])
         );
     }
 
@@ -186,6 +189,7 @@ internal sealed partial class SessionManager
                 ["lastMessageTime"] = meta.LastMessageTime,
                 ["messageCount"] = meta.MessageCount,
                 ["wait"] = meta.Wait?.DeepClone(),
+                ["questions"] = meta.Questions?.DeepClone(),
                 ["llmFailed"] = meta.LlmFailed,
             },
             ["stats"] = new JsonObject
@@ -268,6 +272,7 @@ internal sealed partial class SessionManager
         signature["runtimeState"] = row["_runtimeState"]?.DeepClone();
         signature["llmFailed"] = SessionCatalog.Flag(row["meta"]?["llmFailed"]);
         signature["wait"] = SessionCatalog.WaitProjection(row["meta"]?["wait"]);
+        signature["questions"] = SessionCatalog.QuestionProjection(row["meta"]?["questions"]);
         return signature;
     }
 
@@ -340,7 +345,6 @@ internal sealed partial class SessionManager
                     dto["parentSessionId"] = scope["parentSessionId"]?.DeepClone();
                     dto["pinned"] = scope["pinned"]?.DeepClone();
                     dto["agent"] = scope["agent"]?.DeepClone();
-                    dto["sidebarParentId"] = scope["sidebarParentId"]?.DeepClone();
                 }
                 dto["childTotal"] = childCounts.GetValueOrDefault(id);
                 dto["sequenceMessageCount"] = sequences.GetValueOrDefault(id);
@@ -482,6 +486,14 @@ internal sealed partial class SessionManager
         Catalog.Rename(id, name);
         Find(id)?.PublishStateChanged();
         return Task.CompletedTask;
+    }
+
+    internal bool RenameIfUnnamed(string id, string name)
+    {
+        if (!Catalog.RenameIfUnnamed(id, name))
+            return false;
+        Find(id)?.PublishStateChanged();
+        return true;
     }
 
     private Dictionary<string, long> ArchiveSequenceCounts(string[] ids)

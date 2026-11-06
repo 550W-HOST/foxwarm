@@ -299,6 +299,50 @@ internal sealed partial class SessionManager
         return new(true, null);
     }
 
+    private async Task AuthorizeCreateSessionTargetAsync(
+        SessionOwner source,
+        string agent,
+        CancellationToken token
+    )
+    {
+        source.Entry.RequireIdentityAuthority();
+        if (!IsCurrentOwner(source))
+            throw new InvalidOperationException(
+                "Creation source is no longer the current Session owner."
+            );
+        var request = AuthorizationRequest(
+            source,
+            "builtin",
+            "create_session",
+            null,
+            new JsonObject { ["agentName"] = agent },
+            []
+        );
+        var policies = EffectivePolicies(source.Agent, await authorization.LoadAsync(token));
+        var indeterminate = false;
+        foreach (var policy in policies)
+        {
+            var decision = ToolAuthorizationEvaluation.EvaluateCreationTarget(policy, request);
+            if (decision == CreationTargetDecision.Deny)
+                throw new ToolAuthorizationDeniedException(
+                    $"Tool authorization rules deny creating a Session in Agent '{agent}'."
+                );
+            indeterminate |= decision == CreationTargetDecision.Indeterminate;
+        }
+        if (indeterminate)
+            throw new ToolAuthorizationDeniedException(
+                "Future Session parameters make create_session target authorization indeterminate at timer registration. "
+                    + "Place a decisive creation-target rule before rules depending on future names or settings."
+            );
+        // Only generic policy is shared. Legacy structural create_session denial must not
+        // replace the timer's independent isolation and creator-target checks.
+        source.Entry.RequireIdentityAuthority();
+        if (!IsCurrentOwner(source))
+            throw new InvalidOperationException(
+                "Creation source is no longer the current Session owner."
+            );
+    }
+
     private ToolAuthorizationRequest PopulateEffectiveTargets(
         ToolAuthorizationRequest request,
         SessionOwner owner,
@@ -434,8 +478,7 @@ internal sealed partial class SessionManager
         string name,
         string? server = null,
         bool unknownNode = false,
-        string? node = null,
-        string? selectedNode = null
+        string? node = null
     )
     {
         if (
@@ -469,7 +512,7 @@ internal sealed partial class SessionManager
             ?? (
                 source == "node"
                 || source == "builtin" && name is "send_file" or "image_write_to_file"
-                    ? selectedNode ?? CurrentNode(owner)
+                    ? CurrentNode(owner)
                     : "master"
             );
         if (
@@ -519,7 +562,6 @@ internal sealed partial class SessionManager
     internal JsonArray ModelDefinitions(
         SessionOwner owner,
         JsonArray? explicitOverride = null,
-        string? selectedNode = null,
         bool batchControls = true
     )
     {
@@ -529,44 +571,27 @@ internal sealed partial class SessionManager
             throw new InvalidOperationException(
                 "Model request source is no longer the current Session owner."
             );
-        var node = selectedNode ?? CurrentNode(owner);
-        var definitions = tools
-            .Entries.Where(entry =>
-                entry.DefaultInject
-                && entry.Source != "node"
-                && ToolVisible(
-                    owner,
-                    entry.Source,
-                    SessionWait.Text(entry.Definition["name"])!,
-                    selectedNode: node
+        // Default Node declarations describe the framework interface, not the selected
+        // environment's capabilities or permission grant. Concrete dispatch checks both.
+        return new JsonArray(
+            tools
+                .Entries.Where(entry =>
+                    entry.DefaultInject
+                    && (
+                        entry.Source == "node"
+                        || ToolVisible(
+                            owner,
+                            entry.Source,
+                            SessionWait.Text(entry.Definition["name"])!
+                        )
+                    )
                 )
-            )
-            .Select(entry => (JsonNode?)ToolCallControls.ForModel(entry.Definition, batchControls))
-            .ToList();
-        foreach (
-            var definition in (
-                node == "master" ? tools.NodeDefinitions(node) : NodeProviders.Definitions(node)
-            ).OfType<JsonObject>()
-        )
-        {
-            var name = SessionWait.Text(definition["name"])!;
-            if (
-                node != "master"
-                && tools.Entries.Any(entry =>
-                    entry.Source == "builtin" && SessionWait.Text(entry.Definition["name"]) == name
+                .OrderBy(entry => entry.Source == "node")
+                .Select(entry =>
+                    (JsonNode?)ToolCallControls.ForModel(entry.Definition, batchControls)
                 )
-            )
-                continue;
-            if (
-                !tools.Entries.Any(entry =>
-                    entry.Source == "node"
-                    && !entry.DefaultInject
-                    && SessionWait.Text(entry.Definition["name"]) == name
-                ) && ToolVisible(owner, "node", name, node: node)
-            )
-                definitions.Add(ToolCallControls.ForModel(definition, batchControls));
-        }
-        return new JsonArray(definitions.ToArray());
+                .ToArray()
+        );
     }
 
     // The external runtime receives the same visible model tool set as an internal Session.

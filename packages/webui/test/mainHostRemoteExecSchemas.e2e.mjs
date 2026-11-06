@@ -9,6 +9,7 @@ import { createHostFixture, until } from './mainHostFixture.mjs'
 
 const fixture = await createHostFixture('remote-exec-schemas')
 const plans = new Map(), rounds = new Map(), failures = [], schemaEvidence = []
+let canonicalTools
 const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
 const done = key => [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'SCHEMA-DONE-' + key }] }]
 const peer = createServer(async (request, response) => {
@@ -21,14 +22,10 @@ const peer = createServer(async (request, response) => {
     const names = new Set((body.tools || []).filter(tool => tool.type === 'function').map(tool => tool.name))
     const execAdvertised = names.has('exec'), remoteDefaultCwdAdvertised = names.has('get_default_cwd')
     schemaEvidence.push({ key, round, execAdvertised, remoteDefaultCwdAdvertised })
-    if (['foreground', 'parallel'].includes(key)) {
-      assert(execAdvertised, 'selected official CLI must advertise exec before direct calls')
-      assert(remoteDefaultCwdAdvertised, 'request must use selected CLI capabilities')
-    }
-    if (key === 'hidden') {
-      assert(!execAdvertised, 'current remote deny policy must hide exec')
-      assert(remoteDefaultCwdAdvertised, 'policy must not hide unrelated CLI tools')
-    }
+    canonicalTools ??= body.tools
+    assert.deepEqual(body.tools, canonicalTools, 'Node selection and Node deny policy preserve canonical declarations')
+    assert(execAdvertised, 'canonical exec remains declared even when an effect is denied')
+    assert(!remoteDefaultCwdAdvertised, 'remote-only capabilities require explicit discovery')
     const output = round === 0 ? plans.get(key) ?? done(key) : done(key)
     // Never manufacture an undeclared direct tool call in this qualification.
     for (const tool of output.filter(part => part.type === 'function_call'))
@@ -84,13 +81,15 @@ try {
   await writeFile(join(fixture.work, 'deny-exec.yaml'), 'version: 1\nrules:\n- id: remote-exec\n  action: deny\n  match:\n    tool: {source: node, name: exec}\n    targetNode: official-cli\n')
   state = await turn('policy', [call('policy', 'call_tool', { toolId: 'builtin:set_config', args: { target: 'tool-rules', filePath: 'deny-exec.yaml' } })])
   assert(!pair(state, 'policy').error, JSON.stringify(pair(state, 'policy')))
-  state = await turn('hidden')
+  state = await turn('denied', [call('denied', 'exec', { command: 'printf forbidden > denied-effect' })])
+  assert.equal(pair(state, 'denied').error.type, 'tool_authorization_denied')
+  assert.equal(await access(join(remote, 'denied-effect')).then(() => true, () => false), false)
   const calls = state.history.flatMap(row => row.parts || []).filter(part => part.functionCall).map(part => part.functionCall.id)
   const replies = state.history.flatMap(row => row.parts || []).filter(part => part.functionResponse).map(part => part.functionResponse.tool_use_id)
   for (const id of calls) assert.equal(replies.filter(reply => reply === id).length, 1, 'one canonical response for ' + id)
   assert(schemaEvidence.some(row => row.key === 'foreground' && row.round === 0 && row.execAdvertised))
   assert(schemaEvidence.some(row => row.key === 'parallel' && row.round === 0 && row.execAdvertised))
-  assert(schemaEvidence.some(row => row.key === 'hidden' && !row.execAdvertised))
+  assert(schemaEvidence.some(row => row.key === 'denied' && row.execAdvertised))
   assert.equal(failures.length, 0)
   await fixture.stop()
   console.log(JSON.stringify({ hostStarts: fixture.hostPids.length, officialClientStarts: 1, directExecEffects: 7, canonicalToolPairs: replies.length, parallelMilliseconds, schemaEvidence, failures: failures.length }))

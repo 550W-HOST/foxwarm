@@ -8,6 +8,7 @@ import {
   isHeavySystemTextLine,
   isLightweightStructuredSystem,
   parseFoxwarmMetadataLine,
+  type FunctionCall,
   type Message,
   type ToolTagItem,
 } from './chatShared'
@@ -22,6 +23,7 @@ import { buildConversationActivitySummary } from './conversationActivity'
 import { applyConversationTiming, readConversationWorkInterval, getConversationActivityStart, getConversationLiveRequestStart, type ConversationTimingContext } from './conversationTiming'
 import { isCompactCompletionMaintenanceMessage } from '../../../shared/src/sessionContinuation'
 import { getWebSearchAction } from '../webSearchAction'
+import { askUserArgs, isAskUserCall } from '../sessionQuestions'
 
 /**
  * Explicit view model for one `ChatTimeline` render pass.
@@ -91,6 +93,8 @@ export interface ConversationActivityView {
 
 export interface TimelineRowView {
   readonly communication?: SessionCommunication
+  /** Conversation row for an `ask_user` call, shown as its question card instead of folded activity. */
+  readonly question?: FunctionCall
   readonly key: string
   readonly msg: Message
   readonly reasoningPresentation: readonly (ReasoningPartPresentation | undefined)[]
@@ -568,6 +572,7 @@ const sameRowView = (a: TimelineRowView, b: TimelineRowView): boolean => (
   && a.communication?.key === b.communication?.key && a.communication?.direction === b.communication?.direction
   && a.communication?.peerSessionId === b.communication?.peerSessionId && a.communication?.message === b.communication?.message && a.communication?.truncated === b.communication?.truncated
   && a.activity === b.activity
+  && a.question === b.question
   && a.prevMsg === b.prevMsg
   && a.nextMsg === b.nextMsg
   && a.pairedToolResponse === b.pairedToolResponse
@@ -707,7 +712,7 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
   let foldedThinkingOwnerKey: string | null = null
 
   const anchoredMessages = new Set<number>()
-  const emitRow = (index: number, group: TimelineGroupView | null, isGroupStart: boolean, foldedOwnerKey: string | null, conversation?: { key: string; partIndex?: number; imageOnly?: boolean; literalUserText?: boolean; activity?: TimelineRowView['activity']; communication?: SessionCommunication }): void => {
+  const emitRow = (index: number, group: TimelineGroupView | null, isGroupStart: boolean, foldedOwnerKey: string | null, conversation?: { key: string; partIndex?: number; imageOnly?: boolean; literalUserText?: boolean; activity?: TimelineRowView['activity']; communication?: SessionCommunication; question?: FunctionCall }): void => {
     const msg = messages[index]
     const prevMsg = index > 0 ? messages[index - 1] : null
     const nextMsg = index < messages.length - 1 ? messages[index + 1] : null
@@ -753,6 +758,7 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
       requestTiming,
       group,
       ...(conversation?.communication ? { communication: conversation.communication } : {}),
+      ...(conversation?.question ? { question: conversation.question } : {}),
       collapsedGroup,
       renderSummary: grouped && isGroupStart && activeGroup !== null && !groupExpanded && !activeGroup.keepExpanded,
       hideFoldedThinking: grouped && foldedOwnerKey !== null && !expandedGroupKeys.has(foldedOwnerKey),
@@ -901,6 +907,12 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
         const textBody = visibleText(msg, part)
         const foldedText = hasConversationText(part) && !textBody
         const image = hasConversationImage(part)
+        const call = part.functionCall
+        if (call && isAskUserCall(call) && typeof askUserArgs(call)?.close !== 'string' && !msg.__meta?.queuedPreview) {
+          flushActivity()
+          emitRow(index, null, false, null, { key: `${messageKeys[index]}-question-${call.id || partIndex}`, partIndex, question: call })
+          return
+        }
         const technical = foldedText || part.system || part.functionCall || part.functionResponse || part.toolUseId || isReasoningPart(part) || getWebSearchAction(part.providerMeta?.openaiResponses?.outputItem) || !hasConversationText(part) && !image && part.text === undefined && Object.keys(part).length > 0
         if (technical) {
           const fragment = textBody || image ? { ...part, text: foldedText ? part.text : undefined, inlineData: undefined, inlineDataRef: undefined, inlineDataUnavailable: undefined } : part

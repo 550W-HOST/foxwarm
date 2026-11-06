@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import puppeteer from 'puppeteer-core'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
+import { NEW_SESSION_DIALOG_TRIGGER } from './mainHostFixture.mjs'
 
 const root = await mkdtemp(join(tmpdir(), 'foxwarm-agents-e2e-'))
 const dataRoot = join(root, 'data'); const workRoot = join(dataRoot, 'agents', 'main')
@@ -48,7 +49,7 @@ try {
   await mkdir(dataRoot); await mkdir(workRoot, { recursive: true })
   await mkdir(join(dataRoot, 'agents'), { recursive: true })
   await mkdir(join(workRoot, 'memory'))
-  await writeFile(join(dataRoot, 'agents', '00_SYSTEM.md'), 'FRAME-SHARED\n<foxwarm-if model-id="local-b/two">\nFRAME-B-ONLY\n</foxwarm-if>\n')
+  await writeFile(join(dataRoot, 'agents', '00_SYSTEM.local.md'), 'FRAME-SHARED\n<foxwarm-if model-id="local-b/two">\nFRAME-B-ONLY\n</foxwarm-if>\n')
   await writeFile(join(workRoot, 'memory', 'MEMORY.md'), 'LEGACY-MAIN-MEMORY')
   await writeFile(join(workRoot, 'memory', 'ONBOOT.md'), ' \n')
   const modelsFile = join(root, 'models.json')
@@ -70,7 +71,7 @@ try {
       assert(latest, 'The fixture input is recovered independently of later control rows')
       const count = (counts.get(id) || 0) + 1; counts.set(id, count)
       const snapshot = body.instructions || ''
-      assert(snapshot.includes('FRAME-SHARED'))
+      assert(snapshot.includes('You are running in Foxwarm') && snapshot.includes('FRAME-SHARED'))
       if (id.startsWith('beta/')) {
         assert(snapshot.includes('BETA-'), `${id} missing beta memory`)
         assert(!snapshot.includes('ALPHA-V1'), `${id} inherited another Agent memory`)
@@ -220,7 +221,7 @@ try {
   await page.waitForSelector('#token'); await page.type('#token', apiToken)
   await page.click('button[type="submit"]'); await page.waitForSelector('button[aria-label="New session"]'); await waitForWebUiReady(page)
   async function browserCreateAgent(name, memoryText) {
-    await page.click('button[aria-label="New session"]')
+    await page.click(NEW_SESSION_DIALOG_TRIGGER)
     await page.waitForSelector('button[aria-label="New agent"]')
     await page.click('button[aria-label="New agent"]')
     await page.waitForSelector('input[placeholder="my-agent"]')
@@ -298,7 +299,7 @@ try {
   assert.equal(childAuthority.model, 'local-b/two'); assert.equal(childAuthority.effort, 'low')
   assert.equal(childAuthority.childModelDefault, undefined)
   assert.equal(childAuthority.childEffortDefault, undefined)
-  await page.click('button[aria-label="New session"]')
+  await page.click(NEW_SESSION_DIALOG_TRIGGER)
   await page.waitForSelector('form[role="dialog"]')
   await page.click('form[role="dialog"] button[title="alpha"]')
   await page.click('form[role="dialog"] button[type="submit"]')
@@ -401,8 +402,7 @@ try {
   const exact = (await request('POST', '/api/session-list/by-id' , { ids: [parentId, 'no-such-session'], includePaths: true })).body
   assert.equal(exact.results[0].session.displayName, 'Alpha named parent'); assert.equal(exact.results[1].session, null)
   const childPage = (await request('POST', '/api/session-list/children', { mode: 'default', limit: 2, parents: [{ parentSessionId: parentId }] })).body
-  // 8 real children plus the 54 other top-level alpha Sessions shown under alpha/main (secondId and 53 page_*).
-  assert.equal(childPage.children[0].sessions.length, 2); assert.equal(childPage.children[0].total, 62)
+  assert.equal(childPage.children[0].sessions.length, 2); assert.equal(childPage.children[0].total, 8)
   const childMore = (await request('POST', '/api/session-list/children', { mode: 'default', limit: 2,
     parents: [{ parentSessionId: parentId, cursor: childPage.children[0].nextCursor }] })).body
   assert(!childMore.reset); assert(childMore.children[0].sessions.every(row => !childPage.children[0].sessions.some(first => first.id === row.id)))
@@ -411,16 +411,8 @@ try {
   assert.equal((await request('GET', `/api/session-list/sidebar?limit=2&cursor=${encodeURIComponent(beforeListChange)}`)).body.reset, true)
   const metadataSearch = (await request('GET', '/api/session-list/search?q=Alpha%20named&limit=10')).body
   assert(metadataSearch.sessions.some(row => row.id === parentId))
-  // The alpha Sessions are shown under alpha/main; reveal more than 50 through its bounded continuations.
-  await until(async () => page.evaluate(() => !!document.querySelector('[data-session-id="alpha/main"] button[aria-label="Collapse child sessions"]')
-    || (document.querySelector('[data-session-id="alpha/main"] button[aria-label="Expand child sessions"]')?.click(), false)), 'alpha/main expanded')
-  for (let attempt = 0; attempt < 12; attempt++) {
-    if (await page.evaluate(() => document.querySelectorAll('[data-session-id]').length > 50)) break
-    await until(async () => page.evaluate(() => [...document.querySelectorAll('button')].some(item => /Show .* more\.\.\./.test(item.textContent))), 'original Sidebar load-more cursor')
-    const before = await page.evaluate(() => document.querySelectorAll('[data-session-id]').length)
-    await page.evaluate(() => [...document.querySelectorAll('button')].find(item => /Show .* more\.\.\./.test(item.textContent))?.click())
-    await until(async () => page.evaluate(count => document.querySelectorAll('[data-session-id]').length > count, before), 'original Sidebar continuation page')
-  }
+  await until(async () => page.evaluate(() => document.querySelector('button') && [...document.querySelectorAll('button')].some(item => /Show .* more\.\.\./.test(item.textContent))), 'original Sidebar load-more root cursor')
+  await page.evaluate(() => [...document.querySelectorAll('button')].find(item => /Show .* more\.\.\./.test(item.textContent))?.click())
   await until(async () => page.evaluate(() => document.querySelectorAll('[data-session-id]').length > 50), 'original Sidebar bounded next page')
   await page.type('input[aria-label="Search sessions"]', 'Alpha named')
   await until(async () => page.evaluate(id => !!document.querySelector(`[data-session-id="${id}"]`)

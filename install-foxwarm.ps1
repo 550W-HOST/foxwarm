@@ -1,185 +1,154 @@
-# Foxwarm one-line installer for Windows PowerShell.
-# Usage:
+# Install a prebuilt Foxwarm release on Windows x64 and start it.
 #   irm https://foxwarm.net/install-foxwarm.ps1 | iex
+# To choose options, download the script first:
+#   .\install-foxwarm.ps1 -InstallDir .\foxwarm -DataDir .\foxwarm-data [-Version 0.9.0]
+#     [-SelfContained | -FrameworkDependent] [-Package FILE] [-NoStart]
+# If local script execution is blocked, run:
+#   powershell -ExecutionPolicy Bypass -File .\install-foxwarm.ps1
 param(
   [string]$InstallDir,
   [string]$DataDir,
-  [string]$BranchName
+  [string]$Version,
+  [string]$Package,
+  [switch]$SelfContained,
+  [switch]$FrameworkDependent,
+  [switch]$NoStart
 )
 
-# Optional:
-#   $env:FOXWARM_REPO='https://github.com/550W-HOST/foxwarm.git'
-#   $env:FOXWARM_DIR="$PWD\foxwarm"
-#   $env:FOXWARM_DATA_DIR="$PWD\foxwarm-data"
-#   $env:FOXWARM_BRANCH='main'
-# If local script execution is blocked, run:
-#   powershell -ExecutionPolicy Bypass -File .\install-foxwarm.ps1
-
 $ErrorActionPreference = 'Stop'
-
-$Repo = if ($env:FOXWARM_REPO) { $env:FOXWARM_REPO } else { 'https://github.com/550W-HOST/foxwarm.git' }
+$ProgressPreference = 'SilentlyContinue'
+$Releases = 'https://github.com/550W-HOST/foxwarm/releases'
 $CallDir = (Get-Location).Path
-if ($InstallDir) {
-  $Dir = $InstallDir
-} elseif ($env:FOXWARM_DIR) {
-  $Dir = $env:FOXWARM_DIR
-} elseif ((Test-Path 'package.json') -and ((Get-Content 'package.json' -Raw) -match '"name"\s*:\s*"foxwarm"')) {
-  $Dir = (Get-Location).Path
-} else {
-  $Dir = Join-Path (Get-Location).Path 'foxwarm'
-}
+
+function Write-Step($Message) { Write-Host "[foxwarm-install] $Message" -ForegroundColor Cyan }
+
 function Resolve-InstallerPath($Value, $BaseDir) {
-  if ($Value -eq '~') {
-    $Value = $HOME
-  } elseif ($Value.StartsWith('~/')) {
-    $Value = Join-Path $HOME $Value.Substring(2)
-  }
-  if (-not [System.IO.Path]::IsPathRooted($Value)) {
-    $Value = Join-Path $BaseDir $Value
-  }
+  if ($Value -eq '~') { $Value = $HOME } elseif ($Value.StartsWith('~/')) { $Value = Join-Path $HOME $Value.Substring(2) }
+  if (-not [System.IO.Path]::IsPathRooted($Value)) { $Value = Join-Path $BaseDir $Value }
   return [System.IO.Path]::GetFullPath($Value)
 }
 
+if ($env:PROCESSOR_ARCHITECTURE -ne 'AMD64') { throw 'Foxwarm release packages require Windows x64.' }
+if ($SelfContained -and $FrameworkDependent) { throw 'Choose either -SelfContained or -FrameworkDependent.' }
+
+$Dir = if ($InstallDir) { $InstallDir } elseif ($env:FOXWARM_DIR) { $env:FOXWARM_DIR } else { 'foxwarm' }
 $Dir = Resolve-InstallerPath $Dir $CallDir
-if ($DataDir) {
-  $DataDir = Resolve-InstallerPath $DataDir $CallDir
-} elseif ($env:FOXWARM_DATA_DIR) {
-  $DataDir = Resolve-InstallerPath $env:FOXWARM_DATA_DIR $CallDir
-} else {
-  $Pointer = Join-Path $Dir 'data_dir'
-  $SavedDataDir = if (Test-Path $Pointer) { ([string](Get-Content $Pointer -Raw)).Trim() } else { '' }
-  if ($SavedDataDir) {
-    $DataDir = Resolve-InstallerPath $SavedDataDir $Dir
-  } elseif (Test-Path (Join-Path $Dir '.git')) {
-    $DataDir = $Dir
-  } else {
-    $DataDir = Join-Path (Split-Path $Dir) 'foxwarm-data'
-  }
-}
-if ($BranchName) {
-  $Branch = $BranchName
-} elseif ($env:FOXWARM_BRANCH) {
-  $Branch = $env:FOXWARM_BRANCH
-} elseif (Test-Path (Join-Path $Dir '.git')) {
-  $Branch = (git -C $Dir branch --show-current 2>$null)
-  if (-not $Branch) { $Branch = 'main' }
-} else {
-  $Branch = 'main'
-}
-
-function Write-Step($Message) {
-  Write-Host "[foxwarm-install] $Message" -ForegroundColor Cyan
-}
-
-function Require-Command($Name, $Hint) {
-  if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
-    throw "$Name is required. $Hint"
-  }
-}
-
-function Require-BuildNode() {
-  Require-Command node 'Install Node.js 20.19+ (20.x) or 22.12+ from https://nodejs.org/, then rerun this script.'
-  Require-Command npm 'Install Node.js 20.19+ (20.x) or 22.12+ with npm from https://nodejs.org/, then rerun this script.'
-  node -e "const [major, minor] = process.versions.node.split('.').map(Number); process.exit((major === 20 && minor >= 19) || (major === 22 && minor >= 12) || major > 22 ? 0 : 1)"
-  if ($LASTEXITCODE -ne 0) {
-    $version = node -v
-    throw "Node.js 20.19+ (20.x) or 22.12+ is required; found $version. Please upgrade Node.js and rerun this script."
-  }
-}
-
-function Require-ManagedBuild() {
-  Require-Command dotnet 'Install a net10.0-capable .NET SDK and the ASP.NET Core 10 runtime, then rerun this script.'
-  $sdk = & dotnet --version
-  if ($LASTEXITCODE -ne 0 -or $sdk -notmatch '^(\d+)\.' -or [int]$Matches[1] -lt 10) {
-    throw "A net10.0-capable .NET SDK is required; selected: $sdk"
-  }
-  $runtimes = & dotnet --list-runtimes
-  if ($LASTEXITCODE -ne 0 -or -not ($runtimes -match '^Microsoft.AspNetCore.App 10\.')) {
-    throw 'The ASP.NET Core 10 runtime is required to run managed Main.'
-  }
-  if ($env:PROCESSOR_ARCHITECTURE -ne 'AMD64') {
-    throw 'This managed Main source candidate requires Windows x64.'
-  }
-}
-
-Require-Command git 'Install Git for Windows, then rerun this script: https://git-scm.com/download/win'
-Require-BuildNode
-Require-ManagedBuild
-
+if ($Package) { $Package = Resolve-InstallerPath $Package $CallDir }
 if (Test-Path (Join-Path $Dir '.git')) {
-  Write-Step "Using existing checkout: $Dir"
-  git -C $Dir fetch origin $Branch
-  try {
-    git -C $Dir checkout $Branch
-    git -C $Dir pull --ff-only origin $Branch
-  } catch {
-    Write-Warning "Could not fast-forward existing checkout; continuing with local files unchanged. $_"
+  throw "$Dir is a source checkout. Update it from source, or choose another -InstallDir and pass -DataDir to reuse its data."
+}
+$RequestedData = if ($DataDir) { $DataDir } elseif ($env:FOXWARM_DATA_DIR) { $env:FOXWARM_DATA_DIR } else { $null }
+$Pointer = Join-Path $Dir 'data_dir'
+$Saved = if (Test-Path $Pointer) { ([string](Get-Content $Pointer -Raw)).Trim() } else { '' }
+
+$Control = Join-Path $Dir 'foxwarmctl.ps1'
+if (Test-Path (Join-Path $Dir 'runtime\current\release.json')) {
+  if ($RequestedData -and (-not $Saved -or (Resolve-InstallerPath $RequestedData $CallDir) -ne (Resolve-InstallerPath $Saved $Dir))) {
+    throw "$Dir already uses the data directory in its data_dir file. Stop Foxwarm and edit that file to change it."
   }
-} else {
-  Write-Step "Cloning Foxwarm into $Dir"
-  New-Item -ItemType Directory -Force -Path (Split-Path $Dir) | Out-Null
-  git clone --branch $Branch $Repo $Dir
+  Write-Step "Foxwarm is already installed in $Dir; updating it."
+  $update = @{}
+  if ($Package) { $update.Package = $Package }
+  if ($Version) { & $Control update $Version @update } else { & $Control update @update }
+  if (-not $NoStart) {
+    & $Control status | Out-Null
+    if ($LASTEXITCODE -ne 0) { & $Control start }
+  }
+  return
 }
 
-Set-Location $Dir
-New-Item -ItemType Directory -Force -Path (Join-Path $DataDir 'state'),(Join-Path $DataDir 'agents') | Out-Null
-Set-Content -Path (Join-Path $Dir 'data_dir') -Value $DataDir -NoNewline
-$env:FOXWARM_DATA_DIR = $DataDir
+$Data = if ($RequestedData) { Resolve-InstallerPath $RequestedData $CallDir }
+  elseif ($Saved) { Resolve-InstallerPath $Saved $Dir }
+  else { Join-Path (Split-Path $Dir) 'foxwarm-data' }
 
-node scripts/windowsService.js check-stopped
-if ($LASTEXITCODE -ne 0) {
-  throw 'Foxwarm must be stopped before dependency installation. Run npm run stop:windows, then rerun this installer.'
+$Asset = 'foxwarm-win-x64.zip'
+if (-not $Package) {
+  $useSelfContained = $SelfContained
+  if (-not $SelfContained -and -not $FrameworkDependent) {
+    $runtimes = if (Get-Command dotnet -ErrorAction SilentlyContinue) { & dotnet --list-runtimes 2>$null } else { @() }
+    $useSelfContained = -not ($runtimes -match '^Microsoft.AspNetCore.App 10\.')
+    if ($useSelfContained) { Write-Step 'No ASP.NET Core 10 runtime found; using the self-contained package.' }
+    else { Write-Step 'Found the ASP.NET Core 10 runtime; using the framework-dependent package.' }
+  }
+  if ($useSelfContained) { $Asset = 'foxwarm-win-x64-self-contained.zip' }
 }
 
-if (-not (Test-Path 'dotnet/Foxwarm/obj/monty-0.0.19/win-x64/bin/monty.exe')) {
-  Require-Command python 'Python 3 is required to acquire the pinned Monty worker on a fresh source build.'
-  & python -c "import sys; sys.exit(0 if sys.version_info.major == 3 else 1)"
-  if ($LASTEXITCODE -ne 0) { throw 'Python 3 is required for the pinned native worker acquisition.' }
+$RuntimeDir = Join-Path $Dir 'runtime'
+New-Item -ItemType Directory -Force -Path $RuntimeDir | Out-Null
+$Scratch = Join-Path $RuntimeDir ('.staging-' + [guid]::NewGuid().ToString('N').Substring(0, 12))
+New-Item -ItemType Directory -Path $Scratch | Out-Null
+try {
+  if (-not $Package) {
+    $base = if ($Version) { "$Releases/download/v$($Version.TrimStart('v'))" } else { "$Releases/latest/download" }
+    Write-Step "Downloading $Asset"
+    $Package = Join-Path $Scratch $Asset
+    Invoke-WebRequest "$base/$Asset" -OutFile $Package -UseBasicParsing
+    Invoke-WebRequest "$base/SHA256SUMS" -OutFile (Join-Path $Scratch 'SHA256SUMS') -UseBasicParsing
+    $expected = Get-Content (Join-Path $Scratch 'SHA256SUMS') | Where-Object { $_ -match "^([0-9a-f]{64})  $([regex]::Escape($Asset))$" } | ForEach-Object { $Matches[1] }
+    if (-not $expected -or (Get-FileHash $Package -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected) {
+      throw "Checksum verification failed for $Asset."
+    }
+  }
+  $extract = Join-Path $Scratch 'extract'
+  Add-Type -AssemblyName System.IO.Compression.FileSystem
+  [System.IO.Compression.ZipFile]::ExtractToDirectory($Package, $extract)
+  $staging = Get-ChildItem $extract -Directory | Select-Object -First 1
+  if (-not $staging -or -not (Test-Path (Join-Path $staging.FullName 'Foxwarm.exe')) -or -not (Test-Path (Join-Path $staging.FullName 'foxwarmctl.ps1'))) {
+    throw "$Package is not a Foxwarm Windows server package."
+  }
+  $release = (Get-Content (Join-Path $staging.FullName 'release.json') -Raw | ConvertFrom-Json).version
+
+  New-Item -ItemType Directory -Force -Path (Join-Path $Data 'state'), (Join-Path $Data 'agents') | Out-Null
+  $Data = (Resolve-Path $Data).Path
+  Set-Content -Path $Pointer -Value $Data -NoNewline
+  $env:FOXWARM_DATA_DIR = $Data
+  Write-Step "Checking existing data in $Data"
+  if ((Get-Content (Join-Path $staging.FullName 'release.json') -Raw | ConvertFrom-Json).selfContained) {
+    & (Join-Path $staging.FullName 'Foxwarm.exe') --installation-root $Dir --inspect-upgrade
+  } else {
+    if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) { throw 'This package needs the ASP.NET Core 10 runtime and dotnet on PATH; use -SelfContained otherwise.' }
+    & dotnet (Join-Path $staging.FullName 'Foxwarm.dll') --installation-root $Dir --inspect-upgrade
+  }
+  if ($LASTEXITCODE -ne 0) { throw 'Upgrade inspection found a blocking problem; nothing was installed.' }
+  $target = Join-Path $RuntimeDir $release
+  Move-Item $staging.FullName $target
+  New-Item -ItemType Junction -Path (Join-Path $RuntimeDir 'current') -Target $target | Out-Null
+  foreach ($file in 'foxwarmctl.ps1', 'foxwarmctl.cmd') { Copy-Item (Join-Path $target $file) (Join-Path $Dir $file) -Force }
+  Write-Step "Installed Foxwarm $release in $Dir"
+} finally {
+  Remove-Item -LiteralPath $Scratch -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-Write-Step 'Installing dependencies and building Foxwarm. This can take a few minutes.'
-npm run build-all
-if ($LASTEXITCODE -ne 0) {
-  throw 'Foxwarm dependency installation or build failed.'
+if ($NoStart) {
+  Write-Step "Start it with: & '$Dir\foxwarmctl.cmd' start"
+  return
 }
+& $Control start
 
-Write-Step 'Starting Foxwarm in the background.'
-node scripts/windowsService.js start
-if ($LASTEXITCODE -ne 0) {
-  throw 'Foxwarm failed to start. Check the log paths printed above.'
-}
-
-$TokenFile = Join-Path $DataDir 'state\token'
+$TokenFile = Join-Path $Data 'state\token'
 $Token = $null
-for ($i = 0; $i -lt 240; $i++) {
+for ($i = 0; $i -lt 120; $i++) {
   if (Test-Path $TokenFile) {
-    $Token = (Get-Content $TokenFile -Raw).Trim()
+    $Token = ([string](Get-Content $TokenFile -Raw)).Trim()
     if ($Token) { break }
-  }
-  if (($i -gt 0) -and ($i % 20 -eq 0)) {
-    Write-Warning 'Still waiting for token. Check the Foxwarm logs for startup progress.'
   }
   Start-Sleep -Milliseconds 500
 }
-
+$Port = 3001
+$Config = Join-Path $Data 'state\config.yaml'
+if (Test-Path $Config) {
+  $match = Select-String -Path $Config -Pattern '^\s*httpPort:\s*(\d+)' | Select-Object -First 1
+  if ($match) { $Port = [int]$match.Matches[0].Groups[1].Value }
+}
 Write-Host ''
 Write-Step "Program dir: $Dir"
-Write-Step "Data dir: $DataDir"
-$ConfigFile = Join-Path $DataDir 'state\config.yaml'
-$HttpPort = '3001'
-if (Test-Path $ConfigFile) {
-  try {
-    $portText = node -e "const fs=require('fs'); const yaml=require('js-yaml'); const cfg=yaml.load(fs.readFileSync(process.argv[1],'utf8'))||{}; console.log(cfg?.bot?.httpPort || 3001)" $ConfigFile
-    if ($portText) { $HttpPort = $portText.Trim() }
-  } catch {}
-}
+Write-Step "Data dir: $Data"
 if ($Token) {
-  Write-Step "WebUI: http://localhost:$HttpPort/#token=$Token"
-  Start-Process "http://localhost:$HttpPort/#token=$Token"
+  $Url = "http://localhost:$Port/#token=$Token"
+  Write-Step "WebUI: $Url"
+  try { Start-Process $Url } catch { }
 } else {
-  Write-Warning "Token file is not ready yet. When startup finishes, read it at: $TokenFile"
-  Write-Step "WebUI: http://localhost:$HttpPort/"
-  Start-Process "http://localhost:$HttpPort/"
+  Write-Warning "The sign-in token is not ready yet. When startup finishes, read $TokenFile"
+  Write-Step "WebUI: http://localhost:$Port/"
 }
-
-Write-Host 'Next: finish OOBE in the WebUI by configuring models and optional channels.'
+Write-Step "Control: & '$Dir\foxwarmctl.cmd' status | stop | restart | update"

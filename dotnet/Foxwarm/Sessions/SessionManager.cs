@@ -153,7 +153,11 @@ internal sealed partial class SessionManager : IAsyncDisposable
                     ?? Path.Combine(AppContext.BaseDirectory, "skills")
             )
         );
-        memory = new AgentMemory(agents, skills);
+        memory = new AgentMemory(
+            agents,
+            skills,
+            FrameworkPrompt.TemplatePath(hostPaths?.ResourceRoot ?? AppContext.BaseDirectory)
+        );
         executor = new LocalExecManager(
             this.root,
             sessionId =>
@@ -247,6 +251,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
             foreach (var definition in ToolScriptToolDefinitions.Definitions())
                 definitions.Add(definition?.DeepClone());
         definitions.Add(WaitToolDefinitions.Definition());
+        definitions.Add(AskUserToolDefinitions.Definition());
         foreach (var definition in KnowledgeToolDefinitions.Definitions())
             definitions.Add(definition);
         foreach (var definition in ObservationToolDefinitions.Definitions())
@@ -278,7 +283,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
         archiveWriter = SqliteArchiveMessageStore.AcquireWriter(ArchiveDatabase);
         Vector = new(
             this.root,
-            Foxwarm.Vector.VectorConfiguration.Capture(models.ConfigurationOwner?.AppConfiguration)
+            Foxwarm.Vector.VectorConfiguration.Capture(models.ConfigurationOwner?.AppConfiguration),
+            admissionStop.Token
         );
         Vector.Diagnostic = (code, id) =>
             Console.Error.WriteLine("Vector " + code + (id.Length == 0 ? "" : " session=" + id));
@@ -382,15 +388,12 @@ internal sealed partial class SessionManager : IAsyncDisposable
         owner.Entry.WithState(state => state.AuthorityEnvelope.Remove("goalState"));
     }
 
-    public Task LoadAsync() => LoadOwnersAsync(startMainServices: false);
-
-    private async Task LoadOwnersAsync(bool startMainServices)
+    private async Task StartVectorAsync(bool logStartup)
     {
-        await EnsureIdentityStartupAsync();
         try
         {
             await Vector.StartAsync();
-            if (startMainServices)
+            if (logStartup)
                 Console.WriteLine($"Vector startup: mode={Vector.Mode}, ready={Vector.Ready}.");
         }
         catch (Exception error)
@@ -400,6 +403,14 @@ internal sealed partial class SessionManager : IAsyncDisposable
                     + MainLog.SafeFailure(error)
             );
         }
+    }
+
+    public Task LoadAsync() => LoadOwnersAsync(startMainServices: false);
+
+    private async Task LoadOwnersAsync(bool startMainServices)
+    {
+        await EnsureIdentityStartupAsync();
+        _ = StartVectorAsync(startMainServices);
         await timers.LoadAsync();
         var catalogRows = Catalog.List();
         foreach (var row in catalogRows)
@@ -622,6 +633,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         };
         registry.OnTurnStarting = async _ =>
         {
+            AutoTitleTurnStarting(hosted);
             StartChannelTurn(hosted);
             try
             {
@@ -631,9 +643,13 @@ internal sealed partial class SessionManager : IAsyncDisposable
             await MaybeRefreshStaleAsync(hosted);
         };
         registry.OnTurnCompleted = (_, result) =>
-            ClaudeRuntimeState.IsExternal(hosted.Entry.Snapshot().AuthorityEnvelope)
-                ? Task.CompletedTask
-                : hosted.Compactor.AutoAfterTurnAsync(result);
+        {
+            if (ClaudeRuntimeState.IsExternal(hosted.Entry.Snapshot().AuthorityEnvelope))
+                return Task.CompletedTask;
+            // Detached; never delays continuation maintenance or the next turn.
+            StartAutoTitle(hosted);
+            return hosted.Compactor.AutoAfterTurnAsync(result);
+        };
         registry.OnProcessorFinalizing = async (_, error, interrupted, suspended) =>
         {
             // Retire this run's draft before a queued successor can claim the processor.

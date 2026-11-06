@@ -1,6 +1,7 @@
 import ArtifactView from '../artifacts/ArtifactView'
 import { buildArtifactGroups } from '../artifacts/projection'
 import SessionMessageCard from './SessionMessageCard'
+import { AskUserToolCard, isQuestionAnswerMarker, isStructuredQuestionAnswer, QuestionAnswerBubble } from './QuestionCard'
 import SystemEventCard from './SystemEventCard'
 import { getSessionNotice } from '../sessionNotices'
 import ReplyFileGrid from './ReplyFileGrid'
@@ -1054,13 +1055,16 @@ const MessageRow = memo(function MessageRow({
             : ''
         }`}
       >
-        {row.communication ? <SessionMessageCard communication={row.communication} searchReveal={rowSearchTarget?.surface === 'communication'}><MarkdownContent citations={false} text={row.communication.message} className="prose prose-sm dark:prose-invert max-w-none break-words text-fw-text" /></SessionMessageCard> : sessionNotice ? <SystemEventCard notice={sessionNotice} reveal={!!rowSearchTarget} /> : systemLikeMessage ? (
+        {row.question ? <AskUserToolCard call={row.question} response={pairedToolResponse?.parts.find(part => part.functionResponse?.tool_use_id === row.question!.id)?.functionResponse} /> : row.communication ? <SessionMessageCard communication={row.communication} searchReveal={rowSearchTarget?.surface === 'communication'}><MarkdownContent citations={false} text={row.communication.message} className="prose prose-sm dark:prose-invert max-w-none break-words text-fw-text" /></SessionMessageCard> : sessionNotice ? <SystemEventCard notice={sessionNotice} reveal={!!rowSearchTarget} /> : systemLikeMessage ? (
           <SystemLikeMessageCard msg={msg} messageKey={messageKey} searchReveal={rowSearchTarget?.surface === 'system'} />
         ) : msg.role === 'user' ? (
           <>
           <AttachmentHistoryGrid correlations={attachmentCorrelations} imageParts={imageParts} pending={!!msg.__meta?.queuedPreview} />
+          {msg.__meta?.questionAnswer?.viaMessage && <div data-question-answered-by-message className="mb-1 text-right text-xs text-fw-text-muted">Answered the question</div>}
           {hasUserBody && <div className={`${row.literalUserText !== undefined ? 'foxwarm-conversation-user' : ''} foxwarm-user-message-bubble min-w-0 max-w-full rounded-lg bg-fw-user-surface px-3 py-2 text-fw-user-text`}>
-            {textLikeParts.map((part, partIdx) => (
+            {textLikeParts.map((part, partIdx) => part.system && isQuestionAnswerMarker(part.system) ? null : isStructuredQuestionAnswer(msg.__meta?.questionAnswer) && (!part.system || isWrappedDirectChannelText(part.system)) ? (
+              <QuestionAnswerBubble key={`user-part-${partIdx}`} answer={msg.__meta!.questionAnswer} />
+            ) : (
               <div key={`user-part-${partIdx}`} className={hasInlineAttachmentFlow ? 'contents' : undefined}>
                 {showUserMessageMetadata && inlineUserWrapperBoundaries?.close === partIdx && <UserWrapperBoundaryBreak afterMetadata={false} />}
                 {part.system

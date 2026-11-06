@@ -1,90 +1,81 @@
 /* Starlight palette and type, matched to the homepage (home.css). */
 :root {
-  --sl-color-accent-low: #fde7d7;
-  --sl-color-accent: #c24a1a;
-  --sl-color-accent-high: #6e2a0d;
-  --sl-color-white: #2a1f18;
-  --sl-color-gray-1: #3d2f25;
-  --sl-color-gray-2: #4a3b30;
-  --sl-color-gray-3: #74624f;
-  --sl-color-gray-4: #b9a68f;
-  --sl-color-gray-5: #dccbb7;
-  --sl-color-gray-6: #f5ede2;
-  --sl-color-gray-7: #fbf6ef;
-  --sl-color-black: #fffdf9;
-  --sl-color-bg: #fbf6ef;
-  --sl-color-bg-nav: rgba(251, 246, 239, .88);
-  --sl-color-bg-sidebar: #fbf6ef;
-  --sl-color-hairline: #eadfd1;
-  --sl-color-hairline-light: #f0e6da;
-  --sl-font: 'Inter Variable', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif;
-  --sl-font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', 'Cascadia Code', Menlo, Consolas, monospace;
-  --fw-display: 'Fraunces Variable', Georgia, 'Times New Roman', serif;
+  --sl-color-accent-low: #fdeee6;
+  --sl-color-accent: #c14d1d;
+  --sl-color-accent-high: #6b2a0f;
+  --sl-color-white: #17191c;
+  --sl-color-gray-1: #26292d;
+  --sl-color-gray-2: #33373d;
+  --sl-color-gray-3: #646a72;
+  --sl-color-gray-4: #a3a8af;
+  --sl-color-gray-5: #d3d6db;
+  --sl-color-gray-6: #f0f1f3;
+  --sl-color-gray-7: #f7f8f9;
+  --sl-color-black: #ffffff;
+  --sl-color-hairline: #e6e8eb;
+  --sl-color-hairline-light: #eef0f2;
+  --sl-font: 'IBM Plex Sans Variable', 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif;
+  --sl-font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
 
   /* Variables used by shared components such as the brain/hands diagram. */
-  --bg-alt: #f5ede2;
-  --surface: #fffdf9;
-  --ink: #2a1f18;
-  --ink-soft: #4a3b30;
-  --muted: #74624f;
-  --line: #eadfd1;
-  --line-strong: #dccbb7;
+  --bg-alt: #f5f6f7;
+  --surface: #ffffff;
+  --ink: #17191c;
+  --ink-soft: #33373d;
+  --muted: #646a72;
+  --line: #e6e8eb;
+  --line-strong: #d3d6db;
   --accent: #e2602c;
-  --accent-strong: #c24a1a;
-  --accent-soft: #fde7d7;
+  --accent-strong: #c14d1d;
+  --accent-soft: #fdeee6;
   --accent-ink: #ffffff;
-  --shadow-sm: 0 1px 2px rgba(92, 52, 24, .06), 0 6px 18px -8px rgba(92, 52, 24, .14);
   --font-mono: var(--sl-font-mono);
 }
 :root[data-theme='dark'] {
-  --sl-color-accent-low: #432618;
-  --sl-color-accent: #ff874a;
-  --sl-color-accent-high: #ffd3bd;
-  --sl-color-white: #f7eee5;
-  --sl-color-gray-1: #ece0d4;
-  --sl-color-gray-2: #e2d4c6;
-  --sl-color-gray-3: #b8a593;
-  --sl-color-gray-4: #7d6b5c;
-  --sl-color-gray-5: #4d3e33;
-  --sl-color-gray-6: #281f19;
-  --sl-color-gray-7: #211913;
-  --sl-color-black: #19130f;
-  --sl-color-bg: #19130f;
-  --sl-color-bg-nav: rgba(25, 19, 15, .88);
-  --sl-color-bg-sidebar: #19130f;
-  --sl-color-hairline: #3a2e26;
-  --sl-color-hairline-light: #2f251e;
+  --sl-color-accent-low: #33200f;
+  --sl-color-accent: #ff7a3d;
+  --sl-color-accent-high: #ffd0b8;
+  --sl-color-white: #ecedee;
+  --sl-color-gray-1: #dcdee1;
+  --sl-color-gray-2: #c9ccd0;
+  --sl-color-gray-3: #959ba3;
+  --sl-color-gray-4: #5d636b;
+  --sl-color-gray-5: #353940;
+  --sl-color-gray-6: #1b1d20;
+  --sl-color-gray-7: #151618;
+  --sl-color-black: #111214;
+  --sl-color-hairline: #26292d;
+  --sl-color-hairline-light: #202326;
 
-  --bg-alt: #211913;
-  --surface: #281f19;
-  --ink: #f7eee5;
-  --ink-soft: #e2d4c6;
-  --muted: #b8a593;
-  --line: #3a2e26;
-  --line-strong: #4d3e33;
-  --accent: #ff874a;
-  --accent-strong: #ffa575;
-  --accent-soft: #432618;
-  --accent-ink: #1e130c;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, .3), 0 6px 18px -8px rgba(0, 0, 0, .5);
+  --bg-alt: #17191b;
+  --surface: #17191b;
+  --ink: #ecedee;
+  --ink-soft: #c9ccd0;
+  --muted: #959ba3;
+  --line: #26292d;
+  --line-strong: #353940;
+  --accent: #ff7a3d;
+  --accent-strong: #ff9663;
+  --accent-soft: #33200f;
+  --accent-ink: #160d07;
 }
 
-body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; font-feature-settings: 'cv11', 'ss01'; }
+body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
 header.header { backdrop-filter: saturate(1.4) blur(14px); -webkit-backdrop-filter: saturate(1.4) blur(14px); }
 .site-title img { height: 1.9rem; width: auto; }
 
 .sl-markdown-content h1,
 .sl-markdown-content h2,
 .sl-markdown-content h3 { letter-spacing: -.015em; }
-h1#_top { font-family: var(--fw-display); font-weight: 520; font-optical-sizing: auto; letter-spacing: -.03em; }
-:lang(zh) h1#_top { font-family: var(--sl-font); font-weight: 700; letter-spacing: -.01em; }
+h1#_top { font-weight: 650; letter-spacing: -.03em; }
+:lang(zh) h1#_top { letter-spacing: -.005em; }
 .sl-markdown-content { line-height: 1.75; }
 :lang(zh) .sl-markdown-content { line-height: 1.9; }
 .sl-markdown-content code:not(:where(.not-content *)) { border-radius: .3rem; padding: .1em .35em; }
 .sl-markdown-content .expressive-code { margin-block: 1.25rem; }
 .sl-markdown-content table { display: table; width: 100%; font-size: .94em; }
 .sl-markdown-content th { background: var(--sl-color-gray-6); }
-.card, .sl-link-card { border-radius: .8rem; }
+.card, .sl-link-card { border-radius: 6px; }
 .sl-link-card:hover { border-color: var(--sl-color-accent); }
 
 .sl-markdown-content .diagram { margin-block: 2rem; }

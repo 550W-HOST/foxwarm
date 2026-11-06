@@ -47,6 +47,7 @@ internal sealed class WaitLiveness(SessionManager manager) : IAsyncDisposable
         && wait["waitForInput"]?.GetValue<bool>() != true
         && !(SessionWait.Number(wait["timeoutSeconds"]) > 0)
         && SessionWait.Strings(wait["waitExecIds"]).Length == 0
+        && SessionWait.Strings(wait["waitQuestionIds"]).Length == 0
         && Sources(wait).Length > 0;
 
     internal void Transition(string sessionId)
@@ -164,7 +165,8 @@ internal sealed class WaitLiveness(SessionManager manager) : IAsyncDisposable
                 !root && (metadata?.Busy == true || metadata?.QueueLength > 0)
                 || SessionWait.Number(state?["timeoutSeconds"]) > 0
                 || state?["waitForInput"]?.GetValue<bool>() == true
-                || SessionWait.Strings(state?["waitExecIds"]).Length > 0;
+                || SessionWait.Strings(state?["waitExecIds"]).Length > 0
+                || SessionWait.Strings(state?["waitQuestionIds"]).Length > 0;
             if (!progress)
                 progress = sources.Any(source => Visit(source));
             visiting.Remove(currentId);

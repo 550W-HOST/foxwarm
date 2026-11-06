@@ -133,7 +133,7 @@ internal static class ObservationToolDefinitions
                     ),
                     ["toolDetail"] = Field(
                         "string",
-                        "Tool display detail: names (default) groups names and counts; snippets adds short argument/result excerpts; full expands them within the response budget.",
+                        "names (default) shows compact tool activity; snippets adds short argument and result excerpts; full includes complete tool content within the preview budget.",
                         "names",
                         "snippets",
                         "full"

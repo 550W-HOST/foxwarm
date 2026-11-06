@@ -96,7 +96,7 @@ public sealed class SessionCatalogSourceTests
         using var catalog = new SessionCatalog(root);
         catalog.Initialize();
         catalog.Upsert(rows);
-        SourceParity(expected["expected"], Snapshot(catalog, rows), "current source queries");
+        Equal(expected["expected"], Snapshot(catalog, rows), "current source queries");
         Equal(
             expected["schema"],
             SourceCoreSchema(catalog.FilePath),
@@ -111,7 +111,7 @@ public sealed class SessionCatalogSourceTests
         using (var v2 = new SessionCatalog(v2Root))
         {
             v2.Initialize();
-            SourceParity(expected["expected"], Snapshot(v2, rows), "source v2 upgrade queries");
+            Equal(expected["expected"], Snapshot(v2, rows), "source v2 upgrade queries");
             Assert.Null(v2.Summary()["cost"]);
             var priced = v2.Get("root")!;
             priced["stats"] = new JsonObject { ["totalCost"] = .125 };
@@ -126,7 +126,7 @@ public sealed class SessionCatalogSourceTests
         );
         using var old = new SessionCatalog(oldRoot);
         old.Initialize();
-        SourceParity(expected["upgraded"], Snapshot(old, rows), "source v1 upgrade queries");
+        Equal(expected["upgraded"], Snapshot(old, rows), "source v1 upgrade queries");
         Equal(
             expected["upgradedSchema"],
             SourceCoreSchema(old.FilePath),
@@ -135,11 +135,7 @@ public sealed class SessionCatalogSourceTests
         old.Dispose();
         using var again = new SessionCatalog(oldRoot);
         again.Initialize();
-        SourceParity(
-            expected["upgraded"],
-            Snapshot(again, rows),
-            "reopened upgraded source schema"
-        );
+        Equal(expected["upgraded"], Snapshot(again, rows), "reopened upgraded source schema");
         Assert.Equal(
             await File.ReadAllTextAsync(Path.Combine(temp.Path, "lower-expected.txt")),
             SourceStringLower.Lower(
@@ -158,35 +154,6 @@ public sealed class SessionCatalogSourceTests
                 + "\nActual: "
                 + actual?.ToJsonString()
         );
-    }
-
-    /// <summary>
-    /// Compares a snapshot with the Source oracle. The only difference the Source store does
-    /// not model is the additive `sidebarParentId` scope field. No fixture Agent has a main
-    /// Session, so every unpinned row's Sidebar parent is its real parent and pinned rows have
-    /// none; after that check every query must match exactly.
-    /// </summary>
-    private static void SourceParity(JsonNode? expected, JsonObject actual, string label)
-    {
-        actual = actual.DeepClone().AsObject();
-        foreach (var pair in actual["scopes"]!.AsObject())
-        {
-            var scope = pair.Value!.AsObject();
-            Assert.NotEqual(
-                SessionCatalog.AgentMainId(SessionCatalog.Text(scope["agent"])!),
-                pair.Key
-            );
-            var parent = SessionCatalog.Text(scope["sidebarParentId"]);
-            var wanted = SessionCatalog.Flag(scope["pinned"])
-                ? null
-                : SessionCatalog.Text(scope["parentSessionId"]);
-            Assert.True(
-                parent == wanted,
-                $"{label}: Sidebar parent of {pair.Key} is {parent}, expected {wanted}"
-            );
-            scope.Remove("sidebarParentId");
-        }
-        Equal(expected, actual, label);
     }
 
     private static string Id(JsonObject row) => row["id"]!.GetValue<string>();
@@ -340,6 +307,28 @@ public sealed class SessionCatalogSourceTests
             index["sql"]!.GetValue<string>()
         );
         all.Remove(index);
+        // Sidebar grouping adds its indexes and maintained Node counts beside the Source core;
+        // the question-presence index serves open-question elevation.
+        foreach (
+            var name in new[]
+            {
+                "catalog_node_count",
+                "idx_session_catalog_question_presence",
+                "idx_session_catalog_agent_root_default",
+                "idx_session_catalog_node_root_default",
+                "idx_session_catalog_node_root_time",
+                "idx_session_catalog_node_time",
+                "session_catalog_node_count_delete",
+                "session_catalog_node_count_insert",
+                "session_catalog_node_count_update",
+            }
+        )
+            all.Remove(
+                Assert.Single(
+                    all.OfType<JsonObject>(),
+                    row => row["name"]?.GetValue<string>() == name
+                )
+            );
         // Keep the Source core oracle while allowing the additive USD projection schema.
         foreach (
             var trigger in all.OfType<JsonObject>()
@@ -351,35 +340,6 @@ public sealed class SessionCatalogSourceTests
                 .ToArray()
         )
             all.Remove(trigger);
-        // The additive Sidebar presentation schema is checked here, then removed from the core.
-        string[] sidebarObjects =
-        [
-            "catalog_sidebar_agent",
-            "catalog_sidebar_count",
-            "catalog_sidebar_dirty",
-            "catalog_sidebar_host",
-            "idx_session_catalog_sidebar_default",
-            "idx_session_catalog_sidebar_time",
-            "session_catalog_sidebar_count_update",
-            "session_catalog_sidebar_delete",
-            "session_catalog_sidebar_insert",
-            "session_catalog_sidebar_topology",
-        ];
-        foreach (var name in sidebarObjects)
-            all.Remove(
-                Assert.Single(
-                    all.OfType<JsonObject>(),
-                    row => row["name"]?.GetValue<string>() == name
-                )
-            );
-        var catalogTable = Assert.Single(
-            all.OfType<JsonObject>(),
-            row => row["name"]?.GetValue<string>() == "session_catalog"
-        );
-        Assert.Contains(",sidebar_parenttext)", catalogTable["sql"]!.GetValue<string>());
-        catalogTable["sql"] = catalogTable["sql"]!
-            .GetValue<string>()
-            .Replace(",sidebar_parenttext)", ")", StringComparison.Ordinal);
         foreach (
             var table in all.OfType<JsonObject>()
                 .Where(row => row["type"]!.GetValue<string>() == "table")

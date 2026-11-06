@@ -8,6 +8,8 @@ export const CONTEXT_SCROLLBAR_ANCHOR_SELECTOR = `[${CONTEXT_SCROLLBAR_ANCHOR_AT
 export const PERSISTENT_MEMORY_SNAPSHOT_CONTEXT_SCROLLBAR_ANCHOR_KEY = 'persistent-memory-snapshot'
 export const CHAT_VIEWPORT_BOTTOM_THRESHOLD_PX = 200
 export const CHAT_BOTTOM_FOLLOW_REJOIN_THRESHOLD_PX = 4
+// Leaves room for the row's time separator above an opening message.
+const OPENING_MESSAGE_OFFSET_PX = 48
 
 export type ChatViewportState =
   | { kind: 'bottom' }
@@ -96,6 +98,17 @@ export function getMessageViewportAnchorKey(message: Message): string | null {
   if (hasStableMetaValue(meta.id)) return `id-${String(meta.id)}`
   if (hasStableMetaValue(meta.timestamp)) return `ts-${String(meta.timestamp)}`
   return null
+}
+
+/**
+ * First view of a Session without a saved position. A Session whose timeline is only
+ * one assistant message, such as the first-run welcome, opens at the start of that
+ * message instead of its end; any other Session follows the latest message.
+ */
+export function getOpeningChatViewportState(timeline: readonly Message[]): ChatViewportState | null {
+  if (timeline.length !== 1 || timeline[0].role !== 'model') return null
+  const messageKey = getMessageViewportAnchorKey(timeline[0])
+  return messageKey ? { kind: 'anchor', messageKey, offsetPx: OPENING_MESSAGE_OFFSET_PX } : null
 }
 
 export function getContextScrollbarAnchorKey(message: Message): string | null {

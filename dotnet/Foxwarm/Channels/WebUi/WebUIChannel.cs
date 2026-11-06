@@ -211,6 +211,7 @@ internal sealed partial class WebUIChannel(
         RegisterTerminalRoutes(app);
         RegisterAgentRoutes(app);
         RegisterListRoutes(app);
+        RegisterSequenceRoutes(app);
         RegisterPresentationRoutes(app);
         RegisterRelationRoutes(app);
         RegisterDeleteRoute(app);
@@ -219,6 +220,7 @@ internal sealed partial class WebUIChannel(
         RegisterUploadAndImageRoutes(app);
         RegisterFileRoutes(app);
         RegisterArtifactRoutes(app);
+        RegisterQuestionRoutes(app);
         app.MapPost(
             "/api/sessions/{id}/message",
             async (string id, HttpRequest request) =>

@@ -627,6 +627,13 @@ public sealed partial class LocalSessionTurnHost
             };
             if (item.ClientMessageId is not null)
                 message["__meta"] = new JsonObject { ["clientMessageId"] = item.ClientMessageId };
+            // Display-only answer metadata; the model reads the rendered parts.
+            if (item.OpenFields?["questionAnswer"] is JsonObject answer)
+            {
+                if (message["__meta"] is not JsonObject meta)
+                    message["__meta"] = meta = new JsonObject();
+                meta["questionAnswer"] = answer.DeepClone();
+            }
             rawMessages.Add(DeferredQueueInput.Message(item, message));
             committedAnyInput = true;
         }

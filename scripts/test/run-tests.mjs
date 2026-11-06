@@ -18,10 +18,39 @@ import testEnvironment from './test-process-env.cjs'
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(scriptDir, '../..')
+// A failed Chromium fixture gets the original attempt plus exactly eight retries.
+// Keep this runner-local: retries do not apply to preparation, other groups, or shards.
+const BROWSER_FIXTURE_RETRY_COUNT = 8
 const target = process.argv[2] || 'unit'
 const validTargets = new Set(['inventory', 'unit', 'reference', 'managed', 'published', 'browser', 'app', 'all'])
+let shard = null
+let browserWorkers = 1
+const options = new Set()
+for (const argument of process.argv.slice(3)) {
+  const match = /^(--shard|--workers)=(.+)$/.exec(argument)
+  if (target !== 'browser' || !match || options.has(match[1])) {
+    console.error(`Invalid test option: ${argument}. Browser options: --shard=INDEX/TOTAL --workers=COUNT`)
+    process.exit(2)
+  }
+  options.add(match[1])
+  const positive = value => /^[1-9]\d*$/.test(value) && Number.isSafeInteger(Number(value))
+  if (match[1] === '--shard') {
+    const parts = match[2].split('/')
+    if (parts.length !== 2 || !parts.every(positive) || Number(parts[0]) > Number(parts[1])) {
+      console.error('Invalid browser shard; use INDEX/TOTAL with 1 <= INDEX <= TOTAL.')
+      process.exit(2)
+    }
+    shard = { index: Number(parts[0]), total: Number(parts[1]) }
+  } else {
+    if (!positive(match[2])) {
+      console.error('Invalid browser worker count; use a positive integer.')
+      process.exit(2)
+    }
+    browserWorkers = Number(match[2])
+  }
+}
 if (!validTargets.has(target)) {
-  console.error(`Usage: node scripts/test/run-tests.mjs <${[...validTargets].join('|')}>`)
+  console.error(`Usage: node scripts/test/run-tests.mjs <${[...validTargets].join('|')}> [--shard=INDEX/TOTAL] [--workers=COUNT]`)
   process.exit(2)
 }
 
@@ -33,6 +62,11 @@ if (unclassified.length || missingGroups.length) {
   if (missingGroups.length) console.error(`Empty required test groups: ${missingGroups.join(', ')}`)
   process.exit(1)
 }
+
+const browserFiles = (inventory['webui-browser'] || []).filter((_, index) => !shard || index % shard.total === shard.index - 1)
+const browserSelection = target === 'browser' || target === 'all'
+  ? { shard, workers: browserWorkers, files: browserFiles }
+  : undefined
 
 function printInventory() {
   console.log('Foxwarm test inventory')
@@ -51,10 +85,10 @@ if (target === 'inventory') {
 const artifactParent = process.env.FOXWARM_TEST_ARTIFACT_DIR
   ? path.resolve(process.env.FOXWARM_TEST_ARTIFACT_DIR)
   : path.join(repoRoot, 'test', '.temp', 'test-runs')
-const runId = `${target}-${new Date().toISOString().replace(/[:.]/g, '-')}-${process.pid}`
+const runId = `${target}${shard ? `-shard-${shard.index}-of-${shard.total}` : ''}-${new Date().toISOString().replace(/[:.]/g, '-')}-${process.pid}`
 const runBase = path.join(artifactParent, runId)
 await fsp.mkdir(path.join(runBase, 'logs'), { recursive: true })
-await fsp.writeFile(path.join(runBase, 'inventory.json'), `${JSON.stringify({ inventory, standaloneSelftests }, null, 2)}\n`)
+await fsp.writeFile(path.join(runBase, 'inventory.json'), `${JSON.stringify({ inventory, standaloneSelftests, browserSelection }, null, 2)}\n`)
 const shortTempBase = path.join(os.tmpdir(), `fw-${process.pid}`)
 await fsp.rm(shortTempBase, { recursive: true, force: true })
 await fsp.mkdir(shortTempBase, { recursive: true })
@@ -185,16 +219,24 @@ function findChromium() {
 
 function browserGroup() {
   const chromium = findChromium()
-  const files = requireFiles(inventory['webui-browser'], 'WebUI browser fixtures')
+  const files = requireFiles(browserFiles, 'WebUI browser fixtures')
+  console.log(`Browser selection: ${shard ? `shard ${shard.index}/${shard.total}` : 'all files'}, ${files.length}/${inventory['webui-browser'].length} files, ${browserWorkers} worker(s)`)
   return {
     name: 'webui-browser',
+    concurrency: browserWorkers,
+    stepArtifacts: true,
     steps: [
       // Cold Code assets plus the serial managed builds take nearly ten minutes in CI.
       { ...directStep('prepare', process.execPath, ['scripts/test/prepare-browser.mjs'], 900_000), prepareDependencies: true },
-      ...files.map(file => nodeTestStep(path.basename(file), [file], {
-      concurrency: 1,
-      // Workbench exercises many complete application mounts and navigation paths.
-      timeoutMs: path.basename(file) === 'workbenchPreview.e2e.mjs' ? 360_000 : 240_000,
+      ...files.map(file => ({
+        ...nodeTestStep(path.basename(file), [file], {
+          concurrency: 1,
+          // Workbench exercises many complete application mounts and navigation paths.
+          timeoutMs: path.basename(file) === 'workbenchPreview.e2e.mjs' ? 360_000 : 240_000,
+        }),
+        // This fixture rebuilds the WebUI dist consumed by its peers.
+        exclusive: path.basename(file) === 'setupModels.e2e.mjs',
+        browserFixture: true,
       })),
     ],
     env: {
@@ -245,11 +287,11 @@ async function snapshotVscodeDist() {
   }
 }
 
-let activeChild = null
+const activeChildren = new Set()
 let stopping = false
 let interrupted = false
 function stopActive(signal = 'SIGTERM') {
-  stopChild(activeChild, signal)
+  for (const child of activeChildren) stopChild(child, signal)
 }
 function stopChild(child, signal = 'SIGTERM') {
   if (!child?.pid) return
@@ -276,7 +318,7 @@ async function runStep(group, step, log) {
   const env = { ...(step.prepareDependencies ? process.env : baseEnv), ...(group.env || {}), ...(step.env || {}) }
   return await new Promise(resolve => {
     const child = spawn(step.command, step.args, { cwd: repoRoot, env, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] })
-    activeChild = child
+    activeChildren.add(child)
     let captured = ''
     const forward = chunk => { captured += chunk; process.stdout.write(chunk); log.write(chunk) }
     child.stdout.on('data', forward)
@@ -293,15 +335,15 @@ async function runStep(group, step, log) {
     child.on('error', error => {
       clearTimeout(timer)
       clearTimeout(killTimer)
-      activeChild = null
+      activeChildren.delete(child)
       log.write(`${error.stack || error}\n`)
-      resolve({ code: 1, timedOut, counts: parseTestResultCounts(captured) })
+      resolve({ code: 1, timedOut, interrupted, counts: parseTestResultCounts(captured) })
     })
     child.on('close', (code, signal) => {
       clearTimeout(timer)
       clearTimeout(killTimer)
-      activeChild = null
-      resolve({ code: timedOut ? 1 : (code ?? (signal ? 1 : 0)), signal, timedOut, counts: parseTestResultCounts(captured) })
+      activeChildren.delete(child)
+      resolve({ code: timedOut || interrupted ? 1 : (code ?? (signal ? 1 : 0)), signal, timedOut, interrupted, counts: parseTestResultCounts(captured) })
     })
   })
 }
@@ -318,19 +360,82 @@ const summary = []
 for (const group of groups) {
   const restore = group.restoreVscodeDist ? await snapshotVscodeDist() : null
   let groupCode = 0
-  try {
-    const log = fs.createWriteStream(path.join(runBase, 'logs', `${group.name}.log`), { flags: 'w' })
-    try {
-      for (const [stepIndex, step] of group.steps.entries()) {
-        const result = await runStep(group, step, log)
-        summary.push({ order: stepIndex, group: group.name, step: step.name, ...result })
-        if (result.code !== 0) groupCode = result.code
-        if (interrupted || (step.prepareDependencies && result.code !== 0)) break
+  let preparationFailed = false
+  const logDirectory = path.join(runBase, 'logs', group.name)
+  if (group.stepArtifacts) await fsp.mkdir(logDirectory, { recursive: true })
+  const groupLog = group.stepArtifacts ? null : fs.createWriteStream(path.join(runBase, 'logs', `${group.name}.log`), { flags: 'w' })
+  async function executeStep(order) {
+    const original = group.steps[order]
+    const retryable = group.name === 'webui-browser' && original.browserFixture
+    const attempts = retryable ? BROWSER_FIXTURE_RETRY_COUNT + 1 : 1
+    let allRetriesPassed = true
+    for (let attempt = 0; attempt < attempts && !interrupted; attempt++) {
+      const step = { ...original }
+      const suffix = retryable && attempt > 0 ? `.retry-${attempt}` : ''
+      const logName = `${step.name}${suffix}.log`
+      const log = groupLog || fs.createWriteStream(path.join(logDirectory, logName), { flags: 'w' })
+      if (group.stepArtifacts && !step.prepareDependencies) {
+        const screenshots = path.join(runBase, 'screenshots', `${step.name}${suffix}`)
+        await fsp.mkdir(screenshots, { recursive: true })
+        step.env = {
+          ...step.env,
+          FOXWARM_E2E_SCREENSHOT_DIR: screenshots,
+          ...(retryable ? { FOXWARM_BROWSER_FIXTURE_ATTEMPT: String(attempt) } : {}),
+        }
       }
-    } finally {
-      await new Promise(resolve => log.end(resolve))
+      const started = Date.now()
+      try {
+        const result = await runStep(group, step, log)
+        summary.push({
+          order,
+          group: group.name,
+          step: step.name,
+          attempt,
+          retry: attempt > 0,
+          durationMs: Date.now() - started,
+          ...result,
+        })
+        if (result.code === 0) {
+          if (attempt === 0) return
+          // A retry only recovers the fixture after every retry has passed.
+          // Continue running the remaining attempts even after a pass.
+        } else {
+          if (attempt > 0) allRetriesPassed = false
+          if (!retryable) {
+            groupCode = result.code
+            if (step.prepareDependencies) preparationFailed = true
+          }
+        }
+        if (!retryable && result.code !== 0) return
+      } finally {
+        if (!groupLog) await new Promise(resolve => log.end(resolve))
+      }
+    }
+    if (retryable) {
+      const effectiveCode = !interrupted && allRetriesPassed ? 0 : 1
+      for (const row of summary) {
+        if (row.group === group.name && row.order === order) row.effectiveCode = effectiveCode
+      }
+      if (effectiveCode !== 0) groupCode = effectiveCode
+    }
+  }
+  try {
+    // Preparation and shared-output writers are barriers; independent files
+    // between them share a bounded queue without changing their own test order.
+    for (let start = 0; start < group.steps.length && !interrupted && !preparationFailed;) {
+      const exclusive = step => step.prepareDependencies || step.exclusive
+      let end = start + 1
+      if (!exclusive(group.steps[start])) {
+        while (end < group.steps.length && !exclusive(group.steps[end])) end++
+      }
+      let next = start
+      await Promise.all(Array.from({ length: Math.min(group.concurrency || 1, end - start) }, async () => {
+        while (next < end && !interrupted) await executeStep(next++)
+      }))
+      start = end
     }
   } finally {
+    if (groupLog) await new Promise(resolve => groupLog.end(resolve))
     if (restore) await restore()
   }
   console.log(`[test:${group.name}] ${groupCode === 0 ? 'passed' : 'failed'}`)
@@ -348,4 +453,4 @@ for (const group of [...new Set(summary.map(item => item.group))]) {
 printInventory()
 console.log(`Test artifacts: ${path.relative(repoRoot, runBase)}`)
 await fsp.rm(shortTempBase, { recursive: true, force: true })
-process.exit(interrupted || summary.some(item => item.code !== 0) ? 1 : 0)
+process.exit(interrupted || summary.some(item => (item.effectiveCode ?? item.code) !== 0) ? 1 : 0)

@@ -12,6 +12,7 @@ import { once } from 'node:events'
 import puppeteer from 'puppeteer-core'
 import { startScriptedProvider } from './mainHostModelCompact.provider.mjs'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
+import { NEW_SESSION_DIALOG_TRIGGER } from './mainHostFixture.mjs'
 
 const token = 'local-multimodel-test-api-token'
 const alphaToken = 'local-alpha-provider-secret'
@@ -131,6 +132,8 @@ try {
   browser = await puppeteer.launch({ executablePath: process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium',
     headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'], userDataDir: join(root, 'browser') })
   const page = await browser.newPage()
+  // Nested CTX cards inspect the active compacted context, not Archive originals.
+  await page.evaluateOnNewDocument(() => localStorage.setItem('foxwarm_timeline_view_v1', 'detailed'))
   page.on('pageerror', error => errors.push('browser ' + String(error)))
   await page.goto(`http://127.0.0.1:${hostPort}/`, { waitUntil: 'load' })
   await page.waitForSelector('#token')
@@ -138,7 +141,7 @@ try {
   await page.click('button[type="submit"]')
   await waitForWebUiReady(page)
   await page.waitForSelector('button[aria-label="New session"]')
-  await page.click('button[aria-label="New session"]')
+  await page.click(NEW_SESSION_DIALOG_TRIGGER)
   await page.waitForSelector('[role="dialog"]')
   await page.click('[role="dialog"] button[type="submit"]')
   await page.waitForSelector('[role="dialog"]', { hidden: true })

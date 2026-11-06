@@ -117,9 +117,15 @@ internal static class TerminalNative
             int rows
         )
         {
+            var childEnvironment = new Dictionary<string, string>(
+                environment,
+                OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal
+            );
+            childEnvironment.Remove("TMUX");
+            childEnvironment.Remove("TMUX_PANE");
             if (OperatingSystem.IsWindows())
                 return new Handle(
-                    WindowsPseudoConsole.Spawn(shell, arguments, cwd, environment, cols, rows)
+                    WindowsPseudoConsole.Spawn(shell, arguments, cwd, childEnvironment, cols, rows)
                 );
             if (!IsSupported)
                 throw new PlatformNotSupportedException(
@@ -129,7 +135,7 @@ internal static class TerminalNative
             var directory = Marshal.StringToCoTaskMemUTF8(cwd);
             using var argv = new NativeStrings([shell, .. arguments]);
             using var env = new NativeStrings(
-                environment.Select(pair => $"{pair.Key}={pair.Value}")
+                childEnvironment.Select(pair => $"{pair.Key}={pair.Value}")
             );
             var pointer = fw_spawn(
                 exe,

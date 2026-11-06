@@ -18,7 +18,7 @@ public sealed partial class InContextCompactTests
                         new JsonArray(Call("plan", "submit_compact_plan", Plan()))
                     );
                 Assert.Contains("Completed middle detail.", request.ToJsonString());
-                Assert.DoesNotContain("CTX-BLOCK", request.ToJsonString());
+                Assert.DoesNotContain("CTX-BLOCK", request["input"]!.ToJsonString());
                 return Task.FromResult(Final());
             }
         );
@@ -55,7 +55,7 @@ public sealed partial class InContextCompactTests
                     return Task.FromResult(
                         new JsonArray(Call("plan", "submit_compact_plan", Plan()))
                     );
-                Assert.Equal(afterRename, request.ToJsonString().Contains("CTX-BLOCK"));
+                Assert.Equal(afterRename, request["input"]!.ToJsonString().Contains("CTX-BLOCK"));
                 return Task.FromResult(Final());
             }
         );

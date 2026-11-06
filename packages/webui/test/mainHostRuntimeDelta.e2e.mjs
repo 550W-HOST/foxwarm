@@ -105,7 +105,7 @@ try {
   const sourceFrames = await connect(source)
   // Generated standalone login is served by the real auth/prefix host, not a fake token endpoint.
   options.publicRoot = fixture.origin + '/nested/#session/' + encodeURIComponent(source)
-  page = await fixture.openApp(); await page.setViewport({ width: 1440, height: 1000 }); await waitForWebUiReady(page)
+  page = await fixture.openApp(); await page.setViewport({ width: 1440, height: 1000 })
   const cookies = await page.browserContext().cookies(); assert(cookies.some(cookie => cookie.name === 'foxwarm_token' && !cookie.httpOnly && cookie.value === fixture.token))
   assert.equal((await page.evaluate(async () => (await fetch('./api/auth/session')).json())).role, 'admin')
   const recovery = await page.browser().newPage()

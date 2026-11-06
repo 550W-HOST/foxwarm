@@ -14,17 +14,20 @@ import { CONTEXT_SCROLLBAR_SETTINGS_EVENT, readContextScrollbarSettings } from '
 import type { CodeCommitTarget } from '../commitMarker'
 import ContentHeader from './ContentHeader'
 import ProcessingStatus, { QueuedMessageStatus } from './ProcessingStatus'
-import type { Message } from './chatShared'
+import { isInternalTimelineMessage, type Message } from './chatShared'
 import { buildStreamingAssistantMessage } from '../streamingAssistantDraft'
 import { useChatConversationSync } from './useChatConversationSync'
 import { isRuntimeStateInactiveName, isSessionRuntimeActive } from '../sessionRuntimeState'
 import SessionDebugModal from './SessionDebugModal'
 import { ToolScriptProgressContext } from './ToolScriptProgressContext'
+import { OpenModelSettingsContext } from './SystemEventCard'
 import { ThreadCardHeightContext } from './useThreadCardHeightTransition'
 import { isSessionTurnIncomplete } from '../../../shared/src/sessionContinuation'
 import { formatSessionHeaderSubtitle } from '../sessionHeader'
 import { createLatestRequestGate, loadPageOnce, MODEL_OPTIONS_CHANGED_EVENT, refreshModelOptions, runLatestModelOptionsRequest } from '../modelOptionsLoader'
 import SessionUiSettingsMenu from './SessionUiSettingsMenu'
+import { SessionQuestionsContext, useSessionQuestions } from '../sessionQuestionsState'
+import { QuestionDock } from './QuestionCard'
 import {
   CHAT_BOTTOM_FOLLOW_REJOIN_THRESHOLD_PX,
   CHAT_MESSAGE_ANCHOR_SELECTOR,
@@ -34,6 +37,7 @@ import {
   getChatViewportAnchorSeq,
   getMessageStableKey,
   getMessageViewportAnchorKey,
+  getOpeningChatViewportState,
   getStoredChatViewportState,
   storeChatViewportState,
   updateChatBottomFollow,
@@ -188,7 +192,7 @@ type StreamingAsrSession = {
   cancel: () => void
 }
 
-const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessionMessageMode = false, sessionMessageAttachments = false, canonicalSessionId, sessionDisplayName, webUiIdentityMode = false, onBack, onNewSession, onOpenTerminal, onOpenCode, onOpenCodeFile, onOpenCodeCommit, onOpenModelSettings, sendKeyMode = 'modEnter', timelineView = 'detailed', historyMode = historyModeForTimelineView(timelineView), showUsageBadge = true, showUserMessageMetadata = false, showInterAgentMessages = true, onShowInterAgentMessagesChange = () => {}, showCommentary = true, onShowCommentaryChange = () => {}, fullWidth = true, onFullWidthChange = () => {}, onSendKeyModeChange = () => {}, onTimelineViewChange = () => {}, onShowUsageBadgeChange = () => {}, onShowUserMessageMetadataChange = () => {} }: ChatProps) {
+const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessionMessageMode = false, sessionMessageAttachments = false, canonicalSessionId, sessionDisplayName, webUiIdentityMode = false, onBack, onNewSession, onOpenTerminal, onOpenCode, onOpenCodeFile, onOpenCodeCommit, onOpenModelSettings, sendKeyMode = 'modEnter', timelineView = 'conversation', historyMode = historyModeForTimelineView(timelineView), showUsageBadge = true, showUserMessageMetadata = false, showInterAgentMessages = true, onShowInterAgentMessagesChange = () => {}, showCommentary = true, onShowCommentaryChange = () => {}, fullWidth = true, onFullWidthChange = () => {}, onSendKeyModeChange = () => {}, onTimelineViewChange = () => {}, onShowUsageBadgeChange = () => {}, onShowUserMessageMetadataChange = () => {} }: ChatProps) {
   const viewportSessionId = canonicalSessionId || sessionId
   const initialContinuousAnchorSeq = useMemo(() => getChatViewportAnchorSeq(getStoredChatViewportState(viewportSessionId, 'continuous')), [viewportSessionId])
   const {
@@ -255,7 +259,14 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
   const continuousPagingIntentRef = useRef<'earlier' | 'later' | null>(null)
   const lastNativeScrollTopRef = useRef(0)
   const composerHeightRef = useRef<number | null>(null)
-  const initialViewportState = getStoredChatViewportState(viewportSessionId, historyMode) || { kind: 'bottom' as const }
+  const storedInitialViewportState = getStoredChatViewportState(viewportSessionId, historyMode)
+  const initialViewportState = storedInitialViewportState || { kind: 'bottom' as const }
+  // Interaction version at which a Session without a saved position may still take its
+  // opening position once history loads; null after that decision.
+  const openingViewportVersionRef = useRef<number | null>(storedInitialViewportState ? null : 0)
+  // Opening position held until the user scrolls or the conversation moves on. Content
+  // that grows while it is held (Markdown, fonts) keeps it instead of reading a position.
+  const openingViewportHeldRef = useRef<{ version: number; state: ChatViewportState } | null>(null)
   const currentViewportStateRef = useRef<ChatViewportState>(initialViewportState)
   const pendingViewportRestoreRef = useRef<PendingViewportRestore | null>({
     kind: 'state',
@@ -455,6 +466,8 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
     const pending = pendingViewportRestoreRef.current
     if (pending?.kind === 'state') return pending.state
     if (pendingContentResizeRef.current) return pendingContentResizeRef.current.state
+    const opening = openingViewportHeldRef.current
+    if (opening?.version === userInteractionVersionRef.current) return opening.state
     const followState = updateBottomFollowState()
     const bottomThresholdPx = followState.pendingUserLeave
       ? -1
@@ -976,10 +989,13 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
     buildStreamingAssistantMessage(streamingAssistantDraft)
   ), [streamingAssistantDraft])
 
+  // Conversation hides model bookkeeping; technical views retain the existing snapshot and rows.
   const timelineMessages = useMemo(() => {
-    const baseMessages = snapshotSystemMessage ? [snapshotSystemMessage, ...visibleMessages] : visibleMessages
+    const baseMessages = timelineView === 'conversation'
+      ? visibleMessages.filter(message => !isInternalTimelineMessage(message))
+      : snapshotSystemMessage ? [snapshotSystemMessage, ...visibleMessages] : visibleMessages
     return streamingAssistantMessage && displayingLatest ? [...baseMessages, streamingAssistantMessage] : baseMessages
-  }, [snapshotSystemMessage, streamingAssistantMessage, visibleMessages, displayingLatest])
+  }, [timelineView, snapshotSystemMessage, streamingAssistantMessage, visibleMessages, displayingLatest])
 
   const navigateSearch = useCallback((match: typeof selectedSearchMatch) => {
     if (!match) return
@@ -1142,13 +1158,44 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
     capturedInteractionVersionRef.current = userInteractionVersionRef.current
     pendingContextScrollbarNavigationRef.current = null
     pendingScrollToTrueTopRef.current = false
-    const state = getStoredChatViewportState(viewportSessionId, historyMode) || { kind: 'bottom' as const }
+    const storedState = getStoredChatViewportState(viewportSessionId, historyMode)
+    const state = storedState || { kind: 'bottom' as const }
+    openingViewportVersionRef.current = storedState ? null : userInteractionVersionRef.current
+    openingViewportHeldRef.current = null
     currentViewportStateRef.current = state
     pendingContentResizeRef.current = null
     currentViewportGeometryRef.current = null
     pendingViewportRestoreRef.current = { kind: 'state', state, interactionVersion: userInteractionVersionRef.current }
     setBottomFollow(state.kind === 'bottom')
   }, [historyMode, viewportSessionId, setBottomFollow])
+
+  useLayoutEffect(() => {
+    const held = openingViewportHeldRef.current
+    if (held !== null) {
+      // The opening position was not the user's choice: once the conversation moves on
+      // without the user scrolling, follow the latest message again.
+      if (held.version !== userInteractionVersionRef.current) openingViewportHeldRef.current = null
+      else if (!getOpeningChatViewportState(timelineMessages)) {
+        openingViewportHeldRef.current = null
+        pendingViewportRestoreRef.current = { kind: 'state', state: { kind: 'bottom' }, interactionVersion: held.version }
+      }
+      return
+    }
+    const version = openingViewportVersionRef.current
+    if (version === null) return
+    if (historyMode === 'continuous' ? !archivePage.loaded || !continuousHistoryReady : !historyLoaded) return
+    openingViewportVersionRef.current = null
+    if (version !== userInteractionVersionRef.current) return
+    const state = getOpeningChatViewportState(timelineMessages)
+    if (!state) return
+    // Hand the opening position to the ordinary restore below.
+    openingViewportHeldRef.current = { version, state }
+    // Supersede any resize correction captured for the empty timeline.
+    pendingContentResizeRef.current = null
+    currentViewportStateRef.current = state
+    pendingViewportRestoreRef.current = { kind: 'state', state, interactionVersion: version }
+    setBottomFollow(false)
+  }, [historyMode, archivePage.loaded, continuousHistoryReady, historyLoaded, timelineMessages, setBottomFollow])
 
   useLayoutEffect(() => {
     const pending = pendingViewportRestoreRef.current
@@ -1487,6 +1534,10 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
 
   const turnIncomplete = useMemo(() => sessionRecord?.runtime === 'claude-code' ? sessionRecord.externalRuntime?.canContinue === true : isSessionTurnIncomplete(activeMessages), [activeMessages, sessionRecord?.runtime, sessionRecord?.externalRuntime?.canContinue])
 
+  // Session-owned questions drive the answer dock and the timeline cards.
+  const sessionQuestions = useSessionQuestions(sessionId, sessionRecord?.questions)
+  const waitingOnQuestion = sessionRecord?.runtimeState?.state === 'waiting' && sessionRecord.runtimeState.waiting?.waitingFor === 'question'
+
   const renderQueuedFooter = (alignment: 'left' | 'right') => <QueuedMessageStatus
     count={sessionQueueLength}
     disabled={!!pendingControl || !!sessionRecord?.runtimeState?.stopping}
@@ -1496,6 +1547,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
   />
 
   return (
+    <SessionQuestionsContext.Provider value={sessionQuestions}>
     <div ref={chatRootRef} data-mobile-chat-ui={mobileUi || undefined} data-chat-connection-state={connectionState} data-compact-composer={compactComposer ? "true" : undefined} className="foxwarm-chat-root relative flex h-full flex-col overflow-hidden">
       {searchOpen && <style>{`::highlight(${searchHighlightName}) { background-color: #facc15; color: #171717; }`}</style>}
       <ContentHeader
@@ -1670,9 +1722,11 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
             <HistoryCommit revision={historyMode === 'continuous' ? visibleMessages : showFullTimeline} beforeCommit={captureHistoryCommit}>
             <div ref={committedTimelineRef} data-chat-timeline="committed" className="min-w-0 max-w-full">
               <ThreadCardHeightContext.Provider value={cardHeightContext}>
+                <OpenModelSettingsContext.Provider value={webUiIdentityMode ? null : onOpenModelSettings ?? null}>
                 <ToolScriptProgressContext.Provider value={toolScriptProgress}>
                   <ChatTimeline sessionId={sessionId} historyMessages={messages} currentHistoryMessages={activeMessages} runtimeState={displayingLatest ? sessionRecord?.runtimeState : undefined} busyStartedAt={displayingLatest ? sessionRecord?.busyStartedAt : undefined} isRunningTool={displayingLatest && sessionRecord?.runtimeState?.state === 'running-tool'} messages={timelineMessages} isMobile={isMobile} timelineView={timelineView} showInterAgentMessages={showInterAgentMessages} showCommentary={showCommentary} showUsageBadge={showUsageBadge} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} searchTarget={searchOpen && selectedSearchMatch?.id === searchMatchId ? selectedSearchMatch : null} renderMessageFooter={displayingLatest && sessionQueueLength > 0 && queuedMessages.length === 0 ? renderQueuedFooter : undefined} />
                 </ToolScriptProgressContext.Provider>
+                </OpenModelSettingsContext.Provider>
               </ThreadCardHeightContext.Provider>
             </div>
             </HistoryCommit>
@@ -1772,6 +1826,8 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
         onHeightChange={handleComposerHeightChange}
         onSend={handleSend}
         onCreateStreamingTranscriber={handleCreateStreamingTranscriber}
+        aboveInput={<QuestionDock isMobile={isMobile} />}
+        answersQuestion={waitingOnQuestion}
       />
 
       {!webUiIdentityMode && showDebugInfo && (
@@ -1800,6 +1856,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
         />
       )}
     </div>
+    </SessionQuestionsContext.Provider>
   )
 }, (prev, next) => (
   prev.sessionId === next.sessionId &&

@@ -42,8 +42,16 @@ git pull --ff-only
 Use the installation's existing `FOXWARM_TMUX_SESSION`, `FOXWARM_DATA_DIR`, PATH
 and other launch settings. Restart installs the root/WebUI lockfiles and builds
 the complete resources in staging while the old Main continues running. Only a
-successful build proceeds to Ctrl+C, waits for the exact dedicated tmux pane's
-foreground Main to drain, promotes the output, and sends the new launch command.
+successful build stops Main using its PID in the checkout-root `foxwarm.pid`,
+waits for Main and its launcher to exit, promotes the output, and sends the new
+launch command to the same interactive tmux pane. The PID is checked against this
+installation before signalling; stale or unrelated PIDs are ignored. On the first
+restart of an older PID-less launch, the script finds and validates Main in the
+exact pane's foreground process group.
+A Main that has not exited 60 seconds after SIGTERM receives SIGKILL; this is
+equivalent to a crash, and busy Sessions resume at the next start.
+`./scripts/stop.sh` uses the same stop-and-wait path, leaving the tmux shell and
+window available. Stopping works while the pane is in copy mode.
 For first startup, `./scripts/start.sh` uses the same staging and promotion; it
 refuses an existing exact session. Restart also creates the session if absent.
 
@@ -52,8 +60,8 @@ dependencies, then stops Main, promotes and starts the replacement. If lockfiles
 changed or dependencies are missing, use `npm run stop:windows` followed by
 `npm run start:windows`; the latter installs both lockfiles before building.
 PowerShell `scripts/start.ps1` and `scripts/restart.ps1` use these commands;
-`-SkipBuild` starts/restarts the already selected runtime. First source installers
-perform the same prerequisite checks and preserve their external data directory.
+`-SkipBuild` starts/restarts the already selected runtime. The public installers
+install release packages, not source checkouts; they refuse a source checkout.
 
 For a foreground source launch, `npm run build-all` followed by `node .` builds
 and selects the complete payload. With dependencies already installed,
@@ -82,16 +90,17 @@ selected payload; source changes to them require a new build. Global skills
 retain their installation-relative `skills/` default or configured
 `paths.skillsDir`. Their packaged copies serve standalone published runtimes.
 
-Older runtime directories are retained deliberately. An independent Linux exec
-script records its original DLL path and calls it again to write completion
-status, even after Main has restarted. Existing Main/CLI processes and their
-helpers can also hold their original resources. Keep an old directory until
-those consumers have finished; stopping Main alone is not sufficient. Remove
-obsolete directories manually after checking this condition, and never remove
-the selected target of `runtime/current`. There is no automatic cleanup or
+Promotion by the start/restart controls happens after Main has stopped, so it
+removes every earlier output and keeps only the newly selected one. A standalone
+`npm run build` may run beside Main and leaves earlier outputs in place; the
+next restart removes them. On Windows, an output that a process still holds is
+kept and retried at a later promotion. Independent exec commands write their
+own completion status and do not need their original output. Commands started
+by an earlier Main that still called its output for completion lose their exit
+status if they are still running when that output is removed. There is no
 rollback service. On the first update from the earlier Debug-output layout,
 retain `dotnet/Foxwarm/bin/Debug/net10.0` until its old processes and independent
-execs have finished as well.
+execs have finished.
 
 Build and restart operations on one checkout should be run serially. The scripts
 use ordinary directory moves/link changes; they do not coordinate concurrent

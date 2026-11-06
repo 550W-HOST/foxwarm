@@ -4,7 +4,7 @@ import path from 'path';
 import { nativeFileOperations } from './fileOperations';
 import { resolveValidatedExecCwd } from './execCwd';
 import { expandAgentPathVariable } from './agentPathVariables';
-import { nativeProcessOperations, type ProcessOperations } from './processOperations';
+import { independentProcessEnvironment, nativeProcessOperations, type ProcessOperations } from './processOperations';
 import type { ExecStatus, RunningExecEntry, StartPersistentExecOptions, PersistentExecManagerOptions } from './persistentExec';
 
 const MISSING_STATUS_GRACE_MS = 3000;
@@ -203,7 +203,7 @@ export class NativeExecBackend {
     try {
       options.onBeforeProcessLaunch?.();
       // Reserved names belong to this launch, not to the host process or a prior Agent.
-      const hostEnv = { ...process.env };
+      const hostEnv = independentProcessEnvironment(process.env, platform);
       for (const key of Object.keys(hostEnv)) {
         const name = platform === 'win32' ? key.toLowerCase() : key;
         if (name === 'fw_agentdir' || name === 'fw_tmp') delete hostEnv[key];

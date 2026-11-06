@@ -2,6 +2,8 @@
 'use strict';
 
 const net = require('node:net');
+const fs = require('node:fs');
+const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { spawn } = require('node:child_process');
 const { coreExecutable } = require('./core-executable');
@@ -16,6 +18,9 @@ async function main() {
   let connection;
   let server;
   let stopping = false;
+  const pidFile = path.join(path.dirname(__dirname), 'foxwarm.pid');
+  let pid;
+  let exitSignal;
   if (windows) {
     server = net.createServer(socket => {
       connection = socket;
@@ -49,22 +54,38 @@ async function main() {
       if (stopping) connection.write('stop\n');
     }
     await new Promise((resolve, reject) => {
+      let pidError;
+      child.once('spawn', () => {
+        try {
+          fs.writeFileSync(pidFile, `${child.pid}\n`);
+          pid = `${child.pid}\n`;
+        } catch (error) {
+          pidError = error;
+          stop();
+        }
+      });
       child.once('error', error => reject(new Error(`Cannot launch Foxwarm Main: ${error.message}. Make the .NET 10 ASP.NET Core runtime available on PATH.`)));
       child.once('exit', (code, signal) => {
         process.exitCode = code ?? 1;
-        if (signal) {
-          // Preserve crash/signal status; ordinary requested shutdown uses Main's exit code.
-          for (const name of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.removeListener(name, stop);
-          process.kill(process.pid, signal);
-        }
-        resolve();
+        exitSignal = signal;
+        if (pidError) reject(pidError);
+        else resolve();
       });
     });
   } finally {
     for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.removeListener(signal, stop);
     connection?.destroy();
     if (server?.listening) server.close();
+    if (pid) {
+      try {
+        if (fs.readFileSync(pidFile, 'utf8') === pid) fs.unlinkSync(pidFile);
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+      }
+    }
   }
+  // Remove the PID file before preserving Main's crash/signal status.
+  if (exitSignal) process.kill(process.pid, exitSignal);
 }
 
 main().catch(error => {

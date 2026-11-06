@@ -12,23 +12,33 @@ export const zh: HomeStrings = {
   },
   nav: { features: '功能', install: '安装', docs: '文档', github: 'GitHub', theme: '切换配色', language: 'English', languageLabel: 'Switch to English', skip: '跳到正文' },
   hero: {
-    eyebrow: '开源 · 自托管 · MIT 协议',
-    titleLines: ['持续工作的 AI Agent，', '运行在你自己的机器上。'],
-    lede: 'Foxwarm 是一个自托管的 Agent 工作台。Agent 能读代码、在你接入的机器上跑命令、把任务交给其他会话，重启之后接着干。你可以在浏览器里用它，也可以把它拉进团队群聊。',
-    primary: '安装 Foxwarm',
-    secondary: '阅读文档',
+    title: '合上电脑，它还在干活。',
+    lede: 'Foxwarm 把 AI Agent 跑在你自己的服务器上。一个任务可以连续跑好几天，分派到你的多台机器上，并在你所在的地方汇报：浏览器、手机，或者团队群聊。',
+    timeline: {
+      label: '一个周二，一个任务',
+      rows: [
+        { time: '09:10', place: '笔记本', icon: 'laptop', text: '你说：', quote: 'main 分支的 CI 挂了，查一下原因并修好。' },
+        { time: '09:12', place: 'build-box', icon: 'server', text: '它开了一个子会话，让它到构建服务器上跑测试。' },
+        { time: '09:30', icon: 'moon', text: '你合上电脑去开会。活儿还在继续。', highlight: true },
+        { time: '12:40', place: '手机', icon: 'phone', text: '你在手机上打开子会话，插了一句：', quote: 'prorate() 里保留完整精度。' },
+        { time: '18:30', place: '团队群', icon: 'chat', text: '它在团队群里发了两句话的总结。同事追问，它基于完整历史回答。' }
+      ],
+      footer: '每一步都是一个会话，随时可以打开、查看、插话。',
+      link: 'Foxwarm 如何工作'
+    },
+    shotCaption: '同一个任务在 Foxwarm WebUI 里的样子。真实截图，演示项目。',
     screenshotAlt: 'Foxwarm WebUI 的 Conversation 视图：用户请 Agent 修复失败的测试，Agent 汇报了原因、修复方式和提交记录。侧边栏列出了其他会话，其中一些带有子会话。'
   },
   install: {
-    tabs: { linux: 'Linux / WSL', windows: 'Windows', docker: 'Docker' },
+    tabs: { linux: 'Linux / macOS', windows: 'Windows', docker: 'Docker' },
     copy: '复制',
     copied: '已复制',
     notes: {
-      linux: '支持 Linux x64 和 x64 WSL。从源码构建，需要 Git、Node.js、.NET 10 SDK 和少量编译工具。',
-      windows: '支持 Windows x64，在 PowerShell 中运行。从源码构建，需要 Git、Node.js、.NET 10 SDK 和 Python 3。',
-      docker: '适用于装有 Docker Compose 的 Linux x64，所有依赖都在镜像内构建。'
+      linux: '支持 Linux x64（包括 WSL）和 macOS arm64。下载预编译版本并在后台启动，有 tmux 时优先使用；系统没有兼容运行时则使用自带 .NET 的版本。',
+      windows: '支持 Windows x64，在 PowerShell 中运行。下载预编译版本并在后台运行；另有 Windows 桌面版。',
+      docker: '适用于装有 Docker 的 Linux x64。运行已发布的镜像，内含 Chromium 和 Node.js；数据保存在 foxwarm-data。'
     },
-    requirementsLink: '依赖和安装选项'
+    requirementsLink: '安装包和环境要求'
   },
   strip: {
     label: '兼容',
@@ -131,12 +141,11 @@ export const zh: HomeStrings = {
     title: '几分钟就能跑起来。',
     lede: '程序文件和数据放在不同的目录里，升级和备份都很简单。',
     steps: [
-      { title: '安装', body: '运行对应平台的安装脚本。它会构建并启动 Foxwarm，然后输出 WebUI 的登录链接。' },
+      { title: '安装', body: '运行对应平台的安装脚本。它会下载发布版本、启动 Foxwarm，然后输出 WebUI 的登录链接。' },
       { title: '添加模型', body: '打开 Setup → Models，填写服务商、模型 ID 和 API Key。' },
       { title: '开始会话', body: '和默认 Agent 对话，给它指定工作目录；需要时再添加节点或渠道。' }
     ],
     guide: '完整安装指南'
   },
-  final: { title: '把你的 Agent 带回家。', body: '基于 MIT 协议免费开源。', primary: '安装 Foxwarm', secondary: '在 GitHub 上 Star' },
   footer: { tagline: '自托管的 AI Agent，MIT 协议开源。', docs: '文档', github: 'GitHub', license: '许可证' }
 };

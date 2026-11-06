@@ -37,6 +37,18 @@ internal static class AppConfigurationRules
             "app config `handoffConfirmation`",
             app.ContainsKey("handoffConfirmation")
         );
+        _ = SessionAutoTitle(app);
+    }
+
+    // Absent means off; new installations receive `true` from their initial configuration.
+    internal static bool SessionAutoTitle(JsonObject app)
+    {
+        if (!app.ContainsKey("sessionAutoTitle"))
+            return false;
+        return
+            app["sessionAutoTitle"] is JsonValue value && value.TryGetValue<bool>(out var enabled)
+            ? enabled
+            : throw new InvalidDataException("app config `sessionAutoTitle` must be a boolean.");
     }
 
     private static void Tree(JsonNode? value, bool present, string name)
@@ -104,7 +116,7 @@ internal static class AppConfigurationRules
     {
         if (value is not JsonObject llm)
             return;
-        HostModels.ValidateDefaults(llm, "llm");
+        HostModels.ValidateDefaults(llm, "llm", modelsScope: false);
         Fraction(
             llm,
             llm.ContainsKey("compactKeepPercent") ? "compactKeepPercent" : "compactPercent",

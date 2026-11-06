@@ -16,9 +16,8 @@ internal sealed partial class CodeWorkbench
     private readonly string dataRoot;
     private readonly string? appConfig;
     private readonly string? modelsConfig;
-    private readonly string assetRoot;
     private readonly string extensionRoot;
-    private readonly string yamlRoot;
+    private readonly string installedAssets;
     private readonly string defaultFolder;
     private readonly string workspacePath;
     private readonly bool hasPty;
@@ -46,12 +45,22 @@ internal sealed partial class CodeWorkbench
         var resources = config?.Paths.ResourceRoot ?? AppContext.BaseDirectory;
         appConfig = config is null ? null : Path.GetFullPath(config.AppPath);
         modelsConfig = config is null ? null : Path.GetFullPath(config.ActivePath);
-        assetRoot = Path.Combine(resources, "packages", "vscode-web", "assets", "vscode-web");
         extensionRoot = Path.Combine(resources, "packages", "vscode-web");
-        yamlRoot = Path.Combine(extensionRoot, "assets", "extensions", "redhat.vscode-yaml");
+        installedAssets = Path.Combine(applicationRoot, "packages", "vscode-web", "assets");
         defaultFolder = FoxwarmUri(applicationRoot);
         workspacePath = Path.Combine(dataRoot, "state", "vscode-web", "foxwarm.code-workspace");
     }
+
+    // Prepared Code assets are optional and outlive replaced payloads. A payload that
+    // ships or mounts them wins; otherwise they belong to the installation, where
+    // `build:code` and `download:code` write them. Checked per request so assets
+    // prepared while Main runs need only a reload.
+    private string Assets =>
+        Directory.Exists(Path.Combine(extensionRoot, "assets", "vscode-web"))
+            ? Path.Combine(extensionRoot, "assets")
+            : installedAssets;
+    private string AssetRoot => Path.Combine(Assets, "vscode-web");
+    private string YamlRoot => Path.Combine(Assets, "extensions", "redhat.vscode-yaml");
 
     private bool Prepared =>
         new[]
@@ -59,8 +68,8 @@ internal sealed partial class CodeWorkbench
             "out/nls.messages.js",
             "out/vs/workbench/workbench.web.main.internal.css",
             "out/vs/workbench/workbench.web.main.internal.js",
-        }.All(file => File.Exists(Path.Combine(assetRoot, file)));
-    private bool HasYaml => File.Exists(Path.Combine(yamlRoot, "package.json"));
+        }.All(file => File.Exists(Path.Combine(AssetRoot, file)));
+    private bool HasYaml => File.Exists(Path.Combine(YamlRoot, "package.json"));
 
     internal JsonObject Roots()
     {

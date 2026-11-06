@@ -13,6 +13,7 @@ internal static class SessionRuntimeState
             || SessionWait.Strings(wait["waitAll"]?["sessions"]).Length == 0
                 && SessionWait.Strings(wait["waitAnySessions"]).Length == 0
                 && SessionWait.Strings(wait["waitExecIds"]).Length == 0
+                && SessionWait.Strings(wait["waitQuestionIds"]).Length == 0
                 && wait["waitForInput"]?.GetValue<bool>() != true
                 && !(SessionWait.Number(wait["timeoutSeconds"]) > 0)
         )
@@ -27,6 +28,7 @@ internal static class SessionRuntimeState
                 "timeoutSeconds",
                 "waitAnySessions",
                 "waitExecIds",
+                "waitQuestionIds",
                 "waitForInput",
                 "declarationVersion",
             }
@@ -137,13 +139,15 @@ internal static class SessionRuntimeState
         var all = SessionWait.Strings(wait["waitAll"]?["sessions"]);
         var any = SessionWait.Strings(wait["waitAnySessions"]);
         var exec = SessionWait.Strings(wait["waitExecIds"]);
+        var questions = SessionWait.Strings(wait["waitQuestionIds"]);
         var satisfied = SessionWait.Strings(wait["waitAll"]?["satisfiedSessions"]);
         var input = wait["waitForInput"]?.GetValue<bool>() == true;
         var details = new JsonObject
         {
             ["waitId"] = wait["id"]?.DeepClone(),
             ["waitingFor"] =
-                all.Length > 0 ? "all-sessions"
+                questions.Length > 0 ? "question"
+                : all.Length > 0 ? "all-sessions"
                 : any.Length > 0 ? "any-session"
                 : exec.Length > 0 ? "exec"
                 : input ? "input"
@@ -165,6 +169,7 @@ internal static class SessionRuntimeState
                 "reason",
                 "waitAnySessions",
                 "waitExecIds",
+                "waitQuestionIds",
                 "waitForInput",
                 "timeoutSeconds",
             }

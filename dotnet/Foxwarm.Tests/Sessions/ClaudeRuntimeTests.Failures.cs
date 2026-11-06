@@ -210,10 +210,13 @@ public sealed partial class ClaudeRuntimeTests
             Assert.True(JsonNode.DeepEquals(previous[key], checkpoint[key]), key);
         Assert.Single(f.Lines("inputs.jsonl"));
         await new SessionRuntime(f.Main.Manager).ContinueAsync(f.Owner.Id);
-        var input = f.Lines("inputs.jsonl")[1];
+        var inputs = f.Lines("inputs.jsonl");
+        Assert.Equal(2, inputs.Length);
+        var input = inputs[1];
         Assert.True(input["resumed"]!.GetValue<bool>());
-        Assert.Contains("second input", input["input"]!.ToJsonString());
-        Assert.DoesNotContain("first input", input["input"]!.ToJsonString());
+        var content = Assert.Single(input["input"]!["message"]!["content"]!.AsArray());
+        Assert.Equal("text", content!["type"]!.GetValue<string>());
+        Assert.Equal("second input", content["text"]!.GetValue<string>());
     }
 
     [Fact]

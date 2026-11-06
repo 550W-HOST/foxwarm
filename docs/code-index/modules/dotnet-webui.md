@@ -14,9 +14,12 @@ The .NET HTTP/WebSocket surface consumed by the React WebUI. `HttpServer` owns a
 - [Managed Main Logs and file diagnostics](../units/dotnet-webui-logs.md)
 - [Main-owned artifact publication and reads](../units/dotnet-artifacts.md)
 - [WebUI realtime event publisher](../units/dotnet-webui-realtime.md)
+- [Session sequence projection route](../units/dotnet-session-sequence.md)
+- [Structured user question routes](../units/session-questions.md)
 
 ## Cross-module contracts
 
 - [.NET WebUI boundary](../threads/dotnet-webui-boundary.md)
 - [Session ownership and persistence](../threads/session-ownership-and-persistence.md)
 - [Tasks, timers, waits, and notifications](../threads/tasks-timers-and-waits.md)
+- [Session sequence view](../threads/session-sequence-view.md)

@@ -11,7 +11,9 @@ internal sealed record VectorSearchOptions(
     IReadOnlyList<ArchiveVectorScope>? LineageSessions = null,
     string? IncludeRegex = null,
     string? ExcludeRegex = null,
-    bool PreferBlocks = false
+    bool PreferBlocks = false,
+    long? StartTime = null,
+    long? EndTime = null
 );
 
 internal sealed record VectorSearchResult(IReadOnlyList<JsonObject> Hits, JsonObject Lexical);
@@ -175,7 +177,15 @@ internal sealed partial class VectorRuntime
             });
             clauses.Add("(" + string.Join(" OR ", branches) + ")");
         }
-        else if (options.SessionIds is { Length: > 0 } ids)
+        if (options.StartTime is { } startTime)
+            clauses.Add(
+                $"(end_timestamp >= {startTime} OR (end_timestamp IS NULL AND (memory_kind IS NULL OR (memory_kind != 'block' AND (memory_kind != 'fact' OR block_id IS NULL))) AND timestamp >= {startTime}))"
+            );
+        if (options.EndTime is { } endTime)
+            clauses.Add(
+                $"(start_timestamp < {endTime} OR (start_timestamp IS NULL AND (memory_kind IS NULL OR (memory_kind != 'block' AND (memory_kind != 'fact' OR block_id IS NULL))) AND timestamp < {endTime}))"
+            );
+        if (options.SessionIds is { Length: > 0 } ids)
             clauses.Add(
                 "("
                     + string.Join(
@@ -391,15 +401,20 @@ internal sealed partial class VectorRuntime
                             entry.Hit.Remove(key);
                     entry.Hit["lexical_lane"] = lane;
                 }
+                entry.Hit["lexical_rank"] = entry.Lexical;
                 families[family] = entry;
             }
         }
+        double FusionScore(
+            (JsonObject Hit, int? Dense, int? Lexical, string Lane, double Score) entry
+        ) =>
+            (entry.Dense is { } d ? 1000d / (d + 1) : 0)
+            + (entry.Lexical is { } l ? (entry.Lane == "prose" ? 350d : 1200d) / (l + 1) : 0)
+            + (entry.Dense is not null && entry.Lexical is not null ? 180 : 0);
+        foreach (var entry in families.Values)
+            entry.Hit["fusion_score"] = FusionScore(entry);
         var ranked = families
-            .Values.OrderByDescending(entry =>
-                (entry.Dense is { } d ? 1000d / (d + 1) : 0)
-                + (entry.Lexical is { } l ? (entry.Lane == "prose" ? 350d : 1200d) / (l + 1) : 0)
-                + (entry.Dense is not null && entry.Lexical is not null ? 180 : 0)
-            )
+            .Values.OrderByDescending(FusionScore)
             .ThenBy(entry => entry.Dense ?? int.MaxValue)
             .ThenByDescending(entry => entry.Score)
             .ThenBy(

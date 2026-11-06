@@ -90,7 +90,7 @@ try {
   assert.equal((await fixture.api('GET', '/api/session-list/search?q=%20')).body.code, 'SESSION_LIST_SEARCH_INVALID')
   assert(sql("EXPLAIN QUERY PLAN SELECT metadata_json FROM session_catalog WHERE parent_session_id='root' AND pinned=0 ORDER BY archived,recent_rank,session_id LIMIT 3").some(row => /idx_session_catalog_parent_time/.test(row.detail)))
   const page = await fixture.openApp(); await page.evaluate(() => { location.hash = 'architecture' })
-  await page.waitForSelector('.foxwarm-architecture-surface-tab'); await page.evaluate(() => [...document.querySelectorAll('.foxwarm-architecture-surface-tab')].find(button => button.textContent.trim() === 'Agents').click()); await page.waitForSelector('[data-architecture-agent-id="team"]'); await page.evaluate(() => { location.hash = 'chat' }); await page.waitForSelector('.foxwarm-chat-root')
+  await page.waitForSelector('[data-system-tab="agents"]'); await page.click('[data-system-tab="agents"]'); await page.waitForSelector('[data-architecture-agent-id="team"]'); await page.evaluate(() => { location.hash = 'chat' }); await page.waitForSelector('.foxwarm-chat-root')
   assert.equal(await page.evaluate(() => Boolean(window.foxwarmTest?.switchToSession)), true)
   await page.evaluate(() => window.foxwarmTest.switchToSession('root')); await until(async () => await page.evaluate(() => document.body.innerText.includes('Source root')), 'original Sidebar source name')
   socket = new WebSocket(fixture.origin.replace('http:', 'ws:') + '/api/webui/stream', { headers: { authorization: 'Bearer synthetic-catalog-app-api' } }); socket.on('message', raw => frames.push(JSON.parse(raw)))

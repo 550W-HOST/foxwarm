@@ -54,7 +54,7 @@ internal static class MainLocalToolDefinitions
             ),
             Tool(
                 "write_memory",
-                "Create a file in this agent's memory directory on master. Existing files are not overwritten; use edit_memory to modify one.",
+                "Create a file in this agent's memory directory on master. Existing files are not overwritten; use edit_memory to modify one. Top-level .md files in this directory are part of the system prompt of every Session of this agent and of agents that inherit it.",
                 Parameters(
                     new JsonObject
                     {
@@ -69,7 +69,7 @@ internal static class MainLocalToolDefinitions
             ),
             Tool(
                 "edit_memory",
-                "Replace one exact occurrence of text in a file in this agent's memory directory on master.",
+                "Replace one exact occurrence of text in a file in this agent's memory directory on master. Top-level .md files in this directory are part of the system prompt of every Session of this agent and of agents that inherit it.",
                 Parameters(
                     new JsonObject
                     {
@@ -101,7 +101,7 @@ internal static class MainLocalToolDefinitions
             ),
             Tool(
                 "apply_patch_memory",
-                "Add, modify, or delete files in this agent's memory directory on master using the apply_patch format. Paths in patch headers are relative to the memory directory; a memory/ prefix is also accepted.",
+                "Add, modify, or delete files in this agent's memory directory on master using the apply_patch format. Paths in patch headers are relative to the memory directory; a memory/ prefix is also accepted. Top-level .md files in this directory are part of the system prompt of every Session of this agent and of agents that inherit it.",
                 Parameters(
                     new JsonObject
                     {

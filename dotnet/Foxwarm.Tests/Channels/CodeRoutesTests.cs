@@ -21,18 +21,23 @@ public sealed class CodeRoutesTests
         internal string Data => Path.Combine(Temp.Path, "data literal%20 space 雪");
         internal string Assets =>
             Path.Combine(Temp.Path, "resources/packages/vscode-web/assets/vscode-web");
+        internal string InstalledAssets =>
+            Path.Combine(Temp.Path, "installation/packages/vscode-web/assets/vscode-web");
         internal string Work => Path.Combine(Temp.Path, "work");
 
-        internal static async Task<Fixture> Create()
+        internal static async Task<Fixture> Create(bool separateInstallation = false)
         {
             var f = new Fixture();
             Directory.CreateDirectory(f.Data);
             Directory.CreateDirectory(f.Work);
             Directory.CreateDirectory(Path.Combine(f.Temp.Path, "resources"));
+            Directory.CreateDirectory(Path.Combine(f.Temp.Path, "installation"));
             var config = new ModelConfiguration(
                 HostPaths.ForDataRoot(
                     f.Data,
-                    applicationRoot: AppContext.BaseDirectory,
+                    applicationRoot: separateInstallation
+                        ? Path.Combine(f.Temp.Path, "installation")
+                        : AppContext.BaseDirectory,
                     resourceRoot: Path.Combine(f.Temp.Path, "resources")
                 )
             );
@@ -86,7 +91,7 @@ public sealed class CodeRoutesTests
     [Fact]
     public async Task Missing_Code_assets_return_the_actionable_noncacheable_setup_page()
     {
-        await using var f = await Fixture.Create();
+        await using var f = await Fixture.Create(separateInstallation: true);
         using var response = await f.Client.GetAsync("/vscode-web");
         Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
         Assert.Equal("text/html", response.Content.Headers.ContentType!.MediaType);
@@ -96,7 +101,41 @@ public sealed class CodeRoutesTests
         Assert.Contains("Code is not built", html);
         Assert.Contains("npm run build:code", html);
         Assert.Contains("npm run download:code", html);
-        Assert.Contains(WebUtility.HtmlEncode(f.Assets), html);
+        Assert.Contains(WebUtility.HtmlEncode(f.InstalledAssets), html);
+        using var asset = await f.Client.GetAsync("/vscode-web/static/out/nls.messages.js");
+        Assert.Equal(HttpStatusCode.NotFound, asset.StatusCode);
+    }
+
+    [Fact]
+    public async Task Code_assets_fall_back_to_the_installation_unless_the_payload_has_them()
+    {
+        await using var f = await Fixture.Create(separateInstallation: true);
+        foreach (
+            var file in new[]
+            {
+                "out/nls.messages.js",
+                "out/vs/workbench/workbench.web.main.internal.css",
+                "out/vs/workbench/workbench.web.main.internal.js",
+            }
+        )
+        {
+            var target = Path.Combine(f.InstalledAssets, file);
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            await File.WriteAllTextAsync(target, "installed " + file);
+        }
+        Assert.Equal(
+            "installed out/nls.messages.js",
+            await f.Client.GetStringAsync("/vscode-web/static/out/nls.messages.js")
+        );
+
+        // A payload asset directory takes precedence even before it is complete.
+        Directory.CreateDirectory(f.Assets);
+        using var response = await f.Client.GetAsync("/vscode-web");
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Contains(
+            WebUtility.HtmlEncode(f.Assets),
+            await response.Content.ReadAsStringAsync()
+        );
         using var asset = await f.Client.GetAsync("/vscode-web/static/out/nls.messages.js");
         Assert.Equal(HttpStatusCode.NotFound, asset.StatusCode);
     }

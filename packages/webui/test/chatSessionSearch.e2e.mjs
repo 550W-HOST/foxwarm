@@ -31,7 +31,7 @@ before(async () => {
     const response = (id, seq, name, data) => ({role:'tool',parts:[{functionResponse:{tool_use_id:id,name,response:data}}],__meta:{seq,timestamp:1700000000000+seq}})
     const toolBody = 'A'.repeat(900) + ' CJK目标尾部 & <safe>'
     const history = [...old,
-      call('exec-a',109,'exec',{command:'echo command-needle'}), response('exec-a',110,'exec',{output:toolBody}),
+      call('exec-a',109,'exec',{command:'echo command-needle',cwd:'/workspace/EXEC_CWD_NEEDLE',timeout:0,extra:false}), response('exec-a',110,'exec',{output:toolBody}),
       call('read-b',111,'read',{filePath:'search-target.txt'}), response('read-b',112,'read',{output:'read-file-needle\\nagain'}),
       call('custom-c',113,'unknown_tool',{payload:{needle:'fallback-needle'}}), response('custom-c',114,'unknown_tool',{output:{data:'json-needle'}}),
       {role:'model',parts:[{thinking:'First reasoning summary'},{thinking:'Reasoning **thought-needle** here'},{thinking:'',providerMeta:{thinkingSummaries:[],encryptedThinking:'opaque-search-not-visible'}},{text:'Final hello **world** &amp; safe content'},{text:'Text plus image keeps visible-needle',inlineData:{mimeType:'image/png',data:'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='}}],__meta:{seq:115,timestamp:1700000000115,usage:{reasoningTokens:31}}},
@@ -47,6 +47,14 @@ before(async () => {
       {role:'model',parts:[{text:'start\\n\\n\\\\[\\nZ\\n\\\\]\\n\\nZ after'}],__meta:{seq:128,timestamp:1700000000128}},
       {role:'model',modelVisible:false,parts:[{text:'⚠️ LLM Error: Attempt 1/5 failed: LLM_RETRY_SEARCH_TARGET\\nAttempt 2/5 failed: second retry'}],__meta:{seq:129,timestamp:1700000000129,noticeType:'llm-retry'}},
     ]
+    history.find(row => row.__meta.seq === 109).parts.push(
+      { functionCall: { id: 'script-inline', name: 'run_script', args: { summary: 'SCRIPT_PURPOSE_NEEDLE', code: 'value = "SCRIPT_SOURCE_NEEDLE"\\nreturn value', args: { marker: 'SCRIPT_INPUT_NEEDLE', enabled: false }, mode: 'foreground' } } },
+      { functionCall: { id: 'script-file', name: 'run_script', args: { filePath: './scripts/SCRIPT_PATH_NEEDLE.py', node: 'SCRIPT_NODE_NEEDLE', argsJson: '{"value":"SCRIPT_JSON_NEEDLE"}' } } },
+    )
+    history.find(row => row.__meta.seq === 110).parts.push(
+      { functionResponse: { tool_use_id: 'script-inline', name: 'run_script', response: { status: 'completed', result: 1 } } },
+      { functionResponse: { tool_use_id: 'script-file', name: 'run_script', response: { status: 'completed', result: 2 } } },
+    )
     const channelAttrs = {type:'channel',channelType:'webui',time:'METADATA_ONLY',hint:'direct user message via channel'}
     const wrapperBodies = ${JSON.stringify(wrapperBodies)}
     // Text-only channel ingress stores the complete envelope in one system part; attachments use split boundaries.
@@ -63,7 +71,7 @@ before(async () => {
         const wrapped = url.includes('fixture%2Fwrapped')
         const compact = url.includes('fixture%2Fcompact-')
         const messages = compact ? window.fixture.compactHistory : wrapped ? wrappedHistory : history
-        return new Response(JSON.stringify({session:{id:compact?window.fixture.compactSessionId:wrapped?'fixture/wrapped':'fixture/main',busy:compact?window.fixture.compactRuntime.busy:false,busyStartedAt:compact?window.fixture.compactBusyStartedAt:null,runtimeState:compact?window.fixture.compactRuntime:{state:'idle'},queueLength:0,messageCount:messages.length,historyVersion:0,modelKey:'fixture/model'},messages,queuedMessages:[],queueLength:0,latestSeq:compact?messages.at(-1).__meta.seq:wrapped?503:129,historyVersion:0,prefixLength:0,historyComplete:true}),{status:200,headers:{'Content-Type':'application/json'}})
+        return new Response(JSON.stringify({session:{id:compact?window.fixture.compactSessionId:wrapped?'fixture/wrapped':'fixture/main',busy:compact?window.fixture.compactRuntime.busy:false,busyStartedAt:compact?window.fixture.compactBusyStartedAt:null,runtimeState:compact?window.fixture.compactRuntime:{state:'idle'},queueLength:0,messageCount:messages.length,historyVersion:0,modelKey:'fixture/model'},messages,persistentMemorySnapshot:compact?'SNAPSHOT_SEARCH_EXCLUDED':undefined,queuedMessages:[],queueLength:0,latestSeq:compact?messages.at(-1).__meta.seq:wrapped?503:129,historyVersion:0,prefixLength:0,historyComplete:true}),{status:200,headers:{'Content-Type':'application/json'}})
       }
       if (url.includes('/models')) return new Response(JSON.stringify({models:[{key:'fixture/model',contextLimit:128000}]}),{status:200})
       if (url.includes('/asr/status')) return new Response(JSON.stringify({configured:false,available:false}),{status:200})
@@ -240,6 +248,20 @@ test('finds already-loaded older unmounted rows, read results, reasoning, render
   }
   const state=await snapshot();assert.equal(state.oldMounted,true);assert.equal(state.archive,0)
   assert.equal(await page.$eval('.foxwarm-context-block-card [aria-label="Expand CTX-BLOCK B#7"]',el=>el.getAttribute('aria-expanded')),'false')
+  await page.click('[aria-label="Close search"]')
+})
+
+test('execution argument Search reaches supplied options, full script code and input objects', async () => {
+  await page.click('button[aria-label="Find in chat"]')
+  for (const needle of ['EXEC_CWD_NEEDLE', 'timeout: 0', 'extra: false', 'SCRIPT_PURPOSE_NEEDLE', 'SCRIPT_SOURCE_NEEDLE', 'SCRIPT_INPUT_NEEDLE', 'SCRIPT_PATH_NEEDLE', 'SCRIPT_NODE_NEEDLE', 'SCRIPT_JSON_NEEDLE']) {
+    await query(needle)
+    await page.waitForFunction(value => [...CSS.highlights].some(([name, highlights]) => name.startsWith('foxwarm-chat-search-') && [...highlights][0]?.toString() === value), { timeout: 4000 }, needle)
+    const state = await snapshot()
+    assert.equal(state.hits, '1/1', needle)
+    assert.equal(state.surface, 'call', needle)
+    assert.equal(state.visible, true, needle)
+  }
+  assert.equal((await snapshot()).archive, 0)
   await page.click('[aria-label="Close search"]')
 })
 
@@ -664,4 +686,37 @@ test('a leading execution origin is usable without an input, but unknown earlier
   assert.match(await page.$$eval('[data-timeline-activity]', nodes => nodes.at(-1).textContent), /Elapsed 30s/)
   assert.doesNotMatch(await page.$$eval('[data-timeline-activity]', nodes => nodes.at(-1).textContent), /Worked|Waited/)
   assert.deepEqual(await page.$$eval('[data-timeline-time-separator] time', nodes => nodes.map(node => node.dateTime)), [new Date(base - 400000).toISOString()])
+})
+
+test('internal history and Search follow mode switches while the active snapshot stays synthetic', async () => {
+  await page.reload({ waitUntil: 'load' })
+  await page.waitForFunction(() => !!window.fixture?.showCompactTiming)
+  const history = [
+    { role: 'user', parts: [{ system: '<foxwarm-system kind="session-boundary" event="first-run">\nFIRST_RUN_TARGET\n</foxwarm-system>' }], __meta: { seq: 901 } },
+    { role: 'model', parts: [{ text: 'Welcome to the conversation' }], __meta: { seq: 902 } },
+    { role: 'user', parts: [{ system: '<foxwarm-system kind="session-settings-changed">\nSETTINGS_TARGET\n</foxwarm-system>' }], __meta: { seq: 903 } },
+    { role: 'user', parts: [{ text: 'Visible user message' }], __meta: { seq: 904 } },
+  ]
+  await page.evaluate(history => window.fixture.showCompactTiming(history, 1700000000000, { state: 'idle', busy: false }), history)
+  await page.waitForFunction(() => document.querySelector('.foxwarm-chat-messages')?.textContent.includes('Visible user message'))
+  await page.click('button[aria-label="Find in chat"]')
+  for (const view of ['conversation', 'detailed', 'grouped', 'conversation']) {
+    await page.evaluate(view => window.fixture.setTimelineView(view), view)
+    for (const [seq, term] of [[901, 'FIRST_RUN_TARGET'], [903, 'SETTINGS_TARGET']]) {
+      await query(term)
+      if (view === 'conversation') {
+        await page.waitForFunction(() => document.querySelector('[role="search"] [aria-live]')?.textContent === '0/0')
+        assert.equal(await page.$(`[data-search-row="seq-local-${seq}"]`), null)
+      } else {
+        await page.waitForFunction(term => [...CSS.highlights].some(([name, highlights]) => name.startsWith('foxwarm-chat-search-') && [...highlights][0]?.toString() === term), {}, term)
+        assert.equal((await snapshot()).hits, '1/1')
+        assert.equal((await snapshot()).visible, true)
+      }
+    }
+    assert.equal(!!await page.$('[data-context-scrollbar-anchor-key="persistent-memory-snapshot"]'), view !== 'conversation')
+    await query('SNAPSHOT_SEARCH_EXCLUDED')
+    await page.waitForFunction(() => document.querySelector('[role="search"] [aria-live]')?.textContent === '0/0')
+    assert.deepEqual(await page.evaluate(() => window.fixture.compactHistory), history, 'projection leaves source history unchanged')
+  }
+  await page.click('[aria-label="Close search"]')
 })

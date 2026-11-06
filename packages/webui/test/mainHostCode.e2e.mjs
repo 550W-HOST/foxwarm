@@ -51,7 +51,8 @@ options.env = { HOME: join(owned.root, 'home') }
 await mkdir(options.env.HOME)
 const git = (...args) => execFileSync('git', ['-C', owned.work, ...args], { encoding: 'utf8' }).trim()
 git('init', '-q'); git('config', 'user.name', 'Code Fixture'); git('config', 'user.email', 'code@example.invalid')
-await writeFile(join(owned.work, 'old.txt'), 'first\nselected second\nselected third\nlast\n')
+const committedNotes = 'first\nselected second\nselected third\nlast\n'
+await writeFile(join(owned.work, 'old.txt'), committedNotes)
 git('add', 'old.txt'); git('commit', '-qm', 'root fixture')
 const rootCommit = git('rev-parse', 'HEAD')
 git('mv', 'old.txt', 'notes.txt'); await writeFile(join(owned.work, 'binary.bin'), Buffer.from([0, 17, 255])); git('add', '.'); git('commit', '-qm', 'rename and binary fixture')
@@ -130,6 +131,8 @@ try {
   const state = await authority(), native = state.history.flatMap(row => row.parts || []).find(part => part.functionResponse?.tool_use_id === 'code-read').functionResponse
   assert.equal(native.__meta.resolvedPaths[0].resolved, join(owned.work, 'notes.txt'))
   stage('embedded workbench file and selection')
+  await page.waitForSelector('[aria-label="Expand activity"]'); await page.click('[aria-label="Expand activity"]')
+  await page.waitForFunction(() => document.querySelector('[data-activity-expanded="true"]')?.style.height === '')
   await page.waitForSelector('button[title="Open notes.txt in Code"]'); await page.click('button[title="Open notes.txt in Code"]')
   let code = await codeFrame(page); await code.waitForSelector('.editor-instance .view-lines', { timeout: 40000 })
   await code.waitForFunction(() => document.querySelector('.editor-instance .view-lines')?.textContent.replaceAll('\u00a0', ' ').includes('selected second'))
@@ -158,9 +161,24 @@ try {
   await page.evaluate(() => window.foxwarmTest.switchToSession('main')); await page.waitForSelector('button[title="Open commit details in Code"]'); await page.click('button[title="Open commit details in Code"]')
   const detailsFrame = await until(() => frameText(page, /rename and binary fixture[\s\S]*Changed files/), 'real SCM commit webview', 45000)
   assert((await detailsFrame.evaluate(() => document.body.innerText)).includes(owned.work)); assert((await detailsFrame.evaluate(() => document.body.innerText)).includes('binary'))
-  const diffButton = await detailsFrame.$('button.file:not([disabled])'); assert(diffButton); await diffButton.click()
-  code = await codeFrame(page); await code.waitForSelector('.monaco-diff-editor', { timeout: 30000 })
-  assert(codeResponses.some(row => row.url.includes('/api/vscode-web/git/content') && row.url.includes('ref=')))
+  const diffButton = await detailsFrame.$('button.file:not([disabled])'); assert(diffButton)
+  // The editor shell mounts before its asynchronous immutable content has loaded.
+  const diffDeadline = Date.now() + 30000
+  const [gitContent] = await Promise.all([
+    page.waitForResponse(response => {
+      const url = new URL(response.url())
+      return url.pathname.endsWith('/api/vscode-web/git/content') && url.searchParams.get('nodeId') === 'master'
+        && url.searchParams.get('workspace') === owned.work && url.searchParams.get('path') === 'notes.txt'
+        && url.searchParams.get('side') === 'base' && url.searchParams.get('ref') === commit
+    }, { timeout: 30000 }),
+    (async () => {
+      await diffButton.click(); code = await codeFrame(page)
+      await code.waitForSelector('.monaco-diff-editor', { timeout: Math.max(1, diffDeadline - Date.now()) })
+    })(),
+  ])
+  assert.equal(gitContent.status(), 200); assert.equal(await gitContent.text(), committedNotes)
+  await code.waitForFunction(() => [...document.querySelectorAll('.monaco-diff-editor .modified .view-lines')].some(node => node.textContent.replaceAll('\u00a0', ' ').includes('selected second')), { timeout: Math.max(1, diffDeadline - Date.now()) })
+  assert.doesNotMatch(await code.$$eval('.monaco-diff-editor .modified .view-lines', nodes => nodes.map(node => node.textContent).join('')), /Code saved line/)
   await page.evaluate(() => window.foxwarmTest.switchToSession('main'))
   await page.waitForSelector('code[title="' + rootCommit + '"]')
   await page.evaluate(id => document.querySelector('code[title="' + id + '"]').parentElement.parentElement.querySelector('button').click(), rootCommit)
@@ -176,15 +194,15 @@ try {
   assert(sidebar.parentFrame() !== code && sidebar.parentFrame().parentFrame() !== page.mainFrame(), 'Sidebar leaf must live inside the official webview frame.')
   await sidebar.click('[data-session-id="main"]')
   const chat = await until(() => page.frames().find(frame => new URL(frame.url() || 'about:blank').searchParams.get('foxwarmEmbed') === 'chat'), 'actual nested Chat editor', 30000)
-  await chat.waitForFunction(() => document.body.innerText.includes('CODE-TURN-DONE')); assert(!await chat.$('button[title="Terminal"], button[aria-label="Toggle terminal"]'))
+  await chat.waitForFunction(() => document.body.innerText.includes('CODE-TURN-DONE')); assert(!await chat.$('button[title="Terminal"], button[aria-label="Toggle terminal panel"]'))
   await sidebar.click('button[title="UI settings"]'); await sidebar.waitForFunction(() => document.body.innerText.includes('Open setup'))
   await sidebar.evaluate(() => [...document.querySelectorAll('button')].find(item => item.textContent.trim() === 'Open setup').click())
   const setup = await until(() => page.frames().find(frame => new URL(frame.url() || 'about:blank').searchParams.get('foxwarmEmbed') === 'setup'), 'actual nested Setup editor', 30000)
   await setup.waitForFunction(() => document.body.innerText.includes('Models') && document.body.innerText.includes('Setup'))
   stage('original App terminal and cwd')
-  await page.evaluate(() => window.foxwarmTest.switchToSession('main')); await page.waitForSelector('[data-workbench-status-bar] button[aria-label="Toggle terminal"]')
+  await page.evaluate(() => window.foxwarmTest.switchToSession('main')); await page.waitForSelector('[data-workbench-status-bar] button[aria-label="Toggle terminal panel"]')
   const appTerminalsBefore = (await owned.api('GET', '/api/terminals')).body.terminals
-  await page.click('[data-workbench-status-bar] button[aria-label="Toggle terminal"]')
+  await page.click('[data-workbench-status-bar] button[aria-label="Toggle terminal panel"]')
   await until(async () => (await owned.api('GET', '/api/terminals')).body.terminals.length === appTerminalsBefore.length + 1, 'original App terminal backend', 30000)
   const appTerminal = (await owned.api('GET', '/api/terminals')).body.terminals.find(row => !appTerminalsBefore.some(old => old.id === row.id)); assert(appTerminal)
   await page.waitForSelector('.xterm-screen, .xterm-rows', { timeout: 30000 }); await page.click('.xterm-screen, .xterm-rows'); await page.keyboard.type("printf 'APP-PTY\\n' > app-pty.txt"); await page.keyboard.press('Enter')
@@ -210,7 +228,25 @@ try {
   stage('workbench and workspace restore')
   // The retained Chat can match before asynchronous Session navigation commits.
   await page.waitForFunction(() => decodeURIComponent(location.hash) === '#tab/chat:main' && !document.querySelector('[data-pane-navigation-pending]'))
-  await page.click('button[title="Open notes.txt in Code"]'); code = await codeFrame(page); await code.waitForSelector('.monaco-workbench', { timeout: 30000 })
+  // The terminal stage left Chat in a short upper pane whose composer covers the lower half
+  // of the message list. Wheel both Activity and its file action into the readable band.
+  const clickReadableAction = async selector => {
+    await page.waitForSelector(selector)
+    await until(async () => {
+      const { button, list, composer } = await page.$eval(selector, element => {
+        const rect = node => { const box = node.getBoundingClientRect(); return { top: box.top, bottom: box.bottom, left: box.left, width: box.width } }
+        return { button: rect(element), list: rect(element.closest('.foxwarm-chat-messages')), composer: rect(document.querySelector('.foxwarm-chat-composer-form')) }
+      })
+      if (button.top >= list.top && button.bottom <= composer.top) return true
+      await page.mouse.move(list.left + list.width / 2, list.top + 8)
+      await page.mouse.wheel({ deltaY: button.top < list.top ? -40 : 40 })
+      return false
+    }, selector + ' above the composer')
+    await page.click(selector)
+  }
+  await clickReadableAction('[aria-label="Expand activity"]')
+  await page.waitForFunction(() => document.querySelector('[data-activity-expanded="true"]')?.style.height === '')
+  await clickReadableAction('button[title="Open notes.txt in Code"]'); code = await codeFrame(page); await code.waitForSelector('.monaco-workbench', { timeout: 30000 })
   const persisted = JSON.parse(await readFile(join(owned.data, 'state/vscode-web/foxwarm.code-workspace'), 'utf8')); assert(persisted.folders.length >= 3); assert.equal(persisted.settings['yaml.schemaStore.enable'], false)
   assert.equal((await owned.api('GET', '/api/vscode-web/git/commit?workspace=' + encodeURIComponent(owned.work) + '&id=' + rootCommit)).body.comparison.mode, 'empty-tree')
   await page.evaluate(() => window.foxwarmTest.switchToSession('main'))

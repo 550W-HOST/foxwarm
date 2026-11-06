@@ -5,6 +5,31 @@ namespace Foxwarm.Sessions;
 // Pure source lookup shared by model recall and the existing WebUI block expansion.
 internal sealed class ArchiveContextReader(SqliteArchiveMessageStore archive)
 {
+    internal static ArchiveBlockRecord HydrateBlock(
+        SqliteArchiveMessageStore archive,
+        ArchiveBlockRecord block
+    )
+    {
+        if (block.RawStartTimestamp is not null && block.RawEndTimestamp is not null)
+            return block;
+        var first = archive
+            .ReadEffectiveMessagesPage(block.RawStartSeq, block.RawStartSeq, 1)
+            .FirstOrDefault()
+            ?.Timestamp;
+        var last =
+            block.RawStartSeq == block.RawEndSeq
+                ? first
+                : archive
+                    .ReadEffectiveMessagesPage(block.RawEndSeq, block.RawEndSeq, 1)
+                    .FirstOrDefault()
+                    ?.Timestamp;
+        return block with
+        {
+            RawStartTimestamp = block.RawStartTimestamp ?? first,
+            RawEndTimestamp = block.RawEndTimestamp ?? last,
+        };
+    }
+
     internal ArchiveStats Stats() => archive.EffectiveMessageStats();
 
     internal IReadOnlyList<ArchiveBlockTopology> Topology() => archive.EffectiveBlockTopology();

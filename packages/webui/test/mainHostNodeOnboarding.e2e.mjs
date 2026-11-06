@@ -23,7 +23,10 @@ const delayedBrowser = [], abortedBrowser = []
 async function screenshot(name) {
   if (!process.env.FOXWARM_E2E_SCREENSHOT_DIR) return
   await mkdir(process.env.FOXWARM_E2E_SCREENSHOT_DIR, { recursive: true })
-  await (await page.$('[role="dialog"]')).screenshot({ path: join(process.env.FOXWARM_E2E_SCREENSHOT_DIR, name) })
+  // The dialog is inside the viewport. Capturing beyond it makes Chromium resize the
+  // window transiently, which can switch the App to its mobile shell and unmount the
+  // open dialog before the next assertion.
+  await (await page.$('[role="dialog"]')).screenshot({ path: join(process.env.FOXWARM_E2E_SCREENSHOT_DIR, name), captureBeyondViewport: false })
 }
 const api = (method, path, body) => fixture.api(method, prefix + path, body)
 const nodes = async () => (await api('GET', '/api/nodes')).body.nodes
@@ -87,7 +90,7 @@ try {
   // Navigate through the real workbench status bar, not a replacement component fixture.
   await page.click('[data-workbench-status-bar] button[aria-label^="Nodes:"]')
   await page.waitForSelector('[data-workbench-status-popup] [aria-label="Node directory"]')
-  await click('Open Nodes'); await page.waitForSelector('[data-node-surface]')
+  await click('Open in System › Nodes'); await page.waitForSelector('[data-node-surface]')
   assert.equal(requests.filter(request => request.url.includes('/onboarding/commands')).length, 0)
   await click('New nodes'); await readyCommand('--pairing=')
   assert.equal(await page.$eval('[aria-label="Reachable address"]', input => input.value), host)
@@ -205,9 +208,9 @@ try {
   await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 1 })
   await page.goto(host + '/', { waitUntil: 'networkidle0' })
   await waitForWebUiReady(page)
-  await click('Workspace tools'); await click('Agents')
-  await page.waitForFunction(() => [...document.querySelectorAll('button')].some(button => button.textContent.includes('protocol-compatible execution')))
-  await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.includes('protocol-compatible execution')).click())
+  await click('Workspace tools'); await click('System')
+  await page.waitForSelector('[data-system-tab="nodes"]')
+  await page.click('[data-system-tab="nodes"]')
   await page.waitForSelector('[data-node-surface]')
   await click('New nodes'); await readyCommand('--pairing=')
   await click('Browser')

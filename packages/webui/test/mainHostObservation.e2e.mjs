@@ -150,17 +150,25 @@ try {
   assert(value(observed, 'current-status').output.includes(join(dataRoot, 'agents', 'team')) && value(observed, 'current-status').output.includes('token estimate'))
   assert(!value(observed, 'current-list').output.includes('other/main')); assert(value(observed, 'all-list').output.includes('Found 4 session(s)'))
   assert(value(observed, 'rename').output.includes('changed from unset to "Observed name"')); assert(value(observed, 'rename-noop').output.includes('unchanged'))
-  // Open the renamed Session through the App's Session route; its Chat shows the new name.
+  // The active target Chat must show both its identity and the renamed header.
   await page.evaluate(id => { location.hash = '#session/' + encodeURIComponent(id) }, target)
-  await page.waitForFunction(() => document.querySelector('.foxwarm-chat-root')?.innerText.includes('Observed name'))
+  await page.waitForFunction(id => {
+    const subtitle = document.querySelector('.foxwarm-chat-root [data-session-header-subtitle]')
+    return location.hash === '#tab/' + encodeURIComponent('chat:' + id)
+      && subtitle?.textContent.split(' · ')[0] === 'session ' + id
+      && subtitle.parentElement?.previousElementSibling?.textContent === 'Observed name'
+  }, {}, target)
   held.release(); await final(target, 'HELD-DONE')
 
   // Real canonical history and tool effect: full hidden content is searchable, display remains folded.
-  await writeFile(join(dataRoot, 'agents', 'team', 'needle.txt'), 'EARLY-RESOURCE ' + '🦊'.repeat(1300) + ' HIDDEN_TOOL_NEEDLE ' + 'tail '.repeat(300))
+  const needleContent = 'EARLY-RESOURCE ' + '🦊'.repeat(1300) + ' HIDDEN_TOOL_NEEDLE HIDDEN_ARGUMENT_NEEDLE ' + 'tail '.repeat(300)
+  await turn(target, 'WRITE-SEED', [call('write-needle', 'write', { filePath: 'needle.txt', content: needleContent })])
+  assert.equal(await readFile(join(dataRoot, 'agents', 'team', 'needle.txt'), 'utf8'), needleContent)
   await turn(target, 'READ-SEED', [call('read-needle', 'read', { filePath: 'needle.txt' })])
   for (let i = 0; i < 7; i++) await turn(target, 'FOLLOW-' + i)
   const selected = await history(target); const toolIndex = selected.findIndex(row => row.parts.some(part => part.functionResponse?.tool_use_id === 'read-needle'))
-  assert(toolIndex > 0 && selected.length > 10)
+  const argumentIndex = selected.findIndex(row => row.parts.some(part => part.functionCall?.id === 'write-needle'))
+  assert(toolIndex > 0 && argumentIndex > 0 && selected.length > 10)
   await turn(actor, 'PAGES', [
     call('default-tail', 'view_session', { sessionId: target }),
     call('negative-tail', 'view_session', { sessionId: target, start: -2 }),
@@ -168,6 +176,9 @@ try {
     call('count-only', 'view_session', { sessionId: target, count: 1 }),
     call('page-filter', 'view_session', { sessionId: target, start: -2, contentFilter: 'EARLY-RESOURCE' }),
     call('tool-fold', 'view_session', { sessionId: target, start: toolIndex, count: 1, contentFilter: 'hidden_tool_needle' }),
+    call('argument-fold', 'view_session', { sessionId: target, start: argumentIndex, count: 1, contentFilter: 'hidden_argument_needle' }),
+    call('argument-miss', 'view_session', { sessionId: target, start: argumentIndex, count: 1, contentFilter: 'ABSENT_ARGUMENT_NEEDLE' }),
+    call('tool-expanded', 'view_session', { sessionId: target, start: toolIndex, count: 1, toolDetail: 'full', previewLength: 20000 }),
     call('tool-snippet', 'view_session', { sessionId: target, start: toolIndex, count: 1, contentFilter: 'HIDDEN_TOOL_NEEDLE', toolDetail: 'snippets', previewLength: 1000 }),
     call('tool-full', 'view_session', { sessionId: target, start: toolIndex, count: 1, toolDetail: 'full', previewLength: 1000 }),
     call('regex-page', 'view_session', { sessionId: target, start: 0, count: selected.length, includeRegex: 'follow-[56]', excludeRegex: 'follow-5', previewLength: 1000 }),
@@ -180,7 +191,22 @@ try {
   assert(value(pages, 'negative-tail').output.includes('FOLLOW-6')); assert.equal(value(pages, 'negative-tail').output, value(pages, 'start-only').output)
   assert(value(pages, 'count-only').output.includes('FOLLOW-6')); assert(!value(pages, 'count-only').output.includes('HELD-REQUEST'))
   assert(value(pages, 'page-filter').output.includes('No selected records matched'))
-  assert(value(pages, 'tool-fold').output.includes('Tool content folded') && value(pages, 'tool-fold').output.includes('Matched in omitted tool'))
+  const drilldowns = []
+  for (const [id, index, toolName] of [['tool-fold', toolIndex, 'read'], ['argument-fold', argumentIndex, 'write']]) {
+    const output = value(pages, id).output
+    assert(output.includes(toolName), id + ' selects the hidden-content match')
+    assert(output.includes('#' + selected[index].__meta.seq), id + ' identifies the original source')
+    assert(!output.includes(needleContent), id + ' keeps original bodies folded')
+    const examples = [...output.matchAll(/recall\((\{[^\n]+\})\)/g)].map(match => JSON.parse(match[1]))
+    assert.equal(examples.length, 1, id + ' supplies one usable Archive expansion')
+    assert.equal(examples[0].sessionId, target)
+    assert.equal(examples[0].target, 'msg#' + selected[index].__meta.seq)
+    assert.equal(examples[0].toolDetail, 'full')
+    drilldowns.push(call(id + '-original', 'recall', examples[0]))
+  }
+  assert(!value(pages, 'argument-fold').output.includes('HIDDEN_ARGUMENT_NEEDLE'))
+  assert(!value(pages, 'argument-miss').output.includes('msg#' + selected[argumentIndex].__meta.seq))
+  assert(value(pages, 'tool-expanded').output.includes('HIDDEN_TOOL_NEEDLE'))
   assert(!value(pages, 'tool-fold').output.includes('HIDDEN_TOOL_NEEDLE'))
   assert(value(pages, 'tool-snippet').output.includes('HIDDEN_TOOL_NEEDLE'))
   for (const id of ['tool-snippet', 'tool-full', 'regex-page']) {
@@ -196,12 +222,18 @@ try {
   assert(value(pages, 'literal-archive').output.includes('Examined'))
   assert(value(pages, 'literal-archive').output.includes('Older literal search: recall('))
 
+  await turn(actor, 'EXPAND-ORIGINALS', drilldowns)
+  const originals = await history(actor)
+  assert(value(originals, 'tool-fold-original').output.includes('HIDDEN_TOOL_NEEDLE'))
+  assert(value(originals, 'argument-fold-original').output.includes('HIDDEN_ARGUMENT_NEEDLE'))
+  assert.deepEqual(await history(target), selected, 'Observation and Archive expansion leave original history unchanged')
+
   // Waiting remains quiet; observe a real tool-active peer during an exec foreground await.
   plans.get(target).push([call('wait-target', 'wait', { waitForInput: true })]); await send(target, 'DECLARE-WAIT'); await waiting(target)
   const beforeQuiet = requests.length; await sleep(500); assert.equal(requests.length, beforeQuiet)
   await turn(actor, 'WAIT-OBSERVE', [call('waiting-page', 'view_session', { sessionId: target, count: 0 }), call('clear-name', 'session', { action: 'update-display-name', sessionId: target, name: '' })])
   assert(value(await history(actor), 'waiting-page').output.includes('waiting (input)')); assert(value(await history(actor), 'clear-name').output.includes('to unset'))
-  const execTarget = await create('executing', [[call('held-exec', 'exec', { command: 'sleep 1.5; printf EXEC-DONE', timeout: 5 })], [text('EXEC-FINISHED')]])
+  const execTarget = await create('executing', [[call('held-exec', 'exec', { summary: 'Hold a foreground command while its Session is observed', command: 'sleep 1.5; printf EXEC-DONE', timeout: 5 })], [text('EXEC-FINISHED')]])
   await send(execTarget, 'RUN-EXEC'); await until(async () => (await session(execTarget)).runtimeState.state === 'running-tool', 'actual tool active')
   await turn(actor, 'TOOL-OBSERVE', [call('tool-active-page', 'view_session', { sessionId: execTarget, count: 0 })])
   assert(value(await history(actor), 'tool-active-page').output.includes('running-tool')); await final(execTarget, 'EXEC-FINISHED')

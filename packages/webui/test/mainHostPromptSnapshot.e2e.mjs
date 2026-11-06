@@ -1,4 +1,5 @@
-// Saved prompt history through authenticated routes and the unchanged original App views.
+// Saved prompt history through authenticated routes and the original App. Technical views
+// show the snapshot, Conversation omits it, and Session debug exposes the persisted bytes.
 import assert from 'node:assert/strict'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -8,6 +9,13 @@ import { waitForWebUiReady } from './webuiReadiness.mjs'
 const options = { env: {}, onPage: async page => {
   await page.evaluateOnNewDocument(() => {
     localStorage.setItem('foxwarm_timeline_view_v1', 'detailed')
+    const originalStringify = JSON.stringify
+    window.fixtureDebugCaptures = []
+    JSON.stringify = function(value, ...args) {
+      const text = originalStringify.call(this, value, ...args)
+      if (value?.sessionId && value?.sessionPayload && value?.clientState) window.fixtureDebugCaptures.push(text)
+      return text
+    }
     const OriginalWebSocket = window.WebSocket
     window.fixtureSockets = []
     window.fixtureSubscriptionAcks = 0
@@ -56,6 +64,35 @@ async function view(name) {
   await page.waitForFunction(name => [...document.querySelectorAll('[role="radiogroup"][aria-label="Timeline view"] [role="radio"]')].some(el => el.textContent.trim().toLowerCase() === name && el.getAttribute('aria-checked') === 'true'), {}, name)
   await page.click('[aria-label="Open session options"]')
 }
+// The persisted snapshot as the Session debug view reports it.
+async function debugSnapshot(sessionId) {
+  const before = await page.evaluate(() => window.fixtureDebugCaptures.length)
+  await page.click('[aria-label="Open session options"]')
+  await page.waitForFunction(() => [...document.querySelectorAll('button')].some(button => button.textContent.trim() === 'debug info'))
+  await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'debug info')?.click())
+  await page.waitForFunction((count, id) => window.fixtureDebugCaptures.slice(count).some(text => JSON.parse(text).sessionId === id && JSON.parse(text).resolvedSessionFilePath), {}, before, sessionId)
+  const capture = await page.evaluate((count, id) => window.fixtureDebugCaptures.slice(count).map(text => JSON.parse(text)).filter(value => value.sessionId === id && value.resolvedSessionFilePath).at(-1), before, sessionId)
+  await page.click('[data-json-inspector-dialog] button[title="Close"]')
+  await page.waitForFunction(() => !document.querySelector('[data-json-inspector-dialog]'))
+  return capture.sessionPayload.persistentMemorySnapshot
+}
+// Wait until the view has rendered its rows (continuous Conversation renders its Archive window,
+// which this seeded fixture leaves empty), then check that no snapshot row is present.
+async function assertNoSnapshotRow(label, continuous = false) {
+  if (continuous) await page.waitForSelector('[data-continuous-history]')
+  else await page.waitForFunction(() => document.body.innerText.includes('Retained row 104'))
+  assert.equal(await page.$(snapshotCard), null, label)
+}
+
+async function assertSnapshotRow(expected) {
+  await page.waitForFunction(() => document.body.innerText.includes('Retained row 104'))
+  await page.waitForSelector(snapshotCard)
+  const expand = snapshotCard + ' [aria-label="Expand snapshot message"]'
+  if (await page.$(expand)) await page.click(expand)
+  await page.waitForSelector(snapshotCard + ' .foxwarm-system-message-body')
+  const body = await page.$eval(snapshotCard + ' .foxwarm-system-message-body', element => element.textContent)
+  for (const line of expected.trim().split(/\r?\n/)) assert(body.includes(line), 'snapshot row retains saved prompt content')
+}
 
 try {
   await fixture.start()
@@ -72,28 +109,23 @@ try {
   page.on('response', response => { if (response.url().includes('/saved-prompt/history')) requests.push(new URL(response.url()).search) })
   await page.evaluate(() => window.foxwarmTest.switchToSession('saved-prompt'))
   await waitChat()
-  await page.waitForSelector(snapshotCard)
-  await page.click(snapshotCard)
-  await page.waitForFunction(() => document.querySelector('[data-system-message-kind="snapshot"] .foxwarm-system-message-body')?.textContent.includes('Exact <literal> & "quotes" \\ café 🦊'))
-  assert(!(await page.$eval(snapshotCard, el => el.textContent)).includes(diskMarker))
-  const firstKind = await page.$eval('.foxwarm-chat-timeline [data-system-message-card]', el => el.dataset.systemMessageKind)
-  assert.equal(firstKind, 'snapshot')
+  await assertSnapshotRow(stored)
+  assert.equal(await debugSnapshot('saved-prompt'), stored)
   const firstReconnect = await page.evaluate(() => window.fixtureSubscriptionAcks)
   await page.evaluate(() => { for (const socket of window.fixtureSockets) socket.close() })
   await page.waitForFunction(previous => window.fixtureSubscriptionAcks > previous, {}, firstReconnect)
-  assert((await page.$eval(snapshotCard, el => el.textContent)).includes('SAVED_PROMPT_FIRST_LINE'))
+  await assertSnapshotRow(stored)
   await page.evaluate(() => window.foxwarmTest.switchToSession('empty-prompt'))
   await waitChat()
-  assert.equal(await page.$(snapshotCard), null)
+  await assertNoSnapshotRow('empty snapshot has no row')
+  assert.equal(await debugSnapshot('empty-prompt'), '')
   await page.evaluate(() => window.foxwarmTest.switchToSession('saved-prompt'))
   await waitChat()
-  await page.waitForSelector(snapshotCard)
-  await view('grouped')
-  await page.waitForSelector(snapshotCard)
-  await view('conversation')
-  await until(async () => await page.$(snapshotCard) === null, 'continuous Conversation suppresses synthetic prompt')
-  await view('detailed')
-  await page.waitForSelector(snapshotCard)
+  for (const name of ['grouped', 'conversation', 'detailed']) {
+    await view(name)
+    if (name === 'conversation') await assertNoSnapshotRow('Conversation omits the memory snapshot', true)
+    else await assertSnapshotRow(stored)
+  }
   // Explicit refresh persists a new prompt; ordinary App reload rereads that authority.
   const refresh = await fixture.api('POST', '/api/sessions/saved-prompt/refresh-memory', {})
   assert.equal(refresh.status, 200)
@@ -101,11 +133,10 @@ try {
   assert(refreshed.includes(diskMarker))
   await page.reload({ waitUntil: 'domcontentloaded' })
   await waitChat()
-  await page.waitForSelector(snapshotCard)
-  await page.click(snapshotCard)
-  await until(async () => (await page.$eval(snapshotCard, el => el.textContent)).includes(diskMarker), 'refreshed persisted prompt after reload')
+  await assertSnapshotRow(diskMarker)
+  assert.equal(await debugSnapshot('saved-prompt'), refreshed)
   assert.equal(JSON.parse(await readFile(join(sessionDir, 'saved-prompt.json'), 'utf8')).persistentMemorySnapshot, refreshed)
-  console.log(JSON.stringify({ exactSavedText: true, emptySnapshot: true, activeTimelineTop: firstKind, reconnect: true, refreshedSnapshotAfterReload: true, groupedSnapshot: true, conversationSuppressed: true, historyRequests: requests, errors }))
+  console.log(JSON.stringify({ exactSavedText: true, emptySnapshot: true, modeAwareSnapshotRows: true, reconnect: true, refreshedSnapshotAfterReload: true, historyRequests: requests, errors }))
   assert.deepEqual(errors, [])
   await fixture.stop()
 } catch (error) {

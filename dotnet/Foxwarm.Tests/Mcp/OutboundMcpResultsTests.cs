@@ -301,8 +301,9 @@ public sealed class OutboundMcpResultsTests
                 default
             );
         var summary = names!["output"]!.GetValue<string>();
-        Assert.Contains("call_tool ×3", summary);
-        Assert.Contains("2 error(s)", summary);
+        Assert.DoesNotContain("call_tool ×", summary);
+        Assert.Equal(3, summary.Split('\n').Count(line => line.Contains("(#")));
+        Assert.Equal(2, summary.Split('\n').Count(line => line.Contains("[error")));
 
         args["toolDetail"] = "full";
         var full = await f.Tools(f.Second)

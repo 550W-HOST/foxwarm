@@ -35,11 +35,14 @@ internal static class NativeExecScripts
               status_tmp="${FOXWARM_EXEC_STATUS_PATH}.tmp.$$"
               pwd > "$cwd_tmp"
               mv "$cwd_tmp" "$FOXWARM_EXEC_CWD_PATH"
-            """
-        + "\n  "
-        + selfCommand
-        + " --exec-status \"$status_tmp\" \"$exit_code\"\n"
-        + """
+              # Publish completion without the launching executable: its output
+              # directory may be replaced after Main restarts.
+              finished_at=$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ 2>/dev/null)
+              case "$finished_at" in
+                [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9]Z) ;;
+                *) finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null) ;;
+              esac
+              printf '{"exitCode":%s,"finishedAt":"%s"}\n' "$exit_code" "$finished_at" > "$status_tmp"
               mv "$status_tmp" "$FOXWARM_EXEC_STATUS_PATH"
             }
             trap foxwarm_exec_finalize EXIT

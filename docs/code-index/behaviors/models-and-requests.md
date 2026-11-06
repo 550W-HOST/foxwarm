@@ -29,7 +29,8 @@ There is one outer attempt budget, six total attempts by default, not six retrie
 
 | Observation | Consequence and boundary |
 | --- | --- |
-| Network/stream failure, rate limit, server error, classified auth/model-not-found failure, or unusable response | Can retry and affect failover health under the routing classifier. Every attempt rebuilds the chosen leaf's protocol, credentials, payload, image preparation, and parser. |
+| Network/stream failure, rate limit, server error, or unusable response | Can retry and affect failover health under the routing classifier. Every attempt rebuilds the chosen leaf's protocol, credentials, payload, image preparation, and parser. |
+| Rejected or missing API key (401), denied access (403), or unknown model | Not repeated on the same target. A failover route moves to its next target immediately; otherwise the turn fails after that attempt with a notice naming the cause and pointing to Setup → Models. See [configuration failures](../threads/model-routing.md#d-model-routing-configuration-failures). |
 | Ordinary invalid-request or oversized-input response | Normally terminal rather than a reason to rotate providers; model-not-found classification is a specific exception. |
 | Stop/caller cancellation | Ends the request without counting as bad provider health. A progress watchdog timeout is a different, attempt-local failure. |
 | Local preparation or strict owner-persistence failure | Prevents send and propagates outside provider retry/health classification. Changing provider is not a repair for unreadable local image bytes or failed context persistence. |

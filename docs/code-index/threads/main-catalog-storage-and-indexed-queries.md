@@ -14,7 +14,7 @@ state/catalog.sqlite
 ```
 
 The catalog (schema version 3) contains only Session catalog rows, ambiguity-preserving
-aliases, canonical parent projections, additive Sidebar presentation parents, and
+aliases, canonical parent projections, additive Sidebar grouping indexes, and
 maintained counts. Session semantic
 state remains in one authoritative JSON file per Session.
 
@@ -123,6 +123,11 @@ their real relation. Opaque cursors bind mode/scope/parent/agent plus a
 process-instance catalog revision and volatile sequence; a matching mutation
 returns a first-page reset instead of applying a stale key.
 
+The first `/api/session-list/sidebar` page (no cursor) also carries
+`questionSessions`: up to 50 rows of Sessions with open `ask_user` questions
+from the question-presence partial index, so the Sidebar can elevate them
+wherever they sit in the tree in the same request, without hydrating Sessions ([structured user questions](../units/session-questions.md)).
+
 Root, child, agent, exact, alias, and by-ID queries use concrete indexes and
 bounded batches. Initial child previews and multi-parent continuation each use
 one bounded compound `UNION ALL` request composed of per-parent indexed
@@ -183,10 +188,9 @@ Every bounded Sidebar/search/exact item carries its numeric direct Sidebar
 presentation-child count from one maintained-count batch over the returned IDs.
 Default/Time counts exclude pinned children elevated to presentation roots; an
 item's own unpinned children still count normally. Counts, child windows,
-root pages, focus paths and busy-descendant badges follow the stored Sidebar
-presentation parent described in
-[D-sidebar-agent-grouping](#d-sidebar-agent-grouping), so they include grouped
-rows under an Agent host. Loaded child-page totals take
+root pages, focus paths and busy-descendant badges use real parents; Sidebar
+Agent/Node groups ([D-sidebar-groups](#d-sidebar-groups)) only partition
+top-level rows. Loaded child-page totals take
 precedence in the browser. Architecture keeps its separate real-agent-forest
 branch totals and does not reinterpret Sidebar counts.
 
@@ -263,47 +267,41 @@ ordinary parent relations never subtract. Fork counts are branch-local and
 include every post-fork sequence, including system and tool scaffolding.
 Runtime `messageCount` semantics and Architecture rendering remain unchanged.
 
-### D-sidebar-agent-grouping
+### D-sidebar-groups
 
-[2026-11-01] The Sidebar shows otherwise top-level Sessions under their Agent's
-main Session without changing any real relation. Each catalog row stores a derived
-`sidebar_parent`, maintained in the same transaction as the topology change
-that affects it:
+[2026-11-02] The Sidebar may group its rows by Agent or by Node (user decision,
+replacing the 2026-11-01 grouping of top-level Sessions under their Agent's main
+Session). Groups are presentation only and are computed server-side; the browser
+never regroups loaded windows. Real `parent_session_id` stays authoritative for
+the Sidebar tree and every other consumer: root pages, child windows, counts,
+focus paths, busy-descendant badges, search, Architecture, Tasks and lifecycle.
 
-1. A pinned row has none (pinned partition, unchanged).
-2. A row with a canonical real parent uses that parent (unchanged).
-3. An unpinned top-level row that is not its Agent's main Session
-   (`main` for the main Agent, `<agent>/main` otherwise) uses that main
-   Session when it exists, wherever the main is shown (pinned or nested).
-   A top-level row whose displayed real subtree contains the main stays
-   top-level, so grouping never forms a cycle.
-4. Without a main Session, the Agent's rows stay top-level; the WebUI names
-   their Agent with a tag instead
-   ([webui-session-list](../units/webui-session-list.md#d-sidebar-agent-grouping)).
-
-[2026-11-01, revised the same day] The user replaced the first design's virtual
-Agent group rows (`//agent/<agent>` presentation parents for two or more rows of an
-Agent without a main Session) with that Agent tag: a synthetic host row that is not
-a Session read as odd. Group keys were only ever stored in the derived projection;
-the open-time recompute removes any that an earlier build left.
-
-Insert/delete/agent/parent/pin triggers mark affected rows; one refresh before
-each catalog commit recomputes hosts, per-Agent targets and the affected rows,
-with maintained per-presentation-parent counts. The per-Agent target is the
-main Session ID or null.
-
-These objects (the `sidebar_parent` column, `catalog_sidebar_*` tables, triggers
-and indexes) are additive to schema version 3 and do not change its version, so a
-Main that predates them still opens, reads and writes the catalog: its statements
-name their columns and never read the new objects, while its row writes still
-fire the triggers. Every open adds missing objects idempotently and recomputes
-all presentation parents, hosts, targets and counts in one transaction, repairing
-anything such a Main, or an earlier build with other rules, left stale; fresh
-catalogs and the one-time migration run the same step. Root pages select
-`sidebar_parent IS NULL`; Default/Time child pages, counts, focus paths and
-busy-descendant badges use `sidebar_parent` through
-`idx_session_catalog_sidebar_*`, so every Sidebar row is a Session. Flat mode,
-search, the Architecture forest, reporting, Tasks and every lifecycle path (descendant previews, stop/delete/archive cascades) keep real
-`parent_session_id`. Membership changes advance the catalog revision, so
-clients converge through the existing presentation-revision invalidation and
-bounded replay rather than per-row regroup deltas.
+- Membership. Default/Time group members are unpinned top-level rows, keyed by the
+  row's own `agent` or `current_node`; each keeps its real subtree, whatever
+  Agent or Node its children have. Flat members are every unpinned row, keyed by
+  its own value. Pinned rows keep their own section (`GET /api/session-list/sidebar?group=`
+  pages only the pinned partition), and search is never grouped.
+- Bounded queries. The grouped `sidebar` response adds the non-empty groups with
+  member counts and, for its focus paths, `presentationGroups` (a tree path's
+  first row's group, or each row's own group in Flat).
+  `POST /api/session-list/group-pages` returns keyset pages for up to 20 groups with
+  the same child previews as root pages; `by-id` with `group`/`mode` returns
+  `presentationGroups` for exact rows. An Agent group's main Session is the first
+  row of its first page in every mode (when it is a member); continuations exclude it.
+- Order. Agent groups: `main` first, then by name. Node groups: `master` first,
+  then by display name; a Node missing from the directory is labelled with its ID
+  and reported offline.
+- Storage. Agent counts reuse `catalog_parent_agent_count` (top-level) and
+  `catalog_agent_count` (all); Node counts use the maintained
+  `catalog_node_count` (all and top-level rows per Node). Both subtract the small
+  pinned partition at read time. Group pages are keyset reads through the
+  existing `idx_session_catalog_agent_root_time` and `idx_session_catalog_agent_time`
+  indexes and the additive partial `idx_session_catalog_agent_root_default` and
+  `idx_session_catalog_node_{root_default,root_time,time}` indexes.
+- Compatibility. The catalog stays at schema version 3 (user decision,
+  2026-11-01). The grouping objects are additive `IF NOT EXISTS` objects created on
+  every open; `catalog_node_count` is filled once when created, and its triggers
+  keep it exact under writes from a Main that predates it. Every open also drops
+  the retired `catalog_sidebar_*` tables, their triggers and indexes; the unused
+  `sidebar_parent` column stays and is neither read nor written. A Main from that
+  earlier design recreates its own objects when it opens the catalog.

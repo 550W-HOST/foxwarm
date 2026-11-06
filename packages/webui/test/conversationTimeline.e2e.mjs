@@ -95,6 +95,35 @@ const mode = async value => {
 }
 const countMatches = term => page.evaluate(term => window.fixture.matches(term).length, term)
 
+test('fresh and invalid preferences default to Conversation while viewport families retain independent choices', async () => {
+  for (const stored of [null, 'invalid']) {
+    await page.evaluate(stored => {
+      localStorage.clear()
+      if (stored) {
+        localStorage.setItem('foxwarm_timeline_view_v1', stored)
+        localStorage.setItem('foxwarm_mobile_timeline_view_v1', stored)
+        localStorage.setItem('foxwarm_group_tools_v1', stored)
+      }
+    }, stored)
+    for (const width of [1100, 440]) {
+      await page.setViewport({ width, height: 900 })
+      await page.reload({ waitUntil: 'load' })
+      await page.waitForFunction(() => window.fixture?.prefs.timelineView === 'conversation')
+    }
+  }
+  await mode('detailed')
+  await page.setViewport({ width: 1100, height: 900 })
+  await page.waitForFunction(() => window.fixture?.prefs.timelineView === 'conversation')
+  await mode('grouped')
+  await page.setViewport({ width: 440, height: 900 })
+  await page.waitForFunction(() => window.fixture?.prefs.timelineView === 'detailed')
+  await page.reload({ waitUntil: 'load' })
+  await page.waitForFunction(() => window.fixture?.prefs.timelineView === 'detailed')
+  await page.setViewport({ width: 1100, height: 900 })
+  await page.waitForFunction(() => window.fixture?.prefs.timelineView === 'grouped')
+  assert.deepEqual(await page.evaluate(() => [localStorage.getItem('foxwarm_timeline_view_v1'), localStorage.getItem('foxwarm_mobile_timeline_view_v1')]), ['grouped', 'detailed'])
+})
+
 test('browser preferences read old values, prioritize the new mode, and write only the new key', async () => {
   for (const [old, expected] of [['false', 'detailed'], ['true', 'grouped']]) {
     await page.evaluate(old => { localStorage.clear(); localStorage.setItem('foxwarm_group_tools_v1', old) }, old)

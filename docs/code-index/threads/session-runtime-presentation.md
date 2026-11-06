@@ -19,6 +19,7 @@ A logical model request can contain several physical provider attempts. Retry co
 | Retry backoff | Warning retry pose and countdown/attempt count |
 | Final request failure | Danger/static failure pose |
 | Explicit wait | Warning sleeping fox and the remaining dependency kind/count |
+| Waiting on an `ask_user` question | Warning sleeping fox labelled as waiting for the user's answer, with the question IDs in details |
 | Stop requested | Warning stopping pose until authoritative state settles |
 | Idle unfinished turn | Static interruption/failure pose and permission-gated Continue |
 | Unknown active phase | Neutral running pose without an invented tool or request phase |

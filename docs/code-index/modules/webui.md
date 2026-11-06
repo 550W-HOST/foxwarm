@@ -16,8 +16,9 @@ Owns the browser application and WebUI-facing server surface: workbench/session 
 
 - [webui-app](../units/webui-app.md) — authenticated entry, routing, restricted WebUI identity chat root, global administrator list state, embedded leaf roots, URL helpers, and Code frame host.
 - [webui-session-list](../units/webui-session-list.md) — hierarchy, search, order, pinning, and drag behavior.
-- [webui-nodes](../units/webui-nodes.md) — independent Node directory, status, onboarding and singleton/popup navigation.
-- [webui-architecture-view](../units/webui-architecture-view.md) — agent/session architecture.
+- [webui-nodes](../units/webui-nodes.md) — System's Nodes section: Node directory, status, Session placement and onboarding.
+- [webui-system-view](../units/webui-system-view.md) — System page: Agents, Sessions and Nodes sections, navigation and saved-layout normalization.
+- [webui-session-sequence](../units/webui-session-sequence.md) — System's Sessions Timeline: Session columns with paired deliveries.
 - [webui-chat](../units/webui-chat.md) — per-session history, logical realtime events, sending/commands, ASR, and viewport state.
 - [webui-tasks](../units/webui-tasks.md) — read-only bounded task Table/Board, details, manual refresh and singleton/popup navigation.
 - [webui-logs](../units/webui-logs.md) — bounded fixed-file logger history, live tail, and approximate date navigation.

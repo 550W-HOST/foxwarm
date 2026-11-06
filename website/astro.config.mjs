@@ -19,7 +19,7 @@ export default defineConfig({
         alt: 'Foxwarm',
         replacesTitle: true
       },
-      customCss: ['@fontsource-variable/inter', '@fontsource-variable/fraunces', './src/styles/diagram.css', './src/styles/docs.css'],
+      customCss: ['@fontsource-variable/ibm-plex-sans/wght.css', '@fontsource/ibm-plex-mono/400.css', '@fontsource/ibm-plex-mono/500.css', './src/styles/diagram.css', './src/styles/docs.css'],
       social: [{ icon: 'github', label: 'GitHub', href: github }],
       editLink: { baseUrl: `${github}/edit/main/website/` },
       lastUpdated: true,

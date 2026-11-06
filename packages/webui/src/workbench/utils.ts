@@ -236,7 +236,7 @@ function isSupportedWorkbenchTab(tab: unknown): tab is WorkbenchTab {
     return true
   }
 
-  if (raw.type === 'vscode' || raw.type === 'agents' || raw.type === 'setup' || raw.type === 'search' || raw.type === 'logs' || raw.type === 'tasks' || raw.type === 'nodes') {
+  if (raw.type === 'vscode' || raw.type === 'agents' || raw.type === 'setup' || raw.type === 'search' || raw.type === 'logs' || raw.type === 'tasks') {
     return true
   }
 
@@ -293,6 +293,10 @@ export function sanitizeTabsById(tabsById: Record<string, WorkbenchTab>, root: W
     // Read it tolerantly, but strip it so all future persisted writes use the
     // current single-row tab model.
     const { pinned: _legacyPinned, ...sanitizedTab } = tab as WorkbenchTab & { pinned?: unknown }
+    if (sanitizedTab.type === 'agents') {
+      const section = sanitizedTab.section === 'agents' || sanitizedTab.section === 'sessions' || sanitizedTab.section === 'nodes' ? sanitizedTab.section : undefined
+      return [[tabId, { id: sanitizedTab.id, type: 'agents', title: 'System', ...(section ? { section } : {}) } as WorkbenchTab]]
+    }
     if (sanitizedTab.type === 'vscode') {
       return [[tabId, { ...sanitizedTab, title: 'Code' } as WorkbenchTab]]
     }
@@ -304,7 +308,40 @@ export function sanitizeTabsById(tabsById: Record<string, WorkbenchTab>, root: W
   }))
 }
 
-export function normalizePersistedWorkbenchState(state: WorkbenchPersistedState): WorkbenchPersistedState {
+const SYSTEM_TAB_ID = 'system:agents'
+
+function renameLayoutTab(node: WorkbenchLayoutNode, from: string, to: string): WorkbenchLayoutNode {
+  if (isPaneNode(node)) {
+    if (!node.tabIds.includes(from)) return node
+    return { ...node, tabIds: node.tabIds.map(tabId => tabId === from ? to : tabId), activeTabId: node.activeTabId === from ? to : node.activeTabId }
+  }
+  return { ...node, children: node.children.map(child => renameLayoutTab(child, from, to)) }
+}
+
+/**
+ * The former standalone Nodes page is the System page's Nodes section. A saved Nodes tab
+ * becomes the System tab in its place, unless a System tab already exists; then it is dropped.
+ */
+function migrateLegacyNodesTabs(state: WorkbenchPersistedState): WorkbenchPersistedState {
+  const legacy = Object.entries(state.tabsById).filter(([, tab]) => (tab as { type?: unknown } | undefined)?.type === 'nodes')
+  if (!legacy.length) return state
+  const referenced = new Set<string>()
+  const collect = (node: WorkbenchLayoutNode) => { if (isPaneNode(node)) node.tabIds.forEach(tabId => referenced.add(tabId)); else node.children.forEach(collect) }
+  collect(state.root)
+  const tabsById = { ...state.tabsById }
+  let root = state.root
+  for (const [tabId] of legacy) {
+    delete tabsById[tabId]
+    if (Object.entries(tabsById).some(([id, tab]) => tab.type === 'agents' && referenced.has(id))) continue
+    referenced.add(SYSTEM_TAB_ID)
+    root = renameLayoutTab(root, tabId, SYSTEM_TAB_ID)
+    tabsById[SYSTEM_TAB_ID] = { id: SYSTEM_TAB_ID, type: 'agents', title: 'System', section: 'nodes' }
+  }
+  return { ...state, tabsById, root }
+}
+
+export function normalizePersistedWorkbenchState(persisted: WorkbenchPersistedState): WorkbenchPersistedState {
+  const state = migrateLegacyNodesTabs(persisted)
   const originalRoot = normalizeLayoutNode(state.root)
   const tabsById = sanitizeTabsById(state.tabsById, originalRoot)
   const root = normalizeLayoutNode(filterLayoutToValidTabs(originalRoot, new Set(Object.keys(tabsById))) || createPaneNode())

@@ -83,7 +83,8 @@ try {
   assert.equal((await api('GET', '/api/setup/status')).body.oobe, true)
   assert.deepEqual((await api('GET', '/api/sessions')).body.sessions, [])
   assert.equal(requests.length, 0)
-  assert((await readFile(join(data, 'agents/00_SYSTEM.md'), 'utf8')).length > 0)
+  // The packaged framework prompt is read in place, not copied into the installation.
+  await assert.rejects(stat(join(data, 'agents/00_SYSTEM.md')), { code: 'ENOENT' })
   assert((await readdir(join(data, 'agents/main/memory'))).length > 0)
   const version = JSON.parse(await readFile(join(payload, 'package.json'), 'utf8')).version
   assert.equal(execFileSync(process.execPath, [join(payload, 'scripts/foxwarm.js'), '--version'], { cwd, env, encoding: 'utf8' }).trim(), version)
@@ -111,6 +112,8 @@ try {
   const models = JSON.stringify({ default: 'fixture', providers: { fixture: { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${peer.address().port}`, models: ['wire'], asyncCompact: false } } }, null, 2) + '\n'
   await page.evaluate(() => { location.hash = 'setup' })
   await page.waitForSelector('#setup-tab-models'); await page.click('#setup-tab-models')
+  // First-run Models opens in the form view; this proof writes exact YAML through the editor.
+  await page.waitForSelector('[data-models-view="yaml"]'); await page.click('[data-models-view="yaml"]')
   const editor = '[aria-label="Models YAML editor"] [role="textbox"]'
   await page.waitForSelector(editor)
   await page.evaluate(async value => {
@@ -162,6 +165,7 @@ try {
   const bytes = Buffer.from(await (await fetch(origin + blob, { headers: { authorization: 'Bearer ' + token } })).arrayBuffer())
   assert.equal(bytes.subarray(0, 8).toString('hex'), '89504e470d0a1a0a')
   const effects = JSON.stringify(requests[1].input)
+  assert(requests.some(body => String(body.instructions || '').includes('You are running in Foxwarm')))
   assert.match(effects, /completed/); assert.match(effects, /42/); assert.match(effects, /Source: global/); assert.match(effects, /INITIALIZATION.md/)
   assert.equal(await readFile(join(data, 'agents/main/packaged-native-effect.txt'), 'utf8'), 'native packaged worker')
   assert(!(await readdir(join(data, 'state'))).includes('db'), 'Disabled Vector stays lazy')

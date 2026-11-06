@@ -1,0 +1,344 @@
+#!/usr/bin/env bash
+# Control a Foxwarm release installation: start, stop, restart, status, attach, run, update, version.
+# The installer places this script in the installation directory beside runtime/current.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+RUNTIME="$ROOT/runtime"
+CURRENT="$RUNTIME/current"
+SESSION="${FOXWARM_TMUX_SESSION:-foxwarm}"
+WINDOW="foxwarm"
+TARGET="=$SESSION:=$WINDOW"
+# tmux reports a pane's current directory with symlinks resolved.
+PHYSICAL_ROOT="$ROOT"
+PID_FILE="$ROOT/foxwarm.pid"
+RELEASES="https://github.com/550W-HOST/foxwarm/releases"
+STOP_SECONDS=60
+
+log() { printf '[foxwarm] %s\n' "$*"; }
+fail() { printf '[foxwarm] %s\n' "$*" >&2; exit 1; }
+have() { command -v "$1" >/dev/null 2>&1; }
+
+usage() {
+  cat <<'EOF'
+Usage: foxwarmctl COMMAND
+
+  start              Start Foxwarm in tmux, or detached when tmux is unavailable
+  stop               Stop Foxwarm (forced after 60 seconds)
+  restart            Stop, then start
+  status             Show whether Foxwarm is running
+  attach             Attach to the tmux pane, or show background log paths
+  run                Run Foxwarm in the foreground
+  update [VERSION]   Install the latest or the given release and restart if running
+         [--package FILE] [--force]
+  version            Show the installed release
+
+Environment: FOXWARM_TMUX_SESSION (default: foxwarm), FOXWARM_DATA_DIR.
+EOF
+}
+
+[ -e "$CURRENT/release.json" ] || fail "No release is installed at $CURRENT. Run the copy of foxwarmctl in the installation directory."
+
+release_field() {
+  sed -n "s/^ *\"$2\": *\"\{0,1\}\([^\",]*\)\"\{0,1\},\{0,1\}$/\1/p" "$1/release.json" | sed -n 1p
+}
+
+# Framework-dependent packages use the dotnet on PATH, which the apphost would not search.
+launcher() {
+  if [ "$(release_field "$1" selfContained)" = true ]; then
+    printf '%q' "$1/Foxwarm"
+  else
+    have dotnet || fail "This package needs the ASP.NET Core 10 runtime and dotnet on PATH."
+    printf '%q %q' "$(command -v dotnet)" "$1/Foxwarm.dll"
+  fi
+}
+
+main_command() {
+  local unset="" set="" name
+  # A long-lived tmux server may have a different environment from this invocation.
+  for name in FOXWARM_DATA_DIR MCP_CONFIG_PATH DOTNET_ROOT; do
+    if [ -n "${!name:-}" ]; then set+=" $(printf '%q' "$name=${!name}")"; else unset+=" -u $name"; fi
+  done
+  local command="exec env$unset$set $(printf '%q' "PATH=$PATH")"
+  # Resolve the selected release now so a later update does not move a running Main.
+  command+=" $(launcher "$(cd "$CURRENT" && pwd -P)") --installation-root $(printf '%q' "$ROOT")"
+  printf '%s' "$command"
+}
+
+# An exited Main can remain a zombie until tmux reaps it; that no longer counts as running.
+alive() {
+  local state
+  state="$(ps -o stat= -p "$1" 2>/dev/null)" || return 1
+  [ -n "$state" ] && [ "${state#Z}" = "$state" ]
+}
+
+# Main runs as the process of one pane in window $WINDOW of tmux session $SESSION. Only
+# that pane is ever touched: the user may have opened other windows in the session, or
+# split the window. A live pane is this installation's Main when its current directory
+# is the installation root (start sets it and Main never changes it); another live pane
+# belongs to someone else. A dead pane (remain-on-exit) or an unreaped zombie is an
+# exited Main. Sets STATE to running, exited, foreign or none, with PANE, PID and EXIT.
+find_pane() {
+  local id dead pid status signal path foreign=false
+  STATE=none PANE="" PID="" EXIT=""
+  while IFS='|' read -r id dead pid status signal path; do
+    if [ "$dead" = 0 ] && alive "$pid"; then
+      if [ "$path" = "$PHYSICAL_ROOT" ]; then STATE=running PANE="$id" PID="$pid"; return 0; fi
+      foreign=true
+    elif [ "$STATE" = none ]; then
+      STATE=exited PANE="$id" PID="$pid"
+      if [ -n "$signal" ]; then EXIT="signal $signal"; elif [ -n "$status" ]; then EXIT="status $status"; fi
+    fi
+  done < <(tmux list-panes -t "$TARGET" \
+    -F '#{pane_id}|#{pane_dead}|#{pane_pid}|#{pane_dead_status}|#{pane_dead_signal}|#{pane_current_path}' 2>/dev/null)
+  if [ "$STATE" = none ] && [ "$foreign" = true ]; then STATE=foreign; fi
+  return 0
+}
+
+# Only a live Main from this installation may be recovered from the PID file.
+# -ww avoids terminal-width truncation on Linux and macOS. The installation-root
+# argument is last in main_command; match the entire suffix, not another root's prefix.
+owned_pid() {
+  local args
+  case "$1" in ''|*[!0-9]*|0|1) return 1 ;; esac
+  alive "$1" || return 1
+  args="$(ps -ww -o args= -p "$1" 2>/dev/null)" || return 1
+  case "$args" in
+    *"$RUNTIME/"*"/Foxwarm --installation-root $ROOT"|*"$RUNTIME/"*"/Foxwarm.dll --installation-root $ROOT") return 0 ;;
+  esac
+  return 1
+}
+
+find_main() {
+  local recorded=""
+  STATE=none PANE="" PID="" EXIT="" MODE=""
+  if have tmux; then find_pane; fi
+  if [ "$STATE" = running ]; then
+    MODE=tmux
+    # Also adopt a Main started by the older, pane-only control script.
+    printf '%s\n' "$PID" > "$PID_FILE"
+  else
+    [ ! -f "$PID_FILE" ] || recorded="$(cat "$PID_FILE")"
+    if owned_pid "$recorded"; then
+      STATE=running PID="$recorded" MODE=background PANE=""
+    fi
+  fi
+}
+
+running() { find_main; [ "$STATE" = running ]; }
+
+stopping_alive() {
+  if [ "$MODE" = tmux ]; then alive "$1"; else owned_pid "$1"; fi
+}
+
+# Match Main's installation-relative data selection, including whitespace and ~/.
+log_paths() {
+  local data="${FOXWARM_DATA_DIR:-}"
+  data="$(printf '%s' "$data" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+  if [ -z "$data" ] && [ -f "$ROOT/data_dir" ]; then
+    data="$(sed 's/^[[:space:]]*//;s/[[:space:]]*$//' "$ROOT/data_dir")"
+  fi
+  case "$data" in '~') data="$HOME" ;; '~/'*) data="$HOME/${data#\~/}" ;; esac
+  case "$data" in '') data="$ROOT" ;; /*) ;; *) data="$ROOT/$data" ;; esac
+  LOG_DIR="$data/state/logs"
+  STDOUT_LOG="$LOG_DIR/foxwarm.stdout.log"
+  STDERR_LOG="$LOG_DIR/foxwarm.stderr.log"
+}
+
+logs_hint() {
+  log_paths
+  printf 'Logs: %s and %s.' "$STDOUT_LOG" "$STDERR_LOG"
+}
+
+foreign_hint() {
+  printf "Another program is running in tmux window '%s:%s'. Set FOXWARM_TMUX_SESSION to use another tmux session." "$SESSION" "$WINDOW"
+}
+
+cmd_start() {
+  local command
+  command="$(main_command)"
+  find_main
+  [ "$STATE" != running ] || fail "Foxwarm is already running (PID $PID, $MODE)."
+  if have tmux; then
+    case "$STATE" in
+      foreign) fail "$(foreign_hint)" ;;
+      exited) tmux respawn-pane -k -t "$PANE" -c "$ROOT" "$command" ;;
+      none)
+        # Pane-scoped remain-on-exit, set in the same command list so an early exit stays visible.
+        if tmux has-session -t "=$SESSION" 2>/dev/null; then
+          tmux new-window -d -t "=$SESSION:" -n "$WINDOW" -c "$ROOT" "$command" \; \
+            set-option -p -t "$TARGET" remain-on-exit on
+        else
+          tmux new-session -d -s "$SESSION" -n "$WINDOW" -c "$ROOT" "$command" \; \
+            set-option -p -t "$TARGET" remain-on-exit on
+        fi ;;
+    esac
+    find_pane
+    # Record even an early-exiting Main; validation rejects dead or reused PIDs.
+    if [ -n "$PID" ]; then printf '%s\n' "$PID" > "$PID_FILE"; fi
+  else
+    log_paths
+    mkdir -p "$LOG_DIR"
+    # nohup ignores terminal hangups; redirected descriptors do not retain the SSH
+    # channel. exec keeps the recorded PID through the shell/env/runtime launch chain.
+    (cd "$ROOT" && exec nohup bash -c "$command") </dev/null >>"$STDOUT_LOG" 2>>"$STDERR_LOG" &
+    printf '%s\n' "$!" > "$PID_FILE"
+  fi
+  sleep 1
+  running || fail "Foxwarm exited during startup. Use '$ROOT/foxwarmctl' attach for the pane or log paths."
+  if [ "$MODE" = tmux ]; then
+    log "Started $(release_field "$CURRENT" version) in tmux window '$SESSION:$WINDOW'. Attach with: '$ROOT/foxwarmctl' attach"
+  else
+    log "Started $(release_field "$CURRENT" version) in the background (PID $PID). $(logs_hint)"
+  fi
+}
+
+# Stop removes Main's pane. Restart and update pass "keep" and start Main again in the
+# same pane, so a pane the user split into the window does not take the window over.
+cmd_stop() {
+  local keep="${1:-}" pid waited
+  find_main
+  case "$STATE" in
+    none) log "Foxwarm is not running."; return 0 ;;
+    foreign) log "Foxwarm is not running. $(foreign_hint)"; return 0 ;;
+    exited)
+      [ -n "$keep" ] || tmux kill-pane -t "$PANE" 2>/dev/null || true
+      rm -f "$PID_FILE"
+      log "Foxwarm is not running."
+      return 0 ;;
+  esac
+  pid="$PID"
+  # Pane ownership remains the legacy cwd contract. PID-file recovery additionally
+  # validates Main's command before every signal, including the forced-stop deadline.
+  if [ "$MODE" = tmux ] || owned_pid "$pid"; then kill -TERM "$pid" 2>/dev/null || true; fi
+  for ((waited = 0; waited < STOP_SECONDS * 5; waited++)); do
+    stopping_alive "$pid" || break
+    sleep 0.2
+  done
+  if stopping_alive "$pid"; then
+    log "Foxwarm did not stop within $STOP_SECONDS seconds; killing PID $pid."
+    kill -KILL "$pid" 2>/dev/null || true
+    for ((waited = 0; waited < 50; waited++)); do
+      stopping_alive "$pid" || break
+      sleep 0.2
+    done
+    stopping_alive "$pid" && fail "PID $pid is still running ($(ps -o stat=,args= -p "$pid" 2>/dev/null))."
+  fi
+  if [ -n "$PANE" ] && [ -z "$keep" ]; then tmux kill-pane -t "$PANE" 2>/dev/null || true; fi
+  rm -f "$PID_FILE"
+  log "Foxwarm stopped."
+}
+
+cmd_status() {
+  find_main
+  case "$STATE" in
+    running)
+      log "Running (PID $PID), release $(release_field "$CURRENT" version) $(release_field "$CURRENT" target). Mode: $MODE."
+      [ "$MODE" != background ] || log "$(logs_hint)"
+      return 0 ;;
+    exited) log "Exited${EXIT:+ with $EXIT}. Inspect it with: '$ROOT/foxwarmctl' attach" ;;
+    foreign) log "Not running. $(foreign_hint)" ;;
+    none) log "Not running. $(logs_hint)" ;;
+  esac
+  return 3
+}
+
+cmd_attach() {
+  find_main
+  if [ "$MODE" = background ]; then
+    log "Foxwarm is running without tmux; there is no console to attach to. $(logs_hint)"
+    return 0
+  fi
+  case "$STATE" in
+    running|exited) exec tmux attach -t "$PANE" ;;
+    foreign) fail "Foxwarm is not running. $(foreign_hint)" ;;
+    none) fail "Foxwarm is not running. $(logs_hint)" ;;
+  esac
+}
+
+download() {
+  if have curl; then curl -fL --retry 3 -o "$2" "$1"; elif have wget; then wget -q -O "$2" "$1"; else fail "curl or wget is required."; fi
+}
+
+prune() {
+  local selected entry
+  selected="$(cd "$CURRENT" && pwd -P)"
+  for entry in "$RUNTIME"/* "$RUNTIME"/.staging-*; do
+    [ -e "$entry" ] || continue
+    [ "$entry" = "$CURRENT" ] && continue
+    if [ -d "$entry" ] && [ "$(cd "$entry" && pwd -P)" = "$selected" ]; then continue; fi
+    rm -rf -- "$entry" || log "Could not remove $entry; it will be retried at the next update."
+  done
+}
+
+cmd_update() {
+  local package="" version="" force=false asset base staging new old name was_running=false
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --package) package="${2:?--package requires a file}"; shift 2 ;;
+      --force) force=true; shift ;;
+      -*) fail "Unknown update option: $1" ;;
+      *) version="${1#v}"; shift ;;
+    esac
+  done
+  asset="$(release_field "$CURRENT" asset)"
+  old="$(release_field "$CURRENT" version)"
+  scratch="$(mktemp -d "$RUNTIME/.staging-XXXXXX")"
+  trap 'rm -rf -- "${scratch:-}"' EXIT
+  if [ -z "$package" ]; then
+    if [ -n "$version" ]; then base="$RELEASES/download/v$version"; else base="$RELEASES/latest/download"; fi
+    log "Downloading $asset"
+    download "$base/$asset" "$scratch/$asset"
+    download "$base/SHA256SUMS" "$scratch/SHA256SUMS"
+    if have sha256sum; then
+      (cd "$scratch" && awk -v asset="$asset" '$2 == asset' SHA256SUMS | sha256sum -c --quiet -) || fail "Checksum verification failed for $asset."
+    else
+      (cd "$scratch" && awk -v asset="$asset" '$2 == asset' SHA256SUMS | shasum -a 256 -c -) || fail "Checksum verification failed for $asset."
+    fi
+    package="$scratch/$asset"
+  fi
+  mkdir "$scratch/extract"
+  tar -xzf "$package" -C "$scratch/extract"
+  staging=""
+  for name in "$scratch/extract"/*; do
+    if [ -d "$name" ]; then staging="$name"; break; fi
+  done
+  [ -n "$staging" ] && [ -x "$staging/Foxwarm" ] && [ -f "$staging/release.json" ] || fail "$package is not a Foxwarm server package."
+  [ "$(release_field "$staging" rid)" = "$(release_field "$CURRENT" rid)" ] || fail "$package is for $(release_field "$staging" rid), not this installation."
+  new="$(release_field "$staging" version)"
+  if [ "$new" = "$old" ] && [ "$force" = false ]; then
+    log "Release $old is already installed. Use --force to reinstall it."
+    return 0
+  fi
+  log "Checking existing data with $new"
+  eval "$(launcher "$staging") --installation-root $(printf '%q' "$ROOT") --inspect-upgrade" || fail "Upgrade inspection blocked $new; the installed release is unchanged."
+  if running; then was_running=true; cmd_stop keep; fi
+  name="$new"
+  [ -e "$RUNTIME/$name" ] && name="$new-$(date +%s)"
+  mv "$staging" "$RUNTIME/$name"
+  ln -sfn "$name" "$RUNTIME/.current-next"
+  # Both variants replace the symlink itself, atomically, rather than moving into it.
+  if [ "$(uname -s)" = Darwin ]; then
+    mv -fh "$RUNTIME/.current-next" "$CURRENT"
+  else
+    mv -fT "$RUNTIME/.current-next" "$CURRENT"
+  fi
+  cp "$CURRENT/foxwarmctl" "$ROOT/.foxwarmctl-next"
+  mv "$ROOT/.foxwarmctl-next" "$ROOT/foxwarmctl"
+  log "Installed $new (was $old)."
+  prune
+  if [ "$was_running" = true ]; then cmd_start; fi
+}
+
+case "${1:-}" in
+  start) cmd_start ;;
+  stop) cmd_stop ;;
+  restart) cmd_stop keep; cmd_start ;;
+  status) cmd_status ;;
+  attach) cmd_attach ;;
+  run) eval "$(main_command)" ;;
+  update) shift; cmd_update "$@" ;;
+  version) cat "$CURRENT/release.json" ;;
+  -h|--help|help|'') usage ;;
+  *) usage >&2; exit 2 ;;
+esac

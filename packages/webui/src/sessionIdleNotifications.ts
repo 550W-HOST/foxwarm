@@ -9,6 +9,7 @@ export interface SessionIdleNotificationSession extends RuntimeStateSessionLike 
   displayName?: string
   aliases?: string[]
   queueLength?: number
+  questions?: { open?: number; revision?: number } | null
 }
 
 export interface SessionIdleNotificationHandle {
@@ -27,6 +28,48 @@ type SessionIdleNotificationBaseline = {
 }
 
 export const SESSION_IDLE_NOTIFICATIONS_STORAGE_KEY = 'foxwarm_session_idle_notifications_v1'
+
+/** Which Sessions raise a notification when they ask the user a question (browser-local). */
+export type QuestionNotificationMode = 'all' | 'watched' | 'off'
+export const QUESTION_NOTIFICATIONS_STORAGE_KEY = 'foxwarm_question_notifications_v1'
+export const QUESTION_NOTIFICATIONS_CHANGED_EVENT = 'foxwarm-question-notifications-changed'
+
+export function readQuestionNotificationMode(storage: Pick<Storage, 'getItem'>): QuestionNotificationMode {
+  try {
+    const value = storage.getItem(QUESTION_NOTIFICATIONS_STORAGE_KEY)
+    return value === 'watched' || value === 'off' ? value : 'all'
+  } catch {
+    return 'all'
+  }
+}
+
+export function writeQuestionNotificationMode(storage: Pick<Storage, 'setItem' | 'removeItem'>, mode: QuestionNotificationMode): void {
+  try {
+    if (mode === 'all') storage.removeItem(QUESTION_NOTIFICATIONS_STORAGE_KEY)
+    else storage.setItem(QUESTION_NOTIFICATIONS_STORAGE_KEY, mode)
+  } catch {
+    // Browser storage can be unavailable. Keep the in-memory setting for this page.
+  }
+}
+
+/** Browser-local question notification preference, shared by Setup and the notification hook. */
+export function useQuestionNotificationMode(): [QuestionNotificationMode, (mode: QuestionNotificationMode) => void] {
+  const [mode, setModeState] = useState<QuestionNotificationMode>(() => typeof localStorage === 'undefined' ? 'all' : readQuestionNotificationMode(localStorage))
+  useEffect(() => {
+    const sync = () => { if (typeof localStorage !== 'undefined') setModeState(readQuestionNotificationMode(localStorage)) }
+    const handleStorage = (event: StorageEvent) => { if (!event.key || event.key === QUESTION_NOTIFICATIONS_STORAGE_KEY) sync() }
+    window.addEventListener('storage', handleStorage)
+    window.addEventListener(QUESTION_NOTIFICATIONS_CHANGED_EVENT, sync)
+    return () => { window.removeEventListener('storage', handleStorage); window.removeEventListener(QUESTION_NOTIFICATIONS_CHANGED_EVENT, sync) }
+  }, [])
+  const setMode = useCallback((next: QuestionNotificationMode) => {
+    setModeState(next)
+    if (typeof localStorage === 'undefined') return
+    writeQuestionNotificationMode(localStorage, next)
+    window.dispatchEvent(new Event(QUESTION_NOTIFICATIONS_CHANGED_EVENT))
+  }, [])
+  return [mode, setMode]
+}
 
 function isSessionIdleNotificationMode(value: unknown): value is SessionIdleNotificationMode {
   return value === 'once' || value === 'always'
@@ -84,6 +127,15 @@ export function showSessionIdleNotification(session: SessionIdleNotificationSess
     return new Notification(getSessionRuntimeStateName(session) === 'llm-failed' ? 'Request failed' : 'Session idle', {
       body: session.displayName || session.id,
     })
+  } catch {
+    return null
+  }
+}
+
+export function showSessionQuestionNotification(session: SessionIdleNotificationSession): SessionIdleNotificationHandle | null {
+  if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return null
+  try {
+    return new Notification('Question for you', { body: session.displayName || session.id })
   } catch {
     return null
   }
@@ -157,6 +209,31 @@ export class SessionIdleNotificationRegistry {
 
 export class SessionIdleNotificationTracker {
   private baselines = new Map<string, SessionIdleNotificationBaseline>()
+  private questionBaselines = new Map<string, { open: number; revision: number }>()
+  private questionsPopulated = false
+
+  /**
+   * Sessions that gained an open question since the previous observation and are eligible
+   * under the question notification mode. Baselines are kept for every Session seen, so a
+   * row that leaves and re-enters the list does not notify again; a Session first seen after
+   * the list was populated notifies when it already has an open question.
+   */
+  observeQuestions(sessions: SessionIdleNotificationSession[], modes: SessionIdleNotificationModes, mode: QuestionNotificationMode = 'all'): SessionIdleNotificationSession[] {
+    const result: SessionIdleNotificationSession[] = []
+    const populated = this.questionsPopulated
+    if (sessions.length) this.questionsPopulated = true
+    for (const session of sessions) {
+      const open = Math.max(0, session.questions?.open ?? 0)
+      const revision = session.questions?.revision ?? 0
+      const previous = this.questionBaselines.get(session.id)
+      this.questionBaselines.set(session.id, { open, revision })
+      const eligible = mode === 'all' || mode === 'watched' && !!modes[session.id]
+      if (!eligible) continue
+      const gained = previous ? open > previous.open && revision !== previous.revision : populated && open > 0
+      if (gained) result.push(session)
+    }
+    return result
+  }
 
   arm(session: SessionIdleNotificationSession): void {
     this.baselines.set(session.id, {
@@ -215,6 +292,9 @@ export function useSessionIdleNotifications(sessions: SessionIdleNotificationSes
   onOpenSession?: OpenSessionFromNotification
 } = {}) {
   const [modes, setModes] = useState<SessionIdleNotificationModes>(loadStoredSessionIdleNotificationModes)
+  const [questionMode] = useQuestionNotificationMode()
+  const questionModeRef = useRef(questionMode)
+  questionModeRef.current = questionMode
   const [unread, setUnread] = useState<SessionIdleUnread>(() => typeof localStorage === 'undefined' ? {} : readSessionIdleUnread(localStorage))
   const modesRef = useRef(modes)
   const sessionsRef = useRef(sessions)
@@ -266,6 +346,11 @@ export function useSessionIdleNotifications(sessions: SessionIdleNotificationSes
           return remaining
         })
       }
+    }
+    for (const session of trackerRef.current.observeQuestions(sessions, modesRef.current, questionModeRef.current)) {
+      if (!shouldMarkSessionIdleUnread(session.id, canonicalVisibleSessionIds, document.visibilityState)) continue
+      const notification = showSessionQuestionNotification(session)
+      if (notification) notificationRegistryRef.current?.retain(session.id, notification, canonicalSessionId => openSessionRef.current?.(canonicalSessionId))
     }
   }, [sessions, updateModes, [...canonicalVisibleSessionIds].join('\0')])
 

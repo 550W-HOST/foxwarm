@@ -56,6 +56,7 @@ These unchanged Session methods are also qualified against .NET Main through its
 - File transfer uses shared node file-transfer helpers.
 - `node_service_request`, `node_service_command`, and `node_service_event` are separate from model-tool interception.
 - Optional `node-pty` is loaded from `FOXWARM_NODE_RUNTIME_DIR` or the sibling runtime package; service version is advertised only after success.
+- New PTYs use the shared [independent launch environment](./shared-persistent-exec.md#d-independent-launch-tmux-context), removing hosting-pane tmux variables without changing the CLI process environment.
 - PTYs keep bounded output, support detach/reattach, and use capability-bound local IPC for the terminal `code` helper.
 - The trigger server binds loopback, requires its generated bearer token, and stops the listener on shutdown while retaining its token, metadata and helper files.
 - The standalone client and TUI entry points set `foxwarm:node <node-id>` as a presentation-only process title, initially using the requested ID when available and refreshing it after pairing or registration supplies the canonical ID. Importing `NodeClient` as a library does not rename the embedding process.

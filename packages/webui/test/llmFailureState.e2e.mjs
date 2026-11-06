@@ -15,7 +15,7 @@ before(async () => {
     stdin: { contents: `
       import React from 'react'
       import { createRoot } from 'react-dom/client'
-      import ArchitectureView from './src/components/ArchitectureView'
+      import SystemView from './src/components/SystemView'
       import { initializeThemeRuntime } from './src/theme'
       initializeThemeRuntime()
       const failed = { id: 'fixture/failed', agent: 'main', displayName: 'Failed foreground request', parentSessionId: null,
@@ -35,7 +35,7 @@ before(async () => {
         return new Response(JSON.stringify(payload), {headers:{'Content-Type':'application/json'}})
       }
       window.WebSocket = class { static OPEN=1; static CONNECTING=0; readyState=0; send(){} close(){this.readyState=3} }
-      createRoot(document.getElementById('root')).render(<ArchitectureView currentSession={failed.id} onSelectSession={() => {}} />)
+      createRoot(document.getElementById('root')).render(<SystemView section="sessions" currentSession={failed.id} onSelectSession={() => {}} />)
     `, resolveDir: new URL('..', import.meta.url).pathname, sourcefile: 'llm-failure-fixture.tsx', loader: 'tsx' },
     bundle: true, format: 'iife', platform: 'browser', target: 'chrome120', write: false,
     alias: webuiReactAliases, define: { 'process.env.NODE_ENV': JSON.stringify('test') }, logLevel: 'silent',
@@ -53,7 +53,7 @@ after(async () => {
   if (server) await new Promise(resolve => server.close(resolve))
 })
 
-test('Architecture projects a settled failure without active duration or busy counts', async () => {
+test('System Sessions projects a settled failure without active duration or busy counts', async () => {
   const page = await browser.newPage()
   const errors = []
   page.on('pageerror', error => errors.push(error.message))
@@ -74,7 +74,7 @@ test('Architecture projects a settled failure without active duration or busy co
     const inspector = await page.$eval('aside', element => element.textContent)
     assert.match(inspector, /Request failed/)
     assert.doesNotMatch(inspector, /for \d|Running|Requesting model/)
-    const active = await page.evaluate(() => [...document.querySelectorAll('button')].find(element => element.textContent.startsWith('Active'))?.querySelector('.tabular-nums')?.textContent)
+    const active = await page.evaluate(() => [...document.querySelectorAll('[data-system-summary="sessions"] button')].find(element => /\bactive$/.test(element.textContent.trim()))?.querySelector('.tabular-nums')?.textContent)
     assert.equal(active, '0')
     assert.deepEqual(errors, [])
   } finally { await page.close() }

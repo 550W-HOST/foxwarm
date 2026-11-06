@@ -48,6 +48,126 @@ internal sealed class VectorTable : IDisposable
             );
     }
 
+    internal async Task RepairSourceTimesAsync(
+        Func<string, long, (double? Start, double? End)> sourceTimes,
+        Action<string>? missingSource = null,
+        CancellationToken cancellationToken = default
+    )
+    {
+        const string marker = "foxwarm.block-source-times";
+        cancellationToken.ThrowIfCancellationRequested();
+        var field = (await table.Schema()).GetFieldByName("start_timestamp");
+        if (field.Metadata?.GetValueOrDefault(marker) == "1")
+            return;
+        // Collect only unique locators before mutation; updating Lance fragments can change
+        // scan order. No text, vectors, or candidate limits participate in this repair.
+        var locators =
+            new Dictionary<
+                (string Session, long Block),
+                (double? Start, double? End, bool Mixed)
+            >();
+        for (var offset = 0; ; offset += 128)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var rows = await table
+                .Query()
+                .Where("memory_kind IN ('block','fact') AND block_id IS NOT NULL")
+                .Select(new[] { "session_id", "block_id", "start_timestamp", "end_timestamp" })
+                .Limit(128)
+                .Offset(offset)
+                .ToList();
+            foreach (var row in rows)
+            {
+                var locator = JsonSerializer.SerializeToNode(row)!;
+                var key = (
+                    locator["session_id"]!.GetValue<string>(),
+                    checked((long)Sessions.SessionWait.Number(locator["block_id"])!.Value)
+                );
+                var range = (
+                    Start: Sessions.SessionWait.Number(locator["start_timestamp"]),
+                    End: Sessions.SessionWait.Number(locator["end_timestamp"])
+                );
+                var mixed =
+                    locators.TryGetValue(key, out var existing)
+                    && (
+                        existing.Mixed || existing.Start != range.Start || existing.End != range.End
+                    );
+                locators[key] = (range.Start, range.End, mixed);
+            }
+            if (rows.Count < 128)
+                break;
+        }
+        var updates = new List<(string Session, long Block, double? Start, double? End)>();
+        async Task FlushAsync()
+        {
+            if (updates.Count == 0)
+                return;
+            cancellationToken.ThrowIfCancellationRequested();
+            var sessions = new StringArray.Builder();
+            var blocks = new DoubleArray.Builder();
+            var kinds = new StringArray.Builder();
+            var starts = new DoubleArray.Builder();
+            var ends = new DoubleArray.Builder();
+            foreach (var update in updates)
+            {
+                foreach (var kind in new[] { "block", "fact" })
+                {
+                    sessions.Append(update.Session);
+                    blocks.Append(update.Block);
+                    kinds.Append(kind);
+                    starts.Append(update.Start);
+                    ends.Append(update.End);
+                }
+            }
+            // Partial-schema matched updates touch only source-time metadata. No inserts,
+            // text/embedding reconstruction, or deletion of unmatched rows is permitted.
+            var names = new[]
+            {
+                "session_id",
+                "block_id",
+                "memory_kind",
+                "start_timestamp",
+                "end_timestamp",
+            };
+            using var batch = new RecordBatch(
+                new Schema(names.Select(Schema.GetFieldByName), null),
+                new IArrowArray[]
+                {
+                    sessions.Build(),
+                    blocks.Build(),
+                    kinds.Build(),
+                    starts.Build(),
+                    ends.Build(),
+                },
+                updates.Count * 2
+            );
+            await table
+                .MergeInsert(new[] { "session_id", "block_id", "memory_kind" })
+                .WhenMatchedUpdateAll()
+                .Execute(batch);
+            updates.Clear();
+        }
+        foreach (var ((session, block), existing) in locators)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var range = sourceTimes(session, block);
+            if (range.Start is null || range.End is null)
+                missingSource?.Invoke(session);
+            if (!existing.Mixed && existing.Start == range.Start && existing.End == range.End)
+                continue;
+            updates.Add((session, block, range.Start, range.End));
+            if (updates.Count == 128)
+                await FlushAsync();
+        }
+        await FlushAsync();
+        cancellationToken.ThrowIfCancellationRequested();
+        var metadata = field.Metadata is null
+            ? new Dictionary<string, string>()
+            : new Dictionary<string, string>(field.Metadata);
+        metadata[marker] = "1";
+        await table.ReplaceFieldMetadata("start_timestamp", metadata);
+    }
+
     internal static RecordBatch Batch(IReadOnlyList<JsonObject> rows)
     {
         var arrays = new List<IArrowArray>();

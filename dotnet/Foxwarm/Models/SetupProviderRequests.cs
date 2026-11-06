@@ -129,7 +129,7 @@ internal static class SetupProviderRequests
         );
     }
 
-    internal static async Task<string[]> ListAsync(
+    internal static async Task<SetupListedModel[]> ListAsync(
         HttpClient http,
         ConcreteHostModel model,
         CancellationToken cancellationToken
@@ -183,9 +183,17 @@ internal static class SetupProviderRequests
         {
             if (!response.IsSuccessStatusCode)
             {
+                var status = (int)response.StatusCode;
                 throw new SetupProviderRequestException(
                     "upstream",
-                    $"Provider model list request failed ({(int)response.StatusCode}).",
+                    status switch
+                    {
+                        401 => model.Token.Length == 0
+                            ? $"The provider requires an API key ({status})."
+                            : $"The provider rejected the API key ({status}).",
+                        403 => $"The provider denied access with this API key ({status}).",
+                        _ => $"Provider model list request failed ({status}).",
+                    },
                     502,
                     (int)response.StatusCode
                 );
@@ -222,18 +230,18 @@ internal static class SetupProviderRequests
                     502
                 );
             var seen = new HashSet<string>(StringComparer.Ordinal);
-            var result = new List<string>();
+            var result = new List<SetupListedModel>();
             foreach (var item in data)
             {
+                if (item is not JsonObject obj)
+                    continue;
                 var id =
-                    item is JsonObject obj
-                    && obj["id"] is JsonValue value
-                    && value.TryGetValue<string>(out var raw)
+                    obj["id"] is JsonValue value && value.TryGetValue<string>(out var raw)
                         ? raw.Trim()
                         : "";
                 if (id.Length == 0 || id.Length > MaxModelIdLength || !seen.Add(id))
                     continue;
-                result.Add(id);
+                result.Add(SetupListedModel.FromProvider(id, obj));
                 if (result.Count >= ListMaxModels)
                     break;
             }
@@ -371,4 +379,74 @@ internal static class SetupProviderRequests
 
     private static SetupProviderRequestException Invalid(string message) =>
         new("invalid-request", message, 400);
+}
+
+/// <summary>
+/// One model from a provider's model list, with limits and image support only when the provider
+/// declares them. Anthropic reports <c>max_input_tokens</c>, <c>max_tokens</c> and
+/// <c>capabilities.image_input.supported</c>; OpenRouter-style gateways report
+/// <c>context_length</c>, <c>top_provider.max_completion_tokens</c> and
+/// <c>architecture.input_modalities</c>. OpenAI lists identifiers only.
+/// </summary>
+internal sealed record SetupListedModel(
+    string Id,
+    long? ContextLimit = null,
+    long? MaxOutput = null,
+    bool? ImageInput = null
+)
+{
+    internal static SetupListedModel FromProvider(string id, JsonObject item) =>
+        new(
+            id,
+            PositiveInteger(item["max_input_tokens"]) ?? PositiveInteger(item["context_length"]),
+            PositiveInteger(item["max_tokens"])
+                ?? PositiveInteger((item["top_provider"] as JsonObject)?["max_completion_tokens"]),
+            Supported(
+                ((item["capabilities"] as JsonObject)?["image_input"] as JsonObject)?["supported"]
+            ) ?? InputModalities((item["architecture"] as JsonObject)?["input_modalities"])
+        );
+
+    internal JsonObject ToJson()
+    {
+        var result = new JsonObject { ["id"] = Id };
+        if (ContextLimit is long context)
+            result["contextLimit"] = context;
+        if (MaxOutput is long output)
+            result["maxOutput"] = output;
+        if (ImageInput is bool image)
+            result["imageInput"] = image;
+        return result;
+    }
+
+    private static long? PositiveInteger(JsonNode? node)
+    {
+        if (node is not JsonValue value)
+            return null;
+        if (value.TryGetValue<long>(out var integer))
+            return integer > 0 ? integer : null;
+        return
+            value.TryGetValue<double>(out var number)
+            && number > 0
+            && number <= long.MaxValue
+            && Math.Floor(number) == number
+            ? (long)number
+            : null;
+    }
+
+    private static bool? Supported(JsonNode? node) =>
+        node is JsonValue value && value.TryGetValue<bool>(out var supported) ? supported : null;
+
+    private static bool? InputModalities(JsonNode? node)
+    {
+        if (node is not JsonArray modalities)
+            return null;
+        var names = modalities
+            .Select(item =>
+                item is JsonValue value && value.TryGetValue<string>(out var text) ? text : null
+            )
+            .ToArray();
+        if (names.Length == 0 || names.Any(name => name is null))
+            return null;
+        return names.Contains("image", StringComparer.OrdinalIgnoreCase);
+    }
 }

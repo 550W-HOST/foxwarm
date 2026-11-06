@@ -275,7 +275,9 @@ internal sealed partial class SessionManager
                 ? "No more retries."
                 : $"Retry in {seconds} second{(seconds == 1 ? "" : "s")}...";
             var text =
-                $"⚠️ LLM Error: Attempt {retry.Attempt}/{retry.MaxRetries} failed{(descriptor.Length == 0 ? "." : ": " + descriptor + ".")} {after}";
+                retry.Final && retry.ConfigurationMessage() is { } configuration
+                    ? "⚠️ LLM Error: " + configuration
+                    : $"⚠️ LLM Error: Attempt {retry.Attempt}/{retry.MaxRetries} failed{(descriptor.Length == 0 ? "." : ": " + descriptor + ".")} {after}";
             await BroadcastChannelTextAsync(owner, turn, text, final: false);
             if (retry.Final)
                 await BroadcastChannelTextAsync(owner, turn, "", final: true);

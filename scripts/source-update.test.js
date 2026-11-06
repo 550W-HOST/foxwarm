@@ -29,7 +29,7 @@ function running(pid) {
 // This lane deliberately performs complete asset/.NET builds three times. It
 // reuses installed locked dependencies; npm ci alone is a fixture boundary.
 // Run explicitly with FOXWARM_TEST_SOURCE_UPDATE=1, not in every unit batch.
-test('real source builds, failed update, restart and delayed native completion', {
+test('real source builds, failed update, restart, old output removal and delayed native completion', {
   skip: process.env.FOXWARM_TEST_SOURCE_UPDATE !== '1' || process.platform !== 'linux',
   timeout: 600000,
 }, async t => {
@@ -183,15 +183,15 @@ test('real source builds, failed update, restart and delayed native completion',
   assert(!running(oldPid));
   assert.notEqual(newOutput, oldOutput);
   assert(fs.readFileSync(`/proc/${newPid}/cmdline`, 'utf8').includes(path.join(newOutput, 'Foxwarm.dll')));
-  assert.equal(fs.statSync(oldAssembly).mtimeMs, oldMtime);
+  // Restart promotes after Main stops, so the previous output is no longer retained.
+  assert.deepEqual(fs.readdirSync(path.join(app, 'runtime')).sort(), ['current', path.basename(newOutput)].sort());
   const version = assembly => execFileSync('dotnet', [assembly, '--version'], { cwd: root, env, encoding: 'utf8' }).trim();
-  assert.equal(version(oldAssembly), oldVersion);
   assert.equal(version(path.join(newOutput, 'Foxwarm.dll')), '9.8.7');
   assert.equal(fs.readFileSync(path.join(data, 'state/config.yaml'), 'utf8'), config);
   assert(fs.existsSync(path.join(data, 'state/sessions', sessionId + '.json')));
   assert.equal(fs.readFileSync(effect, 'utf8'), 'started');
   fs.writeFileSync(gate, 'finish');
-  await until(() => fs.existsSync(record.statusPath), 'Old DLL helper did not publish completion after replacement.');
+  await until(() => fs.existsSync(record.statusPath), 'Exec wrapper did not publish completion after its output was removed.');
   assert.equal(JSON.parse(fs.readFileSync(record.statusPath)).exitCode, 7);
   assert.equal(fs.readFileSync(effect, 'utf8'), 'starteddone');
   const cli = await run('source-cli', process.execPath, ['scripts/foxwarm.js', 'model', '--list']);
@@ -232,5 +232,5 @@ test('real source builds, failed update, restart and delayed native completion',
   assert.equal(dllSelected.command, 'dotnet');
   assert.equal(dllSelected.args[0], path.join(published, 'Foxwarm.dll'));
   await publishedMain(path.join(published, 'Foxwarm.dll'));
-  t.diagnostic(`Real Main ${oldPid} -> ${newPid}; assembly ${oldVersion} -> 9.8.7; retained helper exit 7; source CLI and published apphost/DLL Main startup/drain passed.`);
+  t.diagnostic(`Real Main ${oldPid} -> ${newPid}; assembly ${oldVersion} -> 9.8.7; exec exit 7 after old output removal; source CLI and published apphost/DLL Main startup/drain passed.`);
 });

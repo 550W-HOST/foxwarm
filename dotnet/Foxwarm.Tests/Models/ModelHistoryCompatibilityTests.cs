@@ -7,6 +7,17 @@ namespace Foxwarm.Tests;
 
 public sealed class ModelHistoryCompatibilityTests
 {
+    // Fixtures omit provider keys; the legacy app-level key satisfies the first-run key check.
+    private static ModelConfiguration KeyedConfiguration(TempDirectory temp)
+    {
+        Directory.CreateDirectory(Path.Combine(temp.Path, "state"));
+        File.WriteAllText(
+            Path.Combine(temp.Path, "state", "config.yaml"),
+            "llm:\n  openaiApiKey: synthetic-fallback-key\n"
+        );
+        return new ModelConfiguration(temp.Path);
+    }
+
     private static JsonObject Document() =>
         JsonNode
             .Parse(
@@ -67,7 +78,7 @@ public sealed class ModelHistoryCompatibilityTests
     )
     {
         using var temp = new TempDirectory();
-        var configuration = new ModelConfiguration(temp.Path);
+        var configuration = KeyedConfiguration(temp);
         var document = Document();
         var original = document.ToJsonString();
         await configuration.SaveAsync(new JsonObject { ["yaml"] = original });
@@ -110,7 +121,7 @@ public sealed class ModelHistoryCompatibilityTests
     public async Task Structured_save_preserves_provider_mapping_and_retained_model_override()
     {
         using var temp = new TempDirectory();
-        var configuration = new ModelConfiguration(temp.Path);
+        var configuration = KeyedConfiguration(temp);
         var document = JsonNode
             .Parse(
                 """
@@ -160,7 +171,7 @@ public sealed class ModelHistoryCompatibilityTests
     public async Task New_catalog_applies_to_old_canonical_history_and_existing_request_capture_keeps_its_mapping()
     {
         using var temp = new TempDirectory();
-        var configuration = new ModelConfiguration(temp.Path);
+        var configuration = KeyedConfiguration(temp);
         var document = Document();
         document["providers"]!["b"]!.AsObject().Remove("sameProviderAs");
         await configuration.SaveAsync(new JsonObject { ["yaml"] = document.ToJsonString() });
@@ -283,7 +294,7 @@ public sealed class ModelHistoryCompatibilityTests
                 );
             }
         );
-        var configuration = new ModelConfiguration(temp.Path);
+        var configuration = KeyedConfiguration(temp);
         var document = Document();
         document["providers"]!["b"]!["baseUrl"] = peer.BaseUri.ToString();
         await configuration.SaveAsync(new JsonObject { ["yaml"] = document.ToJsonString() });

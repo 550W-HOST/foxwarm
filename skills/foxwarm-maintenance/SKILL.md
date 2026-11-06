@@ -1,12 +1,14 @@
 ---
 name: foxwarm-maintenance
-description: "Foxwarm source updates and restarts, data layout, backup and restore boundaries, and upgrade checks. Use when updating a source installation or assessing changes to its storage and persisted data."
+description: "Foxwarm release and source updates and restarts, data layout, backup and restore boundaries, and upgrade checks. Use when updating an installation or assessing changes to its storage and persisted data."
 ---
 
 # Foxwarm Maintenance
 
-This skill covers installation details that are specific to Foxwarm. For the
-public source checkout, use the source-update procedure below. Use an
+This skill covers installation details that are specific to Foxwarm. A release
+installation has `runtime/current/release.json` and `foxwarmctl` in its program
+directory; a source installation is a Git checkout. Use the matching update
+procedure below. Use an
 installation's own runbook for custom deployment, backup destinations and
 retention. Inspect its actual configuration rather than assuming a process
 manager, repository layout, or remote.
@@ -16,15 +18,15 @@ manager, repository layout, or remote.
 Resolve the running process's data root in this order:
 
 1. Nonempty `FOXWARM_DATA_DIR` in its environment.
-2. Nonempty `data_dir` file in the program repository.
-3. The program repository itself.
+2. Nonempty `data_dir` file in the program directory.
+3. The program directory itself.
 
-Relative values resolve against the program repository, not the operator's shell
+Relative values resolve against the program directory, not the operator's shell
 working directory. A shell's environment may differ from the running service.
 
 - `<data-root>/state/` contains configuration, credentials, Session authority,
   databases, blobs, and logs. `<data-root>/agents/` contains user-owned Agent
-  files and the live framework prompt.
+  files and the installation's framework prompt additions.
 - `<program-repo>/skills/` supplies global skills unless `paths.skillsDir`
   selects another directory. Source builds also copy skills into their payload
   for standalone publication. Templates and native resources come from the
@@ -55,6 +57,15 @@ A live LanceDB directory also needs a verified snapshot or quiesced capture.
 Restore to new paths and verify before any authorized replacement of live data.
 
 ## Upgrades and runtime changes
+
+For a release installation, back up the data root, then run `foxwarmctl update`
+(`foxwarmctl.cmd update` on Windows) from the program directory, optionally with
+a version or `--package FILE`. It checks the existing data with the new release
+before stopping Main, ends Main after 60 seconds, switches releases, restarts
+Main if it was running and removes the previous release. `foxwarmctl status`
+reports the running release; release layout and package types are described in
+the repository's `docs/releasing.md`.
+
 
 Read [Source Updates](references/SOURCE-UPDATES.md) for first C# prerequisites,
 the public pull/build/restart sequence, generated output ownership and old-output

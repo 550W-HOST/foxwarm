@@ -954,8 +954,8 @@ html[data-foxwarm-component-treatment="console"] button {
   letter-spacing: 0.04em;
 }
 
-html[data-foxwarm-component-treatment="console"] .foxwarm-architecture-surface-tab[data-active="true"],
-html[data-foxwarm-component-treatment="console"] .foxwarm-architecture-surface-tab[data-active="true"]:hover {
+html[data-foxwarm-component-treatment="console"] :is(.foxwarm-system-tab, .foxwarm-system-view-tab)[data-active="true"],
+html[data-foxwarm-component-treatment="console"] :is(.foxwarm-system-tab, .foxwarm-system-view-tab)[data-active="true"]:hover {
   background-color: var(--foxwarm-console-text-bright) !important;
   color: var(--foxwarm-console-panel) !important;
 }

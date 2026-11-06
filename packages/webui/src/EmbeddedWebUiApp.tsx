@@ -4,7 +4,7 @@ import { DndContext } from '@dnd-kit/core'
 import { Bot, Workflow, ClipboardList } from 'lucide-react'
 import Chat from './components/Chat'
 import SessionListCore from './components/SessionListCore'
-import AgentCreationMenu, { type ChildSessionRequest } from './components/AgentCreationMenu'
+import AgentCreationMenu, { type SessionCreationRequest } from './components/AgentCreationMenu'
 import GlobalUiSettingsMenu from './components/GlobalUiSettingsMenu'
 import CreateTabButton from './components/CreateTabButton'
 import { API_BASE_PATH } from './config'
@@ -16,7 +16,7 @@ import { useTheme } from './theme/useTheme'
 import { useChatPreferences } from './chatPreferences'
 import { getNodeTargetAvailability, parseWebUiNodeTargets, type WebUiNodeTarget } from './nodeTargets'
 
-const ArchitectureView = lazy(() => import('./components/ArchitectureView'))
+const SystemView = lazy(() => import('./components/SystemView'))
 const SetupView = lazy(() => import('./components/SetupView'))
 
 type WebUiSettings = { instanceName: string; tabIcon: string }
@@ -36,7 +36,7 @@ export function EmbeddedSidebarApp({ target }: { target: Extract<FoxwarmEmbedded
   const [activeTarget, setActiveTarget] = useState<FoxwarmActiveTarget | null>(null)
   const [visibleSessionIds, setVisibleSessionIds] = useState<string[]>([])
   const currentSession = activeTarget?.kind === 'session' ? activeTarget.sessionId : ''
-  const boundedSessions = useBoundedSessionList({ focusIds: currentSession ? [currentSession] : [], exactIds: currentSession ? [currentSession] : [] })
+  const boundedSessions = useBoundedSessionList({ focusIds: currentSession ? [currentSession] : [], exactIds: currentSession ? [currentSession] : [], groupable: true })
   const sessions = boundedSessions.knownSessions
   const sidebarSessions = boundedSessions.sessions
   const fetchSessions = boundedSessions.refresh
@@ -52,6 +52,7 @@ export function EmbeddedSidebarApp({ target }: { target: Extract<FoxwarmEmbedded
     onExpandBranches: (sessionIds: string[]) => { void boundedSessions.expandBranches(sessionIds) },
     onRetryBranch: (sessionId: string) => { void boundedSessions.retryBranch(sessionId) },
     onCollapseBranch: boundedSessions.collapseBranch,
+    groupView: boundedSessions.groupView,
   }
 
   const fetchAgents = useCallback(async () => {
@@ -124,7 +125,7 @@ export function EmbeddedSidebarApp({ target }: { target: Extract<FoxwarmEmbedded
     openSession(data.sessionId)
   }
 
-  const [childRequest, setChildRequest] = useState<ChildSessionRequest | null>(null)
+  const [creationRequest, setCreationRequest] = useState<SessionCreationRequest | null>(null)
   const currentRecord = sessions.find(item => item.id === currentSession || item.aliases?.includes(currentSession))
   const agentsActive = activeTarget?.kind === 'agents'
   return (
@@ -171,7 +172,7 @@ export function EmbeddedSidebarApp({ target }: { target: Extract<FoxwarmEmbedded
               <Workflow className="h-4 w-4" />
               <span>Agents</span>
             </button>
-            <AgentCreationMenu agents={agents} currentAgent={currentRecord?.agent} compact onCreateAgent={createAgent} onCreateSession={createSession} childRequest={childRequest} onChildRequestHandled={() => setChildRequest(null)} />
+            <AgentCreationMenu agents={agents} currentAgent={currentRecord?.agent} compact onCreateAgent={createAgent} onCreateSession={createSession} creationRequest={creationRequest} onCreationRequestHandled={() => setCreationRequest(null)} />
           </div>
           {nodeTargets.some(node => node.id === (currentRecord?.currentNode || 'master') && getNodeTargetAvailability(node, 'vscode-pty').available) && <div className="mt-2">
             <CreateTabButton
@@ -182,7 +183,7 @@ export function EmbeddedSidebarApp({ target }: { target: Extract<FoxwarmEmbedded
           </div>}
         </div>
         <div className="min-h-0 flex-1 border-t border-fw-border">
-          <SessionListCore sessions={sidebarSessions} currentSession={currentSession} onSelectSession={openSession} onKeepSession={openSession} toolbarContainerClassName="p-2 pb-1" listContainerClassName="p-2 pt-1" dragEnabled={false} idleNotificationModes={idleNotificationModes} unreadSessionIds={unreadSessionIds} onToggleIdleNotificationMode={toggleIdleNotificationMode} bounded={boundedPresentation} onCreateChildSession={setChildRequest} />
+          <SessionListCore sessions={sidebarSessions} currentSession={currentSession} onSelectSession={openSession} onKeepSession={openSession} toolbarContainerClassName="p-2 pb-1" listContainerClassName="p-2 pt-1" dragEnabled={false} idleNotificationModes={idleNotificationModes} unreadSessionIds={unreadSessionIds} onToggleIdleNotificationMode={toggleIdleNotificationMode} bounded={boundedPresentation} onRequestSession={setCreationRequest} />
         </div>
       </div>
     </DndContext>
@@ -201,7 +202,7 @@ export function EmbeddedAgentsApp({ target }: { target: Extract<FoxwarmEmbeddedT
   return (
     <div className="foxwarm-fixed-viewport-shell h-full min-h-0 overflow-hidden bg-fw-canvas">
       <Suspense fallback={<EmbeddedLeafFallback label="Agents" />}>
-        <ArchitectureView onSelectSession={openSession} />
+        <SystemView onSelectSession={openSession} />
       </Suspense>
     </div>
   )

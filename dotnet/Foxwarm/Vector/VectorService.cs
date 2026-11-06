@@ -11,6 +11,7 @@ namespace Foxwarm.Vector;
 internal sealed class VectorService : IAsyncDisposable
 {
     private readonly string root;
+    private readonly CancellationToken pendingCallCancellation;
     internal VectorConfiguration Configuration { get; }
     private readonly object lifecycle = new();
     private VectorRuntime? local;
@@ -26,6 +27,7 @@ internal sealed class VectorService : IAsyncDisposable
     private long requestId;
     private volatile bool ready;
     private volatile bool stopping;
+    private readonly CancellationTokenSource shutdown = new();
     private int restartDelay = 250;
     private CancellationTokenSource? restart;
     private readonly VectorLexicalRuntime preinitLexical;
@@ -39,15 +41,28 @@ internal sealed class VectorService : IAsyncDisposable
         }
     }
     internal bool Ready => ready;
+    internal bool Initializing
+    {
+        get
+        {
+            lock (lifecycle)
+                return !stopping && starting is { IsCompleted: false };
+        }
+    }
     internal string Mode =>
         !Configuration.Enabled ? "disabled"
         : Configuration.DbWorkers ? "worker"
         : "local";
     internal Action<string, string>? Diagnostic { get; set; }
 
-    internal VectorService(string root, VectorConfiguration config)
+    internal VectorService(
+        string root,
+        VectorConfiguration config,
+        CancellationToken pendingCallCancellation = default
+    )
     {
         this.root = Path.GetFullPath(root);
+        this.pendingCallCancellation = pendingCallCancellation;
         Configuration = config;
         preinitLexical = new(
             Path.Combine(root, "state", "db"),
@@ -75,6 +90,9 @@ internal sealed class VectorService : IAsyncDisposable
 
     private async Task StartCoreAsync()
     {
+        // Optional native initialization must not execute on Main's startup call stack.
+        await Task.Yield();
+        shutdown.Token.ThrowIfCancellationRequested();
         try
         {
             if (Configuration.DbWorkers)
@@ -86,7 +104,7 @@ internal sealed class VectorService : IAsyncDisposable
                     Diagnostic = (code, session) => Diagnostic?.Invoke(code, session),
                 };
                 local = runtime;
-                await runtime.StartAsync();
+                await runtime.StartAsync(shutdown.Token);
                 ready = !stopping;
             }
         }
@@ -163,8 +181,9 @@ internal sealed class VectorService : IAsyncDisposable
         _ = ObserveExitAsync(process, transport);
         try
         {
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            await transport.WaitForConnectionAsync(timeout.Token);
+            using var connection = CancellationTokenSource.CreateLinkedTokenSource(shutdown.Token);
+            connection.CancelAfter(TimeSpan.FromSeconds(10));
+            await transport.WaitForConnectionAsync(connection.Token);
             _ = ReadResponsesAsync(process, transport);
             await ChildCallAsync(
                     "init",
@@ -177,7 +196,7 @@ internal sealed class VectorService : IAsyncDisposable
                         ),
                     }
                 )
-                .WaitAsync(timeout.Token);
+                .WaitAsync(shutdown.Token);
             lock (lifecycle)
             {
                 if (stopping || child != process)
@@ -343,6 +362,33 @@ internal sealed class VectorService : IAsyncDisposable
         }
     }
 
+    internal async Task WaitForInitializationAsync()
+    {
+        Task? initialization;
+        lock (lifecycle)
+            initialization = !stopping && starting is { IsCompleted: false } ? starting : null;
+        if (initialization is null)
+            return;
+        try
+        {
+            await initialization.WaitAsync(pendingCallCancellation);
+        }
+        catch (OperationCanceledException) when (pendingCallCancellation.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            // Keep the existing facade's unavailable classification after failed initialization.
+        }
+    }
+
+    private async Task<JsonNode?> MutateAsync(string method, JsonObject input)
+    {
+        await WaitForInitializationAsync();
+        return await CallAsync(method, input);
+    }
+
     private Task<JsonNode?> CallAsync(string method, JsonObject input)
     {
         lock (lifecycle)
@@ -425,7 +471,7 @@ internal sealed class VectorService : IAsyncDisposable
     {
         if (!Configuration.Enabled)
             return;
-        await CallAsync(
+        await MutateAsync(
             "schedule",
             new()
             {
@@ -439,7 +485,7 @@ internal sealed class VectorService : IAsyncDisposable
 
     internal async Task<long> ForceAsync(string id, long seq, long block) =>
         VectorRuntime.Integer(
-            await CallAsync(
+            await MutateAsync(
                 "force",
                 new()
                 {
@@ -454,7 +500,7 @@ internal sealed class VectorService : IAsyncDisposable
     {
         if (!Configuration.Enabled)
             return;
-        await CallAsync(
+        await MutateAsync(
             "facts",
             new() { ["record"] = JsonSerializer.SerializeToNode(block, VectorWire.Json) }
         );
@@ -480,7 +526,7 @@ internal sealed class VectorService : IAsyncDisposable
                     );
             return;
         }
-        await CallAsync("rename", new() { ["oldId"] = oldId, ["newId"] = newId });
+        await MutateAsync("rename", new() { ["oldId"] = oldId, ["newId"] = newId });
     }
 
     internal async Task ForkAsync(string id)
@@ -499,7 +545,7 @@ internal sealed class VectorService : IAsyncDisposable
                     );
             return;
         }
-        await CallAsync("fork", new() { ["sessionId"] = id });
+        await MutateAsync("fork", new() { ["sessionId"] = id });
     }
 
     internal async Task ResetAsync(string id)
@@ -512,7 +558,7 @@ internal sealed class VectorService : IAsyncDisposable
             Archive(id).SetVectorCheckpoint(0, 0, 0);
             return;
         }
-        await CallAsync("reset", new() { ["sessionId"] = id });
+        await MutateAsync("reset", new() { ["sessionId"] = id });
     }
 
     private SqliteArchiveMessageStore Archive(string id) =>
@@ -571,6 +617,7 @@ internal sealed class VectorService : IAsyncDisposable
         {
             stopping = true;
             ready = false;
+            shutdown.Cancel();
             restart?.Cancel();
             pendingStart = starting;
         }

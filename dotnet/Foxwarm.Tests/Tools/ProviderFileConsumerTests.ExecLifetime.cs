@@ -94,8 +94,10 @@ public sealed partial class ProviderFileConsumerTests
         await Until(() => Task.FromResult(Volatile.Read(ref attempts) > 0));
         Assert.Single(ExecRecords(data));
         Volatile.Write(ref accept, true);
-        await delivered.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        await Until(() => Task.FromResult(!ExecRecords(data).Any()));
+        // The periodic interval does not bound the next provider poll's completion.
+        await manager.ReconcileNowAsync();
+        Assert.True(delivered.Task.IsCompletedSuccessfully);
+        Assert.Empty(ExecRecords(data));
         var deliveredCount = Volatile.Read(ref attempts);
         await manager.ExecuteAsync(
             f.Owner.Id,

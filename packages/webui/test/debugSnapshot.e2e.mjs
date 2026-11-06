@@ -93,8 +93,9 @@ function fixtureSource() {
     window.emitFixtureEvent = payload => FixtureWebSocket.instances.at(-1)?.emit(payload)
 
     const root = createRoot(document.getElementById('root'))
-    window.renderFixture = sessionId => root.render(React.createElement(Chat, {
+    window.renderFixture = (sessionId, timelineView) => root.render(React.createElement(Chat, {
       sessionId,
+      timelineView,
       canonicalSessionId: sessionId,
       sessionDisplayName: 'Display ' + sessionId,
     }))
@@ -146,6 +147,8 @@ test('mounted Chat session menu remains above the overlapping context minimap', 
   const page = await browser.newPage()
   await page.setViewport({ width: 1000, height: 720 })
   await page.goto(fixtureUrl, { waitUntil: 'load' })
+  await page.waitForFunction(() => !!window.renderFixture)
+  await page.evaluate(() => window.renderFixture('fixture/main', 'detailed'))
   await page.waitForFunction(() => document.querySelector('.foxwarm-context-scrollbar-shell'))
   await page.click('button[aria-label="Open session options"]')
   await page.waitForSelector('[data-session-ui-settings-menu]')

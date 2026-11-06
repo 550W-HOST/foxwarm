@@ -1,17 +1,15 @@
-# Foxwarm Desktop — Windows prototype
+# Foxwarm Desktop for Windows
 
 ## Install and run
 
-This is an unsigned, framework-dependent **Windows x64** prototype. No installer
-or .NET runtime is bundled.
+This is an unsigned **Windows x64** desktop app. The release package includes the
+.NET runtime; no installer is needed.
 
-1. Install the **.NET 10 SDK (x64)**. It includes the .NET, Windows Desktop and
-   ASP.NET Core shared runtimes used by this app. Alternatively, install both
-   the **.NET 10 Desktop Runtime (x64)** and **ASP.NET Core 10 Runtime (x64)**.
-   Use the current serviced .NET 10 release. A .NET 8 or 9 runtime alone is not enough.
-2. Install the **Microsoft Edge WebView2 Evergreen Runtime (x64)** if it is not
-   already installed. Microsoft Edge alone is not a substitute for this runtime.
-3. Extract the entire ZIP to a folder you can read, then open
+1. Install the **Microsoft Edge WebView2 Evergreen Runtime (x64)** if it is not
+   already installed (Windows 10 and 11 normally include it). Microsoft Edge alone
+   is not a substitute for this runtime.
+2. Download `foxwarm-desktop-win-x64.zip` from the repository's GitHub releases,
+   extract the entire ZIP to a folder you can read, then open
    **Foxwarm.Desktop.exe**. Keep the DLLs, native assets, templates and `webui-dist`
    directory together. Configure a model/provider in the WebUI's Setup page.
 
@@ -19,9 +17,7 @@ To prepare image, chart or React artifacts, also install Node.js and make `node`
 available on PATH before starting Desktop. The package includes the collected
 compiler and image dependencies, but not the Node runtime itself.
 
-Microsoft downloads:
-- https://dotnet.microsoft.com/download/dotnet/10.0
-- https://developer.microsoft.com/microsoft-edge/webview2/
+WebView2 download: https://developer.microsoft.com/microsoft-edge/webview2/
 
 The backend runs inside the desktop application's process. WebView2 uses its
 normal browser/renderer subprocesses. The app starts its own authenticated
@@ -31,25 +27,19 @@ port is occupied, it binds a new available port without connecting to the other
 process; browser-only theme/layout preferences start fresh for that new origin.
 No API keys or existing account settings are included.
 
-## Download a GitHub Actions package
+To update, exit the app and replace the extracted folder with the new release.
+Settings and data stay in the user profile (see below).
 
-Open the repository's **Actions → Tests** workflow and select a successful run
-for the desired commit. Download the
-**foxwarm-desktop-win-x64-framework-dependent** artifact, then extract the
-`foxwarm-desktop-win-x64-framework-dependent.zip` inside it. The ZIP contains the
-complete Desktop application; launch `Foxwarm.Desktop.exe` from the extracted
-folder. Install the shared frameworks and WebView2 listed above first.
-Artifacts expire after 14 days; this is not an installer or an automatic update
-channel. The existing **Run workflow** action can build another package.
+## Packaging checks
 
-The Windows packaging job uses the same delivery helper as local builds. It
-extracts the finished ZIP and checks the WebUI, native x64 dependencies, collected
-artifact/extension resources, licenses and framework-dependent runtime metadata.
-It then launches that extracted executable with disposable data and workspace,
-attaches to its actual WebView2 view, verifies native cookie sign-in and Setup,
-runs a native ToolScript turn against a local model fixture, and checks ordinary
-shutdown/restart persistence. It also executes the packaged esbuild/sharp
-dependencies. The ZIP is uploaded only after these checks succeed; a separate
+The **Release packages** workflow publishes this package with the same delivery
+graph as the server packages. A Windows job extracts the finished ZIP and checks
+the WebUI, native x64 dependencies, the embedded .NET 10 runtime, collected
+artifact/extension resources and licenses. It then launches that extracted
+executable with disposable data and workspace, attaches to its actual WebView2
+view, verifies native cookie sign-in and Setup, runs a native ToolScript turn
+against a local model fixture, and checks ordinary shutdown/restart persistence.
+It also executes the packaged esbuild/sharp dependencies. A separate
 `desktop-acceptance` artifact records the acceptance result without user state,
 tokens or browser profiles.
 
@@ -119,17 +109,18 @@ and copied with its notices into output; no native binary is tracked. Git is
 an optional external tool for Code SCM, not a bundled dependency.
 
 Install the repository's npm dependencies (`npm ci`, `npm --prefix packages/webui ci`)
-and the .NET 10 SDK, then run the delivery helper from the repository root. It builds
-the shared assets, publishes Desktop, and removes console-only entry files:
+and the .NET 10 SDK, then run the release packager from the repository root. It
+publishes Desktop self-contained for `win-x64` (also from Linux) and removes
+console-only entry files:
 
 ```sh
-bash dotnet/scripts/publish-desktop.sh desktop-publish
+node scripts/release/package.mjs --build-assets --output dist --target desktop-win-x64
 ```
 
 The Core project supplies the same WebUI, public skills, templates, Node bootstrap,
 artifact runtime and tracked extension resources to Desktop. Missing required built assets fail
 publish; a backend-only C# build does not build the frontend. Desktop does not
 ship the console Core CLI or its apphost/runtimeconfig. Do not package application state,
-private configuration, source dependency caches or .NET runtimes. Preserve the
+private configuration or source dependency caches. Preserve the
 artifact resources selected by the delivery collector, including their required
 `node_modules` directories; do not replace them with the source dependency tree.

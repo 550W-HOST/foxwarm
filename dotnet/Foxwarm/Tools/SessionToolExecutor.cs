@@ -200,7 +200,8 @@ internal sealed partial class SessionToolExecutor(
         JsonObject call,
         CancellationToken token,
         int? index = null,
-        int? total = null
+        int? total = null,
+        string? scriptDelivery = null
     )
     {
         await sessions.WaitForIdentityMutationAsync(hosted.Id, token);
@@ -217,6 +218,9 @@ internal sealed partial class SessionToolExecutor(
             Cwd = captured.Cwd,
             Index = index,
             Total = total,
+            // Only a model batch call has a committed anchor; a script subcall inherits its parent's ID.
+            AnchorSeq = index is null ? null : foregroundBatch,
+            InheritedDelivery = scriptDelivery,
         };
         invocation.Value = current;
         try
@@ -378,7 +382,7 @@ internal sealed partial class SessionToolExecutor(
             ?? (
                 name switch
                 {
-                    "exec" => Text(args["command"]),
+                    "exec" or "run_script" or "call_tool" => ToolActivity.Summary(name, args),
                     "edit" when args.ContainsKey("apply_patch") => Text(args["apply_patch"]),
                     "edit" or "write" or "edit_memory" or "write_memory" or "delete_memory" => Text(
                         args["filePath"]
@@ -570,6 +574,7 @@ internal sealed partial class SessionToolExecutor(
 
     private async Task<JsonObject> ExecuteTaskAsync(JsonObject args, CancellationToken token)
     {
+        sessions.SetDeliverySeq(hosted, invocation.Value?.DeliverySeq(script: false));
         var (response, completionTarget) = await Manager
             .Tasks.ExecuteForToolWithReceiptAsync(Hosted, args)
             .ConfigureAwait(false);
@@ -751,6 +756,8 @@ internal sealed partial class SessionToolExecutor(
     )
     {
         sessions.BeginSuccessfulSendReceipt();
+        var deliverySeq = invocation.Value?.DeliverySeq(script: false);
+        sessions.SetDeliverySeq(hosted, deliverySeq);
         var (response, finish) = await sessions.ExecuteAgentToolAsync(
             hosted,
             name,
@@ -768,6 +775,8 @@ internal sealed partial class SessionToolExecutor(
                 };
                 if (body.Length > 32768)
                     delivery["truncated"] = true;
+                if (deliverySeq is not null)
+                    delivery["deliverySeq"] = deliverySeq;
                 current.SessionMessages = new JsonArray(delivery);
             },
             scriptScope.Value?.RunId,
@@ -816,6 +825,41 @@ internal sealed partial class SessionToolExecutor(
         }
     }
 
+    private async Task<JsonObject> ExecuteAskUserAsync(JsonObject args)
+    {
+        try
+        {
+            var asked = await sessions.AskUserAsync(hosted, args, CurrentCallId);
+            if (asked.WaitQuestionId is not { } questionId)
+                return asked.Response;
+            // afterAsk "wait" is the same terminal control as wait({ waitQuestionIds: [id] }).
+            var wait = new JsonObject { ["waitQuestionIds"] = new JsonArray(questionId) };
+            if (scriptScope.Value is { } script)
+            {
+                sessions.ValidateWait(hosted, wait);
+                script.WaitScope.Pending = wait;
+                return asked.Response;
+            }
+            try
+            {
+                var id = await sessions.DeclareWaitAsync(hosted, wait);
+                if (id is not null)
+                    explicitWaitIds.Add(id);
+            }
+            catch (CommittedWaitDeclarationException committed)
+            {
+                explicitWaitIds.Add(committed.WaitId);
+                throw;
+            }
+            return asked.Response;
+        }
+        catch (Exception error)
+            when (error is InvalidDataException or InvalidOperationException or IOException)
+        {
+            return UnsupportedTurnToolExecutor.ToolError("ask_user_error", error.Message);
+        }
+    }
+
     internal static ToolRegistry CreateRegistry(
         JsonArray definitions,
         Foxwarm.McpClient mcp,
@@ -834,7 +878,7 @@ internal sealed partial class SessionToolExecutor(
         handlers["exec"] = (owner, args, token) => owner.ExecuteExecAsync(args, token);
         handlers["artifact"] = (owner, args, token) => owner.ExecuteArtifactAsync(args, token);
         handlers["recall"] = (owner, args, token) =>
-            ArchiveRecallTool.ExecuteAsync(owner.Manager, owner.Hosted, args, token);
+            ArchiveRecallTool.ExecuteAsync(owner.Manager, owner.Hosted, args, token, owner.Programmatic);
         handlers["get_archived_messages"] = (owner, args, token) =>
             ArchiveControlTools.ReadMessagesAsync(owner.Manager, owner.Hosted, args, token);
         handlers["get_archived_blocks"] = (owner, args, token) =>
@@ -842,6 +886,7 @@ internal sealed partial class SessionToolExecutor(
         handlers["stop_session"] = (owner, args, token) =>
             ArchiveControlTools.StopAsync(owner.Manager, owner.Hosted, args, token);
         handlers["wait"] = (owner, args, _) => owner.ExecuteWaitAsync(args);
+        handlers["ask_user"] = (owner, args, _) => owner.ExecuteAskUserAsync(args);
         handlers["submit_compact_plan"] = (owner, args, token) =>
             owner.SubmitCompactPlanAsync(args, token);
         handlers["task"] = (owner, args, token) => owner.ExecuteTaskAsync(args, token);
@@ -1046,6 +1091,8 @@ internal sealed class TurnToolInvocation(string callId)
     internal string CallId { get; } = callId;
     internal int? Index { get; set; }
     internal int? Total { get; set; }
+    internal long? AnchorSeq { get; init; }
+    internal string? InheritedDelivery { get; init; }
     internal string Node { get; set; } = "master";
     internal string? Cwd { get; set; }
     internal WorkspaceTools? Files { get; set; }
@@ -1058,4 +1105,7 @@ internal sealed class TurnToolInvocation(string callId)
     internal JsonArray? ToolScriptSubCalls { get; set; }
     internal TurnToolReceipt? Receipt { get; set; }
     internal JsonArray? SessionMessages { get; set; }
+
+    internal string? DeliverySeq(bool script) =>
+        InheritedDelivery ?? SessionManager.BatchDeliverySeq(AnchorSeq, Index, Total, script);
 }

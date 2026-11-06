@@ -7,7 +7,8 @@ import WebSocket from 'ws'
 import { createHostFixture, until } from './mainHostFixture.mjs'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
 
-const options = { env: {} }
+// Seeded legacy authority has active history, without an Archive fixture.
+const options = { env: {}, onPage: page => page.evaluateOnNewDocument(() => localStorage.setItem('foxwarm_timeline_view_v1', 'detailed')) }
 const fixture = await createHostFixture('legacy-node-projection', options)
 options.cwd = fixture.root
 options.publicRoot = fixture.origin + '/preview/#session/legacy-absent'
@@ -55,11 +56,14 @@ async function observe(page, id, expected, revision) {
   assert(realtime)
   await page.evaluate(id => window.foxwarmTest.switchToSession(id), id)
   await waitForWebUiReady(page)
-  await page.waitForSelector('.foxwarm-node-picker-trigger')
-  await page.waitForFunction(() => document.body.innerText.includes('Retained historical reply'))
-  await page.click('.foxwarm-node-picker-trigger')
+  // Selection prepares history before replacing the outgoing, inert Chat.
+  const chat = `[data-workbench-content-tab=${JSON.stringify('chat:' + id)}]`
+  const nodeTrigger = `${chat} .foxwarm-node-picker-trigger`
+  await page.waitForSelector(nodeTrigger, { visible: true })
+  await page.waitForFunction(selector => document.querySelector(selector)?.innerText.includes('Retained historical reply'), {}, chat)
+  await page.click(nodeTrigger)
   await page.waitForSelector('[data-node-option="master"]')
-  const trigger = await page.$eval('.foxwarm-node-picker-trigger', el => el.getAttribute('aria-label'))
+  const trigger = await page.$eval(nodeTrigger, el => el.getAttribute('aria-label'))
   const masterPressed = await page.$eval('[data-node-option="master"]', el => el.getAttribute('aria-pressed'))
   await page.keyboard.press('Escape')
   observations.push({ id, revision, historyNode: history.body.session.currentNode, realtimeNode: realtime.session.currentNode, trigger, masterPressed })

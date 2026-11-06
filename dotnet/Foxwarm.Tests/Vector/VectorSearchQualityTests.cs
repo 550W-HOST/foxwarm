@@ -140,6 +140,21 @@ public sealed class VectorSearchQualityTests
             input,
             Path.Combine(f.Temp.Path, "quality-result.json")
         );
+        // The managed projection now retains the fusion score and merged lexical rank.
+        // Compare the original fields/order against Source; new score fields are covered
+        // through real recall in StructuredRecallTests.
+        for (var index = 0; index < expected.Count; index++)
+        {
+            var actualHits = expected[index]!["fused"]!.AsArray();
+            var sourceHits = source[index]!["fused"]!.AsArray();
+            Assert.Equal(sourceHits.Count, actualHits.Count);
+            for (var hit = 0; hit < actualHits.Count; hit++)
+            {
+                actualHits[hit]!.AsObject().Remove("fusion_score");
+                if (!sourceHits[hit]!.AsObject().ContainsKey("lexical_rank"))
+                    actualHits[hit]!.AsObject().Remove("lexical_rank");
+            }
+        }
         VectorRecipeTests.EqualJson(source, expected);
     }
 }

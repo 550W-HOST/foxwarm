@@ -9,7 +9,7 @@ description: 安装 Foxwarm，添加模型，给 Agent 布置第一个任务。
 
 在你希望放置 Foxwarm 程序目录和数据目录的位置，运行对应平台的命令。
 
-**Linux x64 或 x64 WSL**
+**Linux x64、x64 WSL 或 Apple Silicon Mac**
 
 ```bash
 curl -fsSL https://foxwarm.net/install-foxwarm.sh | bash
@@ -21,21 +21,23 @@ curl -fsSL https://foxwarm.net/install-foxwarm.sh | bash
 irm https://foxwarm.net/install-foxwarm.ps1 | iex
 ```
 
-**Docker Compose（Linux x64）**
+**Docker（Linux x64）**
 
 ```bash
-git clone https://github.com/550W-HOST/foxwarm.git && cd foxwarm
-mkdir -p foxwarm-data/state foxwarm-data/agents
-docker compose up -d --build foxwarm
+mkdir -p foxwarm-data
+docker run -d --name foxwarm --init -p 3001:3001 \
+  -v "$PWD/foxwarm-data:/data" ghcr.io/550w-host/foxwarm:latest
 ```
 
-安装脚本从源码构建 Foxwarm。它会检查 Git、Node.js、.NET 10 SDK 和少量编译工具，缺什么会明确告诉你，但不会替你安装系统软件包。Docker 方式会在镜像里构建所有依赖。具体要求见[安装 Foxwarm](/zh/docs/installing/)。
+安装脚本下载预编译版本，不需要编译。系统没有 ASP.NET Core 10 运行时时，会使用自带 .NET 的安装包。Windows 上另有桌面版。安装包和环境要求见[安装 Foxwarm](/zh/docs/installing/)。
 
 安装完成后，脚本会启动 Foxwarm，并输出一个登录链接，形如 `http://localhost:3001/#token=...`。请像对待密码一样保管它。
 
 ## 2. 添加模型
 
-打开登录链接。新安装的实例会打开 **Setup → Models**。粘贴一段服务商配置，例如：
+打开登录链接。新安装的实例会打开 **Setup → Models**。选择你的服务，粘贴 API Key，选一个模型（**Load models** 会列出服务提供的模型），再点 **Test connection**。然后保存，就可以开始聊天。
+
+想直接写 YAML？把 Models 视图切换到 **YAML**，粘贴一段服务商配置，例如：
 
 ```yaml
 default: my-provider/my-model
@@ -48,11 +50,11 @@ providers:
       - my-model
 ```
 
-保存后就可以开始聊天。保存时只检查配置格式，不会请求服务商；你发出的第一条消息才是真正的连通测试。各字段的含义见[配置第一个模型](/zh/docs/model-setup/)。
+各字段的含义见[配置第一个模型](/zh/docs/model-setup/)。
 
 ## 3. 给 Agent 布置任务
 
-Foxwarm 自带一个 `main` Agent 和它的默认会话。先问一个简单的问题，然后在你放心让它操作的目录里，给它一个真实的任务：
+第一次保存后，Foxwarm 会为 `main` Agent 创建默认会话 `main`，里面有一段简短的欢迎消息，介绍 Agent 和会话，并问你希望怎么称呼。关闭 Setup 就会进入这个会话。回复它：你的回答同时也是对服务商连接的第一次实测，Agent 也会记住你告诉它的内容。然后在你放心让它操作的目录里，给它一个真实的任务：
 
 ```text
 看一下 ~/projects/my-app，跑一遍测试，告诉我哪些失败了、为什么。先不要改任何东西。

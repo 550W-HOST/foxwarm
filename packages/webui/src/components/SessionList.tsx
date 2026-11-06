@@ -1,4 +1,4 @@
-import { ClipboardList, Code2, FileText, MessageSquare, MoreHorizontal, Search, Settings, SquareTerminal, Workflow, X } from 'lucide-react'
+import { ClipboardList, Code2, FileText, MessageSquare, MoreHorizontal, Search, Settings, SquareTerminal, Network, X } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import ContextMenu, { type ContextMenuAnchorRect, type ContextMenuEntry } from './ContextMenu'
@@ -7,7 +7,7 @@ import type { BoundedSessionListPresentationProps, Session } from './SessionList
 import type { SessionIdleNotificationMode } from '../sessionIdleNotifications'
 import CreateTabButton from './CreateTabButton'
 import CodeLaunchButton from './CodeLaunchButton'
-import AgentCreationMenu, { type ChildSessionRequest } from './AgentCreationMenu'
+import AgentCreationMenu, { type SessionCreationRequest } from './AgentCreationMenu'
 import type { AgentSettingsChanges, AgentSummary } from '../agentCreation'
 import type { WebUiNodeTarget } from '../nodeTargets'
 
@@ -17,7 +17,7 @@ interface SessionListProps {
   sessions: Session[]
   agents: AgentSummary[]
   currentSession?: string
-  currentView: 'session' | 'agents' | 'setup' | 'logs' | 'tasks' | 'nodes'
+  currentView: 'session' | 'agents' | 'setup' | 'logs' | 'tasks'
   currentSessionRecord?: Session
   onSelectSession: (sessionId: string) => void
   onKeepSession?: (sessionId: string) => void
@@ -78,7 +78,7 @@ export default function SessionList({
   const defaultNodeId = currentSessionRecord?.currentNode || 'master'
   const defaultPath = currentSessionRecord?.cwd || '/'
 
-  const [childRequest, setChildRequest] = useState<ChildSessionRequest | null>(null)
+  const [creationRequest, setCreationRequest] = useState<SessionCreationRequest | null>(null)
   const [primaryTab, setPrimaryTab] = useState<HomeTab>('sessions')
   const [visited, setVisited] = useState<Set<HomeTab>>(() => new Set(['sessions']))
   const selectTab = (tab: HomeTab) => { setVisited(previous => new Set([...previous, tab])); setPrimaryTab(tab) }
@@ -102,7 +102,7 @@ export default function SessionList({
   }, [utility])
 
   const moreEntries: ContextMenuEntry[] = [
-    { key: 'agents', label: 'Agents', icon: <Workflow size={16} />, onSelect: onSelectArchitecture },
+    { key: 'agents', label: 'System', icon: <Network size={16} />, onSelect: onSelectArchitecture },
     { key: 'code', label: 'Code', icon: <Code2 size={16} />, onSelect: () => setUtility('code') },
     { key: 'terminal', label: 'Terminal', icon: <SquareTerminal size={16} />, onSelect: () => setUtility('terminal') },
     ...(onSelectLogs ? [{ key: 'logs', label: 'Logs', icon: <FileText size={16} />, onSelect: onSelectLogs }] : []),
@@ -119,7 +119,8 @@ export default function SessionList({
       <div className="relative min-h-0 flex-1">
         <SessionListCore sessions={sessions} currentSession={currentSession} onSelectSession={onSelectSession} onKeepSession={onKeepSession}
           idleNotificationModes={idleNotificationModes} unreadSessionIds={unreadSessionIds} onToggleIdleNotificationMode={onToggleIdleNotificationMode}
-          bounded={bounded} dragEnabled={false} onCreateChildSession={setChildRequest} mobileHeaderActions={(
+          bounded={bounded} dragEnabled={false} onRequestSession={setCreationRequest}
+          onStartSession={() => { void onCreateSession('main').catch(error => window.alert(`Failed to create session: ${error instanceof Error ? error.message : String(error)}`)) }} mobileHeaderActions={(
         <button ref={moreRef} type="button" aria-label="Workspace tools" aria-haspopup="menu" aria-expanded={!!moreAnchor}
           onClick={() => setMoreAnchor(moreRef.current!.getBoundingClientRect())}
           className="mobile-header-circle">
@@ -129,8 +130,9 @@ export default function SessionList({
         )} toolbarContainerClassName="px-4 py-2" listContainerClassName="mobile-session-scroll px-4 pt-2" />
         <div className="fixed right-4 z-20" style={{bottom: 'calc(var(--foxwarm-home-safe-area-bottom) + 88px)'}}>
           <AgentCreationMenu agents={agents} currentAgent={currentSessionRecord?.agent} onCreateAgent={onCreateAgent} onCreateSession={onCreateSession}
-            childRequest={childRequest} onChildRequestHandled={() => setChildRequest(null)}
-            triggerLabel="New session" triggerClassName="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-fw-accent px-4 text-sm font-medium text-fw-accent-text shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fw-focus-ring focus-visible:ring-offset-2" />
+            creationRequest={creationRequest} onCreationRequestHandled={() => setCreationRequest(null)} directCreate
+            triggerLabel="New session" triggerClassName="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-fw-accent px-4 text-sm font-medium text-fw-accent-text shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fw-focus-ring focus-visible:ring-offset-2"
+            optionsTriggerClassName="inline-flex h-11 w-9 items-center justify-center rounded-xl border-l border-fw-accent-text/30 bg-fw-accent text-fw-accent-text shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fw-focus-ring focus-visible:ring-offset-2" />
         </div>
       </div>
       </section>

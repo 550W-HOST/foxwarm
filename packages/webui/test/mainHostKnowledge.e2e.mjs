@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import puppeteer from 'puppeteer-core'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
+import { NEW_SESSION_DIALOG_TRIGGER } from './mainHostFixture.mjs'
 
 const root = await mkdtemp(join(tmpdir(), 'foxwarm-wait-e2e-'))
 const dataRoot = join(root, 'data'); const workRoot = join(dataRoot, 'agents', 'main'); const globalRoot = join(root, 'global-skills')
@@ -129,7 +130,7 @@ try {
     for (const [file, content] of Object.entries(files)) { await mkdir(join(dir, file, '..'), { recursive: true }); await writeFile(join(dir, file), content) }
   }
   async function browserAgent(agent, inherit) {
-    await page.click('button[aria-label="New session"]'); await page.waitForSelector('button[aria-label="New agent"]'); await page.click('button[aria-label="New agent"]')
+    await page.click(NEW_SESSION_DIALOG_TRIGGER); await page.waitForSelector('button[aria-label="New agent"]'); await page.click('button[aria-label="New agent"]')
     await page.waitForSelector('input[placeholder="my-agent"]'); await page.type('input[placeholder="my-agent"]', agent)
     if (inherit) await page.select('form[role="dialog"] select[data-agent-settings-inherit]', inherit)
     await page.click('form[role="dialog"] button[type="submit"]'); await page.waitForSelector('form[role="dialog"]', { hidden: true })
@@ -210,8 +211,8 @@ try {
   await writeFile(join(agentDir('base'), 'memory', 'MEMORY.md'), 'BASE-V2')
   await skill('leaf', 'shared', 'LEAF-SHARED-V2', 'LOCAL-FULL-ENTRY-V2')
   await page.evaluate(() => { location.hash = '#architecture' })
-  await page.waitForSelector('.foxwarm-architecture-surface-tab')
-  await page.evaluate(() => [...document.querySelectorAll('.foxwarm-architecture-surface-tab')].find(button => button.textContent.trim() === 'Agents').click())
+  await page.waitForSelector('[data-system-tab="agents"]')
+  await page.click('[data-system-tab="agents"]')
   await page.waitForSelector('[data-architecture-agent-id="leaf"]')
   await page.click('[data-architecture-agent-id="leaf"]')
   await page.waitForSelector('[data-architecture-agent-inspector-id="leaf"]')

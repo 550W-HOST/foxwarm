@@ -25,7 +25,7 @@ Foxwarm 是一个常驻运行的服务器。对话会持久保存，可以持续
 
 ### 能在 macOS 上运行吗？
 
-不能作为服务器运行。Foxwarm 支持 Linux x64、x64 WSL 和 Windows x64，也可以在 Linux x64 上用 Docker 运行。Mac 可以作为[节点](/zh/docs/nodes/)接入，Agent 仍然能在上面操作文件、执行命令。
+可以，支持 macOS 15 或更新版本的 Apple Silicon Mac，安装命令和 Linux 相同。Intel Mac 不能作为服务器运行，也没有 macOS 桌面版。任何 Mac 都可以作为[节点](/zh/docs/nodes/)接入其他服务器。见 [macOS（Apple Silicon）](/zh/docs/installing/#macosapple-silicon)。
 
 ### 在哪里登录？
 
@@ -107,13 +107,13 @@ QQ 机器人在群里默认需要 @ 才会回复，设置 `requireMention: false
 
 ### 保存了 Config，需要重启吗？
 
-在 **Setup → Config** 里保存后，渠道和访问身份的修改会立即生效。HTTP 端口、节点 Provider、语义检索、入站 MCP 监听等启动设置需要重启。在 **Setup → Models** 里修改模型永远不需要重启。
+在 **Setup → Config** 里保存后，渠道、访问身份和 `sessionAutoTitle` 的修改会立即生效。HTTP 端口、节点 Provider、语义检索、入站 MCP 监听等启动设置需要重启。在 **Setup → Models** 里修改模型永远不需要重启。
 
-使用 Docker Compose 时，修改端口还需要同步修改端口映射和健康检查，见 [Docker Compose](/zh/docs/installing/#docker-compose)。
+使用 Docker 时，修改端口还需要同步修改端口映射（使用 Compose 时还有健康检查），见 [Docker](/zh/docs/installing/#docker)。
 
 ### 怎么升级？
 
-先备份数据目录，然后在程序目录里拉取代码并重启，或者重新构建容器。见[升级源码安装](/zh/docs/data-upgrades-backups/#update-a-source-installation)（英文）。
+先备份数据目录，然后在程序目录里运行 `foxwarmctl update`，或者拉取新的容器镜像。见[更新预编译安装](/zh/docs/data-upgrades-backups/#update-a-release-installation)（英文）。
 
 ### 需要备份什么？
 

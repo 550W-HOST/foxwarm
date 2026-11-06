@@ -21,7 +21,7 @@ function run(command, args) {
   if (result.status !== 0) throw new Error(`${command} failed (${result.signal || result.status}).`);
 }
 
-function promote() {
+function promote(mainStopped) {
   if (!fs.existsSync(path.join(staging, 'Foxwarm.dll'))) {
     throw new Error('No staged Core build. Run `npm run build -- --stage-only` first.');
   }
@@ -31,12 +31,27 @@ function promote() {
   fs.mkdirSync(runtime, { recursive: true });
   const destination = path.join(runtime, `${Date.now()}-${randomUUID()}`);
   fs.renameSync(staging, destination);
-  // Keep old directories at their original paths: detached exec scripts can call
-  // their original managed helper after Main has stopped.
   const current = path.join(runtime, 'current');
   try { fs.unlinkSync(current); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   fs.symlinkSync(destination, current, process.platform === 'win32' ? 'junction' : 'dir');
   console.log(`Source runtime: ${destination}`);
+  // A standalone build may run beside Main, which keeps using its resolved output.
+  // The controls promote only after stopping Main; then the new output is the only
+  // one in use and earlier outputs are removed.
+  if (!mainStopped) return;
+  for (const name of fs.readdirSync(runtime)) {
+    const old = path.join(runtime, name);
+    if (name === 'current' || old === destination) continue;
+    // Windows refuses to rename a directory whose files a process still holds;
+    // leave that output for a later promotion instead of deleting it partially.
+    const retired = name.startsWith('.retired-') ? old : path.join(runtime, `.retired-${name}`);
+    try {
+      if (retired !== old) fs.renameSync(old, retired);
+      fs.rmSync(retired, { recursive: true, force: true });
+    } catch (error) {
+      console.warn(`Kept previous runtime ${old}: ${error.code || error.message}`);
+    }
+  }
 }
 
 try {
@@ -46,7 +61,7 @@ try {
     throw new Error('Usage: build-source.js [--install] [--stage-only] [--core-only] | --promote');
   }
   if (args.includes('--promote')) {
-    promote();
+    promote(true);
   } else {
     // Every build, including the first one, uses disposable staging. Nothing in
     // runtime is compiled or copied over in place.
@@ -57,13 +72,14 @@ try {
         run('npm', ['--prefix', 'packages/webui', 'ci']);
       }
       if (!args.includes('--core-only')) run('npm', ['run', 'build:assets']);
-      run('dotnet', ['build', 'dotnet/Foxwarm/Foxwarm.csproj', '-o', staging,
+      // A source runtime only runs on this host; omit other platforms' native assets.
+      run('dotnet', ['build', 'dotnet/Foxwarm/Foxwarm.csproj', '--use-current-runtime', '-o', staging,
         ...(!args.includes('--core-only') ? ['-p:FoxwarmDelivery=true'] : [])]);
     } catch (error) {
       fs.rmSync(staging, { recursive: true, force: true });
       throw error;
     }
-    if (!args.includes('--stage-only')) promote();
+    if (!args.includes('--stage-only')) promote(false);
   }
 } catch (error) {
   console.error(error.message);

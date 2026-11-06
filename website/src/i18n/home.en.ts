@@ -12,23 +12,33 @@ export const en: HomeStrings = {
   },
   nav: { features: 'Features', install: 'Install', docs: 'Docs', github: 'GitHub', theme: 'Switch color theme', language: '中文', languageLabel: '切换到中文', skip: 'Skip to content' },
   hero: {
-    eyebrow: 'Open source · Self-hosted · MIT',
-    titleLines: ['AI agents that keep working,', 'on machines you own.'],
-    lede: 'Foxwarm is a self-hosted workspace for long-running agents. They read your code, run commands on the machines you connect, hand work to other sessions, and pick up where they left off — in the browser or in your team’s group chat.',
-    primary: 'Install Foxwarm',
-    secondary: 'Read the docs',
+    title: 'It keeps working after you close the laptop.',
+    lede: 'Foxwarm runs your AI agents on a server you own. One task can run for days, spread across your machines, and report back wherever you are: in the browser, on your phone or in your team’s group chat.',
+    timeline: {
+      label: 'One Tuesday, one task',
+      rows: [
+        { time: '09:10', place: 'laptop', icon: 'laptop', text: 'You ask:', quote: 'CI on main is red. Find out why and fix it.' },
+        { time: '09:12', place: 'build-box', icon: 'server', text: 'It hands the test run to a child session, which runs the suite on your build server.' },
+        { time: '09:30', icon: 'moon', text: 'You close the laptop and go to a meeting. The work carries on.', highlight: true },
+        { time: '12:40', place: 'phone', icon: 'phone', text: 'You open the child session on your phone and steer it:', quote: 'Keep full precision in prorate().' },
+        { time: '18:30', place: 'team chat', icon: 'chat', text: 'It posts a two-line summary in your team’s group. A colleague asks a follow-up; it answers from the full history.' }
+      ],
+      footer: 'Every step is a session you can open, read and talk to.',
+      link: 'How Foxwarm works'
+    },
+    shotCaption: 'The same task in the Foxwarm WebUI. Real screenshot, demo project.',
     screenshotAlt: 'The Foxwarm WebUI in Conversation view: the user asks an agent to fix a failing test suite, and the agent reports the cause, the fix and the commit. The sidebar lists other sessions, some with child sessions.'
   },
   install: {
-    tabs: { linux: 'Linux / WSL', windows: 'Windows', docker: 'Docker' },
+    tabs: { linux: 'Linux / macOS', windows: 'Windows', docker: 'Docker' },
     copy: 'Copy',
     copied: 'Copied',
     notes: {
-      linux: 'Linux x64 and x64 WSL. Builds from source; needs Git, Node.js, the .NET 10 SDK and a few build tools.',
-      windows: 'Windows x64, in PowerShell. Builds from source; needs Git, Node.js, the .NET 10 SDK and Python 3.',
-      docker: 'Linux x64 with Docker Compose. Everything builds inside the image.'
+      linux: 'Linux x64 (including WSL) and macOS arm64. Downloads a prebuilt release and starts it in the background, using tmux when available. Includes .NET when no compatible runtime is installed.',
+      windows: 'Windows x64, in PowerShell. Downloads a prebuilt release and runs it in the background. A Windows desktop app is also available.',
+      docker: 'Linux x64 with Docker. Runs the published image with Chromium and Node.js included; data stays in foxwarm-data.'
     },
-    requirementsLink: 'Prerequisites and options'
+    requirementsLink: 'Packages and requirements'
   },
   strip: {
     label: 'Works with',
@@ -131,12 +141,11 @@ export const en: HomeStrings = {
     title: 'Up and running in a few minutes.',
     lede: 'Program files and data live in separate directories, so upgrades and backups stay simple.',
     steps: [
-      { title: 'Install', body: 'Run the installer for your platform. It builds Foxwarm, starts it, and prints a sign-in link for the WebUI.' },
+      { title: 'Install', body: 'Run the installer for your platform. It downloads a release, starts Foxwarm and prints a sign-in link for the WebUI.' },
       { title: 'Add a model', body: 'Open Setup → Models and enter your provider, model ID and API key.' },
       { title: 'Start a session', body: 'Chat with the default agent, give it a working directory, and add Nodes or Channels whenever you need them.' }
     ],
     guide: 'Full installation guide'
   },
-  final: { title: 'Bring your agents home.', body: 'Free and open source under the MIT license.', primary: 'Install Foxwarm', secondary: 'Star on GitHub' },
   footer: { tagline: 'Self-hosted AI agents. MIT licensed.', docs: 'Docs', github: 'GitHub', license: 'License' }
 };

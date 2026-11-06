@@ -4,7 +4,7 @@
 SESSION="${FOXWARM_TMUX_SESSION:-foxwarm}"
 WINDOW_NAME="foxwarm"
 # Get foxwarm root directory (parent of scripts dir)
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd -P )"
 FOXWARM_DIR="$(dirname "$SCRIPT_DIR")"
 
 NODE_BIN="${FOXWARM_NODE_BIN:-$(command -v node || true)}"
@@ -49,19 +49,13 @@ else
     fi
 fi
 
-# Keep the same pane even if tmux renames its window after the process exits.
-# Wait for the foreground job to return the terminal to its shell; draining Main
-# must finish before another startup command is entered into that terminal.
-tmux send-keys -t "$PANE" C-c || exit 1
-SHELL_PID=$(tmux display-message -p -t "$PANE" '#{pane_pid}') || exit 1
-DEADLINE=$((SECONDS + 60))
-while [ "$(ps -o tpgid= -p "$SHELL_PID" | tr -d ' ')" != "$SHELL_PID" ]; do
-    if [ "$SECONDS" -ge "$DEADLINE" ]; then
-        echo "Error: Main has not returned the terminal after shutdown; no restart was sent." >&2
-        exit 1
-    fi
-    sleep 0.2
-done
+# Keep the same pane even if tmux renames its window after Main exits.
+source "$SCRIPT_DIR/source-process.sh"
+source_stop || exit 1
+# Copy mode need not be cancelled to stop Main, only to send the next command.
+if [ "$(tmux display-message -p -t "$PANE" '#{pane_in_mode}')" = 1 ]; then
+    tmux send-keys -t "$PANE" -X cancel || exit 1
+fi
 "$NODE_BIN" scripts/build-source.js --promote || exit 1
 tmux send-keys -t "$PANE" -l "$START_CMD" || exit 1
 tmux send-keys -t "$PANE" Enter || exit 1

@@ -4,7 +4,7 @@
 SESSION="${FOXWARM_TMUX_SESSION:-foxwarm}"
 WINDOW_NAME="foxwarm"
 # Get foxwarm root directory (parent of scripts dir)
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd -P )"
 FOXWARM_DIR="$(dirname "$SCRIPT_DIR")"
 
 NODE_BIN="${FOXWARM_NODE_BIN:-$(command -v node || true)}"

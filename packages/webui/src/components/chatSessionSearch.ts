@@ -1,7 +1,7 @@
 import { getSessionNotice } from '../sessionNotices'
 import type { TimelineView } from '../chatPreferences'
 import type { Message } from './chatShared'
-import { formatStructuredSystemText, getLlmErrorMessageDetails, getSystemMessagePreviewDescriptor, isSystemLikeText, renderAssistantMarkdownSegments, renderMarkdownSegments } from './chatShared'
+import { formatStructuredSystemText, isInternalTimelineMessage, getLlmErrorMessageDetails, getSystemMessagePreviewDescriptor, isSystemLikeText, renderAssistantMarkdownSegments, renderMarkdownSegments } from './chatShared'
 import { isCommittedHistoryMessage } from '../chatHistoryState'
 import { getContextBlockMetaFromMessage, getContextBlockSummaryText } from './ContextBlockCard'
 import { getGroupedToolEntries, getToolCallSearchText, getToolResponseSearchText } from './ToolTimelineItems'
@@ -59,7 +59,7 @@ export function projectSessionSearchFields(messages: Message[], timelineView: Ti
   const committed: Message[] = []
   const sourceIndices = new Map<Message, number>()
   messages.forEach((message, index) => {
-    if (!isCommittedHistoryMessage(message) || message.__meta?.synthetic) return
+    if (!isCommittedHistoryMessage(message) || message.__meta?.synthetic || (timelineView === 'conversation' && isInternalTimelineMessage(message))) return
     committed.push(message)
     sourceIndices.set(message, index)
   })

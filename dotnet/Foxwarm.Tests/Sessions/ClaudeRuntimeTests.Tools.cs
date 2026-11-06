@@ -129,7 +129,7 @@ public sealed partial class ClaudeRuntimeTests
         Assert.Equal(expected, names);
         Assert.Contains("write", names);
         Assert.Contains("call_tool", names);
-        Assert.DoesNotContain("exec", names);
+        Assert.Contains("exec", names);
         Assert.DoesNotContain("wait", names);
         var schemas = new JsonArray(
             listed.Select(t => (JsonNode)t.DeepClone()).ToArray()
@@ -250,6 +250,18 @@ public sealed partial class ClaudeRuntimeTests
         Assert.Contains(
             "completed",
             f.Main.Target.Entry.Snapshot().Queue[0].Parts![0].ToJsonString()
+        );
+        // Each Claude Code tool call commits its own model row first; that row anchors the ID.
+        var anchor = child
+            .History()
+            .Last(message =>
+                (message["parts"] as JsonArray)!.Any(part =>
+                    part?["functionCall"]?.ToJsonString().Contains("send_to_session") == true
+                )
+            )["__meta"]!["seq"]!.GetValue<long>();
+        Assert.Contains(
+            $"deliverySeq=\"{anchor}\"",
+            SessionWait.Text(f.Main.Target.Entry.Snapshot().Queue[0].Parts![0]["system"])
         );
         Assert.True(
             child.Entry.Snapshot().AuthorityEnvelope["childHandoffState"]![

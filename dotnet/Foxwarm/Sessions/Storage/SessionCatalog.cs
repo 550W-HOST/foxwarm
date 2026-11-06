@@ -67,7 +67,8 @@ internal sealed partial class SessionCatalog : IDisposable
                 "PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON"
             );
             Execute(connection, WaitPresenceIndexSql);
-            EnsureSidebarTransaction(connection);
+            Execute(connection, QuestionPresenceIndexSql);
+            EnsureGroupObjects(connection);
             db = connection;
             Volatile.Write(
                 ref readerConnectionString,
@@ -209,6 +210,17 @@ internal sealed partial class SessionCatalog : IDisposable
                 .ToArray();
     }
 
+    /// <summary>Rows with open questions, most recent first, through the partial presence index.</summary>
+    internal JsonObject[] QuestionRows(int limit)
+    {
+        lock (gate)
+            return Rows(
+                    $"SELECT {Columns} FROM session_catalog WHERE json_extract(metadata_json,'$.meta.questions.open')>0 ORDER BY recent_rank,session_id LIMIT $p0",
+                    limit
+                )
+                .ToArray();
+    }
+
     internal JsonObject Resolve(string requested)
     {
         if (Monitor.IsEntered(gate))
@@ -340,7 +352,6 @@ internal sealed partial class SessionCatalog : IDisposable
                 references.Add(Text(alias)!);
         }
         NormalizeParents(db!, references);
-        RefreshSidebar(db!);
     }
 
     internal void PublishAuthority(JsonObject authority, bool allowInsert = false)
@@ -372,6 +383,21 @@ internal sealed partial class SessionCatalog : IDisposable
             UpsertLocked([row]);
         }
         Changed?.Invoke();
+    }
+
+    // Sets a label only while none is present; the check and write share the catalog gate.
+    internal bool RenameIfUnnamed(string id, string name)
+    {
+        lock (gate)
+        {
+            var row = Get(id);
+            if (row is null || !string.IsNullOrEmpty(Text(row["displayName"])))
+                return false;
+            row["displayName"] = name;
+            UpsertLocked([row]);
+        }
+        Changed?.Invoke();
+        return true;
     }
 
     private static void Insert(SqliteConnection connection, JsonObject row)

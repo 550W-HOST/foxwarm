@@ -254,9 +254,14 @@ export const useWorkbenchStore = create<WorkbenchStoreState>()(persist((set) => 
   replaceTabId: (oldTabId, tab) => {
     set((state) => {
       const pane = findPaneContainingTab(state.root, oldTabId)
-      const nextTabsById = { ...state.tabsById }
-      delete nextTabsById[oldTabId]
-      nextTabsById[tab.id] = tab
+      // Keep the replaced tab's position. Retained tab content renders in this order, and
+      // moving a mounted host in the DOM resets its scroll positions and reloads iframes.
+      const nextTabsById: Record<string, WorkbenchTab> = {}
+      for (const [id, current] of Object.entries(state.tabsById)) {
+        if (id === oldTabId) nextTabsById[tab.id] = tab
+        else if (id !== tab.id) nextTabsById[id] = current
+      }
+      if (!(oldTabId in state.tabsById)) nextTabsById[tab.id] = tab
 
       return {
         tabsById: nextTabsById,

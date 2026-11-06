@@ -1,6 +1,5 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
 import { build } from 'esbuild'
 
 async function loadTypeScriptModule(relativePath) {
@@ -25,17 +24,4 @@ test('session rows only enable drag for fine mouse input', async () => {
   assert.equal(shouldActivateSessionListDrag(true, 'touch'), false)
   assert.equal(shouldActivateSessionListDrag(true, 'pen'), false)
   assert.equal(shouldActivateSessionListDrag(false, 'mouse'), false)
-})
-
-test('mobile session-list UI opts out of row drag while the desktop sidebar keeps it', async () => {
-  const [mobileListSource, desktopSidebarSource, coreSource] = await Promise.all([
-    readFile(new URL('../src/components/SessionList.tsx', import.meta.url), 'utf8'),
-    readFile(new URL('../src/components/Sidebar.tsx', import.meta.url), 'utf8'),
-    readFile(new URL('../src/components/SessionListCore.tsx', import.meta.url), 'utf8'),
-  ])
-
-  assert.match(mobileListSource, /<SessionListCore[\s\S]*?dragEnabled=\{false\}/)
-  assert.doesNotMatch(desktopSidebarSource, /<SessionListCore[\s\S]*?dragEnabled=\{false\}/)
-  assert.match(coreSource, /touch-pan-y/)
-  assert.match(coreSource, /shouldActivateSessionListDrag\(dragEnabled, event\.pointerType\)/)
 })

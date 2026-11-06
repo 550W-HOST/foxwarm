@@ -44,9 +44,21 @@ internal static class VectorChild
             );
         var active = new ConcurrentDictionary<long, Task>();
         var drained = false;
+        using var initialization = new CancellationTokenSource();
+        Task initializing = Task.CompletedTask;
+        Task<JsonObject?>? nextRequest = null;
         try
         {
-            await runtime.StartAsync();
+            // Keep the sole reader active during required initialization so parent loss
+            // cancels it. Carry the same pending read into dispatch; never drop a frame.
+            nextRequest = VectorWire.ReadAsync(pipe);
+            initializing = runtime.StartAsync(initialization.Token);
+            if (
+                await Task.WhenAny(initializing, nextRequest) == nextRequest
+                && await nextRequest is null
+            )
+                throw new EndOfStreamException("Vector parent disconnected during initialization.");
+            await initializing;
             await ReplyAsync(
                 pipe,
                 sending,
@@ -54,7 +66,7 @@ internal static class VectorChild
                 JsonValue.Create(true),
                 null
             );
-            while (await VectorWire.ReadAsync(pipe) is { } request)
+            while (await nextRequest is { } request)
             {
                 if (VectorRuntime.Integer(request["version"]) != 1)
                     throw new InvalidDataException("Unsupported Vector owner protocol.");
@@ -68,6 +80,7 @@ internal static class VectorChild
                     await ReplyAsync(pipe, sending, id, null, null);
                     return true;
                 }
+                nextRequest = VectorWire.ReadAsync(pipe);
                 if (active.Count >= 256)
                 {
                     await ReplyAsync(
@@ -96,11 +109,24 @@ internal static class VectorChild
         }
         finally
         {
+            initialization.Cancel();
             if (!drained)
             {
+                pipe.Dispose();
                 // Like Source parent-disconnect cleanup, this is bounded derived work, not durable fencing.
                 var cleanup = Task.Run(async () =>
                 {
+                    if (nextRequest is not null)
+                        try
+                        {
+                            await nextRequest;
+                        }
+                        catch { }
+                    try
+                    {
+                        await initializing;
+                    }
+                    catch { }
                     await Task.WhenAll(active.Values);
                     await runtime.DisposeAsync();
                 });

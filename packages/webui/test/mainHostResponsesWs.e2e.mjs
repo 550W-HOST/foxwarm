@@ -105,7 +105,12 @@ async function send(id, scenario, expected, timeout = 22000) {
 }
 try {
   await fixture.start(); const main = await create(); const page = await fixture.openApp(); await saveModelsInOriginalApp(page, yaml.dump(configuration()), fixture.modelPath)
-  await page.evaluate(id => window.foxwarmTest.switchToSession(id), main); await page.click('.foxwarm-model-selector-trigger'); await page.waitForSelector('[data-model-column="current"] [data-model-option-key="a"]'); await page.click('[data-model-column="current"] [data-model-option-key="a"]')
+  await page.evaluate(id => window.foxwarmTest.switchToSession(id), main)
+  // Session selection prepares history before the target Chat controls mount.
+  const modelTrigger = `[data-workbench-content-tab=${JSON.stringify('chat:' + main)}] .foxwarm-model-selector-trigger`
+  await page.waitForSelector(modelTrigger, { visible: true })
+  await page.click(modelTrigger)
+  await page.waitForSelector('[data-model-column="current"] [data-model-option-key="a"]'); await page.click('[data-model-column="current"] [data-model-option-key="a"]')
   let wire = await send(main, 'first', 'DONE-first'); assert.equal(wire.length, 1); assert.equal(wire[0].body.max_output_tokens, 713); assert(!wire[0].body.previous_response_id)
   const cache = (await authority(main)).promptCacheKey, expectedCache = createHash('sha256').update(main).digest('hex')
   assert.notEqual(cache, expectedCache); assert.equal(wire[0].body.prompt_cache_key, expectedCache); assert.equal(wire[0].body.cache, expectedCache); assert.equal(wire[0].headers['x-cache'], expectedCache)

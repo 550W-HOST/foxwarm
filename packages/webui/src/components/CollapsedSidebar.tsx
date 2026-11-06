@@ -1,6 +1,6 @@
 import { getSessionRuntimeTone } from '../sessionRuntimeState'
 import GlobalUiSettingsMenu from './GlobalUiSettingsMenu'
-import { PanelLeftOpen, Plus, History, ClipboardList } from 'lucide-react'
+import { PanelLeftOpen, Plus, Search, ClipboardList, Network } from 'lucide-react'
 import type { Session } from './SessionListCore'
 import { getSessionRuntimeStateName, isSessionRuntimeActive, getSessionRuntimeSummary } from '../sessionRuntimeState'
 
@@ -10,6 +10,9 @@ interface CollapsedSidebarProps {
   onSelectSession: (sessionId: string) => void
   onCreateSession: () => void
   onSelectSearch: () => void
+  onSelectArchitecture?: () => void
+  /** Highlights the matching navigation icon. */
+  activeView?: 'system' | 'tasks' | 'search'
   onSelectSetup: () => void
   onSelectLogs: () => void
   onSelectTasks?: () => void
@@ -31,6 +34,8 @@ export default function CollapsedSidebar({
   onSelectSession,
   onCreateSession,
   onSelectSearch,
+  onSelectArchitecture,
+  activeView,
   onSelectSetup,
   onSelectLogs,
   onSelectTasks,
@@ -38,12 +43,12 @@ export default function CollapsedSidebar({
   unreadSessionIds = new Set(),
 }: CollapsedSidebarProps) {
   const rootSessions = sessions
-    .filter((s) => (s.pinned || !(s.sidebarParentId === undefined ? s.parentSessionId : s.sidebarParentId)) && !s.archived)
+    .filter((s) => (s.pinned || !s.parentSessionId) && !s.archived)
 
   return (
     <div className="foxwarm-sidebar-panel h-full w-12 flex flex-col items-center bg-fw-sidebar-surface border-r border-fw-border">
-      {/* Header */}
-      <div className="flex flex-col items-center gap-2 py-3 border-b border-fw-border w-full">
+      {/* Header and navigation, as in the expanded sidebar */}
+      <div className="flex w-full flex-col items-center gap-1 border-b border-fw-border py-3" data-sidebar-nav-list>
         <button
           type="button"
           onClick={onToggleCollapsed}
@@ -52,18 +57,24 @@ export default function CollapsedSidebar({
         >
           <PanelLeftOpen className="h-4 w-4" />
         </button>
-        <button
-          type="button"
-          onClick={onCreateSession}
-          className="flex h-8 w-8 items-center justify-center rounded-lg text-fw-text-muted hover:bg-fw-hover hover:text-fw-text-strong dark:text-fw-text-muted dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse transition"
-          title="New session"
-        >
-          <Plus className="h-4 w-4" />
-        </button>
+        <GlobalUiSettingsMenu menuAlign="start" menuSide="bottom" onOpenSetup={onSelectSetup} onOpenLogs={onSelectLogs} />
+        <div className="my-1 h-px w-6 bg-fw-border" aria-hidden="true" />
+        {onSelectArchitecture && <RailButton label="System" active={activeView === 'system'} onClick={onSelectArchitecture}><Network className="h-4 w-4" /></RailButton>}
+        {onSelectTasks && <RailButton label="Tasks" active={activeView === 'tasks'} onClick={onSelectTasks}><ClipboardList className="h-4 w-4" aria-hidden="true" /></RailButton>}
+        <RailButton label="Search history" active={activeView === 'search'} onClick={onSelectSearch}><Search className="h-4 w-4" /></RailButton>
       </div>
 
       {/* Session rail */}
       <div className="flex-1 flex flex-col items-center gap-1.5 py-2 overflow-y-auto w-full scrollbar-none">
+        <button
+          type="button"
+          onClick={onCreateSession}
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-fw-text-muted hover:bg-fw-hover hover:text-fw-text-strong dark:text-fw-text-muted dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse transition"
+          title="New session"
+          aria-label="New session"
+        >
+          <Plus className="h-4 w-4" />
+        </button>
         {rootSessions.slice(0, 20).map((session) => {
           const isActive = session.id === currentSession
           const initial = getSessionInitial(session)
@@ -100,17 +111,15 @@ export default function CollapsedSidebar({
           )
         })}
       </div>
-      <div data-sidebar-footer className="flex w-full shrink-0 flex-col items-center gap-1 border-t border-fw-border py-2">
-        {onSelectTasks && (
-          <button type="button" onClick={onSelectTasks} title="Open tasks" aria-label="Open tasks" className="flex h-8 w-8 items-center justify-center rounded-lg text-fw-text-muted transition hover:bg-fw-hover hover:text-fw-text-strong">
-            <ClipboardList className="h-4 w-4" aria-hidden="true" />
-          </button>
-        )}
-        <button type="button" onClick={onSelectSearch} title="Search history" aria-label="Search history" className="flex h-8 w-8 items-center justify-center rounded-lg text-fw-text-muted transition hover:bg-fw-hover hover:text-fw-text-strong">
-          <History className="h-4 w-4" />
-        </button>
-        <GlobalUiSettingsMenu menuSide="top" onOpenSetup={onSelectSetup} onOpenLogs={onSelectLogs} />
-      </div>
     </div>
+  )
+}
+
+function RailButton({ label, active, onClick, children }: { label: string; active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button type="button" onClick={onClick} title={label} aria-label={label} aria-current={active ? 'page' : undefined}
+      className={`flex h-8 w-8 items-center justify-center rounded-lg transition ${active ? 'bg-fw-accent-surface text-fw-accent dark:bg-fw-accent-surface-strong/40' : 'text-fw-text-muted hover:bg-fw-hover hover:text-fw-text-strong'}`}>
+      {children}
+    </button>
   )
 }

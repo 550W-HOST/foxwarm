@@ -80,7 +80,9 @@ test('build contains every public page with the canonical custom-domain URL', as
 
 test('the homepage documentation action opens an ordinary docs page with navigation', async () => {
   const homepage = await readFile(routeToFile('/'), 'utf8');
-  assert.match(homepage, /<a class="button secondary" href="\/docs\/">Read the docs/);
+  assert.match(homepage, /<nav class="primary-nav"[^>]*>\s*<a href="\/docs\/">Docs<\/a>/);
+  const zhHomepage = await readFile(routeToFile('/zh/'), 'utf8');
+  assert.match(zhHomepage, /<nav class="primary-nav"[^>]*>\s*<a href="\/zh\/docs\/">文档<\/a>/);
 
   const docsHome = await readFile(routeToFile('/docs/'), 'utf8');
   assert.doesNotMatch(docsHome, /data-has-hero/);

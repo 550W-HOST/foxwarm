@@ -24,7 +24,7 @@ Two virtual `providerType` values are supported:
 
 A virtual entry uses `targets`, containing model lookup keys that resolve strictly to concrete leaves in the same models-config snapshot. Canonical identity is an actual expansion key, so slash-containing model IDs remain exact and a single-model bare alias and qualified key resolve to the same leaf. Version 1 rejects empty targets, unknown targets, self references, virtual-to-virtual references, and aliases that resolve to the same canonical concrete target. `session-hash` accepts one or more targets; `failover` requires at least two.
 
-Virtual entries do not accept `models`, legacy `model`, `baseUrl`, `apiKey`, `requestCompression`, `extraFields`, `extraHeaders`, `webSearch`, `imageGeneration`, `contextLimit`, `maxOutput`, `providerImageOutputFormat`, `effort`, `historyReasoningField`, `asyncCompact`, or `disallowEmptyResponse`. `session-hash` also rejects failover-only threshold/cooldown fields. Concrete entries reject virtual routing fields. Provider entries must be plain objects, and failover threshold/cooldown values are positive integers. Request connection and serialization fields always come from the selected concrete leaf.
+Virtual entries do not accept `models`, legacy `model`, `baseUrl`, `apiKey`, `requestCompression`, `extraFields`, `extraHeaders`, `webSearch`, `imageGeneration`, `contextLimit`, `maxOutput`, `providerImageOutputFormat`, `imageInput`, `effort`, `historyReasoningField`, `asyncCompact`, or `disallowEmptyResponse`. `session-hash` also rejects failover-only threshold/cooldown fields. Concrete entries reject virtual routing fields. Provider entries must be plain objects, and failover threshold/cooldown values are positive integers. Request connection and serialization fields always come from the selected concrete leaf.
 
 The three model settings `contextLimit`, `maxOutput`, and `providerImageOutputFormat` resolve once per concrete leaf from model → provider → root `defaults` → startup-owned legacy app `llm` → built-in defaults. The root defaults object accepts only these three fields. Effective limits and image formats participate in the existing leaf fingerprint, while virtual entries expose only their derived safe context limit. Canonical configuration ownership is [src-config](../units/src-config.md#model-resolution).
 
@@ -36,6 +36,7 @@ The resolved virtual model reports:
 
 - the minimum reachable concrete `contextLimit`;
 - async compaction enabled only when every reachable leaf allows it;
+- presentation `imageInput` true only when every reachable leaf accepts images (requests still decide per attempted leaf);
 - canonical concrete target keys;
 - failover defaults of five consecutive failures and a 600,000 ms cooldown;
 - a deterministic configuration fingerprint covering strategy and the complete resolved leaf request configuration. Secret inputs and header/extra maps contribute through hashes and are not retained in virtual routing metadata.
@@ -44,7 +45,7 @@ The resolved virtual model reports:
 
 1. `requestLlmOnce` resolves one models-config snapshot and one logical prompt-cache routing key for the outer request. A normal exact-owner request may replace its selection snapshot only at the explicit model-change boundary below; the logical cache lineage stays unchanged. Virtual selection and request-journal lineage use that unchanged key; a selected `openai-ws` leaf derives its provider-facing key only inside the final concrete plan under [D-model-routing-openai-ws-prompt-cache-key](#d-model-routing-openai-ws-prompt-cache-key).
 2. A concrete model uses its resolved entry directly. A virtual model selects one concrete target for the current attempt.
-3. Every outer attempt rebuilds the selected leaf's URL, credentials, headers, payload (including its effective output-token limit), request compression, provider serializer, stream collector, and response parser. Image hydration optimizes an attempt-local clone using that leaf's effective input-image format and the existing format-specific derived cache; canonical original blobs remain unchanged. Historical model reasoning is compatibility-filtered against that attempt's canonical concrete destination, then Chat Completions emits it under that leaf's resolved `historyReasoningField`.
+3. Every outer attempt rebuilds the selected leaf's URL, credentials, headers, payload (including its effective output-token limit), request compression, provider serializer, stream collector, and response parser. Image hydration optimizes an attempt-local clone using that leaf's effective input-image format and the existing format-specific derived cache, or replaces visual images with text placeholders when that leaf has `imageInput: false` ([D-image-provider-image-input](./image-blob-lifecycle.md#d-image-provider-image-input)); canonical original blobs remain unchanged. Historical model reasoning is compatibility-filtered against that attempt's canonical concrete destination, then Chat Completions emits it under that leaf's resolved `historyReasoningField`.
    For `openai-ws`, the rebuilt complete plan is matched against process-local completed chains only after this boundary; a match changes only the transport wire suffix, not the semantic request or journal.
 4. One optional provider-neutral requested effort is captured with the selected model; only an explicit owner model change captures a replacement pair. Each concrete attempt uses it when allowed by that leaf, otherwise it falls back to that leaf's configured default. An omitted request also uses each selected leaf's default.
 5. A successful result records the concrete provider-qualified model ID. The session's selected model remains the virtual key.
@@ -70,7 +71,8 @@ Selection chooses the first configured target that is not cooling down. Outcomes
 - reaching `failureThreshold` cools a non-final target for `cooldownMs`;
 - cooldown expiry removes the old streak before the target becomes eligible again;
 - success resets only the successful target;
-- a countable failure from the configured final target clears the route's health and terminates the current request, so the next independent request starts from the first target.
+- a countable failure from the configured final target clears the route's health and terminates the current request, so the next independent request starts from the first target;
+- a configuration failure (below) on a non-final target cools it immediately instead of waiting for `failureThreshold`, so the next attempt uses the next target.
 
 With defaults and two targets, attempts 1–5 may fail on A, the fifth failure cools A, and attempt 6 selects B.
 
@@ -80,11 +82,15 @@ Failures that are retryable and count toward failover health:
 
 - network, DNS, TLS, timeout, and stream failures;
 - HTTP 408, 429, 5xx, and 529;
-- HTTP 401, 403, and 404;
-- model-not-found responses, including HTTP 400 bodies identified by nested structured error code/type or bounded model-specific text patterns;
+- HTTP 404 without a model-not-found body;
 - malformed or unusable successful responses.
 
 HTTP 400, 413, and 422 are terminal and do not affect route health unless the body identifies model-not-found. Other HTTP statuses preserve the prior retry behavior but do not affect shared route health until explicitly classified.
+
+Configuration failures count toward failover health but are never repeated on the same target ([D-model-routing-configuration-failures](#d-model-routing-configuration-failures)):
+
+- HTTP 401 (`authentication`, refined to `missing-api-key` when the leaf sent no key) and HTTP 403 (`permission`), including a Responses WebSocket handshake rejected with those statuses;
+- model-not-found responses (`model-not-found`), identified by nested structured error code/type, Anthropic's `not_found_error` with a `model: <id>` message, or bounded model-specific text patterns, including on HTTP 400 and 404.
 
 Abort, stop, and cancellation terminate immediately and do not count as target health failures.
 
@@ -94,7 +100,7 @@ The [response-usability behavior](../behaviors/models-and-requests.md#routing-an
 
 - Session and WebUI model selection continue to expose the configured virtual key. Public session projections expose raw current/child effort overrides separately from their derived effective values, allowed sets, and concrete defaults; virtual defaults are represented as per-leaf rather than inventing one route-level default.
 - `ChatResult.modelId` and assistant `__meta.modelId` identify the canonical concrete leaf that actually succeeded. When the resolved route is virtual, successful results/messages additionally carry that resolved configuration key as optional `virtualModelKey`; concrete, user, tool, synthetic, failed, and legacy messages omit it. Logs and retry diagnostics continue to identify both the attempted concrete leaf and virtual route where applicable.
-- WebUI Setup presents Models as raw YAML only. Its local static schema accepts provider objects or non-whitespace alias strings, and current-document suggestions include string-alias keys for model/default values but exclude them from concrete `targets`. Save uses the canonical config validator and remains byte-preserving after validation.
+- WebUI Setup offers a one-provider form only for documents it can represent and otherwise the YAML editor ([D-setup-models-form](../units/webui-setup-view.md#d-setup-models-form)); virtual routes are YAML-only. The editor's local static schema accepts provider objects or non-whitespace alias strings, and current-document suggestions include string-alias keys for model/default values but exclude them from concrete `targets`. Save uses the canonical config validator and remains byte-preserving after validation.
 - Structured setup input accepts virtual targets and failover settings; setup diagnostics expose `isVirtual`, `targets`, `failureThreshold`, and `cooldownMs`. The model-list API also exposes the allowlisted provider key, internal configured model ID, provider type, virtual status, resolved targets, effective context limit, ordered allowed efforts, and a concrete default or `null` for virtual per-leaf defaulting, without connection URLs, leaf credentials, headers, or other provider configuration. The browser uses the explicit identity fields for duplicate-ID trigger qualification and uses virtual strategy/targets only as configured routing summaries, never as a claim about the dynamically selected leaf or current health.
 - `/model`, `/session child-model`, the existing model/child-model WebUI endpoints, and the compact Chat selector update model-plus-effort pairs through one SessionRuntime settings mutation. Property presence distinguishes omitted fields from explicit unset/default, and `none` remains an explicit value.
 - Model-facing `create_child_session` and `create_session` schemas expose optional strict `forceModel: { modelId?, effort? }` for visibly intentional current-session overrides. Omission or `{}` keeps existing inheritance/default behavior, while removed top-level keys are rejected. `set_session_child_model` sets or clears future-child model and effort defaults without introducing another overlapping settings tool. Shared session status reports raw/effective current and child effort.
@@ -115,6 +121,10 @@ The [response-usability behavior](../behaviors/models-and-requests.md#routing-an
 - Retry presentation: [D-pipeline-display-only-retries](./message-processing-pipeline.md#d-pipeline-display-only-retries)
 
 ## Design decisions
+
+### D-model-routing-configuration-failures
+
+[2026-11-03, approved first-run proposal] A rejected key, denied access or unknown model cannot be repaired by repeating the same request, and six attempts with backoff (about 77 seconds) hid the cause from new users. `ModelAttemptFailure.ConfigurationCause` classifies these HTTP failures; `ModelRequestOwner` then ends a concrete or `session-hash` request after that attempt, and a `failover` route cools the rejected non-final target at once (`ModelRouting.Failed(..., exhausted: true)`) so the next attempt moves on within the same budget. A final target still terminates as before. The terminal `ModelRetryEvent` carries `cause` and a readable `explanation` naming the provider and upstream model; its notice text, channel text and `ModelRequestException` message read "<explanation> Check Setup → Models." followed by the provider response. Retry JSON gains these two fields only for configuration failures. Transient failures keep the existing classification and backoff. WebUI presentation of the final notice belongs to [runtime status](../units/webui-runtime-status.md).
 
 ### D-model-routing-provider-type
 

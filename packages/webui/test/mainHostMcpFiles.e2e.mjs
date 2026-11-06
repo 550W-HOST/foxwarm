@@ -79,8 +79,6 @@ try {
   for (const tool of tools) assert(text(discovered).includes(JSON.stringify(tool.toolId)))
   const exec = tools.find(tool => tool.name === 'exec')
   assert.equal(exec.inputSchema.additionalProperties, false)
-  assert.match(exec.inputSchema.properties.cwd.description, /Agent directories.*unavailable/)
-  assert.match(exec.description, /foxwarm_exec_result/)
   for (const [id, root] of Object.entries(roots)) {
     const invalid = await concrete(client, id, 'exec', { command: 'printf forbidden > rejected-args', timeoutMs: 1000 })
     assert(invalid.isError); assert.match(text(invalid), /Accepted fields: command, cwd, timeout.*No call was sent/)

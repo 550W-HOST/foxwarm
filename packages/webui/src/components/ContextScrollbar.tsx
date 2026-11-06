@@ -1,5 +1,4 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
-import { Check } from 'lucide-react'
 import { CONTEXT_SCROLLBAR_ANCHOR_SELECTOR } from '../chatViewportState'
 import { writeContextScrollbarSettings, type ContextScrollbarSettings } from '../contextScrollbarSettings'
 import ContextMenu, { type ContextMenuEntry } from './ContextMenu'
@@ -91,16 +90,17 @@ const ContextScrollbar = memo(function ContextScrollbar({ settings, messages, co
     setScaleMenu(null)
   }, [])
   const scaleMenuEntries = useMemo<ContextMenuEntry[]>(() => [
+    { key: 'scale-header', type: 'header' as const, label: 'Scale' },
     ...(Object.keys(verticalScaleLabels) as ContextScrollbarVerticalScale[]).map(scale => ({
       key: scale,
       label: verticalScaleLabels[scale],
-      icon: verticalScale === scale ? <Check size={14} /> : null,
       checked: verticalScale === scale,
+      selection: 'radio' as const,
       onSelect: () => selectVerticalScale(scale),
     })),
-    { key: 'display-separator', type: 'separator' as const },
-    { key: 'show-scrollbar', label: 'Show scrollbar', icon: settings.showScrollbar ? <Check size={14} /> : null, checked: settings.showScrollbar, disabled: settings.showScrollbar && !settings.showMinimap, onSelect: () => writeContextScrollbarSettings({ ...settings, showScrollbar: !settings.showScrollbar }) },
-    { key: 'show-minimap', label: 'Show minimap', icon: settings.showMinimap ? <Check size={14} /> : null, checked: settings.showMinimap, disabled: settings.showMinimap && !settings.showScrollbar, onSelect: () => writeContextScrollbarSettings({ ...settings, showMinimap: !settings.showMinimap }) },
+    { key: 'display-header', type: 'header' as const, label: 'Display' },
+    { key: 'show-scrollbar', label: 'Show scrollbar', checked: settings.showScrollbar, disabled: settings.showScrollbar && !settings.showMinimap, onSelect: () => writeContextScrollbarSettings({ ...settings, showScrollbar: !settings.showScrollbar }) },
+    { key: 'show-minimap', label: 'Show minimap', checked: settings.showMinimap, disabled: settings.showMinimap && !settings.showScrollbar, onSelect: () => writeContextScrollbarSettings({ ...settings, showMinimap: !settings.showMinimap }) },
   ], [selectVerticalScale, settings, verticalScale])
 
   const updateViewportRange = useCallback(() => {

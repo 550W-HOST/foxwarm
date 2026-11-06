@@ -51,7 +51,8 @@ internal sealed record SessionMetadata(
     double? Cost = null,
     bool LlmFailed = false,
     string Runtime = "foxwarm",
-    JsonObject? ExternalRuntime = null
+    JsonObject? ExternalRuntime = null,
+    JsonObject? Questions = null
 );
 
 /// <summary>Session-semantic in-process API. Channels receive cloned projections, never mutable owners.</summary>
@@ -308,7 +309,8 @@ internal sealed partial class SessionOwner
                 Cost: SessionWait.Number(envelope["stats"]?["totalCost"]),
                 LlmFailed: Flag(state.Meta["llmFailed"]),
                 Runtime: Text(envelope["runtime"]) ?? "foxwarm",
-                ExternalRuntime: external
+                ExternalRuntime: external,
+                Questions: SessionQuestions.Projection(state.Meta)
             );
         });
         return MainMetadata?.Invoke(result) ?? result;

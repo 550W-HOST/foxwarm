@@ -165,7 +165,7 @@ internal sealed class ArchiveSearchIndex : IDisposable
                 foreach (
                     var (key, value) in new[]
                     {
-                        ("schema_version", "1"),
+                        ("schema_version", "2"),
                         ("normalizer_version", "2"),
                         ("build_generation", Guid.NewGuid().ToString()),
                     }
@@ -182,7 +182,7 @@ internal sealed class ArchiveSearchIndex : IDisposable
         if (
             Convert.ToString(
                 Scalar("SELECT value FROM archive_search_metadata WHERE key='schema_version'")
-            ) != "1"
+            ) != "2"
             || Convert.ToString(
                 Scalar("SELECT value FROM archive_search_metadata WHERE key='normalizer_version'")
             ) != "2"
@@ -237,7 +237,12 @@ internal sealed class ArchiveSearchIndex : IDisposable
         );
         RequireColumns(
             "archive_search_documents",
-            new[] { ("rowid", "INTEGER", (int?)1, (int?)null) }
+            new[]
+            {
+                ("rowid", "INTEGER", (int?)1, (int?)null),
+                ("start_timestamp", "INTEGER", (int?)null, (int?)null),
+                ("end_timestamp", "INTEGER", (int?)null, (int?)null),
+            }
                 .Concat(
                     new[]
                     {
@@ -311,7 +316,7 @@ internal sealed class ArchiveSearchIndex : IDisposable
     }
 
     private static readonly string[] Fields =
-        "session_id,agent,memory_kind,source_key,source_family,seq,start_seq,end_seq,raw_start_seq,raw_end_seq,timestamp,block_id,block_level,index_text,content_hash,updated_at".Split(
+        "session_id,agent,memory_kind,source_key,source_family,seq,start_seq,end_seq,raw_start_seq,raw_end_seq,timestamp,start_timestamp,end_timestamp,block_id,block_level,index_text,content_hash,updated_at".Split(
             ','
         );
 
@@ -568,6 +573,16 @@ internal sealed class ArchiveSearchIndex : IDisposable
                 );
             if (options?.Agent is { Length: > 0 } agent)
                 predicates.Add("d.agent=" + Param(agent));
+            if (options?.StartTime is { } startTime)
+                predicates.Add(
+                    "(CASE WHEN d.memory_kind='raw' THEN d.timestamp ELSE d.end_timestamp END)>="
+                        + Param(startTime)
+                );
+            if (options?.EndTime is { } endTime)
+                predicates.Add(
+                    "(CASE WHEN d.memory_kind='raw' THEN d.timestamp ELSE d.start_timestamp END)<"
+                        + Param(endTime)
+                );
             var limitParameter = Param(Math.Clamp(limit, 1, 200));
             using var command = Command(
                 """

@@ -89,8 +89,8 @@ try {
   assert.match(await page.$eval('[data-workbench-status-popup]', element => element.textContent), /Cached20.*Input60.*Output10/)
   await page.keyboard.press('Escape')
   await page.reload({ waitUntil: 'domcontentloaded' }); await page.waitForFunction(() => window.foxwarmTest?.switchToSession); await chat()
-  await page.waitForSelector('[aria-label="Tasks: 1 active, 2 unfinished"]')
-  await click('[aria-label="Tasks: 1 active, 2 unfinished"]'); await page.waitForFunction(() => document.querySelector('[data-workbench-status-popup]')?.textContent.includes('Parity active task'))
+  await page.waitForSelector('[aria-label="Tasks: 1 active, 1 open"]')
+  await click('[aria-label="Tasks: 1 active, 1 open"]'); await page.waitForFunction(() => document.querySelector('[data-workbench-status-popup]')?.textContent.includes('Parity active task'))
   assert.match(await page.$eval('[data-workbench-status-popup]', element => element.textContent), /Parity open task/); await page.keyboard.press('Escape')
 
   // The Debug endpoint and Timeline share the original lazy JSON inspector.
@@ -105,7 +105,7 @@ try {
   await page.$eval('.foxwarm-assistant-message-card [title="JSON"]', button => button.click())
   await page.waitForSelector('[data-json-inspector-dialog] [data-editor-ready="true"]'); await closeJson()
   // A real split preserves Chat DOM and draft without issuing another history initialization.
-  await page.evaluate(() => { location.hash = 'architecture' }); await page.waitForSelector('.foxwarm-architecture-surface-tab'); await chat()
+  await page.evaluate(() => { location.hash = 'architecture' }); await page.waitForSelector('.foxwarm-system-tab'); await chat()
   await page.type('[role="textbox"][aria-label="Message"]', 'retained normal-host draft')
   await page.evaluate(() => { window.parityChat = document.querySelector('.foxwarm-chat-root') })
   const historyReads = http.filter(row => row.path.endsWith('/history')).length
@@ -126,7 +126,7 @@ try {
   assert.equal(await page.$eval('[data-history-search-view] [role="alert"]', node => node.textContent), submittedError)
 
   // Desktop dock/reload/collapse retains the actual PTY; explicit pane Close deletes it.
-  await chat(); await click('[aria-label="Toggle terminal"]'); await page.waitForSelector('[data-terminal-header]', { visible: true })
+  await chat(); await click('[aria-label="Toggle terminal panel"]'); await page.waitForSelector('[data-terminal-header]', { visible: true })
   const terminal = await until(async () => (await host.api('GET', '/api/terminals')).body.terminals[0], 'real docked terminal')
   assert.equal(terminal.cwd, host.work)
   await click('.xterm-screen'); await page.keyboard.type("printf 'DOCKED-PTY\\n' > docked.txt"); await page.keyboard.press('Enter')
@@ -134,8 +134,8 @@ try {
   let layout = await savedLayout(), terminalTab = Object.values(layout.tabsById).find(tab => tab.type === 'terminal')
   let terminalPane = panes(layout.root).find(pane => pane.tabIds.includes(terminalTab.id))
   assert(terminalPane && terminalPane.tabIds.length === 1)
-  await click('[aria-label="Toggle terminal"]'); assert.equal((await host.api('GET', '/api/terminals/' + terminal.id)).body.terminal.pid, terminal.pid)
-  await click('[aria-label="Toggle terminal"]'); await page.waitForSelector('[data-terminal-header]', { visible: true })
+  await click('[aria-label="Toggle terminal panel"]'); assert.equal((await host.api('GET', '/api/terminals/' + terminal.id)).body.terminal.pid, terminal.pid)
+  await click('[aria-label="Toggle terminal panel"]'); await page.waitForSelector('[data-terminal-header]', { visible: true })
   await page.reload({ waitUntil: 'domcontentloaded' }); await page.waitForSelector('[data-terminal-header]', { visible: true })
   assert.equal((await host.api('GET', '/api/terminals/' + terminal.id)).body.terminal.pid, terminal.pid)
   layout = await savedLayout(); terminalTab = Object.values(layout.tabsById).find(tab => tab.type === 'terminal'); terminalPane = panes(layout.root).find(pane => pane.tabIds.includes(terminalTab.id))

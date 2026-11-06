@@ -1,9 +1,10 @@
 import { memo, useCallback, useContext, useMemo, useState } from 'react'
 import { normalizeCodePath } from '../vscodeWeb'
 import type { ReactNode } from 'react'
-import { Code2, FileJson, Download, Timer } from 'lucide-react'
+import { Code2, FileJson, Download, Timer, Copy, Check } from 'lucide-react'
 import {
   IconToggleButton,
+  copyTextToClipboard,
   MiniToggleButton,
   ToolTag,
   ToolTagList,
@@ -27,6 +28,7 @@ import {
 } from './chatShared'
 import { ToolScriptProgressContext } from './ToolScriptProgressContext'
 import JsonInspectorDialog from './JsonInspectorDialog'
+import { toolActivitySummary, toolActivityTarget } from '../../../shared/src/toolActivity'
 import { shouldUseStreamingToolPlaceholder } from '../../../shared/src/webuiToolRendering'
 import { formatToolScriptExecutionResponse } from '../../../shared/src/toolResponseFormatting'
 import ImageParts from './ImageParts'
@@ -41,11 +43,92 @@ import { getLegacyEditLineCounts } from './legacyEditCounts'
 import { useThreadCardOverflowFade } from './useThreadCardOverflowFade'
 import { useThreadCardHeightTransition } from './useThreadCardHeightTransition'
 import ReasoningTokenBadge from './ReasoningTokenBadge'
+import { AskUserToolCard } from './QuestionCard'
+import { isAskUserCall } from '../sessionQuestions'
 import type { ReasoningBadgeInfo } from './reasoningParts'
 
 const formatToolResponseText = (resp: FunctionResponse): string => resp.__meta?.toolScriptSubCalls !== undefined
   ? formatToolScriptExecutionResponse(resp.response)
   : formatCompactObjectPreview(resp.response)
+
+const argumentValue = (value: unknown): string => typeof value === 'string' && value.trim().length > 0
+  ? value
+  : JSON.stringify(value, null, 2) ?? String(value)
+
+/** One argument partition shared by expanded rendering and its search projection. */
+const executionArguments = (call: FunctionCall) => {
+  const args = call.args
+  if (!args || typeof args !== 'object' || Array.isArray(args)) return { fallback: argumentValue(args) }
+  const purpose = typeof args.summary === 'string' && args.summary.trim() ? args.summary as string : undefined
+  const sourceKey = call.name === 'exec' ? 'command' : typeof args.code === 'string' ? 'code' : 'filePath'
+  const source = typeof args[sourceKey] === 'string' ? { key: sourceKey, text: args[sourceKey] as string } : undefined
+  const fields = Object.entries(args)
+    .filter(([key]) => !(purpose !== undefined && key === 'summary') && key !== source?.key)
+    .map(([key, value]) => ({ key, text: `${key}: ${argumentValue(value)}` }))
+  return {
+    purpose,
+    source,
+    inputs: fields.filter(field => field.key === 'args' || field.key === 'argsJson'),
+    options: fields.filter(field => field.key !== 'args' && field.key !== 'argsJson'),
+  }
+}
+
+const executionArgumentsSearchText = (call: FunctionCall): string => {
+  const sections = executionArguments(call)
+  if (sections.fallback !== undefined) return sections.fallback
+  return [
+    sections.purpose,
+    sections.source && (sections.source.key === 'filePath' ? `filePath: ${argumentValue(sections.source.text)}` : sections.source.text),
+    ...[...sections.inputs!, ...sections.options!].map(field => field.text),
+  ].filter(value => value !== undefined).join('\u0000')
+}
+
+const executionCallPreview = (call: { name: string; args?: Record<string, unknown> }, purposeOnly: boolean): string => {
+  if (purposeOnly) return toolActivitySummary(call)
+  const args = call.args || {}
+  const source = call.name === 'exec' ? args.command
+    : typeof args.code === 'string' && args.code.trim() ? args.code
+    : args.filePath !== undefined ? args.filePath : args.code
+  if (source === undefined) return toolActivitySummary(call)
+  const text = argumentValue(source).replace(/\s+/g, ' ').trim()
+  const end = /[\uD800-\uDBFF]/.test(text[198] || '') ? 198 : 199
+  return text.length > 200 ? text.slice(0, end) + '…' : text
+}
+
+const CollapsedExecutionCode = ({ text, script }: { text: string; script: boolean }) => (
+  <span className="whitespace-nowrap">
+    {script ? <SyntaxHighlightedText text={text} filePath="script.py" /> : <ExecCommandText command={text} heredocBodyBlock={false} />}
+  </span>
+)
+
+const ExecutionCode = ({ text, script }: { text: string; script: boolean }) => {
+  const [copied, setCopied] = useState(false)
+  return <div className="foxwarm-tool-execution-code relative min-w-0">
+    <div data-search-exclude className="absolute right-0 top-0">
+      <IconToggleButton active={copied} title={copied ? 'Copied' : script ? 'Copy script' : 'Copy command'} onClick={async event => {
+        event.stopPropagation()
+        try { await copyTextToClipboard(text); setCopied(true) } catch (error) { console.error('Failed to copy tool source', error) }
+      }}>{copied ? <Check size={13} /> : <Copy size={13} />}</IconToggleButton>
+    </div>
+    <pre className="m-0 whitespace-pre-wrap break-all pr-8 font-mono text-xs cursor-text">{script
+      ? <SyntaxHighlightedText text={text} filePath="script.py" />
+      : <ExecCommandText command={text} heredocBodyBlock={false} />}</pre>
+  </div>
+}
+
+const ExecutionArguments = ({ call }: { call: FunctionCall }) => {
+  const sections = executionArguments(call)
+  if (sections.fallback !== undefined) return <pre className="whitespace-pre-wrap break-all cursor-text">{sections.fallback}</pre>
+  const { inputs = [], options = [] } = sections
+  return <div className="foxwarm-tool-execution-args space-y-2 min-w-0">
+    {sections.purpose !== undefined && <div className="whitespace-pre-wrap break-all">{sections.purpose}</div>}
+    {sections.source && (sections.source.key === 'filePath'
+      ? <div className="whitespace-pre-wrap break-all">filePath: {argumentValue(sections.source.text)}</div>
+      : <ExecutionCode text={sections.source.text} script={call.name === 'run_script'} />)}
+    {inputs.map(field => <pre key={field.key} className="foxwarm-tool-execution-input m-0 whitespace-pre-wrap break-all cursor-text">{field.text}</pre>)}
+    {options.length > 0 && <div className="foxwarm-tool-execution-options flex flex-wrap gap-x-4 gap-y-1 text-fw-text-muted">{options.map(field => <div key={field.key} className="whitespace-pre-wrap break-all">{field.text}</div>)}</div>}
+  </div>
+}
 
 /** Search the same expanded text surfaces as a Tool card, never its raw JSON view or response metadata. */
 export const getToolCallSearchText = (call: FunctionCall): string => {
@@ -66,7 +149,7 @@ export const getToolCallSearchText = (call: FunctionCall): string => {
       ]).join('\u0000')
     } catch { return String(patchText(call) || JSON.stringify(args, null, 2)) }
   }
-  if (call.name === 'exec') return String(args.command || '')
+  if (call.name === 'exec' || call.name === 'run_script') return executionArgumentsSearchText(call)
   if (call.name === 'send_to_session') return [args.sessionId, typeof args.message === 'string' ? args.message : formatCompactObjectPreview(args.message)].join('\u0000')
   if (call.name === 'create_child_session') return [args.suffix, args.taskId, args.agentName, args.displayName, args.node, args.afterSend, typeof args.forceModel === 'object' ? formatCompactObjectPreview(args.forceModel) : args.forceModel, args.message].filter(value => typeof value === 'string').join('\u0000')
   return formatCompactObjectPreview(call.name === 'session' ? call.args || { action: 'status' } : call.args)
@@ -289,7 +372,7 @@ const hasLegacyDiffPayload = (call: FunctionCall): boolean => (
   typeof call.args.oldText === 'string' && typeof call.args.newText === 'string'
 )
 
-const renderToolCallPreview = (call: FunctionCall, options: { partial?: boolean; onOpenCodeFile?: OpenCodeFileHandler; resolvedPaths?: DisplayResolvedPaths } = {}): ReactNode => {
+const renderToolCallPreview = (call: FunctionCall, options: { partial?: boolean; purposeOnly?: boolean; onOpenCodeFile?: OpenCodeFileHandler; resolvedPaths?: DisplayResolvedPaths } = {}): ReactNode => {
   if (typeof call.argsParseError === 'string' && typeof call.rawArgsText === 'string') {
     const preview = call.rawArgsText.length > 200 ? `${call.rawArgsText.slice(0, 200)}...` : call.rawArgsText
     return <span className="truncate break-all whitespace-pre-wrap font-mono text-fw-text-muted">{preview}</span>
@@ -298,6 +381,23 @@ const renderToolCallPreview = (call: FunctionCall, options: { partial?: boolean;
     const argsFormatted = typeof call.args === 'string' ? call.args : formatCompactObjectPreview(call.args)
     const preview = argsFormatted.length > 200 ? `${argsFormatted.slice(0, 200)}...` : argsFormatted
     return <span className="truncate break-all text-fw-text-muted">{preview || 'streaming tool call…'}</span>
+  }
+
+  const target = toolActivityTarget(call)
+  if (call.name === 'call_tool' && target.name !== 'call_tool') {
+    const summary = target.name === 'exec' || target.name === 'run_script' ? executionCallPreview(target, !!options.purposeOnly) : toolActivitySummary(target)
+    if (target.name === 'exec' || target.name === 'run_script') {
+      return options.purposeOnly
+        ? <span className="truncate" title={summary}>{summary}</span>
+        : <span className="truncate" title={summary}><CollapsedExecutionCode text={summary} script={target.name === 'run_script'} /></span>
+    }
+    return <span className="truncate" title={summary}>{summary}</span>
+  }
+  if (call.name === 'exec' || call.name === 'run_script') {
+    const summary = executionCallPreview(call, !!options.purposeOnly)
+    return options.purposeOnly
+      ? <span className="truncate" title={summary}>{summary}</span>
+      : <span className="truncate" title={summary}><CollapsedExecutionCode text={summary} script={call.name === 'run_script'} /></span>
   }
 
   if (call.name === 'read') {
@@ -352,12 +452,6 @@ const renderToolCallPreview = (call: FunctionCall, options: { partial?: boolean;
     } catch {
       return <span className="text-fw-danger">invalid patch</span>
     }
-  }
-
-  if (call.name === 'exec') {
-    const cmd = call.args?.command ?? ''
-    const preview = cmd.length > 200 ? `${cmd.substring(0, 200)}...` : cmd
-    return <span className="truncate font-mono" title={cmd}><ExecCommandText command={preview} heredocBodyBlock={false} /></span>
   }
 
   if (call.name === 'send_to_session') {
@@ -497,10 +591,7 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
     }
   }
 
-  if (call.name === 'exec') {
-    const cmd = call.args?.command ?? ''
-    return <div className="whitespace-pre-wrap break-all"><ExecCommandText command={cmd} /></div>
-  }
+  if (call.name === 'exec' || call.name === 'run_script') return <ExecutionArguments call={call} />
 
   if (call.name === 'send_to_session') {
     const targetSessionId = String(call.args.sessionId || '')
@@ -812,7 +903,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
       >
         <ToolTag toolCall={!!call || !!primaryResponse} name={primaryName} label={primaryLabel} tone={tagTone} className="foxwarm-tool-tag" />
         <div className="foxwarm-tool-call-header relative flex min-w-0 flex-1 items-center self-stretch">
-          {includeCallPreview && call && <div ref={headerFade.ref} {...headerFade.overflowFadeProps} className={`foxwarm-tool-call-summary min-w-0 max-w-full ${call.name === 'read' ? 'flex text-[13px] leading-[18px]' : THREAD_CARD_HEADER_PREVIEW_CLASS}`}>{renderToolCallPreview(call, { partial: partialToolCall, onOpenCodeFile, resolvedPaths: primaryResponse?.__meta?.resolvedPaths })}</div>}
+          {includeCallPreview && call && <div ref={headerFade.ref} {...headerFade.overflowFadeProps} className={`foxwarm-tool-call-summary min-w-0 max-w-full ${call.name === 'read' ? 'flex text-[13px] leading-[18px]' : THREAD_CARD_HEADER_PREVIEW_CLASS}`}>{renderToolCallPreview(call, { partial: partialToolCall, purposeOnly: hideCollapsedContent, onOpenCodeFile, resolvedPaths: primaryResponse?.__meta?.resolvedPaths })}</div>}
           {viewButtons}
         </div>
         {invocationDurationMs !== null && invocationDurationMs >= 1000 && <span data-tool-execution-time className="ml-auto inline-flex shrink-0 items-center gap-1 font-mono text-[10px] tabular-nums text-fw-text-muted" title="Tool call duration"><Timer aria-hidden="true" size={11} />{formatCompactDuration(invocationDurationMs)}</span>}
@@ -982,7 +1073,9 @@ export const InterleavedToolGroup = memo(function InterleavedToolGroup({ msg, ne
 
   return (
     <div>
-      {entries.map((entry, index) => (
+      {entries.map((entry, index) => entry.call && isAskUserCall(entry.call) ? (
+        <AskUserToolCard key={entry.key} call={entry.call} response={entry.responses[0]} />
+      ) : (
         <ToolCallResponseItem
           key={entry.key}
           reasoningBadges={entry.call ? reasoningBadges?.[index] : undefined}
@@ -1010,7 +1103,9 @@ export const ToolCallsBlock = memo(function ToolCallsBlock({ msg, runningTool, o
 
   return (
     <div>
-      {functionCalls.map((call, callIdx) => (
+      {functionCalls.map((call, callIdx) => isAskUserCall(call) ? (
+        <AskUserToolCard key={`call-${call.id || callIdx}`} call={call} />
+      ) : (
         <ToolCallResponseItem
           key={`call-${call.id || callIdx}`}
           reasoningBadges={reasoningBadges?.[callIdx]}

@@ -102,8 +102,14 @@ public sealed partial class AgentRulesTreeTests
         var owner = await manager.CreateNamedAsync("broken", "main", null, null);
         Assert.False(manager.ToolVisible(owner, "node", "exec", node: "master"));
         Assert.False(manager.ToolVisible(owner, "builtin", "call_tool"));
-        Assert.Empty(manager.ModelDefinitions(owner));
-        await Assert.ThrowsAsync<InvalidDataException>(() =>
+        Assert.Equal(
+            new[] { "edit", "exec", "read", "write" },
+            manager
+                .ModelDefinitions(owner)
+                .Select(definition => SessionWait.Text(definition?["name"]))
+                .Order(StringComparer.Ordinal)
+        );
+        var invalidAuthority = await Assert.ThrowsAsync<InvalidDataException>(() =>
             manager.AuthorizeToolAsync(
                 owner,
                 new("skill", "builtin", "skill", new JsonObject { ["action"] = "list" }),
@@ -111,6 +117,47 @@ public sealed partial class AgentRulesTreeTests
                 default
             )
         );
+
+        var directory = Path.Combine(paths.AgentsRoot, "broken");
+        var definitions = WorkspaceTools.Definitions();
+        foreach (var definition in UnifiedToolDefinitions.All())
+            definitions.Add(definition?.DeepClone());
+        var registry = SessionToolExecutor.CreateRegistry(
+            definitions,
+            manager.OutboundMcp,
+            _ => directory,
+            manager.Nodes,
+            manager.NodeProviders
+        );
+        foreach (var unified in new[] { false, true })
+        {
+            var path = Path.Combine(directory, unified ? "unified.txt" : "direct.txt");
+            var args = new JsonObject { ["filePath"] = path, ["content"] = "must not be written" };
+            var executor = new SessionToolExecutor(
+                new WorkspaceTools(directory),
+                owner,
+                manager,
+                registry
+            );
+            executor.BeginTurn();
+            var response = await executor.ExecuteAsync(
+                new JsonObject
+                {
+                    ["id"] = Guid.NewGuid().ToString("N"),
+                    ["name"] = unified ? "call_tool" : "write",
+                    ["args"] = unified
+                        ? new JsonObject { ["toolId"] = "node:master/write", ["args"] = args }
+                        : args,
+                },
+                default
+            );
+            Assert.Equal("tool_error", SessionWait.Text(response?["error"]?["type"]));
+            Assert.Equal(
+                invalidAuthority.Message,
+                SessionWait.Text(response?["error"]?["message"])
+            );
+            Assert.False(File.Exists(path));
+        }
     }
 
     [Fact]

@@ -157,11 +157,11 @@ internal static class VectorRows
         var text = Trim(block.Summary);
         if (text.Length == 0)
             return null;
-        var messages = store.ReadMessagesRange(block.RawStartSeq, block.RawEndSeq);
-        var first = messages.FirstOrDefault()?.Timestamp ?? block.CreatedAt;
+        var source = ArchiveContextReader.HydrateBlock(store, block);
+        var first = source.RawStartTimestamp ?? block.CreatedAt;
         if (first == 0)
             first = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        var last = messages.LastOrDefault()?.Timestamp ?? first;
+        var last = source.RawEndTimestamp ?? first;
         var row = Common(
             block.SessionId,
             block.Agent,
@@ -175,6 +175,8 @@ internal static class VectorRows
             last == 0 ? first : last,
             text
         );
+        row["start_timestamp"] = source.RawStartTimestamp;
+        row["end_timestamp"] = source.RawEndTimestamp;
         row["block_id"] = block.Id;
         row["block_level"] = block.Level;
         row["source_kind"] = block.SourceKind;
@@ -227,6 +229,8 @@ internal static class VectorRows
                 block.CreatedAt,
                 formatted
             );
+            row["start_timestamp"] = block.RawStartTimestamp;
+            row["end_timestamp"] = block.RawEndTimestamp;
             row["block_id"] = block.Id;
             row["block_level"] = block.Level;
             row["source_kind"] = "memory_fact:" + kind;

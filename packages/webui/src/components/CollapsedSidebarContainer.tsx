@@ -6,6 +6,8 @@ interface CollapsedSidebarContainerProps {
   onSelectSession: (sessionId: string) => void
   onCreateSession: () => void
   onSelectSearch: () => void
+  onSelectArchitecture?: () => void
+  activeView?: 'system' | 'tasks' | 'search'
   onSelectSetup: () => void
   onSelectLogs: () => void
   onSelectTasks?: () => void

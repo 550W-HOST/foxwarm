@@ -2,6 +2,16 @@ import { execFile, spawn } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import { openSync, closeSync } from 'node:fs';
 
+/** Independent commands and terminals do not belong to the hosting tmux pane. */
+export function independentProcessEnvironment(environment: NodeJS.ProcessEnv, platform = process.platform): NodeJS.ProcessEnv {
+  const child = { ...environment };
+  for (const key of Object.keys(child)) {
+    const name = platform === 'win32' ? key.toUpperCase() : key;
+    if (name === 'TMUX' || name === 'TMUX_PANE') delete child[key];
+  }
+  return child;
+}
+
 export interface ProcessSnapshotEntry {
   pid: number;
   parentPid: number;

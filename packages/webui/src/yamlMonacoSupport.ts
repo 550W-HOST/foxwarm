@@ -29,7 +29,13 @@ async function listProviderModels(
   })
   if (!response.ok) throw new Error(`Failed to list provider models (${response.status})`)
   const payload = await response.json().catch(() => ({}))
-  return Array.isArray(payload?.models) ? payload.models.filter((item: unknown): item is string => typeof item === 'string') : []
+  // Entries are `{ id, ...declared metadata }`; completion needs only the IDs.
+  return Array.isArray(payload?.models)
+    ? payload.models.flatMap((item: unknown) => {
+      const id = typeof item === 'string' ? item : (item as { id?: unknown } | null)?.id
+      return typeof id === 'string' ? [id] : []
+    })
+    : []
 }
 
 function installWorkerDispatcher() {

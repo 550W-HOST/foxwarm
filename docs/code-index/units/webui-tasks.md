@@ -1,7 +1,7 @@
 # Unit: WebUI Tasks
 
 Files: packages/webui/src/components/StatusBadge.tsx, packages/webui/src/components/TasksView.tsx, packages/webui/src/components/TasksView.css, packages/webui/src/components/SessionSelector.tsx, packages/webui/test/tasksView.e2e.mjs
-Secondary files: packages/webui/src/index.css, packages/webui/src/components/WorkbenchStatusBar.tsx, packages/webui/src/components/NodesView.tsx, packages/webui/src/App.tsx, packages/webui/src/PopupWebUiApp.tsx, packages/webui/src/EmbeddedWebUiApp.tsx, packages/webui/src/popupWebUi.ts, packages/webui/src/workbench/types.ts, packages/webui/src/workbench/utils.ts, packages/webui/src/components/Sidebar.tsx, packages/webui/src/components/CollapsedSidebar.tsx, packages/webui/src/components/SessionList.tsx, packages/webui/test/workbenchPreview.e2e.mjs, packages/webui/test/sessionListAndWorkbenchState.test.mjs, packages/webui/test/popupWebUi.test.mjs
+Secondary files: packages/webui/src/index.css, packages/webui/src/components/WorkbenchStatusBar.tsx, packages/webui/src/components/SystemNodes.tsx, packages/webui/src/App.tsx, packages/webui/src/PopupWebUiApp.tsx, packages/webui/src/EmbeddedWebUiApp.tsx, packages/webui/src/popupWebUi.ts, packages/webui/src/workbench/types.ts, packages/webui/src/workbench/utils.ts, packages/webui/src/components/Sidebar.tsx, packages/webui/src/components/CollapsedSidebar.tsx, packages/webui/src/components/SessionList.tsx, packages/webui/test/workbenchPreview.e2e.mjs, packages/webui/test/sessionListAndWorkbenchState.test.mjs, packages/webui/test/popupWebUi.test.mjs
 
 ## Purpose
 
@@ -55,7 +55,7 @@ Node status labels reuse that visual component with Online/Offline wording and a
 
 ### D-webui-tasks-navigation
 
-[2026-10-11] Tasks has a persistent direct entry rather than a settings-menu row. Expanded desktop Session-list footers show an icon plus `Tasks` on the left, with History and settings on the right. Mobile primary navigation is separately owned by the [mobile shell contract](../threads/webui-mobile-shell.md#d-mobile-shell-presentation) and does not activate desktop singleton tabs. The collapsed rail shows only the Tasks icon above History and settings. These entries reuse the ordinary singleton activation callback and are omitted when that callback is unavailable. The Code-embedded Sidebar shows a direct Tasks icon beside its header settings button, retaining its same-origin popup behavior and blocked-popup feedback.
+[2026-10-11] Tasks has a persistent direct entry rather than a settings-menu row. [Updated 2026-11-03] The expanded desktop sidebar shows `Tasks` as an icon + text navigation row after `System` ([D-sidebar-navigation](./webui-session-list.md#d-sidebar-navigation)); there is no sidebar footer. Mobile primary navigation is separately owned by the [mobile shell contract](../threads/webui-mobile-shell.md#d-mobile-shell-presentation) and does not activate desktop singleton tabs. The collapsed rail shows the Tasks icon between System and Search at the top. These entries reuse the ordinary singleton activation callback and are omitted when that callback is unavailable. The Code-embedded Sidebar shows a direct Tasks icon beside its header settings button, retaining its same-origin popup behavior and blocked-popup feedback.
 
 ## Tests
 

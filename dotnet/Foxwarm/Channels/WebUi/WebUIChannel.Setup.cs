@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Foxwarm.Models;
+using Foxwarm.Sessions;
 
 namespace Foxwarm.Channels.WebUi;
 
@@ -119,10 +120,20 @@ internal sealed partial class WebUIChannel
                     input =
                         await JsonNode.ParseAsync(request.Body) as JsonObject
                         ?? throw new InvalidDataException("Models setup input must be an object.");
+                    // The client locale only selects the first-run welcome language.
+                    var locale = input.Remove("locale", out var localeNode)
+                        ? SessionWait.Text(localeNode)
+                        : null;
+                    var firstRun = !File.Exists(configuration.ActivePath);
                     var installation = await configuration.SaveAsync(input);
                     installation["success"] = true;
                     installation["models"] = configuration.Diagnostics();
                     installation["payload"] = WebUiContract.Models(sessions.Models);
+                    if (firstRun)
+                        installation["firstSessionId"] = await EnsureFirstRunSessionAsync(
+                            locale,
+                            request.Headers.AcceptLanguage.ToString()
+                        );
                     return Results.Ok(installation);
                 }
                 catch (Exception error)
@@ -157,7 +168,7 @@ internal sealed partial class WebUIChannel
                         new JsonObject
                         {
                             ["models"] = new JsonArray(
-                                models.Select(value => (JsonNode?)JsonValue.Create(value)).ToArray()
+                                models.Select(model => (JsonNode?)model.ToJson()).ToArray()
                             ),
                         }
                     );
@@ -236,5 +247,25 @@ internal sealed partial class WebUIChannel
                 }
             }
         );
+    }
+
+    // A model configuration is already installed; a failed welcome must not report the
+    // save as failed. The installation keeps working without the default Session.
+    private async Task<string?> EnsureFirstRunSessionAsync(string? locale, string? acceptLanguage)
+    {
+        try
+        {
+            return await sessions.EnsureFirstRunSessionAsync(
+                FirstRunWelcome.Language(locale, acceptLanguage)
+            );
+        }
+        catch (Exception error)
+        {
+            MainLog.Diagnostic(
+                "First-run default Session was not created: " + MainLog.SafeFailure(error),
+                failure: true
+            );
+            return null;
+        }
     }
 }

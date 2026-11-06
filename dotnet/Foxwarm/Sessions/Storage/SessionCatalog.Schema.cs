@@ -5,6 +5,10 @@ internal sealed partial class SessionCatalog
     internal const string WaitPresenceIndexSql =
         "CREATE INDEX IF NOT EXISTS idx_session_catalog_wait_presence ON session_catalog(session_id) WHERE json_type(metadata_json,'$.meta.wait.id')='text'";
 
+    // Additive partial index for Sessions with open ask_user questions (Sidebar elevation).
+    internal const string QuestionPresenceIndexSql =
+        "CREATE INDEX IF NOT EXISTS idx_session_catalog_question_presence ON session_catalog(recent_rank, session_id) WHERE json_extract(metadata_json,'$.meta.questions.open')>0";
+
     // Base v2 layout; CostSchemaSql advances both fresh and existing catalogs to v3.
     private const string CreateSchemaSql = """
 

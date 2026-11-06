@@ -6,6 +6,7 @@ import puppeteer from 'puppeteer-core'
 
 const chromiumPath = process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium'
 const timelineEntry = new URL('../src/components/ChatTimeline.tsx', import.meta.url).pathname
+const systemEventCardEntry = new URL('../src/components/SystemEventCard.tsx', import.meta.url).pathname
 
 const call = (id, seq) => ({ role: 'model', parts: [{ functionCall: { id, name: 'exec', args: { command: `echo ${id}` } } }], __meta: { seq } })
 const result = (id, seq, response = { output: `${id} result` }) => ({ role: 'tool', parts: [{ functionResponse: { tool_use_id: id, name: 'exec', response } }], __meta: { seq } })
@@ -48,7 +49,14 @@ const operationalEventMessages = [
   result('after-event', 65),
   { role: 'model', parts: [{ text: 'answer after event' }], __meta: { seq: 66 } },
 ]
-const fixtureCases = { groupedMessages, tailMessages, ungroupedMessages, standaloneMessages, missingPrefixMessages, ordinaryTextMessages, operationalEventMessages }
+const configurationRetry = {
+  role: 'model', modelVisible: false,
+  parts: [{ text: '⚠️ LLM Error: The openai provider rejected the API key. Check Setup → Models.\nProvider response: 401: Incorrect API key provided.' }],
+  __meta: { seq: 71, noticeType: 'llm-retry', retry: { attempt: 1, maxRetries: 6, final: true, status: '401', cause: 'authentication', explanation: 'The openai provider rejected the API key.' } },
+}
+const configurationMessages = [configurationRetry]
+const configurationWithoutSetupMessages = [{ ...configurationRetry, __meta: { ...configurationRetry.__meta, seq: 81 } }]
+const fixtureCases = { groupedMessages, tailMessages, ungroupedMessages, standaloneMessages, missingPrefixMessages, ordinaryTextMessages, operationalEventMessages, configurationMessages, configurationWithoutSetupMessages }
 
 let browser
 let page
@@ -59,16 +67,22 @@ before(async () => {
     import React from 'react'
     import { createRoot } from 'react-dom/client'
     import ChatTimeline from ${JSON.stringify(timelineEntry)}
+    import { OpenModelSettingsContext } from ${JSON.stringify(systemEventCardEntry)}
 
     const cases = ${JSON.stringify(fixtureCases)}
+    window.openedModelSettings = 0
+    const openModelSettings = () => { window.openedModelSettings += 1 }
     for (const [id, messages] of Object.entries(cases)) {
-      createRoot(document.getElementById(id)).render(React.createElement(ChatTimeline, {
+      const timeline = React.createElement(ChatTimeline, {
         sessionId: 'fixture/main',
         messages,
         isMobile: false,
         timelineView: id === 'ungroupedMessages' ? 'detailed' : 'grouped',
         showUsageBadge: false,
-      }))
+      })
+      createRoot(document.getElementById(id)).render(id === 'configurationMessages'
+        ? React.createElement(OpenModelSettingsContext.Provider, { value: openModelSettings }, timeline)
+        : timeline)
     }
   `
   const bundle = await build({
@@ -196,4 +210,20 @@ test('non-retry operational events still split Grouped tool runs and remain stan
     details: 'Original compaction diagnostic',
     open: false,
   })
+})
+
+test('a final key or model rejection names its cause and opens model settings where Setup is available', async () => {
+  assert.deepEqual(await cardSnapshot('#configurationMessages [data-system-event]'), {
+    title: 'Request failed',
+    severity: 'error',
+    heading: 'Request failed: The openai provider rejected the API key. Check the model settings.',
+    details: '⚠️ LLM Error: The openai provider rejected the API key. Check Setup → Models.\nProvider response: 401: Incorrect API key provided.',
+    open: false,
+  })
+  const action = await page.$('#configurationMessages [data-event-action="open-model-settings"]')
+  assert.equal(await action.evaluate(node => node.textContent), 'Open model settings')
+  await action.click()
+  assert.equal(await page.evaluate(() => window.openedModelSettings), 1)
+  assert.equal(await page.$('#configurationWithoutSetupMessages [data-event-action]'), null, 'hosts without Setup show the cause without a dead button')
+  assert.match(await page.$eval('#configurationWithoutSetupMessages h3', node => node.textContent), /rejected the API key/)
 })

@@ -21,19 +21,27 @@ function run(command, args) {
 async function missingAssets() {
   const missing = []
   for (const file of required) {
-    try { await fs.access(path.join(assets, file)) }
+    try {
+      const stat = await fs.stat(path.join(assets, file))
+      if (!stat.isFile() || stat.size === 0) missing.push(file)
+    }
     catch { missing.push(file) }
   }
   return missing
 }
 
 try {
-  if ((await missingAssets()).length) {
+  const args = process.argv.slice(2)
+  if (args.length > 1 || args.some(arg => !['--code-only', '--check-code'].includes(arg))) {
+    throw new Error('Usage: prepare-browser.mjs [--code-only|--check-code]')
+  }
+  if (args[0] !== '--check-code' && (await missingAssets()).length) {
     console.log('Preparing the optional Code workbench with npm run build:code.')
     run('npm', ['run', 'build:code'])
   }
   const missing = await missingAssets()
   if (missing.length) throw new Error(`Code preparation did not produce required browser assets:\n${missing.join('\n')}`)
+  if (args.length) process.exit(0)
   for (const project of ['Foxwarm', 'Foxwarm.CliNode', 'Foxwarm.DevTools']) {
     const args = ['build', `dotnet/${project}/${project}.csproj`, '-c', 'Debug']
     if (project === 'Foxwarm') args.push('-p:FoxwarmDelivery=true')

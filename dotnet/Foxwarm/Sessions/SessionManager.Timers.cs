@@ -93,6 +93,7 @@ internal sealed partial class SessionManager
         var requested = TimerOwner(source, args);
         CheckTimerIsolation(source, args, requested);
         using var admitted = BeginOwnerMutation(source);
+        JsonObject? creationCandidate = null;
         async Task PrepareAsync()
         {
             while (true)
@@ -102,7 +103,18 @@ internal sealed partial class SessionManager
                 var agent = source.Agent;
                 CheckTimerIsolation(source, args, requested);
                 if (authorizeTool)
+                {
                     await AuthorizeToolAsync(source, new(name, "builtin", name, args), null, token);
+                    if (
+                        creationCandidate is not null
+                        && MainTimers.Flag(creationCandidate["newSession"])
+                    )
+                        await AuthorizeCreateSessionTargetAsync(
+                            source,
+                            SessionWait.Text(creationCandidate["agentName"])!,
+                            token
+                        );
+                }
                 if (source.Id == id && source.Agent == agent)
                     return;
             }
@@ -171,6 +183,7 @@ internal sealed partial class SessionManager
                     throw new InvalidDataException("Timer target Agent does not exist: " + agent);
                 NormalizeTimerSettings(row);
             }
+            creationCandidate = row;
             token.ThrowIfCancellationRequested();
             source.Entry.RequireIdentityAuthority();
             var timer = existing is null

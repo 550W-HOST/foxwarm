@@ -21,3 +21,4 @@ Older direct/builtin-dispatched sends require a paired successful response and o
 - [Session message rendering](../units/webui-session-messages.md) owns projection, identity and cards.
 - [Timeline](../modules/webui-timeline.md) owns display boundaries, Search and request accounting.
 - `toolExecutorSessionMessages.test.ts` executes real direct, unified and scripted sends with an isolated data root; the frontend pure/native cases check trusted envelopes, failures, viewport cuts, source order, stable DOM and one visible Search match.
+- Inter-agent and Task wrappers may carry a `deliverySeq` attribute ([D-session-delivery-seq](./session-sequence-view.md#d-session-delivery-seq)); card parsing keeps only the trusted outer wrapper and does not depend on attribute order or the attribute set.

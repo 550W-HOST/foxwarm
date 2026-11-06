@@ -434,6 +434,32 @@ export const isLightweightFoxwarmMetadataLine = (text: string): boolean => {
   return kind === 'time'
     || kind === 'session'
     || kind === 'channel-mode'
+    // Marks an ordinary user message that answered an ask_user question.
+    || kind === 'question-answer'
+}
+
+/**
+ * Runtime bookkeeping that is written for the model, not for the person reading the
+ * conversation: model/Node selection changes and the first-run opening that precedes the
+ * prepared welcome. Conversation omits them; technical views and Session debug retain them.
+ */
+const isInternalSystemPart = (part: MessagePart): boolean => {
+  if (typeof part.system !== 'string' || Object.keys(part).some(key => key !== 'system')) return false
+  const tag = parseFoxwarmMetadataLine(part.system.split('\n', 1)[0])
+  if (!tag || tag.closing || tag.tagName !== 'foxwarm-system') return false
+  return tag.attrs.kind === 'session-settings-changed'
+    || (tag.attrs.kind === 'session-boundary' && tag.attrs.event === 'first-run')
+}
+
+export const isInternalTimelineMessage = (message: Message): boolean => {
+  if (message.__meta?.synthetic === 'persistentMemorySnapshot') return true
+  if (message.role !== 'user' || message.parts.length === 0) return false
+  let internal = false
+  for (const part of message.parts) {
+    if (isInternalSystemPart(part)) internal = true
+    else if (typeof part.system !== 'string' || Object.keys(part).some(key => key !== 'system') || !isLightweightFoxwarmMetadataLine(part.system)) return false
+  }
+  return internal
 }
 
 export const formatStructuredSystemText = (system: string): string => (

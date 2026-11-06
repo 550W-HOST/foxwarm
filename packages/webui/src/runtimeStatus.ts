@@ -42,8 +42,10 @@ export function describeRuntimeWaiting(runtime: SessionRuntimeState): { label: s
   if (wait.pendingSessions?.length) details.push(['Pending', wait.pendingSessions.join('\n')])
   if (wait.waitAnySessions?.length) details.push(['Expected sessions', wait.waitAnySessions.join('\n')])
   if (wait.waitExecIds?.length) details.push(['Commands', wait.waitExecIds.join('\n')])
+  if (wait.waitQuestionIds?.length) details.push(['Questions', wait.waitQuestionIds.join('\n')])
   if (wait.waitForInput) details.push(['Input', 'Waiting for external activity'])
   if (wait.timeoutAt) details.push(['Wake deadline', new Date(wait.timeoutAt).toLocaleString()])
+  if (wait.waitingFor === 'question') return { label: 'Waiting for your answer', details }
   if (wait.waitingFor === 'all-sessions') {
     const count = wait.pendingSessions?.length ?? Math.max(0, (wait.waitAllSessions?.length || 0) - (wait.satisfiedSessions?.length || 0))
     return { label: count ? `Waiting for ${count} session${count === 1 ? '' : 's'}` : 'Waiting for sessions', details }

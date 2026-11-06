@@ -116,7 +116,7 @@ try {
   // The new production Nodes tab consumes the existing directory and onboarding services.
   await page.click('[data-workbench-status-bar] button[aria-label^="Nodes:"]')
   await page.waitForSelector('[data-workbench-status-popup] [aria-label="Node directory"]')
-  await page.evaluate(() => [...document.querySelectorAll('[data-workbench-status-popup] button')].find(button => button.textContent === 'Open Nodes').click())
+  await page.evaluate(() => [...document.querySelectorAll('[data-workbench-status-popup] button')].find(button => button.textContent === 'Open in System › Nodes').click())
   await page.waitForSelector('[data-node-surface]')
   await page.waitForFunction(() => document.querySelector('[data-node-surface]')?.textContent.includes('offline-node'))
   const cards = await page.$$eval('[data-node-surface] article', rows => rows.map(row => row.textContent))

@@ -48,9 +48,10 @@ export function useMobileChatViewport() {
 
 export function readChatPreferences(mobile = false): ChatPreferences {
   const storedView = localStorage.getItem(mobile ? MOBILE_TIMELINE_VIEW_STORAGE_KEY : TIMELINE_VIEW_STORAGE_KEY)
+  const legacyGrouped = mobile ? null : localStorage.getItem(GROUP_TOOLS_STORAGE_KEY)
   const timelineView = storedView === 'detailed' || storedView === 'grouped' || storedView === 'conversation'
     ? storedView
-    : mobile ? 'conversation' : localStorage.getItem(GROUP_TOOLS_STORAGE_KEY) === 'true' ? 'grouped' : 'detailed'
+    : legacyGrouped === 'true' ? 'grouped' : legacyGrouped === 'false' ? 'detailed' : 'conversation'
   return {
     sendKeyMode: localStorage.getItem(SEND_KEY_MODE_STORAGE_KEY) === 'enter' ? 'enter' : 'modEnter',
     timelineView,

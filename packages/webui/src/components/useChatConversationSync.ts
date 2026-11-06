@@ -1,3 +1,4 @@
+import type { SessionQuestionsProjection } from '../sessionQuestions'
 import { CHAT_BOOTSTRAP_TAIL_LENGTH, peekPreparedChatHistory, peekPreparedChatArchive, discardPreparedChatHistory } from '../preparedChatHistory'
 import { createLocalSessionNotice } from '../sessionNotices'
 import { getSessionControlAction, parseSessionControlFeedback, type SessionControlAction, type SessionControlFeedback } from '../../../shared/src/sessionControlFeedback'
@@ -64,6 +65,7 @@ type ChatSessionRecord = {
   childEffortAllowed?: string[]
   childModelEffortDefault?: string | null
   isolated?: boolean
+  questions?: SessionQuestionsProjection
 }
 
 export type HistoryResponse = {

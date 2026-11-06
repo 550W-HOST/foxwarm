@@ -17,6 +17,7 @@ defaults:
   contextLimit: 200000
   maxOutput: 32768
   providerImageOutputFormat: webp # or jpeg; transparent input images use PNG
+  # imageInput: false # text-only models: send a short placeholder instead of each image
 providers:
   openai:
     providerType: openai-completions

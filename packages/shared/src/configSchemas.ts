@@ -130,6 +130,7 @@ const modelDefaultProperties = {
   contextLimit: { ...positiveInteger, description: 'Context limit in tokens.' },
   maxOutput: { ...positiveInteger, description: 'Maximum output tokens requested from the provider. Provider-specific extraFields may override this value.' },
   providerImageOutputFormat: { enum: ['webp', 'jpeg'], description: 'Format used for optimized input images: webp, or jpeg with PNG for transparent images.' },
+  imageInput: { type: 'boolean', default: true, description: 'Whether the model accepts image input. When false, images stay in the Session but each request to this model sends a short text placeholder instead.' },
 }
 
 const pricing = {
@@ -230,7 +231,7 @@ const providerObjectEntry = {
       then: {
         required: ['targets'],
         properties: { targets: { minItems: 1 } },
-        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'imageGeneration', 'contextLimit', 'maxOutput', 'providerImageOutputFormat', 'pricing', 'streamContentInactivityTimeoutMs', 'effort', 'historyReasoningField', 'asyncCompact', 'disallowEmptyResponse', 'keepReasoningOnError', 'sameProviderAs', 'failureThreshold', 'cooldownMs'].map((field) => ({ required: [field] })) },
+        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'imageGeneration', 'contextLimit', 'maxOutput', 'providerImageOutputFormat', 'imageInput', 'pricing', 'streamContentInactivityTimeoutMs', 'effort', 'historyReasoningField', 'asyncCompact', 'disallowEmptyResponse', 'keepReasoningOnError', 'sameProviderAs', 'failureThreshold', 'cooldownMs'].map((field) => ({ required: [field] })) },
       },
     },
     {
@@ -238,7 +239,7 @@ const providerObjectEntry = {
       then: {
         required: ['targets'],
         properties: { targets: { minItems: 2 } },
-        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'imageGeneration', 'contextLimit', 'maxOutput', 'providerImageOutputFormat', 'pricing', 'streamContentInactivityTimeoutMs', 'effort', 'historyReasoningField', 'asyncCompact', 'disallowEmptyResponse', 'keepReasoningOnError', 'sameProviderAs'].map((field) => ({ required: [field] })) },
+        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'imageGeneration', 'contextLimit', 'maxOutput', 'providerImageOutputFormat', 'imageInput', 'pricing', 'streamContentInactivityTimeoutMs', 'effort', 'historyReasoningField', 'asyncCompact', 'disallowEmptyResponse', 'keepReasoningOnError', 'sameProviderAs'].map((field) => ({ required: [field] })) },
       },
     },
     {
@@ -580,6 +581,11 @@ export const APP_CONFIG_SCHEMA = {
       type: 'boolean',
       default: false,
       description: 'Require structured handoff recall and confirmation for send_to_session and create_child_session. Defaults to false and requires restart.',
+    },
+    sessionAutoTitle: {
+      type: 'boolean',
+      default: false,
+      description: 'Name an unnamed Session automatically after its first reply, using one short background model request. Defaults to false; new installations enable it during first-run Setup. Applies when saved in Setup.',
     },
     vectorMaintenance: {
       oneOf: [

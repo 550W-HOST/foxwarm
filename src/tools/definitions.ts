@@ -260,11 +260,12 @@ const baseDefinitions = [
             parameters: {
                 type: 'object',
                 properties: {
+                    summary: { type: 'string', description: "Briefly describe what this command or script will do. State its purpose, not an expected result." },
                     command: { type: 'string' , description: "Shell command or pipeline to execute."},
                     cwd: { type: 'string', description: "Working directory for this command. Relative paths use the session working directory, or the Node's default directory if unset. When omitted, execution uses that same default chain; on master, the final default is the agent directory. On Main and CLI Nodes, a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected." },
                     timeout: { type: 'number', minimum: MIN_EXEC_TIMEOUT_SECONDS, description: `Seconds to wait before returning a still-running command as a background execution. Defaults to ${DEFAULT_EXEC_TIMEOUT_SECONDS}; values above ${MAX_EXEC_TIMEOUT_SECONDS} are reduced to ${MAX_EXEC_TIMEOUT_SECONDS} with a warning.` }
                 },
-                required: ['command']
+                required: ['summary', 'command']
             }
         },
         {
@@ -420,7 +421,7 @@ const baseDefinitions = [
                     contentFilter: { type: 'string', description: "Keep selected messages whose full text or tool content contains this text, ignoring case. Previews show the matching area when possible." },
                     includeRegex: { type: 'string', description: "Keep selected messages matching this regular expression, ignoring case." },
                     excludeRegex: { type: 'string', description: "Exclude selected messages matching this regular expression, ignoring case." },
-                    toolDetail: { type: 'string', enum: ['names', 'snippets', 'full'], description: "Tool display detail: names (default) shows name, ID, and status; snippets adds short excerpts; full includes arguments and results within the response budget." }
+                    toolDetail: { type: 'string', enum: ['names', 'snippets', 'full'], description: "names (default) shows compact tool activity; snippets adds short argument and result excerpts; full includes complete tool content within the preview budget." }
                 },
                 required: ['sessionId']
             }
@@ -469,7 +470,7 @@ const baseDefinitions = [
                     includeRegex: { type: 'string', description: "Keep retrieved items matching this regular expression, ignoring case." },
                     excludeRegex: { type: 'string', description: "Exclude retrieved items matching this regular expression, ignoring case." },
                     preferBlocks: { type: 'boolean', description: "Give context-block summaries a small ranking preference in semantic search." },
-                    toolDetail: { type: 'string', enum: ['names', 'snippets', 'full'], description: "Tool display detail: names (default) shows name, ID, and status; snippets adds short excerpts; full includes arguments and results within the response budget." }
+                    toolDetail: { type: 'string', enum: ['names', 'snippets', 'full'], description: "names (default) shows compact tool activity; snippets adds short argument and result excerpts; full includes complete tool content within the preview budget." }
                 }
             }
         },
@@ -724,8 +725,8 @@ const baseDefinitions = [
             description: "Run Python-subset ToolScript to combine related tool calls without extra model turns. Use sequential call_tool calls to pass results to dependent steps, branch on results, or stop after a failed prerequisite. Keep independent calls in one outer tool batch instead; adjacent exec calls may run concurrently. Supply code or filePath; args is the input dictionary. call_tool is synchronous (no await); its first argument can be a tool name or tool ID. Example: code='created = call_tool(\"task\", args[\"task\"])\nreturn call_tool(\"create_child_session\", dict(args[\"child\"], taskId=created[\"taskId\"]))', with complete task and child arguments in args. Tools return native values, not a common response envelope. Use call_tool for filesystem/process access rather than Python OS APIs. A defined main(args) is called automatically. Use return for the result. Returns status and runId; resume time-budget or agent-input pauses with continue_script using runId and continuationId. Return an object with top-level inlineData, inlineDataItems, or image-bearing parts to pass one or more images to the model. A nested wait takes effect in the calling Session only if it remains the last host call when the script completes normally.",
             parameters: {
                 type: 'object',
-                properties: TOOLSCRIPT_SOURCE_PROPERTIES,
-                required: []
+                properties: { summary: { type: 'string', description: "Briefly describe what this command or script will do. State its purpose, not an expected result." }, ...TOOLSCRIPT_SOURCE_PROPERTIES },
+                required: ['summary']
             }
         },
         {

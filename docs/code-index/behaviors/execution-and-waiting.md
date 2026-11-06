@@ -81,11 +81,12 @@ Use a wait when no useful reply or tool work remains, and declare where progress
 | `waitAllSessions: [a, b, ...]` | At least two distinct accessible, non-self Sessions must each send a new message after the wait starts. Listed messages are deferred and released together after all report; duplicates from one do not satisfy another. |
 | `waitExecIds: [execId, ...]` | Names actual accessible active executions owned by this Session/Agent or already-queued completions. PIDs, log paths, and command strings are not execution identities. |
 | `waitForInput: true` | Declares external/user input as a real progress source. It does not prevent other ordinary activity from waking the Session. |
+| `waitQuestionIds: [id, ...]` | Open `ask_user` questions of this Session whose answers the Agent needs. A real progress source like `waitForInput`, with no automatic deadline. While the wait lists them, any ordinary user message answers them. Validated against the Session's open questions. |
 | `wakeIfNoActivityAfterSeconds: n` | A positive, one-shot fallback wake, not a polling interval and not cancellation of the dependency. Can accompany a source or stand alone. |
 
 The two nonempty Session-list modes are mutually exclusive. Empty optional `waitAllSessions`, `waitAnySessions`, and `waitExecIds` lists are treated as omitted before source validation, mutual exclusion, or fallback selection. They can accompany another real source or a positive fallback. Empty placeholders alone, including an empty exec list, do not make a source-free `wait({})` valid and do not add the exec fallback.
 
-Session/exec sources are validated under current access and ownership rules; an arbitrary ID is not a subscription capability. With a nonempty `waitExecIds` list, omitting the fallback gives a 600-second wake. Explicit `null` disables that default; `waitForInput:true` also avoids adding it implicitly. An explicit positive fallback still applies. Pure Session barriers and input-only waits have no automatic deadline. The old model-facing `timeoutSeconds` argument is not accepted; reading legacy persisted state is a separate compatibility contract.
+Session/exec sources are validated under current access and ownership rules; an arbitrary ID is not a subscription capability. With a nonempty `waitExecIds` list, omitting the fallback gives a 600-second wake. Explicit `null` disables that default; `waitForInput:true` also avoids adding it implicitly. An explicit positive fallback still applies. Pure Session barriers, input-only waits and question waits have no automatic deadline. The old model-facing `timeoutSeconds` argument is not accepted; reading legacy persisted state is a separate compatibility contract.
 
 Ordinary incoming activity can interrupt these waits. In particular, `waitAllSessions` is not an uninterruptible join: unrelated messages or timeout wake it, flush deferred reports, and supply a reminder of still-missing sources. Passive/compaction maintenance can be wait-neutral rather than fabricating progress. Replacing a barrier with deferred reports is rejected instead of dropping those messages. Clear removes the wait. Stale timeout events cannot wake a later replacement wait.
 
@@ -96,6 +97,10 @@ Declared Session dependencies also support a quiescence diagnostic: a closed dep
 An exec returns `execId` after its foreground budget. The Agent can then call `wait` with `waitExecIds` containing that exact ID. Completion is ordinary Session input; a fallback wake merely asks the Agent to reassess while the command may still run. Neither wake authorizes replaying the launch.
 
 A terminal handoff can also end a turn, with or without a Session activity wait. It does not mean the target Task completed. Keep delivery/terminal behavior at the adjacent [handoff contract](../threads/message-processing-pipeline.md#d-pipeline-handoff-wait), including `afterSend`, sibling errors, coalescing and fast replies.
+
+### Asking the user
+
+[2026-11-06] User decisions. `ask_user` asks the user one to four questions, optionally with choices. By default (`afterAsk:"wait"`) it is the same terminal control as `wait` on the new question ID: it applies after the batch and a sibling tool error suppresses it. `afterAsk:"continue"` returns at once and the answer arrives later as user input. Answers are user input, not system events: a WebUI card answer becomes a user message carrying structured answer metadata, and while the Session waits on a question any ordinary user message (WebUI or external channel) is its answer. Messages from other Sessions, timers and system events never answer. The first answer wins; there is no default answer or timeout choice. Delegated Sessions are told to ask their parent first. Records, projection, reminder and WebUI behavior are owned by the [structured user questions](../units/session-questions.md) unit.
 
 ## ToolScript completion is not a return-value control protocol
 

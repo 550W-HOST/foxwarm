@@ -177,9 +177,10 @@ internal sealed partial class AgentCatalog
 
     public string MemoryDirectory(string name) => Path.Combine(AgentDirectory(name), "memory");
 
-    public string FrameworkSystemPath => Path.Combine(agentRoot, "00_SYSTEM.md");
+    public string FrameworkSystemPath => Path.Combine(agentRoot, FrameworkPrompt.FileName);
+    public string FrameworkLocalPath => Path.Combine(agentRoot, FrameworkPrompt.LocalFileName);
     public string MainFallbackSystemPath =>
-        Path.Combine(SourceDirectory("main"), "memory", "00_SYSTEM.md");
+        Path.Combine(SourceDirectory("main"), "memory", FrameworkPrompt.FileName);
 
     public async Task CreateAsync(
         string name,

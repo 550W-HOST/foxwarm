@@ -19,9 +19,11 @@ internal sealed partial class WebUIChannel
                         "limit",
                         "childLimit",
                         "cursor",
-                        "focusSessionId"
+                        "focusSessionId",
+                        "group"
                     );
                     var mode = SessionListQueries.Mode(Query(query, "mode"));
+                    var grouping = SessionListQueries.Grouping(Query(query, "group"));
                     var limit = SessionListQueries.Limit(Query(query, "limit"), 50, 100);
                     var childLimit = SessionListQueries.Limit(Query(query, "childLimit"), 5, 20);
                     var focusIds = query["focusSessionId"].ToArray();
@@ -34,7 +36,13 @@ internal sealed partial class WebUIChannel
                             "focusSessionId accepts at most 8 bounded values."
                         );
                     var view = new SessionListQueries(runtime);
-                    var result = view.Page(mode, limit, Query(query, "cursor"));
+                    // A grouped Sidebar pages the pinned section here and each group separately.
+                    var result = view.Page(
+                        mode,
+                        limit,
+                        Query(query, "cursor"),
+                        pinnedOnly: grouping is not null
+                    );
                     var rootIds = (result["sessions"] as JsonArray)!
                         .OfType<JsonObject>()
                         .Select(row => row["id"]!.GetValue<string>())
@@ -56,20 +64,21 @@ internal sealed partial class WebUIChannel
                     var children = new JsonArray(
                         groups.Select(group => (JsonNode?)group).ToArray()
                     );
-                    var requestedFocus = focusIds
-                        .Cast<string>()
-                        .Distinct(StringComparer.Ordinal)
-                        .ToArray();
-                    var focus = view.Exact(requestedFocus, false);
-                    // Sidebar focus follows presentation parents.
-                    var (presentationPaths, pathContext) = view.SidebarFocus(
-                        (JsonArray)focus["results"]!
+                    var focus = view.Exact(
+                        focusIds.Cast<string>().Distinct(StringComparer.Ordinal).ToArray(),
+                        true
                     );
                     var forced = new JsonObject();
-                    foreach (var path in presentationPaths.Select(pair => (JsonArray)pair.Value!))
+                    var context = new HashSet<string>(StringComparer.Ordinal);
+                    foreach (
+                        var path in (focus["paths"] as JsonObject)!.Select(pair =>
+                            (JsonArray)pair.Value!
+                        )
+                    )
                         for (var index = 0; index < path.Count; index++)
                         {
                             var id = path[index]!.GetValue<string>();
+                            context.Add(id);
                             if (index + 1 >= path.Count)
                                 continue;
                             if (forced[id] is not JsonArray links)
@@ -80,9 +89,29 @@ internal sealed partial class WebUIChannel
                         }
                     result["children"] = children;
                     result["focus"] = focus["results"]!.DeepClone();
-                    result["presentationPaths"] = presentationPaths;
-                    result["pathContext"] = pathContext;
+                    result["presentationPaths"] = focus["paths"]!.DeepClone();
+                    result["pathContext"] = view.Exact(context.ToArray(), false)[
+                        "results"
+                    ]!.DeepClone();
                     result["forcedChildren"] = forced;
+                    // The first page also carries Sessions with open questions, wherever they sit.
+                    if (Query(query, "cursor") is null)
+                        result["questionSessions"] = view.QuestionSessions(50);
+                    if (grouping is not null)
+                    {
+                        result["groups"] = view.Groups(grouping, mode, GroupNodes());
+                        // Tree paths are shown under their first row; Flat shows every row by itself.
+                        result["presentationGroups"] = view.PresentationGroups(
+                            mode == "flat-time"
+                                ? context
+                                : (focus["paths"] as JsonObject)!
+                                    .Select(pair => (pair.Value as JsonArray)?.FirstOrDefault())
+                                    .Select(first => first?.GetValue<string>())
+                                    .OfType<string>(),
+                            grouping,
+                            mode
+                        );
+                    }
                     return result;
                 })
         );
@@ -96,7 +125,9 @@ internal sealed partial class WebUIChannel
                         SessionListQueries.Keys(
                             body.Select(pair => pair.Key),
                             "ids",
-                            "includePaths"
+                            "includePaths",
+                            "group",
+                            "mode"
                         );
                         if (
                             body.ContainsKey("includePaths")
@@ -109,10 +140,25 @@ internal sealed partial class WebUIChannel
                                 "SESSION_LIST_DTO_INVALID",
                                 "includePaths must be boolean."
                             );
-                        return new SessionListQueries(runtime).Exact(
+                        var grouping = SessionListQueries.Grouping(BodyText(body, "group"));
+                        var mode = SessionListQueries.Mode(BodyText(body, "mode"));
+                        var view = new SessionListQueries(runtime);
+                        var result = view.Exact(
                             SessionListQueries.Ids(body["ids"]),
                             body["includePaths"]?.GetValue<bool>() == true
                         );
+                        // Grouped Sidebars place exact rows outside a loaded page by these keys.
+                        if (grouping is not null)
+                            result["presentationGroups"] = view.PresentationGroups(
+                                (result["results"] as JsonArray)!
+                                    .Select(item =>
+                                        SessionCatalog.Text(item?["resolution"]?["sessionId"])
+                                    )
+                                    .OfType<string>(),
+                                grouping,
+                                mode
+                            );
+                        return result;
                     }
                 )
         );
@@ -204,6 +250,95 @@ internal sealed partial class WebUIChannel
                                 pages.Select(page => (JsonNode?)page).ToArray()
                             ),
                         };
+                    }
+                )
+        );
+        app.MapPost(
+            "/api/session-list/group-pages",
+            async (HttpRequest request) =>
+                await ListBody(
+                    request,
+                    body =>
+                    {
+                        SessionListQueries.Keys(
+                            body.Select(pair => pair.Key),
+                            "group",
+                            "mode",
+                            "limit",
+                            "childLimit",
+                            "groups"
+                        );
+                        var grouping =
+                            SessionListQueries.Grouping(BodyText(body, "group"))
+                            ?? throw new SessionListQueryException(
+                                "SESSION_LIST_GROUP_INVALID",
+                                "group must be agent or node."
+                            );
+                        var mode = SessionListQueries.Mode(BodyText(body, "mode"));
+                        var limit = BodyLimit(body, "limit", 10, 100);
+                        var childLimit = BodyLimit(body, "childLimit", 5, 20);
+                        if (body["groups"] is not JsonArray groups || groups.Count > 20)
+                            throw new SessionListQueryException(
+                                "SESSION_LIST_GROUPS_INVALID",
+                                "groups accepts at most 20 requests."
+                            );
+                        var seen = new HashSet<string>(StringComparer.Ordinal);
+                        var requests = new List<(string Key, string? Cursor)>();
+                        foreach (var node in groups)
+                        {
+                            if (node is not JsonObject group)
+                                throw new SessionListQueryException(
+                                    "SESSION_LIST_GROUPS_INVALID",
+                                    "Invalid group request."
+                                );
+                            SessionListQueries.Keys(
+                                group.Select(pair => pair.Key),
+                                "key",
+                                "cursor"
+                            );
+                            var key = SessionCatalog.Text(group["key"]);
+                            if (key is null || key.Length is < 1 or > 512 || !seen.Add(key))
+                                throw new SessionListQueryException(
+                                    "SESSION_LIST_GROUPS_INVALID",
+                                    "Group keys must be unique bounded strings."
+                                );
+                            if (
+                                group.ContainsKey("cursor")
+                                && SessionCatalog.Text(group["cursor"]) is null
+                            )
+                                throw new SessionListQueryException(
+                                    "SESSION_LIST_GROUPS_INVALID",
+                                    "Group cursor must be a string."
+                                );
+                            requests.Add((key, SessionCatalog.Text(group["cursor"])));
+                        }
+                        var view = new SessionListQueries(runtime);
+                        var result = view.GroupPages(requests.ToArray(), grouping, mode, limit);
+                        // Tree-mode members carry the same child previews as Sidebar roots.
+                        var previews =
+                            mode == "flat-time"
+                                ? []
+                                : view.ChildPages(
+                                    result["groups"]!
+                                        .AsArray()
+                                        .SelectMany(group => group!["sessions"]!.AsArray())
+                                        .Select(row =>
+                                            (row!["id"]!.GetValue<string>(), (string?)null)
+                                        )
+                                        .ToArray(),
+                                    mode,
+                                    childLimit,
+                                    previews: true
+                                );
+                        foreach (var preview in previews)
+                        {
+                            preview.Remove("nextCursor");
+                            preview.Remove("reset");
+                        }
+                        result["children"] = new JsonArray(
+                            previews.Select(preview => (JsonNode?)preview).ToArray()
+                        );
+                        return result;
                     }
                 )
         );
@@ -335,6 +470,28 @@ internal sealed partial class WebUIChannel
         return values[0];
     }
 
+    // An absent value is null; a present value must be a string.
+    private static string? BodyText(JsonObject body, string name) =>
+        !body.ContainsKey(name) ? null
+        : body[name] is JsonValue value && value.TryGetValue<string>(out var text) ? text
+        : throw new SessionListQueryException(
+            "SESSION_LIST_DTO_INVALID",
+            $"{name} must be a string."
+        );
+
+    // Node names and online state for Sidebar Node groups.
+    private Dictionary<string, SessionGroupNode> GroupNodes()
+    {
+        var nodes = new Dictionary<string, SessionGroupNode>(StringComparer.Ordinal);
+        foreach (var node in sessions.NodeSummaries().OfType<JsonObject>())
+            if (SessionCatalog.Text(node["id"]) is { } id)
+                nodes[id] = new(
+                    SessionCatalog.Text(node["displayName"]) is { Length: > 0 } name ? name : id,
+                    SessionCatalog.Flag(node["online"])
+                );
+        return nodes;
+    }
+
     private static int BodyLimit(JsonObject body, string name, int fallback, int max) =>
         !body.ContainsKey(name) ? fallback
         : SessionCatalog.Number(body[name]) is { } number
@@ -362,6 +519,7 @@ internal sealed partial class WebUIChannel
                     is System.Text.Json.JsonException
                         or InvalidOperationException
                         or FormatException
+                && error is not WebUiAccessException
             )
         {
             return Results.BadRequest(

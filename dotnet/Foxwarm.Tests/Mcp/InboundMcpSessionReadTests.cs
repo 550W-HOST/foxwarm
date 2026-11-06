@@ -242,8 +242,8 @@ public sealed class InboundMcpSessionReadTests
         Assert.Equal(1, previous["count"]!.GetValue<int>());
         Assert.Contains("early prose", Preview(previous));
         var tools = Value(await Read(client, f.Target, new() { ["start"] = 1, ["count"] = 2 }));
-        Assert.Contains("read ×1", Preview(tools));
-        Assert.DoesNotContain("argument needle", Preview(tools));
+        Assert.Contains("read", Preview(tools));
+        Assert.Contains("argument needle", Preview(tools));
         Assert.DoesNotContain("recall(", Preview(tools));
         Assert.Contains("Archive originals are not available", Preview(tools));
         foreach (var detail in new[] { "snippets", "full" })
@@ -264,7 +264,7 @@ public sealed class InboundMcpSessionReadTests
             Assert.Contains("tool-only needle", Preview(expanded));
         }
         var partial = Value(await Read(client, f.Target, new() { ["start"] = 2, ["count"] = 1 }));
-        Assert.Contains("partial/unpaired", Preview(partial));
+        Assert.Contains("result only", Preview(partial));
         Assert.DoesNotContain("recall(", Preview(partial));
         const string authored =
             "Authored text: recall({target: 'msg#1'}) and view_session({count: 1}).";

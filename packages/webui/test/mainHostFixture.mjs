@@ -15,9 +15,16 @@ export async function until(check, label, timeout = 22000) {
   while (Date.now() < end) { const result = await check(); if (result) return result; await sleep(25) }
   throw new Error('Timed out: ' + label)
 }
+// With only `main` and no alternative runtime, `+` creates directly and a split options control opens the dialog.
+export const NEW_SESSION_DIALOG_TRIGGER = 'button[aria-haspopup="dialog"]:is([aria-label="New session"], [aria-label="New session options"])'
+// Setup opens Models in the form view when the form can represent the file; fixtures that write exact YAML switch to the editor.
+export async function openModelsYaml(page) {
+  await page.waitForSelector('#setup-tab-models'); await page.click('#setup-tab-models')
+  await page.waitForSelector('[data-models-view="yaml"]'); await page.click('[data-models-view="yaml"]')
+}
 export async function saveModelsInOriginalApp(page, raw, modelPath) {
   await page.evaluate(() => { location.hash = 'setup' })
-  await page.waitForSelector('#setup-tab-models'); await page.click('#setup-tab-models')
+  await openModelsYaml(page)
   const editor = '[aria-label="Models YAML editor"] [role="textbox"]'
   await page.waitForSelector(editor); await page.focus(editor)
   await page.keyboard.down('Control'); await page.keyboard.press('A'); await page.keyboard.up('Control')

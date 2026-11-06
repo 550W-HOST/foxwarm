@@ -1,6 +1,7 @@
 # Unit: .NET developer tools
 
 Files: `dotnet/Foxwarm.DevTools/CatalogFixtureCommand.cs`, `dotnet/Foxwarm.DevTools/ConditionalMemoryCommand.cs`, `dotnet/Foxwarm.DevTools/JournalCommand.cs`, `dotnet/Foxwarm.DevTools/MainLogFixtureCommand.cs`, `dotnet/Foxwarm.DevTools/Program.cs`, `dotnet/Foxwarm.DevTools/ResponsesRequestCommand.cs`, `dotnet/Foxwarm.DevTools/ResponsesStreamCommand.cs`, `dotnet/Foxwarm.DevTools/SessionRestartCommand.cs`
+Secondary files: `dotnet/Foxwarm.DevTools/SequenceBenchCommand.cs`
 
 ## Purpose
 
@@ -8,7 +9,7 @@ Provides developer-facing command entry points for Responses request/stream prob
 
 ## Stable symbols and callers
 
-`Foxwarm.DevTools.Program` selects command verbs; `ResponsesRequestCommand`/`ResponsesStreamCommand` call provider request adapters; `JournalCommand` reads the request journal; `ConditionalMemoryCommand` reads memory selection; `SessionRestartCommand` exercises startup/load behavior; `CatalogFixtureCommand` prepares owned browser-fixture membership through the maintained `SessionCatalog` API.
+`Foxwarm.DevTools.Program` selects command verbs; `ResponsesRequestCommand`/`ResponsesStreamCommand` call provider request adapters; `JournalCommand` reads the request journal; `ConditionalMemoryCommand` reads memory selection; `SessionRestartCommand` exercises startup/load behavior; `CatalogFixtureCommand` prepares owned browser-fixture membership through the maintained `SessionCatalog` API; `sequence-bench` (owned by [the sequence projection unit](./dotnet-session-sequence.md)) times the sequence projection on a disposable synthetic root.
 
 ## Contract and side effects
 

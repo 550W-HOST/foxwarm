@@ -70,6 +70,7 @@ Implements the WebUI channel's HTTP, multiplexed realtime WebSocket, compatibili
   focus paths, exact/alias batches, Architecture summaries, descendant preview,
   and explicit JavaScript-compatible search. It does not hydrate semantic
   history or replace the legacy all-list route.
+- With `group=agent|node`, `/api/session-list/sidebar` pages only pinned rows and adds the group list and focus-path `presentationGroups`; `POST /api/session-list/group-pages` serves per-group member pages with child previews, and `by-id` accepts `group`/`mode` for exact-row groups ([D-sidebar-groups](../threads/main-catalog-storage-and-indexed-queries.md#d-sidebar-groups)).
 - Only `/api/session-list/sidebar` omits `nextCursor` from each `children[]` preview. Its top-level root cursor and `/api/session-list/children` continuation cursors remain available; catalog query DTOs and other consumers of child previews are unchanged.
 - Sidebar root/child, exact/by-ID, forced-focus, search, and initial watched-row
   projections attach numeric direct Sidebar child counts through one maintained

@@ -25,7 +25,7 @@ Foxwarm is a server you keep running. Conversations persist and can run for days
 
 ### Does it run on macOS?
 
-Not as the server. Foxwarm runs on Linux x64, x64 WSL and Windows x64, or in Docker on Linux x64. A Mac can join as a [Node](/docs/nodes/), so agents can still work on files and run commands there.
+Yes, on Apple Silicon Macs with macOS 15 or later, using the same installer command as Linux. Intel Macs are not supported as a server, and there is no macOS desktop app. Any Mac can still join another server as a [Node](/docs/nodes/). See [macOS (Apple Silicon)](/docs/installing/#macos-apple-silicon).
 
 ### Where do I sign in?
 
@@ -107,13 +107,13 @@ QQ Bot groups need an @mention by default; set `requireMention: false` to handle
 
 ### I saved Config. Do I need to restart?
 
-Saving **Setup → Config** applies Channel changes and access identities immediately. Startup settings, such as the HTTP port, Node providers, semantic search and the inbound MCP listener, need a restart. Model changes in **Setup → Models** never need one.
+Saving **Setup → Config** applies Channel changes, access identities and `sessionAutoTitle` immediately. Startup settings, such as the HTTP port, Node providers, semantic search and the inbound MCP listener, need a restart. Model changes in **Setup → Models** never need one.
 
-With Docker Compose, changing the port also means updating the port mapping and healthcheck. See [Docker Compose](/docs/installing/#docker-compose).
+With Docker, changing the port also means updating the port mapping (and, with Compose, the healthcheck). See [Docker](/docs/installing/#docker).
 
 ### How do I update?
 
-Back up the data directory, then pull and restart from the program checkout, or rebuild the container. See [Update a source installation](/docs/data-upgrades-backups/#update-a-source-installation).
+Back up the data directory, then run `foxwarmctl update` in the program directory, or pull the new container image. See [Update a release installation](/docs/data-upgrades-backups/#update-a-release-installation).
 
 ### What should I back up?
 

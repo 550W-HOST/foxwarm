@@ -7,6 +7,8 @@ export interface SessionNotice {
   title: string;
   summary: string;
   details?: string;
+  /** Presentation-only follow-up offered by the client; never read from persisted notice data. */
+  action?: 'open-model-settings';
 }
 
 export function parseSessionNotice(value: unknown): SessionNotice | null {

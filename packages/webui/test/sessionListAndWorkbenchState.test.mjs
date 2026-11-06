@@ -139,7 +139,7 @@ test('workbench normalization ignores and removes legacy tab pinned state', asyn
   assert.equal(normalized.tabsById['vscode-web'].title, 'Code')
 })
 
-test('workbench normalization persists Agents, Setup, Logs, Tasks and Nodes tabs', async () => {
+test('workbench normalization persists System, Setup, Logs and Tasks tabs and folds a saved Nodes tab into System', async () => {
   const { normalizePersistedWorkbenchState } = await loadTypeScriptModule('../src/workbench/utils.ts')
   const normalized = normalizePersistedWorkbenchState({
     version: 4,
@@ -159,12 +159,35 @@ test('workbench normalization persists Agents, Setup, Logs, Tasks and Nodes tabs
     focusedPaneId: 'pane-system',
   })
 
-  assert.deepEqual(normalized.root.tabIds, ['system:agents', 'system:setup', 'system:logs', 'system:tasks', 'system:nodes'])
+  // An existing System tab absorbs the former Nodes page.
+  assert.deepEqual(normalized.root.tabIds, ['system:agents', 'system:setup', 'system:logs', 'system:tasks'])
   assert.equal(normalized.root.activeTabId, 'system:setup')
-  assert.equal(normalized.tabsById['system:agents'].type, 'agents')
+  assert.deepEqual(normalized.tabsById['system:agents'], { id: 'system:agents', type: 'agents', title: 'System' })
   assert.equal(normalized.tabsById['system:setup'].type, 'setup')
   assert.equal(normalized.tabsById['system:logs'].type, 'logs')
   assert.equal(normalized.tabsById['system:tasks'].type, 'tasks')
+  assert.equal(normalized.tabsById['system:nodes'], undefined)
+
+  // Without one, the Nodes tab becomes the System tab on its Nodes section, in the same place.
+  const nodesOnly = normalizePersistedWorkbenchState({
+    version: 4,
+    tabsById: {
+      'chat:a': { id: 'chat:a', type: 'chat', title: 'a', sessionId: 'a' },
+      'system:nodes': { id: 'system:nodes', type: 'nodes', title: 'Nodes' },
+    },
+    root: {
+      id: 'split', kind: 'split', direction: 'row', sizes: [1, 1], children: [
+        { id: 'left', kind: 'pane', tabIds: ['chat:a'], activeTabId: 'chat:a' },
+        { id: 'right', kind: 'pane', tabIds: ['system:nodes'], activeTabId: 'system:nodes', collapsed: true },
+      ],
+    },
+    focusedPaneId: 'right',
+  })
+  assert.deepEqual(nodesOnly.root.children.map(child => [child.id, child.tabIds, child.activeTabId, child.collapsed]), [['left', ['chat:a'], 'chat:a', false], ['right', ['system:agents'], 'system:agents', true]])
+  assert.deepEqual(nodesOnly.tabsById['system:agents'], { id: 'system:agents', type: 'agents', title: 'System', section: 'nodes' })
+  assert.equal(nodesOnly.focusedPaneId, 'right')
+  // Written state is already in the new form.
+  assert.deepEqual(normalizePersistedWorkbenchState(nodesOnly), nodesOnly)
 })
 
 test('workbench pane collapse survives normalization and older panes default to expanded', async () => {
@@ -235,6 +258,25 @@ test('user tab activation expands its pane while restore and inactive insertion 
   useWorkbenchStore.setState(state)
   useWorkbenchStore.getState().setPaneActiveTab('pane-collapsed', 'tab:collapsed', { expandPane: false })
   assert.equal(useWorkbenchStore.getState().root.children[0].collapsed, true, 'route/restore activation can preserve collapse')
+})
+
+test('replacing a tab keeps its position among retained tab content', async () => {
+  const { useWorkbenchStore } = await loadTypeScriptModule('../src/workbench/store.ts')
+  useWorkbenchStore.setState({
+    version: 4,
+    tabsById: {
+      'chat:main': { id: 'chat:main', type: 'chat', sessionId: 'main', title: 'main', preview: true },
+      'vscode-web': { id: 'vscode-web', type: 'vscode', title: 'Code' },
+    },
+    root: { id: 'pane-main', kind: 'pane', tabIds: ['chat:main', 'vscode-web'], activeTabId: 'chat:main' },
+    focusedPaneId: 'pane-main',
+  })
+  // Selecting the Session in its own preview tab replaces the tab under the same ID.
+  useWorkbenchStore.getState().replaceTabId('chat:main', { id: 'chat:main', type: 'chat', sessionId: 'main', title: 'main', preview: true })
+  assert.deepEqual(Object.keys(useWorkbenchStore.getState().tabsById), ['chat:main', 'vscode-web'])
+  useWorkbenchStore.getState().replaceTabId('chat:main', { id: 'chat:other', type: 'chat', sessionId: 'other', title: 'other', preview: true })
+  assert.deepEqual(Object.keys(useWorkbenchStore.getState().tabsById), ['chat:other', 'vscode-web'])
+  assert.deepEqual(useWorkbenchStore.getState().root.tabIds, ['chat:other', 'vscode-web'])
 })
 
 test('Code workspace URLs preserve paths and reverse-proxy base paths', async () => {
@@ -375,26 +417,36 @@ test('session list labels omit parent and agent-main prefixes for child rows', a
   assert.equal(getSessionListDisplayId('standalone', null), 'standalone')
 })
 
-test('grouped rows shorten their Agent prefix under the Agent main host only', async () => {
-  const { getSessionListGroupedDisplayId } = await loadTypeScriptModule('../src/sessionListPresentation.ts')
-
-  assert.equal(getSessionListGroupedDisplayId('agent/task', 'agent/main'), '/task')
-  assert.equal(getSessionListGroupedDisplayId('0905_kg1ns', 'main'), '0905_kg1ns')
-  assert.equal(getSessionListGroupedDisplayId('other/task', 'agent/main'), 'other/task')
-})
-
-test('top-level rows name their Agent unless they are its main or the title already does', async () => {
+test('top-level rows name a non-default Agent unless they are its main or the title already does', async () => {
   const { getAgentMainSessionId, getSessionListAgentTag } = await loadTypeScriptModule('../src/sessionListPresentation.ts')
 
   assert.equal(getAgentMainSessionId('main'), 'main')
   assert.equal(getAgentMainSessionId('beta'), 'beta/main')
   assert.equal(getSessionListAgentTag({ id: 'beta/one', agent: 'beta' }, 'Release notes'), 'beta')
   assert.equal(getSessionListAgentTag({ id: 'beta/one', agent: 'beta' }, 'beta/one'), null)
-  assert.equal(getSessionListAgentTag({ id: '0905_kg1ns', agent: 'main' }, '0905_kg1ns'), 'main')
+  assert.equal(getSessionListAgentTag({ id: '0905_kg1ns', agent: 'main' }, 'Release notes'), null)
   assert.equal(getSessionListAgentTag({ id: 'main', agent: 'main' }, 'main'), null)
   assert.equal(getSessionListAgentTag({ id: 'beta/main', agent: 'beta' }, 'Beta home'), null)
   assert.equal(getSessionListAgentTag({ id: 'beta/one', agent: 'beta', pinned: true }, 'Release notes'), null)
   assert.equal(getSessionListAgentTag({ id: 'loose' }, 'loose'), null)
+})
+
+test('group roots keep their page order and place other rows by their server group', async () => {
+  const { assignSessionListGroupRoots } = await loadTypeScriptModule('../src/sessionListPresentation.ts')
+
+  const pages = new Map([['alpha', { ids: ['alpha/main', 'alpha/b', 'alpha/a'] }], ['beta', { ids: ['beta/x'] }]])
+  // A focus root of a loaded group follows its page; an unknown row stays ungrouped.
+  const { byGroup, ungrouped } = assignSessionListGroupRoots(
+    ['beta/x', 'alpha/a', 'focus', 'alpha/main', 'stray', 'alpha/b'],
+    pages,
+    { focus: 'alpha', 'beta/x': 'alpha' },
+  )
+  assert.deepEqual([...byGroup], [['alpha', ['alpha/main', 'alpha/b', 'alpha/a', 'focus']], ['beta', ['beta/x']]])
+  assert.deepEqual(ungrouped, ['stray'])
+  // Rows not yet rendered are omitted from their page.
+  assert.deepEqual([...assignSessionListGroupRoots(['alpha/a'], pages, {}).byGroup], [['alpha', ['alpha/a']], ['beta', []]])
+  // A row of a collapsed (unloaded) group is placed by its server group.
+  assert.deepEqual([...assignSessionListGroupRoots(['gamma/1'], new Map(), { 'gamma/1': 'gamma' }).byGroup], [['gamma', ['gamma/1']]])
 })
 
 test('overlapping global session refreshes cannot let an older response hide a new child', async () => {
