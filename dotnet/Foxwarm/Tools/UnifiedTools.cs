@@ -159,19 +159,24 @@ internal static partial class UnifiedTools
                 warnings.Add("MCP server discovery failed; configuration is unavailable.");
                 servers = [];
             }
-            foreach (var server in servers)
+            var listed = await ListMcpAsync(
+                registry,
+                servers,
+                string.IsNullOrEmpty(filter),
+                owner,
+                token
+            );
+            for (var index = 0; index < servers.Length; index++)
             {
-                token.ThrowIfCancellationRequested();
+                var server = servers[index];
+                if (listed[index].Warning is string warning)
+                {
+                    warnings.Add(warning);
+                    continue;
+                }
                 try
                 {
-                    foreach (
-                        var tool in await registry.Mcp.ListToolsAsync(
-                            server,
-                            token,
-                            owner,
-                            owner?.McpGeneration
-                        )
-                    )
+                    foreach (var tool in listed[index].Tools!)
                     {
                         var name = SessionWait.Text(tool["name"]) ?? "unknown";
                         var description = SessionWait.Text(tool["description"]) ?? "";
@@ -258,6 +263,77 @@ internal static partial class UnifiedTools
                 );
         }
         return response;
+    }
+
+    // Broad MCP discovery (no server filter) lists servers concurrently under one
+    // shared deadline so a slow or hung server cannot hold the whole search; a
+    // server that misses it is reported as a warning. A named server keeps the
+    // ordinary per-request discovery timeout.
+    internal const int BroadMcpConcurrency = 6;
+    internal static readonly TimeSpan BroadMcpBudget = TimeSpan.FromSeconds(15);
+
+    private static async Task<(IReadOnlyList<JsonObject>? Tools, string? Warning)[]> ListMcpAsync(
+        ToolRegistry registry,
+        string[] servers,
+        bool broad,
+        SessionOwner? owner,
+        CancellationToken token
+    )
+    {
+        var results = new (IReadOnlyList<JsonObject>? Tools, string? Warning)[servers.Length];
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+        if (broad)
+            deadline.CancelAfter(BroadMcpBudget);
+        using var slots = new SemaphoreSlim(broad ? BroadMcpConcurrency : 1);
+        await Task.WhenAll(
+            servers.Select(
+                async (server, index) =>
+                {
+                    try
+                    {
+                        await slots.WaitAsync(deadline.Token);
+                        try
+                        {
+                            results[index] = (
+                                await registry.Mcp.ListToolsAsync(
+                                    server,
+                                    deadline.Token,
+                                    owner,
+                                    owner?.McpGeneration
+                                ),
+                                null
+                            );
+                        }
+                        finally
+                        {
+                            slots.Release();
+                        }
+                    }
+                    catch (OperationCanceledException) when (token.IsCancellationRequested)
+                    {
+                        throw;
+                    }
+                    catch (OperationCanceledException) when (deadline.IsCancellationRequested)
+                    {
+                        results[index] = (
+                            null,
+                            $"MCP server {server}: tool discovery did not finish within the "
+                                + $"{(int)BroadMcpBudget.TotalSeconds}-second budget for searching all servers; "
+                                + "pass server to search it with the full discovery timeout."
+                        );
+                    }
+                    catch (ToolAuthorizationUnavailableException)
+                    {
+                        throw;
+                    }
+                    catch (Exception error)
+                    {
+                        results[index] = (null, "MCP server " + server + ": " + error.Message);
+                    }
+                }
+            )
+        );
+        return results;
     }
 
     internal static int Score(string query, params string[] fields)
