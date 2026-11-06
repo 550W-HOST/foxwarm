@@ -78,15 +78,18 @@ try {
       await opened.context.close()
     }
   }
-  // An existing authenticated app entry migrates the actual cookie without
+  // Every authenticated app entry renews the actual cookie, including an existing Lax cookie, without
   // requiring a new token submission or trusting a localStorage credential.
-  for (const root of [host.origin + '/', proxyRoot]) {
+  for (const root of [host.origin + '/', proxyRoot]) for (const sameSite of ['Strict', 'Lax']) {
     const context = await browser.createBrowserContext(), page = await context.newPage()
     try {
       const path = new URL(root).pathname
-      await context.setCookie({ name: 'foxwarm_token', value: host.token, domain: '127.0.0.1', path, sameSite: 'Strict', expires: Date.now() / 1000 + 86400 })
+      const before = Date.now() / 1000
+      await context.setCookie({ name: 'foxwarm_token', value: host.token, domain: '127.0.0.1', path, sameSite, expires: before + 86400 })
       await page.goto(root, { waitUntil: 'networkidle2' })
-      assert.equal((await context.cookies()).find(c => c.path === path)?.sameSite, 'Lax')
+      const renewed = (await context.cookies()).find(c => c.name === 'foxwarm_token' && c.path === path)
+      assert.equal(renewed?.sameSite, 'Lax')
+      assert(renewed.expires >= before + 31536000 - 2 && renewed.expires <= Date.now() / 1000 + 31536000 + 2, JSON.stringify(renewed))
       assert.equal(await page.evaluate(() => localStorage.getItem('foxwarm_token')), null)
     } finally { await context.close() }
   }
