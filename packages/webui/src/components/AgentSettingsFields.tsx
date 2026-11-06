@@ -53,13 +53,15 @@ const labelClass = 'mt-2 block text-xs font-medium text-fw-text-muted'
 const controlClass = 'mt-1 w-full rounded-lg border border-fw-border-strong bg-fw-surface-sunken px-2.5 py-2 text-sm font-normal text-fw-text-strong outline-none focus:border-fw-accent-border focus:ring-2 focus:ring-fw-focus-ring/20 disabled:cursor-not-allowed disabled:opacity-70 dark:border-fw-border-strong dark:bg-fw-canvas dark:text-fw-text-strong'
 const hintClass = 'mt-1 block text-[11px] font-normal text-fw-text-muted'
 
-export default function AgentSettingsFields({ value, onChange, agentId, agents, nodes, inheritanceChain, isolationCollapsed = false, disabled = false }: {
+export default function AgentSettingsFields({ value, onChange, agentId, agents, nodes, installDefaultNode = null, inheritanceChain, isolationCollapsed = false, disabled = false }: {
   value: AgentSettingsDraft
   onChange: (next: AgentSettingsDraft) => void
   /** The edited Agent; empty while creating one. */
   agentId: string
   agents: readonly AgentSummary[]
   nodes: readonly WebUiNodeTarget[]
+  /** Installation `agentDefaultNode`, used when the Agent sets no default Node. */
+  installDefaultNode?: string | null
   inheritanceChain?: ReactNode
   /** Collapse Isolation until opened (New agent). */
   isolationCollapsed?: boolean
@@ -72,7 +74,9 @@ export default function AgentSettingsFields({ value, onChange, agentId, agents, 
     return [...nodes, ...extra]
   }
   const startNode = value.isolatedNode || value.defaultNode
-  const nodeOptions = withSaved([value.defaultNode, value.isolatedNode])
+  // With an installation default, unset and an explicit master choose different Nodes.
+  const installDefault = installDefaultNode && installDefaultNode !== 'master' ? installDefaultNode : null
+  const nodeOptions = withSaved([value.defaultNode, value.isolatedNode, installDefault || ''])
   const isolationOptions = withSaved([value.isolatedNode]).filter(node => node.id !== 'master')
   const inheritOptions = agents.filter(agent => agent.id !== agentId.trim() && !agent.isolated)
 
@@ -109,8 +113,9 @@ export default function AgentSettingsFields({ value, onChange, agentId, agents, 
         <h3 className={sectionTitle}><FolderOpen className="h-3.5 w-3.5" /> Session defaults</h3>
         <label className={labelClass}>
           Node
-          <select data-agent-default-node value={startNode === 'master' ? '' : startNode} disabled={disabled || !!value.isolatedNode} onChange={event => set({ defaultNode: event.target.value })} className={controlClass}>
-            <option value="">{nodeDisplayName(nodes, 'master')} (default)</option>
+          <select data-agent-default-node value={startNode === 'master' && !installDefault ? '' : startNode} disabled={disabled || !!value.isolatedNode} onChange={event => set({ defaultNode: event.target.value })} className={controlClass}>
+            <option value="">{installDefault ? `Installation default (${nodeDisplayName(nodeOptions, installDefault)})` : `${nodeDisplayName(nodes, 'master')} (default)`}</option>
+            {installDefault ? <option value="master">{nodeDisplayName(nodes, 'master')}</option> : null}
             {nodeOptions.filter(node => node.id !== 'master').map(node => (
               <option key={node.id} value={node.id}>{node.displayName}{node.online ? '' : ' · offline'}</option>
             ))}
@@ -119,7 +124,7 @@ export default function AgentSettingsFields({ value, onChange, agentId, agents, 
         </label>
         <label className={labelClass}>
           Working directory
-          <input data-agent-default-cwd value={value.defaultCwd} disabled={disabled} onChange={event => set({ defaultCwd: event.target.value })} placeholder={`Absolute path on ${nodeDisplayName(nodeOptions, startNode || 'master')}`} spellCheck={false} autoComplete="off" className={`${controlClass} font-mono`} />
+          <input data-agent-default-cwd value={value.defaultCwd} disabled={disabled} onChange={event => set({ defaultCwd: event.target.value })} placeholder={`Absolute path on ${nodeDisplayName(nodeOptions, startNode || installDefault || 'master')}`} spellCheck={false} autoComplete="off" className={`${controlClass} font-mono`} />
           <span className={hintClass}>Existing sessions keep their current directory.</span>
         </label>
       </section>

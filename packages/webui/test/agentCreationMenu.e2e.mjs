@@ -19,6 +19,7 @@ let server
 let fixtureUrl
 let runtimeState = { available: true, reason: null }
 let runtimeStatus = 200
+let agentDefaultNode = null
 let runtimeGate = null
 let runtimeRequests = []
 
@@ -151,7 +152,7 @@ before(async () => {
   server = createServer(async (request, response) => {
     if (request.url.endsWith('/api/nodes')) {
       response.writeHead(200, { 'Content-Type': 'application/json' })
-      response.end(JSON.stringify({ nodes: [{ id: 'build-box', displayName: 'Build box', online: true }] }))
+      response.end(JSON.stringify({ nodes: [{ id: 'build-box', displayName: 'Build box', online: true }], agentDefaultNode }))
       return
     }
     if (request.url.endsWith('/api/setup/status')) {
@@ -303,6 +304,28 @@ test('New agent uses the shared Agent settings: start location, and isolation th
   assert.equal(await page.$eval('[data-creation-start-location]', line => line.textContent), 'Starts on Build box', 'the working directory belongs to the default Node only')
   await page.click('button[title="notes"]')
   assert.equal(await page.$eval('[data-creation-start-location]', line => line.textContent), 'Starts on master · /srv/notes')
+})
+
+test('an installation default Node separates unset from an explicit master', async () => {
+  agentDefaultNode = 'build-box'
+  try {
+    await resetFixture()
+    await openSessionDialog()
+    await page.waitForFunction(() => document.querySelector('[data-creation-start-location]')?.textContent === 'Starts on Build box')
+    await page.click('button[aria-label="New agent"]')
+    await page.waitForSelector('select[data-agent-default-node] option[value="master"]')
+    assert.equal(await page.$eval('select[data-agent-default-node] option[value=""]', option => option.textContent), 'Installation default (Build box)')
+    assert.equal(await page.$eval('input[data-agent-default-cwd]', input => input.placeholder), 'Absolute path on Build box')
+    await page.type('input[placeholder="my-agent"]', 'local')
+    await page.select('select[data-agent-default-node]', 'master')
+    await clickButtonByText('Create')
+    await page.waitForSelector('[role="dialog"]', { hidden: true })
+    assert.deepEqual(await page.evaluate(() => window.fixtureCalls), [
+      { type: 'agent', agentId: 'local', inheritAgent: null, defaultNode: 'master', defaultCwd: null, isolatedNode: null },
+    ])
+  } finally {
+    agentDefaultNode = null
+  }
 })
 
 test('validation, request errors, and pending creation remain visible and keyboard-safe', async () => {

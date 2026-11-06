@@ -126,7 +126,7 @@ internal sealed partial class ModelConfiguration
             .Concat(config.Select(pair => pair.Key))
             .Distinct(StringComparer.Ordinal)
             .Where(key =>
-                key is not ("access" or "channels" or "sessionAutoTitle")
+                key is not ("access" or "channels" or "sessionAutoTitle" or "agentDefaultNode")
                 && !JsonNode.DeepEquals(app[key], config[key])
             )
             .ToList();
@@ -160,6 +160,10 @@ internal sealed partial class ModelConfiguration
         if (autoTitle != sessionAutoTitle)
             applied.Add("sessionAutoTitle");
         sessionAutoTitle = autoTitle;
+        var nodeDefault = AppConfigurationRules.AgentDefaultNode(config);
+        if (nodeDefault != agentDefaultNode)
+            applied.Add("agentDefaultNode");
+        agentDefaultNode = nodeDefault;
         JsonObject? reload = null;
         if (ManagedChannels is { } runtime)
         {
@@ -217,6 +221,7 @@ internal sealed partial class ModelConfiguration
                 File.Delete(temporary);
             }
             sessionAutoTitle = AppConfigurationRules.SessionAutoTitle(seeded);
+            agentDefaultNode = AppConfigurationRules.AgentDefaultNode(seeded);
             return true;
         }
         catch (Exception error) when (error is IOException or InvalidDataException)

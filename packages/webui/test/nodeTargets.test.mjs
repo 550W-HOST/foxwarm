@@ -4,7 +4,7 @@ import { build } from 'esbuild'
 
 const sourcePath = new URL('../src/nodeTargets.ts', import.meta.url).pathname
 const bundle = await build({ entryPoints: [sourcePath], bundle: true, platform: 'node', format: 'esm', write: false, logLevel: 'silent' })
-const { parseWebUiNodeTargets, getNodeTargetAvailability, formatNodeTargetLabel } = await import(
+const { parseWebUiNodeTargets, parseAgentDefaultNode, getNodeTargetAvailability, formatNodeTargetLabel } = await import(
   `data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`
 )
 
@@ -79,4 +79,10 @@ test('qualified executable identities survive the real directory parser at the C
   assert.deepEqual(getNodeTargetAvailability(nodes[1], 'vscode-fs'), { available: false, reason: 'filesystem unavailable' })
   assert.deepEqual(getNodeTargetAvailability(nodes[1], 'vscode-pty'), { available: false, reason: 'terminal unavailable' })
   assert.equal(nodes[2].availability, 'offline')
+})
+
+test('the installation Agent default Node is read beside the directory', () => {
+  assert.equal(parseAgentDefaultNode({ nodes: [], agentDefaultNode: 'example-node' }), 'example-node')
+  assert.equal(parseAgentDefaultNode({ nodes: [] }), null)
+  assert.equal(parseAgentDefaultNode({ agentDefaultNode: 'bad node' }), null)
 })

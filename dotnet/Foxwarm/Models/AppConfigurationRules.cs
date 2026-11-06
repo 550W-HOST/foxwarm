@@ -38,6 +38,27 @@ internal static class AppConfigurationRules
             app.ContainsKey("handoffConfirmation")
         );
         _ = SessionAutoTitle(app);
+        _ = AgentDefaultNode(app);
+    }
+
+    // Placement for Agents without their own `defaultNode`; it grants no access.
+    internal static string? AgentDefaultNode(JsonObject app)
+    {
+        if (!app.ContainsKey("agentDefaultNode") || app["agentDefaultNode"] is null)
+            return null;
+        var node =
+            app["agentDefaultNode"] is JsonValue value && value.TryGetValue<string>(out var text)
+                ? text
+                : throw new InvalidDataException("app config `agentDefaultNode` must be a string.");
+        try
+        {
+            Foxwarm.Nodes.NodeProviderRegistry.ValidateId(node);
+        }
+        catch (InvalidDataException)
+        {
+            throw new InvalidDataException("app config `agentDefaultNode` is not a valid Node ID.");
+        }
+        return node;
     }
 
     // Absent means off; new installations receive `true` from their initial configuration.

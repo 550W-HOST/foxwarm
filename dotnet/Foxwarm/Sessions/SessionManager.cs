@@ -143,7 +143,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
                             models.ConfigurationOwner?.AppConfiguration["agentTree"]?["maxChildren"]
                         ) ?? 128
                     )
-                )
+                ),
+            installDefaultNode: () => models.ConfigurationOwner?.AgentDefaultNode
         );
         skills = new Skills(
             agents,

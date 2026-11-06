@@ -23,6 +23,7 @@ internal static class NodeRoutes
                             Foxwarm.Terminal.TerminalRegistry.IsSupported,
                             token
                         ),
+                        agentDefaultNode = sessions.Models.ConfigurationOwner?.AgentDefaultNode,
                     }
                 )
         );

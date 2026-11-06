@@ -86,7 +86,7 @@ export default function SystemView({
   const [modelFilter, setModelFilter] = useState<string | null>(null)
   const [sessionsView, setSessionsView] = useState<'list' | 'timeline'>('list')
   const [inspectedSessionId, setInspectedSessionId] = useState<string | null>(currentSession || null)
-  const { nodes: nodeTargets, error: nodeTargetsError, reload: reloadNodes } = useNodeDirectory()
+  const { nodes: nodeTargets, agentDefaultNode, error: nodeTargetsError, reload: reloadNodes } = useNodeDirectory()
   const [section, setSectionState] = useState<SystemSection>(requestedSection || 'sessions')
   useEffect(() => { if (requestedSection) setSectionState(requestedSection) }, [requestedSection])
   const onSectionChangeRef = useRef(onSectionChange); onSectionChangeRef.current = onSectionChange
@@ -565,7 +565,7 @@ export default function SystemView({
                 {agentRegistry.length === 0 && !agentRegistryError ? <div className="col-span-full rounded-xl border border-dashed border-fw-border-strong py-10 text-center text-sm text-fw-text-muted">No agents found.</div> : null}
               </div>
             </main>
-            <AgentRegistryInspector agent={selectedRegistryAgent} allAgents={agentRegistry} nodes={displayNodes} memoryFiles={agentMemoryFiles} memoryLoading={agentMemoryLoading} memoryError={agentMemoryError} onOpenMemory={openAgentMemory} onSave={saveRegistryAgent} onDelete={deleteRegistryAgent} />
+            <AgentRegistryInspector agent={selectedRegistryAgent} allAgents={agentRegistry} nodes={displayNodes} installDefaultNode={agentDefaultNode} memoryFiles={agentMemoryFiles} memoryLoading={agentMemoryLoading} memoryError={agentMemoryError} onOpenMemory={openAgentMemory} onSave={saveRegistryAgent} onDelete={deleteRegistryAgent} />
           </div>
         ) : section === 'timers' ? (
           <SystemTimers sessionFilter={timersSessionFilter} onSessionFilterChange={setTimersSessionFilter} onInspectSession={sessionId => sessionMap.has(sessionId) ? showSessionFromNode(sessionId) : onSelectSession(sessionId)} onOpenSession={onSelectSession} />
