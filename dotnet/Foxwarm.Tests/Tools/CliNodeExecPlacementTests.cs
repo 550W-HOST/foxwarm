@@ -24,19 +24,24 @@ public sealed class CliNodeExecPlacementTests
             (Path.Combine(temp.Path, "sub"), "sub", "explicit"),
             paths.ExecCwd(JsonValue.Create("sub"), temp.Path, "main", "n")
         );
-        Assert.Equal((temp.Path, temp.Path, "session"), paths.ExecCwd(null, temp.Path, "main", "n"));
+        Assert.Equal(
+            (temp.Path, temp.Path, "session"),
+            paths.ExecCwd(null, temp.Path, "main", "n")
+        );
         Assert.Equal((temp.Path, null, "default"), paths.ExecCwd(null, null, null, "n"));
 
         var tools = new NodeFileTools(paths);
         Assert.Equal(
             agent,
-            (await tools.Execute("get_default_cwd", null, "main", null, false))["output"]!
-                .GetValue<string>()
+            (await tools.Execute("get_default_cwd", null, "main", null, false))[
+                "output"
+            ]!.GetValue<string>()
         );
         Assert.Equal(
             temp.Path,
-            (await tools.Execute("get_default_cwd", null, null, null, false))["output"]!
-                .GetValue<string>()
+            (await tools.Execute("get_default_cwd", null, null, null, false))[
+                "output"
+            ]!.GetValue<string>()
         );
     }
 
@@ -103,6 +108,9 @@ public sealed class CliNodeExecPlacementTests
         Assert.Equal("default", placement["cwdSource"]!.GetValue<string>());
         Assert.Equal("quiet-otter", placement["execId"]!.GetValue<string>());
         Assert.Equal(final, placement["finalCwd"]!.GetValue<string>());
-        Assert.Equal(Path.Combine(temp.Path, "owned.log"), placement["logPath"]!.GetValue<string>());
+        Assert.Equal(
+            Path.Combine(temp.Path, "owned.log"),
+            placement["logPath"]!.GetValue<string>()
+        );
     }
 }

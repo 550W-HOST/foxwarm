@@ -70,32 +70,33 @@ public sealed class MainExecPlacementTests
         var host = new LocalSessionTurnHost(
             owner.Entry,
             owner.Registry.Store,
-            new OnceChat(
-                [
-                    new JsonObject
+            new OnceChat([
+                new JsonObject
+                {
+                    ["id"] = "direct",
+                    ["name"] = "exec",
+                    ["args"] = new JsonObject { ["command"] = "cd child" },
+                },
+                new JsonObject
+                {
+                    ["id"] = "script",
+                    ["name"] = "run_script",
+                    ["args"] = new JsonObject
                     {
-                        ["id"] = "direct",
-                        ["name"] = "exec",
-                        ["args"] = new JsonObject { ["command"] = "cd child" },
+                        ["code"] =
+                            "call_tool('exec', {'command': 'cd ..', 'cwd': '$fw_tmp'})\nreturn True\n",
                     },
-                    new JsonObject
-                    {
-                        ["id"] = "script",
-                        ["name"] = "run_script",
-                        ["args"] = new JsonObject
-                        {
-                            ["code"] =
-                                "call_tool('exec', {'command': 'cd ..', 'cwd': '$fw_tmp'})\nreturn True\n",
-                        },
-                    },
-                ]
-            ),
+                },
+            ]),
             tools
         );
         Assert.True(await host.TryClaimBusyAsync());
         await host.ChatAsync("placement");
         var row = owner.History().First(row => row["role"]?.ToString() == "tool");
-        var responses = row["parts"]!.AsArray().Select(part => part!["functionResponse"]!).ToArray();
+        var responses = row["parts"]!
+            .AsArray()
+            .Select(part => part!["functionResponse"]!)
+            .ToArray();
 
         var direct = responses[0]["__meta"]!["exec"]!;
         Assert.Equal("master", direct["nodeId"]!.GetValue<string>());
@@ -135,7 +136,13 @@ public sealed class MainExecPlacementTests
         {
             ["output"] = "ok",
             [ExecPlacement.Field] = valid
-                ? ExecPlacement.Create("C:\\w", "default", "quiet-otter", "C:\\w\\a.log", "C:\\w\\b")
+                ? ExecPlacement.Create(
+                    "C:\\w",
+                    "default",
+                    "quiet-otter",
+                    "C:\\w\\a.log",
+                    "C:\\w\\b"
+                )
                 : new JsonObject { ["cwd"] = "/w", ["cwdSource"] = "forged" },
         };
         var parsed = ExecPlacement.Parse(raw[ExecPlacement.Field]);
