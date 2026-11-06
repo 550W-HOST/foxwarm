@@ -7,7 +7,8 @@ namespace Foxwarm.Tests;
 public sealed class SessionCreationNodeDefaultTests
 {
     [Fact]
-    public async Task Omitted_selection_follows_existing_same_Agent_main_without_cwd_or_online_requirement()
+    // User decision 2026-11-06: the Agent main Session's Node is not a placement fallback.
+    public async Task Omitted_selection_ignores_the_Agent_main_Session_Node()
     {
         using var temp = new TempDirectory();
         var options = new ResponsesClientOptions(
@@ -40,7 +41,7 @@ public sealed class SessionCreationNodeDefaultTests
         await main.UpdateCwdAsync("remote-only-directory");
         Assert.False(manager.Nodes.Online("offline"));
         var following = await manager.CreateNamedAsync("named", "following", null, null);
-        Assert.Equal("offline", manager.CurrentNode(following));
+        Assert.Equal("master", manager.CurrentNode(following));
         Assert.Null(following.Entry.Snapshot().AuthorityEnvelope["cwd"]);
         var explicitMaster = await manager.CreateNamedAsync(
             "named",
@@ -84,7 +85,7 @@ public sealed class SessionCreationNodeDefaultTests
         await manager.MoveIdentityAsync(main, new JsonObject { ["newSessionId"] = "renamed-main" });
         Assert.Equal("alias", manager.Catalog.Resolve("named/main")["kind"]!.GetValue<string>());
         Assert.Equal(
-            "offline",
+            "master",
             manager.CurrentNode(
                 await manager.CreateNamedAsync("named", "alias-follower", null, null)
             )
