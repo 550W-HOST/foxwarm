@@ -1,3 +1,4 @@
+import { renewAuthenticatedBrowserCookie } from './browserAuth'
 import { Component, lazy, StrictMode, Suspense, useEffect, useState, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import 'katex/dist/katex.min.css'
@@ -61,9 +62,12 @@ function AuthenticatedWebUiRoot() {
     }).then(data => {
       if (!active) return
       if (data?.role === 'webui' && Array.isArray(data.sessionIds) && typeof data.identityId === 'string') {
+        renewAuthenticatedBrowserCookie()
         setAuth({ role: 'webui', identityId: data.identityId, sessionIds: data.sessionIds.filter((id: unknown): id is string => typeof id === 'string') })
-      } else if (data?.role === 'admin') setAuth({ role: 'admin' })
-      else setFailed(true)
+      } else if (data?.role === 'admin') {
+        renewAuthenticatedBrowserCookie()
+        setAuth({ role: 'admin' })
+      } else setFailed(true)
     }).catch(() => { if (active) setFailed(true) })
     return () => { active = false }
   }, [])

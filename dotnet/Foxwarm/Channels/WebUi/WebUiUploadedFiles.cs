@@ -92,7 +92,7 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
                     : Path.GetFileName(path);
                 var mime = Mime(SessionWait.Text((entry as JsonObject)?["mimeType"]), filename);
                 await using var source = OpenStaged(path);
-                var isImage = mime.StartsWith("image/", StringComparison.Ordinal);
+                var isImage = ImageInputPolicy.IsImageInput(mime);
                 byte[]? bytes = null;
                 if (isImage)
                 {

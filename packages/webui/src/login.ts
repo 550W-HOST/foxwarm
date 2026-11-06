@@ -1,3 +1,4 @@
+import { recoverBrowserCookie, writeBrowserAuthCookie } from './browserAuth'
 import { initializeThemeRuntime } from './theme/runtime'
 
 try {
@@ -14,6 +15,10 @@ function mountLogin() {
   const error = document.getElementById('error')!
   let pending = false
   let request: AbortController | null = null
+  const recovery = new AbortController()
+  let edited = false
+  const recoveryTimeout = window.setTimeout(() => recovery.abort(), 5000)
+  void recoverBrowserCookie(recovery.signal, () => !pending && !edited).finally(() => window.clearTimeout(recoveryTimeout))
 
   const clearError = () => {
     error.textContent = ''
@@ -25,7 +30,7 @@ function mountLogin() {
     if (invalid) { input.setAttribute('aria-invalid', 'true'); input.focus({ preventScroll: true }) }
     if (!matchMedia('(prefers-reduced-motion: reduce)').matches) error.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 180 })
   }
-  input.addEventListener('input', clearError)
+  input.addEventListener('input', () => { edited = true; recovery.abort(); clearError() })
   reveal.addEventListener('click', () => {
     const visible = input.type === 'password'
     input.type = visible ? 'text' : 'password'
@@ -38,6 +43,7 @@ function mountLogin() {
     if (pending) return
     const token = input.value.trim()
     if (!token) { fail('Enter your access token.', true); return }
+    recovery.abort()
     pending = true
     clearError()
     input.readOnly = true
@@ -59,8 +65,7 @@ function mountLogin() {
         fail(response.status === 401 || response.status === 403 ? 'Invalid token. Try again.' : 'Couldn’t sign in. Try again.', response.status === 401 || response.status === 403)
         return
       }
-      const cookiePath = location.pathname.replace(/[^/]+$/, '') || '/'
-      document.cookie = `foxwarm_token=${encodeURIComponent(token)}; path=${cookiePath}; max-age=31536000; SameSite=Strict${location.protocol === 'https:' ? '; Secure' : ''}`
+      writeBrowserAuthCookie(token)
       try { localStorage.setItem('foxwarm_token', token) } catch { /* The authenticated cookie remains usable without browser storage. */ }
       input.value = ''
       succeeded = true
@@ -84,7 +89,7 @@ function mountLogin() {
       }
     }
   })
-  window.addEventListener('pagehide', () => request?.abort())
+  window.addEventListener('pagehide', () => { recovery.abort(); request?.abort() })
 
   // Consume legacy sign-in links without retaining their credential in history.
   if (location.hash.startsWith('#token=')) {

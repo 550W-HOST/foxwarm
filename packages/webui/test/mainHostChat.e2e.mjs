@@ -167,7 +167,7 @@ try {
   await page.click('button[type="submit"]')
   await page.waitForSelector('button[aria-label="New session"]'); await waitForWebUiReady(page)
   assert.equal(await page.evaluate(() => localStorage.getItem('foxwarm_token')), token)
-  assert((await page.cookies()).some(cookie => cookie.name === 'foxwarm_token' && cookie.value === token && cookie.path === '/' && !cookie.httpOnly && cookie.sameSite === 'Strict'))
+  assert((await page.cookies()).some(cookie => cookie.name === 'foxwarm_token' && cookie.value === token && cookie.path === '/' && !cookie.httpOnly && cookie.sameSite === 'Lax'))
   assert(!(page.url().includes(token)))
   await page.click(NEW_SESSION_DIALOG_TRIGGER)
   await page.waitForSelector('form[role="dialog"]')

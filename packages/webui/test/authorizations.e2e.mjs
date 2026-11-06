@@ -84,7 +84,19 @@ async function authorize(page) {
   await articleButton(page, text.includes('Not authorized') ? 'Authorize' : 'Reauthorize')
   const popup = await (await popupTarget).page()
   await popup.waitForSelector('#consent')
+  const beforeCallback = (await api(page, 'test/state')).data
+  await popup.setRequestInterception(true)
+  const isComplete = request => request.method() === 'POST' && new URL(request.url()).pathname === '/preview/api/mcp/oauth/complete'
+  const complete = popup.waitForRequest(isComplete)
+  popup.on('request', request => {
+    if (!isComplete(request)) void request.continue()
+  })
   await popup.click('#consent')
+  const pending = await complete
+  const afterGet = (await api(page, 'test/state')).data
+  assert.equal(afterGet.exchanges, beforeCallback.exchanges, 'callback GET cannot exchange a code, even with a cookie')
+  assert.deepEqual(afterGet.grantStatus, beforeCallback.grantStatus, 'callback GET cannot publish an authorization result')
+  await pending.continue()
   await page.waitForFunction(() => document.querySelector('article')?.textContent.includes('Authorized'))
 }
 
@@ -93,7 +105,7 @@ for (const browserName of ['chromium', 'firefox']) {
   const executablePath = browserName === 'firefox'
     ? process.env.FOXWARM_E2E_FIREFOX || '/usr/bin/firefox-esr'
     : process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium'
-  test(`${browserName}: administrator OAuth, cross-site Strict cookie completion, prefix/CIMD and scoped denial`, {
+  test(`${browserName}: administrator OAuth, cross-site Lax cookie completion, prefix/CIMD and scoped denial`, {
     skip: !existsSync(executablePath), timeout: 180000,
   }, async t => {
     const env = await fixture()
@@ -112,7 +124,7 @@ for (const browserName of ['chromium', 'firefox']) {
       const dcr = (await api(page, 'test/state')).data
       assert.equal(dcr.exchanges, 1)
       assert.equal(dcr.registrations, 1)
-      assert.equal(dcr.callback.cookieOnRedirect, false, 'Strict admin cookie does not accompany the AS redirect')
+      assert.equal(dcr.callback.cookieOnRedirect, true, 'Lax admin cookie accompanies the top-level AS redirect without authorizing an exchange')
       assert.equal(dcr.callback.cookieOnComplete, true, 'first-party complete POST authenticates the administrator')
       assert(!JSON.stringify((await api(page, 'setup/authorizations')).data).includes('fixture-client-secret'))
       await articleButton(page, 'Disconnect')

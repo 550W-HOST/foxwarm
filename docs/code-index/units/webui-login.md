@@ -1,11 +1,11 @@
 # Unit: WebUI token sign-in
 
-Files: packages/webui/src/login.html, packages/webui/src/login.css, packages/webui/src/login.ts, packages/webui/build/loginHtml.ts, packages/webui/public/login.html, packages/webui/test/login.e2e.mjs
+Files: packages/webui/src/login.html, packages/webui/src/login.css, packages/webui/src/login.ts, packages/webui/src/browserAuth.ts, packages/webui/build/loginHtml.ts, packages/webui/public/login.html, packages/webui/test/login.e2e.mjs
 Secondary files: packages/webui/vite.config.ts, packages/webui/src/components/foxDrawing.json, packages/webui/src/components/FoxLoaders.css, packages/webui/src/theme/runtime.ts, src/channels/webuiChannel.ts
 
 ## Purpose
 
-Responsive, independent token entry before the authenticated application. The existing public file and POST authentication endpoint remain the backend integration surface. Login does not mount the application, request protected assets, enumerate Sessions or infer an administrator/WebUI role.
+Responsive, independent token entry before the authenticated application. The existing public file and POST authentication endpoint remain the backend integration surface. Login does not mount the application, request protected assets or enumerate Sessions. Legacy-cookie recovery uses the authenticated session endpoint to confirm a valid role before re-entry.
 
 ## Symbols and generated output
 
@@ -18,7 +18,11 @@ Responsive, independent token entry before the authenticated application. The ex
 
 **Browser/API compatibility constraint with explicitly retained ownership.** The login frontend owns the normal credential cookie; the backend verifies requests through existing authentication. This serves [deployment-relative WebUI access](../modules/webui.md#d-webui-dynamic-base-path). Replacing the host implementation does not authorize a second cookie writer or changed login route semantics.
 
-[2026-10-19] Browser cookie scope follows the actual visible login directory. The configured public URL is not the only valid entry: one instance must support both direct root access and a reverse-proxy base path under the same configuration, including a proxy that strips its prefix. After successful `POST ./api/auth` validation, the existing frontend writes `foxwarm_token` at `location.pathname.replace(/[^/]+$/, '') || '/'`, with a 365-day max-age (31,536,000 seconds), SameSite=Strict and Secure only on HTTPS. The validation endpoint returns JSON only: it does not create, renew or delete cookies, nor infer the pre-proxy path from public URL configuration, Referer or forwarding headers. This keeps cookie ownership at the browser, which knows the address actually used.
+[2026-11-06] The current browser cookie policy is SameSite=Lax with a rolling 365-day max-age (31,536,000 seconds), Secure only on HTTPS. This replaces the SameSite=Strict policy recorded on 2026-10-19. Lax admits external top-level safe navigation, including cold PWA entry, while excluding cross-site POST and embedded requests. Successful login writes the cookie after `POST ./api/auth` validation. Every authenticated app boot renews the existing script-readable cookie for another 365 days after a valid administrator or scoped WebUI response; renewal is not limited to legacy-cookie migration. Server token revocation remains authoritative.
+
+Browser cookie scope follows the actual visible login directory, `location.pathname.replace(/[^/]+$/, '') || '/'`. The configured public URL is not the only valid entry: one instance supports direct root access and a reverse-proxy base path, including a proxy that strips its prefix. The validation endpoint returns JSON only: it does not create, renew or delete cookies, nor infer the pre-proxy path from public URL configuration, Referer or forwarding headers. This retains the browser-owned path decision from 2026-10-19.
+
+Recovery never imports a localStorage token. An old Strict-cookie login landing checks `./api/auth/session` using same-origin cookies, migrates only after a valid admin/webui response, then re-enters once. Explicit login pages and hash-token links remain manual. The probe is bounded to five seconds, aborted on user input/submission/departure, and guarded by deployment-scoped sessionStorage against redirect loops; denied storage leaves the manual form usable. Failed/offline/invalid probes preserve credentials. Successful app boot clears the guard.
 
 An existing same-name/domain/path HttpOnly cookie blocks script replacement. The .NET host retains valid old raw/derived cookie reads, but does not automatically migrate browser storage through backend path inference. The separate native Desktop cookie is owned by [host runtime](./host-runtime.md#desktop-boundary), not this frontend flow.
 
@@ -34,6 +38,6 @@ Successful authentication keeps the existing `foxwarm_token` cookie/local-storag
 
 ## Verification
 
-`login.e2e.mjs` serves the generated page under a nested deployment prefix with synthetic credentials only. Native Chromium checks desktop/mobile/short/landscape geometry, exact canonical fox paths, theme restoration, zero protected-asset dependencies, mask/reveal, pending deduplication, successful cookie/storage persistence, invalid/network/server/timeout recovery, fragment handling, storage denial and reduced motion. Screenshot artifacts use empty fields or synthetic pending data.
+`login.e2e.mjs` serves the generated page under a nested deployment prefix with synthetic credentials only. Native Chromium checks desktop/mobile/short/landscape geometry, exact canonical fox paths, theme restoration, zero protected-asset dependencies, mask/reveal, pending deduplication, successful cookie/storage persistence, invalid/network/server/timeout recovery, fragment handling, storage denial and reduced motion. External-navigation cases cover Strict-cookie recovery, Lax GET versus POST/iframe behavior, failed recovery, redirect-loop prevention and browser-process relaunch. Screenshot artifacts use empty fields or synthetic pending data.
 
-`mainHostLoginCookies.e2e.mjs` verifies the unchanged generated page against one owned .NET configuration through direct-root and prefix-stripping proxy URLs: cookie scope/lifetime, validation-only responses, scoped authorization/revocation and the old HttpOnly replacement limitation.
+`mainHostLoginCookies.e2e.mjs` verifies the unchanged generated page against one owned .NET configuration through direct-root and prefix-stripping proxy URLs: cookie scope/lifetime, validation-only responses, scoped authorization/revocation, renewal of both Strict and Lax cookies on authenticated boot, and the old HttpOnly replacement limitation.

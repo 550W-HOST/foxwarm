@@ -1,13 +1,14 @@
 import type { CSSProperties } from 'react'
 import { ArrowUp, Bot, Check, ChevronDown, Code2, FileText, GitBranch, MessageSquare, Plus, Search, Settings, SquareTerminal } from 'lucide-react'
 import { themeVariantCssVariables, type ThemeVariant } from '../theme/manifest'
+import { FoxwarmMark } from './FoxwarmMark'
 import './ThemeWorkbenchPreview.css'
 
 /** A static, locally scoped sample: no Session data, runtime mutation, or live controls. */
 export default function ThemeWorkbenchPreview({ variant }: { variant: ThemeVariant }) {
   return <div className="theme-scene" data-theme-workbench-preview data-card={variant.composition.card} data-header={variant.composition.header} data-density={variant.composition.density} data-treatment={variant.componentTreatment} style={themeVariantCssVariables(variant) as CSSProperties} role="img" aria-label="Theme preview showing navigation, a conversation, tool output, code, and the composer">
     <aside className="theme-scene-sidebar">
-      <div className="theme-scene-brand"><span aria-hidden="true">🦊</span><strong>Foxwarm</strong><span className="theme-scene-brand-settings"><Settings /></span></div>
+      <div className="theme-scene-brand"><FoxwarmMark className="theme-scene-brand-mark" /><strong>Foxwarm</strong><span className="theme-scene-brand-settings"><Settings /></span></div>
       <div className="theme-scene-launchers">
         <div><Bot /><span>Agents</span><Plus /></div>
         <div><Code2 /><span>Code</span><ChevronDown /></div>

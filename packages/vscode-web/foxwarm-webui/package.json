@@ -4,6 +4,7 @@
   "private": true,
   "publisher": "foxwarm",
   "license": "MIT",
+  "icon": "media/icon.png",
   "browser": "./dist/extension.js",
   "activationEvents": ["*"],
   "contributes": {

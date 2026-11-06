@@ -98,6 +98,7 @@ internal sealed class WebUiAccess(SessionRuntime runtime, AccessConfiguration co
             && (
                 context.Request.Path is { Value: "/" or "/login.html" }
                 || context.Request.Path.StartsWithSegments("/assets")
+                || HttpServer.IsBrandAsset(context.Request.Path)
             )
         )
             return true;

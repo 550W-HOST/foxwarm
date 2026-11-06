@@ -56,7 +56,7 @@ async function login(root, token, oldValue) {
     }
     await page.waitForFunction(() => !document.querySelector('#token'))
     const cookies = await context.cookies(), cookie = cookies.find(cookie => cookie.name === 'foxwarm_token' && cookie.path === path)
-    assert(cookie); assert.equal(cookie.value, token); assert.equal(cookie.httpOnly, false); assert.equal(cookie.secure, false); assert.equal(cookie.sameSite, 'Strict')
+    assert(cookie); assert.equal(cookie.value, token); assert.equal(cookie.httpOnly, false); assert.equal(cookie.secure, false); assert.equal(cookie.sameSite, 'Lax')
     assert(cookie.expires >= before + 31536000 - 2 && cookie.expires <= Date.now() / 1000 + 31536000 + 2, JSON.stringify(cookie))
     assert(cookies.some(cookie => cookie.path === '/sibling/' && cookie.value === 'unrelated-sibling'))
     assert.equal(await page.evaluate(() => localStorage.getItem('foxwarm_token')), token)
@@ -77,6 +77,21 @@ try {
       const opened = await login(root, host.token, oldValue)
       await opened.context.close()
     }
+  }
+  // Every authenticated app entry renews the actual cookie, including an existing Lax cookie, without
+  // requiring a new token submission or trusting a localStorage credential.
+  for (const root of [host.origin + '/', proxyRoot]) for (const sameSite of ['Strict', 'Lax']) {
+    const context = await browser.createBrowserContext(), page = await context.newPage()
+    try {
+      const path = new URL(root).pathname
+      const before = Date.now() / 1000
+      await context.setCookie({ name: 'foxwarm_token', value: host.token, domain: '127.0.0.1', path, sameSite, expires: before + 86400 })
+      await page.goto(root, { waitUntil: 'networkidle2' })
+      const renewed = (await context.cookies()).find(c => c.name === 'foxwarm_token' && c.path === path)
+      assert.equal(renewed?.sameSite, 'Lax')
+      assert(renewed.expires >= before + 31536000 - 2 && renewed.expires <= Date.now() / 1000 + 31536000 + 2, JSON.stringify(renewed))
+      assert.equal(await page.evaluate(() => localStorage.getItem('foxwarm_token')), null)
+    } finally { await context.close() }
   }
   const scoped = await login(proxyRoot, 'synthetic-reader-cookie', null)
   config.access.identities.reader.token = 'synthetic-reader-rotated'
