@@ -283,7 +283,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
         archiveWriter = SqliteArchiveMessageStore.AcquireWriter(ArchiveDatabase);
         Vector = new(
             this.root,
-            Foxwarm.Vector.VectorConfiguration.Capture(models.ConfigurationOwner?.AppConfiguration)
+            Foxwarm.Vector.VectorConfiguration.Capture(models.ConfigurationOwner?.AppConfiguration),
+            admissionStop.Token
         );
         Vector.Diagnostic = (code, id) =>
             Console.Error.WriteLine("Vector " + code + (id.Length == 0 ? "" : " session=" + id));

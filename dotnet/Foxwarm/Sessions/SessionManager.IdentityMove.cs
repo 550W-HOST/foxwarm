@@ -456,6 +456,8 @@ internal sealed partial class SessionManager
         bool copyMemory
     )
     {
+        // Repair resolves canonical Archive locators. Do not move those sources underneath it.
+        await Vector.WaitForInitializationAsync();
         var owner = operation.Owner;
         var record = operation.Record;
         var aliases = record
