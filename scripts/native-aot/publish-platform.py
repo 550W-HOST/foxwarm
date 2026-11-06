@@ -7,15 +7,16 @@ from pathlib import Path
 import platform
 import shutil
 import subprocess
+import tempfile
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[2]
-SDK = "10.0.401"
-RUNTIME = "10.0.12"
+SDK = "10.0.403"
+RUNTIME = "10.0.14"
 
 
-def run(*args):
-    return subprocess.check_output(args, cwd=ROOT, text=True, stderr=subprocess.STDOUT)
+def run(*args, cwd=ROOT):
+    return subprocess.check_output(args, cwd=cwd, text=True, stderr=subprocess.STDOUT)
 
 
 def main():
@@ -26,16 +27,29 @@ def main():
     expected = ("Windows", "AMD64") if args.target == "win-x64" else ("Darwin", "arm64")
     if (platform.system(), platform.machine()) != expected:
         parser.error(f"Publish {args.target} on its native host: expected {expected}")
-    if run("dotnet", "--version").strip() != SDK:
-        parser.error(f"Use SDK {SDK}")
-    output = args.output.resolve()
+    args.output = args.output.resolve()
+    # SDK resolution starts at the invocation cwd, not at the supplied project.
+    # Keep this pin job-local; installing an SDK alone does not select it when
+    # hosted runners already carry a newer one.
+    with tempfile.TemporaryDirectory(prefix="fw-native-sdk-") as temporary:
+        sdk_directory = Path(temporary)
+        (sdk_directory / "global.json").write_text(json.dumps({
+            "sdk": {"version": SDK, "rollForward": "disable", "allowPrerelease": False}
+        }), encoding="utf-8")
+        if run("dotnet", "--version", cwd=sdk_directory).strip() != SDK:
+            parser.error(f"Use SDK {SDK}")
+        publish(args, sdk_directory)
+
+
+def publish(args, sdk_directory):
+    output = args.output
     output.mkdir(parents=True, exist_ok=True)
     # Keep all trim/AOT diagnostics visible; do not trim features to obtain an artifact.
     subprocess.run([
-        "dotnet", "publish", "dotnet/Foxwarm.CliNode/Foxwarm.CliNode.csproj",
+        "dotnet", "publish", str(ROOT / "dotnet/Foxwarm.CliNode/Foxwarm.CliNode.csproj"),
         "-c", "Release", "-r", args.target, "-p:PublishAot=true",
         f"-p:RuntimeFrameworkVersion={RUNTIME}", "-o", str(output),
-    ], cwd=ROOT, check=True)
+    ], cwd=sdk_directory, check=True)
     nuget = Path(os.environ.get("NUGET_PACKAGES", str(Path.home() / ".nuget/packages")))
     notices = output / "notices"
     notices.mkdir(exist_ok=True)
@@ -62,7 +76,7 @@ def main():
         (notices / f"{name}-LICENSE.txt").write_bytes(data)
         sources.append(f"{name}-LICENSE.txt {url}")
     (notices / "SOURCES.txt").write_text("\n".join(sources) + "\n", encoding="utf-8")
-    inventory = [platform.platform(), run("dotnet", "--info"), run("dotnet", "list", "dotnet/Foxwarm.CliNode/Foxwarm.CliNode.csproj", "package", "--include-transitive")]
+    inventory = [platform.platform(), run("dotnet", "--info", cwd=sdk_directory), run("dotnet", "list", str(ROOT / "dotnet/Foxwarm.CliNode/Foxwarm.CliNode.csproj"), "package", "--include-transitive", cwd=sdk_directory)]
     if args.target == "osx-arm64":
         inventory.append(run("clang", "--version"))
         for name in ["Foxwarm.CliNode", "libfoxwarm-pty.dylib", "foxwarm-pty-helper"]:

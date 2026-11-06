@@ -254,12 +254,13 @@ replace review of the actual dependency inputs and redistribution obligations.
 ## Windows x64 and macOS arm64 native packages
 
 The sibling `native-cli-platforms.yml` workflow publishes the same CLI graph on
-`windows-latest` and Apple Silicon `macos-15`, using SDK 10.0.401 and runtime
-10.0.12. It is callable from the native distribution and release workflows.
+`windows-latest` and Apple Silicon `macos-15`, using SDK 10.0.403 and runtime
+10.0.14. It is callable from the native distribution and release workflows.
 Windows/macOS qualification is required before their channels are published;
 see the [platform evidence and limits](../../docs/code-index/units/dotnet-cli-platforms-aot.md).
 
-On the corresponding native host, with that SDK selected:
+On the corresponding native host, with that SDK installed (the script selects it
+using an owned temporary `global.json`, without changing repository SDK policy):
 
 ```sh
 # Use win-x64 on Windows; osx-arm64 on Apple Silicon.

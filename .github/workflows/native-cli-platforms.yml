@@ -34,7 +34,7 @@ jobs:
           node-version: 24.21.0
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
-          dotnet-version: '10.0.401'
+          dotnet-version: '10.0.403'
       - name: Publish the full native CLI graph and collect notices
         run: |
           mkdir -p .temp/native-cli-downloads
