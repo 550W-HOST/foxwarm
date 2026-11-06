@@ -1,5 +1,6 @@
 import type { Message, ModelStreamPart, ModelStreamToolCall, SessionStreamEvent } from './components/chatShared'
 import { extractOpenAIReasoningSummaryTitles } from './reasoningSummary'
+import { getStreamingToolSummary } from './streamingToolSummary'
 
 export type StreamingAssistantDraft = {
   streamId: string
@@ -15,20 +16,30 @@ export type StreamingAssistantDraft = {
   incompletePrefix?: boolean
 }
 
-/** Only the live reasoning tail supplies a caption; later output retires its title. */
-export function getStreamingReasoningTitle(draft: StreamingAssistantDraft | null | undefined): string | undefined {
-  if (!draft) return undefined
-  let reasoning: string
+export type StreamingCaption = { kind: 'reasoning' | 'tool'; text: string; key: string; order: number }
+
+/** Eligible captions in output order; ordinary output never cancels a previous caption. */
+export function getStreamingCaptions(draft: StreamingAssistantDraft | null | undefined): StreamingCaption[] {
+  if (!draft) return []
+  const captions: StreamingCaption[] = []
+  const reasoning = new Map<number, string[]>()
   if (draft.parts) {
-    const tail = draft.parts.at(-1)
-    if (tail?.kind !== 'reasoning') return undefined
-    reasoning = draft.parts.filter(part => part.kind === 'reasoning' && part.outputIndex === tail.outputIndex)
-      .map(part => part.text || '').filter(Boolean).join('\n')
-  } else {
-    if (draft.text || draft.toolCalls.length) return undefined
-    reasoning = draft.reasoning
+    for (const part of draft.parts) {
+      if (part.kind !== 'reasoning') continue
+      const summaries = reasoning.get(part.outputIndex) || []
+      summaries[part.summaryIndex || 0] = part.text || ''
+      reasoning.set(part.outputIndex, summaries)
+    }
+  } else reasoning.set(-1, [draft.reasoning])
+  for (const [order, summaries] of reasoning) {
+    const text = extractOpenAIReasoningSummaryTitles(summaries.filter(Boolean).join('\n')).at(-1)
+    if (text) captions.push({ kind: 'reasoning', text, key: `${draft.streamId}:reasoning:${order}`, order })
   }
-  return extractOpenAIReasoningSummaryTitles(reasoning).at(-1)
+  for (const call of draft.toolCalls) {
+    const text = getStreamingToolSummary(call)
+    if (text) captions.push({ kind: 'tool', text, key: call.id || `${draft.streamId}:tool:${call.index}`, order: call.index })
+  }
+  return captions.sort((left, right) => left.order - right.order)
 }
 
 export function buildStreamingAssistantMessage(draft: StreamingAssistantDraft | null): Message | null {

@@ -3,7 +3,8 @@ import { createPortal } from 'react-dom'
 import RuntimeFox from './RuntimeFox'
 import FoxThinkingText from './FoxThinkingText'
 import type { TimelineView } from '../chatPreferences'
-import { getStreamingReasoningTitle, type StreamingAssistantDraft } from '../streamingAssistantDraft'
+import type { StreamingAssistantDraft } from '../streamingAssistantDraft'
+import { useProcessingCaption } from '../useProcessingCaption'
 import { isRuntimeStateInactiveName, type SessionRuntimeState } from '../sessionRuntimeState'
 import { getRuntimeStatusView, type RuntimeStatusView } from '../runtimeStatus'
 
@@ -88,14 +89,7 @@ const ProcessingStatus = memo(function ProcessingStatus({ sessionBusy, runtimeSt
 
   useEffect(() => { if (open && position) panel.current?.focus({ preventScroll: true }) }, [open, position !== null])
 
-  const tool = runtimeState?.tool
-  const toolName = tool?.name.split(/[.:/]/).at(-1)
-  const toolSummary = view?.kind === 'tool' && tool?.source !== 'mcp' && (toolName === 'exec' || toolName === 'run_script')
-    ? tool?.argsPreview?.trim() : undefined
-  const reasoningTitle = view?.playful && timelineView === 'conversation'
-    && (!runtimeState?.active?.streamId || runtimeState.active.streamId === streamingAssistantDraft?.streamId)
-    ? getStreamingReasoningTitle(streamingAssistantDraft) : undefined
-  const liveCaption = toolSummary || reasoningTitle
+  const liveCaption = useProcessingCaption(view, runtimeState, streamingAssistantDraft, timelineView)
   const caption = view && <>
     <RuntimeFox kind={view.kind} />
     {liveCaption ? <span className="min-w-0 truncate" title={liveCaption}>{liveCaption}</span> : view.playful ? <FoxThinkingText label={view.label} title={view.label} /> : <span className="min-w-0 truncate" title={view.label}>{view.label}</span>}

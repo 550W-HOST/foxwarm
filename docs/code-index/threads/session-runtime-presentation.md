@@ -8,12 +8,12 @@ A logical model request can contain several physical provider attempts. Retry co
 
 ## D-session-runtime-presentation
 
-[2026-10-17] Session status uses one consistent borderless presentation with explicit operation identity. Requesting the model uses a fox spinner and the theme accent; executing a tool uses the theme special color and working pose. Waiting uses a sleeping fox. Maintenance, retries, stopping, interruption and failures have recognizable poses and concise labels. Decorative rotating captions belong only to ordinary model requests. Chat uses the active `exec`/`run_script` summary as its visible caption in every timeline mode; other tools retain their operation labels. Conversation can replace the ordinary request caption with the latest complete heading while its current draft ends in reasoning, using the same first-line bold-heading recognition as collapsed Reasoning. Without an eligible live caption it uses the ordinary runtime caption. Tool identity and execution Node remain available in the stable accessible label and details. Detailed and Conversation views use the same status facts.
+[2026-10-17] Session status uses one consistent borderless presentation with explicit operation identity. Requesting the model uses a fox spinner and the theme accent; executing a tool uses the theme special color and working pose. Waiting uses a sleeping fox. Maintenance, retries, stopping, interruption and failures have recognizable poses and concise labels. Decorative rotating captions belong only to ordinary model requests. Chat uses eligible live captions under [live caption continuity](#d-runtime-caption-continuity), otherwise the ordinary runtime caption. Tool identity and execution Node remain available in the stable accessible label and details. Detailed and Conversation views use the same status facts.
 
 | Situation | Presentation |
 | --- | --- |
-| Ordinary model request | Accent spinner and decorative caption, or eligible live reasoning heading in Conversation; stable accessible operation label |
-| Tool execution | Special-color working fox; Chat shows an active exec/script summary when available, with resolved tool identity and Node in its accessible label and details |
+| Ordinary model request | Accent spinner and decorative or eligible live caption; stable accessible operation label |
+| Tool execution | Special-color working fox; Chat shows an eligible live caption when available, with resolved tool identity and Node in its accessible label and details |
 | Foreground compaction | Accent maintenance pose and planning/application phase |
 | Background compaction | Secondary maintenance detail; never replaces active foreground work |
 | Retry backoff | Warning retry pose and countdown/attempt count |
@@ -28,6 +28,12 @@ A logical model request can contain several physical provider attempts. Retry co
 The managed backend projects `requesting-model`, `running-tool`, `waiting`, `idle`, and inactive `llm-failed`; the retained TypeScript backend has the original four states. [Terminal foreground failure](../behaviors/messages-and-turns.md#terminal-foreground-request-failure-net) owns classification, clearing, persistence and completion-attention behavior. Retry, stopping and compaction metadata remain orthogonal projections, not scheduler states. A blocking wait for compaction must replace a stale tool phase and release only its exact owned runtime instance. Background job metadata cannot acquire foreground ownership. List/Architecture summaries consume the same presentation mapping; their existing bounded data and busy-ring behavior remain intact.
 
 The current status opens a keyboard/touch-accessible details popover for actual tool identity, source/MCP server, argument preview, batch position, Node, requested model, wait targets/deadline, retry cause and compaction phase. Missing information stays absent. Provider arguments remain bounded previews, not complete invocation payloads. Reduced motion preserves labels and controls while suppressing pose/caption animation.
+
+### D-runtime-caption-continuity
+
+[2026-11-07] Live Chat captions connect reasoning, tool generation, execution and the next request without brief fallback flashes. Complete `exec`/`run_script` summary strings can appear in every timeline mode while arguments are still streaming, including supported `call_tool` routing. Conversation also accepts the latest complete reasoning heading under the Reasoning card's exact first-line bold-heading gate. Within one live request, incomplete later headings, tool arguments and body output retain the last eligible caption until newer eligible content arrives. New request identity clears ordinary caption ownership; captions are never recovered from unrelated history or Sessions.
+
+A displayed tool summary stays visible for at least three seconds from its first display, including generation time. Execution does not restart that interval. While held, only the newest eligible candidate is retained; intermediate captions are not queued. At expiry, display that candidate or the ordinary fallback, and keep an active tool's own summary while it continues. Consecutive reasoning headings have no added delay. The tool minimum can cross completion into the next ordinary model request. Stop, waiting, failure, retry, compaction, idle and Session changes cancel retention immediately. State color, fox pose, accessible operation label and runtime details always follow the current runtime, independently of retained text.
 
 ## D-session-control-feedback
 

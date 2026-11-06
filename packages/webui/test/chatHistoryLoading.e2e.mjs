@@ -21,6 +21,8 @@ async function buildFixtureBundle() {
     import { createRoot } from 'react-dom/client'
     import Chat from ${JSON.stringify(chatEntry)}
     import { storeChatViewportState } from './src/chatViewportState'
+    import { initializeThemeRuntime, setThemeSelection } from './src/theme'
+    window.initializeFixtureTheme = () => { initializeThemeRuntime(); setThemeSelection({themeId:'foxwarm.default',colorMode:'dark'}) }
 
     if (new URLSearchParams(location.search).has('restoreOldAnchor')) {
       storeChatViewportState('fixture/main', { kind: 'anchor', messageKey: 'seq-local-1', offsetPx: 24 })
@@ -2963,60 +2965,163 @@ test('real Chat routes per-call activity without refetching history or flashing 
   assert.deepEqual(await states(), [false, false, false])
 })
 
-test('real Chat status follows live reasoning headings, timeline mode and active tool summaries', async t => {
+async function captionChat(t) {
   const page = await browser.newPage()
   t.after(() => page.close())
   await page.setViewport({ width: 390, height: 800 })
-  await page.goto(fixtureUrl, { waitUntil: 'load' })
+  await page.goto(`${fixtureUrl}?nodePicker=1`, { waitUntil: 'load' })
   await page.waitForFunction(() => window.fixtureHistoryRequestCount === 1)
   await page.evaluate(() => {
+    window.initializeFixtureTheme()
     window.fixtureTimelineView = 'conversation'
     window.renderFixtureChats()
     window.resolveFixtureHistory(0, undefined, 0, { busy: true })
     window.setCaptionRuntime = runtimeState => window.emitFixtureEvent({ type: 'session-state', session: {
       id: 'fixture/main', busy: runtimeState.busy, queueLength: 0, messageCount: 1, historyVersion: 0, runtimeState,
     } })
-    window.setCaptionRuntime({ state: 'requesting-model', busy: true, queueLength: 0, active: { phase: 'normal-turn', streamId: 'caption-stream' } })
   })
-  await page.waitForSelector('[data-fox-thinking-copy]')
+  const runtime = state => page.evaluate(state => window.setCaptionRuntime({ queueLength: 0, busy: true, ...state }), state)
   const emit = event => page.evaluate(event => window.emitFixtureEvent({ type: 'session-event', event }), event)
-  const stream = { streamVersion: 2, streamId: 'caption-stream', llmRequestId: 'caption-request', startedAt: 100 }
-  await emit({ ...stream, type: 'model-stream-reset', sequence: 0 })
-  await emit({ ...stream, type: 'model-stream-update', sequence: 1, partDeltas: [
-    { outputIndex: 0, kind: 'reasoning', summaryIndex: 0, textDelta: { offset: 0, text: '**Inspecting the source**\nBody.' } },
-  ] })
-  const caption = '[data-runtime-caption]'
-  await page.waitForFunction(() => document.querySelector('[data-runtime-caption]')?.textContent === 'Inspecting the source')
+  const request = async id => {
+    await runtime({state:'requesting-model',active:{phase:'normal-turn',streamId:id}})
+    await emit({type:'model-stream-reset',streamVersion:2,streamId:id,llmRequestId:id,sequence:0})
+  }
+  const caption = () => page.$eval('[data-runtime-caption]', el => el.textContent)
+  const expect = text => page.waitForFunction(text => document.querySelector('[data-runtime-caption]')?.textContent === text, {}, text)
+  const shot = async name => {
+    if (process.env.FOXWARM_E2E_SCREENSHOT_DIR) await page.screenshot({path:join(process.env.FOXWARM_E2E_SCREENSHOT_DIR, name + '.png')})
+  }
+  return {page,runtime,emit,request,caption,expect,shot}
+}
+
+test('real Chat captions connect reasoning, generated summaries, execution and the latest next-request heading', async t => {
+  const {page,runtime,emit,request,caption,expect,shot} = await captionChat(t)
+  await request('caption-stream')
+  let sequence = 0
+  const update = delta => emit({type:'model-stream-update',streamVersion:2,streamId:'caption-stream',sequence:++sequence,...delta})
+  await update({partDeltas:[{outputIndex:0,kind:'reasoning',summaryIndex:0,textDelta:{offset:0,text:'**Inspecting the source**\nBody.'}}]})
+  await expect('Inspecting the source')
   assert.equal(await page.$('[data-fox-thinking-copy]'), null)
   assert.equal(await page.$eval('[data-processing-runtime-state]', el => el.getAttribute('aria-label')), 'Requesting model…')
+  await update({partDeltas:[{outputIndex:1,kind:'reasoning',summaryIndex:0,textDelta:{offset:0,text:'**Next heading'}}]})
+  assert.equal(await caption(), 'Inspecting the source')
+  await update({partDeltas:[{outputIndex:1,kind:'reasoning',summaryIndex:0,textDelta:{offset:14,text:'**\nBody.'}}]})
+  await expect('Next heading')
+  await update({partDeltas:[{outputIndex:2,kind:'text',contentIndex:0,textDelta:{offset:0,text:'The answer begins.'}}]})
+  await expect('Next heading')
   const longTitle = 'Checking the implementation and its streaming lifecycle '.repeat(5).trim()
-  await emit({ ...stream, type: 'model-stream-update', sequence: 2, partDeltas: [
-    { outputIndex: 0, kind: 'reasoning', summaryIndex: 1, textDelta: { offset: 0, text: `**${longTitle}**\nBody.` } },
-  ] })
-  await page.waitForFunction(title => document.querySelector('[data-runtime-caption]')?.textContent === title, {}, longTitle)
-  assert.equal(await page.$eval(`${caption} span[title]`, el => el.title), longTitle)
-  assert.equal(await page.$eval(caption, el => el.getBoundingClientRect().right <= innerWidth), true)
-  for (const mode of ['detailed', 'grouped', 'conversation']) {
-    await page.evaluate(mode => { window.fixtureTimelineView = mode; window.renderFixtureChats() }, mode)
-    await page.waitForFunction(mode => mode === 'conversation'
-      ? !document.querySelector('[data-fox-thinking-copy]')
-      : !!document.querySelector('[data-fox-thinking-copy]'), {}, mode)
+  await update({partDeltas:[{outputIndex:1,kind:'reasoning',summaryIndex:1,textDelta:{offset:0,text:'**'+longTitle+'**\nBody.'}}]})
+  await expect(longTitle)
+  assert.equal(await page.$eval('[data-runtime-caption] span[title]',el=>el.title),longTitle)
+  assert.equal(await page.$eval('[data-runtime-caption]',el=>el.getBoundingClientRect().right<=innerWidth),true)
+  for (const mode of ['detailed','grouped','conversation']) {
+    await page.evaluate(mode => {window.fixtureTimelineView=mode;window.renderFixtureChats()},mode)
+    await page.waitForFunction(mode => mode === 'conversation' ? !document.querySelector('[data-fox-thinking-copy]') : !!document.querySelector('[data-fox-thinking-copy]'),{},mode)
   }
-  await emit({ ...stream, type: 'model-stream-update', sequence: 3, partDeltas: [
-    { outputIndex: 1, kind: 'text', contentIndex: 0, textDelta: { offset: 0, text: 'The answer begins.' } },
-  ] })
-  await page.waitForSelector('[data-fox-thinking-copy]')
-  await page.evaluate(() => window.setCaptionRuntime({ state: 'running-tool', busy: true, queueLength: 0,
-    tool: { id: 'script', name: 'run_script', source: 'builtin', argsPreview: 'Validate streaming updates', startedAt: 200 },
-  }))
-  await page.waitForFunction(() => document.querySelector('[data-runtime-caption]')?.textContent === 'Validate streaming updates')
-  await page.click(caption)
+  const prefix = '{"summary":"Validate streaming'
+  await update({partDeltas:[{outputIndex:3,kind:'tool-call'}],toolCallDeltas:[{index:3,id:'script',name:'run_script',argumentsDelta:{offset:0,text:prefix}}]})
+  await expect(longTitle)
+  await update({toolCallDeltas:[{index:3,argumentsDelta:{offset:prefix.length,text:' updates","code":"unfinished'}}]})
+  await expect('Validate streaming updates')
+  const firstShown = Date.now()
+  const requestInk = await page.$eval('[data-runtime-caption]',el=>getComputedStyle(el).color)
+  await shot('caption-generation')
+  assert.equal(await page.$eval('[data-processing-runtime-state]',el=>el.dataset.runtimePresentation),'request')
+  await page.evaluate(() => {
+    window.captionChanges=[]
+    new MutationObserver(() => {
+      const text=document.querySelector('[data-runtime-caption]')?.textContent
+      if(window.captionChanges.at(-1)?.text!==text) window.captionChanges.push({text,time:Date.now()})
+    }).observe(document.querySelector('[data-processing-status-slot]'),{subtree:true,childList:true,characterData:true})
+  })
+  await new Promise(resolve=>setTimeout(resolve,900))
+  await page.evaluate(() => window.emitFixtureMessage({role:'model',parts:[{functionCall:{id:'script',name:'run_script',args:{summary:'Validate streaming updates',code:'return 1'}}}],__meta:{seq:2,timestamp:200,llmRequestId:'caption-stream',llmSegment:{outputStart:0,outputEndExclusive:4,complete:true}}}))
+  await expect('Validate streaming updates')
+  await runtime({state:'running-tool',tool:{id:'script',name:'run_script',source:'builtin',argsPreview:'Validate streaming updates',startedAt:200}})
+  await expect('Validate streaming updates')
+  assert.equal(await page.$eval('[data-processing-runtime-state]',el=>el.dataset.runtimePresentation),'tool')
+  assert.notEqual(await page.$eval('[data-runtime-caption]',el=>getComputedStyle(el).color),requestInk)
+  assert.ok(await page.$('[data-runtime-fox="tool"]'))
+  await shot('caption-execution')
+  await page.click('[data-runtime-caption]')
   await page.waitForSelector('[data-runtime-details]')
-  assert.match(await page.$eval('[data-runtime-details]', el => el.textContent), /run_script/)
+  assert.match(await page.$eval('[data-runtime-details]',el=>el.textContent),/run_script/)
   await page.keyboard.press('Escape')
-  await page.evaluate(() => window.setCaptionRuntime({ state: 'waiting', busy: false, queueLength: 0,
-    waiting: { waitId: 'pause', waitingFor: 'input' },
-  }))
-  await page.waitForFunction(() => document.querySelector('[data-runtime-caption]')?.textContent === 'Waiting for input')
-  assert.equal(await page.evaluate(() => window.fixtureHistoryRequestCount), 1)
+  await request('next-request')
+  const nextUpdate = (sequence,text) => emit({type:'model-stream-update',streamVersion:2,streamId:'next-request',sequence,partDeltas:[{outputIndex:0,kind:'reasoning',summaryIndex:0,textDelta:{offset:0,text}}]})
+  await nextUpdate(1,'**Intermediate heading**\nBody.')
+  await expect('Validate streaming updates')
+  await nextUpdate(2,'**Latest heading**\nBody.')
+  assert.equal(await page.$eval('[data-runtime-caption]',el=>getComputedStyle(el).color),requestInk)
+  assert.ok(await page.$('[data-fox-loader="spinner"]'))
+  await shot('caption-held-next-request')
+  await new Promise(resolve=>setTimeout(resolve,700))
+  await nextUpdate(3,'**Latest heading**\nBody grows.')
+  await new Promise(resolve=>setTimeout(resolve,700))
+  await nextUpdate(4,'**Latest heading**\nBody grows again.')
+  await expect('Validate streaming updates')
+  await expect('Latest heading')
+  const elapsed = Date.now()-firstShown
+  assert.ok(elapsed>=2800 && elapsed<3900, `minimum is measured from generation, without update/execution resets: ${elapsed}ms`)
+  assert.ok((await page.evaluate(()=>window.captionChanges)).every(item=>['Validate streaming updates','Latest heading'].includes(item.text)))
+  await emit({type:'model-stream-update',streamVersion:2,streamId:'next-request',sequence:5,trimBeforeOutputIndex:1,partDeltas:[{outputIndex:1,kind:'text',textDelta:{offset:0,text:'Retained through committed prefix and body output.'}}]})
+  await expect('Latest heading')
+  // A reset can reach Chat before the matching runtime-state publication. It must retire the old heading.
+  await emit({type:'model-stream-reset',streamVersion:2,streamId:'fresh-request',sequence:0})
+  await page.waitForSelector('[data-fox-thinking-copy]')
+  await request('fresh-request')
+  await page.waitForSelector('[data-fox-thinking-copy]')
+  assert.equal(await page.evaluate(()=>window.fixtureHistoryRequestCount),1)
+})
+
+test('real Chat tool caption retention is latest-wins in every mode and critical states cancel it', async t => {
+  const {page,runtime,emit,request,caption,expect,shot} = await captionChat(t)
+  const tool = (id,text) => runtime({state:'running-tool',tool:{id,name:'exec',source:'node',argsPreview:text,startedAt:200}})
+  await tool('first','First tool')
+  await expect('First tool')
+  const start=Date.now()
+  await tool('skipped','Skipped tool')
+  await tool('latest','Latest tool')
+  for (const mode of ['detailed','grouped','conversation']) {
+    await page.evaluate(mode=>{window.fixtureTimelineView=mode;window.renderFixtureChats()},mode)
+    await expect('First tool')
+  }
+  await expect('Latest tool')
+  assert.ok(Date.now()-start>=2800)
+  await shot('caption-latest-tool')
+  await request('without-heading')
+  await expect('Latest tool')
+  await page.waitForSelector('[data-fox-thinking-copy]')
+  assert.ok(Date.now()-start>=5800)
+  for (const state of [
+    {state:'waiting',busy:false,waiting:{waitId:'pause',waitingFor:'input'}},
+    {state:'running-tool',stopping:true},
+    {state:'llm-failed',busy:false},
+    {state:'requesting-model',active:{phase:'compaction'}},
+    {state:'requesting-model',retry:{attempt:1,maxAttempts:3}},
+    {state:'idle',busy:false},
+  ]) {
+    await tool('held-'+JSON.stringify(state),'Must clear immediately')
+    await expect('Must clear immediately')
+    await runtime(state)
+    await page.waitForFunction(()=>document.querySelector('[data-runtime-caption]')?.textContent!=='Must clear immediately')
+    await request('clean-'+JSON.stringify(state))
+    await page.waitForSelector('[data-fox-thinking-copy]')
+  }
+  // Generated summaries keep the same mode gating as executed summaries; reasoning remains Conversation-only.
+  for (const mode of ['detailed','grouped','conversation']) {
+    await request(mode)
+    await page.evaluate(mode=>{window.fixtureTimelineView=mode;window.renderFixtureChats()},mode)
+    await emit({type:'model-stream-update',streamVersion:2,streamId:mode,sequence:1,toolCallDeltas:[{index:0,id:'generated-'+mode,name:'call_tool',argumentsDelta:{offset:0,text:'{"toolId":"node:worker/exec","args":{"summary":"Generated in '+mode+'","command":"unfinished'}}]})
+    await expect('Generated in '+mode)
+    await runtime({state:'waiting',busy:false})
+  }
+  await tool('session-owned','Session-owned caption')
+  await expect('Session-owned caption')
+  await page.evaluate(()=>window.renderFixtureChats(1,0,'fixture/other'))
+  await page.waitForFunction(()=>window.fixtureHistoryRequestCount===2)
+  await page.waitForFunction(()=>document.querySelector('[data-runtime-caption]')?.textContent!=='Session-owned caption')
+  await page.evaluate(()=>window.resolveFixtureHistory(0,undefined,0,{sessionId:'fixture/other',busy:true}))
+  await page.waitForSelector('[data-fox-thinking-copy]')
+  assert.notEqual(await caption(),'Session-owned caption')
 })

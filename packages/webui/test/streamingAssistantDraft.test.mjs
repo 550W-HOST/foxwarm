@@ -4,7 +4,9 @@ import { build } from 'esbuild'
 
 const sourcePath = new URL('../src/streamingAssistantDraft.ts', import.meta.url).pathname
 const bundle = await build({ entryPoints: [sourcePath], bundle: true, platform: 'node', format: 'esm', write: false, logLevel: 'silent' })
-const { getStreamingReasoningTitle, applyModelStreamEvent, applyModelStreamSnapshot, buildStreamingAssistantMessage, parseStreamingToolArguments, reconcileCommittedModelDraft, shouldClearDraftAfterHistory, shouldClearDraftForCommittedModel } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`)
+const { getStreamingCaptions, applyModelStreamEvent, applyModelStreamSnapshot, buildStreamingAssistantMessage, parseStreamingToolArguments, reconcileCommittedModelDraft, shouldClearDraftAfterHistory, shouldClearDraftForCommittedModel } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`)
+
+const getStreamingReasoningTitle = draft => getStreamingCaptions(draft).filter(caption => caption.kind === 'reasoning').at(-1)?.text
 
 test('synthetic assistant messages retain the canonical request identity for render reconciliation', () => {
   const message = buildStreamingAssistantMessage({
@@ -312,7 +314,7 @@ test('ordered empty reasoning items survive without inventing a loading-only rea
 })
 
 
-test('live reasoning caption follows complete headings and retires when later output begins', () => {
+test('live reasoning caption keeps complete headings across subsequent output and incomplete reasoning items', () => {
   let draft = applyModelStreamSnapshot({ streamId: 'headings', iteration: 1, sequence: 1, startedAt: 100,
     reasoning: '', text: '', toolCalls: [], parts: [
       { outputIndex: 0, kind: 'reasoning', summaryIndex: 0, text: '  **First heading**\nBody.' },
@@ -329,19 +331,71 @@ test('live reasoning caption follows complete headings and retires when later ou
   })
   assert.equal(getStreamingReasoningTitle(draft), 'Next heading')
   for (const kind of ['text', 'tool-call', 'image-generation']) {
-    assert.equal(getStreamingReasoningTitle({ ...draft, parts: [...draft.parts, { outputIndex: 1, kind }] }), undefined)
+    assert.equal(getStreamingReasoningTitle({ ...draft, parts: [...draft.parts, { outputIndex: 1, kind }] }), 'Next heading')
   }
-  assert.equal(getStreamingReasoningTitle({ ...draft, parts: [...draft.parts, { outputIndex: 1, kind: 'reasoning', text: '' }] }), undefined)
+  assert.equal(getStreamingReasoningTitle({ ...draft, parts: [...draft.parts, { outputIndex: 1, kind: 'reasoning', text: '' }] }), 'Next heading')
   assert.equal(getStreamingReasoningTitle(applyModelStreamSnapshot(null)), undefined)
   assert.equal(getStreamingReasoningTitle(applyModelStreamEvent(draft, { type: 'model-stream-reset', streamId: 'new' })), undefined)
 })
 
-test('reasoning caption shares the card first-line rule and accepts legacy reasoning-only streams', () => {
+test('reasoning caption shares the card first-line rule and survives legacy body and tool output', () => {
   const draft = { streamId: 'legacy', reasoning: '**Title**\nBody.\n**Last title**\nBody.', text: '', toolCalls: [] }
   assert.equal(getStreamingReasoningTitle(draft), 'Last title')
   for (const reasoning of ['Plain reasoning', 'Plain first line\n**Later bold line**', '**Incomplete', '**Title** trailing prose']) {
     assert.equal(getStreamingReasoningTitle({ ...draft, reasoning }), undefined)
   }
-  assert.equal(getStreamingReasoningTitle({ ...draft, text: 'Answer' }), undefined)
-  assert.equal(getStreamingReasoningTitle({ ...draft, toolCalls: [{ index: 0, name: 'exec' }] }), undefined)
+  assert.equal(getStreamingReasoningTitle({ ...draft, text: 'Answer' }), 'Last title')
+  assert.equal(getStreamingReasoningTitle({ ...draft, toolCalls: [{ index: 0, name: 'exec' }] }), 'Last title')
+})
+
+
+test('generated tool summaries wait for complete strings and decode escapes before the object is complete', () => {
+  const summary = 'Inspect "quoted" paths, \\slashes,\nUnicode 雪 🦊'
+  const encoded = JSON.stringify(summary)
+  const caption = (name, argumentsText) => getStreamingCaptions({ streamId: 's', reasoning: '', text: '',
+    toolCalls: [{ index: 0, id: 'call', name, arguments: argumentsText }],
+  }).at(-1)?.text
+  for (const name of ['exec', 'run_script']) {
+    for (let end = 0; end < encoded.length; end++) {
+      assert.equal(caption(name, '{"summary":' + encoded.slice(0, end)), undefined)
+    }
+    assert.equal(caption(name, '{"summary":' + encoded), summary)
+    assert.equal(caption(name, '{"summary":' + encoded + ',"command":"unfinished'), summary)
+    assert.equal(caption(name, '{"summary":"Unicode \\u96ea"'), 'Unicode 雪')
+    assert.equal(caption(name, '{"command":' + JSON.stringify('echo {"summary":"wrong"}') + ',"summary":"right"'), 'right')
+    for (const raw of ['{"command":"summary: wrong', '{"command":{"summary":"wrong"}', '{"other":[{"summary":"wrong"}]', '{"summary":"   "}', '{"summary":123}']) {
+      assert.equal(caption(name, raw), undefined)
+    }
+  }
+  for (const route of [
+    { toolId: 'node:provider/worker/exec' }, { source: 'node', name: 'exec' },
+    { toolId: 'builtin:run_script' }, { source: 'builtin', name: 'run_script' },
+  ]) {
+    const prefix = JSON.stringify(route).slice(0, -1)
+    assert.equal(caption('call_tool', prefix + ',"args":{"summary":' + encoded + ',"code":"unfinished'), summary)
+    // The wrapper string can still be streaming when its decoded inner summary string is complete.
+    const argsJson = JSON.stringify('{"summary":' + encoded + ',"command":"unfinished')
+    assert.equal(caption('call_tool', prefix + ',"argsJson":' + argsJson.slice(0, -1)), summary)
+    assert.equal(caption('call_tool', JSON.stringify({ ...route, argsJson: JSON.stringify({ summary }) })), summary)
+  }
+  for (const route of [{toolId:'mcp:server/exec'}, {source:'mcp',name:'run_script'}, {name:'exec'}, {toolId:'builtin:read'}, {toolId:'mcp:server/exec',source:'node',name:'exec'}]) {
+    assert.equal(caption('call_tool', JSON.stringify({...route,args:{summary}})),undefined)
+  }
+  for (const name of ['mcp:server/exec', 'server.exec', 'functions.exec', 'read']) {
+    assert.equal(caption(name, JSON.stringify({summary})), undefined)
+  }
+})
+
+test('caption candidates respect output order and the per-item first-line heading gate', () => {
+  const draft = { streamId: 's', reasoning: '', text: '', toolCalls: [{ index: 1, id: 'call', name: 'exec', arguments: '{"summary":"Run checks"' }], parts: [
+    {outputIndex:0,kind:'reasoning',summaryIndex:0,text:'**Earlier**\nBody.'},
+    {outputIndex:1,kind:'tool-call'},
+    {outputIndex:2,kind:'reasoning',summaryIndex:0,text:'**Incomplete'},
+    {outputIndex:3,kind:'text',text:'Body output'},
+  ] }
+  assert.equal(getStreamingCaptions(draft).at(-1).text, 'Run checks')
+  draft.parts[2].text = '**Latest**\nBody.'
+  assert.equal(getStreamingCaptions(draft).at(-1).text, 'Latest')
+  draft.parts[2].text = 'Plain first line\n**Not a heading caption**'
+  assert.equal(getStreamingReasoningTitle(draft), 'Earlier')
 })

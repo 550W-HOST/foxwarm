@@ -1737,6 +1737,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
             </HistoryCommit>
             {historyMode === 'continuous' && archivePage.hasLater && <button type="button" disabled={archivePage.loading} className="my-3 text-xs text-fw-accent hover:underline" onClick={() => { void loadArchivePage('later') }}>Load newer messages</button>}
             {displayingLatest && <ProcessingStatus
+              key={sessionId}
               timelineView={timelineView}
               streamingAssistantDraft={streamingAssistantDraft}
               sessionBusy={sessionBusy}
