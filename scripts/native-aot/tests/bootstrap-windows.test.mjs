@@ -45,7 +45,7 @@ for (const scenario of ['native', 'unpublished', 'unsupported', 'server-error'])
       const bundle = join(root, 'bundle/packages/cli-node/dist')
       await mkdir(bundle, { recursive: true })
       await writeFile(join(bundle, 'client.bundle.js'), 'require("fs").writeFileSync(process.env.CAPTURE, JSON.stringify({argv:process.argv,cwd:process.cwd(),agents:process.env.FOXWARM_AGENTS_DIR,agent:process.env.FOXWARM_AGENT_DIR}));\n')
-      execFileSync('tar', ['-czf', join(root, 'source.tar.gz'), '-C', join(root, 'bundle'), 'packages'])
+      execFileSync('tar', ['-czf', 'source.tar.gz', '-C', 'bundle', 'packages'], { cwd: root })
       server.listen(0, '127.0.0.1'); await once(server, 'listening')
       const origin = `http://127.0.0.1:${server.address().port}`
       const script = join(root, 'run.ps1')

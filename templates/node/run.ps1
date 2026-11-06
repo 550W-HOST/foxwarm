@@ -138,7 +138,16 @@ if (-not $NativeExecutable) {
     Invoke-WebRequest -Uri $tarUrl -OutFile $tarFile -UseBasicParsing
 
     Write-Host "Extracting source ..."
-    tar -xzf $tarFile -C $SourceDir
+    # GNU tar on PATH interprets a drive-qualified archive as a remote host.
+    # Extract from the owned source directory so both GNU tar and Windows tar
+    # receive local relative paths.
+    Push-Location -LiteralPath $SourceDir
+    try {
+        & tar -xzf './source.tar.gz' -C '.'
+        if ($LASTEXITCODE -ne 0) { throw 'Node source extraction failed.' }
+    } finally {
+        Pop-Location
+    }
     Remove-Item -LiteralPath $tarFile -Force -ErrorAction SilentlyContinue
 
     # ─── Determine entry point ───
