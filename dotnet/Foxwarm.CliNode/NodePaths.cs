@@ -91,10 +91,11 @@ internal sealed class NodePaths(string startupDirectory)
             : session is not null ? "session"
             : "default";
         var raw = explicitCwd ?? session;
-        var basis = session is not null
-            ? FullPath(Home(session), StartupDirectory)
-            : StartupDirectory;
-        var cwd = FullPath(Home(raw ?? StartupDirectory), basis);
+        // Session-owned exec defaults to the Agent directory, like Main and CLI file tools;
+        // external owners have no Agent root and keep the startup directory.
+        var fallback = agent is null ? StartupDirectory : AgentDirectory(agent);
+        var basis = session is not null ? FullPath(Home(session), StartupDirectory) : fallback;
+        var cwd = FullPath(Home(raw ?? fallback), basis);
         string Invalid(string reason) =>
             $"Cannot start exec on node `{node}`: working directory is invalid ({reason}). Source: {source}.{(raw is null ? "" : $" Raw cwd: `{raw}`.")} Resolved cwd: `{cwd}`.";
         FileAttributes attributes;

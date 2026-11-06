@@ -17,7 +17,10 @@ internal sealed class NodeFileTools(NodePaths paths)
     )
     {
         if (tool == "get_default_cwd")
-            return new JsonObject { ["output"] = paths.StartupDirectory };
+            return new JsonObject
+            {
+                ["output"] = agent is null ? paths.StartupDirectory : paths.AgentDirectory(agent),
+            };
         // External Source contexts do not request programmatic capture or resolved-path sidecars.
         programmatic &= agent is not null;
         args ??= new JsonObject();
