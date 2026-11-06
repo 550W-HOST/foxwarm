@@ -277,7 +277,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         );
         clientOptions = options with { Tools = tools.ModelDefinitions() };
         this.models = models;
-        timers = new(this.root, DeliverTimerAsync);
+        timers = Foxwarm.Timers.MainTimers.Reporting(this.root, DeliverTimerAsync);
         waitTimeouts = new SessionWaitTimeouts(this);
         waitLiveness = new WaitLiveness(this);
         Journal = new LlmRequestJournalStore(this.root);

@@ -329,6 +329,20 @@ internal sealed partial class MainToolScript : IAsyncDisposable
         return await RunAsync(record, context, token, null, null, resume, snapshot);
     }
 
+    /// <summary>Returns a run's inspection projection, as get_toolscript_run does.</summary>
+    internal async Task<JsonObject> ReadOwnedRunAsync(
+        string runId,
+        string owner,
+        CancellationToken token
+    )
+    {
+        var record =
+            await store.ReadAsync(runId, token)
+            ?? throw new InvalidDataException("ToolScript run not found: " + runId);
+        ToolScriptRunStore.RequireOwned(record, owner);
+        return Project(record, lean: false);
+    }
+
     private async Task<JsonObject> RequiredAsync(
         string id,
         ToolScriptContext context,

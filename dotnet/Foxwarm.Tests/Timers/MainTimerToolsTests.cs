@@ -507,4 +507,59 @@ public sealed class MainTimerToolsTests
             )["error"]
         );
     }
+
+    [Fact]
+    public async Task Update_timer_pauses_and_resumes_and_list_timers_shows_it()
+    {
+        await using var f = await Fixture.Create();
+        var created = await f.Call("create_timer", Future());
+        var id = created["timer"]!["id"]!.GetValue<string>();
+        Assert.False(created["timer"]!["paused"]!.GetValue<bool>());
+        var invalid = await f.Call(
+            "update_timer",
+            new JsonObject { ["timerId"] = id, ["paused"] = "true" }
+        );
+        Assert.NotNull(invalid["error"]);
+        var paused = await f.Call(
+            "update_timer",
+            new JsonObject { ["timerId"] = id, ["paused"] = true }
+        );
+        Assert.Null(paused["error"]);
+        var listed = (await f.Call("list_timers", new JsonObject()))["timers"]!.AsArray().Single()!;
+        Assert.True(listed["paused"]!.GetValue<bool>());
+        Assert.Null(listed["nextRunAt"]);
+        Assert.Equal(created["timer"]!["at"]!.GetValue<double>(), listed["at"]!.GetValue<double>());
+        var resumed = await f.Call(
+            "update_timer",
+            new JsonObject { ["timerId"] = id, ["paused"] = false }
+        );
+        Assert.False(resumed["timer"]!["paused"]!.GetValue<bool>());
+        Assert.NotNull(resumed["timer"]!["nextRunAt"]);
+        // The administrator WebUI path runs the same owner operation.
+        var viaOwner = await f.Manager.ExecuteTimerForOwnerAsync(
+            f.Owner.Id,
+            "update_timer",
+            new JsonObject
+            {
+                ["timerId"] = id,
+                ["paused"] = true,
+                ["cron"] = "0 9 * * 1-5",
+            }
+        );
+        Assert.Null(viaOwner["error"]);
+        Assert.True(viaOwner["timer"]!["paused"]!.GetValue<bool>());
+        Assert.Equal("0 9 * * 1-5", viaOwner["timer"]!["cron"]!.GetValue<string>());
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            f.Manager.ExecuteTimerForOwnerAsync(
+                f.Owner.Id,
+                "update_timer",
+                new JsonObject
+                {
+                    ["timerId"] = id,
+                    ["cron"] = "0 9 * * *",
+                    ["afterSeconds"] = 5,
+                }
+            )
+        );
+    }
 }

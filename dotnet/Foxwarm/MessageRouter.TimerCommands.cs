@@ -68,8 +68,11 @@ internal sealed partial class MessageRouter
                                             ? $"cron: `{timer["cron"]}`"
                                             : "at: " + Date(timer["at"])
                                     )
-                                    + " - next: "
-                                    + Date(timer["nextRunAt"])
+                                    + (
+                                        SessionCatalog.Flag(timer["paused"])
+                                            ? " - paused"
+                                            : " - next: " + Date(timer["nextRunAt"])
+                                    )
                                     + " - "
                                     + (
                                         SessionCatalog.Flag(timer["newSession"])

@@ -100,7 +100,7 @@ internal sealed partial class MainTimers
             if (!record.Internal && record.Reason is null)
                 Start(record);
         Console.WriteLine(
-            $"Timer startup: loaded={items.Length}, scheduled={items.Count(record => !record.Internal && record.Reason is null)}, inactive={items.Count(record => record.Internal || record.Reason is not null)}."
+            $"Timer startup: loaded={items.Length}, scheduled={items.Count(record => !record.Internal && record.Reason is null && !record.Paused)}, paused={items.Count(record => !record.Internal && record.Reason is null && record.Paused)}, inactive={items.Count(record => record.Internal || record.Reason is not null)}."
         );
     }
 
@@ -112,9 +112,12 @@ internal sealed partial class MainTimers
         long first;
         lock (gate)
         {
+            // A paused timer keeps its record but has no clock. Resume replaces the record,
+            // whose new clock starts from the next occurrence.
             if (
                 !running
                 || closed
+                || record.Paused
                 || record.Clock is not null
                 || !records.TryGetValue(record.Id, out var current)
                 || !ReferenceEquals(record, current)
@@ -194,18 +197,20 @@ internal sealed partial class MainTimers
                 }
                 TaskCompletionSource? accepted = null;
                 JsonObject? captured = null;
+                var overlapped = false;
                 lock (gate)
                 {
-                    if (
+                    var eligible =
                         running
                         && !closed
                         && records.TryGetValue(record.Id, out var current)
                         && ReferenceEquals(current, record)
-                        && !record.StopSource.IsCancellationRequested
-                        && (
-                            !TimerArguments.Script(row) || !scriptInvocations.ContainsKey(record.Id)
-                        )
-                    )
+                        && !record.StopSource.IsCancellationRequested;
+                    overlapped =
+                        eligible
+                        && TimerArguments.Script(row)
+                        && scriptInvocations.ContainsKey(record.Id);
+                    if (eligible && !overlapped)
                     {
                         accepted = new(TaskCreationOptions.RunContinuationsAsynchronously);
                         deliveries.Add(accepted.Task);
@@ -217,6 +222,8 @@ internal sealed partial class MainTimers
                 }
                 if (accepted is not null)
                     _ = FireAsync(record, captured!, accepted);
+                else if (overlapped)
+                    await RecordSkippedAsync(record);
                 if (cron is null || exhausted)
                     break;
             }
@@ -242,6 +249,8 @@ internal sealed partial class MainTimers
     {
         var firedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var delivered = false;
+        JsonObject? outcome = null;
+        string? failure = null;
         try
         {
             try
@@ -250,41 +259,48 @@ internal sealed partial class MainTimers
                     await before(record.Id);
                 var payload = (JsonObject)captured.DeepClone();
                 payload["__timerFiredAt"] = firedAt;
-                await deliver(payload);
+                outcome = await deliver(payload);
                 delivered = true;
             }
             catch (Exception error)
             {
+                failure = error.Message;
                 Report("Timer delivery failed: " + record.Id, error);
             }
-            if (!record.Cron || delivered || TimerArguments.Script(captured))
-            {
-                await ChangeAsync(
-                    null,
-                    record,
-                    candidate =>
-                    {
-                        lock (gate)
-                            if (
-                                !records.TryGetValue(record.Id, out var current)
-                                || !ReferenceEquals(current, record)
-                            )
-                                return null;
-                        var rows = candidate["timers"]!.AsArray();
-                        var index = rows.Select((row, position) => (row, position))
-                            .First(pair =>
-                                pair.row is JsonObject item && Text(item["id"]) == record.Id
-                            )
-                            .position;
-                        if (record.Cron)
-                            rows[index]!["lastTriggeredAt"] = firedAt;
-                        else
-                            rows.RemoveAt(index);
+            var run = RunEntry(firedAt, captured, delivered, outcome, failure);
+            await ChangeAsync(
+                null,
+                null,
+                candidate =>
+                {
+                    TimerRecord? current;
+                    lock (gate)
+                        records.TryGetValue(record.Id, out current);
+                    if (current is null || current.Ambiguous)
                         return null;
-                    },
-                    acceptedCompletion: true
-                );
-            }
+                    var rows = candidate["timers"]!.AsArray();
+                    var index = rows.Select((row, position) => (row, position))
+                        .First(pair => pair.row is JsonObject item && Text(item["id"]) == record.Id)
+                        .position;
+                    var row = rows[index]!.AsObject();
+                    if (ReferenceEquals(current, record))
+                    {
+                        if (!record.Cron)
+                        {
+                            rows.RemoveAt(index);
+                            return null;
+                        }
+                        if (delivered || TimerArguments.Script(captured))
+                            row["lastTriggeredAt"] = firedAt;
+                    }
+                    // An accepted replacement keeps its own schedule but still records
+                    // what the earlier invocation did.
+                    AppendRun(row, run);
+                    return null;
+                },
+                acceptedCompletion: true,
+                preserveCurrent: record.Id
+            );
         }
         catch (Exception error)
         {
@@ -299,6 +315,102 @@ internal sealed partial class MainTimers
                     scriptInvocations.Remove(record.Id);
             }
             accepted.TrySetResult();
+        }
+    }
+
+    /// <summary>Recent results kept on each timer record, newest first.</summary>
+    internal const int RecentRunLimit = 10;
+    private const int RunErrorLimit = 500;
+
+    private static JsonObject RunEntry(
+        long firedAt,
+        JsonObject captured,
+        bool delivered,
+        JsonObject? outcome,
+        string? failure
+    )
+    {
+        var entry = new JsonObject { ["at"] = firedAt };
+        if (!TimerArguments.Script(captured))
+            entry["outcome"] = delivered ? "delivered" : "failed";
+        else
+        {
+            var status = Text(outcome?["status"]);
+            entry["outcome"] =
+                !delivered ? "failed"
+                : outcome is null ? "completed"
+                : status switch
+                {
+                    "completed" => "completed",
+                    "waiting" => "paused",
+                    _ => "failed",
+                };
+            if (Text(outcome?["runId"]) is { Length: > 0 } runId)
+                entry["runId"] = runId;
+            failure ??= Text(outcome?["error"]) ?? Text(outcome?["error"]?["message"]);
+        }
+        if (Text(entry["outcome"]) == "failed" && failure is { Length: > 0 })
+            entry["error"] = failure.Length > RunErrorLimit ? failure[..RunErrorLimit] : failure;
+        return entry;
+    }
+
+    /// <summary>Reads the bounded run list tolerantly: rows written before it existed,
+    /// or with an unrecognized value, have no recent runs.</summary>
+    internal static JsonArray RecentRuns(JsonObject row) =>
+        new(
+            (row["recentRuns"] as JsonArray ?? [])
+                .OfType<JsonObject>()
+                .Where(entry =>
+                    Number(entry["at"]) is not null && Text(entry["outcome"]) is not null
+                )
+                .Take(RecentRunLimit)
+                .Select(entry => (JsonNode?)entry.DeepClone())
+                .ToArray()
+        );
+
+    private static void AppendRun(JsonObject row, JsonObject entry)
+    {
+        var runs = RecentRuns(row);
+        runs.Insert(0, entry);
+        while (runs.Count > RecentRunLimit)
+            runs.RemoveAt(runs.Count - 1);
+        row["recentRuns"] = runs;
+    }
+
+    private async Task RecordSkippedAsync(TimerRecord record)
+    {
+        var entry = new JsonObject
+        {
+            ["at"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            ["outcome"] = "skipped",
+        };
+        try
+        {
+            await ChangeAsync(
+                null,
+                null,
+                candidate =>
+                {
+                    lock (gate)
+                        if (
+                            !records.TryGetValue(record.Id, out var current)
+                            || !ReferenceEquals(current, record)
+                        )
+                            return null;
+                    var row = candidate["timers"]!
+                        .AsArray()
+                        .OfType<JsonObject>()
+                        .First(item => Text(item["id"]) == record.Id);
+                    AppendRun(row, entry);
+                    return null;
+                },
+                preserveCurrent: record.Id
+            );
+        }
+        catch (Exception error)
+            when (error is IOException or InvalidOperationException or OperationCanceledException)
+        {
+            Report("Timer skipped-run record failed: " + record.Id, error);
         }
     }
 

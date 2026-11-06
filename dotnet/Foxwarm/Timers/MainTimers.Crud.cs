@@ -23,7 +23,16 @@ internal sealed partial class MainTimers
         return (JsonObject)captured.DeepClone();
     }
 
-    internal JsonArray List(string owner)
+    internal JsonArray List(string owner) =>
+        ListWhere(candidate => candidate == owner, recentRuns: false);
+
+    /// <summary>Lists ordinary timers whose owner matches, with their recent run results.</summary>
+    internal JsonArray ListAll(Func<string, bool> owner) => ListWhere(owner, recentRuns: true);
+
+    /// <summary>Returns one owned timer as shown in the timer list, with recent run results.</summary>
+    internal JsonObject Detail(string id, string owner) => View(Get(id, owner), recentRuns: true);
+
+    private JsonArray ListWhere(Func<string, bool> owner, bool recentRuns)
     {
         RequireAvailable();
         TimerRecord[] items;
@@ -33,12 +42,12 @@ internal sealed partial class MainTimers
                     !record.Internal
                     && !record.Ambiguous
                     && record.Ordinary
-                    && Text(record.Row["sessionId"]) == owner
+                    && owner(Text(record.Row["sessionId"])!)
                 )
                 .ToArray();
         return new JsonArray(
             items
-                .Select(record => View(record.Row))
+                .Select(record => View(record.Row, recentRuns))
                 .OrderBy(row => Number(row["nextRunAt"]) ?? 9_007_199_254_740_991)
                 .ThenBy(row => Number(row["createdAt"]) ?? 0)
                 .Select(row => (JsonNode?)row)
@@ -46,15 +55,29 @@ internal sealed partial class MainTimers
         );
     }
 
-    private JsonObject View(JsonObject row)
+    /// <summary>Projects a stored row. Tool results show only the latest run; the WebUI
+    /// list shows the bounded recent-run record.</summary>
+    private JsonObject View(JsonObject row, bool recentRuns = false)
     {
         var view = (JsonObject)row.DeepClone();
+        var runs = RecentRuns(row);
+        view.Remove("recentRuns");
+        if (recentRuns)
+            view["recentRuns"] = runs;
+        else if (runs.Count > 0)
+            view["lastRun"] = runs[0]!.DeepClone();
+        var paused = Flag(row["paused"]);
+        view["paused"] = paused;
         var cron =
             Text(row["cron"]) is string expression && SessionGoal.Trim(expression).Length > 0;
         JsonNode? next = null;
         lock (gate)
         {
-            if (records.TryGetValue(Text(row["id"])!, out var current) && current.Reason is null)
+            if (
+                !paused
+                && records.TryGetValue(Text(row["id"])!, out var current)
+                && current.Reason is null
+            )
             {
                 if (cron)
                     next = current.Next is long stamp ? JsonValue.Create(stamp) : null;
@@ -195,6 +218,12 @@ internal sealed partial class MainTimers
     internal static JsonObject UpdateRow(JsonObject existing, JsonObject args, JsonObject owner)
     {
         var schedule = TimerArguments.Normalize(args, required: false);
+        bool? paused = null;
+        if (args.ContainsKey("paused"))
+            paused =
+                args["paused"] is JsonValue flag && flag.TryGetValue<bool>(out var value)
+                    ? value
+                    : throw new InvalidDataException("paused must be true or false.");
         var message = args.ContainsKey("message");
         var newSession = args["newSession"] is not null;
         var changedTarget =
@@ -207,9 +236,16 @@ internal sealed partial class MainTimers
             && !changedTarget
             && !args.ContainsKey("action")
             && !args.ContainsKey("script")
+            && paused is null
         )
             throw new InvalidDataException("At least one timer field must be supplied to update.");
         var updated = (JsonObject)existing.DeepClone();
+        // A paused timer keeps its schedule. Resume arms a fresh clock from the next
+        // occurrence; an overdue one-time timer fires once, as after a restart.
+        if (paused == true)
+            updated["paused"] = true;
+        else if (paused == false)
+            updated.Remove("paused");
         var action = args.ContainsKey("action")
             ? args["action"]
             : existing["action"] ?? JsonValue.Create("message");

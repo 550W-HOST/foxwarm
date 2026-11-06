@@ -49,6 +49,31 @@ internal sealed partial class SessionManager
         JsonObject args
     ) => ExecuteTimerAsync(source, name, args, CancellationToken.None, authorizeTool: false);
 
+    /// <summary>Runs a timer operation for its owner Session, with the same validation and
+    /// authority as the owner's human timer commands. Used by the administrator WebUI.</summary>
+    internal async Task<JsonObject> ExecuteTimerForOwnerAsync(
+        string ownerId,
+        string name,
+        JsonObject args
+    ) => await ExecuteTimerCommandAsync(await RequiredAsync(ownerId), name, args);
+
+    /// <summary>Reads the ToolScript run recorded for one of a timer's recent results.</summary>
+    internal async Task<JsonObject> ReadTimerRunAsync(
+        string timerId,
+        string ownerId,
+        string runId,
+        CancellationToken token
+    )
+    {
+        var timer = timers.Detail(timerId, ownerId);
+        if (
+            timer["recentRuns"] is not JsonArray runs
+            || !runs.Any(run => SessionWait.Text(run?["runId"]) == runId)
+        )
+            throw new InvalidDataException("Run is not among this timer's recent results.");
+        return await ToolScript.ReadOwnedRunAsync(runId, ownerId, token);
+    }
+
     private async Task<JsonObject> ExecuteTimerAsync(
         SessionOwner source,
         string name,
@@ -76,6 +101,7 @@ internal sealed partial class SessionManager
             [
                 "timerId",
                 "sessionId",
+                "paused",
                 "at",
                 "afterSeconds",
                 "cron",
@@ -279,7 +305,7 @@ internal sealed partial class SessionManager
             row.Remove("effort");
     }
 
-    private async Task DeliverTimerAsync(JsonObject timer)
+    private async Task<JsonObject?> DeliverTimerAsync(JsonObject timer)
     {
         if (TimerArguments.Script(timer))
         {
@@ -319,7 +345,7 @@ internal sealed partial class SessionManager
                         + " "
                         + result.ToJsonString()
                 );
-            return;
+            return outcome as JsonObject;
         }
         SessionOwner target;
         if (MainTimers.Flag(timer["newSession"]))
@@ -338,6 +364,7 @@ internal sealed partial class SessionManager
                 [new JsonObject { ["system"] = MainTimers.TriggeredMessage(timer) }]
             )
         );
+        return null;
     }
 
     private async Task<SessionOwner> CreateTimerSessionAsync(JsonObject timer)

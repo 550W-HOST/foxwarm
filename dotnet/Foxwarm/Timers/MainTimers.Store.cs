@@ -18,7 +18,7 @@ internal sealed class TimerCommittedException(string id, Exception error)
 internal sealed partial class MainTimers : IAsyncDisposable
 {
     private readonly string path;
-    private readonly Func<JsonObject, Task> deliver;
+    private readonly Func<JsonObject, Task<JsonObject?>> deliver;
     private readonly object gate = new();
     private readonly SemaphoreSlim saveLane = new(1, 1);
     private readonly Dictionary<string, TimerRecord> records = new(StringComparer.Ordinal);
@@ -33,14 +33,34 @@ internal sealed partial class MainTimers : IAsyncDisposable
     internal Action<AtomicJsonWriteStage>? WriteStage { get; set; }
     internal Func<string, Task>? BeforeDelivery { get; set; }
     internal Action<string, Exception?>? Diagnostic { get; set; }
+
+    /// <summary>Raised after a committed store change, including recorded run results.</summary>
+    internal event Action? Changed;
     private static readonly JsonSerializerOptions JsonOptions = new() { MaxDepth = int.MaxValue };
     private static readonly JsonDocumentOptions ReadOptions = new() { MaxDepth = int.MaxValue };
 
     internal MainTimers(string root, Func<JsonObject, Task> deliver)
+        : this(
+            async row =>
+            {
+                await deliver(row);
+                return null;
+            },
+            root
+        ) { }
+
+    private MainTimers(Func<JsonObject, Task<JsonObject?>> reporting, string root)
     {
         path = Path.Combine(root, "state", "timers.json");
-        this.deliver = deliver;
+        deliver = reporting;
     }
+
+    /// <summary>Creates timers whose delivery reports a ToolScript run outcome
+    /// (<c>status</c>, <c>runId</c>, <c>error</c>) for the recent-run record.</summary>
+    internal static MainTimers Reporting(
+        string root,
+        Func<JsonObject, Task<JsonObject?>> deliver
+    ) => new(deliver, root);
 
     internal string? Unavailable => unavailable;
 
@@ -155,12 +175,18 @@ internal sealed partial class MainTimers : IAsyncDisposable
         CancellationToken token = default,
         bool acceptedCompletion = false,
         Func<Task>? prepare = null,
-        bool forceReplacement = false
+        bool forceReplacement = false,
+        string? preserveCurrent = null
     )
     {
         await saveLane.WaitAsync(token);
         try
         {
+            // Records change only inside this lane, so the current record stays current
+            // while the candidate is edited and published.
+            if (preserveCurrent is not null)
+                lock (gate)
+                    preserve = records.GetValueOrDefault(preserveCurrent);
             if (!acceptedCompletion)
                 RequireAvailable();
             else if (unavailable is not null)
@@ -191,6 +217,7 @@ internal sealed partial class MainTimers : IAsyncDisposable
             }
             document = next;
             Publish(next, replacement, preserve);
+            NotifyChanged();
             if (partial is not null)
                 throw new TimerCommittedException(
                     replacement
@@ -270,6 +297,18 @@ internal sealed partial class MainTimers : IAsyncDisposable
         }
     }
 
+    private void NotifyChanged()
+    {
+        try
+        {
+            Changed?.Invoke();
+        }
+        catch (Exception error)
+        {
+            Report("Timer change notification failed.", error);
+        }
+    }
+
     internal static string? Text(JsonNode? value) => SessionWait.Text(value);
 
     internal static double? Number(JsonNode? value) => SessionWait.Number(value);
@@ -290,6 +329,7 @@ internal sealed partial class MainTimers : IAsyncDisposable
             && (TimerArguments.Script(Row) || Text(Row["message"]) is not null)
             && (Number(Row["at"]) is not null) != Cron;
         internal bool Cron => Text(Row["cron"]) is string cron && SessionGoal.Trim(cron).Length > 0;
+        internal bool Paused => Flag(Row["paused"]);
         internal CancellationTokenSource StopSource = new();
         internal Task? Clock;
         internal long? Next;

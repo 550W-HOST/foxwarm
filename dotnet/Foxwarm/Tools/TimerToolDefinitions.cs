@@ -134,6 +134,10 @@ internal static class TimerToolDefinitions
       "agentName": {
         "type": "string",
         "description": "Agent for new Sessions; applies to message timers when newSession is true and defaults to the owner Session's Agent."
+      },
+      "paused": {
+        "type": "boolean",
+        "description": "Pause (true) or resume (false) the timer."
       }
     },
     "required": [
