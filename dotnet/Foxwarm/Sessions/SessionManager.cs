@@ -387,15 +387,12 @@ internal sealed partial class SessionManager : IAsyncDisposable
         owner.Entry.WithState(state => state.AuthorityEnvelope.Remove("goalState"));
     }
 
-    public Task LoadAsync() => LoadOwnersAsync(startMainServices: false);
-
-    private async Task LoadOwnersAsync(bool startMainServices)
+    private async Task StartVectorAsync(bool logStartup)
     {
-        await EnsureIdentityStartupAsync();
         try
         {
             await Vector.StartAsync();
-            if (startMainServices)
+            if (logStartup)
                 Console.WriteLine($"Vector startup: mode={Vector.Mode}, ready={Vector.Ready}.");
         }
         catch (Exception error)
@@ -405,6 +402,14 @@ internal sealed partial class SessionManager : IAsyncDisposable
                     + MainLog.SafeFailure(error)
             );
         }
+    }
+
+    public Task LoadAsync() => LoadOwnersAsync(startMainServices: false);
+
+    private async Task LoadOwnersAsync(bool startMainServices)
+    {
+        await EnsureIdentityStartupAsync();
+        _ = StartVectorAsync(startMainServices);
         await timers.LoadAsync();
         var catalogRows = Catalog.List();
         foreach (var row in catalogRows)

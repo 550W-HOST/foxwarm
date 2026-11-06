@@ -64,10 +64,24 @@ public sealed class VectorSourceTimeTests
         var missing = (JsonObject)rows[0].DeepClone();
         missing["id"] = "missing-block";
         missing["block_id"] = 999;
+        var raw = (JsonObject)rows[0].DeepClone();
+        raw["id"] = "raw-control";
+        raw["memory_kind"] = "raw";
+        raw["session_id"] = session;
+        raw["start_timestamp"] = null;
+        raw["end_timestamp"] = null;
+        raw["timestamp"] = null;
+        var legacy = (JsonObject)rows[0].DeepClone();
+        legacy["id"] = "legacy-fact-control";
+        legacy["block_id"] = null;
+        legacy["session_id"] = "main/control";
         using (var table = new VectorTable())
         {
             await table.OpenAsync(f.Dense);
-            await table.AddAsync(rows.Append(missing).ToArray(), merge: false);
+            await table.AddAsync(
+                rows.Concat(new[] { missing, raw, legacy }).ToArray(),
+                merge: false
+            );
         }
         var before = await ReadRows(f.Dense);
         var diagnostics = new List<string>();
@@ -78,7 +92,7 @@ public sealed class VectorSourceTimeTests
             await service.StartAsync();
             await service.WaitForStartupAsync();
             Console.WriteLine(
-                $"Fact source-time repair: 515 rows, 258 locators, {watch.ElapsedMilliseconds} ms"
+                $"Fact source-time repair: 515 candidate rows, 2 untouched controls, 258 locators, {watch.ElapsedMilliseconds} ms"
             );
             var dated = await service.SearchAsync(
                 "violet",
@@ -109,7 +123,13 @@ public sealed class VectorSourceTimeTests
         Assert.Equal(before.Length, after.Length);
         for (var index = 0; index < before.Length; index++)
         {
-            var unknown = after[index]["id"]!.GetValue<string>() == "missing-block";
+            var id = after[index]["id"]!.GetValue<string>();
+            if (id is "raw-control" or "legacy-fact-control")
+            {
+                Assert.True(JsonNode.DeepEquals(before[index], after[index]));
+                continue;
+            }
+            var unknown = id == "missing-block";
             if (unknown)
             {
                 Assert.Null(after[index]["start_timestamp"]);
@@ -140,7 +160,7 @@ public sealed class VectorSourceTimeTests
     public async Task Interrupted_fact_repair_retries_without_a_completion_marker()
     {
         await using var f = await VectorFixture.CreateAsync();
-        var rows = LegacyFacts(f, "main/retry", 3);
+        var rows = LegacyFacts(f, "main/retry", 259);
         using (var table = new VectorTable())
         {
             await table.OpenAsync(f.Dense);
@@ -150,7 +170,7 @@ public sealed class VectorSourceTimeTests
                 table.RepairSourceTimesAsync(
                     (_, _) =>
                     {
-                        if (++resolved == 2)
+                        if (++resolved == 130)
                             throw new IOException("synthetic interrupted Archive read");
                         return (1000, 2000);
                     }
@@ -158,9 +178,12 @@ public sealed class VectorSourceTimeTests
             );
         }
         var partial = await ReadRows(f.Dense);
-        Assert.Equal(2, partial.Count(row => VectorRuntime.Number(row["start_timestamp"]) == 1000));
         Assert.Equal(
-            4,
+            256,
+            partial.Count(row => VectorRuntime.Number(row["start_timestamp"]) == 1000)
+        );
+        Assert.Equal(
+            262,
             partial.Count(row => VectorRuntime.Number(row["start_timestamp"]) == 900000)
         );
         var versions = Directory
@@ -171,8 +194,8 @@ public sealed class VectorSourceTimeTests
             await table.OpenAsync(f.Dense);
             await table.RepairSourceTimesAsync((_, _) => (1000, 2000));
         }
-        // Two remaining locator updates plus the completion marker; the completed
-        // locator from the interrupted attempt is not rewritten.
+        // Two remaining batches plus the completion marker; the completed
+        // batch from the interrupted attempt is not rewritten.
         Assert.Equal(
             versions + 3,
             Directory

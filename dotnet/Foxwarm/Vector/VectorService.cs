@@ -40,6 +40,14 @@ internal sealed class VectorService : IAsyncDisposable
         }
     }
     internal bool Ready => ready;
+    internal bool Initializing
+    {
+        get
+        {
+            lock (lifecycle)
+                return !stopping && starting is { IsCompleted: false };
+        }
+    }
     internal string Mode =>
         !Configuration.Enabled ? "disabled"
         : Configuration.DbWorkers ? "worker"
@@ -76,6 +84,9 @@ internal sealed class VectorService : IAsyncDisposable
 
     private async Task StartCoreAsync()
     {
+        // Optional native initialization must not execute on Main's startup call stack.
+        await Task.Yield();
+        shutdown.Token.ThrowIfCancellationRequested();
         try
         {
             if (Configuration.DbWorkers)

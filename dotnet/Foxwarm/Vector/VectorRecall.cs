@@ -89,14 +89,31 @@ internal static class VectorRecall
         if (Trim(query).Length == 0)
             throw new InvalidDataException("Search query must be non-empty.");
         var candidateLimit = Math.Max(limit * 4, 20);
-        var detailed = await vector.SearchAsync(
-            query,
-            candidateLimit,
-            options with
-            {
-                PreferBlocks = preferBlocks,
-            }
-        );
+        VectorSearchResult detailed;
+        var unavailable = false;
+        try
+        {
+            detailed = await vector.SearchAsync(
+                query,
+                candidateLimit,
+                options with
+                {
+                    PreferBlocks = preferBlocks,
+                }
+            );
+        }
+        catch (VectorUnavailableException error)
+            when (error.Code == "VECTOR_UNAVAILABLE"
+                && vector.Initializing
+                && effectiveScope == "current-session"
+                && resolvedSessionId is not null
+            )
+        {
+            // The exact-Session Archive fallback is bounded and authoritative even while
+            // the optional owner is initializing. Never query unrepaired dense metadata.
+            unavailable = true;
+            detailed = new([], new JsonObject { ["ready"] = false, ["errorCode"] = error.Code });
+        }
         var hits = detailed.Hits;
         var fallbackUsed = false;
         if (
@@ -124,13 +141,13 @@ internal static class VectorRecall
             catch { }
         }
         var hybridUsed = detailed.Lexical["used"]?.GetValue<bool>() == true;
-        var labelText = hybridUsed
-            ? fallbackUsed
-                ? "hybrid search with bounded identifier fallback"
-                : "hybrid search"
-            : fallbackUsed
-                ? "semantic search with bounded identifier fallback"
-                : "vector search";
+        var labelText =
+            unavailable ? "bounded identifier fallback (Vector unavailable)"
+            : hybridUsed
+                ? fallbackUsed ? "hybrid search with bounded identifier fallback"
+                    : "hybrid search"
+            : fallbackUsed ? "semantic search with bounded identifier fallback"
+            : "vector search";
         var selected = Reload(
             archiveReader,
             hits,

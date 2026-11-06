@@ -97,6 +97,56 @@ internal sealed class VectorTable : IDisposable
             if (rows.Count < 128)
                 break;
         }
+        var updates = new List<(string Session, long Block, double? Start, double? End)>();
+        async Task FlushAsync()
+        {
+            if (updates.Count == 0)
+                return;
+            cancellationToken.ThrowIfCancellationRequested();
+            var sessions = new StringArray.Builder();
+            var blocks = new DoubleArray.Builder();
+            var kinds = new StringArray.Builder();
+            var starts = new DoubleArray.Builder();
+            var ends = new DoubleArray.Builder();
+            foreach (var update in updates)
+            {
+                foreach (var kind in new[] { "block", "fact" })
+                {
+                    sessions.Append(update.Session);
+                    blocks.Append(update.Block);
+                    kinds.Append(kind);
+                    starts.Append(update.Start);
+                    ends.Append(update.End);
+                }
+            }
+            // Partial-schema matched updates touch only source-time metadata. No inserts,
+            // text/embedding reconstruction, or deletion of unmatched rows is permitted.
+            var names = new[]
+            {
+                "session_id",
+                "block_id",
+                "memory_kind",
+                "start_timestamp",
+                "end_timestamp",
+            };
+            using var batch = new RecordBatch(
+                new Schema(names.Select(Schema.GetFieldByName), null),
+                new IArrowArray[]
+                {
+                    sessions.Build(),
+                    blocks.Build(),
+                    kinds.Build(),
+                    starts.Build(),
+                    ends.Build(),
+                },
+                updates.Count * 2
+            );
+            await table
+                .MergeInsert(new[] { "session_id", "block_id", "memory_kind" })
+                .WhenMatchedUpdateAll()
+                .Execute(batch);
+            updates.Clear();
+        }
         foreach (var ((session, block), existing) in locators)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -105,18 +155,11 @@ internal sealed class VectorTable : IDisposable
                 missingSource?.Invoke(session);
             if (!existing.Mixed && existing.Start == range.Start && existing.End == range.End)
                 continue;
-            string Sql(double? value) =>
-                value?.ToString("R", System.Globalization.CultureInfo.InvariantCulture) ?? "NULL";
-            cancellationToken.ThrowIfCancellationRequested();
-            await table.Update(
-                new Dictionary<string, string>
-                {
-                    ["start_timestamp"] = Sql(range.Start),
-                    ["end_timestamp"] = Sql(range.End),
-                },
-                $"memory_kind IN ('block','fact') AND session_id = '{VectorRuntime.Escape(session)}' AND block_id = {block}"
-            );
+            updates.Add((session, block, range.Start, range.End));
+            if (updates.Count == 128)
+                await FlushAsync();
         }
+        await FlushAsync();
         cancellationToken.ThrowIfCancellationRequested();
         var metadata = field.Metadata is null
             ? new Dictionary<string, string>()
