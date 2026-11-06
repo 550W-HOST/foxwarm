@@ -53,10 +53,23 @@ try {
   await fixture.start(); if (!await access(join(fixture.data, 'state/sessions/main.json')).then(() => true, () => false)) await create('main'); await create('control'); await create('shutdown-target'); const initial = (await fixture.api('GET', '/api/sessions')).body.sessions; await fixture.stop()
   const cold = Array.from({ length: 1000 }, (_, index) => catalogRow('cold-' + index)); await seed([...initial, ...cold]); await put('cold-0'); await put('cold-1', { currentNode: 'unsupported-node' }); await put('cold-2'); await put('cold-3'); await writeFile(join(fixture.data, 'state/sessions/cold-4.json'), '{broken')
   const at = Date.now() + 500
+  // A cron timer whose owner cannot be delivered to records each failed attempt, newest first and bounded,
+  // without advancing lastTriggeredAt. Returns the row without its results for whole-record comparison.
+  const withoutFailedRuns = (row, error) => {
+    const { recentRuns, ...rest } = row
+    assert(Array.isArray(recentRuns) && recentRuns.length >= 1 && recentRuns.length <= 10, `bounded recent results for ${row.id}: ${JSON.stringify(recentRuns)}`)
+    for (const [index, run] of recentRuns.entries()) {
+      assert.deepEqual(run, { at: run.at, outcome: 'failed', error })
+      assert(Number.isInteger(run.at) && run.at <= Date.now() && (index === 0 || run.at <= recentRuns[index - 1].at), 'results are newest first')
+    }
+    return rest
+  }
+  const absentError = 'Session `absent` not found.'
+  const normalizeTimers = document => ({ ...document, timers: document.timers.map(row => row?.id === 'failed-cron' ? withoutFailedRuns(row, absentError) : row) })
   const retained = timer('unknown-internal', 'cold-999', '', { at: 1, waitTimeoutId: 'unknown', waitTimeoutSeconds: 1 }), duplicate = timer('duplicate', 'main', 'FIRE:forbidden', { at: 1 })
   await writeFile(timerPath, JSON.stringify({ extension: { original: ['雪', false, null] }, timers: [42, retained, duplicate, duplicate, timer('due', 'cold-0', 'FIRE:cold', { at }), timer('node', 'cold-1', 'FIRE:offline-node', { at }), timer('future', 'cold-2', 'FIRE:future', { at: at + 600000 }), timer('missing', 'absent', 'FIRE:forbidden', { at }), timer('bad', 'cold-4', 'FIRE:forbidden', { at }), timer('failed-cron', 'absent', 'FIRE:forbidden', { cron: '* * * * * *', lastTriggeredAt: 7 })] }))
   const before = requests.length; await fixture.start(); await completed('cold-0', 'DONE-FIRE-cold'); await sleep(1100)
-  assert.equal(requests.slice(before).filter(value => value.fire).length, 2); const remaining = await rows(); assert(remaining.includes(42)); assert.equal(remaining.filter(row => row?.id === 'duplicate').length, 2); assert(!remaining.some(row => row?.id === 'node')); assert.equal((await authority('cold-1')).currentNode, 'unsupported-node'); assert(!remaining.some(row => ['due', 'bad', 'missing'].includes(row?.id))); assert.equal(remaining.find(row => row?.id === 'failed-cron').lastTriggeredAt, 7); assert(remaining.some(row => row?.id === 'unknown-internal'))
+  assert.equal(requests.slice(before).filter(value => value.fire).length, 2); const remaining = await rows(); assert(remaining.includes(42)); assert.equal(remaining.filter(row => row?.id === 'duplicate').length, 2); assert(!remaining.some(row => row?.id === 'node')); assert.equal((await authority('cold-1')).currentNode, 'unsupported-node'); assert(!remaining.some(row => ['due', 'bad', 'missing'].includes(row?.id))); assert.equal(remaining.find(row => row?.id === 'failed-cron').lastTriggeredAt, 7); withoutFailedRuns(remaining.find(row => row?.id === 'failed-cron'), absentError); assert(remaining.some(row => row?.id === 'unknown-internal'))
 
   await fixture.stop(); const restartedAt = Date.now(), noReplay = requests.length; await fixture.start(); await sleep(350); assert.equal(requests.length, noReplay); assert(!requests.slice(noReplay).some(record => record.at <= restartedAt));
   // An ordinary once timer queues behind a genuine held model, and Stop does not undo it.
@@ -91,9 +104,12 @@ try {
   assert.deepEqual(requests.slice(localRequests).map(record => record.payload), ['healthy-startup'])
   assert.equal(await readFile(badFile, 'utf8'), '{broken')
   assert.equal(fixture.sql('SELECT COUNT(*) FROM archive_messages WHERE session_id=?', ['mandatory-busy'])[0][0], 0)
-  const afterLocal = JSON.parse(await readFile(timerPath, 'utf8'))
-  assert.deepEqual(afterLocal.timers.find(row => row?.id === 'local-bad-cron'), failedCron)
-  assert.deepEqual({ ...afterLocal, timers: afterLocal.timers.filter(row => row?.id !== 'local-bad-cron') }, originalTimers)
+  // Each failed cron attempt is recorded as a result; lastTriggeredAt still marks only successful delivery.
+  let afterLocal
+  await until(async () => { afterLocal = JSON.parse(await readFile(timerPath, 'utf8')); return afterLocal.timers.find(row => row?.id === 'local-bad-cron')?.recentRuns?.length > 0 }, 'the failed cron attempt is recorded')
+  assert.deepEqual(withoutFailedRuns(afterLocal.timers.find(row => row?.id === 'local-bad-cron'), 'session="mandatory-busy" file="state/sessions/mandatory-busy.json" reason="Session authority is not valid JSON."'), failedCron)
+  // failed-cron keeps failing in the background, so its results grow between the two reads.
+  assert.deepEqual(normalizeTimers({ ...afterLocal, timers: afterLocal.timers.filter(row => row?.id !== 'local-bad-cron') }), normalizeTimers(originalTimers))
   await fixture.stop()
   assert.equal(failures.length, 0, failures.join('\n')); const proof = { requests: requests.length, thousandColdMetadata: true, mandatoryLocalFailureIsolated: true, healthyTimerContinues: true, unavailableOwnerReceivesNoTimerInput: true, dueExactAdmission: true, onceFailureConsumed: true, cronFailureRetained: true, offlinePlacementPreserved: true, noDowntimeReplay: true, busyStopContinue: true, rawSnapshotCatalogDrift: true, canonicalOnlyWait: true, hostPids: fixture.hostPids, home, failures }; await writeFile(join(fixture.root, 'timer-lifecycle-proof.json'), JSON.stringify(proof, null, 2)); console.log(JSON.stringify(proof))
 } catch (error) { console.error(fixture.output); throw error } finally { await writeFile(join(fixture.root, 'timer-lifecycle-resources.json'), JSON.stringify({ hostPids: fixture.hostPids, home, requests: requests.length, failures }, null, 2)); peer.closeAllConnections(); await new Promise(done => peer.close(done)); await fixture.cleanup() }
