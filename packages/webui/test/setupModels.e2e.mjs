@@ -138,6 +138,17 @@ function respondJson(request, body, status = 200) {
 }
 
 async function attachRequestMocks(targetPage, options = {}) {
+  // The resource timeline is bounded; observers still receive entries after it
+  // fills. Capture the loaded module URL per document before navigation starts.
+  await targetPage.evaluateOnNewDocument(() => {
+    new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        if (/\/deps\/monaco-editor\.js(?:\?|$)/.test(entry.name)) {
+          window.__setupMonacoModuleUrl = entry.name
+        }
+      }
+    }).observe({ type: 'resource', buffered: true })
+  })
   const blockedEditorAssets = options.blockYamlWorkerImport ? ['yaml.worker']
     : options.blockEditorChunks ? ['monaco-editor', 'monaco-yaml', 'yaml.worker', 'editor.worker'] : []
   let mockModelsRawYaml = options.oobe ? '' : (options.modelsRawYaml ?? statusPayload.models.rawYaml)
@@ -397,10 +408,7 @@ async function runMonacoEditorAction(targetPage, modelUri, action, payload = {})
 
 async function evaluateMonacoEditorAction(targetPage, modelUri, action, payload = {}) {
   return targetPage.evaluate(async ({ targetModelUri, editorAction, actionPayload }) => {
-    const monacoUrl = performance.getEntriesByType('resource')
-      .map((entry) => entry.name)
-      // An external Vite cache is served through /@fs/, not /node_modules/.vite/.
-      .find((name) => /\/deps\/monaco-editor\.js(?:\?|$)/.test(name))
+    const monacoUrl = window.__setupMonacoModuleUrl
     if (!monacoUrl) throw new Error('Monaco module URL was not loaded')
     const monaco = await import(monacoUrl)
     const editor = monaco.editor.getEditors().find((candidate) => candidate.getModel()?.uri.toString() === targetModelUri)
@@ -1144,6 +1152,28 @@ test('Setup editors fill available desktop space and remain scroll-reachable on 
     }
   } finally {
     await mobilePage.close()
+  }
+})
+
+test('Setup editor actions work after the Resource Timing buffer fills', async () => {
+  const timingPage = await browser.newPage()
+  await attachRequestMocks(timingPage)
+  await timingPage.evaluateOnNewDocument(() => performance.setResourceTimingBufferSize(1))
+  try {
+    await timingPage.goto(`${baseUrl}/setup-resource-timing/#setup`, { waitUntil: 'networkidle2' })
+    await waitForWebUiReady(timingPage)
+    for (const section of ['models', 'config']) {
+      const modelUri = `inmemory://foxwarm/setup/foxwarm-${section}.yaml`
+      await timingPage.waitForSelector(`[data-monaco-model-uri="${modelUri}"][data-editor-ready="true"]`)
+      const resources = await timingPage.evaluate(() => performance.getEntriesByType('resource').map(entry => entry.name))
+      assert.equal(resources.length, 1)
+      assert.ok(resources.every(url => !/\/deps\/monaco-editor\.js(?:\?|$)/.test(url)))
+      const value = `# ${section} editor remains editable\n`
+      await runMonacoEditorAction(timingPage, modelUri, 'replace-value', { value })
+      assert.equal((await runMonacoEditorAction(timingPage, modelUri, 'snapshot')).value, value)
+    }
+  } finally {
+    await timingPage.close()
   }
 })
 
