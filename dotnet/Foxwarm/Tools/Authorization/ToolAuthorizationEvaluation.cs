@@ -42,6 +42,22 @@ internal sealed record ToolAuthorizationRequest(
 
 internal sealed record AuthorizationDecision(bool Allowed, JsonObject? Rule);
 
+// Layer is null for the global policy, otherwise the Agent that owns the local rules.
+internal sealed record AuthorizationLayerDecision(
+    string? Layer,
+    ToolAuthorizationPolicy Policy,
+    AuthorizationDecision Decision
+);
+
+internal sealed record AuthorizationAssessment(
+    ToolAuthorizationRequest Request,
+    IReadOnlyList<AuthorizationLayerDecision> Layers
+)
+{
+    internal AuthorizationLayerDecision? Denied =>
+        Layers.FirstOrDefault(layer => !layer.Decision.Allowed);
+}
+
 internal enum CreationTargetDecision
 {
     Allow,
