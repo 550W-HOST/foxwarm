@@ -61,6 +61,7 @@ Foxwarm hosts optional official Code for the Web assets in a separate workbench 
 
 ## Compatibility
 
+- Foxwarm bootstrap, migration and default backfill publish complete workspace documents by same-directory atomic replacement. Code-initiated edits retain the ordinary filesystem write API; consumers that depend on an edit must observe its completion before reading. Add-folder bridge acknowledgements follow the workspace update and Explorer focus; the original-App fixture waits for them before its next launcher interaction.
 - The legacy mixed-Node `foxwarm.code-workspace` is read once, distributing folder descriptors by URI authority (including legacy URI readers) and copying workspace settings to Node-specific files. The old file is archived as `.migrated`; subsequent writes use only the new files. Existing target files retain their folders. Legacy WebUI Code tab/layout IDs become the master tab.
 - Filesystem URI parser reads the earlier `foxwarm://node/<nodeId>/...` form; writers use current `node+<id>` authority.
 - Generalized WebUI editor restore reads the older session-only extension state once.

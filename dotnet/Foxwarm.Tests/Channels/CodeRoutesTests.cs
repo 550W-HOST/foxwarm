@@ -654,6 +654,83 @@ public sealed class CodeRoutesTests
     }
 
     [Fact]
+    public async Task Workspace_migration_and_defaults_publish_complete_replacement_files()
+    {
+        await using var f = await Fixture.Create();
+        var assets = Path.Combine(f.Assets, "out");
+        Directory.CreateDirectory(Path.Combine(assets, "vs/workbench"));
+        await File.WriteAllTextAsync(Path.Combine(assets, "nls.messages.js"), "");
+        await File.WriteAllTextAsync(
+            Path.Combine(assets, "vs/workbench/workbench.web.main.internal.css"),
+            ""
+        );
+        await File.WriteAllTextAsync(
+            Path.Combine(assets, "vs/workbench/workbench.web.main.internal.js"),
+            "export function create() {}"
+        );
+        var directory = Path.Combine(f.Data, "state/vscode-web");
+        Directory.CreateDirectory(directory);
+        var target = Path.Combine(directory, "node-master.code-workspace");
+        var original = new JsonObject
+        {
+            ["folders"] = new JsonArray(),
+            ["settings"] = new JsonObject { ["editor.fontSize"] = 17 },
+        }.ToJsonString();
+        var legacy = new JsonObject
+        {
+            ["folders"] = new JsonArray(
+                new JsonObject { ["uri"] = CodeWorkbench.FoxwarmUri(f.Work) }
+            ),
+        };
+        await File.WriteAllTextAsync(
+            Path.Combine(directory, "foxwarm.code-workspace"),
+            legacy.ToJsonString()
+        );
+        await File.WriteAllTextAsync(target, original);
+        using (
+            var reader = new StreamReader(
+                new FileStream(
+                    target,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete
+                )
+            )
+        )
+        {
+            await f.Client.GetStringAsync("/vscode-web/?nodeId=master");
+            Assert.Equal(original, await reader.ReadToEndAsync());
+        }
+        var migrated = JsonNode.Parse(await File.ReadAllTextAsync(target))!;
+        Assert.Single(migrated["folders"]!.AsArray());
+        Assert.Equal(17, migrated["settings"]!["editor.fontSize"]!.GetValue<int>());
+        Assert.False(migrated["settings"]!["yaml.schemaStore.enable"]!.GetValue<bool>());
+
+        migrated["settings"]!.AsObject().Remove("yaml.schemaStore.enable");
+        original = migrated.ToJsonString();
+        await File.WriteAllTextAsync(target, original);
+        using (
+            var reader = new StreamReader(
+                new FileStream(
+                    target,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete
+                )
+            )
+        )
+        {
+            await f.Client.GetStringAsync("/vscode-web/?nodeId=master");
+            Assert.Equal(original, await reader.ReadToEndAsync());
+        }
+        Assert.False(
+            JsonNode.Parse(await File.ReadAllTextAsync(target))!["settings"]![
+                "yaml.schemaStore.enable"
+            ]!.GetValue<bool>()
+        );
+    }
+
+    [Fact]
     public async Task Workspace_settings_and_malformed_file_retention_with_narrow_capability_scope()
     {
         await using var f = await Fixture.Create();

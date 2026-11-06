@@ -118,7 +118,10 @@ const workspaceHas = async path => { try { return (JSON.parse(await readFile(wor
 async function palette(frame, command) {
   await frame.click('.monaco-workbench')
   const page = frame.page(); await page.keyboard.down('Control'); await page.keyboard.down('Shift'); await page.keyboard.press('P'); await page.keyboard.up('Shift'); await page.keyboard.up('Control')
-  await frame.waitForSelector('.quick-input-widget input'); await frame.type('.quick-input-widget input', command); await page.keyboard.press('Enter')
+  await frame.waitForSelector('.quick-input-widget input', { visible: true })
+  await frame.type('.quick-input-widget input', command)
+  await frame.waitForFunction(command => [...document.querySelectorAll('.quick-input-list .monaco-list-row.focused')].some(row => row.textContent.includes(command)), {}, command)
+  await page.keyboard.press('Enter')
 }
 async function codeFrame(page, nodeId = 'master') {
   return until(() => page.frames().find(frame => { const url = new URL(frame.url() || 'about:blank'); return url.pathname.endsWith('/vscode-web/') && url.searchParams.get('nodeId') === nodeId && frame.parentFrame() === page.mainFrame() }), 'actual Code iframe', 30000)
@@ -160,17 +163,38 @@ try {
   assert.equal((await remoteWorkspace()).folders.length, 2)
   assert.equal((await remoteWorkspace()).settings['editor.fontSize'], 15)
   assert.equal((JSON.parse(await readFile(workspaceFile, 'utf8'))).folders.length, 1)
+  await page.evaluate(() => {
+    window.codeOpenResults = []
+    window.addEventListener('message', event => {
+      if (event.origin !== location.origin || event.data?.channel !== 'foxwarm-code-bridge' || event.data.version !== 1 || event.data.type !== 'response') return
+      const frame = [...document.querySelectorAll('iframe[data-code-node]')].find(frame => frame.contentWindow === event.source)
+      if (frame) window.codeOpenResults.push({ nodeId: frame.dataset.codeNode, ...event.data })
+    })
+  })
   const launch = async (nodeId, path) => {
+    const firstResult = await page.evaluate(() => window.codeOpenResults.length)
     await page.click('button[aria-label="Open code options"]')
     await page.waitForFunction(nodeId => [...document.querySelectorAll('select option')].some(option => option.value === nodeId && !option.disabled), {}, nodeId)
     await page.select('select', nodeId)
     await page.click('input[placeholder="/"]', { clickCount: 3 }); await page.type('input[placeholder="/"]', path)
     await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Open code')?.click())
+    // Completion includes the workspace write and Explorer focus. Starting the next
+    // launcher interaction during that focus transition can redirect its typing.
+    await page.waitForFunction(({ nodeId, firstResult }) => window.codeOpenResults.slice(firstResult).some(result => result.nodeId === nodeId), { timeout: 30000 }, { nodeId, firstResult })
+    const result = await page.evaluate(({ nodeId, firstResult }) => window.codeOpenResults.slice(firstResult).find(result => result.nodeId === nodeId), { nodeId, firstResult })
+    assert.equal(result.ok, true, result.error)
+    assert.equal(decodeURIComponent(new URL(result.result.uri).pathname), path)
   }
-  await launch('code-peer', remoteRoot)
+  const mergedWorkspaceWrite = page.waitForResponse(response => {
+    const url = new URL(response.url())
+    return response.request().method() === 'PUT' && url.pathname === '/api/vscode-web/fs/write-file'
+      && url.searchParams.get('path') === remoteWorkspaceFile
+  }, { timeout: 30000 })
+  const [, mergedResponse] = await Promise.all([launch('code-peer', remoteRoot), mergedWorkspaceWrite])
+  assert.equal(mergedResponse.status(), 200)
   let remoteCode = await codeFrame(page, 'code-peer')
   await remoteCode.waitForSelector('.monaco-workbench', { timeout: 30000 })
-  await until(async () => (await remoteWorkspace()).folders.length === 1, 'remote child roots merged')
+  assert.equal((await remoteWorkspace()).folders.length, 1)
   assert.equal(await page.$$eval('iframe[data-code-node]', frames => frames.length), 2)
   assert.equal(await page.$eval('iframe[data-code-node="master"]', frame => frame.dataset.codeProof), 'same-frame')
   assert((await remoteWorkspace()).folders.every(folder => folder.uri.startsWith('foxwarm://node+code-peer')))

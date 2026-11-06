@@ -1,3 +1,4 @@
+import { open } from 'node:fs/promises';
 import './testEnvironment';
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -252,12 +253,17 @@ if (hostname === parentOriginHash || hostname.startsWith(parentOriginHash + '.')
         folders: [{ uri: folderUri }, { uri: 'foxwarm://node+development%2Freview/remote', name: 'Remote' }, { uri: 'foxwarm://node/worker/legacy' }],
         settings: { 'editor.fontSize': 15 },
       });
+      const workspacePath = path.join(STATE_DIR, 'vscode-web', 'node-master.code-workspace');
+      const beforeMigration = JSON.stringify({ folders: [], settings: { 'editor.fontSize': 15 } });
+      await fs.outputFile(workspacePath, beforeMigration);
+      const migrationReader = await open(workspacePath, 'r');
       const embeddedWorkbench = await fetch(`${baseUrl}/vscode-web?embedded=true&initialFolderUri=${encodeURIComponent(folderUri)}`, { headers: cookieHeaders() });
       assert.equal(embeddedWorkbench.status, 200);
       const embeddedHtml = await embeddedWorkbench.text();
       assert.match(embeddedHtml, /&quot;workspaceUri&quot;/);
       assert.match(embeddedHtml, /node-master\.code-workspace/);
-      const workspacePath = path.join(STATE_DIR, 'vscode-web', 'node-master.code-workspace');
+      assert.equal(await migrationReader.readFile('utf8'), beforeMigration);
+      await migrationReader.close();
       const workspace = await fs.readJson(workspacePath) as { settings: Record<string, unknown> };
       assert.equal(await fs.pathExists(legacyWorkspacePath), false);
       const remoteWorkspace = await fs.readJson(path.join(STATE_DIR, 'vscode-web', 'node-development%2Freview.code-workspace'));
@@ -272,9 +278,15 @@ if (hostname === parentOriginHash || hostname.startsWith(parentOriginHash + '.')
         'yaml.extension.recommendations': false,
       });
       workspace.settings['redhat.telemetry.enabled'] = true;
-      await fs.writeJson(workspacePath, workspace);
+      delete workspace.settings['yaml.schemaStore.enable'];
+      const beforeDefaults = JSON.stringify(workspace);
+      await fs.writeFile(workspacePath, beforeDefaults);
+      const defaultsReader = await open(workspacePath, 'r');
       const repeatedEmbedded = await fetch(`${baseUrl}/vscode-web?embedded=true&initialFolderUri=${encodeURIComponent(folderUri)}`, { headers: cookieHeaders() });
       assert.equal(repeatedEmbedded.status, 200);
+      assert.equal(await defaultsReader.readFile('utf8'), beforeDefaults);
+      await defaultsReader.close();
+      assert.equal((await fs.readJson(workspacePath)).settings['yaml.schemaStore.enable'], false);
       assert.equal((await fs.readJson(workspacePath) as { settings: Record<string, unknown> }).settings['redhat.telemetry.enabled'], true);
       const commitLaunch = await fetch(`${baseUrl}/vscode-web?nodeId=commit-peer&openCommitPath=%2Frepository`, { headers: cookieHeaders() });
       assert.equal(commitLaunch.status, 200);

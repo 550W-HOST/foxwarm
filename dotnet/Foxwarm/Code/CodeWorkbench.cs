@@ -149,6 +149,12 @@ internal sealed partial class CodeWorkbench
         return nodeId;
     }
 
+    private static void WriteWorkspace(string path, JsonObject workspace) =>
+        new LinuxAtomicJsonFile(
+            Path.GetDirectoryName(path)!,
+            Path.GetFileName(path)
+        ).WriteTextPayload(workspace.ToJsonString(new() { WriteIndented = true }), default);
+
     private void MigrateWorkspace()
     {
         if (!File.Exists(workspacePath))
@@ -174,7 +180,7 @@ internal sealed partial class CodeWorkbench
                 if (!folders.Any(existing => JsonNode.DeepEquals(existing, folder)))
                     folders.Add(folder!.DeepClone());
             workspace["folders"] = folders.Parent is null ? folders : folders.DeepClone();
-            File.WriteAllText(destination, workspace.ToJsonString(new() { WriteIndented = true }));
+            WriteWorkspace(destination, workspace);
         }
         File.Move(workspacePath, workspacePath + ".migrated", true);
     }
@@ -193,8 +199,7 @@ internal sealed partial class CodeWorkbench
             MigrateWorkspace();
             if (!File.Exists(targetPath))
             {
-                Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
-                File.WriteAllText(
+                WriteWorkspace(
                     targetPath,
                     new JsonObject
                     {
@@ -202,7 +207,7 @@ internal sealed partial class CodeWorkbench
                             ? new JsonArray(new JsonObject { ["uri"] = folder })
                             : new JsonArray(),
                         ["settings"] = PrivacyDefaults.DeepClone(),
-                    }.ToJsonString(new() { WriteIndented = true })
+                    }
                 );
             }
             else
@@ -222,10 +227,7 @@ internal sealed partial class CodeWorkbench
                                 changed = true;
                             }
                         if (changed)
-                            File.WriteAllText(
-                                targetPath,
-                                workspace.ToJsonString(new() { WriteIndented = true })
-                            );
+                            WriteWorkspace(targetPath, workspace);
                     }
                 }
                 catch (System.Text.Json.JsonException)
