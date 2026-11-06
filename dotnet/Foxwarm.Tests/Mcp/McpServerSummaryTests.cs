@@ -58,4 +58,39 @@ public sealed class McpServerSummaryTests
         Assert.Equal("X-Api-Key", query["headerKeys"]![0]!.GetValue<string>());
         Assert.True(query["hasToken"]!.GetValue<bool>());
     }
+
+    [Fact]
+    public async Task Error_redaction_covers_URL_query_user_info_and_fragment()
+    {
+        using var temp = new TempDirectory();
+        await using (var mcp = new McpClient(temp.Path))
+            await mcp.ConfigureAsync(
+                new JsonObject
+                {
+                    ["name"] = "query",
+                    ["url"] =
+                        "https://user:url-password@mcp.example.com/mcp?apikey=url%2Dsecret&bare-secret#frag-secret",
+                },
+                default
+            );
+        var configuration = new McpConfiguration(temp.Path);
+        foreach (
+            var leaked in new[]
+            {
+                "GET https://mcp.example.com/mcp?apikey=url%2Dsecret failed",
+                "invalid apikey url-secret",
+                "bad item bare-secret",
+                "user:url-password rejected",
+                "anchor frag-secret",
+            }
+        )
+            Assert.Equal(
+                "MCP operation failed because the underlying error contained configured secret data.",
+                configuration.Redact(leaked)
+            );
+        Assert.Equal(
+            "connect to mcp.example.com failed",
+            configuration.Redact("connect to mcp.example.com failed")
+        );
+    }
 }

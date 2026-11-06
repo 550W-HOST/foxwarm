@@ -248,11 +248,36 @@ internal sealed class McpConfiguration(string root, string? configPath = null)
                             ? headers.Select(pair => pair.Value)
                             : []
                     )
+                    .Select(SessionWait.Text)
+                    .Concat(UrlSecrets(SessionWait.Text(config["url"])))
             )
-            .Select(SessionWait.Text)
             .Where(value => !string.IsNullOrEmpty(value));
         return secrets.Any(secret => message.Contains(secret!, StringComparison.Ordinal))
             ? "MCP operation failed because the underlying error contained configured secret data."
             : message;
+    }
+
+    // The URL parts that server summaries redact: user info, each query value (or
+    // bare query item) and the fragment, raw and unescaped. An unparseable URL is
+    // treated as secret as a whole.
+    private static IEnumerable<string> UrlSecrets(string? url)
+    {
+        if (string.IsNullOrEmpty(url))
+            return [];
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+            return [url];
+        var hash = url.IndexOf('#');
+        var fragment = hash >= 0 ? url[(hash + 1)..] : "";
+        var beforeFragment = hash >= 0 ? url[..hash] : url;
+        var mark = beforeFragment.IndexOf('?');
+        var query = mark >= 0 ? beforeFragment[(mark + 1)..] : "";
+        var parts = query
+            .Split('&', StringSplitOptions.RemoveEmptyEntries)
+            .Select(part => part.IndexOf('=') is var equals and > 0 ? part[(equals + 1)..] : part)
+            .Append(uri.UserInfo)
+            .Append(fragment)
+            .Where(part => part.Length > 0)
+            .ToArray();
+        return parts.Concat(parts.Select(Uri.UnescapeDataString)).Distinct(StringComparer.Ordinal);
     }
 }
