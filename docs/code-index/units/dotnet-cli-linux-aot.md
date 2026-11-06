@@ -5,7 +5,7 @@ Secondary/integration references: `dotnet/Foxwarm.CliNode/Foxwarm.CliNode.csproj
 
 ## Build and compatibility contract
 
-The separate [CLI Node](./dotnet-cli-node.md), shared native primitives and BrowserSupport are the entire application build graph. The recipe uses official .NET SDK 10.0.401 with runtime/ILCompiler 10.0.12 and an ordinary UBI 9 compiler/linker/libc environment. It does not build Main, frontend assets or the TypeScript CLI. SDK files are copied from the Microsoft image; native compilers, headers and libraries come from the builder distro. Runtime behavior and project globalization/serialization settings are unchanged. There are no symbol-version shims, replacement system libraries, warning suppressions or additional runtime packages in the project graph.
+The separate [CLI Node](./dotnet-cli-node.md), shared native primitives and BrowserSupport are the entire application build graph. The recipe uses official .NET SDK 10.0.403 with runtime/ILCompiler 10.0.14 and an ordinary UBI 9 compiler/linker/libc environment. It does not build Main, frontend assets or the TypeScript CLI. SDK files are copied from the Microsoft image; native compilers, headers and libraries come from the builder distro. Runtime behavior and project globalization/serialization settings are unchanged. There are no symbol-version shims, replacement system libraries, warning suppressions or additional runtime packages in the project graph.
 
 The default recipe qualifies Linux **x64/glibc**; the explicitly selected static-musl build is qualified separately below. Docker callers can explicitly select `--platform=linux/amd64`; the recipe is not an ARM build or Main Native AOT delivery lane. Image arguments permit caller-controlled image/digest selection. Package repositories can update, so a future rebuild still needs its own actual ABI and execution checks.
 
@@ -14,6 +14,8 @@ The measured UBI 9 build uses clang 21.1.8, GCC 11.5 and glibc 2.34. Its executa
 Upstream PuppeteerSharp analysis warnings remain visible. The measured recipe emits IL2104 and IL3053 assembly summaries and IL3000 for BrowserFetcher; prior detailed native analysis is described in the [browser unit](./dotnet-cli-browser.md). Successful bounded browser checks do not qualify arbitrary CLR callbacks, DTOs or future package branches.
 
 ## Measured userspaces
+
+The dynamic and static measurements in this document used SDK 10.0.401 and runtime/ILCompiler 10.0.12. The current recipes use 10.0.403/10.0.14; these historical matrices have not been rerun for the updated inputs.
 
 On October 21, 2026, the **same published executable and shim**, without per-distro rebuilding, ran the focused native fixture on these official image userspaces:
 
@@ -61,7 +63,7 @@ Public build/probe instructions in `scripts/native-aot/README.md` describe the c
 
 ## Explicit static-musl qualification
 
-`cli-linux-musl-x64.Dockerfile` is a separate CLI-only publication using official SDK 10.0.401-alpine3.23/runtime 10.0.12 and native Alpine static archives. It sets `StaticExecutable`, `StaticICULinking`, `StaticOpenSslLinking` and `EmbedIcuDataPath`; globalization stays non-invariant. The explicit `FoxwarmStaticMusl` project property requires a static linux-musl-x64 Native AOT CLI publication, statically links the production PTY object and makes libc/PTY imports direct. It does not change default dynamic or managed publication, Main, bootstrap or dependency versions. An ELF static PIE may have a relocation DYNAMIC segment; the relevant loader checks are absence of PT_INTERP and DT_NEEDED, plus actual runtime library-load evidence.
+`cli-linux-musl-x64.Dockerfile` is a separate CLI-only publication using official SDK 10.0.403-alpine3.24/runtime 10.0.14 and native Alpine static archives. It sets `StaticExecutable`, `StaticICULinking`, `StaticOpenSslLinking` and `EmbedIcuDataPath`; globalization stays non-invariant. The explicit `FoxwarmStaticMusl` project property requires a static linux-musl-x64 Native AOT CLI publication, statically links the production PTY object and makes libc/PTY imports direct. It does not change default dynamic or managed publication, Main, bootstrap or dependency versions. An ELF static PIE may have a relocation DYNAMIC segment; the relevant loader checks are absence of PT_INTERP and DT_NEEDED, plus actual runtime library-load evidence.
 
 Musl lacks the close-from spawn action used by the unchanged glibc path. Only this static target selects the bounded native spawn prelude described in [native primitives](./dotnet-node-primitives.md). The small native probe compiles against the actual production C source, checks cwd/session/signal defaults and parent-mask retention, sparse inherited descriptors with concurrent parent fd churn, PATH/permission/cwd errors, resize, read/write cancellation, closed parent stdio, exact reaping and descriptor release. An inherited seccomp filter forces real close_range ENOSYS/procfs fallback and separately verifies synchronous error/reap when procfs enumeration is denied. It is a manual smoke entry, not a general native test framework.
 
@@ -69,7 +71,7 @@ The maintained protocol probe accepts `FOXWARM_TEST_EXPECT_STATIC=1` to require 
 
 ### Measured full static artifact
 
-On October 21, 2026, the full CLI-plus-PTY graph built on Alpine 3.23.6/musl 1.2.5-r23 with clang 21.1.2/GCC 15.2, static ICU 76.1 and OpenSSL 3.5.9. The stripped executable is **60,061,360 bytes**, ELF64 x86-64 static PIE, with no PT_INTERP, DT_NEEDED or adjacent PTY shared object. SDK/runtime/ILCompiler remain 10.0.401/10.0.12. The existing PuppeteerSharp IL2104, IL3000 and IL3053 diagnostics remain visible and unsuppressed. No feature-deleted executable, TLS relaxation, invariant globalization or dependency fork was used.
+On October 21, 2026, the full CLI-plus-PTY graph built on Alpine 3.23.6/musl 1.2.5-r23 with clang 21.1.2/GCC 15.2, static ICU 76.1 and OpenSSL 3.5.9. The stripped executable is **60,061,360 bytes**, ELF64 x86-64 static PIE, with no PT_INTERP, DT_NEEDED or adjacent PTY shared object. That measured artifact used SDK 10.0.401 and runtime/ILCompiler 10.0.12. The existing PuppeteerSharp IL2104, IL3000 and IL3053 diagnostics remain visible and unsuppressed. No feature-deleted executable, TLS relaxation, invariant globalization or dependency fork was used.
 
 The same executable, without rebuilding, passed these focused userspace checks:
 

@@ -8,7 +8,7 @@ for other projects, browser installations, or future rebuilds.
 
 | Embedded input | Notice/source basis and redistribution obligation |
 | --- | --- |
-| .NET Native AOT runtime and ASP.NET Core framework | Their runtime-pack licenses and complete third-party notices are copied from the exact 10.0.12 packages used by publish. These cover runtime-incorporated code including LLVM/libunwind-derived components and other listed dependencies. Keep both license and notice files. |
+| .NET Native AOT runtime and ASP.NET Core framework | Their runtime-pack licenses and complete third-party notices are copied from the exact 10.0.14 packages used by publish. These cover runtime-incorporated code including LLVM/libunwind-derived components and other listed dependencies. Keep both license and notice files. |
 | PuppeteerSharp.Cdp 25.14.0 | MIT license from repository commit `7ee221b6b9b4286ccc400bbc2537e4ec9a315dcd`, the commit recorded in its NuGet metadata. Keep copyright and permission notice. |
 | ReactiveExtensionsSharp 0.3.0 | MIT license from NuGet's repository commit `787712268f4bedf5945d43082d450042be275bce`. Keep copyright and permission notice. |
 | Microsoft.IO.RecyclableMemoryStream 3.0.1 | MIT license from NuGet's repository commit `e29a28387da9018fa9605a1dcb3f7a0435aa9974`. Keep copyright and permission notice. |

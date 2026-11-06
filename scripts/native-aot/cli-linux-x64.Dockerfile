@@ -1,5 +1,5 @@
 # Build from the repository root. The SDK is copied, never the SDK image's libc.
-ARG SDK_IMAGE=mcr.microsoft.com/dotnet/sdk:10.0.401
+ARG SDK_IMAGE=mcr.microsoft.com/dotnet/sdk:10.0.403
 ARG BUILD_IMAGE=registry.access.redhat.com/ubi9/ubi:latest
 FROM ${SDK_IMAGE} AS sdk
 FROM ${BUILD_IMAGE} AS build
@@ -16,7 +16,7 @@ COPY dotnet/Foxwarm.NodePrimitives/ dotnet/Foxwarm.NodePrimitives/
 COPY dotnet/Foxwarm.BrowserSupport/ dotnet/Foxwarm.BrowserSupport/
 RUN dotnet --info && clang --version && gcc --version && ldd --version
 RUN dotnet publish dotnet/Foxwarm.CliNode/Foxwarm.CliNode.csproj \
-    -c Release -r linux-x64 -p:PublishAot=true -p:RuntimeFrameworkVersion=10.0.12 \
+    -c Release -r linux-x64 -p:PublishAot=true -p:RuntimeFrameworkVersion=10.0.14 \
     -o /publish
 RUN file=/publish/Foxwarm.CliNode; readelf -h -l -d -V "$file" \
     && objdump -T "$file" | grep -E 'GLIBC_|GLIBCXX_' \

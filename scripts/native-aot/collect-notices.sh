@@ -6,10 +6,10 @@ mkdir -p "$out/notices"
 notices="$out/notices"
 nuget="${NUGET_PACKAGES:-/root/.nuget/packages}"
 cp /publish/Foxwarm.CliNode "$out/"
-cp "$nuget/microsoft.netcore.app.runtime.nativeaot.linux-musl-x64/10.0.12/LICENSE.TXT" "$notices/dotnet-LICENSE.txt"
-cp "$nuget/microsoft.netcore.app.runtime.nativeaot.linux-musl-x64/10.0.12/THIRD-PARTY-NOTICES.TXT" "$notices/dotnet-NOTICES.txt"
-cp "$nuget/microsoft.aspnetcore.app.runtime.linux-musl-x64/10.0.12/LICENSE.txt" "$notices/aspnetcore-LICENSE.txt"
-cp "$nuget/microsoft.aspnetcore.app.runtime.linux-musl-x64/10.0.12/THIRD-PARTY-NOTICES.TXT" "$notices/aspnetcore-NOTICES.txt"
+cp "$nuget/microsoft.netcore.app.runtime.nativeaot.linux-musl-x64/10.0.14/LICENSE.TXT" "$notices/dotnet-LICENSE.txt"
+cp "$nuget/microsoft.netcore.app.runtime.nativeaot.linux-musl-x64/10.0.14/THIRD-PARTY-NOTICES.TXT" "$notices/dotnet-NOTICES.txt"
+cp "$nuget/microsoft.aspnetcore.app.runtime.linux-musl-x64/10.0.14/LICENSE.txt" "$notices/aspnetcore-LICENSE.txt"
+cp "$nuget/microsoft.aspnetcore.app.runtime.linux-musl-x64/10.0.14/THIRD-PARTY-NOTICES.TXT" "$notices/aspnetcore-NOTICES.txt"
 # Record the actual Alpine versions; the accepted image's repositories are mutable.
 version() { apk info -v | sed -n "s/^$1-\([0-9].*\)-r[0-9]*$/\1/p"; }
 fetch() {

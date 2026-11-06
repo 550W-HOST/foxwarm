@@ -6,9 +6,12 @@ qualified default target is **Linux x64 with glibc**. The separate static-musl
 build below has its own bounded qualification. Main onboarding selects the
 qualified full static Linux x64 package; neither recipe qualifies ARM64.
 
-The build uses official .NET SDK 10.0.401 and runtime/ILCompiler 10.0.12 with the
+The build uses official .NET SDK 10.0.403 and runtime/ILCompiler 10.0.14 with the
 UBI 9 distro compiler, headers and libraries. It copies SDK files, not the SDK
 image's libc/libm. No system-library replacement or symbol shim is involved.
+The compatibility measurements below were made with SDK 10.0.401 and
+runtime/ILCompiler 10.0.12 on October 21, 2026; they have not been rerun with
+the current SDK/runtime pins.
 
 ## Build
 
@@ -28,7 +31,7 @@ need a .NET/ASP.NET Core runtime installed on its execution machine. It still
 needs the native libraries and shell tools described below.
 
 `SDK_IMAGE` and `BUILD_IMAGE` build arguments can select explicit official
-image digests. The defaults are `mcr.microsoft.com/dotnet/sdk:10.0.401` and
+image digests. The defaults are `mcr.microsoft.com/dotnet/sdk:10.0.403` and
 `registry.access.redhat.com/ubi9/ubi:latest`. Record actual image/package versions
 when qualifying a rebuild; mutable distro repositories do not promise
 byte-identical future output. BuildKit leaves the publish in one output
@@ -150,12 +153,12 @@ workspace's state.
 ## Explicit full static-musl build
 
 This separate recipe builds the full CLI graph with the PTY linked into the
-executable, using official SDK `10.0.401-alpine3.23`, runtime/ILCompiler 10.0.12,
+executable, using official SDK `10.0.403-alpine3.24`, runtime/ILCompiler 10.0.14,
 and ordinary Alpine static ICU/OpenSSL packages. It does not copy glibc libraries
-or enable invariant globalization. The current ICU data argument is the measured
-Alpine full-data path; override `ICU_DATA_PATH` if qualifying different official
-image/package inputs. `SDK_IMAGE` remains overridable. The generic SDK tag
-`10.0.401-alpine` is not available; use the explicit distro tag.
+or enable invariant globalization. The current ICU data argument is the Alpine
+3.24 ICU 78.1 full-data path; override `ICU_DATA_PATH` if qualifying different official
+image/package inputs. `SDK_IMAGE` remains overridable; use the explicit distro
+tag rather than assuming a generic Alpine tag is available.
 
 ```sh
 docker build --platform=linux/amd64 --progress=plain \
