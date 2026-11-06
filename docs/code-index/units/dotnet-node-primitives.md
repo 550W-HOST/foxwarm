@@ -88,3 +88,7 @@ A nonblocking cancellation pipe wakes PTY IO. Darwin shell signalling and nonblo
 Unix Code helper wrappers and sockets retain owner-only permissions on macOS. Terminal creation supplies a UTF-8 locale only when a macOS service has no explicit locale. Non-Bash shells obtain live cwd through start-identity-checked Darwin process inspection; Bash retains its logical cwd sidecar.
 
 `TerminalNativePlatformTests` exercises actual input/output, resize, cancellation, failed spawn and descriptor release; `TerminalNativeConsumerTests` exercises the Main registry, Unicode paths, close/reap and Code capability IPC. Apple Silicon runtime tests and a native Intel compile check are distinct qualification evidence.
+
+## macOS Code file metadata
+
+CodeFileOperations uses managed filesystem metadata on macOS, retaining target-following symlink flags, owner-readonly metadata and typed missing/non-directory errors; Linux retains statx. Darwin ENOTEMPTY maps to DirectoryNotEmpty. CodeFileOperationsTests cover native stat, links, broken targets and create/write/read/rename/delete; the VS Code filesystem provider preserves backend error detail alongside the resource URI.

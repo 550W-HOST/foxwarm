@@ -65,6 +65,7 @@ internal static class CodeFileOperations
                 13 or 1 => "NoPermissions",
                 17 => "FileExists",
                 39 => "DirectoryNotEmpty",
+                66 when OperatingSystem.IsMacOS() => "DirectoryNotEmpty",
                 _ => "Unknown",
             };
         return FileError(code, path, new System.ComponentModel.Win32Exception(errno).Message);
@@ -133,7 +134,10 @@ internal static class CodeFileOperations
 
     internal static JsonObject StatFile(string path)
     {
-        if (OperatingSystem.IsWindows())
+        // Keep Linux statx metadata (including special-file types and status-change
+        // time) intact. Darwin uses the runtime's portable filesystem APIs rather
+        // than interpreting a platform-specific struct stat ABI.
+        if (OperatingSystem.IsWindows() || OperatingSystem.IsMacOS())
         {
             try
             {
@@ -143,14 +147,40 @@ internal static class CodeFileOperations
                 var isLink = (attributes & FileAttributes.ReparsePoint) != 0;
                 if (isLink && info.ResolveLinkTarget(true) is { } target)
                     info = target;
-                directory = (info.Attributes & FileAttributes.Directory) != 0;
-                return new()
+                // ResolveLinkTarget may return a descriptor for a missing target.
+                // GetAttributes throws in that case instead of treating its -1
+                // sentinel Attributes value as a directory.
+                if (OperatingSystem.IsMacOS())
+                    attributes = File.GetAttributes(info.FullName);
+                else
+                    attributes = info.Attributes;
+                directory = (attributes & FileAttributes.Directory) != 0;
+                var metadata = new JsonObject
                 {
                     ["type"] = (directory ? 2 : 1) | (isLink ? 64 : 0),
                     ["ctime"] = new DateTimeOffset(info.CreationTimeUtc).ToUnixTimeMilliseconds(),
                     ["mtime"] = new DateTimeOffset(info.LastWriteTimeUtc).ToUnixTimeMilliseconds(),
                     ["size"] = directory ? 0UL : checked((ulong)((FileInfo)info).Length),
                 };
+                if (
+                    OperatingSystem.IsMacOS()
+                    && (File.GetUnixFileMode(info.FullName) & UnixFileMode.UserWrite) == 0
+                )
+                    metadata["permissions"] = 1;
+                return metadata;
+            }
+            catch (DirectoryNotFoundException error) when (OperatingSystem.IsMacOS())
+            {
+                // .NET folds ENOTDIR into DirectoryNotFoundException on Unix.
+                // Preserve the filesystem API's distinct non-directory error.
+                for (
+                    var parent = Path.GetDirectoryName(path);
+                    parent is not null;
+                    parent = Path.GetDirectoryName(parent)
+                )
+                    if (File.Exists(parent) && !Directory.Exists(parent))
+                        throw FileError("FileNotADirectory", path, error.Message);
+                throw FileError(error, path);
             }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException)
             {

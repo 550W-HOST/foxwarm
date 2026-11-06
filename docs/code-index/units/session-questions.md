@@ -1,6 +1,6 @@
 # Unit: Structured user questions (`ask_user`)
 
-Files: `dotnet/Foxwarm/Sessions/SessionQuestions.cs`, `dotnet/Foxwarm/Sessions/SessionManager.Questions.cs`, `dotnet/Foxwarm/Tools/AskUserToolDefinitions.cs`, `dotnet/Foxwarm/Channels/WebUi/WebUIChannel.Questions.cs`, `packages/webui/src/sessionQuestions.ts`, `packages/webui/src/sessionQuestionsState.ts`, `packages/webui/src/components/QuestionCard.tsx`
+Files: `dotnet/Foxwarm/Sessions/SessionQuestions.cs`, `dotnet/Foxwarm/Sessions/SessionManager.Questions.cs`, `dotnet/Foxwarm/Tools/AskUserToolDefinitions.cs`, `dotnet/Foxwarm/Channels/WebUi/WebUIChannel.Questions.cs`, `packages/webui/src/sessionQuestions.ts`, `packages/webui/src/sessionQuestionsState.ts`, `packages/webui/src/components/QuestionCard.tsx`, `packages/webui/src/components/QuestionContent.tsx`, `packages/webui/src/questionContent.ts`
 
 ## Purpose
 
@@ -30,3 +30,7 @@ Lets an Agent ask the user one to four questions, optionally with choices, and e
 ## Tests
 
 `dotnet/Foxwarm.Tests/Sessions/AskUserTests.cs` (blocking ask and structured answer, first-answer-wins, plain-message answer, Session events not answering, asynchronous ask with reminder and close, sibling-error suppression, restart survival, validation, channel text); `InContextCompactTests.Questions.cs` (open questions survive compaction); `packages/webui/test/sessionQuestions.test.mjs` (draft/answer bodies, list ordering, runtime label, notifications); `packages/webui/test/askUser.e2e.mjs` (real .NET Main: read-only card opening and focusing the dock, dock keyboard flow, answer and skipped bubbles, list elevation, composer answer with its label, asynchronous answer, narrow layout).
+
+## Answer content presentation
+
+Question text and resolved answers use the shared sanitized Markdown renderer. Legacy via-message answers project transport attachment descriptors into attachment controls without rewriting stored records. Code spans, fences, nested code examples and pasted literals remain literal. Master-local raster attachments open the shared image preview; downloads retain existing authorization and errors. Remote descriptors remain non-actionable rather than being interpreted as local paths. User-bubble prose and links use the user foreground token. Regression coverage: questionContent unit/browser tests.

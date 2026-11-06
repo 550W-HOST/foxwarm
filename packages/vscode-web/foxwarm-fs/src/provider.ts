@@ -33,24 +33,27 @@ function queryString(params: Record<string, string | number | boolean | undefine
 }
 
 function mapFileSystemError(uri: vscode.Uri, status: number, code?: string, message?: string): vscode.FileSystemError {
+  // Keep the VS Code error code, but do not replace an actionable backend cause
+  // with only a resource URI (which is all an open-request alert can display).
+  const detail = message ? `${message}\n\n${uri.toString()}` : uri;
   switch (code || status) {
     case 'FileNotFound':
     case 404:
-      return vscode.FileSystemError.FileNotFound(uri);
+      return vscode.FileSystemError.FileNotFound(detail);
     case 'FileExists':
     case 409:
-      return vscode.FileSystemError.FileExists(uri);
+      return vscode.FileSystemError.FileExists(detail);
     case 'FileNotADirectory':
-      return vscode.FileSystemError.FileNotADirectory(uri);
+      return vscode.FileSystemError.FileNotADirectory(detail);
     case 'FileIsADirectory':
-      return vscode.FileSystemError.FileIsADirectory(uri);
+      return vscode.FileSystemError.FileIsADirectory(detail);
     case 'NoPermissions':
     case 401:
     case 403:
-      return vscode.FileSystemError.NoPermissions(uri);
+      return vscode.FileSystemError.NoPermissions(detail);
     case 'Unavailable':
     case 503:
-      return vscode.FileSystemError.Unavailable(uri);
+      return vscode.FileSystemError.Unavailable(detail);
     default:
       return new vscode.FileSystemError(message || `Foxwarm filesystem request failed (${status}).`);
   }
