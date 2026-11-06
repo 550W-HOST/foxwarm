@@ -131,7 +131,10 @@ public sealed class UnsupportedImageInputTests
             Assert.Contains("is not a supported image input format", wire);
             Assert.Contains("read result", wire);
         }
-        Assert.Equal(canonical, string.Join('\n', messages.Select(message => message.ToJsonString())));
+        Assert.Equal(
+            canonical,
+            string.Join('\n', messages.Select(message => message.ToJsonString()))
+        );
         Assert.Equal(bytes, await blobs.ReadAsync(reference));
     }
 }

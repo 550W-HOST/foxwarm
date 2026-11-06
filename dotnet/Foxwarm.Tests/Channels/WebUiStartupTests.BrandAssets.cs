@@ -9,10 +9,18 @@ public sealed partial class WebUiStartupTests
     {
         await using var h = new Host();
         await File.WriteAllTextAsync(h.TokenPath, h.Token);
-        await File.AppendAllTextAsync(h.ConfigPath,
-            "url: https://public.invalid/nested/app/\nvector: false\naccess:\n  identities: {alice: {token: synthetic-alice, surfaces: {webui: {sessions: [chat]}}}}\n");
-        await File.WriteAllTextAsync(Path.Combine(h.Dist, "manifest.json"), "{\"name\":\"Foxwarm\"}");
-        await File.WriteAllTextAsync(Path.Combine(h.Dist, "favicon.svg"), "<svg xmlns=\"http://www.w3.org/2000/svg\"/>");
+        await File.AppendAllTextAsync(
+            h.ConfigPath,
+            "url: https://public.invalid/nested/app/\nvector: false\naccess:\n  identities: {alice: {token: synthetic-alice, surfaces: {webui: {sessions: [chat]}}}}\n"
+        );
+        await File.WriteAllTextAsync(
+            Path.Combine(h.Dist, "manifest.json"),
+            "{\"name\":\"Foxwarm\"}"
+        );
+        await File.WriteAllTextAsync(
+            Path.Combine(h.Dist, "favicon.svg"),
+            "<svg xmlns=\"http://www.w3.org/2000/svg\"/>"
+        );
         await File.WriteAllBytesAsync(Path.Combine(h.Dist, "icon-maskable-512.png"), [1, 2, 3]);
         await File.WriteAllTextAsync(Path.Combine(h.Dist, "private.json"), "not public");
         h.Start();
