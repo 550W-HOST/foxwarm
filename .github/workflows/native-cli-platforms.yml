@@ -1,0 +1,87 @@
+name: Native CLI Node (Windows and macOS)
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  platform:
+    name: Native CLI ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: win-x64
+            runner: windows-latest
+            extension: zip
+          - target: osx-arm64
+            runner: macos-15
+            extension: tar.gz
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.21.0
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.403'
+      - name: Publish the full native CLI graph and collect notices
+        run: |
+          mkdir -p .temp/native-cli-downloads
+          python3 scripts/native-aot/publish-platform.py --target '${{ matrix.target }}' --output .temp/native-publish \
+            2>&1 | tee .temp/native-cli-downloads/build.log
+      - name: Package and extract the complete distribution
+        run: |
+          python3 scripts/native-aot/package-cli.py --target '${{ matrix.target }}' \
+            --publish .temp/native-publish --output .temp/native-cli-downloads \
+            --source-commit "$GITHUB_SHA" --source-epoch "$(git show -s --format=%ct HEAD)" \
+            --build-id "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT"
+          mkdir -p .temp/native-extracted
+          archive='.temp/native-cli-downloads/assets/downloads/native-cli-node-${{ matrix.target }}-latest-v3.${{ matrix.extension }}'
+          if [ '${{ matrix.extension }}' = zip ]; then
+            python3 -m zipfile -e "$archive" .temp/native-extracted
+          else
+            tar -xzf "$archive" -C .temp/native-extracted
+          fi
+      - name: Prepare the isolated protocol driver
+        run: |
+          npm install --prefix "$RUNNER_TEMP/native-driver" --ignore-scripts --no-audit --no-fund ws@8.21.0
+          # NODE_PATH is used only by the protocol peer's createRequire, never by the CLI.
+          echo "NODE_PATH=$RUNNER_TEMP/native-driver/node_modules" >> "$GITHUB_ENV"
+      - name: Qualify the extracted executable and native helpers
+        run: |
+          python3 scripts/native-aot/qualify-platform.py '.temp/native-extracted/native-cli-node-${{ matrix.target }}' \
+            | tee .temp/native-cli-downloads/qualification.json
+      - name: Qualify native-first PowerShell onboarding and source fallback
+        if: matrix.target == 'win-x64'
+        env:
+          FOXWARM_TEST_NATIVE_ARCHIVE: ${{ github.workspace }}/.temp/native-cli-downloads/assets/downloads/native-cli-node-win-x64-latest-v3.zip
+        run: node --test scripts/native-aot/tests/bootstrap-windows.test.mjs
+      - name: Upload the qualified distribution and build evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-cli-${{ matrix.target }}-${{ github.sha }}
+          path: .temp/native-cli-downloads/
+          if-no-files-found: error
+          retention-days: 30
+          include-hidden-files: true
+      - name: Retain failed qualification diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-cli-failed-${{ matrix.target }}-${{ github.sha }}
+          path: |
+            .temp/native-cli-downloads/build.log
+            .temp/native-cli-downloads/qualification.json
+          if-no-files-found: ignore
+          retention-days: 7

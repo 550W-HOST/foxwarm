@@ -6,6 +6,51 @@ namespace Foxwarm.Tests;
 
 public sealed class CliNodeFileTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Read_allows_an_independent_writer_to_keep_its_capture_open(bool raster)
+    {
+        using var temp = new TempDirectory();
+        var path = Path.Combine(temp.Path, "live-capture");
+        var bytes = raster
+            ? new byte[] { 137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0 }
+            : System.Text.Encoding.UTF8.GetBytes("started native\né🙂\n");
+        await using var writer = new FileStream(
+            path,
+            FileMode.CreateNew,
+            FileAccess.Write,
+            FileShare.ReadWrite | FileShare.Delete
+        );
+        await writer.WriteAsync(bytes);
+        await writer.FlushAsync();
+        var cli = new NodeFileTools(new NodePaths(temp.Path));
+        var result = await cli.Execute(
+            "read",
+            new JsonObject { ["filePath"] = path },
+            "main",
+            temp.Path,
+            true
+        );
+        if (raster)
+        {
+            Assert.Equal("image/png", result["mimeType"]!.GetValue<string>());
+            Assert.Equal(
+                Convert.ToBase64String(bytes),
+                result["inlineData"]!["data"]!.GetValue<string>()
+            );
+        }
+        else
+            Assert.Equal(
+                System.Text.Encoding.UTF8.GetString(bytes),
+                result["content"]!.GetValue<string>()
+            );
+        // Reading must neither require the live writer to close nor take over its lifetime.
+        await writer.WriteAsync("finished"u8.ToArray());
+        await writer.FlushAsync();
+        Assert.Equal(bytes.Length + 8, writer.Length);
+    }
+
     [Fact]
     public async Task Native_resolution_removes_trailing_separators_without_changing_roots_or_bases()
     {

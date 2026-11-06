@@ -563,7 +563,11 @@ internal sealed partial class NodeClient
             capabilities["features"]!.AsObject().Remove("execWaitCancellation");
             capabilities["features"]!.AsObject().Remove("remoteExecBackgroundRegistration");
         }
-        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsWindows())
+        if (
+            !OperatingSystem.IsLinux()
+            && !OperatingSystem.IsMacOS()
+            && !OperatingSystem.IsWindows()
+        )
             capabilities.Remove("services");
         if (NodePtyService.IsSupported && capabilities["services"] is JsonObject services)
             services["vscode-pty"] = 1;

@@ -37,6 +37,7 @@ const manualGroups = new Map([
   ['scripts/native-aot/tests/test_package.py', 'manual-smoke'],
   ['dotnet/Foxwarm.Tests/scripts/qualify-native-onboarding.mjs', 'manual-smoke'],
   ['packages/webui/test/dotnetCliNodeAotLinux.e2e.mjs', 'manual-smoke'],
+  ['packages/webui/test/dotnetCliNodeAot.e2e.mjs', 'manual-smoke'],
   ['test/managedSessionLiveSmoke.js', 'manual-smoke'],
   ['test/pushOnlyBroadcastSmoke.js', 'manual-smoke'],
   ['test/sessionMetadataSafetySmoke.js', 'manual-smoke'],

@@ -101,7 +101,7 @@ internal static partial class FileToolCore
             path,
             FileMode.Open,
             FileAccess.Read,
-            FileShare.ReadWrite,
+            FileShare.ReadWrite | FileShare.Delete,
             65536,
             FileOptions.Asynchronous
         );

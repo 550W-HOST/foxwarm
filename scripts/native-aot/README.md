@@ -253,3 +253,54 @@ site or change DNS. The public channel is
 See [distribution ownership](../../docs/code-index/units/native-cli-distribution.md)
 for channel retention and publication boundaries. Collection of notices does not
 replace review of the actual dependency inputs and redistribution obligations.
+
+## Windows x64 and macOS arm64 native packages
+
+The sibling `native-cli-platforms.yml` workflow publishes the same CLI graph on
+`windows-latest` and Apple Silicon `macos-15`, using SDK 10.0.403 and runtime
+10.0.14. It is callable from the native distribution and release workflows.
+Windows/macOS qualification is required before their channels are published;
+see the [platform evidence and limits](../../docs/code-index/units/dotnet-cli-platforms-aot.md).
+
+On the corresponding native host, with that SDK installed (the script selects it
+using an owned temporary `global.json`, without changing repository SDK policy):
+
+```sh
+# Use win-x64 on Windows; osx-arm64 on Apple Silicon.
+python3 scripts/native-aot/publish-platform.py --target osx-arm64 --output .temp/native-publish
+python3 scripts/native-aot/package-cli.py --target osx-arm64 \
+  --publish .temp/native-publish --output .temp/native-cli-downloads \
+  --source-commit "$(git rev-parse HEAD)" --source-epoch "$(git show -s --format=%ct HEAD)" \
+  --build-id '<release-build-reference>'
+```
+
+The macOS tar includes the executable, PTY dylib and its executable helper.
+Windows produces a ZIP containing `Foxwarm.CliNode.exe`. Both include provenance,
+actual build inputs and the applicable runtime/managed notices. Archives have
+SHA-256 sidecars and the same complete-package size gate as Linux. The channels
+are `native-cli-node-osx-arm64-latest-v3.tar.gz` and
+`native-cli-node-win-x64-latest-v3.zip`; the Linux alias is unchanged.
+
+Extract the complete archive before testing. On a **disposable hosted runner**,
+install only the protocol driver's `ws` dependency and run:
+
+```sh
+python3 scripts/native-aot/qualify-platform.py .temp/native-extracted/native-cli-node-osx-arm64
+```
+
+This qualification creates owned TLS certificates, temporarily adds the positive
+certificate to the runner's OS trust store, and removes the certificate afterward.
+On macOS, residual trust-settings metadata is discarded with the disposable runner. macOS needs
+`sudo` for this operation. Do not use the runner qualification script as an end-user
+installer. It verifies trusted/negative TLS, process module snapshots without CLR,
+files, exec lifetime/recovery, helpers, Git, PTY, Code and missing-browser isolation.
+Windows records forced process interruption; Unix records draining SIGTERM.
+Neither is a claim of installed-browser or complete interactive-console qualification.
+
+Shared Main-generated templates prefer the corresponding native channel on x64
+Windows and Apple Silicon. A 404 falls back to the existing JavaScript/source
+path; other download/extraction failures stop setup. Other architectures retain
+that existing path. Publication remains opt-in and protected; changing templates
+does not activate a public route. The release workflow includes the three qualified
+CLI archives alongside its existing server packages. This lane does not sign or
+notarize Windows/macOS packages.

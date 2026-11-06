@@ -19,6 +19,10 @@ jobs:
   code-resources:
     uses: ./.github/workflows/code-resources.yml
 
+  native-cli:
+    name: Build and qualify standalone Native AOT CLI packages
+    uses: ./.github/workflows/native-cli-node.yml
+
   packages:
     needs: code-resources
     name: Build Linux and Windows packages
@@ -130,7 +134,7 @@ jobs:
 
   aggregate:
     name: Aggregate release assets and checksums
-    needs: [packages, macos]
+    needs: [packages, macos, native-cli]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -145,6 +149,16 @@ jobs:
           pattern: release-packages-*
           merge-multiple: true
           path: dist
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: native-cli-*
+          path: .temp/native-cli
+      - name: Include the qualified standalone CLI archives
+        run: |
+          find .temp/native-cli -path '*/assets/downloads/*' \( -name '*.zip' -o -name '*.tar.gz' \) -exec cp {} dist/ \;
+          test -f dist/native-cli-node-latest-v3.tar.gz
+          test -f dist/native-cli-node-win-x64-latest-v3.zip
+          test -f dist/native-cli-node-osx-arm64-latest-v3.tar.gz
       - name: Write one checksum list covering every platform
         run: node scripts/release/package.mjs --output dist --checksums-only
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

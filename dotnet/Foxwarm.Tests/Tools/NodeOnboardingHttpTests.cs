@@ -130,6 +130,20 @@ public sealed class NodeOnboardingHttpTests
         Assert.Contains("client.bundle.js", launcher);
         var windows = await client.GetStringAsync("node/run.ps1");
         Assert.DoesNotContain(download, windows);
+        Assert.Contains(
+            $"https://foxwarm.net/downloads/native-cli-node-win-x64-latest-v{current}.zip",
+            windows
+        );
+        Assert.DoesNotContain("__FOXWARM_NATIVE_CLI_WIN_URL__", windows);
+        foreach (var name in new[] { "run.sh", "run-interactive.sh", "run-cli-node.sh" })
+        {
+            var text = await client.GetStringAsync("node/" + name);
+            Assert.Contains(
+                $"https://foxwarm.net/downloads/native-cli-node-osx-arm64-latest-v{current}.tar.gz",
+                text
+            );
+            Assert.DoesNotContain("__FOXWARM_NATIVE_CLI_OSX_URL__", text);
+        }
     }
 
     [Fact]

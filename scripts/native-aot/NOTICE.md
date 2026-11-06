@@ -18,6 +18,8 @@ for other projects, browser installations, or future rebuilds.
 | zlib | Retain the matching source license, including attribution and alteration restrictions. |
 | GCC support libraries, including statically linked libgcc/libstdc++ where selected | Include GPLv3 and GCC Runtime Library Exception 3.1. The exception permits eligible target-code combinations produced by an eligible compilation process to be conveyed under independent terms. This ordinary GCC/clang/.NET build does not modify GCC runtime sources or use non-GPL-compatible compiler plugins. The exception is not a general waiver for a modified runtime or an ineligible build; those cases need corresponding-source compliance before distribution. |
 
+The musl, embedded ICU/OpenSSL, zlib and GCC rows apply to the Linux static-musl target. Windows and macOS packages retain the exact .NET/ASP.NET runtime-pack and managed dependency notices; their OS-provided libraries are not redistributed in the package. The macOS PTY dylib/helper are first-party source covered by the root license.
+
 The net10.0 graph prunes Microsoft.Extensions.Logging package references in
 favor of the shared framework; its runtime-pack notices remain included. The
 builder records the resolved package graph so a new dependency cannot be

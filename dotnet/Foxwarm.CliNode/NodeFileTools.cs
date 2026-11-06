@@ -40,16 +40,31 @@ internal sealed class NodeFileTools(NodePaths paths)
                     var raw = RequiredPath(args, tool);
                     var path = Resolve(raw);
                     string? mime = null;
+                    byte[]? image = null;
                     if (!Directory.Exists(path) && FileToolCore.NativeSize(path) > 0)
                     {
-                        await using var stream = File.OpenRead(path);
+                        await using var stream = new FileStream(
+                            path,
+                            FileMode.Open,
+                            FileAccess.Read,
+                            FileShare.ReadWrite | FileShare.Delete,
+                            8192,
+                            FileOptions.Asynchronous
+                        );
                         var header = new byte[RasterImageMime.HeaderBytes];
                         var count = await stream.ReadAsync(header);
                         mime = RasterImageMime.Detect(header.AsSpan(0, count));
+                        if (mime is not null)
+                        {
+                            stream.Position = 0;
+                            using var buffer = new MemoryStream();
+                            await stream.CopyToAsync(buffer);
+                            image = buffer.ToArray();
+                        }
                     }
                     if (mime is not null)
                     {
-                        var bytes = await File.ReadAllBytesAsync(path);
+                        var bytes = image!;
                         result = new JsonObject
                         {
                             ["output"] = "[Image loaded: " + raw + "]",

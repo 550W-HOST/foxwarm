@@ -95,6 +95,24 @@ fi
 ABS_STATE_DIR="$(cd "$STATE_DIR" && pwd)"
 ABS_SOURCE_DIR="$(cd "$SOURCE_DIR" && pwd)"
 
+NODE_BIN=""
+if [ "$(uname -s)/$(uname -m)" = "Darwin/arm64" ]; then
+  echo "Downloading native macOS arm64 node client ..."
+  native_status="$(curl -sSL -w '%{http_code}' "__FOXWARM_NATIVE_CLI_OSX_URL__" -o "$ABS_SOURCE_DIR/native-cli-node.tar.gz")"
+  case "$native_status" in
+    200)
+      tar -xzf "$ABS_SOURCE_DIR/native-cli-node.tar.gz" -C "$ABS_SOURCE_DIR"
+      NODE_BIN="$ABS_SOURCE_DIR/native-cli-node-osx-arm64/Foxwarm.CliNode"
+      if [ ! -x "$NODE_BIN" ]; then
+        echo "Error: downloaded native node executable is missing: $NODE_BIN" >&2
+        exit 1
+      fi
+      ;;
+    404) echo "No native package is published; using the JavaScript node client." ;;
+    *) echo "Error: native package download returned HTTP $native_status" >&2; exit 1 ;;
+  esac
+  rm "$ABS_SOURCE_DIR/native-cli-node.tar.gz"
+fi
 if [ "$(uname -s)/$(uname -m)" = "Linux/x86_64" ]; then
   echo "Downloading native Linux x64 node client ..."
   curl -fsSL "__FOXWARM_NATIVE_CLI_URL__" -o "$ABS_SOURCE_DIR/native-cli-node.tar.gz"
@@ -105,6 +123,8 @@ if [ "$(uname -s)/$(uname -m)" = "Linux/x86_64" ]; then
     echo "Error: downloaded native node executable is missing: $NODE_BIN" >&2
     exit 1
   fi
+fi
+if [ -n "$NODE_BIN" ]; then
   set -- "$NODE_BIN" --interactive --host "$HOST" --id "$NODE_ID"
 else
   if ! command -v node >/dev/null 2>&1; then

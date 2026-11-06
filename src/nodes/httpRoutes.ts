@@ -76,7 +76,9 @@ export function inferNodeBootstrapBaseUrl(req: Pick<express.Request, 'headers' |
 export function renderNodeTemplateText(templateText: string, req: Pick<express.Request, 'headers' | 'protocol'>): string {
   const defaultBaseUrl = inferNodeBootstrapBaseUrl(req) || '';
   return templateText.split(NODE_TEMPLATE_BASE_URL_PLACEHOLDER).join(defaultBaseUrl)
-    .split('__FOXWARM_NATIVE_CLI_URL__').join(`https://foxwarm.net/downloads/native-cli-node-latest-v${CURRENT_NODE_PROTOCOL_RANGE.max}.tar.gz`);
+    .split('__FOXWARM_NATIVE_CLI_URL__').join(`https://foxwarm.net/downloads/native-cli-node-latest-v${CURRENT_NODE_PROTOCOL_RANGE.max}.tar.gz`)
+    .split('__FOXWARM_NATIVE_CLI_WIN_URL__').join(`https://foxwarm.net/downloads/native-cli-node-win-x64-latest-v${CURRENT_NODE_PROTOCOL_RANGE.max}.zip`)
+    .split('__FOXWARM_NATIVE_CLI_OSX_URL__').join(`https://foxwarm.net/downloads/native-cli-node-osx-arm64-latest-v${CURRENT_NODE_PROTOCOL_RANGE.max}.tar.gz`);
 }
 
 function addTextRoute(httpServer: HttpServer, routePath: string, filePath: string, contentType: string): void {
