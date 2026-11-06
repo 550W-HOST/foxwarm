@@ -561,6 +561,7 @@ public sealed class RemoteExecProtocolTests
             SessionWait.Strings(fixture.Owner.Entry.Snapshot().Meta["acceptedExternalEventIds"])
         );
     }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -586,7 +587,12 @@ public sealed class RemoteExecProtocolTests
         );
         var request = await fixture.Read();
         Assert.Equal(advertised, request[ExecPlacement.Feature]?.GetValue<bool>() == true);
-        var placement = ExecPlacement.Create("/remote/cwd", "session", "quiet-otter", "/remote/a.log");
+        var placement = ExecPlacement.Create(
+            "/remote/cwd",
+            "session",
+            "quiet-otter",
+            "/remote/a.log"
+        );
         await fixture.Respond(
             request,
             new JsonObject { ["output"] = "done", [ExecPlacement.Field] = placement }
