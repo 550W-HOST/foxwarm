@@ -29,7 +29,7 @@ The empty MCP surface is validated and persisted by the same snapshot owner. Nor
 
 ## Browser boundary and retained effects
 
-`WebUiAccess.BrowserRoute` is an explicit allowlist: auth introspection, restricted Session list, active/continuous history, Session WS/SSE, Session-bound uploads, text ingress and referenced Session image reads/grant issuance. All other management endpoints remain administrator-only, including Code capability issuance, Setup, Nodes, model/cwd controls, debug/state/context expansion, tasks and lifecycle commands. Existing independent Node, Code resource and OAuth callback paths retain their original authorities.
+`WebUiAccess.BrowserRoute` is an explicit allowlist: auth introspection, restricted Session list, active/continuous history, Session WS/SSE, Session-bound uploads, text ingress and referenced Session image reads/grant issuance. All other management endpoints remain administrator-only, including Code capability issuance, Setup, Nodes, model/cwd controls, debug/state/context expansion, tasks, timers and lifecycle commands. Existing independent Node, Code resource and OAuth callback paths retain their original authorities.
 
 Auth introspection projects current canonical IDs and role features. Scoped `/api/sessions` exposes only ID, display name and busy state. History removes only the persistent prompt snapshot, using existing safe chat/tool/queue projections rather than broad tool-result redaction. Session-state DTOs retain Source's browser presentation fields, not mutable owner authority.
 

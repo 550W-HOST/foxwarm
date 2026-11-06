@@ -1,18 +1,19 @@
 # Unit: webui-system-view
 
-Files: packages/webui/src/components/SystemView.tsx, packages/webui/src/components/SystemSessions.tsx, packages/webui/src/components/SystemAgents.tsx, packages/webui/src/components/SystemShared.tsx, packages/webui/src/components/AgentSettingsFields.tsx, packages/webui/src/architectureOperations.ts, packages/webui/test/architectureOperations.test.mjs, packages/webui/test/mainHostSystem.e2e.mjs
+Files: packages/webui/src/components/SystemView.tsx, packages/webui/src/components/SystemSessions.tsx, packages/webui/src/components/SystemAgents.tsx, packages/webui/src/components/SystemShared.tsx, packages/webui/src/components/SystemTimers.tsx, packages/webui/src/components/AgentSettingsFields.tsx, packages/webui/src/architectureOperations.ts, packages/webui/src/systemTimers.ts, packages/webui/test/architectureOperations.test.mjs, packages/webui/test/systemTimers.test.mjs, packages/webui/test/mainHostSystem.e2e.mjs, packages/webui/test/mainHostSystemTimers.e2e.mjs
 Secondary files: packages/webui/src/components/SystemNodes.tsx, packages/webui/src/components/TokenUsageDetails.tsx, packages/webui/src/useNodeDirectory.ts, packages/webui/src/App.tsx, packages/webui/src/workbench/utils.ts, packages/webui/test/nodeOnboarding.e2e.mjs, packages/webui/test/boundedSessionReplay.test.mjs
 
 ## Purpose
 
-The **System** page explains how Foxwarm is organized and running, in three sections: **Agents** (persistent workspaces), **Sessions** (runtime state, placement, usage and the collaboration timeline) and **Nodes** (execution environments and the Sessions on them). The Sidebar answers which Session to enter; System is diagnostic and administrative.
+The **System** page explains how Foxwarm is organized and running, in four sections: **Agents** (persistent workspaces), **Sessions** (runtime state, placement, usage and the collaboration timeline), **Nodes** (execution environments and the Sessions on them) and **Timers** (scheduled messages and scripts across all Sessions). The Sidebar answers which Session to enter; System is diagnostic and administrative.
 
 ## Key Exports
 
-- `SystemView` — owns the bounded Session catalog, Node directory, Agent registry, section switching and filters; renders the three sections. `SystemSection` / `SYSTEM_SECTIONS` name them.
+- `SystemView` — owns the bounded Session catalog, Node directory, Agent registry, section switching and filters; renders the four sections. `SystemSection` / `SYSTEM_SECTIONS` name them.
 - `SessionFilterBar`, `SessionOperationRow`, `SessionInspector` (`SystemSessions.tsx`) — Sessions list controls, rows and inspector.
 - `AgentRegistryCard`, `AgentRegistryInspector` (`SystemAgents.tsx`) — Agent registry.
 - `SystemNodes` ([webui-nodes](./webui-nodes.md)) — Nodes section.
+- `SystemTimers`, `SessionTimersSection` (`SystemTimers.tsx`) — Timers section and the Session inspector's Timers section; `systemTimers.ts` owns their pure list projection, filters, ordering and edit-request building.
 - `UsagePie` and formatting helpers (`SystemShared.tsx`).
 - `getArchitectureSessionNodeId(session)` — effective placement: an active tool's exact execution node, otherwise the Session's current node, otherwise `master`.
 - `getArchitectureSessionModel(session)` — model in use, otherwise the configured model.
@@ -23,9 +24,9 @@ The **System** page explains how Foxwarm is organized and running, in three sect
 
 ### Page and navigation
 
-- Header: title System, a per-section subtitle and the Agents | Sessions | Nodes switch. There is no global summary-card row; each section shows only its own summary (Agents: count; Sessions: active / waiting / queued, which also set the status filter; Nodes: Online / Total).
+- Header: title System, a per-section subtitle and the Agents | Sessions | Nodes | Timers switch. There is no global summary-card row; each section shows only its own summary (Agents: count; Sessions: active / waiting / queued, which also set the status filter; Nodes: Online / Total; Timers: timers / paused / failing).
 - The Workbench tab keeps its persisted identity `system:agents` / type `agents` and stores the current `section`; App writes section changes back through `updateTab`, so reload restores the section. The tab title is System.
-- Entry points: the Sidebar and mobile Workspace tools "System" button; `#agents`, `#architecture`, `#system` (System tab, current section); `#nodes`, `#tab/system:nodes` and the status-bar Open Nodes action (System on Nodes). The former `system:nodes` route settles on `#tab/system:agents`.
+- Entry points: the Sidebar and mobile Workspace tools "System" button; `#agents`, `#architecture`, `#system` (System tab, current section); `#nodes`, `#tab/system:nodes` and the status-bar Open Nodes action (System on Nodes); `#timers` (System on Timers); the Session inspector's "View in Timers" (Timers filtered to that Session). The former `system:nodes` route settles on `#tab/system:agents`.
 - Saved layouts are normalized on read: a former `nodes` tab becomes the System tab with `section: 'nodes'` in the same pane position, or is dropped when a System tab already exists. No layout reset or storage version change.
 - Popup leaves: `agents` opens System, `nodes` opens System on Nodes. Moving the System tab to a new window uses the `nodes` leaf when it is on Nodes. Sections switch in place inside popup and embedded leaves.
 - The Sessions Timeline renders [the session sequence view](./webui-session-sequence.md), lazily loaded because it shares Chat rendering pieces; it does not use the bounded catalog window.
@@ -51,6 +52,16 @@ The **System** page explains how Foxwarm is organized and running, in three sect
 
 - Lists real directory Nodes plus unavailable cards for placement IDs outside the directory, each with the Sessions placed on it by effective placement. Selecting one switches to Sessions (List) with that Session inspected; there is no second inspector. Directory, pending-approval and onboarding ownership are in [webui-nodes](./webui-nodes.md).
 
+### Timers section
+
+- Lists every ordinary timer from `GET /api/timers` (internal wait timeouts excluded): action icon and summary (message text, inline script first line or script file), state (Scheduled, Paused, Not scheduled), schedule (cron with next run, or one-time time, in local time with a relative hint), owner Session and the latest result. Order: scheduled by next run, then unscheduled, then paused.
+- Filters: search (ID, owner ID/name, message, cron, script code/file/Node, new-Session Agent/prefix), Agent (owner's catalog Agent, falling back to the ID prefix), action (Message, ToolScript), state (Scheduled, Paused, Last run failed, Not scheduled), and a removable Session chip set by the inspector link. Owner names and Agents come from the exact `/session-list/by-id` lookup.
+- The inspector shows schedule (repeats/once, next run, last fired), owner (inspect in Sessions when loaded, otherwise open; separate open action), Agent, action, target (owner Session, new Session with Agent/prefix, or the owner for scripts), script file/source Node/timeout/inline code or the full message, and the recent results with errors. A result's run ID opens the run's diagnostics (`get_toolscript_run` projection) in the JSON inspector.
+- Actions: Pause/Resume; Edit (schedule kept, cron, date-time or delay; message for message timers, or the complete script settings as JSON for ToolScript timers), validated again by `update_timer`; Delete after an inline confirmation. A paused one-time timer past its time notes that resuming fires it once. There is no run-now action.
+- Live updates: the section and the inspector's Timers list reload (debounced) on the realtime `timers-changed` event and on socket reopen; no polling. A 30-second clock refreshes relative times only while mounted.
+- The Session inspector's Timers section lists up to five of that Session's timers from `GET /api/timers?sessionId=` with a "View in Timers" link.
+- Narrow widths stack the inspector below the list without horizontal overflow.
+
 ### Agent registry
 
 - The Agents summary counts real workspace directories, including valid zero-session Agents that do not appear in Session-derived catalog summaries.
@@ -69,6 +80,10 @@ The **System** page explains how Foxwarm is organized and running, in three sect
 - The Sidebar remains the canonical surface for compact navigation, pinning, drag ordering, and branch disclosure; System intentionally does not duplicate those controls.
 
 ## Design Decisions
+
+### D-webui-system-timers
+
+[2026-11-07, user decision] Global timers are a fourth System section, Agents | Sessions | Nodes | Timers, rather than a separate page, and the Session inspector shows that Session's timers with a link into the section. The section offers the read-only list, recent results, pause/resume, edit and delete; run-now was deliberately not included. Changes go through the timer tools' own operations ([timer persistence](./tasks-timers.md#d-timers-pause-and-recent-runs)); the routes are administrator-only. Refresh is event-driven over the existing realtime list subscription instead of polling.
 
 ### D-webui-system-page
 

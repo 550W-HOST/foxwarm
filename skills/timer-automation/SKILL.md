@@ -70,6 +70,20 @@ Reschedule an existing timer:
 }
 ```
 
+Pause a timer, then resume it later:
+
+```json
+{
+  "toolId": "builtin:update_timer",
+  "args": {
+    "timerId": "abcd1234",
+    "paused": true
+  }
+}
+```
+
+A paused timer keeps its schedule and settings but does not fire. `"paused": false` resumes it from the next scheduled occurrence; ticks missed while paused are not replayed. A paused one-time timer whose time has already passed fires once when resumed. Pausing does not stop a run already in progress. `paused` can be combined with other updates, and later updates keep the timer paused.
+
 Delete a timer:
 
 ```json
@@ -81,6 +95,10 @@ Delete a timer:
 }
 ```
 
+## Inspecting timers
+
+`list_timers` returns each timer's schedule, `nextRunAt` (null while paused or when nothing is scheduled), `paused`, and `lastRun`, the most recent result: `delivered` or `failed` for message timers; `completed`, `paused` (the script is waiting for continuation), `failed`, or `skipped` (the previous run was still active) for ToolScript timers, with its `runId` when there is one. Use `get_toolscript_run` with that `runId` for the run's output. One-time timers are removed after they fire, so they have no results to list.
+
 ## Scheduling Rules
 
 For both `create_timer` and schedule-changing `update_timer`, pass exactly one schedule field:
@@ -89,7 +107,7 @@ For both `create_timer` and schedule-changing `update_timer`, pass exactly one s
 - `at`: absolute future time as an ISO string or epoch milliseconds; creates a one-shot timer.
 - `cron`: recurring schedule expression.
 
-For `update_timer`, omit schedule fields when you only want to change metadata such as `message`, `newSession`, `sessionPrefix`, or `agentName`. If you provide a schedule, provide only one of `afterSeconds`, `at`, or `cron`.
+For `update_timer`, omit schedule fields when you only want to change metadata such as `message`, `paused`, `newSession`, `sessionPrefix`, or `agentName`. If you provide a schedule, provide only one of `afterSeconds`, `at`, or `cron`.
 
 `newSession=true` on a message timer means every firing creates a new session instead of delivering into the owner session. `sessionPrefix` and `agentName` are only meaningful with `newSession=true`.
 

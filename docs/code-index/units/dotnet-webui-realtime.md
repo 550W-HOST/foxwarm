@@ -21,6 +21,8 @@ Scoped clients retain role-safe state/message projections and current exact/Agen
 
 A superseding subscription initialization retains already-buffered live events only for subscriptions still present in the new union. The final flush rechecks both that union and the exact Session owner. A captured admitted owner must still match; an event produced before cold admission instead matches the exact owner admitted by that initialization, so registered channel sends are not lost merely because their target was cold. Only a still-current admitted owner can receive either form. The publisher sends retained events after state/draft snapshots and before `subscriptions-applied`. Removed subscriptions, replaced owners, stale initialization tasks and stale queued revisions do not revive old replies. The initialization buffer has the same 1,000-event bound as the TypeScript hub; it is not durable replay or command history. Scoped authorization remains enforced at the actual send boundary.
 
+Administrator list subscribers also receive `timers-changed` after each committed timer store change, including recorded firing results; the event carries no timer data and System › Timers reloads through its HTTP route. Scoped clients cannot hold a list subscription, so they never receive it.
+
 The administrator-only file-backed Logs topic shares the same physical socket and sender, with an independent logical lifetime, reconnect cursor and bounded outbound backlog. It never enters the Session initialization pending list or restarts for an unrelated revision. The [managed Main Logs unit](./dotnet-webui-logs.md) owns reader/tail/producer behavior and queue accounting. Existing Session/list revision and queue policies remain unchanged.
 
 ## Tests
