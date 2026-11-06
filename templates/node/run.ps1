@@ -138,14 +138,16 @@ if (-not $NativeExecutable) {
     Invoke-WebRequest -Uri $tarUrl -OutFile $tarFile -UseBasicParsing
 
     Write-Host "Extracting source ..."
-    # GNU tar on PATH interprets a drive-qualified archive as a remote host.
-    # Keep the archive name relative for GNU tar, while the explicit destination
-    # preserves the source root independently of PowerShell/process cwd differences.
+    # Native tar receives relative paths; in-process extraction must resolve
+    # those paths against the same directory as PowerShell.
+    $previousProcessDirectory = [IO.Directory]::GetCurrentDirectory()
     Push-Location -LiteralPath $SourceDir
     try {
-        & tar -xzf './source.tar.gz' -C $SourceDir
+        [IO.Directory]::SetCurrentDirectory($SourceDir)
+        & tar -xzf './source.tar.gz' -C '.'
         if ($LASTEXITCODE -ne 0) { throw 'Node source extraction failed.' }
     } finally {
+        [IO.Directory]::SetCurrentDirectory($previousProcessDirectory)
         Pop-Location
     }
     Remove-Item -LiteralPath $tarFile -Force -ErrorAction SilentlyContinue
