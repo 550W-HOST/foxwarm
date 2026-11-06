@@ -3,15 +3,18 @@ import assert from 'node:assert/strict'
 import { createServer } from 'node:https'
 import { once } from 'node:events'
 import { spawn, execFileSync } from 'node:child_process'
-import { mkdir, readFile, writeFile, readlink, readdir, rm, chmod, symlink } from 'node:fs/promises'
+import { mkdir, readFile, writeFile, readlink, readdir, rm, chmod, symlink, realpath } from 'node:fs/promises'
 import { join } from 'node:path'
 import { platform, release, arch } from 'node:os'
 import { createRequire } from 'node:module'
 const require = createRequire(import.meta.url)
 const { WebSocketServer } = require('ws')
 const { initializeTestEnvironment, isolatedApplicationEnv } = require('../../../scripts/test/test-process-env.cjs')
-const { processRoot: root } = initializeTestEnvironment()
+const { processRoot: allocatedRoot } = initializeTestEnvironment()
 const windows = process.platform === 'win32', darwin = process.platform === 'darwin'
+// Windows TEMP may use an 8.3 alias; use the same native absolute path spelling
+// as the executable before constructing expected Agent/cwd paths.
+const root = windows ? await realpath(allocatedRoot) : allocatedRoot
 const powershell = windows ? join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe') : null
 const executable = process.env.FOXWARM_CLI_EXECUTABLE
 assert(executable, 'Set FOXWARM_CLI_EXECUTABLE to the native executable')

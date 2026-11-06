@@ -4,7 +4,7 @@ import test from 'node:test'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
 import { spawn, execFileSync } from 'node:child_process'
-import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, writeFile, rm, realpath } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createRequire } from 'node:module'
@@ -15,7 +15,7 @@ const { isolatedApplicationEnv } = require('../../test/test-process-env.cjs')
 for (const scenario of ['native', 'unpublished', 'unsupported', 'server-error']) {
   test(`Windows bootstrap: ${scenario}`, { skip: process.platform !== 'win32', timeout: 30000 }, async () => {
     assert(process.env.FOXWARM_TEST_NATIVE_ARCHIVE, 'Supply the complete qualified Windows archive')
-    const root = await mkdtemp(join(tmpdir(), 'fw-bootstrap-'))
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'fw-bootstrap-')))
     const source = join(root, 'source'), state = join(root, 'state'), capture = join(root, 'fallback.json')
     const requests = [], sockets = new Set()
     let registration, child, output = ''
