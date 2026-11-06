@@ -44,16 +44,30 @@ __export(extension_exports, {
   registerFoxwarmConfigSchemas: () => registerFoxwarmConfigSchemas
 });
 module.exports = __toCommonJS(extension_exports);
-var vscode3 = __toESM(require("vscode"));
-
-// src/provider.ts
-var vscode = __toESM(require("vscode"));
 
 // ../../shared/src/nodeIdentity.ts
 var MAX_CORE_NODE_ID_LENGTH = 193;
 function isCoreNodeId(value) {
   return typeof value === "string" && value.length <= MAX_CORE_NODE_ID_LENGTH && (/^[A-Za-z0-9._:-]{1,128}$/.test(value) || /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}\/[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value));
 }
+
+// ../../shared/src/codeWorkspace.ts
+function codeWorkspaceNode(path) {
+  const name = path.split("/").pop() || "";
+  if (!name.startsWith("node-") || !name.endsWith(".code-workspace")) return void 0;
+  try {
+    const nodeId = decodeURIComponent(name.slice(5, -".code-workspace".length));
+    return isCoreNodeId(nodeId) ? nodeId : void 0;
+  } catch {
+    return void 0;
+  }
+}
+
+// src/extension.ts
+var vscode3 = __toESM(require("vscode"));
+
+// src/provider.ts
+var vscode = __toESM(require("vscode"));
 
 // src/foxwarmUri.ts
 function decodePathSegment(segment) {
@@ -164,6 +178,7 @@ function normalizeFoxwarmOpenRequest(value) {
       kind: "openFile",
       nodeId,
       path,
+      ...request.cwd !== void 0 ? { cwd: normalizeFoxwarmAbsolutePath(request.cwd) } : {},
       ...startLine !== void 0 ? { startLine } : {},
       ...startColumn !== void 0 ? { startColumn } : {},
       ...endLine !== void 0 ? { endLine } : {}
@@ -1094,16 +1109,12 @@ async function registerFoxwarmConfigSchemas(files, extensions2 = vscode2.extensi
 }
 
 // src/extension.ts
-async function waitForInitialWorkspaceFolders() {
-  const deadline = Date.now() + 15e3;
-  while (Date.now() < deadline) {
-    const folders = vscode3.workspace.workspaceFolders;
-    if (folders && folders.length > 0) return folders;
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  throw new Error("Code workspace folders did not finish loading.");
-}
 function getCurrentNodeId() {
+  const workspaceFile = vscode3.workspace.workspaceFile;
+  if (workspaceFile?.scheme === "foxwarm") {
+    const nodeId = codeWorkspaceNode(parseFoxwarmUri(workspaceFile).realPath);
+    if (nodeId) return nodeId;
+  }
   const folder = vscode3.workspace.workspaceFolders?.[0];
   if (!folder) {
     return "master";
@@ -1125,106 +1136,91 @@ function getCurrentPath() {
     return "/";
   }
 }
-async function addFoxwarmFolder(request) {
+async function loadedWorkspaceFolders() {
+  const workspaceFile = vscode3.workspace.workspaceFile;
+  if (vscode3.workspace.workspaceFolders?.length || !workspaceFile) return vscode3.workspace.workspaceFolders ?? [];
+  const content = new TextDecoder().decode(await vscode3.workspace.fs.readFile(workspaceFile));
+  try {
+    if (JSON.parse(content).folders?.length === 0) return [];
+  } catch {
+  }
+  const deadline = Date.now() + 15e3;
+  while (Date.now() < deadline) {
+    if (vscode3.workspace.workspaceFolders?.length) return vscode3.workspace.workspaceFolders;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error("Code workspace folders did not finish loading.");
+}
+function containsPath(root, path) {
+  return path === root || path.startsWith(root.replace(/\/$/, "") + "/");
+}
+async function addFoxwarmFolder(request, name) {
   const normalized = normalizeFoxwarmOpenRequest(request);
-  if (normalized.kind !== "addFolder") {
-    throw new Error("Expected an addFolder request.");
-  }
+  if (normalized.kind !== "addFolder") throw new Error("Expected an addFolder request.");
   const uri = vscode3.Uri.parse(buildFoxwarmNodeUriString(normalized.nodeId, normalized.path));
-  const uriString = uri.toString(true);
-  const workspaceFolders = await waitForInitialWorkspaceFolders();
-  const existing = workspaceFolders.some((folder) => {
+  const folders = await loadedWorkspaceFolders();
+  const targetOf = (folder) => {
     try {
-      const target = parseFoxwarmUri(folder.uri);
-      return target.nodeId === normalized.nodeId && target.realPath === normalized.path;
+      return parseFoxwarmUri(folder.uri);
     } catch {
-      return false;
+      return void 0;
     }
-  }) ?? false;
-  if (existing) {
-    return { status: "existing", uri: uriString };
+  };
+  const covering = folders.find((folder) => {
+    const target = targetOf(folder);
+    return target?.nodeId === normalized.nodeId && containsPath(target.realPath, normalized.path);
+  });
+  const relabel = covering && name && targetOf(covering)?.realPath === normalized.path && covering.name !== name;
+  if (covering && !relabel) {
+    await revealWorkspaceRoot(uri);
+    return { status: "existing", uri: uri.toString(true) };
   }
-  let folderChangeListener;
-  let folderChangeTimeout;
-  const folderAdded = new Promise((resolve, reject) => {
-    folderChangeTimeout = setTimeout(() => {
-      folderChangeListener?.dispose();
+  const retained = folders.filter((folder) => {
+    const target = targetOf(folder);
+    return target?.nodeId !== normalized.nodeId || !containsPath(normalized.path, target.realPath);
+  }).map((folder) => ({ uri: folder.uri, name: folder.name }));
+  const insertAt = folders.findIndex((folder) => !retained.some((item) => item.uri === folder.uri));
+  retained.splice(insertAt < 0 ? retained.length : insertAt, 0, { uri, name: name || normalized.path.split("/").filter(Boolean).pop() || "/" });
+  let listener;
+  let timer;
+  const changed = new Promise((resolve, reject) => {
+    timer = setTimeout(() => {
+      listener?.dispose();
       reject(new Error(`Timed out while adding ${normalized.path} to the current workspace.`));
     }, 15e3);
-    folderChangeListener = vscode3.workspace.onDidChangeWorkspaceFolders((event) => {
-      if (!event.added.some((folder) => folder.uri.toString(true) === uriString)) return;
-      if (folderChangeTimeout) clearTimeout(folderChangeTimeout);
-      folderChangeListener?.dispose();
+    listener = vscode3.workspace.onDidChangeWorkspaceFolders(() => {
+      if (!vscode3.workspace.workspaceFolders?.some((folder) => folder.uri.toString(true) === uri.toString(true))) return;
+      clearTimeout(timer);
+      listener?.dispose();
       resolve();
     });
   });
-  const accepted = vscode3.workspace.updateWorkspaceFolders(
-    workspaceFolders.length,
-    0,
-    { uri }
-  );
-  if (!accepted) {
-    if (folderChangeTimeout) clearTimeout(folderChangeTimeout);
-    folderChangeListener?.dispose();
-    throw new Error(`Could not add ${normalized.path} to the current workspace.`);
+  if (!vscode3.workspace.updateWorkspaceFolders(0, folders.length, ...retained)) {
+    clearTimeout(timer);
+    listener?.dispose();
+    throw new Error(`Could not update ${name || normalized.path} in the current workspace.`);
   }
-  await folderAdded;
-  return { status: "added", uri: uriString };
-}
-async function waitForManagedWorkspaceUpdate(context, target, start, deleteCount, uri) {
-  let settled = false;
-  let listener;
-  let finish = () => {
-  };
-  const changed = new Promise((resolve) => {
-    finish = (value) => {
-      if (settled) return;
-      settled = true;
-      listener?.dispose();
-      resolve(value);
-    };
-    listener = vscode3.workspace.onDidChangeWorkspaceFolders(() => {
-      const folder = vscode3.workspace.workspaceFolders?.find((candidate) => candidate.name === target.name && isExactWorkspaceRoot(candidate.uri, target));
-      if (folder) finish(folder.uri);
-    });
-  });
-  context.subscriptions.push(listener, { dispose: () => finish(void 0) });
-  const accepted = vscode3.workspace.updateWorkspaceFolders(start, deleteCount, { uri, name: target.name });
-  if (!accepted) {
-    finish(void 0);
-    throw new Error(`Could not update ${target.name} in the current workspace.`);
-  }
-  return changed;
+  await changed;
+  await revealWorkspaceRoot(uri);
+  return { status: covering ? "existing" : "added", uri: uri.toString(true) };
 }
 async function revealWorkspaceRoot(uri) {
   await vscode3.commands.executeCommand("workbench.view.explorer");
   await vscode3.commands.executeCommand("revealInExplorer", uri);
 }
-async function openManagedWorkspaceRoot(kind, provider, context) {
+async function openManagedWorkspaceRoot(kind, provider) {
+  await loadedWorkspaceFolders();
   const target = (await provider.getWorkspaceRoots())[kind];
   const uri = vscode3.Uri.parse(buildFoxwarmNodeUriString(target.nodeId, target.path));
   const stat = await vscode3.workspace.fs.stat(uri);
   if ((stat.type & vscode3.FileType.Directory) === 0) {
     throw new Error(`${target.name} is not a directory: ${target.path}`);
   }
-  const folders = vscode3.workspace.workspaceFolders ?? [];
-  const existingIndex = folders.findIndex((folder) => isExactWorkspaceRoot(folder.uri, target));
-  const existing = existingIndex >= 0 ? folders[existingIndex] : void 0;
-  let finalUri = existing?.uri ?? uri;
-  if (existing?.name !== target.name) {
-    finalUri = await waitForManagedWorkspaceUpdate(
-      context,
-      target,
-      existing ? existingIndex : folders.length,
-      existing ? 1 : 0,
-      existing?.uri ?? uri
-    );
+  if (getCurrentNodeId() !== "master") {
+    await vscode3.commands.executeCommand("foxwarm.routeCodeRequest", { kind: "openManagedRoot", nodeId: "master", path: target.path, root: kind });
+    return { status: "added", uri: uri.toString(true) };
   }
-  if (finalUri) await revealWorkspaceRoot(finalUri);
-  return {
-    status: existing ? "existing" : "added",
-    uri: (finalUri ?? existing?.uri ?? uri).toString(true)
-  };
+  return addFoxwarmFolder({ kind: "addFolder", nodeId: "master", path: target.path }, target.name);
 }
 async function openFoxwarmFolder() {
   const value = await vscode3.window.showInputBox({
@@ -1252,6 +1248,18 @@ async function openFoxwarmFile(request, provider) {
   if ((stat.type & vscode3.FileType.Directory) !== 0) {
     throw new Error(`${normalized.path} is a directory, not a file.`);
   }
+  const covered = vscode3.workspace.workspaceFolders?.some((folder) => {
+    try {
+      const root = parseFoxwarmUri(folder.uri);
+      return root.nodeId === normalized.nodeId && containsPath(root.realPath, normalized.path);
+    } catch {
+      return false;
+    }
+  });
+  if (!covered) {
+    const path = normalized.cwd && containsPath(normalized.cwd, normalized.path) ? normalized.cwd : normalized.path.slice(0, normalized.path.lastIndexOf("/")) || "/";
+    await addFoxwarmFolder({ kind: "addFolder", nodeId: normalized.nodeId, path });
+  }
   const existing = vscode3.workspace.textDocuments.find((document2) => document2.uri.toString(true) === uri.toString(true));
   if (!existing?.isDirty) provider.notifyExternalChange(uri);
   const document = existing ?? await vscode3.workspace.openTextDocument(uri);
@@ -1273,6 +1281,7 @@ async function openFoxwarmFile(request, provider) {
     }
   }
   await vscode3.window.showTextDocument(document, { preview: true, selection });
+  await revealWorkspaceRoot(uri);
   if (existing?.isDirty) {
     void vscode3.window.showWarningMessage(`${normalized.path} has unsaved Code changes; the external file was not reloaded.`);
   }
@@ -1293,8 +1302,8 @@ function activate(context) {
       isReadonly: false
     }),
     vscode3.commands.registerCommand("foxwarm-fs.openFolder", openFoxwarmFolder),
-    vscode3.commands.registerCommand("foxwarm-fs.openAppFolder", () => openManagedWorkspaceRoot("app", provider, context)),
-    vscode3.commands.registerCommand("foxwarm-fs.openDataFolder", () => openManagedWorkspaceRoot("data", provider, context)),
+    vscode3.commands.registerCommand("foxwarm-fs.openAppFolder", () => openManagedWorkspaceRoot("app", provider)),
+    vscode3.commands.registerCommand("foxwarm-fs.openDataFolder", () => openManagedWorkspaceRoot("data", provider)),
     vscode3.commands.registerCommand("foxwarm-fs.addFolderToWorkspace", addExplorerFolderToWorkspace),
     vscode3.commands.registerCommand("foxwarm-fs.handleOpenRequest", (request) => handleOpenRequest(request, provider))
   );

@@ -32,7 +32,7 @@ const updates = [];
 const folderListeners = new Set();
 let workspaceFolders = [{
   name: 'Remote Project',
-  uri: MockUri.parse('foxwarm://node+worker-1/remote/project'),
+  uri: MockUri.parse('foxwarm://node+master/remote/project'),
 }];
 let updateAccepted = true;
 let statType = 2;
@@ -70,12 +70,13 @@ const vscodeMock = {
       folderListeners.add(listener);
       return { dispose: () => folderListeners.delete(listener) };
     },
-    updateWorkspaceFolders: (start, deleteCount, folder) => {
+    updateWorkspaceFolders: (start, deleteCount, ...folders) => {
+      const folder = folders[0];
       updates.push({ start, deleteCount, folder });
       if (!updateAccepted) return false;
-      const added = { name: folder.name || folder.uri.path.split('/').at(-1), uri: folder.uri };
-      workspaceFolders.splice(start, deleteCount, added);
-      for (const listener of [...folderListeners]) listener({ added: [added], removed: [] });
+      const added = folders.map(folder => ({ name: folder.name || folder.uri.path.split('/').at(-1), uri: folder.uri }));
+      workspaceFolders.splice(start, deleteCount, ...added);
+      for (const listener of [...folderListeners]) listener({ added, removed: [] });
       return true;
     },
     fs: { stat: async () => {
@@ -119,10 +120,10 @@ extension.activate({
   subscriptions: [],
 });
 
-test('app/data commands always add master roots, preserve a remote current folder, reveal, and deduplicate repeats', async () => {
+test('app/data commands add master roots, reveal, and deduplicate repeats', async () => {
   const appResult = await commands.get('foxwarm-fs.openAppFolder')();
   assert.deepEqual(appResult, { status: 'added', uri: 'foxwarm://node+master/srv/foxwarm' });
-  assert.equal(workspaceFolders[0].uri.authority, 'node+worker-1');
+  assert.equal(workspaceFolders[0].uri.authority, 'node+master');
   assert.deepEqual({ name: workspaceFolders[1].name, uri: workspaceFolders[1].uri.toString() }, {
     name: 'Foxwarm App',
     uri: 'foxwarm://node+master/srv/foxwarm',
@@ -198,8 +199,8 @@ test('preexisting legacy exact root is relabeled in place without reordering or 
     },
   };
   workspaceFolders = [
-    { name: 'Before', uri: MockUri.parse('foxwarm://node+worker-1/before') },
-    { name: 'foxwarm', uri: MockUri.parse('foxwarm://node/master/srv/foxwarm') },
+    { name: 'Before', uri: MockUri.parse('foxwarm://node+master/before') },
+    { name: 'foxwarm', uri: MockUri.parse('foxwarm://node+master/srv/foxwarm') },
     { name: 'After', uri: MockUri.parse('foxwarm://node+worker-2/after') },
   ];
   statType = 2;
@@ -208,7 +209,7 @@ test('preexisting legacy exact root is relabeled in place without reordering or 
   const updatesBefore = updates.length;
   await commands.get('foxwarm-fs.openAppFolder')();
   assert.deepEqual(workspaceFolders.map((folder) => folder.name), ['Before', 'Foxwarm App', 'After']);
-  assert.equal(workspaceFolders[1].uri.toString(), 'foxwarm://node/master/srv/foxwarm');
+  assert.equal(workspaceFolders[1].uri.toString(), 'foxwarm://node+master/srv/foxwarm');
   assert.equal(updates.length, updatesBefore + 1);
   const repeatedAt = updates.length;
   await commands.get('foxwarm-fs.openAppFolder')();
@@ -229,7 +230,7 @@ test('same app/data path is order-independent when Data runs before App', async 
   assert.deepEqual(workspaceFolders.map((folder) => folder.name), ['Foxwarm App & Data']);
 });
 
-test('authoritative master roots preserve spaces and Unicode without matching nested roots', async () => {
+test('authoritative master roots preserve spaces and Unicode and merge nested roots', async () => {
   rootsPayload = {
     version: 1,
     roots: {
@@ -238,11 +239,72 @@ test('authoritative master roots preserve spaces and Unicode without matching ne
     },
   };
   workspaceFolders = [
-    { name: 'Remote', uri: MockUri.parse('foxwarm://node+worker-1/srv/Fox%20warm/%E7%A0%94%E5%8F%91') },
+    { name: 'Other', uri: MockUri.parse('foxwarm://node+master/other') },
     { name: 'Nested', uri: MockUri.parse('foxwarm://node+master/srv/Fox%20warm/%E7%A0%94%E5%8F%91/nested') },
   ];
   await commands.get('foxwarm-fs.openAppFolder')();
-  assert.equal(workspaceFolders.length, 3);
+  assert.equal(workspaceFolders.length, 2);
   assert.equal(workspaceFolders.at(-1).name, 'Foxwarm App');
   assert.equal(workspaceFolders.at(-1).uri.toString(), 'foxwarm://node+master/srv/Fox%20warm/%E7%A0%94%E5%8F%91');
+});
+
+test('folder requests reveal covered descendants and merge only contained same-Node roots', async () => {
+  workspaceFolders = [
+    { name: 'Project', uri: MockUri.parse('foxwarm://node+remote/project/src') },
+    { name: 'Tests', uri: MockUri.parse('foxwarm://node+remote/project/tests') },
+    { name: 'Other', uri: MockUri.parse('foxwarm://node+remote/project-other') },
+    { name: 'Master', uri: MockUri.parse('foxwarm://node+master/project/src') },
+  ];
+  const request = commands.get('foxwarm-fs.handleOpenRequest');
+  await request({ kind: 'addFolder', nodeId: 'remote', path: '/project' });
+  assert.deepEqual(workspaceFolders.map(folder => folder.uri.toString()), [
+    'foxwarm://node+remote/project', 'foxwarm://node+remote/project-other', 'foxwarm://node+master/project/src',
+  ]);
+  const count = updates.length;
+  assert.equal((await request({ kind: 'addFolder', nodeId: 'remote', path: '/project/src/nested' })).status, 'existing');
+  assert.equal(updates.length, count);
+  assert.equal(executed.at(-1).args[0].toString(), 'foxwarm://node+remote/project/src/nested');
+});
+
+test('file requests add a containing cwd or parent, then open and focus Explorer for both Nodes', async () => {
+  const request = commands.get('foxwarm-fs.handleOpenRequest');
+  statType = 1;
+  vscodeMock.workspace.openTextDocument = async uri => ({ uri, lineCount: 1 });
+  workspaceFolders = [{ name: 'Existing', uri: MockUri.parse('foxwarm://node+remote/existing') }];
+  await request({ kind: 'openFile', nodeId: 'remote', path: '/outside/src/file.txt', cwd: '/outside' });
+  assert(workspaceFolders.some(folder => folder.uri.toString() === 'foxwarm://node+remote/outside'));
+  assert.equal(executed.at(-1).args[0].toString(), 'foxwarm://node+remote/outside/src/file.txt');
+  const count = updates.length;
+  await request({ kind: 'openFile', nodeId: 'remote', path: '/outside/other.txt', cwd: '/unrelated' });
+  assert.equal(updates.length, count);
+  await request({ kind: 'openFile', nodeId: 'master', path: '/outside/src/master.txt', cwd: '/unrelated' });
+  assert(workspaceFolders.some(folder => folder.uri.toString() === 'foxwarm://node+master/outside/src'));
+  assert.equal(executed.at(-1).args[0].toString(), 'foxwarm://node+master/outside/src/master.txt');
+  statType = 2;
+});
+
+test('master folder commands from a remote workbench route to master without changing remote roots', async () => {
+  workspaceFolders = [{ name: 'Remote', uri: MockUri.parse('foxwarm://node+remote/project') }];
+  const count = updates.length;
+  await commands.get('foxwarm-fs.openDataFolder')();
+  assert.equal(updates.length, count);
+  assert.equal(executed.at(-1).id, 'foxwarm.routeCodeRequest');
+  assert.deepEqual(executed.at(-1).args[0], { kind: 'openManagedRoot', nodeId: 'master', path: '/var/lib/foxwarm', root: 'data' });
+});
+
+test('early commands wait for saved roots instead of treating the startup snapshot as an empty workspace', async () => {
+  workspaceFolders = [];
+  vscodeMock.workspace.workspaceFile = MockUri.parse('foxwarm://node+master/state/node-remote.code-workspace');
+  vscodeMock.workspace.fs.readFile = async () => new TextEncoder().encode('{"folders":[{"uri":"foxwarm://node+remote/project"}]}');
+  const count = updates.length;
+  const pending = commands.get('foxwarm-fs.handleOpenRequest')({ kind: 'addFolder', nodeId: 'remote', path: '/project/src' });
+  setTimeout(() => { workspaceFolders = [{ name: 'Project', uri: MockUri.parse('foxwarm://node+remote/project') }]; }, 10);
+  assert.equal((await pending).status, 'existing');
+  assert.equal(updates.length, count);
+  assert.equal(workspaceFolders[0].uri.toString(), 'foxwarm://node+remote/project');
+  workspaceFolders = [];
+  vscodeMock.workspace.fs.readFile = async () => new TextEncoder().encode('{"folders":[]}');
+  await commands.get('foxwarm-fs.handleOpenRequest')({ kind: 'addFolder', nodeId: 'remote', path: '/new' });
+  assert.equal(workspaceFolders[0].uri.toString(), 'foxwarm://node+remote/new');
+  delete vscodeMock.workspace.workspaceFile;
 });

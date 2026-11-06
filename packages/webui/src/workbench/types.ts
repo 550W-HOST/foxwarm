@@ -6,7 +6,7 @@ export type WorkbenchTabBase = {
 export type WorkbenchTab =
   | (WorkbenchTabBase & { type: 'chat'; sessionId: string; preview?: boolean })
   | (WorkbenchTabBase & { type: 'terminal'; terminalId?: string; nodeId?: string; cwd?: string; createMode?: 'new' | 'reuse' })
-  | (WorkbenchTabBase & { type: 'vscode' })
+  | (WorkbenchTabBase & { type: 'vscode'; nodeId: string; path: string })
   /** The System page (Agents, Sessions, Nodes); its ID and type predate the page's name. */
   | (WorkbenchTabBase & { type: 'agents'; section?: 'agents' | 'sessions' | 'nodes' })
   | (WorkbenchTabBase & {

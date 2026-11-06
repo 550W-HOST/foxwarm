@@ -119,7 +119,9 @@
     bridgeQueue = bridgeQueue.then(async () => {
       try {
         const requestKind = message.request && typeof message.request === 'object' ? message.request.kind : '';
-        const command = requestKind === 'openCommit'
+        const command = requestKind === 'openManagedRoot' && message.request.nodeId === 'master'
+          ? (message.request.root === 'app' ? 'foxwarm-fs.openAppFolder' : message.request.root === 'data' ? 'foxwarm-fs.openDataFolder' : '')
+          : requestKind === 'openCommit'
           ? 'foxwarm-scm.openCommitDetails'
           : (requestKind === 'addFolder' || requestKind === 'openFile')
             ? 'foxwarm-fs.handleOpenRequest'
@@ -265,6 +267,20 @@
     ];
     create(document.body, {
       ...config,
+      commands: [{ id: 'foxwarm.routeCodeRequest', handler: (request) => {
+        if (request?.kind !== 'openManagedRoot' || request.nodeId !== 'master' || !['app', 'data'].includes(request.root)) throw new Error('Unsupported Code target.');
+        if (window.parent !== window) {
+          window.parent.postMessage({ channel: bridgeChannel, version: bridgeVersion, type: 'open', request }, window.location.origin);
+        } else {
+          const target = new URL(window.location.href);
+          target.search = '';
+          target.searchParams.set('embedded', 'true');
+          target.searchParams.set('nodeId', 'master');
+          target.searchParams.set('initialFolderUri', 'foxwarm://node+master' + request.path.split('/').map(encodeURIComponent).join('/'));
+          target.searchParams.set('openRoot', request.root);
+          window.open(target.toString(), '_blank', 'noopener,noreferrer');
+        }
+      } }],
       workspaceProvider: WorkspaceProvider.create(config),
       urlCallbackProvider: new LocalStorageURLCallbackProvider(config.callbackRoute || @@CALLBACK@@),
     });
@@ -280,6 +296,13 @@
       }
     };
     const startupQuery = new URL(window.location.href).searchParams;
+    const root = startupQuery.get('openRoot');
+    if (root === 'app' || root === 'data') void executeStartupCommand(root === 'app' ? 'foxwarm-fs.openAppFolder' : 'foxwarm-fs.openDataFolder');
+    const initialFolder = startupQuery.get('initialFolderUri');
+    if (window.parent === window && !root && initialFolder && !startupQuery.has('openFilePath') && !startupQuery.has('openCommitPath')) {
+      const uri = new URL(initialFolder);
+      void executeStartupCommand('foxwarm-fs.handleOpenRequest', { kind: 'addFolder', nodeId: startupQuery.get('nodeId') || decodeURIComponent(uri.host.slice(5)), path: decodeURIComponent(uri.pathname) }).catch(error => console.error('Failed to open initial folder', error));
+    }
     const openFilePath = startupQuery.get('openFilePath');
     if (openFilePath) {
       const parseLine = (name) => {
@@ -290,6 +313,7 @@
         kind: 'openFile',
         nodeId: startupQuery.get('openFileNodeId') || 'master',
         path: openFilePath,
+        cwd: startupQuery.get('openFileCwd') || undefined,
         startLine: parseLine('startLine'),
         endLine: parseLine('endLine'),
       }).catch((error) => console.error('Failed to open initial Foxwarm file', error));

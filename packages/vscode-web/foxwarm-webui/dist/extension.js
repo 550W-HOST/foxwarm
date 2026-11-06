@@ -239,14 +239,18 @@ var FoxwarmWebUiController = class {
     this.webUiBaseUrl = deriveWebUiBaseUrl(context.extensionUri);
   }
   getStoredTargets() {
-    const value = this.context.globalState.get(OPEN_TABS_STATE_KEY);
+    const value = this.context.workspaceState.get(OPEN_TABS_STATE_KEY);
     if (Array.isArray(value)) return value.map(normalizeStoredTarget).filter((item) => !!item);
+    const previous = this.context.globalState.get(OPEN_TABS_STATE_KEY);
+    if (Array.isArray(previous)) return previous.map(normalizeStoredTarget).filter((item) => !!item);
     const legacy = this.context.globalState.get(LEGACY_OPEN_SESSIONS_STATE_KEY, []);
     if (!Array.isArray(legacy)) return [];
     return legacy.map(normalizeOpenSessionRequest).filter((item) => !!item).map((item) => ({ kind: "session", ...item }));
   }
   async storeTargets(targets) {
-    await this.context.globalState.update(OPEN_TABS_STATE_KEY, targets);
+    await this.context.workspaceState.update(OPEN_TABS_STATE_KEY, targets);
+    await this.context.globalState.update(OPEN_TABS_STATE_KEY, void 0);
+    await this.context.globalState.update(LEGACY_OPEN_SESSIONS_STATE_KEY, void 0);
   }
   async rememberTarget(target) {
     const key = targetKey(target);

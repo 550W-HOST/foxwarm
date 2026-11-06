@@ -1,5 +1,7 @@
 import { isCoreNodeId } from '../../shared/src/nodeIdentity'
-export const VSCODE_WEB_TAB_ID = 'vscode-web'
+export function codeTabId(nodeId: string): string {
+  return `vscode-web:${nodeId}`
+}
 export const CODE_OPEN_NEW_WINDOW_STORAGE_KEY = 'foxwarm_code_open_new_window_v1'
 export const CODE_WORKSPACE_PATH_STORAGE_KEY = 'foxwarm_code_workspace_path_v1'
 export const CODE_WORKSPACE_NODE_STORAGE_KEY = 'foxwarm_code_workspace_node_v1'
@@ -16,27 +18,12 @@ export interface CodeCommitTarget extends CodeTarget {
 }
 
 export type CodeOpenRequest =
+  | { kind: 'openManagedRoot'; nodeId: 'master'; path: string; root: 'app' | 'data' }
   | { kind: 'addFolder'; nodeId: string; path: string }
-  | { kind: 'openFile'; nodeId: string; path: string; startLine?: number; endLine?: number }
+  | { kind: 'openFile'; nodeId: string; path: string; cwd?: string; startLine?: number; endLine?: number }
   | ({ kind: 'openCommit' } & CodeCommitTarget)
 
 export type CodeFileTarget = Extract<CodeOpenRequest, { kind: 'openFile' }>
-
-export type CodeOpenPlan = 'new-window' | 'start-embedded' | 'reuse-embedded'
-
-export function selectCodeFrameStarted(
-  frameStarted: boolean,
-  activePaneTabTypes: readonly (string | null | undefined)[],
-  options: { workbenchVisible?: boolean; explicitlyClosed?: boolean } = {},
-): boolean {
-  if (options.explicitlyClosed) return false
-  return frameStarted || (options.workbenchVisible !== false && activePaneTabTypes.some((type) => type === 'vscode'))
-}
-
-export function planCodeOpen(frameStarted: boolean, preferredNewWindow: boolean, forceNewWindow = false): CodeOpenPlan {
-  if (shouldOpenCodeInNewWindow(preferredNewWindow, forceNewWindow)) return 'new-window'
-  return frameStarted ? 'reuse-embedded' : 'start-embedded'
-}
 
 export function getVscodeWebPath(apiBasePath: string): string {
   const normalizedApiBase = apiBasePath.replace(/\/+$/, '')
@@ -167,14 +154,15 @@ export function makeCodeWorkspaceUri(target: CodeTarget): string {
   return `foxwarm://node+${encodeURIComponent(target.nodeId)}${encodedPath || '/'}`
 }
 
-export function makeVscodeWebUrl(apiBasePath: string, origin: string, target?: CodeTarget, options: { embedded?: boolean; openFile?: CodeFileTarget; openCommit?: CodeCommitTarget } = {}): URL {
+export function makeVscodeWebUrl(apiBasePath: string, origin: string, target?: CodeTarget, options: { nodeId?: string; openFile?: CodeFileTarget; openCommit?: CodeCommitTarget } = {}): URL {
   const url = new URL(getVscodeWebPath(apiBasePath), origin)
-  const usePersistentWorkspace = options.embedded || Boolean(options.openCommit)
-  if (usePersistentWorkspace) url.searchParams.set('embedded', 'true')
-  if (target && !options.openCommit) url.searchParams.set(usePersistentWorkspace ? 'initialFolderUri' : 'folderUri', makeCodeWorkspaceUri(target))
+  url.searchParams.set('nodeId', options.nodeId || options.openCommit?.nodeId || options.openFile?.nodeId || target?.nodeId || 'master')
+  url.searchParams.set('embedded', 'true')
+  if (target && !options.openCommit) url.searchParams.set('initialFolderUri', makeCodeWorkspaceUri(target))
   if (options.openFile) {
     url.searchParams.set('openFilePath', options.openFile.path)
     url.searchParams.set('openFileNodeId', options.openFile.nodeId)
+    if (options.openFile.cwd) url.searchParams.set('openFileCwd', options.openFile.cwd)
     if (options.openFile.startLine !== undefined) url.searchParams.set('startLine', String(options.openFile.startLine))
     if (options.openFile.endLine !== undefined) url.searchParams.set('endLine', String(options.openFile.endLine))
   }

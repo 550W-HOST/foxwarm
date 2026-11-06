@@ -265,12 +265,12 @@ export async function openCommitDetails(gitApiBase: string, value: unknown, opti
   const hasExactWorkspaceFolder = (vscode.workspace.workspaceFolders || []).some((folder) => {
     try {
       const parsed = parseFoxwarmUri(folder.uri);
-      return parsed.nodeId === details.nodeId && parsed.realPath === details.workspace;
+      return parsed.nodeId === details.nodeId && (parsed.realPath === details.workspace || details.workspace.startsWith(parsed.realPath.replace(/\/$/, '') + '/'));
     } catch {
       return false;
     }
   });
-  if (!hasExactWorkspaceFolder && options.deferForWorkspaceReload) {
+  if (!hasExactWorkspaceFolder && !vscode.workspace.workspaceFile && options.deferForWorkspaceReload) {
     await options.deferForWorkspaceReload({
       kind: 'openCommit',
       nodeId: details.nodeId,

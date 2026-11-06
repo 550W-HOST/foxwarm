@@ -5,7 +5,7 @@ Secondary files: packages/webui/src/realtime.ts, packages/webui/src/boundedSessi
 
 ## Purpose
 
-Bootstraps the browser application, routes workbench tabs, owns global list/UI preferences, selects strict embedded leaf roots, derives deployment-relative URLs, and hosts the persistent Code iframe/typed bridge.
+Bootstraps the browser application, routes workbench tabs, owns global list/UI preferences, selects strict embedded leaf roots, derives deployment-relative URLs, and hosts the per-Node persistent Code iframes and typed bridges.
 
 ## Key exports
 
@@ -20,7 +20,7 @@ Bootstraps the browser application, routes workbench tabs, owns global list/UI p
 - REST and compatibility EventSource callers append route fragments to `API_BASE_PATH`.
 - WebSocket callers use `makeWebSocketUrl`; the page realtime transport uses it for the shared `/webui/stream` socket.
 - `getVscodeWebPath` removes a trailing `/api` and appends `/vscode-web/`.
-- `makeVscodeWebUrl` emits new-tab folder or embedded persistent-workspace startup URLs.
+- `makeVscodeWebUrl` emits Node-specific persistent-workspace startup URLs for embedded and new-window launches.
 - Main WebUI and its persistent Code frame use exact source plus origin checks. For nested Foxwarm leaf views, the inner iframe sends to its parent with `'*'`; the outer extension validates exact source, channel, version, and random nonce but does not inspect `event.origin`. Outer-to-inner delivery targets the exact derived `frameOrigin`. No bridge accepts arbitrary Code command names or puts auth tokens in messages.
 
 - Tool-card Code actions prefer the successful response path and recorded execution Node, not the Session's later Node/cwd; only older absolute paths retain the legacy fallback. The Code bridge still validates the resolved absolute target and authorizes open operations separately. See [D-dispatch-native-agent-paths-and-code-targets](../threads/tool-dispatch-node-execution.md#d-dispatch-native-agent-paths-and-code-targets).
@@ -30,7 +30,7 @@ Bootstraps the browser application, routes workbench tabs, owns global list/UI p
 - Route hydration activates an existing target when the route ID changes or the target first becomes available, not when workbench focus or tab metadata changes. This prevents an outgoing route from reactivating its previous Session while an explicit activation publishes its new hash.
 - Publishing the canonical hash for an already-addressed tab replaces the current browser history entry; it does not append a second entry for an inbound alias such as `#session/<sessionId>`. A new destination still appends an entry. Native Session links therefore return to the previous Session with one browser Back, including when route hydration replaces a preview; Forward remains available. Hash-only publication retains the deployment path and query.
 - Hash routing restores normal tabs plus current singleton Agents/Setup/Logs/Tasks/Nodes tabs and independently routed History tabs; old agents/architecture/setup/oobe hash aliases and `system:search` remain inbound readers. The History leaf/popout and deployment-relative viewer routes are documented in [webui-history-search](./webui-history-search.md).
-- A tab context-menu popout opens synchronously, removes the source tab only after `window.open` returns a handle, and uses the ordinary route-fencing/fallback publication without invoking resource close. Setup and Agents require a synchronous warning confirmation. A terminal without a resolved backend ID cannot move. Code opens its current launcher node/path through the existing standalone URL helper and destroys the embedded frame only after the standalone window opens.
+- A tab context-menu popout opens synchronously, removes the source tab only after `window.open` returns a handle, and uses the ordinary route-fencing/fallback publication without invoking resource close. Setup and Agents require a synchronous warning confirmation. A terminal without a resolved backend ID cannot move. Code opens the selected tab’s Node/path through the existing standalone URL helper and destroys the embedded frame only after the standalone window opens.
 - Desktop inset shell and the icon/label/count status footer are documented in [Workbench behavior](./webui-workbench.md#behavior). The footer belongs to the right workbench column, never shortens Sidebar, and is not mounted in mobile navigation or popup/embedded leaf roots.
 - Workbench supports split panes and drag/reorder for chat, terminal, Agents, Setup, Search, Logs, Tasks, Nodes, and Code. Each sole non-Code tab uses the current-pane header Close/icon path described in [Single-tab headers](./webui-workbench.md#single-tab-headers). User activation of a tab in a collapsed pane expands that pane; route/hash hydration passes the store's non-expanding activation option so persisted collapsed layouts remain collapsed on reload. The shared tab-owned content host evaluates the actual renderer inside its error boundary; content lifetime and layout independence are canonical in [D-workbench-stable-content](./webui-workbench-content.md#d-workbench-stable-content). Closing an active tab advances the hash to the store-selected fallback before hydration can recreate it. The fallback-route effect resolves the current focused pane and verifies its active tab against the live store and existing closing intent before publishing; a render-captured ID removed during asynchronous resource close cannot restore the closed hash.
 - Explicit Workbench navigation carries a transient tab-reveal request, including same-ID activation. Pane focus still synchronizes the route but does not request strip scrolling. The canonical behavior is [Tab navigation and manual scrolling](./webui-workbench.md#d-workbench-tab-navigation).
@@ -70,12 +70,12 @@ These are independent roots, not CSS-hidden full App instances. Active-target me
 
 ## Code and commit behavior
 
-- Embedded launch creates one singleton Code tab. App's `useVscodeWebFrameBridge` controller remains mounted before lazy iframe admission, preserving first file/commit requests while the frame starts and clearing pending work on explicit Close. `VscodeWebFrameHost` renders only the frame inside the shared tab-owned host. Code-specific persistence is canonical in [D-code-persistent-workspace](../threads/code-integration.md#d-code-persistent-workspace); positioning and layout-independent identity are canonical in [D-workbench-stable-content](./webui-workbench-content.md#d-workbench-stable-content).
+- Embedded launch selects a Node-specific Code tab. App’s `useCodeFrames` registry retains a controller per Node before first-visible iframe admission, queues initial requests, and disposes only the closed Node’s controller. `VscodeWebFrameHost` renders that Node’s frame inside the shared tab-owned host. Legacy singleton tab/layout state maps to master. Code persistence and folder/reveal rules are canonical in [D-code-persistent-workspace](../threads/code-integration.md#d-code-persistent-workspace).
 - File-tool paths become typed open-file requests only after node/path/cwd normalization; `read` ranges become selections.
 - Strict standalone model-authored commit markers outside code fences render inert cards. Click dispatches typed `openCommit`; malformed/user markers remain text.
 - Chat supplies a single ordinary Code launch callback, retaining the browser-local opening preference. Header action presentation is owned by [D-chat-header-launch-actions](./webui-chat.md#d-chat-header-launch-actions).
 - New-tab URLs carry one-shot targets. Running iframe transfer/pop-out is not implemented.
-- Changing a main Code launcher node adds that node/path resource to the same persistent multi-root workspace; it never creates a per-node Code tab or iframe.
+- Changing the Code launcher Node selects or creates that Node’s tab and workspace; popout uses the selected tab’s stored Node/path rather than the launcher’s latest selection.
 
 Logs is a lazy singleton `system:logs` tab with normal route restoration, close fallback and same-origin `logs` popup leaf. Code-embedded Sidebar opens this leaf directly without changing the Code host protocol. Its file/transport contract is canonical in [WebUI Logs](./webui-logs.md).
 

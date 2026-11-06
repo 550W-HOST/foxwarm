@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { createServer, request as httpRequest } from 'node:http'
 import { createServer as createTlsServer, request as tlsRequest } from 'node:https'
 import { once } from 'node:events'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { createHostFixture, until } from './mainHostFixture.mjs'
@@ -51,6 +51,17 @@ options.env = { HOME: join(owned.root, 'home') }
 await mkdir(options.env.HOME)
 const git = (...args) => execFileSync('git', ['-C', owned.work, ...args], { encoding: 'utf8' }).trim()
 git('init', '-q'); git('config', 'user.name', 'Code Fixture'); git('config', 'user.email', 'code@example.invalid')
+const remoteRoot = join(owned.root, 'remote-project'), remoteOutside = join(owned.root, 'remote-outside')
+for (const folder of [join(remoteRoot, 'src'), join(remoteRoot, 'tests'), remoteOutside]) await mkdir(folder, { recursive: true })
+await writeFile(join(remoteRoot, 'src/remote.txt'), 'remote project file\n')
+await writeFile(join(remoteOutside, 'outside.txt'), 'remote outside file\n')
+await mkdir(join(owned.data, 'state/vscode-web'), { recursive: true })
+await writeFile(join(owned.data, 'state/vscode-web/foxwarm.code-workspace'), JSON.stringify({ folders: [
+  { uri: 'foxwarm://node+master' + owned.work },
+  { uri: 'foxwarm://node+code-peer' + remoteRoot + '/src', name: 'Remote source' },
+  { uri: 'foxwarm://node+code-peer' + remoteRoot + '/tests' },
+], settings: { 'editor.fontSize': 15 } }))
+let remoteCli, remoteOutput = ''
 const committedNotes = 'first\nselected second\nselected third\nlast\n'
 await writeFile(join(owned.work, 'old.txt'), committedNotes)
 git('add', 'old.txt'); git('commit', '-qm', 'root fixture')
@@ -102,15 +113,15 @@ const peer = createServer(async (request, response) => {
 peer.listen(0, '127.0.0.1'); await once(peer, 'listening')
 await writeModelFixture(owned.data, { default: 'a', providers: { a: { providerType: 'openai-responses', baseUrl: 'http://127.0.0.1:' + peer.address().port, models: ['wire'], contextLimit: 20000 } } })
 const authority = async () => JSON.parse(await readFile(join(owned.data, 'state/sessions/main.json'), 'utf8'))
-const workspaceFile = join(owned.data, 'state/vscode-web/foxwarm.code-workspace')
+const workspaceFile = join(owned.data, 'state/vscode-web/node-master.code-workspace')
 const workspaceHas = async path => { try { return (JSON.parse(await readFile(workspaceFile, 'utf8')).folders || []).some(folder => (folder.uri ? resolve(decodeURIComponent(new URL(folder.uri).pathname)) : resolve(dirname(workspaceFile), folder.path)) === resolve(path)) } catch (error) { if (error instanceof SyntaxError) return false; throw error } }
 async function palette(frame, command) {
   await frame.click('.monaco-workbench')
   const page = frame.page(); await page.keyboard.down('Control'); await page.keyboard.down('Shift'); await page.keyboard.press('P'); await page.keyboard.up('Shift'); await page.keyboard.up('Control')
   await frame.waitForSelector('.quick-input-widget input'); await frame.type('.quick-input-widget input', command); await page.keyboard.press('Enter')
 }
-async function codeFrame(page) {
-  return until(() => page.frames().find(frame => new URL(frame.url() || 'about:blank').pathname.endsWith('/vscode-web/') && frame.parentFrame() === page.mainFrame()), 'actual Code iframe', 30000)
+async function codeFrame(page, nodeId = 'master') {
+  return until(() => page.frames().find(frame => { const url = new URL(frame.url() || 'about:blank'); return url.pathname.endsWith('/vscode-web/') && url.searchParams.get('nodeId') === nodeId && frame.parentFrame() === page.mainFrame() }), 'actual Code iframe', 30000)
 }
 async function frameText(page, pattern) {
   for (const frame of page.frames()) { try { const text = await frame.evaluate(() => document.body.innerText); if (pattern.test(text)) return frame } catch {} }
@@ -119,6 +130,11 @@ async function frameText(page, pattern) {
 try {
   stage('host startup and App login')
   await owned.start(); assert.equal((await owned.api('POST', '/api/sessions', { agentId: 'main', sessionId: 'main' })).status, 200); assert.equal((await owned.api('POST', '/api/sessions/main/cwd', { cwd: owned.work })).status, 200); const page = await owned.openApp(); browserVersion = await page.browser().version()
+  const approval = await owned.api('POST', '/api/nodes/onboarding/create', { fallbackUrl: owned.origin, nodeId: 'code-peer' })
+  assert.equal(approval.status, 200)
+  remoteCli = spawn(process.execPath, [resolve('packages/cli-node/dist/client.js'), '--host', owned.origin, '--id', 'code-peer', '--auth-token', approval.body.authToken, '--credentials-file', join(owned.root, 'peer-credentials.json'), '--no-local-trigger'], { cwd: remoteRoot, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: options.env.HOME, FOXWARM_DATA_DIR: join(owned.root, 'peer-data'), FOXWARM_AGENTS_DIR: join(owned.root, 'peer-agents') } })
+  for (const stream of [remoteCli.stdout, remoteCli.stderr]) stream.on('data', bytes => { remoteOutput = (remoteOutput + bytes).slice(-4000) })
+  await until(async () => (await owned.api('GET', '/api/nodes')).body.nodes.some(node => node.id === 'code-peer' && node.online), 'second Node connected', 40000)
   await page.evaluate(() => window.foxwarmTest.switchToSession('main')); await page.waitForSelector('.foxwarm-chat-root')
   assert.equal(await page.evaluate(() => document.querySelector('meta[name="foxwarm-host"]')?.content), 'dotnet')
   assert.equal(await page.evaluate(() => localStorage.getItem('foxwarm_token')), owned.token)
@@ -138,6 +154,47 @@ try {
   await code.waitForFunction(() => document.querySelector('.editor-instance .view-lines')?.textContent.replaceAll('\u00a0', ' ').includes('selected second'))
   await page.evaluate(() => { document.querySelector('iframe[src*="vscode-web"]').dataset.codeProof = 'same-frame' })
   await code.waitForFunction(() => [...document.querySelectorAll('.statusbar-item')].some(item => item.textContent.replaceAll('\u00a0', ' ').includes('(30 selected)')))
+  stage('per-Node migration, folder merge, reveal and close/reopen')
+  const remoteWorkspaceFile = join(owned.data, 'state/vscode-web/node-code-peer.code-workspace')
+  const remoteWorkspace = async () => JSON.parse(await readFile(remoteWorkspaceFile, 'utf8'))
+  assert.equal((await remoteWorkspace()).folders.length, 2)
+  assert.equal((await remoteWorkspace()).settings['editor.fontSize'], 15)
+  assert.equal((JSON.parse(await readFile(workspaceFile, 'utf8'))).folders.length, 1)
+  const launch = async (nodeId, path) => {
+    await page.click('button[aria-label="Open code options"]')
+    await page.waitForFunction(nodeId => [...document.querySelectorAll('select option')].some(option => option.value === nodeId && !option.disabled), {}, nodeId)
+    await page.select('select', nodeId)
+    await page.click('input[placeholder="/"]', { clickCount: 3 }); await page.type('input[placeholder="/"]', path)
+    await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Open code')?.click())
+  }
+  await launch('code-peer', remoteRoot)
+  let remoteCode = await codeFrame(page, 'code-peer')
+  await remoteCode.waitForSelector('.monaco-workbench', { timeout: 30000 })
+  await until(async () => (await remoteWorkspace()).folders.length === 1, 'remote child roots merged')
+  assert.equal(await page.$$eval('iframe[data-code-node]', frames => frames.length), 2)
+  assert.equal(await page.$eval('iframe[data-code-node="master"]', frame => frame.dataset.codeProof), 'same-frame')
+  assert((await remoteWorkspace()).folders.every(folder => folder.uri.startsWith('foxwarm://node+code-peer')))
+  await launch('code-peer', join(remoteRoot, 'src'))
+  await remoteCode.waitForFunction(() => [...document.querySelectorAll('.monaco-list-row.focused')].some(row => row.innerText.includes('src')))
+  assert.equal((await remoteWorkspace()).folders.length, 1)
+  await palette(remoteCode, 'Foxwarm: New Terminal')
+  const remoteTerminal = await until(async () => (await owned.api('GET', '/api/terminals')).body.terminals.find(terminal => terminal.nodeId === 'code-peer'), 'remote terminal')
+  await remoteCode.waitForSelector('.xterm-screen canvas', { timeout: 30000 })
+  await remoteCode.click('.xterm-screen'); await page.keyboard.type('code ' + join(remoteOutside, 'outside.txt')); await page.keyboard.press('Enter')
+  await remoteCode.waitForFunction(() => [...document.querySelectorAll('.monaco-list-row.focused')].some(row => row.innerText.includes('outside.txt')))
+  assert.equal((await remoteWorkspace()).folders.length, 2)
+  await remoteCode.click('.xterm-screen'); await page.keyboard.type('code ' + join(remoteRoot, 'src/remote.txt')); await page.keyboard.press('Enter')
+  await remoteCode.waitForFunction(() => [...document.querySelectorAll('.monaco-list-row.focused')].some(row => row.innerText.includes('remote.txt')))
+  assert.equal((await remoteWorkspace()).folders.length, 2)
+  await page.click('[data-tab-id="vscode-web:code-peer"] button[title="Close tab"]')
+  await page.waitForFunction(() => !document.querySelector('iframe[data-code-node="code-peer"]'))
+  assert.equal(await page.$eval('iframe[data-code-node="master"]', frame => frame.dataset.codeProof), 'same-frame')
+  await launch('code-peer', remoteRoot)
+  remoteCode = await codeFrame(page, 'code-peer'); await remoteCode.waitForSelector('.monaco-workbench', { timeout: 30000 })
+  assert.equal((await remoteWorkspace()).folders.length, 2)
+  await page.click('[data-tab-id="vscode-web:code-peer"] button[title="Close tab"]')
+  await owned.api('DELETE', '/api/terminals/' + encodeURIComponent(remoteTerminal.id))
+  await page.click('[data-tab-id="vscode-web:master"]')
   stage('official Code terminal and helper')
   await palette(code, 'Foxwarm: New Terminal')
   await until(async () => (await owned.api('GET', '/api/terminals')).body.terminals.length === 1, 'official Code terminal backend', 30000)
@@ -247,7 +304,7 @@ try {
   await clickReadableAction('[aria-label="Expand activity"]')
   await page.waitForFunction(() => document.querySelector('[data-activity-expanded="true"]')?.style.height === '')
   await clickReadableAction('button[title="Open notes.txt in Code"]'); code = await codeFrame(page); await code.waitForSelector('.monaco-workbench', { timeout: 30000 })
-  const persisted = JSON.parse(await readFile(join(owned.data, 'state/vscode-web/foxwarm.code-workspace'), 'utf8')); assert(persisted.folders.length >= 3); assert.equal(persisted.settings['yaml.schemaStore.enable'], false)
+  const persisted = JSON.parse(await readFile(join(owned.data, 'state/vscode-web/node-master.code-workspace'), 'utf8')); assert(persisted.folders.length >= 2); assert.equal(persisted.settings['yaml.schemaStore.enable'], false)
   assert.equal((await owned.api('GET', '/api/vscode-web/git/commit?workspace=' + encodeURIComponent(owned.work) + '&id=' + rootCommit)).body.comparison.mode, 'empty-tree')
   await page.evaluate(() => window.foxwarmTest.switchToSession('main'))
   await page.click('button[aria-label="Open code options"]')
@@ -259,7 +316,7 @@ try {
   stage('standalone Code popup')
   const popupReady = once(page, 'popup'); await page.click('.foxwarm-chat-root button[title="Code"]'); const [popup] = await popupReady; extraPage = popup; observeNativeDialogs(popup, 'code-popup'); popup.on('pageerror', error => browserErrors.push(error.message))
   await popup.waitForSelector('.monaco-workbench', { timeout: 30000 }); const configuration = await popup.evaluate(() => JSON.parse(document.querySelector('#vscode-workbench-web-configuration').getAttribute('data-settings')))
-  assert.equal(configuration.folderUri.authority, 'node+master'); assert.equal(resolve(decodeURIComponent(configuration.folderUri.path)), owned.work); assert(!configuration.workspaceUri)
+  assert.equal(configuration.workspaceUri.authority, 'node+master'); assert.equal(resolve(decodeURIComponent(configuration.workspaceUri.path)), workspaceFile); assert(!configuration.folderUri)
   stage('standalone config navigation')
   const rawApp = await readFile(roots.configFiles.app.path, 'utf8')
   const configUrl = new URL(popup.url()); configUrl.searchParams.set('openFilePath', roots.configFiles.app.path); configUrl.searchParams.set('openFileNodeId', 'master')
@@ -292,7 +349,7 @@ try {
     upstream.on('error', error => response.destroy(error)); request.pipe(upstream)
   }); prefixProxy.listen(0, '127.0.0.1'); await once(prefixProxy, 'listening')
   const prefixed = await page.browser().newPage(); extraPage = prefixed; observeNativeDialogs(prefixed, 'prefixed-code'); prefixed.on('pageerror', error => browserErrors.push(error.message)); prefixNavigation = observePrefixNavigation(prefixed); const prefixResponses = []; prefixed.on('response', response => prefixResponses.push({ url: response.url(), status: response.status() })); const prefixUrl = new URL('http://127.0.0.1:' + prefixProxy.address().port + '/fixture/vscode-web/')
-  prefixUrl.searchParams.set('folderUri', configuration.folderUri.scheme + '://' + configuration.folderUri.authority + configuration.folderUri.path); prefixUrl.searchParams.set('openFilePath', join(owned.work, 'notes.txt'))
+  prefixUrl.searchParams.set('embedded', 'true'); prefixUrl.searchParams.set('nodeId', 'master'); prefixUrl.searchParams.set('initialFolderUri', 'foxwarm://node+master' + owned.work); prefixUrl.searchParams.set('openFilePath', join(owned.work, 'notes.txt'))
   assert.equal((await prefixed.goto(prefixUrl.toString(), { waitUntil: 'domcontentloaded' })).status(), 200)
   await prefixed.waitForSelector('.monaco-workbench', { timeout: 30000 })
   assert(prefixResponses.some(row => row.url.includes('/fixture/vscode-web/static/') && row.status === 200), 'Relative Code assets must retain the prefix.')
@@ -365,4 +422,4 @@ try {
   console.error(JSON.stringify({ stage: currentStage, browserVersion, prefixNavigation: prefixNavigation?.(), browserErrors: browserErrors.slice(-8).map(value => value.slice(0, 512)), failedRequests: codeResponses.filter(row => row.status >= 500).slice(-8).map(row => ({ path: path(row.url), status: row.status })), host: owned.output, frames: [...(appPage?.frames() || []), ...(extraPage?.isClosed() ? [] : extraPage?.frames() || [])].slice(-16).map(frame => ({ path: path(frame.url()) })) }))
   throw error
 }
-finally { releaseHold(); await owned.cleanup(); if (declaredProxy) { declaredProxy.closeAllConnections(); await new Promise(done => declaredProxy.close(done)) } if (prefixProxy) await new Promise(done => prefixProxy.close(done)); await new Promise(done => peer.close(done)) }
+finally { remoteCli?.kill(); releaseHold(); await owned.cleanup(); if (declaredProxy) { declaredProxy.closeAllConnections(); await new Promise(done => declaredProxy.close(done)) } if (prefixProxy) await new Promise(done => prefixProxy.close(done)); await new Promise(done => peer.close(done)) }

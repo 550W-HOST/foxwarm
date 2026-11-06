@@ -181,3 +181,16 @@ test('routes commit opens to the sidebar and keeps the editor panel available fr
   await provider.openInEditor();
   assert.equal(panelRevealCount, revealBefore + 1);
 });
+
+test('persistent workspaces show a new repository commit without waiting for an extension reload', async () => {
+  vscodeMock.workspace.workspaceFile = MockUri.from({ scheme: 'foxwarm', authority: 'node+master', path: '/state/node-worker-1.code-workspace' });
+  const shown = [], deferred = [];
+  const result = await openCommitDetails('http://example.test/api/vscode-web/git', { kind: 'openCommit', nodeId: 'worker-1', path: '/requested/path', commitId: 'abcdef1' }, {
+    deferForWorkspaceReload: async value => { deferred.push(value); },
+    showInSidebar: async value => { shown.push(value); },
+  });
+  assert.equal(result.status, 'opened');
+  assert.equal(shown[0].workspace, '/canonical/repo');
+  assert.deepEqual(deferred, []);
+  delete vscodeMock.workspace.workspaceFile;
+});

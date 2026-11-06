@@ -234,7 +234,7 @@ class FoxwarmPseudoterminal implements vscode.Pseudoterminal {
 }
 
 function getCurrentTarget(): TerminalTarget {
-  const target = getWorkspaceTerminalTarget(vscode.workspace.workspaceFolders);
+  const target = getWorkspaceTerminalTarget(vscode.workspace.workspaceFolders, vscode.workspace.workspaceFile);
   return { nodeId: target.nodeId, cwd: target.realPath };
 }
 

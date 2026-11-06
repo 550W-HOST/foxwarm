@@ -220,8 +220,10 @@ export class FoxwarmWebUiController implements vscode.WebviewViewProvider, vscod
   }
 
   private getStoredTargets(): FoxwarmEditorTarget[] {
-    const value = this.context.globalState.get<unknown>(OPEN_TABS_STATE_KEY);
+    const value = this.context.workspaceState.get<unknown>(OPEN_TABS_STATE_KEY);
     if (Array.isArray(value)) return value.map(normalizeStoredTarget).filter((item): item is FoxwarmEditorTarget => !!item);
+    const previous = this.context.globalState.get<unknown>(OPEN_TABS_STATE_KEY);
+    if (Array.isArray(previous)) return previous.map(normalizeStoredTarget).filter((item): item is FoxwarmEditorTarget => !!item);
     const legacy = this.context.globalState.get<unknown>(LEGACY_OPEN_SESSIONS_STATE_KEY, []);
     if (!Array.isArray(legacy)) return [];
     return legacy
@@ -231,7 +233,9 @@ export class FoxwarmWebUiController implements vscode.WebviewViewProvider, vscod
   }
 
   private async storeTargets(targets: FoxwarmEditorTarget[]): Promise<void> {
-    await this.context.globalState.update(OPEN_TABS_STATE_KEY, targets);
+    await this.context.workspaceState.update(OPEN_TABS_STATE_KEY, targets);
+    await this.context.globalState.update(OPEN_TABS_STATE_KEY, undefined);
+    await this.context.globalState.update(LEGACY_OPEN_SESSIONS_STATE_KEY, undefined);
   }
 
   private async rememberTarget(target: FoxwarmEditorTarget): Promise<void> {

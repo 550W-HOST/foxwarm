@@ -1,6 +1,6 @@
 import { prepareChatHistory, discardPreparedChatHistory } from './preparedChatHistory'
 import { SessionMessageNamesContext } from './components/SessionMessageCard'
-import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { DndContext, DragOverlay, PointerSensor, pointerWithin, useSensor, useSensors, type DragEndEvent, type DragStartEvent } from '@dnd-kit/core'
 import { Plus } from 'lucide-react'
 import Chat from './components/Chat'
@@ -12,7 +12,7 @@ import CollapsedSidebarContainer from './components/CollapsedSidebarContainer'
 import WorkbenchLayout from './components/WorkbenchLayout'
 import WorkbenchStatusBar from './components/WorkbenchStatusBar'
 import WorkbenchPane, { type WorkbenchPaneProps } from './components/WorkbenchPane'
-import VscodeWebFrameHost, { useVscodeWebFrameBridge, type VscodeWebFrameHostHandle } from './components/VscodeWebFrameHost'
+import VscodeWebFrameHost, { createCodeFrame, useCodeFrames } from './components/VscodeWebFrameHost'
 import type { SessionMoveRequest } from './components/SessionListCore'
 import { API_BASE_PATH } from './config'
 import { isSessionRuntimeActive } from './sessionRuntimeState'
@@ -23,7 +23,7 @@ import { useWorkbenchStore } from './workbench/store'
 import type { WorkbenchLayoutNode, WorkbenchTab } from './workbench/types'
 import type { SystemSection } from './components/SystemView'
 import { createWorkbenchId, findPaneBelow, findPaneContainingTab, findPaneNode, getFlattenedTabIds, getPaneIds, getPaneNodes } from './workbench/utils'
-import { makeVscodeWebUrl, normalizeCodePath, planCodeOpen, readCodeOpenInNewWindowPreference, readCodeWorkspaceNodePreference, readCodeWorkspacePathPreference, resolveSessionCodeTarget, resolveToolCodeFileTarget, selectCodeFrameStarted, VSCODE_WEB_TAB_ID, writeCodeOpenInNewWindowPreference, writeCodeWorkspaceNodePreference, writeCodeWorkspacePathPreference, type CodeCommitTarget, type CodeFileTarget, type CodeTarget } from './vscodeWeb'
+import { makeVscodeWebUrl, normalizeCodePath, readCodeOpenInNewWindowPreference, readCodeWorkspaceNodePreference, readCodeWorkspacePathPreference, resolveSessionCodeTarget, resolveToolCodeFileTarget, codeTabId, writeCodeOpenInNewWindowPreference, writeCodeWorkspaceNodePreference, writeCodeWorkspacePathPreference, type CodeCommitTarget, type CodeFileTarget, type CodeTarget, type CodeOpenRequest } from './vscodeWeb'
 import { buildAgentCreationBody, buildSessionCreationBody, type AgentSettingsChanges, type AgentSummary } from './agentCreation'
 import { getNodeTargetAvailability, MASTER_NODE_TARGET, parseWebUiNodeTargets, type WebUiNodeTarget } from './nodeTargets'
 import { findTerminalForTarget, normalizeTerminalTarget } from './terminalTarget'
@@ -323,6 +323,7 @@ function loadStoredCodeOpenInNewWindow(): boolean {
 
 function getHashState(): RouteState {
   const route = readHashRoute()
+  if (route.tabId === 'vscode-web') return { view: 'tab', tabId: codeTabId('master') }
   // The former Nodes page is now the System page's Nodes section.
   return route.tabId === NODES_TAB_ID ? { view: 'tab', tabId: AGENTS_TAB_ID, systemSection: 'nodes' } : route
 }
@@ -427,12 +428,8 @@ function makeTerminalTabFromRecord(record: TerminalRegistryRecord): WorkbenchTab
   }
 }
 
-function makeVscodeWebTab(): WorkbenchTab {
-  return {
-    id: VSCODE_WEB_TAB_ID,
-    type: 'vscode',
-    title: 'Code',
-  }
+function makeVscodeWebTab(target: CodeTarget): WorkbenchTab {
+  return { id: codeTabId(target.nodeId), type: 'vscode', title: `Code · ${target.nodeId}`, nodeId: target.nodeId, path: target.path }
 }
 
 function makeAgentsTab(section?: SystemSection): WorkbenchTab {
@@ -494,13 +491,15 @@ function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true')
   const { sendKeyMode, setSendKeyMode, timelineView, setTimelineView, showUsageBadge, setShowUsageBadge, showUserMessageMetadata, setShowUserMessageMetadata, showInterAgentMessages, setShowInterAgentMessages, showCommentary, setShowCommentary, fullWidth, setFullWidth } = useChatPreferences()
   const [webUiSettings, setWebUiSettings] = useState<WebUiSettings>({ instanceName: '', tabIcon: '' })
-  const [vscodeFrameStarted, setVscodeFrameStarted] = useState(false)
-  const vscodeFrameRef = useRef<VscodeWebFrameHostHandle | null>(null)
+  const codeFrames = useCodeFrames(request => {
+    void requestEmbeddedCode(request, request).catch(error => {
+      if (error instanceof Error && error.name === 'AbortError') return
+      window.alert(`Could not open Code.\n\n${error instanceof Error ? error.message : String(error)}`)
+    })
+  })
   const [codePath, setCodePath] = useState(loadStoredCodePath)
   const [codeNodeId, setCodeNodeId] = useState(loadStoredCodeNodeId)
   const [codeOpenInNewWindow, setCodeOpenInNewWindow] = useState(loadStoredCodeOpenInNewWindow)
-  const [codeFrameUrl, setCodeFrameUrl] = useState(() => makeVscodeWebUrl(API_BASE_PATH, window.location.origin, { nodeId: loadStoredCodeNodeId(), path: loadStoredCodePath() }, { embedded: true }).toString())
-  const vscodeFrameBridge = useVscodeWebFrameBridge({ started: vscodeFrameStarted, src: codeFrameUrl }, vscodeFrameRef)
   const [nodeTargets, setNodeTargets] = useState<WebUiNodeTarget[]>([MASTER_NODE_TARGET])
   const [nodeTargetsError, setNodeTargetsError] = useState('')
 
@@ -541,10 +540,17 @@ function App() {
   const focusedPane = useMemo(() => (focusedPaneId ? findPaneNode(root, focusedPaneId) : null), [root, focusedPaneId])
   const focusedActiveTabId = focusedPane?.activeTabId || paneNodes[0]?.activeTabId || null
   const focusedActiveTab = focusedActiveTabId ? (tabsById[focusedActiveTabId] || null) : null
-  const activePaneTabTypes = useMemo(
-    () => paneNodes.filter((pane) => (isMobile || !pane.collapsed) && (!isMobile || pane.id === (focusedPaneId || paneNodes[0]?.id))).map((pane) => pane.activeTabId ? tabsById[pane.activeTabId]?.type : null),
-    [paneNodes, tabsById, isMobile, focusedPaneId],
-  )
+  for (const tab of allTabs) {
+    if (tab.type !== 'vscode') continue
+    let frame = codeFrames.get(tab.nodeId)
+    if (!frame) {
+      frame = createCodeFrame(makeVscodeWebUrl(API_BASE_PATH, window.location.origin, tab).toString())
+      codeFrames.set(tab.nodeId, frame)
+    }
+    const pane = findPaneContainingTab(root, tab.id)
+    if (pane && (isMobile || !pane.collapsed) && pane.activeTabId === tab.id
+      && (!isMobile || (!showSessionList && pane.id === (focusedPaneId || paneNodes[0]?.id)))) frame.started = true
+  }
   const handleFocusModelsRequestHandled = useCallback((handled: number) => {
     setFocusModelsRequest((current) => (current === handled ? 0 : current))
   }, [])
@@ -944,14 +950,6 @@ function App() {
     if (tab?.type === 'chat' && shouldAcknowledgeSessionNavigation(origin)) acknowledgeSession(tab.sessionId)
   }
 
-  useLayoutEffect(() => {
-    setVscodeFrameStarted((started) => {
-      return selectCodeFrameStarted(started, activePaneTabTypes, {
-        workbenchVisible: !isMobile || !showSessionList,
-      })
-    })
-  }, [activePaneTabTypes, isMobile, showSessionList])
-
   const updateCodePath = (path: string) => {
     const normalized = writeCodeWorkspacePathPreference(localStorage, path)
     setCodePath(normalized)
@@ -967,70 +965,55 @@ function App() {
     writeCodeOpenInNewWindowPreference(localStorage, enabled)
   }
 
-  const activateEmbeddedCodeTab = () => {
-    const existingTab = tabsById[VSCODE_WEB_TAB_ID]
-    const tab = existingTab ? { ...existingTab, title: 'Code' } as WorkbenchTab : makeVscodeWebTab()
+  const requestEmbeddedCode = (target: CodeTarget, request: CodeOpenRequest): Promise<unknown> => {
+    let frame = codeFrames.get(target.nodeId)
+    if (!frame) {
+      frame = createCodeFrame(makeVscodeWebUrl(API_BASE_PATH, window.location.origin, request.kind === 'openCommit' ? undefined : target, { nodeId: target.nodeId }).toString())
+      codeFrames.set(target.nodeId, frame)
+    }
+    const tab = makeVscodeWebTab(target)
     upsertTab(tab, { activate: true })
     navigateToTab(tab.id)
+    return frame.request(request)
+  }
+
+  const closeCodeFrame = (nodeId: string) => {
+    codeFrames.get(nodeId)?.dispose()
+    codeFrames.delete(nodeId)
   }
 
   const openCode = (target: CodeTarget, forceNewWindow = false) => {
-    const plan = planCodeOpen(vscodeFrameStarted, codeOpenInNewWindow, forceNewWindow)
-    if (plan === 'new-window') {
-      const url = makeVscodeWebUrl(API_BASE_PATH, window.location.origin, target).toString()
-      window.open(url, '_blank', 'noopener,noreferrer')
+    if (codeOpenInNewWindow || forceNewWindow) {
+      window.open(makeVscodeWebUrl(API_BASE_PATH, window.location.origin, target).toString(), '_blank', 'noopener,noreferrer')
       return
     }
-
-    if (plan === 'start-embedded') {
-      const url = makeVscodeWebUrl(API_BASE_PATH, window.location.origin, target, { embedded: true }).toString()
-      setCodeFrameUrl(url)
-      setVscodeFrameStarted(true)
-    }
-    void vscodeFrameRef.current?.request({ kind: 'addFolder', nodeId: target.nodeId, path: target.path }).catch((error) => {
+    void requestEmbeddedCode(target, { kind: 'addFolder', ...target }).catch((error) => {
+      if (error instanceof Error && error.name === 'AbortError') return
       window.alert(`Could not add the folder to Code.\n\n${error instanceof Error ? error.message : String(error)}`)
     })
-    activateEmbeddedCodeTab()
   }
 
-  const openCodeFile = (
-    request: CodeFileTarget,
-    workspaceTarget: CodeTarget,
-  ) => {
-    const plan = planCodeOpen(vscodeFrameStarted, codeOpenInNewWindow)
-    if (plan === 'new-window') {
-      window.open(makeVscodeWebUrl(API_BASE_PATH, window.location.origin, workspaceTarget, { openFile: request }).toString(), '_blank', 'noopener,noreferrer')
+  const openCodeFile = (request: CodeFileTarget, workspaceTarget: CodeTarget) => {
+    const cwd = workspaceTarget.nodeId === request.nodeId ? workspaceTarget.path : undefined
+    const target = { nodeId: request.nodeId, path: cwd && (request.path === cwd || request.path.startsWith(cwd.replace(/\/$/, '') + '/')) ? cwd : request.path.slice(0, request.path.lastIndexOf('/')) || '/' }
+    const openFile = { ...request, cwd }
+    if (codeOpenInNewWindow) {
+      window.open(makeVscodeWebUrl(API_BASE_PATH, window.location.origin, target, { openFile }).toString(), '_blank', 'noopener,noreferrer')
       return
     }
-    if (plan === 'start-embedded') {
-      setCodeFrameUrl(makeVscodeWebUrl(API_BASE_PATH, window.location.origin, workspaceTarget, { embedded: true }).toString())
-      setVscodeFrameStarted(true)
-    }
-    void vscodeFrameRef.current?.request(request).catch((error) => {
+    void requestEmbeddedCode(target, openFile).catch((error) => {
+      if (error instanceof Error && error.name === 'AbortError') return
       window.alert(`Could not open the file in Code.\n\n${error instanceof Error ? error.message : String(error)}`)
     })
-    activateEmbeddedCodeTab()
   }
 
   const openCodeCommit = async (target: CodeCommitTarget): Promise<void> => {
-    const plan = planCodeOpen(vscodeFrameStarted, codeOpenInNewWindow)
-    if (plan === 'new-window') {
-      const opened = window.open(
-        makeVscodeWebUrl(API_BASE_PATH, window.location.origin, target, { openCommit: target }).toString(),
-        '_blank',
-        'noopener,noreferrer',
-      )
+    if (codeOpenInNewWindow) {
+      const opened = window.open(makeVscodeWebUrl(API_BASE_PATH, window.location.origin, target, { openCommit: target }).toString(), '_blank', 'noopener,noreferrer')
       if (!opened) throw new Error('The browser blocked the Code window.')
       return
     }
-    if (plan === 'start-embedded') {
-      setCodeFrameUrl(makeVscodeWebUrl(API_BASE_PATH, window.location.origin, undefined, { embedded: true }).toString())
-      setVscodeFrameStarted(true)
-    }
-    activateEmbeddedCodeTab()
-    const frame = vscodeFrameRef.current
-    if (!frame) throw new Error('The embedded Code frame is unavailable.')
-    await frame.request({ kind: 'openCommit', ...target })
+    await requestEmbeddedCode(target, { kind: 'openCommit', ...target })
   }
 
   const findPreferredChatTab = (sessionId: string): WorkbenchTab | null => {
@@ -1206,7 +1189,7 @@ function App() {
   const statusTerminalTarget = normalizeTerminalTarget(focusedActiveTab?.type === 'terminal'
     ? focusedActiveTab
     : focusedActiveTab?.type === 'vscode'
-      ? { nodeId: codeNodeId, cwd: codePath }
+      ? { nodeId: focusedActiveTab.nodeId, cwd: focusedActiveTab.path }
       : { nodeId: currentContextSessionRecord?.currentNode, cwd: currentContextSessionRecord?.cwd || '/' })
   const statusTerminalBelow = focusedPaneId ? findPaneBelow(root, focusedPaneId) : null
   const statusTerminalTab = focusedActiveTab?.type === 'terminal' ? focusedActiveTab
@@ -1262,7 +1245,7 @@ function App() {
     }
 
     if (targetTab?.type === 'vscode') {
-      setVscodeFrameStarted((started) => selectCodeFrameStarted(started, [], { explicitlyClosed: true }))
+      closeCodeFrame(targetTab.nodeId)
     }
 
     if (currentRouteTabIdRef.current === tabId) {
@@ -1309,7 +1292,7 @@ function App() {
 
     let url: URL
     if (targetTab.type === 'vscode') {
-      url = makeVscodeWebUrl(API_BASE_PATH, window.location.origin, { nodeId: codeNodeId, path: codePath })
+      url = makeVscodeWebUrl(API_BASE_PATH, window.location.origin, targetTab)
     } else {
       const popupTarget: FoxwarmPopupTarget = targetTab.type === 'chat'
         ? { kind: 'chat', sessionId: targetTab.sessionId, title: targetTab.title }
@@ -1340,7 +1323,7 @@ function App() {
       && stateBeforeMove.focusedPaneId === paneBeforeMove.id
 
     if (targetTab.type === 'vscode') {
-      setVscodeFrameStarted(false)
+      closeCodeFrame(targetTab.nodeId)
     }
     if (targetTab.type === 'terminal' && targetTab.terminalId) {
       movedOutTerminalIdsRef.current.add(targetTab.terminalId)
@@ -1762,7 +1745,7 @@ function App() {
     }
 
     if (tab.type === 'vscode') {
-      return <VscodeWebFrameHost bridge={vscodeFrameBridge} src={codeFrameUrl} />
+      return <VscodeWebFrameHost frame={codeFrames.get(tab.nodeId)!} nodeId={tab.nodeId} />
     }
 
     return (
@@ -2068,8 +2051,8 @@ function App() {
       && (!isMobile || (!showSessionList && pane.id === mobilePaneId))
     // History already retains hidden views; Code starts lazily then keeps its frame.
     // Ordinary tabs retain their existing semantic hide/unmount policy.
-    if (!visible && tab.type !== 'search' && !(tab.type === 'vscode' && vscodeFrameStarted)) return null
-    if (tab.type === 'vscode' && !vscodeFrameStarted) return null
+    if (!visible && tab.type !== 'search' && !(tab.type === 'vscode' && codeFrames.get(tab.nodeId)?.started)) return null
+    if (tab.type === 'vscode' && !codeFrames.get(tab.nodeId)?.started) return null
     const props = getPaneProps(pane.id, getPaneCollapseDirection(root, pane.id))!
     return <WorkbenchContentHost key={tab.id} {...props} tab={tab} visible={visible}
       navigationPending={pendingChatNavigation?.paneId === pane.id ? pendingChatNavigation : null}

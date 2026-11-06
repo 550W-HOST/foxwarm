@@ -407,8 +407,8 @@ test('collapsing Terminal detaches without closing resources and kept Code stays
     assert.deepEqual(await terminalPage.evaluate(() => window.__terminalCreates), [], 'expansion reattaches the existing terminal rather than creating a replacement')
   } finally { await terminalPage.close() }
 
-  const codeTab = { id: 'vscode-web', type: 'vscode', title: 'Code' }
-  const codePage = await openFixture({ tabs: [codeTab, chat('e2e-a', false), system], activeTabId: codeTab.id, hash: '#tab/vscode-web', split: true })
+  const codeTab = { id: 'vscode-web:master', type: 'vscode', title: 'Code · master', nodeId: 'master', path: '/' }
+  const codePage = await openFixture({ tabs: [codeTab, chat('e2e-a', false), system], activeTabId: codeTab.id, hash: '#tab/vscode-web:master', split: true })
   try {
     await codePage.waitForSelector('[data-foxwarm-vscode-web-frame="true"]')
     const codeFrameIdentity = await codePage.$eval('[data-foxwarm-vscode-web-frame="true"]', frame => {
@@ -421,14 +421,14 @@ test('collapsing Terminal detaches without closing resources and kept Code stays
     await codePage.waitForSelector('[role="textbox"][aria-label="Message"]')
     assert.ok(await codePage.$('[data-foxwarm-vscode-web-frame="true"]'), 'ordinary switching keeps the inactive Code iframe')
     await codePage.click('[data-workbench-pane-collapse="pane-main"]')
-    await codePage.waitForSelector('[data-workbench-collapsed-tab="vscode-web"]')
+    await codePage.waitForSelector('[data-workbench-collapsed-tab="vscode-web:master"]')
     await codePage.waitForFunction(() => {
       const frame = document.querySelector('[data-foxwarm-vscode-web-frame="true"]')
       return frame && getComputedStyle(frame).visibility === 'hidden' && getComputedStyle(frame).pointerEvents === 'none'
     })
-    assert.ok((await state(codePage)).tabsById['vscode-web'], 'Code tab record stays available while its pane is collapsed')
+    assert.ok((await state(codePage)).tabsById['vscode-web:master'], 'Code tab record stays available while its pane is collapsed')
     assert.equal(await codePage.$eval('[data-foxwarm-vscode-web-frame="true"]', frame => frame.dataset.testFrameIdentity), codeFrameIdentity, 'collapse keeps the same iframe object')
-    await codePage.click('[data-workbench-collapsed-tab="vscode-web"]')
+    await codePage.click('[data-workbench-collapsed-tab="vscode-web:master"]')
     await codePage.waitForSelector('[data-foxwarm-vscode-web-frame="true"]')
     assert.equal(await codePage.$eval('[data-foxwarm-vscode-web-frame="true"]', frame => frame.dataset.testFrameIdentity), codeFrameIdentity, 'expansion reuses the same iframe object')
   } finally { await codePage.close() }
@@ -1464,9 +1464,9 @@ test('550A Chat has one Code action, honors the new-tab preference, and dispatch
     assert.equal(opened.length, 1)
     const codeUrl = new URL(opened[0][0])
     assert.equal(codeUrl.pathname, '/prefix/ui/vscode-web/')
-    assert.equal(codeUrl.searchParams.get('folderUri'), 'foxwarm://node+master/')
+    assert.equal(codeUrl.searchParams.get('initialFolderUri'), 'foxwarm://node+master/')
     assert.deepEqual(opened[0].slice(1), ['_blank', 'noopener,noreferrer'])
-    assert.equal((await state(page)).tabsById['vscode-web'], undefined)
+    assert.equal((await state(page)).tabsById['vscode-web:master'], undefined)
 
     await page.click('[data-workbench-status-bar] [data-status-terminal-panel]')
     await page.waitForFunction(() => Object.values(JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.tabsById).some(tab => tab.type === 'terminal'))
@@ -1485,8 +1485,8 @@ test('Chat Code still opens the embedded workbench when the new-tab preference i
       window.open = (...args) => { window.__openedCode.push(args); return null }
     })
     await page.click('.foxwarm-chat-root button[title="Code"]')
-    await page.waitForFunction(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.root.activeTabId === 'vscode-web')
-    assert.equal((await state(page)).tabsById['vscode-web'].type, 'vscode')
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.root.activeTabId === 'vscode-web:master')
+    assert.equal((await state(page)).tabsById['vscode-web:master'].type, 'vscode')
     assert.deepEqual(await page.evaluate(() => window.__openedCode), [])
   } finally { await page.close() }
 })
@@ -1676,10 +1676,10 @@ test('Chat follows each pane through real divider dragging without changing desk
 })
 
 test('every ordinary single tab closes from its header; Code retains the strip', async () => {
-  for (const tab of [chat('e2e-a'), system, { id: 'system:search', type: 'search', title: 'History' }, { id: 'system:logs', type: 'logs', title: 'Logs' }, { id: 'system:tasks', type: 'tasks', title: 'Tasks' }, { id: 'system:setup', type: 'setup', title: 'Setup' }, { id: 'vscode-web', type: 'vscode', title: 'Code' }]) {
+  for (const tab of [chat('e2e-a'), system, { id: 'system:search', type: 'search', title: 'History' }, { id: 'system:logs', type: 'logs', title: 'Logs' }, { id: 'system:tasks', type: 'tasks', title: 'Tasks' }, { id: 'system:setup', type: 'setup', title: 'Setup' }, { id: 'vscode-web:master', type: 'vscode', title: 'Code · master', nodeId: 'master', path: '/' }]) {
     const page = await openFixture({ tabs: [tab], activeTabId: tab.id })
     try {
-      const close = tab.type === 'vscode' ? '[data-tab-id="vscode-web"] button[title="Close tab"]' : `[data-workbench-tab-close=${JSON.stringify(tab.id)}]`
+      const close = tab.type === 'vscode' ? '[data-tab-id="vscode-web:master"] button[title="Close tab"]' : `[data-workbench-tab-close=${JSON.stringify(tab.id)}]`
       await page.waitForSelector(close)
       if (tab.type !== 'vscode') {
         assert.equal(await page.$('[data-tab-id]'), null, tab.type)
@@ -2504,8 +2504,8 @@ test('visible Chat keeps its DOM and initialization across split and normalizati
 
 
 test('Code retains its iframe/window across split, docking, collapse and desktop/mobile shells', async () => {
-  const code = { id: 'vscode-web', type: 'vscode', title: 'Code' }
-  const page = await openFixture({ tabs: [code, system, chat('e2e-a', false)], activeTabId: code.id, hash: '#tab/vscode-web', themeId: '550a', responsiveChat: true })
+  const code = { id: 'vscode-web:master', type: 'vscode', title: 'Code · master', nodeId: 'master', path: '/' }
+  const page = await openFixture({ tabs: [code, system, chat('e2e-a', false)], activeTabId: code.id, hash: '#tab/vscode-web:master', themeId: '550a', responsiveChat: true })
   const assertFrame = async () => {
     assert.ok(await page.evaluate(() => document.querySelector('[data-foxwarm-vscode-web-frame]') === window.__originalCode && window.__originalCode.contentWindow === window.__originalCodeWindow), 'the frame element and browsing context stay identical')
     assert.equal(await page.evaluate(() => window.__codeFrameLoads), 1, 'layout operations never reload Code')
@@ -2535,7 +2535,7 @@ test('Code retains its iframe/window across split, docking, collapse and desktop
     await page.waitForSelector('[data-pane-id="pane-main"][data-workbench-collapsed-pane="true"]')
     await page.waitForFunction(() => {
       const slot = document.querySelector('[data-workbench-content-slot]')?.getBoundingClientRect()
-      const host = document.querySelector('[data-workbench-content-tab="vscode-web"]')?.getBoundingClientRect()
+      const host = document.querySelector('[data-workbench-content-tab="vscode-web:master"]')?.getBoundingClientRect()
       return slot && host && Math.abs(slot.height - host.height) < 1
     })
     await assertFrame()
@@ -2557,7 +2557,7 @@ test('Code retains its iframe/window across split, docking, collapse and desktop
     await page.waitForFunction(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.root.kind === 'pane')
     // Close pane migrates tabs and selects its last tab, hiding but retaining Code.
     await assertFrame()
-    await page.click('[data-tab-id="vscode-web"]')
+    await page.click('[data-tab-id="vscode-web:master"]')
     await assertFrame()
     await page.locator('[data-tab-id="chat:e2e-a"]').click()
     await page.setViewport({ width: 390, height: 844 })
@@ -2574,13 +2574,13 @@ test('Code retains its iframe/window across split, docking, collapse and desktop
 })
 
 test('restored Code starts only on its first actual visible surface', async () => {
-  const code = { id: 'vscode-web', type: 'vscode', title: 'Code' }
+  const code = { id: 'vscode-web:master', type: 'vscode', title: 'Code · master', nodeId: 'master', path: '/' }
   const page = await openFixture({ tabs: [code, chat('e2e-a', false)], activeTabId: code.id, width: 390 })
   try {
     assert.equal(await page.$('[data-foxwarm-vscode-web-frame]'), null, 'mobile list does not start the logically active Code tab')
     await page.setViewport({ width: 1400, height: 900 })
     await page.waitForFunction(() => window.__codeFrameLoads === 1)
-    await page.click('[data-tab-id="vscode-web"] button[title="Close tab"]')
+    await page.click('[data-tab-id="vscode-web:master"] button[title="Close tab"]')
     await page.waitForFunction(() => !document.querySelector('[data-foxwarm-vscode-web-frame]'))
     assert.equal(await page.evaluate(() => window.__codeFrameLoads), 1)
   } finally { await page.close() }
@@ -2597,8 +2597,8 @@ test('the initial Code file request survives lazy frame creation and explicit re
     const openFile = 'button[aria-label="Open /fixture.txt in Code"]'
     await clickReadyControl(page, openFile)
     await page.waitForFunction(() => window.__codeRequests?.some(request => request.kind === 'openFile'))
-    assert.deepEqual(await page.evaluate(() => window.__codeRequests.find(request => request.kind === 'openFile')), { kind: 'openFile', nodeId: 'master', path: '/fixture.txt', startLine: 3, endLine: 8 })
-    await page.click('[data-tab-id="vscode-web"] button[title="Close tab"]')
+    assert.deepEqual(await page.evaluate(() => window.__codeRequests.find(request => request.kind === 'openFile')), { kind: 'openFile', nodeId: 'master', cwd: '/', path: '/fixture.txt', startLine: 3, endLine: 8 })
+    await page.click('[data-tab-id="vscode-web:master"] button[title="Close tab"]')
     await page.waitForSelector('[data-foxwarm-vscode-web-frame]', { hidden: true })
     await clickReadyControl(page, openFile)
     await page.waitForFunction(() => window.__codeRequests?.filter(request => request.kind === 'openFile').length === 2)
@@ -2661,7 +2661,7 @@ test('full-page Tasks and Chat modals block Sidebar navigation without losing th
 })
 
 test('clicking a visible Code iframe activates its pane after another pane has focus', async () => {
-  const code = { id: 'vscode-web', type: 'vscode', title: 'Code' }
+  const code = { id: 'vscode-web:master', type: 'vscode', title: 'Code · master', nodeId: 'master', path: '/' }
   const page = await openFixture({ tabs: [chat('e2e-a', false), code], activeTabId: 'chat:e2e-a', hash: '#tab/chat:e2e-a', responsiveChat: true,
     layout: { id: 'focus-split', kind: 'split', direction: 'row', sizes: [50, 50], children: [
       { id: 'pane-main', kind: 'pane', tabIds: ['chat:e2e-a'], activeTabId: 'chat:e2e-a' },
@@ -2675,7 +2675,7 @@ test('clicking a visible Code iframe activates its pane after another pane has f
     const box = await frame.boundingBox()
     await page.mouse.click(box.x + box.width / 2, box.y + 12)
     await page.waitForFunction(() => document.activeElement?.tagName === 'IFRAME' && JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.focusedPaneId === 'pane-code')
-    assert.equal(await page.evaluate(() => location.hash), '#tab/vscode-web')
+    assert.equal(await page.evaluate(() => location.hash), '#tab/vscode-web%3Amaster')
     await page.mouse.click(box.x + box.width / 2, box.y + 12)
     assert.equal(await page.evaluate(() => window.__codeFrameLoads), 1)
   } finally { await page.close() }
@@ -3854,4 +3854,27 @@ test('fresh App, popup and embedded Chat roots open Conversation on desktop and 
       }
     } finally { await page.close() }
   }
+})
+
+test('Code tabs admit and retain one independent frame per Node and migrate a legacy tab', async () => {
+  const legacy = { id: 'vscode-web', type: 'vscode', title: 'Code' }
+  const remote = { id: 'vscode-web:development/review', type: 'vscode', nodeId: 'development/review', path: '/project', title: 'Code · development/review' }
+  const page = await openFixture({ tabs: [legacy, remote, system], activeTabId: system.id, hash: '#tab/system:agents' })
+  try {
+    assert.equal(await page.$('[data-foxwarm-vscode-web-frame]'), null)
+    await page.click('[data-tab-id="vscode-web:master"]')
+    assert.equal((await state(page)).tabsById['vscode-web:master'].nodeId, 'master')
+    await page.waitForSelector('[data-code-node="master"]')
+    await page.evaluate(() => { window.masterCode = document.querySelector('[data-code-node="master"]') })
+    assert.equal(await page.$('[data-code-node="development/review"]'), null)
+    await page.click('[data-tab-id="vscode-web:development/review"]')
+    await page.waitForSelector('[data-code-node="development/review"]')
+    assert.deepEqual(await page.$$eval('[data-foxwarm-vscode-web-frame]', frames => frames.map(frame => new URL(frame.src).searchParams.get('nodeId')).sort()), ['development/review', 'master'])
+    await page.evaluate(() => { window.remoteCode = document.querySelector('[data-code-node="development/review"]') })
+    await page.click('[data-tab-id="vscode-web:master"]')
+    assert(await page.evaluate(() => window.masterCode === document.querySelector('[data-code-node="master"]')))
+    await page.click('[data-tab-id="vscode-web:development/review"] button[title="Close tab"]')
+    await page.waitForFunction(() => !document.querySelector('[data-code-node="development/review"]'))
+    assert(await page.evaluate(() => window.masterCode === document.querySelector('[data-code-node="master"]')))
+  } finally { await page.close() }
 })

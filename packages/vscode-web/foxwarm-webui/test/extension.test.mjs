@@ -83,6 +83,11 @@ function mockContext(values = new Map()) {
   return {
     extensionUri: MockUri.parse('https://example.test/proxy/vscode-web/extensions/foxwarm-webui'),
     subscriptions: [],
+    workspaceState: {
+      values: new Map(),
+      get(key, fallback) { return this.values.has(key) ? this.values.get(key) : fallback; },
+      async update(key, value) { this.values.set(key, value); },
+    },
     globalState: {
       values,
       get(key, fallback) { return this.values.has(key) ? this.values.get(key) : fallback; },
@@ -197,7 +202,7 @@ test('fixed bridges open, restore, activate, and explicitly close session/Agents
     type: 'focus-models',
   });
 
-  assert.deepEqual(context.globalState.values.get('foxwarm-webui.openTabs.v2'), [
+  assert.deepEqual(context.workspaceState.values.get('foxwarm-webui.openTabs.v2'), [
     { kind: 'session', sessionId: 'agent/task', title: 'Task title' },
     { kind: 'agents' },
     { kind: 'setup' },
@@ -212,7 +217,7 @@ test('fixed bridges open, restore, activate, and explicitly close session/Agents
   tabGroups.activeTabGroup.activeTab = null;
   tabChangeHandler({ opened: [], closed: [setupTab], changed: [] });
   await tick();
-  assert.deepEqual(context.globalState.values.get('foxwarm-webui.openTabs.v2'), [
+  assert.deepEqual(context.workspaceState.values.get('foxwarm-webui.openTabs.v2'), [
     { kind: 'session', sessionId: 'agent/task', title: 'Task title' },
     { kind: 'agents' },
   ]);
@@ -241,7 +246,8 @@ test('restores stored session, Agents, and Setup targets in stable order', async
       { kind: 'setup' },
     ]],
   ]);
-  extension.activate(mockContext(values));
+  const context = mockContext(values);
+  extension.activate(context);
   await tick();
   await tick();
   assert.deepEqual(executed.filter(item => item.id === 'vscode.openWith').map(item => item.args[1]), [
@@ -257,9 +263,10 @@ test('reads legacy open-session restore state and writes the generalized target 
   const values = new Map([
     ['foxwarm-webui.openSessions.v1', [{ sessionId: 'agent/legacy', title: 'Legacy' }]],
   ]);
-  extension.activate(mockContext(values));
+  const context = mockContext(values);
+  extension.activate(context);
   await tick();
   await tick();
   assert.equal(executed.filter(item => item.id === 'vscode.openWith').at(-1).args[1], 'foxwarm-webui.chatEditor');
-  assert.deepEqual(values.get('foxwarm-webui.openTabs.v2'), [{ kind: 'session', sessionId: 'agent/legacy', title: 'Legacy' }]);
+  assert.deepEqual(context.workspaceState.values.get('foxwarm-webui.openTabs.v2'), [{ kind: 'session', sessionId: 'agent/legacy', title: 'Legacy' }]);
 });

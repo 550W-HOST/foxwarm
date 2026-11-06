@@ -240,18 +240,19 @@ try {
       const commitFrame = await until(async () => { for (const frame of page.frames()) { try { if ((await frame.evaluate(() => document.body.innerText)).includes('remote rename and binary') && (await frame.evaluate(() => document.body.innerText)).includes('Changed files')) return frame } catch {} } }, 'official SCM immutable commit webview', 45000)
       await (await commitFrame.$('button.file:not([disabled])')).click(); code = await codeFrame(); await code.waitForSelector('.monaco-diff-editor', { timeout: 30000 })
       assert(wire.some(row => row.type === 'node_service_request' && row.service === 'vscode-git' && row.operation === 'content' && row.args.ref))
-      const workspaceFile = join(fixture.data, 'state/vscode-web/foxwarm.code-workspace')
-      const workspaceWritten = page.waitForResponse(response => {
-        const url = new URL(response.url())
-        return response.request().method() === 'PUT' && url.pathname === '/api/vscode-web/fs/write-file' && url.searchParams.get('nodeId') === 'master' && url.searchParams.get('path') === workspaceFile
-      }, { timeout: 22000 })
-      const [workspaceResponse] = await Promise.all([workspaceWritten, palette(code, 'Foxwarm: Open Foxwarm data folder')])
-      assert.equal(workspaceResponse.status(), 200, await workspaceResponse.text())
-      assert.equal((await workspaceResponse.json()).success, true)
+      const remoteWorkspaceFile = join(fixture.data, 'state/vscode-web/node-official-code.code-workspace')
+      const remoteFolders = JSON.parse(await readFile(remoteWorkspaceFile, 'utf8')).folders
+      const workspaceFile = join(fixture.data, 'state/vscode-web/node-master.code-workspace')
+      await palette(code, 'Foxwarm: Open Foxwarm data folder')
+      const masterCode = await until(() => page.frames().find(frame => new URL(frame.url() || 'about:blank').searchParams.get('nodeId') === 'master' && frame.parentFrame() === page.mainFrame()), 'master Code tab')
+      await masterCode.waitForFunction(() => [...document.querySelectorAll('.monaco-list-row')].some(row => row.innerText.includes('Foxwarm Data')), { timeout: 30000 })
       const roots = (await fixture.api('GET', '/api/vscode-web/fs/workspace-roots')).body; assert.equal(roots.roots.data.nodeId, 'master')
       const workspace = JSON.parse(await readFile(workspaceFile, 'utf8'))
       assert(workspace.folders.some(folder => folder.uri ? folder.uri.startsWith('foxwarm://node+master') && decodeURIComponent(new URL(folder.uri).pathname) === fixture.data : typeof folder.path === 'string' && resolve(fixture.data, 'state/vscode-web', folder.path) === fixture.data), 'authoritative Master data command from remote workspace')
-      masterWorkspaceWrite = { method: workspaceResponse.request().method(), url: workspaceResponse.url(), status: workspaceResponse.status(), workspace }
+      assert.deepEqual(JSON.parse(await readFile(remoteWorkspaceFile, 'utf8')).folders, remoteFolders)
+      assert.equal(await page.$$eval('iframe[data-code-node]', frames => frames.length), 2)
+      assert.equal(await page.$eval('[data-tab-id="vscode-web:master"]', tab => tab.textContent.includes('master')), true)
+      masterWorkspaceWrite = { workspace }
     }
     await fixture.api('DELETE', '/api/terminals/' + encodeURIComponent(codeTerminal.id))
   }

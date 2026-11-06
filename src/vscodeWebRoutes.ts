@@ -1,3 +1,4 @@
+import { codeWorkspaceFilename } from '../packages/shared/dist/codeWorkspace';
 import { isCoreNodeId } from '../packages/shared/dist/nodeIdentity';
 import express from 'express';
 import path from 'path';
@@ -672,12 +673,42 @@ function buildMasterFoxwarmUri(fullPath: string): string {
   return `foxwarm://node+master${encodedPath}`;
 }
 
-function ensureFoxwarmWorkspace(initialFolderUri: string): string {
+function folderNode(uri: string): string {
+  const parts = toFoxwarmFolderUriComponents(uri);
+  return normalizeNodeId(decodeURIComponent(parts.authority.startsWith('node+') ? parts.authority.slice(5) : parts.authority === 'node' ? parts.path.split('/')[1] : 'master'));
+}
+
+function nodeWorkspacePath(nodeId: string): string {
+  return path.join(path.dirname(DEFAULT_VSCODE_WEB_WORKSPACE_PATH), codeWorkspaceFilename(nodeId));
+}
+
+function migrateFoxwarmWorkspace(): void {
+  if (!fs.existsSync(DEFAULT_VSCODE_WEB_WORKSPACE_PATH)) return;
+  const legacy = fs.readJsonSync(DEFAULT_VSCODE_WEB_WORKSPACE_PATH);
+  const groups = new Map<string, any[]>();
+  for (const folder of legacy.folders || []) {
+    const nodeId = typeof folder.uri === 'string' ? folderNode(folder.uri) : 'master';
+    const group = groups.get(nodeId) || [];
+    group.push(folder);
+    groups.set(nodeId, group);
+  }
+  if (groups.size === 0) groups.set('master', []);
+  for (const [nodeId, folders] of groups) {
+    const destination = nodeWorkspacePath(nodeId);
+    const workspace = fs.existsSync(destination) ? fs.readJsonSync(destination) : { ...legacy, folders: [] };
+    for (const folder of folders) if (!workspace.folders.some((existing: unknown) => JSON.stringify(existing) === JSON.stringify(folder))) workspace.folders.push(folder);
+    fs.outputJsonSync(destination, workspace, { spaces: 2 });
+  }
+  fs.moveSync(DEFAULT_VSCODE_WEB_WORKSPACE_PATH, DEFAULT_VSCODE_WEB_WORKSPACE_PATH + '.migrated', { overwrite: true });
+}
+
+function ensureFoxwarmWorkspace(initialFolderUri: string, nodeId: string, seedFolder: boolean): string {
   toFoxwarmFolderUriComponents(initialFolderUri);
-  const workspacePath = DEFAULT_VSCODE_WEB_WORKSPACE_PATH;
+  migrateFoxwarmWorkspace();
+  const workspacePath = nodeWorkspacePath(nodeId);
   if (!fs.existsSync(workspacePath)) {
     fs.outputJsonSync(workspacePath, {
-      folders: [{ uri: initialFolderUri }],
+      folders: seedFolder ? [{ uri: initialFolderUri }] : [],
       settings: VSCODE_YAML_PRIVACY_DEFAULTS,
     }, { spaces: 2 });
   } else {
@@ -721,7 +752,9 @@ function escapeHtmlText(value: string): string {
 function buildWorkbenchConfiguration(req: express.Request) {
   const origin = getRequestOrigin(req);
   const embeddedWorkspace = getSingleQueryValue(req.query.embedded) === 'true';
-  const requestedFolderUri = getSingleQueryValue(embeddedWorkspace ? req.query.initialFolderUri : req.query.folderUri) ?? getDefaultFolderUri();
+  let requestedFolderUri = getSingleQueryValue(embeddedWorkspace ? req.query.initialFolderUri : req.query.folderUri) ?? getDefaultFolderUri();
+  const nodeId = normalizeNodeId(getSingleQueryValue(req.query.nodeId) ?? folderNode(requestedFolderUri));
+  if (folderNode(requestedFolderUri) !== nodeId) requestedFolderUri = `foxwarm://node+${encodeURIComponent(nodeId)}/`;
   const staticBasePath = getExternalPath(req, VSCODE_WEB_STATIC_ROUTE);
   const fsExtensionPath = getExternalPath(req, VSCODE_WEB_FS_EXTENSION_ROUTE);
   const terminalExtensionPath = getExternalPath(req, VSCODE_WEB_TERMINAL_EXTENSION_ROUTE);
@@ -752,7 +785,7 @@ function buildWorkbenchConfiguration(req: express.Request) {
     webviewOriginTemplate,
     configuration: {
       ...(embeddedWorkspace
-        ? { workspaceUri: toUriComponents(ensureFoxwarmWorkspace(requestedFolderUri)) }
+        ? { workspaceUri: toUriComponents(ensureFoxwarmWorkspace(requestedFolderUri, nodeId, req.query.initialFolderUri !== undefined || req.query.nodeId === undefined)) }
         : { folderUri: toFoxwarmFolderUriComponents(requestedFolderUri) }),
       callbackRoute,
       productConfiguration: {
@@ -905,7 +938,9 @@ function buildVscodeWorkbenchHtml(req: express.Request): string {
     bridgeQueue = bridgeQueue.then(async () => {
       try {
         const requestKind = message.request && typeof message.request === 'object' ? message.request.kind : '';
-        const command = requestKind === 'openCommit'
+        const command = requestKind === 'openManagedRoot' && message.request.nodeId === 'master'
+          ? (message.request.root === 'app' ? 'foxwarm-fs.openAppFolder' : message.request.root === 'data' ? 'foxwarm-fs.openDataFolder' : '')
+          : requestKind === 'openCommit'
           ? 'foxwarm-scm.openCommitDetails'
           : (requestKind === 'addFolder' || requestKind === 'openFile')
             ? 'foxwarm-fs.handleOpenRequest'
@@ -1051,6 +1086,20 @@ function buildVscodeWorkbenchHtml(req: express.Request): string {
     ];
     create(document.body, {
       ...config,
+      commands: [{ id: 'foxwarm.routeCodeRequest', handler: (request) => {
+        if (request?.kind !== 'openManagedRoot' || request.nodeId !== 'master' || !['app', 'data'].includes(request.root)) throw new Error('Unsupported Code target.');
+        if (window.parent !== window) {
+          window.parent.postMessage({ channel: bridgeChannel, version: bridgeVersion, type: 'open', request }, window.location.origin);
+        } else {
+          const target = new URL(window.location.href);
+          target.search = '';
+          target.searchParams.set('embedded', 'true');
+          target.searchParams.set('nodeId', 'master');
+          target.searchParams.set('initialFolderUri', 'foxwarm://node+master' + request.path.split('/').map(encodeURIComponent).join('/'));
+          target.searchParams.set('openRoot', request.root);
+          window.open(target.toString(), '_blank', 'noopener,noreferrer');
+        }
+      } }],
       workspaceProvider: WorkspaceProvider.create(config),
       urlCallbackProvider: new LocalStorageURLCallbackProvider(config.callbackRoute || ${jsCallbackRoute}),
     });
@@ -1066,6 +1115,13 @@ function buildVscodeWorkbenchHtml(req: express.Request): string {
       }
     };
     const startupQuery = new URL(window.location.href).searchParams;
+    const root = startupQuery.get('openRoot');
+    if (root === 'app' || root === 'data') void executeStartupCommand(root === 'app' ? 'foxwarm-fs.openAppFolder' : 'foxwarm-fs.openDataFolder');
+    const initialFolder = startupQuery.get('initialFolderUri');
+    if (window.parent === window && !root && initialFolder && !startupQuery.has('openFilePath') && !startupQuery.has('openCommitPath')) {
+      const uri = new URL(initialFolder);
+      void executeStartupCommand('foxwarm-fs.handleOpenRequest', { kind: 'addFolder', nodeId: startupQuery.get('nodeId') || decodeURIComponent(uri.host.slice(5)), path: decodeURIComponent(uri.pathname) }).catch(error => console.error('Failed to open initial folder', error));
+    }
     const openFilePath = startupQuery.get('openFilePath');
     if (openFilePath) {
       const parseLine = (name) => {
@@ -1076,6 +1132,7 @@ function buildVscodeWorkbenchHtml(req: express.Request): string {
         kind: 'openFile',
         nodeId: startupQuery.get('openFileNodeId') || 'master',
         path: openFilePath,
+        cwd: startupQuery.get('openFileCwd') || undefined,
         startLine: parseLine('startLine'),
         endLine: parseLine('endLine'),
       }).catch((error) => console.error('Failed to open initial Foxwarm file', error));

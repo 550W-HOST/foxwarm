@@ -58,7 +58,7 @@ async function inspectYaml(browser, baseUrl, token, nodeId, filePath) {
 test('pinned Red Hat YAML Web extension applies shared schemas only to exact master config files', { skip: !assetsReady, timeout: 90_000 }, async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-code-yaml-schema-'));
   const stateDir = path.join(dataDir, 'state');
-  const workspacePath = path.join(stateDir, 'vscode-web', 'foxwarm.code-workspace');
+  const workspacePath = path.join(stateDir, 'vscode-web', 'node-master.code-workspace');
   const modelsPath = path.join(stateDir, 'models.yaml');
   const appPath = path.join(stateDir, 'config.yaml');
   await fs.mkdir(path.dirname(workspacePath), { recursive: true });

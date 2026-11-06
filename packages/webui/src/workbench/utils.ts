@@ -1,3 +1,5 @@
+import { codeTabId } from '../vscodeWeb'
+import { isCoreNodeId } from '../../../shared/src/nodeIdentity'
 import type { WorkbenchLayoutNode, WorkbenchPaneNode, WorkbenchPersistedState, WorkbenchSplitNode, WorkbenchTab } from './types'
 
 const DEFAULT_SPLIT_SIZES: [number, number] = [50, 50]
@@ -298,7 +300,7 @@ export function sanitizeTabsById(tabsById: Record<string, WorkbenchTab>, root: W
       return [[tabId, { id: sanitizedTab.id, type: 'agents', title: 'System', ...(section ? { section } : {}) } as WorkbenchTab]]
     }
     if (sanitizedTab.type === 'vscode') {
-      return [[tabId, { ...sanitizedTab, title: 'Code' } as WorkbenchTab]]
+      return [[tabId, { ...sanitizedTab, title: `Code · ${sanitizedTab.nodeId}` } as WorkbenchTab]]
     }
     if (sanitizedTab.type === 'search') {
       const query = typeof sanitizedTab.searchSubmittedQuery === 'string' ? sanitizedTab.searchSubmittedQuery.trim() : ''
@@ -341,7 +343,16 @@ function migrateLegacyNodesTabs(state: WorkbenchPersistedState): WorkbenchPersis
 }
 
 export function normalizePersistedWorkbenchState(persisted: WorkbenchPersistedState): WorkbenchPersistedState {
-  const state = migrateLegacyNodesTabs(persisted)
+  let state = migrateLegacyNodesTabs(persisted)
+  for (const [id, tab] of Object.entries(state.tabsById)) {
+    if (tab.type !== 'vscode') continue
+    const nodeId = isCoreNodeId(tab.nodeId) ? tab.nodeId : 'master'
+    const nextId = codeTabId(nodeId)
+    const tabsById = { ...state.tabsById }
+    delete tabsById[id]
+    tabsById[nextId] = { ...tab, id: nextId, nodeId, path: tab.path || '/', title: `Code · ${nodeId}` }
+    state = { ...state, tabsById, root: renameLayoutTab(state.root, id, nextId) }
+  }
   const originalRoot = normalizeLayoutNode(state.root)
   const tabsById = sanitizeTabsById(state.tabsById, originalRoot)
   const root = normalizeLayoutNode(filterLayoutToValidTabs(originalRoot, new Set(Object.keys(tabsById))) || createPaneNode())

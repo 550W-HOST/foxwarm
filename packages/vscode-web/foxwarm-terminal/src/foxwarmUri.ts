@@ -1,3 +1,4 @@
+import { codeWorkspaceNode } from '../../../shared/src/codeWorkspace';
 export type FoxwarmUriTarget = {
   namespace: 'node';
   nodeId: string;
@@ -61,10 +62,10 @@ export function parseFoxwarmUri(uri: UriLike): FoxwarmUriTarget {
   };
 }
 
-export function getWorkspaceTerminalTarget(workspaceFolders: readonly { uri: UriLike }[] | undefined): FoxwarmUriTarget {
+export function getWorkspaceTerminalTarget(workspaceFolders: readonly { uri: UriLike }[] | undefined, workspaceFile?: UriLike): FoxwarmUriTarget {
   const folder = workspaceFolders?.[0];
   if (!folder) {
-    return { namespace: 'node', nodeId: 'master', realPath: '/' };
+    return { namespace: 'node', nodeId: workspaceFile?.scheme === 'foxwarm' ? codeWorkspaceNode(parseFoxwarmUri(workspaceFile).realPath) || 'master' : 'master', realPath: '/' };
   }
   return parseFoxwarmUri(folder.uri);
 }

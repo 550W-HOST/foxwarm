@@ -1,11 +1,11 @@
 import { isCoreNodeId } from '../../../shared/src/nodeIdentity';
 export type FoxwarmOpenRequest =
   | { kind: 'addFolder'; nodeId: string; path: string }
-  | { kind: 'openFile'; nodeId: string; path: string; startLine?: number; startColumn?: number; endLine?: number }
+  | { kind: 'openFile'; nodeId: string; path: string; cwd?: string; startLine?: number; startColumn?: number; endLine?: number }
 
 export type NormalizedFoxwarmOpenRequest =
   | { kind: 'addFolder'; nodeId: string; path: string }
-  | { kind: 'openFile'; nodeId: string; path: string; startLine?: number; startColumn?: number; endLine?: number }
+  | { kind: 'openFile'; nodeId: string; path: string; cwd?: string; startLine?: number; startColumn?: number; endLine?: number }
 
 export function normalizeFoxwarmAbsolutePath(value: unknown): string {
   if (typeof value !== 'string') {
@@ -64,6 +64,7 @@ export function normalizeFoxwarmOpenRequest(value: unknown): NormalizedFoxwarmOp
       kind: 'openFile',
       nodeId,
       path,
+      ...(request.cwd !== undefined ? { cwd: normalizeFoxwarmAbsolutePath(request.cwd) } : {}),
       ...(startLine !== undefined ? { startLine } : {}),
       ...(startColumn !== undefined ? { startColumn } : {}),
       ...(endLine !== undefined ? { endLine } : {}),

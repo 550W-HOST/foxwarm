@@ -21,7 +21,7 @@ Cross-module behavior: [Code integration](../threads/code-integration.md).
 - `/vscode-web/extensions/foxwarm-{fs,terminal,scm,webui}/*` and optional `/vscode-web/extensions/redhat-vscode-yaml/*` — bundled browser-extension assets under normal authentication.
 - `/vscode-web/webview/<process-capability>/...` — narrowly scoped official `pre/` webview bootstrap; capability URL is supplied only to an authenticated workbench.
 
-Required official asset files are loaded from `packages/vscode-web/assets/vscode-web` in the payload when that directory exists, otherwise in the installation root ([Code services](./code-services.md#installed-resources-and-workspace-defaults)). Optional YAML assets use the sibling `assets/extensions/redhat.vscode-yaml` directory. Embedded workspaces persist at selected `state/vscode-web/foxwarm.code-workspace`. These locations and the automatic webview origin have no environment overrides.
+Required official asset files are loaded from `packages/vscode-web/assets/vscode-web` in the payload when that directory exists, otherwise in the installation root ([Code services](./code-services.md#installed-resources-and-workspace-defaults)). Optional YAML assets use the sibling `assets/extensions/redhat.vscode-yaml` directory. Node workspaces persist at selected `state/vscode-web/node-<encoded-node-id>.code-workspace`; the legacy mixed workspace migrates once by folder URI authority. These locations and the automatic webview origin have no environment overrides.
 
 A direct workbench launch without a requested folder derives its master URI from the canonical `BASE_DIR`. It does not probe installation-specific filesystem paths. The fixed workspace-roots response remains authoritative for app/data commands.
 
@@ -46,10 +46,10 @@ Master Git uses argument-array process spawning. Remote status/content use `vsco
 ## Workbench bootstrap
 
 - Uses `foxwarm://node+<encoded-node-id>/<absolute-path>` folder URIs. Qualified Provider IDs are encoded as one identity, never replaced with master; accepting the identity does not add Code filesystem/Git capabilities to primitive providers.
-- Direct launches may open one folder; embedded and commit launches use a persistent `foxwarm.code-workspace`.
+- Current WebUI launches, including new windows, select a Node-specific persistent workspace. Legacy bare folder URLs remain readable.
 - The bootstrap installs fixed browser extensions as additional builtins.
 - The persistent workspace supplies opt-out defaults for Red Hat telemetry, SchemaStore, Kubernetes CRD fetching, and extension recommendations while preserving explicit values already stored in that workspace.
-- A versioned same-origin parent-source-checked request/ack bridge accepts only fixed add-folder/open-file/open-commit requests.
+- A versioned same-origin parent-source-checked request/ack bridge accepts fixed add-folder/open-file/open-commit/master-root requests; reverse master-root routing also checks exact source and origin.
 - Runtime URLs are derived from the actual browser path so reverse-proxy prefixes survive even when a stripping proxy does not provide `X-Forwarded-Prefix`.
 - Missing individual assets are 404; missing required workbench assets produce the 503 setup page.
 - The authenticated workbench-main route applies the Firefox clipboard safeguard and insecure-context SHA-256 fallback by matching the stable generated helper bodies; minifier-generated function names are not part of the compatibility contract.

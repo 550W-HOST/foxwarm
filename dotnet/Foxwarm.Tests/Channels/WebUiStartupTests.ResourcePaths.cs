@@ -60,7 +60,9 @@ public sealed partial class WebUiStartupTests
             ]!.GetValue<string>()
         );
         await h.Client.GetStringAsync("/vscode-web/?embedded=true");
-        Assert.True(File.Exists(Path.Combine(h.Data, "state/vscode-web/foxwarm.code-workspace")));
+        Assert.True(
+            File.Exists(Path.Combine(h.Data, "state/vscode-web/node-master.code-workspace"))
+        );
         var created = await h.Client.PostAsJsonAsync(
             "/api/sessions",
             new { agentId = "main", sessionId = "normal-roots" }

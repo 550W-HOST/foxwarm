@@ -39,6 +39,24 @@ __export(extension_exports, {
 module.exports = __toCommonJS(extension_exports);
 var vscode = __toESM(require("vscode"));
 
+// ../../shared/src/nodeIdentity.ts
+var MAX_CORE_NODE_ID_LENGTH = 193;
+function isCoreNodeId(value) {
+  return typeof value === "string" && value.length <= MAX_CORE_NODE_ID_LENGTH && (/^[A-Za-z0-9._:-]{1,128}$/.test(value) || /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}\/[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value));
+}
+
+// ../../shared/src/codeWorkspace.ts
+function codeWorkspaceNode(path) {
+  const name = path.split("/").pop() || "";
+  if (!name.startsWith("node-") || !name.endsWith(".code-workspace")) return void 0;
+  try {
+    const nodeId = decodeURIComponent(name.slice(5, -".code-workspace".length));
+    return isCoreNodeId(nodeId) ? nodeId : void 0;
+  } catch {
+    return void 0;
+  }
+}
+
 // src/foxwarmUri.ts
 function decodePathSegment(segment) {
   try {
@@ -82,10 +100,10 @@ function parseFoxwarmUri(uri) {
     realPath
   };
 }
-function getWorkspaceTerminalTarget(workspaceFolders) {
+function getWorkspaceTerminalTarget(workspaceFolders, workspaceFile) {
   const folder = workspaceFolders?.[0];
   if (!folder) {
-    return { namespace: "node", nodeId: "master", realPath: "/" };
+    return { namespace: "node", nodeId: workspaceFile?.scheme === "foxwarm" ? codeWorkspaceNode(parseFoxwarmUri(workspaceFile).realPath) || "master" : "master", realPath: "/" };
   }
   return parseFoxwarmUri(folder.uri);
 }
@@ -312,7 +330,7 @@ Foxwarm terminal protocol error: ${error instanceof Error ? error.message : Stri
   }
 };
 function getCurrentTarget() {
-  const target = getWorkspaceTerminalTarget(vscode.workspace.workspaceFolders);
+  const target = getWorkspaceTerminalTarget(vscode.workspace.workspaceFolders, vscode.workspace.workspaceFile);
   return { nodeId: target.nodeId, cwd: target.realPath };
 }
 function getActiveWorkspaceTarget() {

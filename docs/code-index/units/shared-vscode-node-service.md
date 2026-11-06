@@ -1,6 +1,6 @@
 # Unit: shared-vscode-node-service
 
-Files: packages/shared/src/vscodeNodeService.ts, packages/shared/src/gitCommitDetails.ts, packages/shared/src/gitCommitDetails.test.ts
+Files: packages/shared/src/codeWorkspace.ts, packages/shared/src/vscodeNodeService.ts, packages/shared/src/gitCommitDetails.ts, packages/shared/src/gitCommitDetails.test.ts
 Secondary files: packages/shared/src/nodeCapabilities.ts
 
 ## Purpose
@@ -31,3 +31,5 @@ Implements the fixed-operation filesystem and read-only Git services used by Cod
 - `src/vscodeWebRoutes.ts` keeps master operations local and dispatches non-master filesystem/Git requests through the node service protocol.
 - `src/vscodeWebRoutes.test.ts` exercises the HTTP-to-node-service dispatch with an advertised fake node; a real Docker CLI-node E2E also validated Explorer read/write and SCM status/diff.
 - Commit details require advertised `vscode-git` service version 2; older nodes keep status/content compatibility but receive a structured unsupported-service response for commit inspection.
+
+`codeWorkspaceFilename` and `codeWorkspaceNode` share the persisted per-Node workspace filename identity between the retained server and browser extensions. Empty workspaces retain their Node for folder commands and terminal creation.

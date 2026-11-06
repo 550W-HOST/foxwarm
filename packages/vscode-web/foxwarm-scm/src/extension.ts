@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { buildFoxwarmNodeUriString, normalizeGitRelativePath, parseFoxwarmUri } from './foxwarmUri';
-import { COMMIT_DETAILS_VIEW_ID, CommitDetailsViewProvider, openCommitDetails } from './commitDetails';
+import { COMMIT_DETAILS_VIEW_ID, CommitDetailsViewProvider, openCommitDetails, normalizeCommitOpenRequest } from './commitDetails';
 export { buildFoxwarmNodeUriString, normalizeGitRelativePath, parseFoxwarmUri } from './foxwarmUri';
 
 type GitSubmoduleChange = {
@@ -298,12 +298,13 @@ class FoxwarmGitContentProvider implements vscode.TextDocumentContentProvider {
 
 export function activate(context: vscode.ExtensionContext): void {
   gitApiBase = deriveGitApiBase(context.extensionUri);
-  const pendingCommitKey = 'foxwarm.pendingCommitOpen.v1';
+  const pendingCommitKey = (nodeId: string) => `foxwarm.pendingCommitOpen.v2.${nodeId}`;
   const commitDetailsView = new CommitDetailsViewProvider();
   const openCommit = async (request: unknown) => {
-    await context.globalState.update(pendingCommitKey, undefined);
-    return openCommitDetails(gitApiBase, request, {
-      deferForWorkspaceReload: (canonicalRequest) => context.globalState.update(pendingCommitKey, canonicalRequest),
+    const normalized = normalizeCommitOpenRequest(request);
+    await context.globalState.update(pendingCommitKey(normalized.nodeId), undefined);
+    return openCommitDetails(gitApiBase, normalized, {
+      deferForWorkspaceReload: (canonicalRequest) => context.globalState.update(pendingCommitKey(canonicalRequest.nodeId), canonicalRequest),
       showInSidebar: (details) => commitDetailsView.show(details),
     });
   };
@@ -324,8 +325,11 @@ export function activate(context: vscode.ExtensionContext): void {
     console.error('Foxwarm SCM refresh failed', error);
   });
   setTimeout(() => {
-    const pendingCommit = context.globalState.get<unknown>(pendingCommitKey);
+    const nodeId = getFoxwarmWorkspaces()[0]?.nodeId || 'master';
+    const legacy = context.globalState.get<{ nodeId?: string }>('foxwarm.pendingCommitOpen.v1');
+    const pendingCommit = context.globalState.get<unknown>(pendingCommitKey(nodeId)) || (legacy?.nodeId === nodeId ? legacy : undefined);
     if (!pendingCommit) return;
+    if (pendingCommit === legacy) void context.globalState.update('foxwarm.pendingCommitOpen.v1', undefined);
     void openCommit(pendingCommit).catch((error) => {
       void vscode.window.showErrorMessage(`Failed to reopen Foxwarm commit: ${error instanceof Error ? error.message : String(error)}`);
     });

@@ -660,14 +660,20 @@ public sealed class CodeRoutesTests
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             await File.WriteAllTextAsync(path, "metadata fixture");
         }
-        var workspace = Path.Combine(f.Data, "state/vscode-web/foxwarm.code-workspace");
+        var workspace = Path.Combine(f.Data, "state/vscode-web/node-master.code-workspace");
         Directory.CreateDirectory(Path.GetDirectoryName(workspace)!);
         await File.WriteAllTextAsync(
-            workspace,
+            Path.Combine(f.Data, "state/vscode-web/foxwarm.code-workspace"),
             new JsonObject
             {
                 ["folders"] = new JsonArray(
-                    new JsonObject { ["uri"] = CodeWorkbench.FoxwarmUri(f.Work) }
+                    new JsonObject { ["uri"] = CodeWorkbench.FoxwarmUri(f.Work) },
+                    new JsonObject
+                    {
+                        ["uri"] = "foxwarm://node+development%2Freview/remote/project",
+                        ["name"] = "Remote project",
+                    },
+                    new JsonObject { ["uri"] = "foxwarm://node/worker/other" }
                 ),
                 ["settings"] = new JsonObject
                 {
@@ -685,6 +691,34 @@ public sealed class CodeRoutesTests
                 + config["workspaceUri"]!["authority"]!.ToString()
                 + config["workspaceUri"]!["path"]!.ToString()
         );
+        var remoteWorkspace = Path.Combine(
+            f.Data,
+            "state/vscode-web/node-development%2Freview.code-workspace"
+        );
+        var migrated = JsonNode.Parse(await File.ReadAllTextAsync(remoteWorkspace))!;
+        Assert.Single(migrated["folders"]!.AsArray());
+        Assert.Equal("Remote project", migrated["folders"]![0]!["name"]!.GetValue<string>());
+        Assert.Equal(17, migrated["settings"]!["editor.fontSize"]!.GetValue<int>());
+        Assert.Single(
+            JsonNode.Parse(await File.ReadAllTextAsync(workspace))!["folders"]!.AsArray()
+        );
+        Assert.True(
+            File.Exists(Path.Combine(f.Data, "state/vscode-web/node-worker.code-workspace"))
+        );
+        Assert.False(File.Exists(Path.Combine(f.Data, "state/vscode-web/foxwarm.code-workspace")));
+        var remoteHtml = await f.Client.GetStringAsync(
+            "/vscode-web/?embedded=true&nodeId=development%2Freview"
+        );
+        Assert.Contains("node-development%252Freview.code-workspace", remoteHtml);
+        await f.Client.GetStringAsync(
+            "/vscode-web/?embedded=true&nodeId=commit-peer&openCommitPath=%2Frepository"
+        );
+        var empty = JsonNode.Parse(
+            await File.ReadAllTextAsync(
+                Path.Combine(f.Data, "state/vscode-web/node-commit-peer.code-workspace")
+            )
+        )!;
+        Assert.Empty(empty["folders"]!.AsArray());
         var encodedFolder = "foxwarm://node+master/W%3A/work%20space/%E9%9B%AA";
         var folderHtml = await f.Client.GetStringAsync(
             "/vscode-web/?folderUri=" + Uri.EscapeDataString(encodedFolder)

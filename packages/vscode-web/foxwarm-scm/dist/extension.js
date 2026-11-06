@@ -306,12 +306,12 @@ async function openCommitDetails(gitApiBase2, value, options = {}) {
   const hasExactWorkspaceFolder = (vscode.workspace.workspaceFolders || []).some((folder) => {
     try {
       const parsed = parseFoxwarmUri(folder.uri);
-      return parsed.nodeId === details.nodeId && parsed.realPath === details.workspace;
+      return parsed.nodeId === details.nodeId && (parsed.realPath === details.workspace || details.workspace.startsWith(parsed.realPath.replace(/\/$/, "") + "/"));
     } catch {
       return false;
     }
   });
-  if (!hasExactWorkspaceFolder && options.deferForWorkspaceReload) {
+  if (!hasExactWorkspaceFolder && !vscode.workspace.workspaceFile && options.deferForWorkspaceReload) {
     await options.deferForWorkspaceReload({
       kind: "openCommit",
       nodeId: details.nodeId,
@@ -568,12 +568,13 @@ var FoxwarmGitContentProvider = class {
 };
 function activate(context) {
   gitApiBase = deriveGitApiBase(context.extensionUri);
-  const pendingCommitKey = "foxwarm.pendingCommitOpen.v1";
+  const pendingCommitKey = (nodeId) => `foxwarm.pendingCommitOpen.v2.${nodeId}`;
   const commitDetailsView = new CommitDetailsViewProvider();
   const openCommit = async (request) => {
-    await context.globalState.update(pendingCommitKey, void 0);
-    return openCommitDetails(gitApiBase, request, {
-      deferForWorkspaceReload: (canonicalRequest) => context.globalState.update(pendingCommitKey, canonicalRequest),
+    const normalized = normalizeCommitOpenRequest(request);
+    await context.globalState.update(pendingCommitKey(normalized.nodeId), void 0);
+    return openCommitDetails(gitApiBase, normalized, {
+      deferForWorkspaceReload: (canonicalRequest) => context.globalState.update(pendingCommitKey(canonicalRequest.nodeId), canonicalRequest),
       showInSidebar: (details) => commitDetailsView.show(details)
     });
   };
@@ -594,8 +595,11 @@ function activate(context) {
     console.error("Foxwarm SCM refresh failed", error);
   });
   setTimeout(() => {
-    const pendingCommit = context.globalState.get(pendingCommitKey);
+    const nodeId = getFoxwarmWorkspaces()[0]?.nodeId || "master";
+    const legacy = context.globalState.get("foxwarm.pendingCommitOpen.v1");
+    const pendingCommit = context.globalState.get(pendingCommitKey(nodeId)) || (legacy?.nodeId === nodeId ? legacy : void 0);
     if (!pendingCommit) return;
+    if (pendingCommit === legacy) void context.globalState.update("foxwarm.pendingCommitOpen.v1", void 0);
     void openCommit(pendingCommit).catch((error) => {
       void vscode2.window.showErrorMessage(`Failed to reopen Foxwarm commit: ${error instanceof Error ? error.message : String(error)}`);
     });

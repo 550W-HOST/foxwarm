@@ -247,14 +247,25 @@ if (hostname === parentOriginHash || hostname.startsWith(parentOriginHash + '.')
       const wrongCapability = await fetch(`${baseUrl}/vscode-web/webview/${'0'.repeat(48)}/index.html`);
       assert.equal(wrongCapability.status, 404);
 
+      const legacyWorkspacePath = path.join(STATE_DIR, 'vscode-web', 'foxwarm.code-workspace');
+      await fs.outputJson(legacyWorkspacePath, {
+        folders: [{ uri: folderUri }, { uri: 'foxwarm://node+development%2Freview/remote', name: 'Remote' }, { uri: 'foxwarm://node/worker/legacy' }],
+        settings: { 'editor.fontSize': 15 },
+      });
       const embeddedWorkbench = await fetch(`${baseUrl}/vscode-web?embedded=true&initialFolderUri=${encodeURIComponent(folderUri)}`, { headers: cookieHeaders() });
       assert.equal(embeddedWorkbench.status, 200);
       const embeddedHtml = await embeddedWorkbench.text();
       assert.match(embeddedHtml, /&quot;workspaceUri&quot;/);
-      assert.match(embeddedHtml, /foxwarm\.code-workspace/);
-      const workspacePath = path.join(STATE_DIR, 'vscode-web', 'foxwarm.code-workspace');
+      assert.match(embeddedHtml, /node-master\.code-workspace/);
+      const workspacePath = path.join(STATE_DIR, 'vscode-web', 'node-master.code-workspace');
       const workspace = await fs.readJson(workspacePath) as { settings: Record<string, unknown> };
+      assert.equal(await fs.pathExists(legacyWorkspacePath), false);
+      const remoteWorkspace = await fs.readJson(path.join(STATE_DIR, 'vscode-web', 'node-development%2Freview.code-workspace'));
+      assert.deepEqual(remoteWorkspace.folders, [{ uri: 'foxwarm://node+development%2Freview/remote', name: 'Remote' }]);
+      assert.equal(remoteWorkspace.settings['editor.fontSize'], 15);
+      assert.equal((await fs.readJson(path.join(STATE_DIR, 'vscode-web', 'node-worker.code-workspace'))).folders[0].uri, 'foxwarm://node/worker/legacy');
       assert.deepEqual(workspace.settings, {
+        'editor.fontSize': 15,
         'redhat.telemetry.enabled': false,
         'yaml.schemaStore.enable': false,
         'yaml.kubernetesCRDStore.enable': false,
@@ -265,6 +276,9 @@ if (hostname === parentOriginHash || hostname.startsWith(parentOriginHash + '.')
       const repeatedEmbedded = await fetch(`${baseUrl}/vscode-web?embedded=true&initialFolderUri=${encodeURIComponent(folderUri)}`, { headers: cookieHeaders() });
       assert.equal(repeatedEmbedded.status, 200);
       assert.equal((await fs.readJson(workspacePath) as { settings: Record<string, unknown> }).settings['redhat.telemetry.enabled'], true);
+      const commitLaunch = await fetch(`${baseUrl}/vscode-web?embedded=true&nodeId=commit-peer&openCommitPath=%2Frepository`, { headers: cookieHeaders() });
+      assert.equal(commitLaunch.status, 200);
+      assert.deepEqual((await fs.readJson(path.join(STATE_DIR, 'vscode-web/node-commit-peer.code-workspace'))).folders, []);
     }, installation);
   });
 });

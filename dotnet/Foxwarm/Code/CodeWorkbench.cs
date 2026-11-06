@@ -129,7 +129,57 @@ internal sealed partial class CodeWorkbench
         };
     }
 
-    private string Workspace(string folder)
+    private string NodeWorkspacePath(string nodeId) =>
+        Path.Combine(
+            Path.GetDirectoryName(workspacePath)!,
+            "node-" + Uri.EscapeDataString(nodeId) + ".code-workspace"
+        );
+
+    private static string FolderNode(string uri)
+    {
+        var parts = UriParts(uri);
+        var authority = parts["authority"]!.GetValue<string>();
+        var nodeId =
+            authority.StartsWith("node+", StringComparison.Ordinal)
+                ? Uri.UnescapeDataString(authority[5..])
+            : authority == "node"
+                ? Uri.UnescapeDataString(parts["path"]!.GetValue<string>().Split('/')[1])
+            : "master";
+        Foxwarm.Nodes.NodeProviderRegistry.ValidateId(nodeId);
+        return nodeId;
+    }
+
+    private void MigrateWorkspace()
+    {
+        if (!File.Exists(workspacePath))
+            return;
+        var legacy = JsonNode.Parse(File.ReadAllText(workspacePath))!.AsObject();
+        var groups = (legacy["folders"]?.AsArray() ?? new JsonArray())
+            .GroupBy(folder =>
+                folder?["uri"] is JsonValue uri ? FolderNode(uri.GetValue<string>()) : "master"
+            )
+            .ToDictionary(group => group.Key, group => group.ToArray());
+        if (groups.Count == 0)
+            groups["master"] = Array.Empty<JsonNode?>();
+        foreach (var (nodeId, group) in groups)
+        {
+            var destination = NodeWorkspacePath(nodeId);
+            var workspace = File.Exists(destination)
+                ? JsonNode.Parse(File.ReadAllText(destination))!.AsObject()
+                : legacy.DeepClone().AsObject();
+            var folders = File.Exists(destination)
+                ? workspace["folders"]!.AsArray()
+                : new JsonArray();
+            foreach (var folder in group)
+                if (!folders.Any(existing => JsonNode.DeepEquals(existing, folder)))
+                    folders.Add(folder!.DeepClone());
+            workspace["folders"] = folders.Parent is null ? folders : folders.DeepClone();
+            File.WriteAllText(destination, workspace.ToJsonString(new() { WriteIndented = true }));
+        }
+        File.Move(workspacePath, workspacePath + ".migrated", true);
+    }
+
+    private string Workspace(string folder, string nodeId, bool seedFolder)
     {
         if (!folder.StartsWith("foxwarm://", StringComparison.Ordinal))
             throw new CodeServiceException(
@@ -137,16 +187,20 @@ internal sealed partial class CodeWorkbench
                 "folderUri must use the foxwarm:// scheme."
             );
         _ = UriParts(folder);
+        var targetPath = NodeWorkspacePath(nodeId);
         lock (workspaceGate)
         {
-            if (!File.Exists(workspacePath))
+            MigrateWorkspace();
+            if (!File.Exists(targetPath))
             {
-                Directory.CreateDirectory(Path.GetDirectoryName(workspacePath)!);
+                Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
                 File.WriteAllText(
-                    workspacePath,
+                    targetPath,
                     new JsonObject
                     {
-                        ["folders"] = new JsonArray(new JsonObject { ["uri"] = folder }),
+                        ["folders"] = seedFolder
+                            ? new JsonArray(new JsonObject { ["uri"] = folder })
+                            : new JsonArray(),
                         ["settings"] = PrivacyDefaults.DeepClone(),
                     }.ToJsonString(new() { WriteIndented = true })
                 );
@@ -155,7 +209,7 @@ internal sealed partial class CodeWorkbench
             {
                 try
                 {
-                    if (JsonNode.Parse(File.ReadAllText(workspacePath)) is JsonObject workspace)
+                    if (JsonNode.Parse(File.ReadAllText(targetPath)) is JsonObject workspace)
                     {
                         var settings = workspace["settings"] as JsonObject;
                         var changed = settings is null;
@@ -169,7 +223,7 @@ internal sealed partial class CodeWorkbench
                             }
                         if (changed)
                             File.WriteAllText(
-                                workspacePath,
+                                targetPath,
                                 workspace.ToJsonString(new() { WriteIndented = true })
                             );
                     }
@@ -179,7 +233,7 @@ internal sealed partial class CodeWorkbench
                 }
             }
         }
-        return FoxwarmUri(workspacePath);
+        return FoxwarmUri(targetPath);
     }
 
     internal string Bootstrap(HttpContext context)
@@ -197,6 +251,10 @@ internal sealed partial class CodeWorkbench
                 "InvalidPath",
                 "folderUri must use the foxwarm:// scheme."
             );
+        var nodeId = context.Request.Query["nodeId"].FirstOrDefault() ?? FolderNode(folder);
+        Foxwarm.Nodes.NodeProviderRegistry.ValidateId(nodeId);
+        if (FolderNode(folder) != nodeId)
+            folder = "foxwarm://node+" + Uri.EscapeDataString(nodeId) + "/";
         var route = address.Prefix.ToUriComponent() + "/vscode-web";
         var baseUrl = origin + route + "/static";
         var extensions = new JsonArray();
@@ -211,7 +269,14 @@ internal sealed partial class CodeWorkbench
         var configuration = new JsonObject
         {
             [context.Request.Query["embedded"] == "true" ? "workspaceUri" : "folderUri"] = UriParts(
-                context.Request.Query["embedded"] == "true" ? Workspace(folder) : folder
+                context.Request.Query["embedded"] == "true"
+                    ? Workspace(
+                        folder,
+                        nodeId,
+                        context.Request.Query.ContainsKey("initialFolderUri")
+                            || !context.Request.Query.ContainsKey("nodeId")
+                    )
+                    : folder
             ),
             ["callbackRoute"] = route + "/callback",
             ["productConfiguration"] = new JsonObject

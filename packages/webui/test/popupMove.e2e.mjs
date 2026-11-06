@@ -18,7 +18,8 @@ let baseUrl
 const tabs = {
   'chat:popup-test': { id: 'chat:popup-test', type: 'chat', sessionId: 'popup-test', title: 'Popup chat' },
   'terminal:term-1': { id: 'terminal:term-1', type: 'terminal', terminalId: 'term-1', nodeId: 'master', cwd: '/tmp', title: 'Terminal /tmp' },
-  'vscode-web': { id: 'vscode-web', type: 'vscode', title: 'Code' },
+  'vscode-web:master': { id: 'vscode-web:master', type: 'vscode', title: 'Code · master', nodeId: 'master', path: '/' },
+  'vscode-web:worker-a': { id: 'vscode-web:worker-a', type: 'vscode', title: 'Code · worker-a', nodeId: 'worker-a', path: '/remote/project' },
   'system:agents': { id: 'system:agents', type: 'agents', title: 'System' },
   'system:setup': { id: 'system:setup', type: 'setup', title: 'Setup' },
   'system:search': { id: 'system:search', type: 'search', title: 'Search history' },
@@ -170,7 +171,8 @@ test('moves each supported tab to the expected URL and terminal move never delet
     // System on its Nodes section moves to the nodes leaf.
     ['system:agents', 'nodes'],
     ['system:search', 'search'],
-    ['vscode-web', 'code'],
+    ['vscode-web:master', 'code'],
+    ['vscode-web:worker-a', 'code'],
   ]
   for (const [tabId, kind] of cases) {
     const page = await openFixture()
@@ -192,7 +194,11 @@ test('moves each supported tab to the expected URL and terminal move never delet
       assert.equal(!!stillPresent, false, `expected ${tabId} to be removed after opening ${kind}; opened=${await page.evaluate(() => window.__opened[0] || '')}`)
       const opened = new URL(await page.evaluate(() => window.__opened[0]))
       assert.equal(opened.pathname.startsWith('/prefix/ui/'), true)
-      if (kind === 'code') assert.equal(opened.pathname, '/prefix/ui/vscode-web/')
+      if (kind === 'code') {
+        assert.equal(opened.pathname, '/prefix/ui/vscode-web/')
+        assert.equal(opened.searchParams.get('nodeId'), tabs[tabId].nodeId)
+        assert.equal(opened.searchParams.get('initialFolderUri'), `foxwarm://node+${tabs[tabId].nodeId}${tabs[tabId].path}`)
+      }
       else assert.equal(opened.searchParams.get('foxwarmPopup'), kind)
       if (kind === 'terminal') {
         assert.equal(opened.searchParams.get('terminalId'), 'term-1')

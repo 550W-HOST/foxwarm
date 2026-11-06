@@ -18,19 +18,20 @@ Foxwarm hosts optional official Code for the Web assets in a separate workbench 
 
 - Official workbench assets are optional and excluded from the main WebUI bundle, Git, and ordinary build.
 - Preferred resources use `foxwarm://node+<nodeId>/<absolute-posix-path>`.
-- Direct new-tab launches can open one folder. Embedded launches use a persistent `foxwarm.code-workspace`, so later folders append without replacing the iframe or losing editor/terminal state.
-- The filesystem extension exposes fixed commands for the authoritative master app and data roots. They add an exact normalized root to the current multi-root workspace, then open Explorer and reveal it; they never derive these roots from a session node or cwd.
+- Each Node has a persistent `node-<encoded-node-id>.code-workspace`. Embedded and new-window launches select that Node’s workspace. Folder requests use path containment: covered descendants are revealed, and a new ancestor replaces contained roots.
+- The filesystem extension exposes fixed commands for the authoritative master app and data roots. They route to the master workbench, add or reveal the normalized root using the same containment rules, then focus Explorer; they never derive these roots from a session node or cwd.
 - A pinned MIT Red Hat YAML Web extension consumes the same static config schemas as Setup through a local contributor. Only the authoritative master app/models file URIs match.
 - Main WebUI presents the feature as **Code** while route/package identifiers remain `/vscode-web`.
 
 ## WebUI launch and bridge
 
 - `API_BASE_PATH` is converted to the deployment-relative `/vscode-web/` path; launch URLs preserve reverse-proxy prefixes.
-- Embedded mode uses the shared [Workbench content host](../units/webui-workbench-content.md#d-workbench-stable-content) for its single iframe, while App retains the bridge controller before lazy iframe creation. A restored inactive Code tab, or a logically active Code tab while the mobile list hides the workbench surface, does not create it; the first Code tab actually shown as active in any visible expanded workbench pane starts it. Ordinary tab switching then hides/repositions the persistent iframe without unmounting it. Pane collapse and explicit Code-tab close follow [D-code-persistent-workspace](#d-code-persistent-workspace).
-- Parent/workbench communication is versioned, exact-origin/source checked, and allowlisted to add-folder, open-file, and open-commit request shapes with acknowledgements.
+- Embedded mode uses the shared [Workbench content host](../units/webui-workbench-content.md#d-workbench-stable-content) for each Node’s iframe, while App retains independent bridge controllers before lazy iframe creation. A restored inactive Code tab, or a logically active Code tab while the mobile list hides the workbench surface, does not create it; the first Code tab actually shown as active in any visible expanded workbench pane starts it. Ordinary tab switching then hides/repositions the persistent iframe without unmounting it. Pane collapse and explicit Code-tab close follow [D-code-persistent-workspace](#d-code-persistent-workspace).
+- Parent/workbench communication is versioned, exact-origin/source checked, and allowlisted to add-folder, open-file, open-commit, and fixed master App/Data commands with acknowledgements. Master-folder commands invoked inside another Node’s frame use an exact-source/origin-checked reverse message to select master’s tab. Standalone workbenches open a master window for those commands.
+- Every open-file request first ensures its Node’s workspace contains the file (use a containing Session cwd when supplied, otherwise the file parent), opens the editor, and focuses/reveals the resource in Explorer.
 - Direct `read`, `write`, `edit` (including actionable patches) tool paths remain plain text; after exact node/cwd/path resolution, an adjacent icon-only Code action may issue the open-file request. See [D-webui-tool-call-region](../units/webui-tool-timeline.md#d-webui-tool-call-region) for the interaction contract. Memory tools, nested descriptors, and ambiguous paths remain inert.
 - New-tab mode carries initial target parameters; it does not control an already-open tab.
-- Moving the WebUI Code tab to a browser window uses this existing standalone new-tab mode with the current launcher node/path. It is a fresh standalone Code launch, not transfer of the running embedded iframe; only after `window.open` succeeds does WebUI remove the source Code tab and destroy its embedded frame.
+- Moving the WebUI Code tab to a browser window uses this existing standalone new-tab mode with the selected tab’s Node/path. It is a fresh standalone Code launch, not transfer of the running embedded iframe; only after `window.open` succeeds does WebUI remove that Node’s source Code tab and destroy its embedded frame.
 
 ## Files, services, and terminals
 
@@ -43,7 +44,7 @@ Foxwarm hosts optional official Code for the Web assets in a separate workbench 
 
 - `foxwarm-scm` is read-only: status, individual/multi-diff, submodule transitions, and direct immutable commit details.
 - Strict standalone model-authored commit markers render inert cards in WebUI; only a user click performs Git lookup/open.
-- Commit resolution canonicalizes the Git top-level before persistent-workspace mutation and survives the resulting Code reload through extension state.
+- Commit resolution canonicalizes the Git top-level before adding a root; a new commit-only workspace starts empty. Persistent workspaces show the details after folder reconciliation without waiting for a reload. Legacy bare-folder launches retain Node-scoped reload-resume state.
 
 ## Nested Foxwarm WebUI
 
@@ -60,6 +61,7 @@ Foxwarm hosts optional official Code for the Web assets in a separate workbench 
 
 ## Compatibility
 
+- The legacy mixed-Node `foxwarm.code-workspace` is read once, distributing folder descriptors by URI authority (including legacy URI readers) and copying workspace settings to Node-specific files. The old file is archived as `.migrated`; subsequent writes use only the new files. Existing target files retain their folders. Legacy WebUI Code tab/layout IDs become the master tab.
 - Filesystem URI parser reads the earlier `foxwarm://node/<nodeId>/...` form; writers use current `node+<id>` authority.
 - Generalized WebUI editor restore reads the older session-only extension state once.
 - Missing optional workbench assets return an actionable 503 rather than a blank workbench.
@@ -80,9 +82,11 @@ Represent node identity in URI authority and retain the absolute slash-based pat
 
 ### D-code-persistent-workspace
 
-**Derived integration design; adopted for [independent mounted/visible/running lifetimes](../behaviors/workbench-and-chat.md#mounted-visible-and-running-are-independent).** One workspace and a stable iframe preserve editor state through ordinary layout changes. Visibility admission and explicit Close implement the selected resource behavior, not arbitrary remount heuristics.
+**User-selected per-Node resource separation**, preserving [independent mounted/visible/running lifetimes](../behaviors/workbench-and-chat.md#mounted-visible-and-running-are-independent).
 
-Embedded Code uses one persistent multi-root workspace and an iframe that starts on first actual Code-tab visibility in an expanded pane of the displayed workbench surface, not merely because a restored or logically active Code tab exists. Once started, ordinary tab switching, hiding the workbench, and collapse of the owning pane preserve the same iframe and background workbench state. Collapse hides and pointer-disables the frame while its slot is unavailable, including when Code is an inactive tab; expansion reuses the existing frame. Explicit Code-tab close destroys the iframe and resets its bridge lifecycle so reopening creates a fresh frame. New folders/requests use a fixed bridge instead of reloading/replacing it.
+Each Node has one Code tab, one persistent multi-root workspace, and independent editors, terminals, bridge, and iframe. The tab title identifies its Node. The iframe starts on first actual visibility in an expanded pane of the displayed workbench surface, not merely because its tab was restored or logically active. Once started, ordinary tab switching, workbench hiding, and pane collapse preserve that same iframe and background workbench state. Explicit close destroys only that Node’s iframe and pending bridge requests; reopening starts a new frame using its persisted workspace. Memory use therefore grows with the number of started Node tabs.
+
+Requests select the target Node’s tab, including repository-Node commit opens, tool-file actions, and launcher selection. A covered folder is revealed without another root; a newly added ancestor replaces its contained roots, preserving unrelated roots. Opening a file reveals and focuses it in Explorer, adding a containing Session cwd or its parent only when no root covers it. These rules apply to master and remote Nodes. New-window preference and move-to-browser-window use the target Node’s persistent workspace; moving removes the source frame only after the browser accepts the window.
 
 ### D-code-fixed-remote-services
 
@@ -96,7 +100,7 @@ Setup and Code reuse one public-safe build-time source for the Models and App Dr
 
 ### D-code-master-workspace-roots
 
-Code commands for the Foxwarm app and data folders obtain `BASE_DIR` and the resolved `DATA_ROOT_DIR` from a fixed authenticated Code filesystem response. Both targets always use the master node, regardless of the current workspace, session node, or cwd. In the supported persistent multi-root workbench, commands append rather than replace workspace folders, compare normalized exact URIs for idempotence, reconcile a preexisting exact-root descriptor in place with its final stable label, await the ordinary workspace-folder change, and reveal the root in Explorer. When both runtime roots are the same path, they share one combined workspace folder instead of creating duplicate aliases. No reload-resume state or ownership protocol is used. A direct bare empty/single-folder Code launch may still add the root best-effort, but post-reload Explorer focus is not guaranteed and is outside this command contract.
+Code commands for the Foxwarm app and data folders obtain `BASE_DIR` and the resolved `DATA_ROOT_DIR` from a fixed authenticated Code filesystem response. Both targets always use master, regardless of the current workspace, Session Node, or cwd. A command in a remote workbench routes to master’s tab (or a master window from standalone Code). The master workbench applies the same path-containment rules as other folder requests, relabels an exact root with its stable product label, awaits the ordinary workspace-folder change, and reveals the target in Explorer. When both runtime roots share a path, they use one combined label. No reload-resume state or ownership protocol is used for these commands.
 
 ### D-code-terminal-lifecycle
 

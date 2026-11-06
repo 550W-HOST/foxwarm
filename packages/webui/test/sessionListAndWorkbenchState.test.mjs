@@ -130,13 +130,13 @@ test('workbench normalization ignores and removes legacy tab pinned state', asyn
     focusedPaneId: 'pane-one',
   })
 
-  assert.deepEqual(normalized.root.tabIds, ['chat:one', 'terminal:two', 'vscode-web'])
+  assert.deepEqual(normalized.root.tabIds, ['chat:one', 'terminal:two', 'vscode-web:master'])
   assert.equal(normalized.root.activeTabId, 'terminal:two')
   assert.equal(normalized.focusedPaneId, 'pane-one')
   assert.equal(Object.hasOwn(normalized.tabsById['chat:one'], 'pinned'), false)
   assert.equal(Object.hasOwn(normalized.tabsById['terminal:two'], 'pinned'), false)
-  assert.equal(normalized.tabsById['vscode-web'].type, 'vscode')
-  assert.equal(normalized.tabsById['vscode-web'].title, 'Code')
+  assert.equal(normalized.tabsById['vscode-web:master'].type, 'vscode')
+  assert.equal(normalized.tabsById['vscode-web:master'].title, 'Code · master')
 })
 
 test('workbench normalization persists System, Setup, Logs and Tasks tabs and folds a saved Nodes tab into System', async () => {
@@ -283,7 +283,7 @@ test('Code workspace URLs preserve paths and reverse-proxy base paths', async ()
   const { getVscodeWebPath, makeCodeWorkspaceUri, makeVscodeWebUrl, normalizeCodePath } = await loadTypeScriptModule('../src/vscodeWeb.ts')
   assert.equal(getVscodeWebPath('/api'), '/vscode-web/')
   assert.equal(getVscodeWebPath('/proxy-prefix/api'), '/proxy-prefix/vscode-web/')
-  assert.equal(makeVscodeWebUrl('/proxy-prefix/api', 'https://example.test').toString(), 'https://example.test/proxy-prefix/vscode-web/')
+  assert.equal(makeVscodeWebUrl('/proxy-prefix/api', 'https://example.test').toString(), 'https://example.test/proxy-prefix/vscode-web/?nodeId=master&embedded=true')
   assert.equal(normalizeCodePath('/'), '/')
   assert.equal(normalizeCodePath('/work dir/你好'), '/work dir/你好')
   assert.equal(normalizeCodePath('relative/path'), null)
@@ -291,7 +291,7 @@ test('Code workspace URLs preserve paths and reverse-proxy base paths', async ()
 
   const subpathUrl = makeVscodeWebUrl('/proxy-prefix/api', 'https://example.test', { nodeId: 'master', path: '/work dir/你好' })
   assert.equal(subpathUrl.pathname, '/proxy-prefix/vscode-web/')
-  assert.equal(subpathUrl.searchParams.get('folderUri'), 'foxwarm://node+master/work%20dir/%E4%BD%A0%E5%A5%BD')
+  assert.equal(subpathUrl.searchParams.get('initialFolderUri'), 'foxwarm://node+master/work%20dir/%E4%BD%A0%E5%A5%BD')
 })
 
 test('global Code launch preference defaults safely and controls sidebar launches', async () => {

@@ -88,3 +88,9 @@ test('kills backend terminals only for explicit user close reasons', () => {
   assert.equal(shouldKillBackendTerminal(4), false);
   assert.equal(shouldKillBackendTerminal(undefined), false);
 });
+
+test('empty Node workspaces retain their own terminal namespace', () => {
+  assert.deepEqual(getWorkspaceTerminalTarget([], uri('foxwarm://node+master/state/node-development%252Freview.code-workspace')), {
+    namespace: 'node', nodeId: 'development/review', realPath: '/',
+  });
+});
