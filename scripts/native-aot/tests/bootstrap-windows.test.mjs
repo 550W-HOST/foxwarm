@@ -18,7 +18,7 @@ for (const scenario of ['native', 'unpublished', 'unsupported', 'server-error'])
     const root = await realpath(await mkdtemp(join(tmpdir(), 'fw-bootstrap-')))
     const source = join(root, 'source'), state = join(root, 'state'), capture = join(root, 'fallback.json')
     const requests = [], sockets = new Set()
-    let registration, child, output = ''
+    let registration, registrationUrl, child, output = ''
     const server = createServer(async (request, response) => {
       requests.push(request.url)
       if (request.url === '/native.zip') {
@@ -30,7 +30,8 @@ for (const scenario of ['native', 'unpublished', 'unsupported', 'server-error'])
       response.writeHead(404).end()
     })
     const peer = new WebSocketServer({ server })
-    peer.on('connection', socket => {
+    peer.on('connection', (socket, request) => {
+      registrationUrl = new URL(request.url, 'http://127.0.0.1')
       sockets.add(socket)
       socket.on('message', bytes => {
         const value = JSON.parse(bytes)
@@ -67,7 +68,9 @@ for (const scenario of ['native', 'unpublished', 'unsupported', 'server-error'])
           if (!credentials) await new Promise(done => setTimeout(done, 50))
         }
         assert(registration, output)
-        assert.equal(registration.authToken, 'synthetic-native-auth')
+        assert.equal(registrationUrl.searchParams.get('auth'), 'synthetic-native-auth')
+        assert.equal(registrationUrl.searchParams.get('id'), 'bootstrap-windows')
+        assert.equal(credentials?.authToken, 'synthetic-native-auth')
         assert.equal(credentials?.nodeId, 'bootstrap-windows', output)
         assert.equal(registration.capabilities.services['vscode-pty'], 1)
         assert.deepEqual(requests, ['/native.zip'])
