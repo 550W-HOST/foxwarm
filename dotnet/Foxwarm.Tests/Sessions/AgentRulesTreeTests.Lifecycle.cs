@@ -514,9 +514,7 @@ public sealed partial class AgentRulesTreeTests
             Node(await f.Manager.CreateNamedAsync("legacy", "after", null, null))
         );
         Assert.Equal("master", Node(f.Owner));
-        Successful(
-            await f.ToolAsync("create_agent", new JsonObject { ["agentName"] = "plain" })
-        );
+        Successful(await f.ToolAsync("create_agent", new JsonObject { ["agentName"] = "plain" }));
         var plain = await f.Manager.RequiredAsync("plain/main");
         Assert.Equal("install-offline", Node(plain));
         Assert.Null(f.Manager.AgentMetadata["plain"]?["defaultNode"]);
