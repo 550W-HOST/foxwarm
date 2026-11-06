@@ -95,9 +95,9 @@ export function registerMcpOAuthRoutes(server: HttpServer): void {
   } });
 
   server.addRoute({ path: MCP_OAUTH_CALLBACK_PATH, method: 'GET', noAuth: true, handler: async (_req, res) => {
-    // The existing administrator cookie is SameSite=Strict, so a redirect from
-    // the AS cannot authenticate this GET. This public document performs no
-    // exchange: its first-party POST must pass the normal administrator check.
+    // A Lax administrator cookie may accompany the top-level AS redirect.
+    // This fixed public GET never consumes it or exchanges a code; the document's
+    // first-party POST must pass administrator, request-origin and flow checks.
     try {
       const service = getMcpOAuthService();
       const completeUrl = JSON.stringify(service.publicUrl('/api/mcp/oauth/complete'));

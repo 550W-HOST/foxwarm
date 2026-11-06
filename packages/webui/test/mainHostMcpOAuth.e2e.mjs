@@ -88,6 +88,72 @@ async function authorize(page) {
     await until(async () => (await pageApi(page, 'setup/authorizations')).body.servers[0].state === 'authorized', 'administrator status published')
   } finally { await consent.close() }
 }
+// Real cross-site navigations exercise the public bridge with a Lax admin cookie.
+async function callbackSecurity(page) {
+  const admitted = await pageApi(page, 'setup/authorizations/Fixture%20MCP/authorize', {})
+  assert.equal(admitted.status, 200)
+  const pendingUrl = admitted.body.authorizationUrl
+  const attacker = await browser.newPage()
+  const callbackPath = '/preview/api/mcp/oauth/callback'
+  const completePath = '/preview/api/mcp/oauth/complete'
+  try {
+    for (const foreign of [false, true]) {
+      const authorizationUrl = new URL(pendingUrl)
+      if (foreign) authorizationUrl.searchParams.set('state', 'foreign-flow-state')
+      await attacker.goto(authorizationUrl.href)
+      await attacker.waitForSelector('#consent')
+      if (!foreign) await attacker.$eval('#consent', anchor => {
+        const target = new URL(anchor.href)
+        target.searchParams.set('code', 'forged-code')
+        target.searchParams.set('state', 'forged-state')
+        anchor.href = target.href
+      })
+      const before = (await pageApi(page, 'setup/authorizations')).body.servers[0]
+      const exchanges = peer.state.exchanges, asRequests = peer.state.asHeaders.length, offset = records.length
+      const complete = attacker.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === completePath)
+      await Promise.all([attacker.waitForNavigation({ waitUntil: 'domcontentloaded' }), attacker.click('#consent')])
+      assert.equal((await complete).status(), 400, 'forged or foreign state fails the first-party completion POST')
+      await until(async () => await attacker.title() === 'Authorization not completed', 'invalid callback rejected')
+      assert.equal(peer.state.exchanges, exchanges)
+      assert.equal(peer.state.asHeaders.length, asRequests, 'invalid state never reaches an AS token exchange')
+      assert.deepEqual((await pageApi(page, 'setup/authorizations')).body.servers[0], before)
+      assert(records.slice(offset).some(record => record.path === callbackPath && record.method === 'GET' && record.site === 'cross-site' && record.cookie))
+      assert(records.slice(offset).some(record => record.path === completePath && record.method === 'POST' && record.site === 'same-origin' && record.cookie))
+    }
+
+    // The original pending flow still works. Pause its POST to observe the GET alone.
+    await attacker.goto(pendingUrl); await attacker.waitForSelector('#consent')
+    const before = (await pageApi(page, 'setup/authorizations')).body.servers[0]
+    const exchanges = peer.state.exchanges, asRequests = peer.state.asHeaders.length
+    await attacker.setRequestInterception(true)
+    const isComplete = request => request.method() === 'POST' && new URL(request.url()).pathname === completePath
+    const complete = attacker.waitForRequest(isComplete)
+    attacker.on('request', request => {
+      if (!isComplete(request)) void request.continue()
+    })
+    await Promise.all([attacker.waitForNavigation({ waitUntil: 'domcontentloaded' }), attacker.click('#consent')])
+    const held = await complete
+    assert.equal(peer.state.exchanges, exchanges)
+    assert.equal(peer.state.asHeaders.length, asRequests, 'even a valid callback GET performs no AS request')
+    assert.deepEqual((await pageApi(page, 'setup/authorizations')).body.servers[0], before, 'GET does not consume or authorize the pending flow')
+    await held.continue()
+    await until(async () => await attacker.title() === 'Authorization complete', 'valid callback completed after POST')
+    assert.equal(peer.state.exchanges, exchanges + 1)
+    await attacker.setRequestInterception(false)
+    attacker.removeAllListeners('request')
+
+    // Browser cookies grant no inbound MCP principal; outbound initiation is POST-only.
+    for (const [path, status] of [['mcp', 401], ['api/setup/authorizations/Fixture%20MCP/authorize', 405]]) {
+      await attacker.goto(pendingUrl); await attacker.waitForSelector('#consent')
+      await attacker.$eval('#consent', (anchor, href) => { anchor.href = href }, new URL(path, url).href)
+      const offset = records.length
+      const [response] = await Promise.all([attacker.waitForNavigation(), attacker.click('#consent')])
+      assert.equal(response.status(), status)
+      assert(records.slice(offset).some(record => record.method === 'GET' && record.site === 'cross-site' && record.cookie))
+      assert.equal(peer.state.exchanges, exchanges + 1)
+    }
+  } finally { await attacker.close() }
+}
 const fn = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
 async function toolTurn(owner, calls) {
   const key = 'OAUTH-TURN-' + (++serial); scripts.set(key, calls)
@@ -193,6 +259,7 @@ try {
     assert.equal(new URL(standalone.url()).search, ''); assert.equal(new URL(standalone.url()).pathname, '/preview/api/mcp/oauth/callback')
     assert.equal(await standalone.$eval('#home', element => element.href), url.replace(/\/$/, ''))
     await standalone.close()
+    await callbackSecurity(page)
     console.log(JSON.stringify({ browser: browserName, originalApp: true, dcr: true, cimd: true, preregistered: true, standalone: true }))
     await browser.close(); browser = null
   }
