@@ -480,7 +480,7 @@ internal sealed partial class SessionManager
                     )
         );
 
-    internal string? AgentDefaultNode(string agent) => agents.DefaultNode(agent);
+    internal string? AgentDefaultNode(string agent) => agents.EffectiveDefaultNode(agent);
 
     internal string? AgentDefaultCwd(string agent) => agents.DefaultCwd(agent);
 

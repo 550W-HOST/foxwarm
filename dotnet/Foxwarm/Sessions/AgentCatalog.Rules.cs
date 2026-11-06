@@ -19,6 +19,15 @@ internal sealed partial class AgentCatalog
         return node;
     }
 
+    /// <summary>Installation `agentDefaultNode`, already validated by app configuration.</summary>
+    internal string? InstallDefaultNode => installDefaultNode();
+
+    /// <summary>
+    /// Placement default for new Sessions: the Agent's own `defaultNode`, else the installation
+    /// default. Stored metadata and API views keep only the Agent's own value.
+    /// </summary>
+    internal string? EffectiveDefaultNode(string name) => DefaultNode(name) ?? InstallDefaultNode;
+
     internal string? DefaultCwd(string name)
     {
         var value = MetadataSnapshot()[name]?["defaultCwd"];
@@ -33,10 +42,11 @@ internal sealed partial class AgentCatalog
 
     /// <summary>
     /// Working directory for a new Session of this Agent, applied only when the Session
-    /// starts on the Node the directory belongs to: the default Node, or master when unset.
+    /// starts on the Node the directory belongs to: the effective default Node, or master when unset.
     /// </summary>
     internal string? DefaultCwdFor(string name, string? node) =>
-        DefaultCwd(name) is { } cwd && (node ?? "master") == (DefaultNode(name) ?? "master")
+        DefaultCwd(name) is { } cwd
+        && (node ?? "master") == (EffectiveDefaultNode(name) ?? "master")
             ? cwd
             : null;
 

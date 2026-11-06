@@ -14,6 +14,7 @@ internal sealed partial class AgentCatalog
     private readonly SemaphoreSlim createGate = new(1, 1);
     private readonly object stateGate = new();
     private readonly Func<(int MaxDepth, int MaxChildren)> treeLimits;
+    private readonly Func<string?> installDefaultNode;
     private readonly Action<AtomicJsonWriteStage>? metadataWriteStage;
     private JsonObject metadata = new();
     private readonly HashSet<string> known = new(StringComparer.Ordinal) { "main" };
@@ -25,10 +26,12 @@ internal sealed partial class AgentCatalog
         bool canonicalLayout = false,
         bool createDirectories = true,
         Func<(int MaxDepth, int MaxChildren)>? treeLimits = null,
-        Action<AtomicJsonWriteStage>? metadataWriteStage = null
+        Action<AtomicJsonWriteStage>? metadataWriteStage = null,
+        Func<string?>? installDefaultNode = null
     )
     {
         this.treeLimits = treeLimits ?? (() => (16, 128));
+        this.installDefaultNode = installDefaultNode ?? (() => null);
         this.metadataWriteStage = metadataWriteStage;
         this.workspaceRoot = Path.GetFullPath(workspaceRoot);
         this.canonicalLayout = canonicalLayout;

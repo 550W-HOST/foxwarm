@@ -71,6 +71,12 @@ export function parseWebUiNodeTargets(payload: unknown): WebUiNodeTarget[] {
   return [...byId.values()]
 }
 
+/** Installation `agentDefaultNode` reported beside the Node directory, or null. */
+export function parseAgentDefaultNode(payload: unknown): string | null {
+  const value = payload && typeof payload === 'object' ? (payload as { agentDefaultNode?: unknown }).agentDefaultNode : null
+  return normalizeNodeId(value, '') || null
+}
+
 export function preserveSelectedNodeTarget(nodes: readonly WebUiNodeTarget[], selectedNodeId: string): WebUiNodeTarget[] {
   const normalizedId = normalizeNodeId(selectedNodeId)
   if (nodes.some(node => node.id === normalizedId)) return [...nodes]

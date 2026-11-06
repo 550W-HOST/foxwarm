@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { API_BASE_PATH } from './config'
-import { parseWebUiNodeTargets, type WebUiNodeTarget } from './nodeTargets'
+import { parseAgentDefaultNode, parseWebUiNodeTargets, type WebUiNodeTarget } from './nodeTargets'
 
 /** Directory/status only; pending approvals and setup credentials have separate owners. */
 export function useNodeDirectory() {
   const [nodes, setNodes] = useState<WebUiNodeTarget[]>(() => parseWebUiNodeTargets({ nodes: [] }))
+  const [agentDefaultNode, setAgentDefaultNode] = useState<string | null>(null)
   const [error, setError] = useState('')
   const requestRef = useRef<AbortController | null>(null)
   const reload = useCallback(async () => {
@@ -18,6 +19,7 @@ export function useNodeDirectory() {
       if (!response.ok) throw new Error(payload.error || 'Could not load Nodes.')
       if (requestRef.current === request) {
         setNodes(parseWebUiNodeTargets(payload))
+        setAgentDefaultNode(parseAgentDefaultNode(payload))
         setError('')
       }
     } catch (error) {
@@ -45,5 +47,5 @@ export function useNodeDirectory() {
     }
   }, [reload])
 
-  return { nodes, error, reload }
+  return { nodes, agentDefaultNode, error, reload }
 }

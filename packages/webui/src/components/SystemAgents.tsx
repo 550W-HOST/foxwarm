@@ -69,10 +69,11 @@ export function AgentRegistryCard({ agent, usage, selected, onSelect }: { agent:
   )
 }
 
-export function AgentRegistryInspector({ agent, allAgents, nodes, memoryFiles, memoryLoading, memoryError, onOpenMemory, onSave, onDelete }: {
+export function AgentRegistryInspector({ agent, allAgents, nodes, installDefaultNode = null, memoryFiles, memoryLoading, memoryError, onOpenMemory, onSave, onDelete }: {
   agent: AgentRegistryEntry | null
   allAgents: AgentRegistryEntry[]
   nodes: WebUiNodeTarget[]
+  installDefaultNode?: string | null
   memoryFiles: AgentMemoryFile[]
   memoryLoading: boolean
   memoryError: string
@@ -127,6 +128,7 @@ export function AgentRegistryInspector({ agent, allAgents, nodes, memoryFiles, m
           agentId={agent.id}
           agents={allAgents}
           nodes={nodes}
+          installDefaultNode={installDefaultNode}
           disabled={saving}
           inheritanceChain={<div className="mt-2 flex flex-wrap items-center gap-1 text-xs text-fw-text-muted">{agent.inheritanceChain.map((item, index) => <span key={item} className="inline-flex items-center gap-1"><span className={`rounded px-1.5 py-0.5 ${item === agent.id ? 'bg-fw-accent-surface text-fw-accent dark:bg-fw-accent-surface-strong/40 dark:text-fw-accent' : 'bg-fw-neutral-surface dark:bg-fw-surface-raised'}`}>{item}</span>{index < agent.inheritanceChain.length - 1 ? <ChevronRight className="h-3 w-3" /> : null}</span>)}</div>}
         />

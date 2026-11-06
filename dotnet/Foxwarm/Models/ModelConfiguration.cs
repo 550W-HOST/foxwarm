@@ -144,9 +144,11 @@ internal sealed partial class ModelConfiguration
     internal JsonObject AppConfiguration => (JsonObject)app.DeepClone();
     internal bool HandoffConfirmationEnabled { get; }
     private volatile bool sessionAutoTitle;
+    private volatile string? agentDefaultNode;
 
     // Applied live by Setup Config saves; hand edits apply at startup.
     internal bool SessionAutoTitleEnabled => sessionAutoTitle;
+    internal string? AgentDefaultNode => agentDefaultNode;
     internal string ProviderImageOutputFormat { get; }
     public double MaxOutput { get; }
     public double CompactKeep { get; }
@@ -168,6 +170,7 @@ internal sealed partial class ModelConfiguration
         Access = new(app);
         HandoffConfirmationEnabled = Foxwarm.Tools.HandoffConfirmation.Enabled(app);
         sessionAutoTitle = AppConfigurationRules.SessionAutoTitle(app);
+        agentDefaultNode = AppConfigurationRules.AgentDefaultNode(app);
         var llm = app["llm"] as JsonObject;
         MaxOutput = HostModels.PositiveSetting(llm?["maxOutput"], 32768, "llm.maxOutput");
         var imageOutput = llm?["providerImageOutputFormat"];

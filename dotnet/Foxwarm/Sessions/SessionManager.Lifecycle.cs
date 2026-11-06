@@ -155,7 +155,9 @@ internal sealed partial class SessionManager
                     if (original.AuthorityEnvelope.ContainsKey(field))
                         envelope[field] = original.AuthorityEnvelope[field]?.DeepClone();
                 var selectedNode =
-                    BoundNode(parent.Agent) ?? initialNode ?? agents.DefaultNode(parent.Agent);
+                    BoundNode(parent.Agent)
+                    ?? initialNode
+                    ?? agents.EffectiveDefaultNode(parent.Agent);
                 if (selectedNode is not null)
                 {
                     envelope["currentNode"] = selectedNode;

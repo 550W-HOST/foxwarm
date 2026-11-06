@@ -29,13 +29,14 @@ export function buildAgentCreationBody(agentId: string, settings?: Partial<Agent
 
 /**
  * Where a new Session of this Agent starts according to its saved settings: the isolation
- * Node, else the default Node (Main when unset). The working directory applies only on the
- * default Node. Null when the Agent has no placement settings.
+ * Node, else the default Node, else the installation default (Main when neither is set). The
+ * working directory applies only on that default Node. Null when nothing chooses placement.
  */
-export function agentStartLocation(agent: AgentSummary | undefined): { node: string; cwd: string | null } | null {
-  if (!agent || !(agent.isolatedNode || agent.defaultNode || agent.defaultCwd)) return null
-  const node = agent.isolatedNode || agent.defaultNode || 'master'
-  return { node, cwd: agent.defaultCwd && node === (agent.defaultNode || 'master') ? agent.defaultCwd : null }
+export function agentStartLocation(agent: AgentSummary | undefined, installDefaultNode: string | null = null): { node: string; cwd: string | null } | null {
+  const defaultNode = agent?.defaultNode || installDefaultNode
+  if (!agent || !(agent.isolatedNode || defaultNode || agent.defaultCwd)) return null
+  const node = agent.isolatedNode || defaultNode || 'master'
+  return { node, cwd: agent.defaultCwd && node === (defaultNode || 'master') ? agent.defaultCwd : null }
 }
 
 export const RANDOM_SESSION_ID_PLACEHOLDER = 'Random ID (for example, 0712_ab123)'

@@ -123,6 +123,7 @@ internal sealed partial class SessionManager
                     null,
                     initialNode: initialNode
                         ?? defaultNode
+                        ?? agents.InstallDefaultNode
                         ?? (sourceSession is null ? null : CurrentNode(sourceSession)),
                     childDefaults: (
                         SessionWait.Text(source?["childModelDefault"]),
@@ -205,7 +206,7 @@ internal sealed partial class SessionManager
                     null,
                     null,
                     exactId: id,
-                    initialNode: agents.DefaultNode(SessionIdentity.Agent(id)) ?? "master"
+                    initialNode: agents.EffectiveDefaultNode(SessionIdentity.Agent(id)) ?? "master"
                 );
         }
         finally
@@ -397,7 +398,7 @@ internal sealed partial class SessionManager
                     candidate,
                     targetAgent == parent.Agent ? AgentMemory.Selection(parentEnvelope) : null,
                     initialNode: initialNode
-                        ?? agents.DefaultNode(targetAgent)
+                        ?? agents.EffectiveDefaultNode(targetAgent)
                         ?? CurrentNode(parent),
                     runtime: runtime
                 );
@@ -678,8 +679,8 @@ internal sealed partial class SessionManager
             BoundNode(agentName)
             ?? (
                 timerCreation
-                    ? agents.DefaultNode(agentName) ?? timerNode
-                    : initialNode ?? agents.DefaultNode(agentName)
+                    ? agents.EffectiveDefaultNode(agentName) ?? timerNode
+                    : initialNode ?? agents.EffectiveDefaultNode(agentName)
             );
         if (selectedNode is null && agentName != "main")
         {

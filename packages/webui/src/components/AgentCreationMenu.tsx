@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import { ChevronDown, Plus, X } from 'lucide-react'
 import { makeApiUrl } from '../config'
 import { RANDOM_SESSION_ID_PLACEHOLDER, agentStartLocation, validateAgentId, validateSessionId, type AgentSettingsChanges, type AgentSummary } from '../agentCreation'
-import { parseWebUiNodeTargets, type WebUiNodeTarget } from '../nodeTargets'
+import { parseAgentDefaultNode, parseWebUiNodeTargets, type WebUiNodeTarget } from '../nodeTargets'
 import AgentSettingsFields, { EMPTY_AGENT_SETTINGS, agentSettingsChanges, nodeDisplayName, type AgentSettingsDraft } from './AgentSettingsFields'
 
 type CreationMode = 'agent' | 'session'
@@ -49,6 +49,7 @@ export default function AgentCreationMenu({
   const [agentId, setAgentId] = useState('')
   const [agentSettings, setAgentSettings] = useState<AgentSettingsDraft>(EMPTY_AGENT_SETTINGS)
   const [nodes, setNodes] = useState<WebUiNodeTarget[]>(() => parseWebUiNodeTargets({ nodes: [] }))
+  const [installDefaultNode, setInstallDefaultNode] = useState<string | null>(null)
   const [sessionAgent, setSessionAgent] = useState('')
   const [sessionId, setSessionId] = useState('')
   const [runtime, setRuntime] = useState<'foxwarm' | 'claude-code'>('foxwarm')
@@ -101,7 +102,11 @@ export default function AgentCreationMenu({
     const controller = new AbortController()
     void fetch(makeApiUrl('/nodes'), { signal: controller.signal })
       .then(response => response.ok ? response.json() : null)
-      .then(payload => { if (payload && !controller.signal.aborted) setNodes(parseWebUiNodeTargets(payload)) })
+      .then(payload => {
+        if (!payload || controller.signal.aborted) return
+        setNodes(parseWebUiNodeTargets(payload))
+        setInstallDefaultNode(parseAgentDefaultNode(payload))
+      })
       .catch(() => {})
     return () => controller.abort()
   }, [open])
@@ -225,7 +230,7 @@ export default function AgentCreationMenu({
     }
   }
 
-  const startLocation = mode === 'session' ? agentStartLocation(agents.find(agent => agent.id === sessionAgent)) : null
+  const startLocation = mode === 'session' ? agentStartLocation(agents.find(agent => agent.id === sessionAgent), installDefaultNode) : null
 
   return (
     <div className="relative flex">
@@ -278,7 +283,7 @@ export default function AgentCreationMenu({
                   <input ref={agentIdInputRef} value={agentId} onChange={event => setAgentId(event.target.value)} autoComplete="off" placeholder="my-agent" className="mt-1 w-full rounded-lg border border-fw-border-strong bg-fw-surface px-3 py-2 text-fw-text-strong outline-none focus:border-fw-accent-border focus:ring-2 focus:ring-fw-focus-ring/20 dark:border-fw-border-strong dark:bg-fw-canvas dark:text-fw-text-strong" />
                   <span className="mt-1 block text-xs font-normal text-fw-text-muted">Letters, numbers, hyphens, and underscores.</span>
                 </label>
-                <AgentSettingsFields value={agentSettings} onChange={setAgentSettings} agentId={agentId} agents={agents} nodes={nodes} disabled={loading} isolationCollapsed />
+                <AgentSettingsFields value={agentSettings} onChange={setAgentSettings} agentId={agentId} agents={agents} nodes={nodes} installDefaultNode={installDefaultNode} disabled={loading} isolationCollapsed />
               </div>
             ) : (
               <div className="space-y-4">

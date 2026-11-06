@@ -94,6 +94,10 @@ test('agent/session creation helpers keep an empty session ID random', async () 
   assert.deepEqual(agentStartLocation({ id: 'node', defaultNode: 'box', defaultCwd: '/w' }), { node: 'box', cwd: '/w' })
   assert.deepEqual(agentStartLocation({ id: 'iso', isolatedNode: 'other', defaultNode: 'box', defaultCwd: '/w' }), { node: 'other', cwd: null })
   assert.deepEqual(agentStartLocation({ id: 'iso-linked', isolatedNode: 'box', defaultNode: 'box', defaultCwd: '/w' }), { node: 'box', cwd: '/w' })
+  // The installation default applies only when the Agent sets no default Node.
+  assert.deepEqual(agentStartLocation({ id: 'none' }, 'box'), { node: 'box', cwd: null })
+  assert.deepEqual(agentStartLocation({ id: 'cwd', defaultCwd: '/w' }, 'box'), { node: 'box', cwd: '/w' })
+  assert.deepEqual(agentStartLocation({ id: 'own', defaultNode: 'master', defaultCwd: '/w' }, 'box'), { node: 'master', cwd: '/w' })
 })
 
 test('workbench normalization ignores and removes legacy tab pinned state', async () => {

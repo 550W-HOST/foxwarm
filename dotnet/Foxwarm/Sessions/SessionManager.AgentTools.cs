@@ -231,7 +231,7 @@ internal sealed partial class SessionManager
                             initialModel: SessionWait.Text(
                                 source.Entry.Snapshot().AuthorityEnvelope["model"]
                             ),
-                            initialNode: defaultNode ?? CurrentNode(source),
+                            initialNode: defaultNode ?? agents.InstallDefaultNode ?? CurrentNode(source),
                             inheritMemory: copyMemory,
                             creator: source,
                             rules: localRules,
@@ -332,7 +332,7 @@ internal sealed partial class SessionManager
                         OptionalString(args, "displayName"),
                         forceModel,
                         initialNode: CreationNode(args)
-                            ?? agents.DefaultNode(agentName)
+                            ?? agents.EffectiveDefaultNode(agentName)
                             ?? CurrentNode(source),
                         inherited: (
                             SessionWait.Text(settings["childModelDefault"])

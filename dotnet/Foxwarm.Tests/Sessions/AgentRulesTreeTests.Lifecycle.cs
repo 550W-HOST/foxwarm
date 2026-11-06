@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json.Nodes;
+using Foxwarm.Models;
 using Foxwarm.Sessions;
 using Foxwarm.Tools;
 
@@ -481,6 +482,104 @@ public sealed partial class AgentRulesTreeTests
         var fallback = await f.Manager.CreateNamedAsync("workspace", "fallback", null, null);
         Assert.Equal(("dev-offline", (string?)null), f.Manager.ExecutionPlacement(fallback));
         Assert.Equal(("dev-offline", Repo), f.Manager.ExecutionPlacement(main));
+    }
+
+    [Fact]
+    public async Task Installation_default_Node_places_Agents_without_their_own_default()
+    {
+        await using var f = await Fixture();
+        string Node(SessionOwner owner) => f.Manager.CurrentNode(owner);
+        Successful(
+            await f.ToolAsync(
+                "create_agent",
+                new JsonObject { ["agentName"] = "legacy", ["defaultNode"] = "legacy-offline" }
+            )
+        );
+        var legacyMain = await f.Manager.RequiredAsync("legacy/main");
+        await f.Manager.SetAgentDefaultPlacementAsync("legacy", true, null, false, null);
+        var before = await f.Manager.CreateNamedAsync("legacy", "before", null, null);
+        Assert.Equal("legacy-offline", Node(before));
+
+        var saved = await f.Configuration.SaveAppAsync("agentDefaultNode: install-offline\n");
+        Assert.Contains("agentDefaultNode", saved["applied"]!.AsArray().Select(v => v!.ToString()));
+        Assert.DoesNotContain(
+            "agentDefaultNode",
+            saved["restartRequired"]!.AsArray().Select(v => v!.ToString())
+        );
+        // Existing selections stay; it outranks the main-Session and caller Node fallbacks.
+        Assert.Equal("legacy-offline", Node(legacyMain));
+        Assert.Equal(
+            "install-offline",
+            Node(await f.Manager.CreateNamedAsync("legacy", "after", null, null))
+        );
+        Assert.Equal("master", Node(f.Owner));
+        Successful(
+            await f.ToolAsync("create_agent", new JsonObject { ["agentName"] = "plain" })
+        );
+        var plain = await f.Manager.RequiredAsync("plain/main");
+        Assert.Equal("install-offline", Node(plain));
+        Assert.Null(f.Manager.AgentMetadata["plain"]?["defaultNode"]);
+        Assert.Equal("install-offline", Node(await f.Manager.ForkAsync(f.Owner, "fork")));
+        // A cross-Agent child of a master caller uses the target's installation default.
+        Successful(
+            await f.ToolAsync(
+                "create_child_session",
+                new JsonObject { ["suffix"] = "child", ["agentName"] = "plain" }
+            )
+        );
+        Assert.Equal("install-offline", Node(await f.Manager.RequiredAsync("plain/child")));
+        await f.Manager.SetAgentDefaultPlacementAsync("plain", false, null, true, "/srv/plain");
+        Assert.Equal(
+            ("install-offline", "/srv/plain"),
+            f.Manager.ExecutionPlacement(
+                await f.Manager.CreateNamedAsync("plain", "cwd", null, null)
+            )
+        );
+
+        // An Agent's own default, including explicit master, and explicit selection win.
+        Successful(
+            await f.ToolAsync(
+                "create_agent",
+                new JsonObject { ["agentName"] = "own", ["defaultNode"] = "own-offline" }
+            )
+        );
+        Assert.Equal("own-offline", Node(await f.Manager.RequiredAsync("own/main")));
+        await f.Manager.SetAgentDefaultPlacementAsync("own", true, "master", true, "/srv/own");
+        Assert.Equal(
+            ("master", "/srv/own"),
+            f.Manager.ExecutionPlacement(await f.Manager.CreateNamedAsync("own", "m", null, null))
+        );
+        Assert.Equal(
+            "explicit-offline",
+            Node(
+                await f.Manager.CreateNamedAsync(
+                    "plain",
+                    "explicit",
+                    null,
+                    null,
+                    initialNode: "explicit-offline"
+                )
+            )
+        );
+
+        // Clearing it restores the previous fallbacks.
+        await f.Configuration.SaveAppAsync("bot:\n  name: fox\n");
+        Assert.Equal(
+            "legacy-offline",
+            Node(await f.Manager.CreateNamedAsync("legacy", "cleared", null, null))
+        );
+    }
+
+    [Theory]
+    [InlineData("agentDefaultNode: [a]\n")]
+    [InlineData("agentDefaultNode: bad node\n")]
+    public void Invalid_installation_default_Node_is_rejected(string yaml)
+    {
+        using var temp = new TempDirectory();
+        Directory.CreateDirectory(Path.Combine(temp.Path, "state"));
+        File.WriteAllText(Path.Combine(temp.Path, "state", "config.yaml"), yaml);
+        var error = Assert.Throws<InvalidDataException>(() => new ModelConfiguration(temp.Path));
+        Assert.Contains("agentDefaultNode", error.Message);
     }
 
     [Fact]
