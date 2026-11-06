@@ -164,7 +164,8 @@ internal static class ArchiveLexicalRecall
     internal static IReadOnlyList<JsonObject> Search(
         SqliteArchiveMessageStore archive,
         string query,
-        int limit
+        int limit,
+        VectorSearchOptions? options = null
     )
     {
         var locators = Locators(query);
@@ -185,7 +186,9 @@ internal static class ArchiveLexicalRecall
                         branch.MaxMessageSeq,
                         2000,
                         descending: true,
-                        substantiveWindow: true
+                        substantiveWindow: true,
+                        startTime: options?.StartTime,
+                        endTime: options?.EndTime
                     )
                     .Where(row =>
                         locators.Any(locator =>
@@ -219,7 +222,14 @@ internal static class ArchiveLexicalRecall
                         )
                     );
                 var blocks = local
-                    .ReadBlocksNumericRange(null, branch.MaxBlockId, 1000, descending: true)
+                    .ReadBlocksNumericRange(
+                        null,
+                        branch.MaxBlockId,
+                        1000,
+                        descending: true,
+                        startTime: options?.StartTime,
+                        endTime: options?.EndTime
+                    )
                     .Where(block =>
                         locators.Any(locator =>
                             locator.Value.All(character => character <= 127)
@@ -306,6 +316,13 @@ internal static class ArchiveLexicalRecall
             .ThenBy(row => Text(row["source_family"]), StringComparer.InvariantCulture)
             .DistinctBy(row => Text(row["source_family"]))
             .Take(Math.Clamp(limit, 1, 40))
+            .Select(
+                (row, rank) =>
+                {
+                    row["lexical_rank"] = rank;
+                    return row;
+                }
+            )
             .ToArray();
     }
 }

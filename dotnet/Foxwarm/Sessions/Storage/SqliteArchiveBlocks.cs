@@ -373,7 +373,9 @@ public sealed partial class SqliteArchiveMessageStore
         double? first,
         double? last,
         int? limit = null,
-        bool descending = false
+        bool descending = false,
+        long? startTime = null,
+        long? endTime = null
     )
     {
         if (!File.Exists(databasePath))
@@ -381,8 +383,34 @@ public sealed partial class SqliteArchiveMessageStore
         using var connection = OpenExistingReadOnly();
         var canonical = ResolveReadOnly(connection, sessionId);
         using var command = connection.CreateCommand();
+        var timeFilter = "";
+        if (startTime is not null || endTime is not null)
+        {
+            // Legacy blocks may omit their source timestamps. Resolve endpoints within
+            // the same effective lineage as Archive reads, before the block row limit.
+            var branches = VectorLineage();
+            var scopes = new List<string>();
+            for (var index = 0; index < branches.Count; index++)
+            {
+                var branch = branches[index];
+                command.Parameters.AddWithValue("$timeSession" + index, branch.SessionId);
+                command.Parameters.AddWithValue(
+                    "$timeCap" + index,
+                    (object?)branch.MaxMessageSeq ?? DBNull.Value
+                );
+                scopes.Add(
+                    $"(m.session_id=$timeSession{index} AND ($timeCap{index} IS NULL OR m.seq<=$timeCap{index}))"
+                );
+            }
+            string Endpoint(string column, string sequence) =>
+                $"coalesce({column},(SELECT m.timestamp FROM archive_messages m WHERE m.seq=archive_blocks.{sequence} AND ({string.Join(" OR ", scopes)} ) LIMIT 1))";
+            timeFilter =
+                $" AND ($startTime IS NULL OR {Endpoint("raw_end_timestamp", "raw_end_seq")} >= $startTime) AND ($endTime IS NULL OR {Endpoint("raw_start_timestamp", "raw_start_seq")} < $endTime)";
+            command.Parameters.AddWithValue("$startTime", (object?)startTime ?? DBNull.Value);
+            command.Parameters.AddWithValue("$endTime", (object?)endTime ?? DBNull.Value);
+        }
         command.CommandText =
-            $"SELECT agent,id,level,source_kind,source_start,source_end,source_block_ids_json,raw_start_seq,raw_end_seq,raw_start_timestamp,raw_end_timestamp,summary,memory_facts_json,created_at,{(HasFrictionColumn(connection) ? "friction_score" : "NULL")} FROM archive_blocks WHERE session_id=$session AND ($first IS NULL OR id >= $first) AND ($last IS NULL OR id <= $last) ORDER BY id {(descending ? "DESC" : "ASC")}";
+            $"SELECT agent,id,level,source_kind,source_start,source_end,source_block_ids_json,raw_start_seq,raw_end_seq,raw_start_timestamp,raw_end_timestamp,summary,memory_facts_json,created_at,{(HasFrictionColumn(connection) ? "friction_score" : "NULL")} FROM archive_blocks WHERE session_id=$session AND ($first IS NULL OR id >= $first) AND ($last IS NULL OR id <= $last){timeFilter} ORDER BY id {(descending ? "DESC" : "ASC")}";
         if (limit is { } boundedLimit)
         {
             command.CommandText += " LIMIT $limit";

@@ -9,7 +9,8 @@ internal sealed record StructuredVectorRecall(
     JsonArray Sources,
     string SearchLabel,
     int HitCount,
-    IReadOnlyList<string> Notices
+    IReadOnlyList<string> Notices,
+    IReadOnlyList<JsonObject>? Candidates = null
 );
 
 internal static class VectorRecall
@@ -46,31 +47,6 @@ internal static class VectorRecall
             : null;
     }
 
-    private static ArchiveBlockRecord HydrateBlock(
-        SqliteArchiveMessageStore archive,
-        ArchiveBlockRecord block
-    )
-    {
-        if (block.RawStartTimestamp is not null && block.RawEndTimestamp is not null)
-            return block;
-        var first = archive
-            .ReadEffectiveMessagesPage(block.RawStartSeq, block.RawStartSeq, 1)
-            .FirstOrDefault()
-            ?.Timestamp;
-        var last =
-            block.RawStartSeq == block.RawEndSeq
-                ? first
-                : archive
-                    .ReadEffectiveMessagesPage(block.RawEndSeq, block.RawEndSeq, 1)
-                    .FirstOrDefault()
-                    ?.Timestamp;
-        return block with
-        {
-            RawStartTimestamp = block.RawStartTimestamp ?? first,
-            RawEndTimestamp = block.RawEndTimestamp ?? last,
-        };
-    }
-
     private static JsonObject MessageSource(ArchiveMessageRecord record)
     {
         var message = (JsonObject)record.Message.DeepClone();
@@ -78,8 +54,7 @@ internal static class VectorRecall
         if (message["__meta"] is null)
             message["__meta"] = meta;
         meta["seq"] = record.Seq;
-        if (SessionWait.Number(meta["timestamp"]) is null or 0)
-            meta["timestamp"] = record.Timestamp;
+        meta["timestamp"] = record.Timestamp;
         meta["contextArchiveItem"] = new JsonObject { ["kind"] = "message", ["seq"] = record.Seq };
         return message;
     }
@@ -107,12 +82,12 @@ internal static class VectorRecall
         bool preferBlocks = false,
         bool bounded = false,
         Action<JsonObject>? fallbackWarning = null,
-        Func<string, bool>? sourceAllowed = null
+        Func<string, bool>? sourceAllowed = null,
+        bool filterSources = false
     )
     {
         if (Trim(query).Length == 0)
             throw new InvalidDataException("Search query must be non-empty.");
-        var renderer = new ContextPreviewRenderer(filters ?? new(), 1000);
         var candidateLimit = Math.Max(limit * 4, 20);
         var detailed = await vector.SearchAsync(
             query,
@@ -140,21 +115,69 @@ internal static class VectorRecall
                 var lexical = ArchiveLexicalRecall.Search(
                     archiveReader(resolvedSessionId),
                     query,
-                    candidateLimit
+                    candidateLimit,
+                    options
                 );
                 hits = VectorRuntime.Fuse(hits, lexical, candidateLimit);
                 fallbackUsed = lexical.Count > 0;
             }
             catch { }
         }
+        var hybridUsed = detailed.Lexical["used"]?.GetValue<bool>() == true;
+        var labelText = hybridUsed
+            ? fallbackUsed
+                ? "hybrid search with bounded identifier fallback"
+                : "hybrid search"
+            : fallbackUsed
+                ? "semantic search with bounded identifier fallback"
+                : "vector search";
+        var selected = Reload(
+            archiveReader,
+            hits,
+            query,
+            bounded ? limit : candidateLimit,
+            options,
+            resolvedSessionId,
+            filters,
+            bounded,
+            fallbackWarning,
+            sourceAllowed,
+            filterSources
+        );
+        return selected with { SearchLabel = labelText };
+    }
+
+    internal static StructuredVectorRecall Reload(
+        Func<string, SqliteArchiveMessageStore> archiveReader,
+        IReadOnlyList<JsonObject> hits,
+        string query,
+        int limit,
+        VectorSearchOptions options,
+        string? resolvedSessionId,
+        JsonObject? filters = null,
+        bool bounded = false,
+        Action<JsonObject>? fallbackWarning = null,
+        Func<string, bool>? sourceAllowed = null,
+        bool filterSources = false,
+        bool strict = false
+    )
+    {
+        var renderer = new ContextPreviewRenderer(filters ?? new(), 1000);
         var items = new List<PreviewItem>();
         var sources = new JsonArray();
+        var candidates = new List<JsonObject>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var hit in hits)
         {
             var sourceId = Text(hit["session_id"]);
             if (sourceId.Length == 0 || sourceAllowed is not null && !sourceAllowed(sourceId))
+            {
+                if (strict)
+                    throw new InvalidDataException(
+                        "A recalled source is no longer accessible; start a new search."
+                    );
                 continue;
+            }
             var readId = bounded && resolvedSessionId is not null ? resolvedSessionId : sourceId;
             var archive = archiveReader(readId);
             var kind = Text(hit["kind"]);
@@ -175,7 +198,7 @@ internal static class VectorRecall
                     && new ArchiveContextReader(archive).Block((long)number) is { } stored
                 )
                 {
-                    var block = HydrateBlock(archive, stored);
+                    var block = ArchiveContextReader.HydrateBlock(archive, stored);
                     var own = ArchiveContextReader.BlockItem(block, readId);
                     var facts =
                         (hit["matched_facts"] as JsonArray)?.OfType<JsonObject>().Take(3).ToArray()
@@ -249,18 +272,37 @@ internal static class VectorRecall
                 && range is { } rawRange
             )
             {
-                IReadOnlyList<ArchiveMessageRecord> records = bounded
-                    ? []
-                    : archive.ReadEffectiveMessagesRange(rawRange.First, rawRange.Last);
-                var window = bounded
-                    ? VectorRawWindow.Bounded(
-                        archive,
-                        rawRange.First,
-                        rawRange.Last,
-                        query,
-                        Text(hit["chunk_text"])
-                    )
-                    : VectorRawWindow.Select(records, query, Text(hit["chunk_text"]), filters);
+                IReadOnlyList<ArchiveMessageRecord> records =
+                    bounded && !filterSources
+                        ? []
+                        : archive
+                            .ReadEffectiveMessagesRange(rawRange.First, rawRange.Last)
+                            .Where(record =>
+                                (options.StartTime is null || record.Timestamp >= options.StartTime)
+                                && (options.EndTime is null || record.Timestamp < options.EndTime)
+                            )
+                            .ToArray();
+                if (
+                    (options.StartTime is not null || options.EndTime is not null)
+                    && records.Count == 0
+                )
+                {
+                    if (strict)
+                        throw new InvalidDataException(
+                            "A recalled source is no longer available; start a new search."
+                        );
+                    continue;
+                }
+                var window =
+                    bounded && !filterSources
+                        ? VectorRawWindow.Bounded(
+                            archive,
+                            rawRange.First,
+                            rawRange.Last,
+                            query,
+                            Text(hit["chunk_text"])
+                        )
+                        : VectorRawWindow.Select(records, query, Text(hit["chunk_text"]), filters);
                 if (window.Records.Count > 0)
                 {
                     var messageItems = window
@@ -280,7 +322,7 @@ internal static class VectorRecall
                                     + message.Body
                                 )
                         ),
-                        bounded
+                        bounded && !filterSources
                             ? ""
                             : string.Join("\n\n", records.Select(VectorRawWindow.SearchText)),
                         string.Join(
@@ -317,6 +359,10 @@ internal static class VectorRecall
             }
             if (item is null)
             {
+                if (strict)
+                    throw new InvalidDataException(
+                        "A recalled source is no longer available; start a new search."
+                    );
                 try
                 {
                     var warning = new JsonObject
@@ -360,6 +406,7 @@ internal static class VectorRecall
             if (!seen.Add(key))
                 continue;
             items.Add(item);
+            candidates.Add(hit);
             if (bounded)
             {
                 if (source is not null)
@@ -373,22 +420,31 @@ internal static class VectorRecall
                     {
                         ["sessionId"] = Text(source["sessionId"]),
                         ["kind"] = Text(source["kind"]),
-                        ["sourceRange"] = source["sourceRange"]?.DeepClone()
+                        ["sourceRange"] = source["sourceRange"]?.DeepClone(),
                     };
                     sources.Add(source);
                 }
             }
-            if (items.Count >= (bounded ? limit : candidateLimit))
+            if (!filterSources && items.Count >= limit)
                 break;
         }
-        var hybridUsed = detailed.Lexical["used"]?.GetValue<bool>() == true;
-        var labelText = hybridUsed
-            ? fallbackUsed
-                ? "hybrid search with bounded identifier fallback"
-                : "hybrid search"
-            : fallbackUsed
-                ? "semantic search with bounded identifier fallback"
-                : "vector search";
-        return new(items, sources, labelText, hits.Count, []);
+        IReadOnlyList<string> notices = [];
+        if (filterSources)
+        {
+            var filtered = renderer.FilterItems(items);
+            notices = filtered.Notices;
+            var selected = filtered.Items.Take(limit).ToHashSet(ReferenceEqualityComparer.Instance);
+            for (var index = items.Count - 1; index >= 0; index--)
+            {
+                if (selected.Contains(items[index]))
+                    continue;
+                items.RemoveAt(index);
+                candidates.RemoveAt(index);
+                sources.RemoveAt(index);
+            }
+            for (var index = 0; index < sources.Count; index++)
+                sources[index]!["rank"] = index + 1;
+        }
+        return new(items, sources, "", hits.Count, notices, candidates);
     }
 }

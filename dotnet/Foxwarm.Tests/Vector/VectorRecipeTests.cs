@@ -296,9 +296,31 @@ public sealed class VectorRecipeTests
             .ToArray();
         EqualJson(source["rows"], new JsonArray(rows));
         EqualJson(source["blocks"], new JsonArray(VectorRows.Block(block, f.Archive(id))));
+        // Source used compaction creation time here. Source-range timestamps are now
+        // independent metadata; the remaining fact recipe is unchanged.
+        var sourceFacts = source["facts"]!.AsArray();
+        foreach (var fact in sourceFacts)
+        {
+            Assert.Equal(block.CreatedAt, VectorRuntime.Number(fact!["start_timestamp"]));
+            Assert.Equal(block.CreatedAt, VectorRuntime.Number(fact["end_timestamp"]));
+            fact["start_timestamp"] = null;
+            fact["end_timestamp"] = null;
+        }
         EqualJson(
-            source["facts"],
+            sourceFacts,
             new JsonArray(VectorRows.Facts(block).Select(row => (JsonNode?)row).ToArray())
+        );
+        var hydratedFacts = VectorRows.Facts(
+            ArchiveContextReader.HydrateBlock(f.Archive(id), block)
+        );
+        Assert.All(
+            hydratedFacts,
+            fact =>
+            {
+                Assert.Equal(1000, VectorRuntime.Number(fact["start_timestamp"]));
+                Assert.Equal(3000, VectorRuntime.Number(fact["end_timestamp"]));
+                Assert.Equal(block.CreatedAt, VectorRuntime.Number(fact["timestamp"]));
+            }
         );
         for (var index = 0; index < queries.Length; index++)
         {

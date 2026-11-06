@@ -465,7 +465,9 @@ public sealed partial class SqliteArchiveMessageStore
         double? endSeq,
         int? limit = null,
         bool descending = false,
-        bool substantiveWindow = false
+        bool substantiveWindow = false,
+        long? startTime = null,
+        long? endTime = null
     )
     {
         if (!File.Exists(databasePath))
@@ -474,7 +476,7 @@ public sealed partial class SqliteArchiveMessageStore
         var canonical = ResolveReadOnly(connection, sessionId);
         using var command = connection.CreateCommand();
         command.CommandText =
-            $"SELECT agent,seq,timestamp,role,message_json FROM archive_messages WHERE session_id=$session AND ($first IS NULL OR seq >= $first) AND ($last IS NULL OR seq <= $last){(substantiveWindow ? " AND role IN ('user','model') AND coalesce(json_extract(message_json,'$.modelVisible'),1)!=0" : "")} ORDER BY seq {(descending ? "DESC" : "ASC")}";
+            $"SELECT agent,seq,timestamp,role,message_json FROM archive_messages WHERE session_id=$session AND ($first IS NULL OR seq >= $first) AND ($last IS NULL OR seq <= $last){(substantiveWindow ? " AND role IN ('user','model') AND coalesce(json_extract(message_json,'$.modelVisible'),1)!=0" : "")} AND ($startTime IS NULL OR timestamp >= $startTime) AND ($endTime IS NULL OR timestamp < $endTime) ORDER BY seq {(descending ? "DESC" : "ASC")}";
         if (limit is int boundedLimit)
         {
             command.CommandText += " LIMIT $limit";
@@ -483,6 +485,8 @@ public sealed partial class SqliteArchiveMessageStore
         command.Parameters.AddWithValue("$session", canonical);
         command.Parameters.AddWithValue("$first", (object?)startSeq ?? DBNull.Value);
         command.Parameters.AddWithValue("$last", (object?)endSeq ?? DBNull.Value);
+        command.Parameters.AddWithValue("$startTime", (object?)startTime ?? DBNull.Value);
+        command.Parameters.AddWithValue("$endTime", (object?)endTime ?? DBNull.Value);
         using var reader = command.ExecuteReader();
         var records = new List<ArchiveMessageRecord>();
         while (reader.Read())

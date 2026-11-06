@@ -144,6 +144,13 @@ public sealed class VectorTransientRecallTests
             inputPath,
             Path.Combine(f.Temp.Path, "transient-result.json")
         );
+        // Explicit lexical rank is new; candidate order and original metadata retain
+        // the Source contract.
+        for (var index = 0; index < captured.Count; index++)
+        {
+            Assert.Equal(index, captured[index]["lexical_rank"]!.GetValue<int>());
+            captured[index].Remove("lexical_rank");
+        }
         VectorRecipeTests.EqualJson(
             source,
             new JsonArray(captured.Select(hit => (JsonNode?)hit).ToArray())

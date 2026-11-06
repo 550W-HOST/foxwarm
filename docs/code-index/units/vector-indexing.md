@@ -25,6 +25,14 @@ Dense progress lives in Source-compatible `archive_checkpoints`, through the exi
 
 Rename moves scheduler/checkpoint state but deliberately does not rewrite old Lance row identities. Same-Agent scoped retrieval can follow an Archive alias; destination dense searches can miss old rows. No row migration, forced re-embedding, durable fencing or new recovery transaction is implied. The canonical retrieval scope check is owned by [Vector recall](./vector-recall.md).
 
+## Source-time metadata compatibility
+
+Block and modern fact date admission uses the canonical block's source range. New fact producers hydrate source endpoints through effective Archive lineage; `timestamp` retains fact creation time, while `start_timestamp`/`end_timestamp` carry source times. Dense block production shares the same endpoint hydration. Missing block/fact source ranges cannot qualify a dated search, while undated compatibility retrieval remains available. Recorded source timestamps take precedence; absent endpoint rows do not replace a retained known range with creation time.
+
+Before enabling searches, `VectorTable.RepairSourceTimesAsync` repairs existing block and modern fact source columns once. It collects distinct Session/block locators in bounded 128-row reads, then updates every block/fact row at each locator through native scoped metadata updates. Row IDs, text, embeddings, original timestamps and unrelated rows remain unchanged. A field-metadata completion marker is written only after every update succeeds; interrupted work is idempotently retried on reopening, without a separate journal or fact reconstruction. Unknown sources retain their derived rows with unknown source columns and a bounded metadata-only diagnostic. Initialization failure leaves the optional Vector owner unavailable through its existing initialization boundary.
+
+`VectorSourceTimeTests` exercises multiple read batches, multiple facts per block, retained known block ranges without raw endpoint rows, missing sources, content/vector preservation, completed reopen, interruption/retry and initialization failure followed by recovery. No query-time full scan or dense rebuild is needed.
+
 ## SDK and platform boundary
 
 The dependency is exactly `LanceDB` NuGet `2.5.0` (community SDK/native Lance 8.0.0), with Apache Arrow 22.1.0. Its builder/RecordBatch API replaces the Node binding, not the storage engine. New-table format 2.0 is explicit because the bindings' defaults differ. Existing tables remain intact.

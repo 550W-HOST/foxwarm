@@ -26,6 +26,8 @@ internal static class ArchiveSearchSchema
         raw_start_seq INTEGER,
         raw_end_seq INTEGER,
         timestamp INTEGER,
+        start_timestamp INTEGER,
+        end_timestamp INTEGER,
         block_id INTEGER,
         block_level INTEGER,
         index_text TEXT NOT NULL,

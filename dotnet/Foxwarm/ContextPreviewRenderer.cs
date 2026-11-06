@@ -279,18 +279,13 @@ internal sealed partial class ContextPreviewRenderer
         );
     }
 
-    internal string RenderItems(
-        IReadOnlyList<PreviewItem> items,
-        string context,
-        Func<int, string> titleFor,
-        string empty,
-        IReadOnlyList<string>? extraNotices = null,
-        int? maxItems = null,
-        string? runningCallId = null
+    internal (IReadOnlyList<PreviewItem> Items, IReadOnlyList<string> Notices) FilterItems(
+        IReadOnlyList<PreviewItem> items
     )
     {
-        var selected = items.AsEnumerable();
         var notices = new List<string>(warnings);
+        var selected = items.AsEnumerable();
+
         void Filter(Func<PreviewItem, bool> predicate, string label)
         {
             var before = selected.Count();
@@ -320,6 +315,22 @@ internal sealed partial class ContextPreviewRenderer
                 item => !exclude.IsMatch(SearchText(item)),
                 "[filter] excludeRegex excluded {count} additional item(s) that remained after earlier filter stages."
             );
+        return (selected.ToArray(), notices);
+    }
+
+    internal string RenderItems(
+        IReadOnlyList<PreviewItem> items,
+        string context,
+        Func<int, string> titleFor,
+        string empty,
+        IReadOnlyList<string>? extraNotices = null,
+        int? maxItems = null,
+        string? runningCallId = null
+    )
+    {
+        var filtered = FilterItems(items);
+        var selected = filtered.Items;
+        var notices = filtered.Notices.ToList();
         var sourceMatches = (maxItems is { } maximum ? selected.Take(maximum) : selected).ToArray();
         var matched = GroupTools(sourceMatches, runningCallId);
         var example = sourceMatches.FirstOrDefault(item => item.DrillDown is not null)?.DrillDown;

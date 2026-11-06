@@ -48,6 +48,63 @@ internal sealed class VectorTable : IDisposable
             );
     }
 
+    internal async Task RepairSourceTimesAsync(
+        Func<string, long, (double? Start, double? End)> sourceTimes,
+        Action<string>? missingSource = null
+    )
+    {
+        const string marker = "foxwarm.block-source-times";
+        var field = (await table.Schema()).GetFieldByName("start_timestamp");
+        if (field.Metadata?.GetValueOrDefault(marker) == "1")
+            return;
+        // Collect only unique locators before mutation; updating Lance fragments can change
+        // scan order. No text, vectors, or candidate limits participate in this repair.
+        var locators = new HashSet<(string Session, long Block)>();
+        for (var offset = 0; ; offset += 128)
+        {
+            var rows = await table
+                .Query()
+                .Where("memory_kind IN ('block','fact') AND block_id IS NOT NULL")
+                .Select(new[] { "session_id", "block_id" })
+                .Limit(128)
+                .Offset(offset)
+                .ToList();
+            foreach (var row in rows)
+            {
+                var locator = JsonSerializer.SerializeToNode(row)!;
+                locators.Add(
+                    (
+                        locator["session_id"]!.GetValue<string>(),
+                        checked((long)Sessions.SessionWait.Number(locator["block_id"])!.Value)
+                    )
+                );
+            }
+            if (rows.Count < 128)
+                break;
+        }
+        foreach (var (session, block) in locators)
+        {
+            var range = sourceTimes(session, block);
+            if (range.Start is null || range.End is null)
+                missingSource?.Invoke(session);
+            string Sql(double? value) =>
+                value?.ToString("R", System.Globalization.CultureInfo.InvariantCulture) ?? "NULL";
+            await table.Update(
+                new Dictionary<string, string>
+                {
+                    ["start_timestamp"] = Sql(range.Start),
+                    ["end_timestamp"] = Sql(range.End),
+                },
+                $"memory_kind IN ('block','fact') AND session_id = '{VectorRuntime.Escape(session)}' AND block_id = {block}"
+            );
+        }
+        var metadata = field.Metadata is null
+            ? new Dictionary<string, string>()
+            : new Dictionary<string, string>(field.Metadata);
+        metadata[marker] = "1";
+        await table.ReplaceFieldMetadata("start_timestamp", metadata);
+    }
+
     internal static RecordBatch Batch(IReadOnlyList<JsonObject> rows)
     {
         var arrays = new List<IArrowArray>();

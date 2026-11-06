@@ -126,7 +126,7 @@ public sealed partial class VectorLexicalTests
         Assert.Single(reopened.Query("ΑΑΣ꟎", new(SessionIds: [id]), 5));
         Assert.Single(reopened.Query("αασ꟏", new(SessionIds: [id]), 5));
         Assert.Equal(
-            "1",
+            "2",
             Scalar("SELECT value FROM archive_search_metadata WHERE key='schema_version'")
         );
         Assert.Equal(
