@@ -995,6 +995,10 @@ var APP_CONFIG_SCHEMA = {
       default: false,
       description: "Name an unnamed Session automatically after its first reply, using one short background model request. Defaults to false; new installations enable it during first-run Setup. Applies when saved in Setup."
     },
+    agentDefaultNode: {
+      type: "string",
+      description: "Default Node for new Sessions of Agents that have no defaultNode of their own. Placement only; it grants no access. Applies when saved in Setup."
+    },
     vectorMaintenance: {
       oneOf: [
         { type: "boolean" },
