@@ -125,6 +125,23 @@ fi
 
 NODE_BIN=""
 NODE_CLIENT_ENTRYPOINT=""
+if [ "$(uname -s)/$(uname -m)" = "Darwin/arm64" ]; then
+  echo "Downloading native macOS arm64 node client ..."
+  native_status="$(curl -sSL -w '%{http_code}' "__FOXWARM_NATIVE_CLI_OSX_URL__" -o "$SOURCE_DIR/native-cli-node.tar.gz")"
+  case "$native_status" in
+    200)
+      tar -xzf "$SOURCE_DIR/native-cli-node.tar.gz" -C "$SOURCE_DIR"
+      NODE_BIN="$SOURCE_DIR/native-cli-node-osx-arm64/Foxwarm.CliNode"
+      if [ ! -x "$NODE_BIN" ]; then
+        echo "Error: downloaded native node executable is missing: $NODE_BIN" >&2
+        exit 1
+      fi
+      ;;
+    404) echo "No native package is published; using the JavaScript node client." ;;
+    *) echo "Error: native package download returned HTTP $native_status" >&2; exit 1 ;;
+  esac
+  rm "$SOURCE_DIR/native-cli-node.tar.gz"
+fi
 if [ "$(uname -s)/$(uname -m)" = "Linux/x86_64" ]; then
   echo "Downloading native Linux x64 node client ..."
   curl -fsSL "__FOXWARM_NATIVE_CLI_URL__" -o "$SOURCE_DIR/native-cli-node.tar.gz"
@@ -135,7 +152,8 @@ if [ "$(uname -s)/$(uname -m)" = "Linux/x86_64" ]; then
     echo "Error: downloaded native node executable is missing: $NODE_BIN" >&2
     exit 1
   fi
-else
+fi
+if [ -z "$NODE_BIN" ]; then
   if ! command -v node >/dev/null 2>&1; then
     echo "Error: Node.js is required on platforms without a native package" >&2
     exit 1

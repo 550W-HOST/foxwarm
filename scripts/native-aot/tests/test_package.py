@@ -2,6 +2,8 @@
 """Packaging contracts only; these synthetic inputs do not qualify a native binary."""
 import importlib.util
 import json
+import zipfile
+import hashlib
 from pathlib import Path
 import tarfile
 import tempfile
@@ -38,7 +40,8 @@ class PackagingTests(unittest.TestCase):
 
     def test_archive_contents_permissions_provenance_and_single_alias(self):
         archive = self.package()
-        self.assertEqual(list((self.output / "assets/downloads").iterdir()), [archive])
+        self.assertEqual(set((self.output / "assets/downloads").iterdir()), {archive, archive.with_name(archive.name + ".sha256")})
+        self.assertEqual(archive.with_name(archive.name + ".sha256").read_text(), hashlib.sha256(archive.read_bytes()).hexdigest() + "  " + archive.name + "\n")
         result = json.loads((self.output / "package-result.json").read_text())
         self.assertEqual(result["bytes"], archive.stat().st_size)
         self.assertLessEqual(result["bytes"], pack.LIMIT)
@@ -59,6 +62,31 @@ class PackagingTests(unittest.TestCase):
             destination = self.root / "extracted"
             tar.extractall(destination, filter="data")
         self.assertEqual((destination / pack.PACKAGE / "Foxwarm.CliNode").stat().st_mode & 0o777, 0o755)
+
+    def test_windows_zip_contains_only_target_executable_and_managed_notices(self):
+        (self.publish / "Foxwarm.CliNode.exe").write_bytes(b"synthetic PE")
+        archive = pack.package(self.publish, self.output, "a" * 40, 1700000000, "fixture", "win-x64")
+        with zipfile.ZipFile(archive) as zipped:
+            names = set(zipped.namelist())
+            prefix = "native-cli-node-win-x64/"
+            self.assertIn(prefix + "Foxwarm.CliNode.exe", names)
+            self.assertNotIn(prefix + "Foxwarm.CliNode", names)
+            self.assertNotIn(prefix + "notices/musl-COPYRIGHT.txt", names)
+            info = json.loads(zipped.read(prefix + "BUILD-INFO.json"))
+            self.assertEqual(info["runtimeIdentifier"], "win-x64")
+            self.assertEqual(info["publishedAlias"], archive.name)
+
+    def test_macos_requires_and_preserves_both_pty_components(self):
+        for name in ("libfoxwarm-pty.dylib", "foxwarm-pty-helper"):
+            with self.assertRaisesRegex(ValueError, name):
+                pack.package(self.publish, self.output, "a" * 40, 1700000000, "fixture", "osx-arm64")
+            (self.publish / name).write_bytes(b"synthetic native component")
+        archive = pack.package(self.publish, self.output, "a" * 40, 1700000000, "fixture", "osx-arm64")
+        with tarfile.open(archive) as tar:
+            for name in ("Foxwarm.CliNode", "libfoxwarm-pty.dylib", "foxwarm-pty-helper"):
+                member = tar.getmember("native-cli-node-osx-arm64/" + name)
+                self.assertEqual(member.mode, 0o755)
+            self.assertFalse(any(member.name.endswith("libfoxwarm-pty.so") for member in tar.getmembers()))
 
     def test_complete_archive_limit_prevents_staging(self):
         with patch.object(pack, "LIMIT", 1):

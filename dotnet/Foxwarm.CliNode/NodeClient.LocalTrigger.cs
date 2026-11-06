@@ -100,7 +100,10 @@ internal sealed partial class NodeClient
             return;
         var metaFile = Path.Combine(triggerState, "node_local_trigger.json");
         var tokenFile = Path.Combine(triggerState, "node_local_trigger_token");
-        var scriptFile = Path.Combine(triggerState, "trigger-session-event.sh");
+        var scriptFile = Path.Combine(
+            triggerState,
+            OperatingSystem.IsWindows() ? "trigger-session-event.ps1" : "trigger-session-event.sh"
+        );
         await File.WriteAllTextAsync(
             metaFile,
             new JsonObject
@@ -122,6 +125,25 @@ internal sealed partial class NodeClient
             + " "
             + ExecNative.Quote(tokenFile)
             + " \"$1\" \"$2\" \"${3:-trigger}\"\n";
+        if (OperatingSystem.IsWindows())
+        {
+            static string QuotePowerShell(string value) => "'" + value.Replace("'", "''") + "'";
+            var start = ExecNative.SelfStart();
+            var command = string.Join(
+                " ",
+                new[] { start.FileName }.Concat(start.ArgumentList).Select(QuotePowerShell)
+            );
+            script =
+                "param([string]$SessionId, [string]$Message, [string]$EventType = 'trigger')\r\n"
+                + "if (-not $SessionId -or -not $Message) { throw 'Session ID and message are required.' }\r\n"
+                + "& "
+                + command
+                + " --local-trigger-helper "
+                + QuotePowerShell(metaFile)
+                + " "
+                + QuotePowerShell(tokenFile)
+                + " $SessionId $Message $EventType\r\nexit $LASTEXITCODE\r\n";
+        }
         await WriteTriggerFile(
             scriptFile,
             script,
@@ -140,6 +162,8 @@ internal sealed partial class NodeClient
         if (!OperatingSystem.IsWindows())
             fileOptions.UnixCreateMode = mode;
         await using var stream = new FileStream(path, fileOptions);
+        if (OperatingSystem.IsWindows() && Path.GetExtension(path) == ".ps1")
+            await stream.WriteAsync(Encoding.UTF8.GetPreamble());
         await stream.WriteAsync(Encoding.UTF8.GetBytes(text));
     }
 

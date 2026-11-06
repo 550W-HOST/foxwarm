@@ -24,6 +24,7 @@ test('run.ps1 anchors node cwd and agent storage outside the caller project', {
   const harnessPath = path.join(root, 'harness.ps1');
   try {
     await Promise.all([fs.ensureDir(scriptDir), fs.ensureDir(callerProject)]);
+    // Force the unsupported-architecture fallback; native delivery has its own hosted probe.
     await fs.copyFile(RUN_PS1, scriptPath);
     await fs.writeFile(harnessPath, [
       'param([string]$RunPs1, [string]$StateDir, [string]$SourceDir, [string]$CapturePath)',
@@ -53,6 +54,8 @@ test('run.ps1 anchors node cwd and agent storage outside the caller project', {
     ].join('\r\n'));
 
     const env = { ...process.env };
+    env.PROCESSOR_ARCHITECTURE = 'ARM64';
+    delete env.PROCESSOR_ARCHITEW6432;
     env.FOXWARM_AGENT_DIR = 'hostile-single-agent';
     env.FOXWARM_AGENTS_DIR = 'hostile-agents-root';
     await execFileAsync('powershell.exe', [

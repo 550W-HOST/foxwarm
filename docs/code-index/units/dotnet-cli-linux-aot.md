@@ -46,7 +46,7 @@ Every container above shared the same **6.12.101+deb13-amd64** host kernel. No o
 
 ## Probe and ownership boundaries
 
-`dotnetCliNodeAotLinux.e2e.mjs` extends the maintained focused native exec probe rather than substituting an analyzer or `--help` check. It uses an explicit native executable, owned temporary state and a loopback HTTPS/WebSocket peer. It verifies:
+`dotnetCliNodeAotLinux.e2e.mjs` is the Linux entry for the shared [native platform probe](./dotnet-cli-platforms-aot.md), which extends the maintained focused native exec probe rather than substituting an analyzer or `--help` check. It uses an explicit native executable, owned temporary state and a loopback HTTPS/WebSocket peer. It verifies:
 
 - authenticated registration over trusted TLS, native executable identity and ICU/OpenSSL maps;
 - ordinary file write/read and Unicode; foreground native exec with inherited environment, cwd, final cwd sidecar, nonzero status and Unicode output;

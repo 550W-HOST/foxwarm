@@ -65,14 +65,6 @@ Parameters:
     exit 0
 }
 
-# ─── Validate prerequisites ───
-foreach ($cmd in @("node")) {
-    if (-not (Get-Command $cmd -ErrorAction SilentlyContinue)) {
-        Write-Error "$cmd is required but not found in PATH"
-        exit 1
-    }
-}
-
 # ─── Resolve base directory (script location, or cwd if piped) ───
 $ScriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Get-Location }
 
@@ -111,84 +103,118 @@ if (-not $Pairing -and -not $AuthToken -and -not (Test-Path -LiteralPath $Creden
     exit 1
 }
 
-# ─── Download source ───
-$tarUrl = "$HostUrl/node/source.tar.gz"
-$tarFile = Join-Path $SourceDir "source.tar.gz"
-
-Write-Host "Downloading node source from $tarUrl ..."
-Invoke-WebRequest -Uri $tarUrl -OutFile $tarFile -UseBasicParsing
-
-Write-Host "Extracting source ..."
-tar -xzf $tarFile -C $SourceDir
-Remove-Item -LiteralPath $tarFile -Force -ErrorAction SilentlyContinue
-
-# ─── Determine entry point ───
-if ($Interactive) {
-    $entryPoint = Join-Path $SourceDir "packages\cli-node\dist\tui.bundle.js"
-} else {
-    $entryPoint = Join-Path $SourceDir "packages\cli-node\dist\client.bundle.js"
-}
-
-if (Test-Path -LiteralPath $entryPoint) {
-    Write-Host "Using bundled node client from source archive; skipping npm install."
-} else {
-    if (-not (Get-Command "npm" -ErrorAction SilentlyContinue)) {
-        Write-Error "npm is required only when the downloaded bundle is missing and a source build fallback is needed"
-        exit 1
-    }
-
-    Write-Host "Bundled node client not found; installing minimal package dependencies and building fallback ..."
-    Push-Location -LiteralPath (Join-Path $SourceDir "packages\shared")
+# Native delivery is selected by the OS architecture, including a 32-bit PowerShell host.
+$NativeExecutable = $null
+$architecture = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+if ($architecture -eq 'AMD64') {
+    $archive = Join-Path $SourceDir 'native-cli-node.zip'
     try {
-        & npm ci
-        if ($LASTEXITCODE -ne 0) { throw "npm ci failed in packages/shared" }
-        & npm run build
-        if ($LASTEXITCODE -ne 0) { throw "npm run build failed in packages/shared" }
-    } finally {
-        Pop-Location
-    }
-
-    Push-Location -LiteralPath (Join-Path $SourceDir "packages\cli-node")
-    try {
-        & npm ci
-        if ($LASTEXITCODE -ne 0) { throw "npm ci failed in packages/cli-node" }
-        & npm run build
-        if ($LASTEXITCODE -ne 0) { throw "npm run build failed in packages/cli-node" }
-    } finally {
-        Pop-Location
-    }
-}
-
-if (-not (Test-Path -LiteralPath $entryPoint)) {
-    if ($Interactive) {
-        $entryPoint = Join-Path $SourceDir "packages\cli-node\dist\tui.js"
-    } else {
-        $entryPoint = Join-Path $SourceDir "packages\cli-node\dist\client.js"
-    }
-    if (-not (Test-Path -LiteralPath $entryPoint)) {
-        Write-Error "Entry point not found: $entryPoint"
-        exit 1
-    }
-}
-
-# Install only the target-platform PTY runtime. macOS/Windows use official
-# prebuilds; Linux requires node-gyp build prerequisites.
-$runtimeDir = Join-Path $SourceDir "packages\cli-node-runtime"
-$runtimeLock = Join-Path $runtimeDir "package-lock.json"
-if (Test-Path -LiteralPath $runtimeLock) {
-    if (Get-Command "npm" -ErrorAction SilentlyContinue) {
-        Write-Host "Installing the target-platform PTY runtime (node-pty only) ..."
-        & npm --prefix $runtimeDir ci --omit=dev
-        if ($LASTEXITCODE -ne 0) {
-            Write-Warning "node-pty installation failed; the node will continue without remote terminal capability."
+        Invoke-WebRequest -Uri '__FOXWARM_NATIVE_CLI_WIN_URL__' -OutFile $archive -UseBasicParsing
+        Expand-Archive -LiteralPath $archive -DestinationPath $SourceDir -Force
+        $NativeExecutable = Join-Path $SourceDir 'native-cli-node-win-x64\Foxwarm.CliNode.exe'
+        if (-not (Test-Path -LiteralPath $NativeExecutable -PathType Leaf)) {
+            throw "Native executable is missing: $NativeExecutable"
         }
-    } else {
-        Write-Warning "npm is unavailable; the node will continue without remote terminal capability."
+    } catch {
+        if ($_.Exception.Response -and [int]$_.Exception.Response.StatusCode -eq 404) {
+            Write-Host 'No native package is published; using the JavaScript node client.'
+        } else {
+            throw
+        }
+    } finally {
+        Remove-Item -LiteralPath $archive -Force -ErrorAction SilentlyContinue
     }
+}
+
+if (-not $NativeExecutable) {
+    if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+        throw 'Node.js is required on platforms without a native package'
+    }
+    # ─── Download source ───
+    $tarUrl = "$HostUrl/node/source.tar.gz"
+    $tarFile = Join-Path $SourceDir "source.tar.gz"
+
+    Write-Host "Downloading node source from $tarUrl ..."
+    Invoke-WebRequest -Uri $tarUrl -OutFile $tarFile -UseBasicParsing
+
+    Write-Host "Extracting source ..."
+    tar -xzf $tarFile -C $SourceDir
+    Remove-Item -LiteralPath $tarFile -Force -ErrorAction SilentlyContinue
+
+    # ─── Determine entry point ───
+    if ($Interactive) {
+        $entryPoint = Join-Path $SourceDir "packages\cli-node\dist\tui.bundle.js"
+    } else {
+        $entryPoint = Join-Path $SourceDir "packages\cli-node\dist\client.bundle.js"
+    }
+
+    if (Test-Path -LiteralPath $entryPoint) {
+        Write-Host "Using bundled node client from source archive; skipping npm install."
+    } else {
+        if (-not (Get-Command "npm" -ErrorAction SilentlyContinue)) {
+            Write-Error "npm is required only when the downloaded bundle is missing and a source build fallback is needed"
+            exit 1
+        }
+
+        Write-Host "Bundled node client not found; installing minimal package dependencies and building fallback ..."
+        Push-Location -LiteralPath (Join-Path $SourceDir "packages\shared")
+        try {
+            & npm ci
+            if ($LASTEXITCODE -ne 0) { throw "npm ci failed in packages/shared" }
+            & npm run build
+            if ($LASTEXITCODE -ne 0) { throw "npm run build failed in packages/shared" }
+        } finally {
+            Pop-Location
+        }
+
+        Push-Location -LiteralPath (Join-Path $SourceDir "packages\cli-node")
+        try {
+            & npm ci
+            if ($LASTEXITCODE -ne 0) { throw "npm ci failed in packages/cli-node" }
+            & npm run build
+            if ($LASTEXITCODE -ne 0) { throw "npm run build failed in packages/cli-node" }
+        } finally {
+            Pop-Location
+        }
+    }
+
+    if (-not (Test-Path -LiteralPath $entryPoint)) {
+        if ($Interactive) {
+            $entryPoint = Join-Path $SourceDir "packages\cli-node\dist\tui.js"
+        } else {
+            $entryPoint = Join-Path $SourceDir "packages\cli-node\dist\client.js"
+        }
+        if (-not (Test-Path -LiteralPath $entryPoint)) {
+            Write-Error "Entry point not found: $entryPoint"
+            exit 1
+        }
+    }
+
+    # Install only the target-platform PTY runtime. macOS/Windows use official
+    # prebuilds; Linux requires node-gyp build prerequisites.
+    $runtimeDir = Join-Path $SourceDir "packages\cli-node-runtime"
+    $runtimeLock = Join-Path $runtimeDir "package-lock.json"
+    if (Test-Path -LiteralPath $runtimeLock) {
+        if (Get-Command "npm" -ErrorAction SilentlyContinue) {
+            Write-Host "Installing the target-platform PTY runtime (node-pty only) ..."
+            & npm --prefix $runtimeDir ci --omit=dev
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warning "node-pty installation failed; the node will continue without remote terminal capability."
+            }
+        } else {
+            Write-Warning "npm is unavailable; the node will continue without remote terminal capability."
+        }
+    }
+
 }
 
 # ─── Build arguments ───
-$nodeArgs = @($entryPoint, "--host", $HostUrl, "--id", $NodeId, "--credentials-file", $CredentialsFile)
+$nodeArgs = @("--host", $HostUrl, "--id", $NodeId, "--credentials-file", $CredentialsFile)
+if ($NativeExecutable) {
+    if ($Interactive) { $nodeArgs = @("--interactive") + $nodeArgs }
+} else {
+    $nodeArgs = @($entryPoint) + $nodeArgs
+}
 
 if ($Pairing) {
     $nodeArgs += @("--token", $Pairing)
@@ -234,7 +260,7 @@ Write-Host ""
 $nodeExitCode = 1
 Push-Location -LiteralPath $ScriptDir
 try {
-    & node @nodeArgs
+    if ($NativeExecutable) { & $NativeExecutable @nodeArgs } else { & node @nodeArgs }
     $nodeExitCode = $LASTEXITCODE
 } finally {
     Pop-Location

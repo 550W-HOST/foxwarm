@@ -24,6 +24,9 @@ internal sealed class NodeBootstrap(
     internal static string NativeDownloadUrl =>
         $"https://foxwarm.net/downloads/native-cli-node-latest-v{NodeConnectionHub.CurrentProtocolVersion}.tar.gz";
 
+    internal static string NativePlatformDownloadUrl(string platform, string extension) =>
+        $"https://foxwarm.net/downloads/native-cli-node-{platform}-latest-v{NodeConnectionHub.CurrentProtocolVersion}.{extension}";
+
     private static readonly string[] Sources =
     [
         "packages/shared",
@@ -235,7 +238,15 @@ internal sealed class NodeBootstrap(
                                 "__FOXWARM_DEFAULT_BASE_URL__",
                                 InferRequestBaseUrl(context.Request)
                             )
-                            .Replace("__FOXWARM_NATIVE_CLI_URL__", NativeDownloadUrl),
+                            .Replace("__FOXWARM_NATIVE_CLI_URL__", NativeDownloadUrl)
+                            .Replace(
+                                "__FOXWARM_NATIVE_CLI_WIN_URL__",
+                                NativePlatformDownloadUrl("win-x64", "zip")
+                            )
+                            .Replace(
+                                "__FOXWARM_NATIVE_CLI_OSX_URL__",
+                                NativePlatformDownloadUrl("osx-arm64", "tar.gz")
+                            ),
                         context.RequestAborted
                     );
                 }

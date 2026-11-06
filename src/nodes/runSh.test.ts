@@ -463,3 +463,57 @@ test('run.sh --install selects a user service for non-root and starts foreground
     await fs.remove(fixture.root);
   }
 });
+
+for (const status of ['200', '404', '503']) {
+  test(`Apple Silicon native bootstrap handles package HTTP ${status}`, async () => {
+    const fixture = await makeFixture();
+    const install = path.join(fixture.root, 'apple silicon');
+    try {
+      await writeExecutable(path.join(fixture.bin, 'uname'), '#!/bin/sh\ncase "$1" in -s) echo Darwin;; -m) echo arm64;; esac\n');
+      await writeExecutable(path.join(fixture.bin, 'curl'), `#!/bin/sh
+case "$*" in
+  *NATIVE_CLI_OSX_URL*)
+    while [ "$#" -gt 0 ]; do
+      if [ "$1" = "-o" ]; then shift; : > "$1"; fi
+      shift
+    done
+    printf '${status}'
+    ;;
+  *) exit 0 ;;
+esac
+`);
+      await writeExecutable(path.join(fixture.bin, 'tar'), `#!/bin/sh
+native=0
+case "$*" in *native-cli-node.tar.gz*) native=1;; esac
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-C" ]; then shift; target="$1"; fi
+  shift
+done
+if [ "$native" = 1 ]; then
+  mkdir -p "$target/native-cli-node-osx-arm64"
+  printf '#!/bin/sh\\nexit 0\\n' > "$target/native-cli-node-osx-arm64/Foxwarm.CliNode"
+  chmod +x "$target/native-cli-node-osx-arm64/Foxwarm.CliNode"
+else
+  mkdir -p "$target/packages/cli-node/dist"
+  : > "$target/packages/cli-node/dist/client.bundle.js"
+fi
+`);
+      const args = [`--dir=${install}`, '--host=http://master/base', '--auth-token=direct token', '--node-id=apple', '--prepare-only'];
+      if (status === '503') {
+        await assert.rejects(runScript(args, fixture.env), (error: any) => {
+          assert.match(error.stderr, /HTTP 503/);
+          return true;
+        });
+        assert.equal(await fs.pathExists(path.join(install, 'run-node-client.sh')), false);
+      } else {
+        await runScript(args, fixture.env);
+        const launcher = await fs.readFile(path.join(install, 'run-node-client.sh'), 'utf8');
+        assert.equal(launcher.includes('native-cli-node-osx-arm64/Foxwarm.CliNode'), status === '200');
+        assert.equal(launcher.includes('client.bundle.js'), status === '404');
+        assert.match(launcher, /--auth-token 'direct token'/);
+      }
+    } finally {
+      await fs.remove(fixture.root);
+    }
+  });
+}
