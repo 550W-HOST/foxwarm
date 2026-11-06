@@ -73,17 +73,23 @@ internal sealed partial class AgentCatalog
         return chain.ToArray();
     }
 
-    internal ToolAuthorizationPolicy[] RuleLayers(string name)
+    internal ToolAuthorizationPolicy[] RuleLayers(string name) =>
+        NamedRuleLayers(name).Select(layer => layer.Policy).ToArray();
+
+    internal (string Agent, ToolAuthorizationPolicy Policy)[] NamedRuleLayers(string name)
     {
         lock (stateGate)
         {
             var snapshot = MetadataSnapshot();
             return CreatorChain(name, snapshot)
                 .Select(agent =>
-                    AgentRulePolicy.Parse(
-                        snapshot[agent] is JsonObject row && row.ContainsKey("rules")
-                            ? row["rules"]
-                            : new JsonArray()
+                    (
+                        agent,
+                        AgentRulePolicy.Parse(
+                            snapshot[agent] is JsonObject row && row.ContainsKey("rules")
+                                ? row["rules"]
+                                : new JsonArray()
+                        )
                     )
                 )
                 .ToArray();

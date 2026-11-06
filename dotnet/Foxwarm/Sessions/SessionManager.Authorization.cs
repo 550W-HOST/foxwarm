@@ -144,6 +144,44 @@ internal sealed partial class SessionManager
         IReadOnlyList<string>? nodeEffects = null
     )
     {
+        var assessment = await AssessToolAsync(
+            owner,
+            resolved,
+            files,
+            token,
+            concreteTarget,
+            toolScriptSourceRead,
+            nodeEffects
+        );
+        if (assessment.Denied is { } denied)
+            throw new ToolAuthorizationDeniedException(
+                SessionWait.Text(denied.Decision.Rule?["reason"])
+                    ?? $"Tool authorization rule denies {resolved.Source} capability `{resolved.Name}`."
+            );
+        IsolatedToolCompatibility.Check(
+            Isolation(owner.Agent),
+            assessment.Request,
+            AuthorizationTarget
+        );
+        if (!IsCurrentOwner(owner))
+            throw new InvalidOperationException(
+                "Tool source is no longer the current Session owner."
+            );
+    }
+
+    // Shared by enforcement and explanation: structural prechecks, fact construction and
+    // every generic policy layer. A replacement global policy only substitutes that layer.
+    internal async Task<AuthorizationAssessment> AssessToolAsync(
+        SessionOwner owner,
+        ResolvedTool resolved,
+        WorkspaceTools? files,
+        CancellationToken token,
+        SessionOwner? concreteTarget = null,
+        bool toolScriptSourceRead = false,
+        IReadOnlyList<string>? nodeEffects = null,
+        ToolAuthorizationPolicy? global = null
+    )
+    {
         owner.Entry.RequireIdentityAuthority();
         if (!IsCurrentOwner(owner))
             throw new InvalidOperationException(
@@ -265,25 +303,42 @@ internal sealed partial class SessionManager
             {
                 NodeForest = await NodeProviders.PrepareAuthorizationForestAsync(endpoints, token),
             };
-        var policies = EffectivePolicies(owner.Agent, await authorization.LoadAsync(token));
-        request = PopulateEffectiveTargets(request, owner, policies, concreteTarget);
-        var decision = EffectiveDecision(policies, request);
-        if (!decision.Allowed)
-            throw new ToolAuthorizationDeniedException(
-                SessionWait.Text(decision.Rule?["reason"])
-                    ?? $"Tool authorization rule denies {resolved.Source} capability `{resolved.Name}`."
-            );
-        IsolatedToolCompatibility.Check(Isolation(owner.Agent), request, AuthorizationTarget);
-        if (!IsCurrentOwner(owner))
-            throw new InvalidOperationException(
-                "Tool source is no longer the current Session owner."
-            );
+        var layers = EffectiveLayers(
+            owner.Agent,
+            global ?? await authorization.LoadAsync(token)
+        );
+        request = PopulateEffectiveTargets(
+            request,
+            owner,
+            layers.Select(layer => layer.Policy).ToArray(),
+            concreteTarget
+        );
+        return new(
+            request,
+            layers
+                .Select(layer =>
+                    new AuthorizationLayerDecision(
+                        layer.Name,
+                        layer.Policy,
+                        ToolAuthorizationEvaluation.Evaluate(layer.Policy, request)
+                    )
+                )
+                .ToArray()
+        );
     }
+
+    private (string? Name, ToolAuthorizationPolicy Policy)[] EffectiveLayers(
+        string agent,
+        ToolAuthorizationPolicy global
+    ) =>
+        new (string?, ToolAuthorizationPolicy)[] { (null, global) }
+            .Concat(agents.NamedRuleLayers(agent).Select(layer => ((string?)layer.Agent, layer.Policy)))
+            .ToArray();
 
     private ToolAuthorizationPolicy[] EffectivePolicies(
         string agent,
         ToolAuthorizationPolicy global
-    ) => new[] { global }.Concat(agents.RuleLayers(agent)).ToArray();
+    ) => EffectiveLayers(agent, global).Select(layer => layer.Policy).ToArray();
 
     private static AuthorizationDecision EffectiveDecision(
         IReadOnlyList<ToolAuthorizationPolicy> policies,
