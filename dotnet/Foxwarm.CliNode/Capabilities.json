@@ -305,6 +305,7 @@
     "programmaticToolData": true,
     "execWaitCancellation": true,
     "remoteExecBackgroundRegistration": true,
+    "execPlacement": true,
     "externalToolOwner": 1,
     "unifiedEdit": true
   },

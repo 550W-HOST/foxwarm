@@ -13,6 +13,7 @@ internal static class RemoteNodeResult
         if (result is not JsonObject value)
             return result;
         value.Remove("__foxwarmResolvedToolPaths");
+        value.Remove(Foxwarm.Tools.ExecPlacement.Field);
         if (value["inlineData"] is JsonObject || value["inlineDataItems"] is JsonArray)
             return value;
         string? data = null;

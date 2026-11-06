@@ -73,12 +73,20 @@ internal sealed partial class SessionToolExecutor(
 
     private readonly AsyncLocal<ExecSnapshot?> execSnapshot = new();
 
-    internal Action<JsonNode?>? RemoteCodePaths(ResolvedTool resolved)
+    internal Action<JsonNode?>? RemoteResultMetadata(ResolvedTool resolved)
     {
         var active = invocation.Value;
-        if (active is null || resolved.Name is not ("read" or "write" or "edit"))
+        if (active is null)
             return null;
         var nodeId = resolved.ExecutionNode;
+        if (resolved.Name == "exec")
+            return raw =>
+                active.ExecPlacement = RemoteExecPlacement(
+                    resolved,
+                    ExecPlacement.Parse((raw as JsonObject)?[ExecPlacement.Field])
+                );
+        if (resolved.Name is not ("read" or "write" or "edit"))
+            return null;
         return raw =>
         {
             if (
@@ -111,6 +119,23 @@ internal sealed partial class SessionToolExecutor(
             // Display-only evidence in the captured remote namespace, never Main path/control authority.
             active.ResolvedPaths = captured;
         };
+    }
+
+    // Main records the Node and the Session cwd it forwarded; only a peer report proves the rest.
+    private JsonObject RemoteExecPlacement(ResolvedTool resolved, JsonObject? reported)
+    {
+        var placement = reported ?? new JsonObject { ["cwdSource"] = "unknown" };
+        placement["nodeId"] = resolved.ExecutionNode;
+        if (ExecutionNode == resolved.ExecutionNode && ExecutionCwd is string forwarded)
+            placement["sessionCwd"] = forwarded;
+        return placement;
+    }
+
+    // Transports without a result-metadata callback (Shell HTTP) still record their Node.
+    internal void SettleRemoteExec(ResolvedTool resolved)
+    {
+        if (invocation.Value is { ExecPlacement: null } current)
+            current.ExecPlacement = RemoteExecPlacement(resolved, null);
     }
 
     internal bool ToolScriptExecution => invocation.Value?.ToolScriptSubCalls is not null;
@@ -236,7 +261,8 @@ internal sealed partial class SessionToolExecutor(
                 current.ToolScriptSubCalls,
                 current.Receipt,
                 current.SessionMessages,
-                current.DeferredCwdNode
+                current.DeferredCwdNode,
+                current.ExecPlacement
             );
         }
         finally
@@ -627,6 +653,7 @@ internal sealed partial class SessionToolExecutor(
             },
             programmatic: ScriptBudget,
             cancellationSource: () => hosted.Entry.ToolCancellationSource,
+            observePlacement: ObservePlacement,
             beforeLaunch: () =>
             {
                 hosted.Entry.RequireIdentityAuthority();
@@ -659,6 +686,7 @@ internal sealed partial class SessionToolExecutor(
             observeCwd: (_, end) => observed = end,
             programmatic: ScriptBudget,
             cancellationSource: () => hosted.Entry.ToolCancellationSource,
+            observePlacement: ObservePlacement,
             backend: backend,
             providerCwd: ExecutionNode == resolved.ExecutionNode ? ExecutionCwd : null,
             beforeLaunch: () =>
@@ -681,6 +709,12 @@ internal sealed partial class SessionToolExecutor(
             return response;
         }
         return await ApplyCwdAsync(response, observed, resolved.ExecutionNode);
+    }
+
+    private void ObservePlacement(JsonObject placement)
+    {
+        if (invocation.Value is { } current)
+            current.ExecPlacement = placement;
     }
 
     internal async Task<TurnToolExecution> ReplayCwdAsync(TurnToolExecution execution)
@@ -1116,7 +1150,8 @@ internal sealed record TurnToolExecution(
     JsonArray? ToolScriptSubCalls = null,
     TurnToolReceipt? Receipt = null,
     JsonArray? SessionMessages = null,
-    string? DeferredCwdNode = null
+    string? DeferredCwdNode = null,
+    JsonObject? ExecPlacement = null
 );
 
 internal sealed record TurnToolReceipt(
@@ -1147,6 +1182,7 @@ internal sealed class TurnToolInvocation(string callId)
     internal JsonArray? ToolScriptSubCalls { get; set; }
     internal TurnToolReceipt? Receipt { get; set; }
     internal JsonArray? SessionMessages { get; set; }
+    internal JsonObject? ExecPlacement { get; set; }
 
     internal string? DeliverySeq(bool script) =>
         InheritedDelivery ?? SessionManager.BatchDeliverySeq(AnchorSeq, Index, Total, script);

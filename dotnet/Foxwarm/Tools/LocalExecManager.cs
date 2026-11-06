@@ -376,7 +376,8 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
         ProviderExecBackend? backend = null,
         string? providerCwd = null,
         Action? beforeLaunch = null,
-        CancellationToken hardCancellation = default
+        CancellationToken hardCancellation = default,
+        Action<JsonObject>? observePlacement = null
     )
     {
         if (!IsSupported)
@@ -473,6 +474,20 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
                 mutation.Release();
             }
         }
+        var placement = ExecPlacement.Create(
+            record.Cwd,
+            record.CwdSource
+                ?? (
+                    Text(args, "cwd") is not null ? "explicit"
+                    : providerCwd is not null ? "session"
+                    : "default"
+                ),
+            record.Id,
+            record.LogPath
+        );
+        placement["nodeId"] = record.NodeId;
+        if ((backend is null ? paths.SessionCwd : providerCwd) is string suppliedCwd)
+            placement["sessionCwd"] = suppliedCwd;
         var clock = Stopwatch.StartNew();
         var status = await WaitAsync(record, seconds, ct, hardCancellation);
         if (status is null)
@@ -510,7 +525,11 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
                 )
                 : await ExecOutput.Foreground(entry, status, warning, files);
             if (status is not null && await ReadFinishedCwdAsync(record) is string finalCwd)
+            {
+                placement["finalCwd"] = finalCwd;
                 observeCwd?.Invoke(record.Cwd, finalCwd);
+            }
+            observePlacement?.Invoke(placement);
             return await ExecOutput.Result(
                 entry,
                 status,

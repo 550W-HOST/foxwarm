@@ -228,10 +228,16 @@ internal sealed class ToolRegistry(
                     owner.Programmatic,
                     cancellationToken,
                     owner.Hosted,
-                    owner.RemoteCodePaths(resolved),
+                    owner.RemoteResultMetadata(resolved),
                     owner.ScriptBudget
                 )
             : await entries[resolved.Name].Execute(owner, resolved.Args, cancellationToken);
+        if (
+            resolved is { Source: "node", Name: "exec" }
+            && resolved.ExecutionNode != "master"
+            && providers?.IsProviderNode(resolved.ExecutionNode) != true
+        )
+            owner.SettleRemoteExec(resolved);
         if (owner.Programmatic)
         {
             owner.ScriptBudget!.JsonValue(result);

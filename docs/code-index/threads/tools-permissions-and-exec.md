@@ -25,6 +25,14 @@ Definition discovery is not authorization. Invalid/ambiguous rules fail closed; 
 
 `MainNativePaths` resolves roots; `FileToolCore`/`WorkspaceTools` enforce bounded reads/writes/patches; `LocalExecManager` owns cwd/env/process/parallel/persistent exec; `FileDeliveryDefinitions` produces authenticated deployment-relative delivery. Retry-safe write refs and post-effect ambiguity are preserved rather than guessed away.
 
+### D-exec-placement-record
+
+**User-approved (2026-11-06).** Session exec records where it actually ran as audit/display evidence. The Archive schema, older rows and Session cwd authority are unchanged; there is no backfill.
+
+- A model exec `functionResponse` carries `__meta.exec`; a nested ToolScript exec subcall carries the same object as `exec`. Fields: `nodeId`, initial effective `cwd`, `cwdSource` (`explicit`, `session`, `default` or `unknown`), and when known `sessionCwd` (the Session cwd Main supplied or forwarded), `finalCwd`, `execId` and `logPath` (linking the native sidecars). Model request projection removes `__meta`; a missing object means unknown.
+- Main native and Provider exec build it from their own start records. A Node reports `__foxwarmExecPlacement` only when Main sets `execPlacement` in the exec frame after the Node advertises `features.execPlacement`, so an older Main never exposes the field to a model. Main parses its bounded shape and strips it from every result; it is never cwd, path or control authority.
+- Without a valid report (older or TypeScript CLI, Shell HTTP) the record is `cwdSource:"unknown"` with the Node and forwarded Session cwd. Only the [.NET CLI](../units/dotnet-cli-node.md#persistent-session-exec) reports; the TypeScript CLI is unchanged by explicit scope.
+
 ## Outbound MCP values and trusted control
 
 The [outbound MCP client](../units/mcp.md) receives an actual trusted Session owner from unified discovery/execution, including nested ToolScript. Its SDK bindings are transient connection authority, not Session history or a model-supplied caller identity. Real configuration changes, identity moves, deletion, and host shutdown invalidate their corresponding lifetimes.

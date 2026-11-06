@@ -613,6 +613,7 @@ internal sealed partial class NodeClient
                 definitions.Remove(exec);
             capabilities["features"]!.AsObject().Remove("execWaitCancellation");
             capabilities["features"]!.AsObject().Remove("remoteExecBackgroundRegistration");
+            capabilities["features"]!.AsObject().Remove(ExecPlacement.Feature);
         }
         if (
             !OperatingSystem.IsLinux()

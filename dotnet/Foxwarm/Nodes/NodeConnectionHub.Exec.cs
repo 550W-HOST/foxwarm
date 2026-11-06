@@ -176,7 +176,8 @@ internal sealed partial class NodeConnectionHub
                     token,
                     claim,
                     owner,
-                    admission
+                    admission,
+                    pathMetadata
                 );
             }
             catch (NodeToolException error)
@@ -258,6 +259,12 @@ internal sealed partial class NodeConnectionHub
             }
             if (currentNode == connection.Id && cwd is not null)
                 request["sessionCwd"] = cwd;
+            if (
+                tool == "exec"
+                && connection.Capabilities["features"]?[ExecPlacement.Feature]?.GetValue<bool>()
+                    == true
+            )
+                request[ExecPlacement.Feature] = true;
             if (
                 programmatic
                 && connection.Capabilities["features"]?["programmaticToolData"]?.GetValue<bool>()

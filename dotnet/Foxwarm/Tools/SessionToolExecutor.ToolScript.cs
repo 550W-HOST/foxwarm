@@ -74,6 +74,8 @@ internal sealed partial class SessionToolExecutor
                     if (execution.SessionMessages is { Count: > 0 } deliveries)
                         foreach (var delivery in deliveries.OfType<JsonObject>())
                             context.SessionMessageDelivered?.Invoke(delivery);
+                    if (execution.ExecPlacement is { } placement)
+                        context.ExecPlacementObserved?.Invoke(placement);
                     if (
                         execution.Receipt is not null
                         && (
