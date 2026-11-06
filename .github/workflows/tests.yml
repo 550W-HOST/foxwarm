@@ -19,7 +19,69 @@ env:
   CI: 'true'
 
 jobs:
+  code-resources:
+    name: Prepare shared Code workbench
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      cache-key: ${{ steps.cache.outputs.cache-primary-key }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.21.0
+      - name: Restore pinned Code resources
+        id: cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: packages/vscode-web/assets
+          key: code-oss-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('packages/vscode-web/code-oss-version.json', 'packages/vscode-web/yaml-extension-version.json', 'packages/vscode-web/scripts/**', 'packages/vscode-web/Dockerfile.code-oss', 'packages/vscode-web/package*.json', 'package*.json', 'scripts/test/prepare-browser.mjs', '.github/workflows/tests.yml') }}
+      - name: Build missing Code resources once
+        if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+        run: node scripts/test/prepare-browser.mjs --code-only
+      - name: Check Code resources
+        run: node scripts/test/prepare-browser.mjs --check-code
+      - name: Save complete Code resources
+        if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: packages/vscode-web/assets
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+
+  native-test-resources:
+    name: Prepare shared HEIF prerequisite
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      cache-key: ${{ steps.cache.outputs.cache-primary-key }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Restore pinned HEIF prerequisite
+        id: cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/heif-test/prefix
+          key: heif-test-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('dotnet/scripts/build-image-decoder.sh', '.github/workflows/tests.yml') }}
+      - name: Build missing HEIF prerequisite once
+        if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+        run: bash dotnet/scripts/build-image-decoder.sh "$RUNNER_TEMP/heif-test"
+      - name: Check HEIF prerequisite
+        run: |
+          test -s "$RUNNER_TEMP/heif-test/prefix/lib/libheif.so"
+          test -s "$RUNNER_TEMP/heif-test/prefix/lib/libde265.so"
+      - name: Save complete HEIF prerequisite
+        if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/heif-test/prefix
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+
   core:
+    needs: native-test-resources
     name: Core, packages, and quality
     runs-on: ubuntu-24.04
     timeout-minutes: 35
@@ -50,8 +112,16 @@ jobs:
         run: |
           npm run build
           npm run build:reference
-      - name: Prepare optional HEIF test prerequisite
-        run: bash dotnet/scripts/build-image-decoder.sh "$RUNNER_TEMP/heif-test"
+      - name: Restore shared HEIF prerequisite
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/heif-test/prefix
+          key: ${{ needs.native-test-resources.outputs.cache-key }}
+          fail-on-cache-miss: true
+      - name: Check HEIF prerequisite
+        run: |
+          test -s "$RUNNER_TEMP/heif-test/prefix/lib/libheif.so"
+          test -s "$RUNNER_TEMP/heif-test/prefix/lib/libde265.so"
       # Source is still needed by managed oracles and fixture producers; the
       # retired Main unit suite is available separately through test:reference.
       - name: Run maintained core and component tests
@@ -78,13 +148,14 @@ jobs:
           retention-days: 7
 
   chromium:
+    needs: [code-resources, native-test-resources]
     name: Chromium fixtures (${{ matrix.shard }}/8)
     strategy:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4, 5, 6, 7, 8]
     runs-on: ubuntu-24.04
-    # Each shard prepares its own checkout and runs two independent fixture files.
+    # Shards reuse pinned resources; managed outputs remain checkout-local.
     timeout-minutes: 120
     steps:
       - name: Check out repository
@@ -126,8 +197,24 @@ jobs:
         run: |
           npm run build
           npm run build:reference
-      - name: Prepare optional HEIF test prerequisite
-        run: bash dotnet/scripts/build-image-decoder.sh "$RUNNER_TEMP/heif-test"
+      - name: Restore shared HEIF prerequisite
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/heif-test/prefix
+          key: ${{ needs.native-test-resources.outputs.cache-key }}
+          fail-on-cache-miss: true
+      - name: Check HEIF prerequisite
+        run: |
+          test -s "$RUNNER_TEMP/heif-test/prefix/lib/libheif.so"
+          test -s "$RUNNER_TEMP/heif-test/prefix/lib/libde265.so"
+      - name: Restore shared Code resources
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: packages/vscode-web/assets
+          key: ${{ needs.code-resources.outputs.cache-key }}
+          fail-on-cache-miss: true
+      - name: Check shared Code resources
+        run: node scripts/test/prepare-browser.mjs --check-code
       - name: Prepare owned SSH daemon prerequisite
         run: sudo install -d -o root -g root -m 0755 /run/sshd
       - name: Qualify complete managed publish

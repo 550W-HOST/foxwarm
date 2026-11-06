@@ -10,7 +10,7 @@ testEnvironment.initializeTestEnvironment()
 const script = new URL('./prepare-browser.mjs', import.meta.url)
 const required = ['out/nls.messages.js', 'out/vs/workbench/workbench.web.main.internal.css', 'out/vs/workbench/workbench.web.main.internal.js']
 
-async function fixture({ prepared = false, fail = '', incomplete = false } = {}, check) {
+async function fixture({ prepared = false, fail = '', incomplete = false, damage = '', args = [] } = {}, check) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'browser-preparation-'))
   const entry = path.join(root, 'scripts/test/prepare-browser.mjs')
   const assets = path.join(root, 'packages/vscode-web/assets/vscode-web')
@@ -23,9 +23,16 @@ async function fixture({ prepared = false, fail = '', incomplete = false } = {},
     if (prepared) for (const file of required) {
       const target = path.join(assets, file); await fs.mkdir(path.dirname(target), { recursive: true }); await fs.writeFile(target, 'retained caller resource')
     }
-    const result = spawnSync(process.execPath, [entry], { cwd: root, env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}` }, encoding: 'utf8', timeout: 10000 })
+    if (damage) {
+      const target = path.join(assets, required[0])
+      await fs.rm(target)
+      if (damage === 'empty') await fs.writeFile(target, '')
+      if (damage === 'directory') await fs.mkdir(target)
+    }
+    const result = spawnSync(process.execPath, [entry, ...args], { cwd: root, env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}` }, encoding: 'utf8', timeout: 10000 })
     if (result.error) throw result.error
-    const calls = (await fs.readFile(journal, 'utf8')).trim().split('\n').map(JSON.parse)
+    const text = await fs.readFile(journal, 'utf8').catch(error => { if (error.code === 'ENOENT') return ''; throw error })
+    const calls = text.trim() ? text.trim().split('\n').map(JSON.parse) : []
     await check({ root, result, calls })
   } finally { await fs.rm(root, { recursive: true, force: true }) }
 }
@@ -52,5 +59,41 @@ test('browser preparation reuses caller Code resources and fences failed managed
 test('browser preparation rejects failed or incomplete optional-asset production before managed builds', unix, async () => {
   for (const options of [{ fail: 'npm' }, { incomplete: true }]) await fixture(options, ({ result, calls }) => {
     assert.equal(result.status, 1); assert.deepEqual(calls.map(call => call.name), ['npm'])
+  })
+})
+
+test('shared Code producer builds only assets on a cold checkout and reuses a warm restore', unix, async () => {
+  await fixture({ args: ['--code-only'] }, ({ result, calls }) => {
+    assert.equal(result.status, 0, result.stderr)
+    assert.deepEqual(calls, [{ name: 'npm', args: ['run', 'build:code'] }])
+  })
+  for (const mode of ['--code-only', '--check-code']) {
+    await fixture({ prepared: true, args: [mode] }, ({ result, calls }) => {
+      assert.equal(result.status, 0, result.stderr)
+      assert.deepEqual(calls, [])
+    })
+  }
+})
+
+test('cache consumption rejects absent, partial, empty and non-file assets without downloading', unix, async () => {
+  for (const options of [{}, ...['missing', 'empty', 'directory'].map(damage => ({ prepared: true, damage }))]) {
+    await fixture({ ...options, args: ['--check-code'] }, ({ result, calls }) => {
+      assert.equal(result.status, 1)
+      assert.match(result.stderr, /required browser assets/)
+      assert.deepEqual(calls, [])
+    })
+  }
+})
+
+test('Code-only producer failures and invalid modes cannot proceed to managed builds', unix, async () => {
+  for (const options of [{ fail: 'npm' }, { incomplete: true }]) {
+    await fixture({ ...options, args: ['--code-only'] }, ({ result, calls }) => {
+      assert.equal(result.status, 1)
+      assert.deepEqual(calls.map(call => call.name), ['npm'])
+    })
+  }
+  await fixture({ args: ['--check-code', '--code-only'] }, ({ result, calls }) => {
+    assert.equal(result.status, 1)
+    assert.deepEqual(calls, [])
   })
 })
