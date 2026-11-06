@@ -860,6 +860,31 @@ internal sealed partial class SessionToolExecutor(
         }
     }
 
+    // Source behavior: broad MCP discovery for an isolated Agent connects only to
+    // servers named by its exact MCP allow rules; null means all enabled servers.
+    private static string[]? IsolatedMcpServers(SessionManager manager, string agent)
+    {
+        try
+        {
+            var isolation = manager.Isolation(agent);
+            return !isolation.Isolated
+                ? null
+                : isolation
+                    .Rules.OfType<JsonObject>()
+                    .Where(rule =>
+                        SessionWait.Text(rule["effect"]) == "allow"
+                        && SessionWait.Text(rule["source"]) == "mcp"
+                    )
+                    .Select(rule => SessionWait.Text(rule["server"])!)
+                    .Distinct(StringComparer.Ordinal)
+                    .ToArray();
+        }
+        catch (InvalidDataException)
+        {
+            return [];
+        }
+    }
+
     internal static ToolRegistry CreateRegistry(
         JsonArray definitions,
         Foxwarm.McpClient mcp,
@@ -1007,7 +1032,8 @@ internal sealed partial class SessionToolExecutor(
                         node: source == "node" ? server : null
                     ),
                 owner.ScriptBudget,
-                owner.Hosted
+                owner.Hosted,
+                IsolatedMcpServers(owner.Manager, owner.Hosted.Agent)
             );
         handlers["call_tool"] = (_, _, _) =>
             throw new InvalidDataException("call_tool is a dispatcher, not a concrete target.");

@@ -25,7 +25,8 @@ internal static partial class UnifiedTools
         CancellationToken token,
         Func<string, string, string?, bool>? visible = null,
         Foxwarm.ToolScript.ToolScriptDataBudget? budget = null,
-        SessionOwner? owner = null
+        SessionOwner? owner = null,
+        IReadOnlyList<string>? broadServers = null
     )
     {
         ToolRegistry.Keys(args, ["query", "sources", "server", "nodeId", "limit", "includeSchema"]);
@@ -143,8 +144,9 @@ internal static partial class UnifiedTools
             string[] servers;
             try
             {
-                servers = !string.IsNullOrEmpty(filter)
-                    ? new[] { filter }
+                servers =
+                    !string.IsNullOrEmpty(filter) ? new[] { filter }
+                    : broadServers is not null ? broadServers.ToArray()
                     : registry
                         .Mcp.Summaries()
                         .OfType<JsonObject>()
