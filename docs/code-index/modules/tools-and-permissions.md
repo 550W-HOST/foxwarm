@@ -92,6 +92,8 @@ Less frequently used builtins, MCP tools, and node tools are discovered through 
 
 [2026-11-06] Without `server`, MCP discovery for an isolated Agent's Session lists only the distinct servers named by its MCP allow rules, in rule order, as retained TypeScript did; other Sessions list all enabled servers. An explicit `server` is used as given. Unreadable isolation metadata selects no servers.
 
+[2026-11-06] Discovery without `server` lists at most six servers concurrently under one 15-second deadline shared by the whole search; a server still waiting or listing at the deadline is cancelled and reported as an ordinary per-server warning that suggests passing `server`. Results and warnings keep server order. Searching one named server keeps the [60-second per-request discovery timeout](../units/mcp.md#connection-and-cancellation-contract). There is no discovery cache; per-Session connection ownership is unchanged.
+
 Agent-level authorization and filtered discovery are canonical in [D-dispatch-exact-agent-tool-rules](../threads/tool-dispatch-authorization.md#d-dispatch-exact-agent-tool-rules).
 
 ### D-tools-write-parent-policy
