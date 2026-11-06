@@ -16,7 +16,7 @@ Preview IDs, draft lifetime, scroll restoration, permission checks, semantic unm
 
 - [Navigation handoff](../units/webui-session-navigation.md) owns the bounded transient data.
 - [App](../units/webui-app.md), [Chat synchronization](../units/webui-chat.md) and [content hosts](../units/webui-workbench-content.md) stage, seed and present one navigation intent.
-- Original-App fixtures such as `mainHostResponsesWs.e2e.mjs` and `mainHostLegacyNodeProjection.e2e.mjs` wait for the target tab's visible control before physical interaction; dispatching selection does not await prepared navigation. A page-wide trigger or shared history text can still belong to the outgoing inert Chat.
+- Original-App fixtures such as `mainHostRouting.e2e.mjs`, `mainHostResponsesWs.e2e.mjs` and `mainHostLegacyNodeProjection.e2e.mjs` wait for the target tab's visible control before physical interaction; dispatching selection does not await prepared navigation. A page-wide trigger or shared history text can still belong to the outgoing inert Chat.
 - Actual built-App regressions stall history, require the old body to remain inert/visible, sample animation frames for a populated target, verify one bootstrap read, and prove the last click wins even if an abandoned server response ignores cancellation.
 
 The built-App request-budget regression switches between kept Sessions, checks one focus query per choice and no order-only exact or summary refetch, and verifies live row/tab/status updates plus coalesced invalidation. A rapid preview-switch case releases older root and exact responses last and checks that only the current focus and metadata survive.

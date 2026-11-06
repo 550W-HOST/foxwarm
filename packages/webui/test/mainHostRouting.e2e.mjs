@@ -121,7 +121,10 @@ try {
   await fixture.start(); const main = await newSession(); page = await fixture.openApp()
   await saveModelsInOriginalApp(page, yamlReader.dump(configuration()), fixture.modelPath)
   await page.evaluate(id => window.foxwarmTest.switchToSession(id), main)
-  await page.click('.foxwarm-model-selector-trigger'); await page.waitForSelector('[data-model-column="current"] [data-model-option-key="route"]')
+  // Session selection prepares history before the target Chat controls mount.
+  const modelTrigger = `[data-workbench-content-tab=${JSON.stringify('chat:' + main)}] .foxwarm-model-selector-trigger`
+  await page.waitForSelector(modelTrigger, { visible: true })
+  await page.click(modelTrigger); await page.waitForSelector('[data-model-column="current"] [data-model-option-key="route"]')
   await page.click('[data-model-column="current"] [data-model-option-key="route"]')
   assert.equal((await history(main)).session.effectiveEffort, null)
   const catalog = (await fixture.api('GET', '/api/models')).body
