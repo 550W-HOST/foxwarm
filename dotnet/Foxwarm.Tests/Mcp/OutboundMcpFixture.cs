@@ -28,11 +28,27 @@ internal sealed class OutboundMcpFixture : IAsyncDisposable
     internal Foxwarm.McpClient Mcp => Manager.OutboundMcp;
     internal ToolRegistry Registry = null!;
 
-    internal static async Task<OutboundMcpFixture> CreateAsync(string? publicBaseUrl = null)
+    internal static async Task<OutboundMcpFixture> CreateAsync(
+        string? publicBaseUrl = null,
+        JsonObject? mainMetadata = null
+    )
     {
         var f = new OutboundMcpFixture();
         try
         {
+            if (mainMetadata is not null)
+            {
+                Directory.CreateDirectory(Path.Combine(f.Data, "state"));
+                File.WriteAllText(
+                    Path.Combine(f.Data, "state", "agents.json"),
+                    new JsonObject
+                    {
+                        ["version"] = 2,
+                        ["agents"] = new JsonArray(),
+                        ["metadata"] = new JsonObject { ["main"] = mainMetadata.DeepClone() },
+                    }.ToJsonString()
+                );
+            }
             var options = new ResponsesClientOptions(
                 new Uri("http://127.0.0.1:1"),
                 "wire",

@@ -90,6 +90,8 @@ Less frequently used builtins, MCP tools, and node tools are discovered through 
 
 [2026-10-29] Maintained C# ordinary discovery renders tool and displayed property descriptions without per-description clipping, retaining control/direction escaping, whitespace normalization and comment-terminator escaping. It omits the displayed default-injection marker; structured programmatic `hidden` metadata, model injection and authorization keep their existing semantics. `includeSchema` still defaults to true, explicit false requests summaries, and only the first ten selected tools receive schema detail. Structural schema simplification and the aggregate search budget still apply. There is no independent per-declaration rejection; a declaration is omitted as a whole only when it does not fit the remaining aggregate budget.
 
+[2026-11-06] Without `server`, MCP discovery for an isolated Agent's Session lists only the distinct servers named by its MCP allow rules, in rule order, as retained TypeScript did; other Sessions list all enabled servers. An explicit `server` is used as given. Unreadable isolation metadata selects no servers.
+
 Agent-level authorization and filtered discovery are canonical in [D-dispatch-exact-agent-tool-rules](../threads/tool-dispatch-authorization.md#d-dispatch-exact-agent-tool-rules).
 
 ### D-tools-write-parent-policy

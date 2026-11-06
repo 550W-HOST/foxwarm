@@ -39,4 +39,54 @@ public sealed class OutboundMcpDiscoveryTests
         Assert.Equal(2, events.Count(item => item["kind"]?.ToString() == "list"));
         Assert.DoesNotContain(events, item => item["kind"]?.ToString() is "call" or "effect");
     }
+
+    [Fact]
+    public async Task Broad_search_for_isolated_Agent_connects_only_to_servers_with_MCP_allow_rules()
+    {
+        using var temp = new TempDirectory();
+        await using var peer = await OutboundSdkPeer.StartAsync(temp.Path);
+        await using var fixture = await OutboundMcpFixture.CreateAsync(
+            mainMetadata: new JsonObject
+            {
+                ["isolated"] = true,
+                ["toolRules"] = new JsonArray(
+                    new JsonObject
+                    {
+                        ["source"] = "mcp",
+                        ["effect"] = "allow",
+                        ["server"] = "peer",
+                        ["tool"] = "probe",
+                    }
+                ),
+            }
+        );
+        await fixture.ConfigureAsync(peer.Url + "/mcp");
+        await fixture.Mcp.ConfigureAsync(
+            new JsonObject
+            {
+                ["name"] = "unlisted",
+                ["url"] = "http://127.0.0.1:1/mcp",
+                ["transport"] = "streamable-http",
+            },
+            default
+        );
+        var result = await fixture
+            .Tools(fixture.First)
+            .ExecuteAsync(
+                new JsonObject
+                {
+                    ["id"] = "search",
+                    ["name"] = "search_tools",
+                    ["args"] = new JsonObject
+                    {
+                        ["query"] = "probe",
+                        ["sources"] = new JsonArray("mcp"),
+                    },
+                },
+                default
+            );
+        var text = result!.ToJsonString();
+        Assert.Contains("mcp:peer/probe", text);
+        Assert.DoesNotContain("unlisted", text);
+    }
 }
