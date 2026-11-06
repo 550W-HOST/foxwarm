@@ -96,8 +96,6 @@ public sealed class CodeRoutesTests
         Assert.Contains("Code is not built", html);
         Assert.Contains("npm run build:code", html);
         Assert.Contains("npm run download:code", html);
-        Assert.Contains("npm run restart", html);
-        Assert.Contains("rebuild and restart", html);
         Assert.Contains(WebUtility.HtmlEncode(f.Assets), html);
         using var asset = await f.Client.GetAsync("/vscode-web/static/out/nls.messages.js");
         Assert.Equal(HttpStatusCode.NotFound, asset.StatusCode);

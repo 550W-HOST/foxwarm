@@ -44,7 +44,7 @@ internal sealed partial class CodeWorkbench
               <main>
                 <p class="eyebrow">Optional component</p>
                 <h1>Code is not built</h1>
-                <p>This Foxwarm installation does not currently include the optional browser workbench assets. For a source installation, prepare Code below, then rebuild and restart Foxwarm.</p>
+                <p>This Foxwarm installation does not currently include the optional browser workbench assets. Choose one preparation method, then reload this page.</p>
                 <section class="option">
                   <strong>Build the MIT-licensed Code - OSS workbench from source</strong>
                   <code>npm run build:code</code>
@@ -53,8 +53,7 @@ internal sealed partial class CodeWorkbench
                   <strong>Download Microsoft's prebuilt workbench for development or licensed internal use</strong>
                   <code>npm run download:code</code>
                 </section>
-                <p>After preparation: <code>npm run restart</code></p>
-                <p class="hint">Packaged installations require a payload containing Code assets. Both commands are intentionally excluded from the normal <code style="display:inline;padding:2px 5px">npm run build</code> because preparing Code is large and slow. Assets are expected at <span class="path">{{WebUtility.HtmlEncode(
+                <p class="hint">Both commands are intentionally excluded from the normal <code style="display:inline;padding:2px 5px">npm run build</code> because preparing Code is large and slow. Assets are expected at <span class="path">{{WebUtility.HtmlEncode(
                 assetRoot
             )}}</span>.</p>
               </main>
