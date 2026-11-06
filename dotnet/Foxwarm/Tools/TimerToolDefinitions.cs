@@ -70,7 +70,7 @@ internal static class TimerToolDefinitions
             ),
             Definition(
                 "list_timers",
-                "List timers owned by a session.",
+                "List timers owned by a session, with each timer's schedule, next run, paused state and most recent result.",
                 new JsonObject
                 {
                     ["sessionId"] = String("Owner Session ID. Defaults to this session."),
@@ -137,7 +137,7 @@ internal static class TimerToolDefinitions
       },
       "paused": {
         "type": "boolean",
-        "description": "Pause (true) or resume (false) the timer."
+        "description": "Set true to stop the timer from firing while keeping its schedule and settings; set false to resume from the next scheduled time. Missed times are not replayed; a one-time timer whose time has passed fires once on resume."
       }
     },
     "required": [
