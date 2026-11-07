@@ -119,10 +119,18 @@ function markReady() {
 function onStartupError(event: Event) {
   if (ready) return
   if (event instanceof ErrorEvent) {
-    fail(event.error || event.message)
+    // Module errors expose their source URL, including cross-origin CORS assets.
+    // Initial static dependencies are represented by Vite's modulepreload links;
+    // lazy imports and React root failures have their own explicit callbacks.
+    // Anonymous classic-script errors cannot be attributed to the application.
+    if (event.filename && Array.from(document.querySelectorAll<HTMLScriptElement | HTMLLinkElement>('[data-foxwarm-boot-resource]'))
+      .some(resource => (resource instanceof HTMLScriptElement ? resource.src : resource.rel === 'modulepreload' ? resource.href : '') === event.filename)) {
+      fail(event.error || event.message)
+    }
     return
   }
   const target = event.target
+  if (!(target instanceof Element) || !target.hasAttribute('data-foxwarm-boot-resource')) return
   if (target instanceof HTMLScriptElement && target.type === 'module') {
     fail(`Could not load application module: ${target.src}`)
   } else if (target instanceof HTMLLinkElement && (target.rel === 'modulepreload' || target.rel === 'stylesheet')) {

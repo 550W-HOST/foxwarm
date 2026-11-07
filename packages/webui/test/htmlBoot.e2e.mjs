@@ -11,7 +11,8 @@ import puppeteer from 'puppeteer-core'
 
 const webui = new URL('..', import.meta.url).pathname
 const dist = path.join(webui, 'dist')
-let browser, server, baseUrl, temp, theme, html, entry, staticDependency
+let browser, server, foreignServer, foreignUrl, baseUrl, temp, theme, html, entry, staticDependency
+let injectedHtml = '', externalAssets = false
 let fixtures, fixtureHtml, serveVersion = 'a', staleHtml = false
 let admin = false, authFailed = false, authGate = null, rootGate = null, cssGate = null
 const missing = new Set()
@@ -59,9 +60,26 @@ before(async () => {
   }
   assert.notEqual(fixtureHtml.a.match(/src="([^"]+\.js)"/)[1], fixtureHtml.b.match(/src="([^"]+\.js)"/)[1])
 
+  foreignServer = createServer(async (request, response) => {
+    if (request.url.startsWith('/app/')) {
+      try {
+        if (missing.has(request.url)) throw new Error('Missing asset')
+        const body = await readFile(path.join(dist, request.url.slice('/app/'.length)))
+        response.writeHead(200, { 'Content-Type': request.url.endsWith('.css') ? 'text/css' : 'text/javascript', 'Access-Control-Allow-Origin': '*' })
+        response.end(body)
+      } catch { response.writeHead(404, { 'Access-Control-Allow-Origin': '*' }); response.end('Not found') }
+      return
+    }
+    response.writeHead(request.url.includes('missing') ? 404 : 200, { 'Content-Type': 'text/javascript', 'Access-Control-Allow-Origin': '*' })
+    response.end('throw new Error("Unrelated script exception")')
+  })
+  await new Promise(resolve => foreignServer.listen(0, '127.0.0.1', resolve))
+  foreignUrl = `http://127.0.0.1:${foreignServer.address().port}`
+
   server = createServer(async (request, response) => {
     const url = new URL(request.url, 'http://localhost')
     requests.push(url.pathname)
+    if (url.pathname === '/preview/unrelated-throws.js') { response.writeHead(200, { 'Content-Type': 'text/javascript' }); response.end('throw new Error("Unrelated same-origin exception")'); return }
     if (missing.has(url.pathname)) { response.writeHead(404); response.end('Removed deployment asset'); return }
     if (url.pathname.endsWith('/api/auth/session')) {
       if (authGate) await authGate
@@ -83,6 +101,8 @@ before(async () => {
         }
         body = await readFile(path.join(fixture ? fixtures[serveVersion] : dist, relative))
       }
+      if ((!relative || relative === 'index.html') && externalAssets) body = body.replaceAll('./assets/', foreignUrl + '/app/assets/')
+      if ((!relative || relative === 'index.html') && injectedHtml) body = body.replace('</head>', injectedHtml + '</head>')
       const type = relative.endsWith('.js') ? 'text/javascript' : relative.endsWith('.css') ? 'text/css' : !relative || relative.endsWith('.html') ? 'text/html' : 'application/octet-stream'
       response.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-store' })
       response.end(body)
@@ -98,6 +118,7 @@ before(async () => {
 
 after(async () => {
   await browser?.close()
+  if (foreignServer) await new Promise(resolve => foreignServer.close(resolve))
   if (server) await new Promise(resolve => server.close(resolve))
   if (artifacts) await writeFile(path.join(artifacts, 'browser-evidence.json'), JSON.stringify({ requests, diagnostics }, null, 2))
   if (temp) await rm(temp, { recursive: true, force: true })
@@ -105,7 +126,7 @@ after(async () => {
 
 async function newPage({ selection, custom, dark = false, reduced = false, blockAssets = false } = {}) {
   const page = await browser.newPage()
-  page.on('pageerror', error => diagnostics.push({ kind: 'pageerror', message: error.message }))
+  page.on('pageerror', error => diagnostics.push({ kind: 'pageerror', message: error?.message ?? String(error) }))
   page.on('requestfailed', request => diagnostics.push({ kind: 'requestfailed', url: request.url(), reason: request.failure()?.errorText }))
   page.on('response', response => { if (response.status() >= 400) diagnostics.push({ kind: 'http', status: response.status(), url: response.url() }) })
   if (!firefox) await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: dark ? 'dark' : 'light' }, { name: 'prefers-reduced-motion', value: reduced ? 'reduce' : 'no-preference' }])
@@ -334,6 +355,96 @@ test('popup and embedded entry failures show recovery even though their loading 
   } finally { missing.clear() }
 })
 
+test('unrelated injected resources and script exceptions do not replace a working startup', async () => {
+  const cases = [
+    { tag: `<script type="module" src="${foreignUrl}/missing.js"></script>`, kind: 'resource' },
+    { tag: '<script type="module" src="./unrelated-missing.js"></script>', kind: 'resource' },
+    { tag: `<link rel="modulepreload" href="${foreignUrl}/missing.js">`, kind: 'resource' },
+    { tag: '<link rel="stylesheet" href="./unrelated-missing.css">', kind: 'resource' },
+    { tag: `<script type="module" src="${foreignUrl}/throws.js"></script>`, kind: 'execution' },
+    { tag: '<script type="module" src="./unrelated-throws.js"></script>', kind: 'execution' },
+    { tag: `<script src="${foreignUrl}/throws.js"></script>`, kind: 'anonymous' },
+    { tag: '<script>throw new Error("Unrelated inline exception")</script>', kind: 'execution' },
+  ]
+  for (const scenario of cases) {
+    let releaseAuth
+    authGate = new Promise(resolve => { releaseAuth = resolve })
+    injectedHtml = scenario.tag
+    const page = await newPage({ reduced: true })
+    await page.evaluateOnNewDocument(() => {
+      window.observedErrors = []
+      window.addEventListener('error', event => window.observedErrors.push(event instanceof ErrorEvent
+        ? { kind: 'execution', filename: event.filename, message: event.message }
+        : { kind: 'resource', url: event.target.src || event.target.href }), true)
+    })
+    try {
+      await page.goto(baseUrl + '/preview/')
+      await page.waitForFunction(() => window.observedErrors.length > 0)
+      const errors = await page.evaluate(() => window.observedErrors)
+      diagnostics.push({ kind: 'injected-errors', scenario: scenario.kind, errors })
+      if (scenario.kind === 'anonymous' && !firefox) assert.ok(errors.some(error => error.kind === 'execution' && !error.filename))
+      assert.equal(await page.$(errorScreen), null, JSON.stringify(errors))
+      releaseAuth()
+      await page.waitForSelector('[data-webui-role="webui"]')
+      await page.waitForSelector('#foxwarm-boot', { hidden: true })
+    } finally { releaseAuth(); authGate = null; injectedHtml = ''; await page.close() }
+  }
+})
+
+test('static dependency execution exceptions still show startup recovery', async () => {
+  const page = await newPage()
+  await page.setRequestInterception(true)
+  page.on('request', async request => {
+    if (request.url().endsWith('/' + staticDependency)) {
+      const code = await readFile(path.join(dist, 'assets', staticDependency), 'utf8')
+      await request.respond({ status: 200, contentType: 'text/javascript', body: 'throw new Error("Static dependency failed");\n' + code })
+    } else await request.continue()
+  })
+  try {
+    await page.goto(baseUrl + '/preview/')
+    await page.waitForSelector(errorScreen, { visible: true })
+    assert.equal(await page.$eval('#foxwarm-boot-error', node => node.textContent), 'Static dependency failed')
+  } finally { await page.close() }
+})
+
+test('owned cross-origin assets retain recovery for load and execution errors', async () => {
+  externalAssets = true
+  try {
+    for (const scenario of ['ready', 'entry-load', 'entry-execution', 'dependency-execution', 'stylesheet-load']) {
+      const page = await newPage({ reduced: true })
+      await page.evaluateOnNewDocument(() => {
+        window.ownedErrors = []
+        window.addEventListener('error', event => window.ownedErrors.push({
+          filename: event.filename, message: event.message, target: event.target?.src || event.target?.href,
+        }), true)
+      })
+      if (scenario === 'entry-load') missing.add('/app/' + entry)
+      if (scenario === 'stylesheet-load') missing.add('/app/' + html.match(/href="\.\/([^"]+\.css)"/)[1])
+      if (scenario.endsWith('execution')) {
+        await page.setRequestInterception(true)
+        page.on('request', async request => {
+          const resource = scenario === 'entry-execution' ? entry : 'assets/' + staticDependency
+          if (request.url() === foreignUrl + '/app/' + resource) {
+            const code = await readFile(path.join(dist, resource), 'utf8')
+            await request.respond({ status: 200, contentType: 'text/javascript', headers: { 'Access-Control-Allow-Origin': '*' }, body: 'throw new Error("Owned module failed");\n' + code })
+          } else await request.continue()
+        })
+      }
+      try {
+        await page.goto(baseUrl + '/preview/')
+        if (scenario === 'ready') {
+          await page.waitForSelector('[data-webui-role="webui"]')
+          await page.waitForSelector('#foxwarm-boot', { hidden: true })
+        } else {
+          diagnostics.push({ kind: 'owned-errors', scenario, errors: await page.evaluate(() => window.ownedErrors) })
+          await page.waitForSelector(errorScreen, { visible: true })
+          assert.ok(await page.$eval('#foxwarm-boot-error', node => node.textContent.length > 0))
+        }
+      } finally { missing.clear(); await page.close() }
+    }
+  } finally { externalAssets = false }
+})
+
 test('startup execution exceptions retain their safe text without executing error markup or swallowing diagnostics', async () => {
   const page = await newPage()
   await page.setRequestInterception(true)
@@ -347,7 +458,7 @@ test('startup execution exceptions retain their safe text without executing erro
     assert.equal(await page.$eval('#foxwarm-boot-error', node => node.textContent), message)
     assert.equal(await page.$('#foxwarm-boot-error img'), null)
     assert.equal(await page.evaluate(() => window.injected), undefined)
-    assert.ok(diagnostics.some(item => item.kind === 'pageerror' && item.message === message))
+    assert.ok(diagnostics.some(item => item.kind === 'pageerror' && item.message.includes(message)))
   } finally { await page.close() }
 })
 

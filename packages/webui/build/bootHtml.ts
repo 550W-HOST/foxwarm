@@ -45,9 +45,13 @@ export async function renderBootHtml(html: string): Promise<string> {
   </div>`
   // Escape the HTML parser's script terminator, including in bundled theme data.
   const script = bundle.outputFiles[0].text.replace(/<\/script/gi, '<\\/script')
+  // Only resources in the built/source HTML belong to this startup. Scripts
+  // injected by a proxy or extension after this transform are not app failures.
+  const ownedHtml = html.replace(/<(?:script\b[^>]*\btype="module"[^>]*|link\b[^>]*\brel="(?:modulepreload|stylesheet)"[^>]*)>/g,
+    tag => tag.replace(/>$/, ' data-foxwarm-boot-resource>'))
   // Entry CSS must not prevent the inline screen's first paint. The inline
   // load handler enables each sheet and includes it in the existing ready gate.
-  const nonBlockingHtml = html.replace(/<link\b[^>]*\brel="stylesheet"[^>]*>/g,
+  const nonBlockingHtml = ownedHtml.replace(/<link\b[^>]*\brel="stylesheet"[^>]*>/g,
     tag => tag.replace(/>$/, ' media="not all" data-foxwarm-boot-style>'))
   return nonBlockingHtml.replace('<!-- foxwarm-boot-head -->', `<style>${loaderCss}\n${recoveryCss}</style><script>${script}</script>`)
     .replace('<!-- foxwarm-boot-screen -->', screen)
