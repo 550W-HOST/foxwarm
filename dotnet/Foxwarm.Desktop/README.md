@@ -65,10 +65,14 @@ It also executes the packaged esbuild/sharp dependencies. A separate
 `desktop-acceptance` artifact records the acceptance result without user state,
 tokens or browser profiles.
 
-The existing managed-package acceptance lane must be rerun for WinUI before its
-results apply to this host. NativeAOT package validation is not yet qualified.
-These checks do not cover tray interaction, Windows sign-out, power-loss
-recovery, optional Vector/embedding services or the unbundled Code workbench.
+Managed and NativeAOT direct-publish lanes have exercised native cookie sign-in,
+original Setup, a native ToolScript turn with real exec-helper execution, artifact
+dependencies, extension bundles, shutdown/restart persistence and the window/tray
+lifetime. Native process inspection confirms that CoreCLR is not loaded. The full
+release ZIP (including optional Code workbench assets), NativeAOT package-layout
+validation and the optional Main services remain separate qualification steps.
+Physical notification-area gestures, Windows sign-out and power-loss
+recovery, plus optional Vector/embedding services, remain outside these checks.
 WebView2 debugging is enabled only for acceptance, through the test child's
 environment or an app-specific policy on the disposable Windows runner. Normal
 Desktop startup does not enable it.
@@ -102,9 +106,9 @@ Node installation, WSL or alternate backend. Native Code drive paths use the exi
 Code URI mapping; UNC/device paths are not supported. Connected Nodes retain
 their own capabilities. Chat, setup, file tools and persistent history remain
 available.
-Linux directory-fsync durability is not claimed on Windows. Code workbench
-assets, optional external tools/services and optional HEIF support are not
-supplied by this package. There is no updater, autostart or installer.
+Linux directory-fsync durability is not claimed on Windows. The release packager
+adds the pinned Code workbench assets; direct .NET publication does not acquire
+them. Optional external tools/services and HEIF support remain unbundled. There is no updater, autostart or installer.
 
 Artifact preparation uses a short-lived Node process for validation, raster
 inspection and React compilation. Its Windows esbuild/sharp dependencies and
@@ -133,7 +137,7 @@ and copied with its notices into output; no native binary is tracked. Git is
 an optional external tool for Code SCM, not a bundled dependency.
 
 Install the repository's npm dependencies (`npm ci`, `npm --prefix packages/webui ci`)
-and the .NET 10 SDK on Windows, then run the release packager from the repository root. It
+and a patched .NET 10 SDK on Windows, then run the release packager from the repository root. It
 publishes Desktop self-contained for `win-x64` on Windows and removes
 console-only entry files:
 
@@ -163,3 +167,21 @@ pins Windows SDK BuildTools 10.0.26100.4654 through Windows App SDK 2.6.5. The
 package's XAML compiler uses .NET Framework 4.7.2 for `App.xaml`, which supplies
 the application/control resources. The window and original WebUI remain unchanged
 by this resource definition.
+
+### NativeAOT publication
+
+Qualification uses .NET SDK 10.0.403 with runtime and ILCompiler 10.0.14.
+Use a patched SDK rather than forcing one runtime version onto every framework
+reference: WinUI also resolves a separately versioned Windows SDK projection.
+The default release packager remains managed. To publish the same Desktop entry
+as native code after preparing the shared delivery assets:
+
+```powershell
+dotnet publish dotnet/Foxwarm.Desktop -c Release -r win-x64 --self-contained true -p:PublishAot=true -p:FoxwarmConsoleEntry=false -p:ArtifactTargetRid=win-x64 -o desktop-native
+```
+
+Keep the app-local WinUI and WebView2 native libraries and resources beside the
+executable. NativeAOT does not make this a single-file application. Keep PDB
+symbols separately from the application archive. The selected WebUI/host path
+is qualified; outstanding trim/AOT warnings in other Main services must be
+assessed before expanding that support claim.

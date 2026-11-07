@@ -22,7 +22,7 @@ export async function validateDesktopPackage(directory) {
   for (const file of [
     'Foxwarm.Desktop.dll', 'Foxwarm.Desktop.deps.json', 'Foxwarm.dll',
     'Microsoft.Web.WebView2.Core.Projection.dll', 'Microsoft.WinUI.dll',
-    'Foxwarm.ico', 'WindowsAppSDK-LICENSE.txt',
+    'Foxwarm.ico', 'WindowsAppSDK-LICENSE.txt', 'WindowsAppSDK-NOTICE.txt',
     'webui-dist/index.html', 'packages/webui/login.html',
     'templates/agents/00_SYSTEM.md', 'templates/models.example.yaml',
     'templates/node/run.ps1', 'templates/node/run.sh',

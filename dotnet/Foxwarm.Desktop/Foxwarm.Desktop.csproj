@@ -60,6 +60,10 @@
       DestinationFiles="$(PublishDir)WindowsAppSDK-LICENSE.txt"
     />
     <Copy
+      SourceFiles="$(PkgMicrosoft_WindowsAppSDK)/NOTICE.txt"
+      DestinationFiles="$(PublishDir)WindowsAppSDK-NOTICE.txt"
+    />
+    <Copy
       SourceFiles="$(PkgMicrosoft_Web_WebView2)/LICENSE.txt"
       DestinationFiles="$(PublishDir)WebView2-LICENSE.txt"
     />
