@@ -1481,7 +1481,6 @@ const ChatComposer = memo(function ChatComposer({
         )}
 
         {aboveInput}
-        {answersQuestion && <div data-composer-answer-hint className="mb-1 px-1 text-xs text-fw-warning">Your next message answers the question.</div>}
         <div className="foxwarm-chat-composer-form-anchor relative">
           {showSlashCommandMenu && (
             <div className="absolute inset-x-0 bottom-[calc(100%+0.5rem)] z-10 flex max-h-[min(20rem,calc(100vh-1rem))] flex-col overflow-hidden rounded-lg border border-fw-border bg-fw-surface shadow-lg dark:border-fw-border dark:bg-fw-canvas" data-slash-command-overlay="true">

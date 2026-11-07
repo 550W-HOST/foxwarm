@@ -87,7 +87,7 @@ test('ask_user questions are answered from the card, the dock and an ordinary me
     await page.evaluate(id => window.foxwarmTest.switchToSession(id), blocking)
     await page.waitForSelector('[data-question-dock][data-question-dock-expanded="true"]')
     await page.waitForSelector(`[data-ask-user-card="${questionId}"][data-question-status="open"]`)
-    assert.match(await page.$eval('[data-composer-answer-hint]', node => node.textContent), /answers the question/)
+    await page.waitForSelector('[data-placeholder="Reply to answer the question"]')
     assert.ok(await page.evaluate(() => document.body.innerText.includes('Waiting for your answer')))
     await screenshot(page, 'desktop-blocking-card-dock')
 
@@ -132,7 +132,7 @@ test('ask_user questions are answered from the card, the dock and an ordinary me
     // A question asked while the page is open elevates its Session through the live list refresh.
     await page.waitForSelector(`[data-session-section="questions"] [data-session-id="${replyId}"] [data-session-question="waiting"]`)
     await page.evaluate(id => window.foxwarmTest.switchToSession(id), replyId)
-    await page.waitForSelector('[data-composer-answer-hint]')
+    await page.waitForSelector('[data-placeholder="Reply to answer the question"]')
     await page.evaluate(() => window.foxwarmTest.sendMessage('Tomorrow morning, please.'))
     await until(async () => (await view(replyId)).questions.find(item => item.id === replyQuestion)?.status === 'answered', 'message answered the question')
     const replyRecord = (await view(replyId)).questions.find(item => item.id === replyQuestion)

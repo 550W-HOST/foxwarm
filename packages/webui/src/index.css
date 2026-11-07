@@ -148,6 +148,20 @@ html.dark {
   padding-right: calc(var(--foxwarm-content-gutter) + var(--foxwarm-chat-scrollbar-gutter, 0px));
 }
 
+/* Hide scrolled Timeline text below the floating composer and behind its lower edge.
+   The fade starts near the form's middle so its upper part keeps the translucent look;
+   the native scrollbar gutter stays uncovered. */
+.foxwarm-chat-composer::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  bottom: 0;
+  inset-inline: 0 var(--foxwarm-chat-scrollbar-gutter, 0px);
+  height: 5rem;
+  background: linear-gradient(to bottom, transparent, var(--foxwarm-color-canvas) 1.5rem);
+  pointer-events: none;
+}
+
 .foxwarm-chat-sm-label,
 .foxwarm-chat-md-label,
 .foxwarm-chat-lg-label { display: none; }
