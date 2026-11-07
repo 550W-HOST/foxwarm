@@ -14,12 +14,14 @@ import { waitForWebUiReady } from './webuiReadiness.mjs'
 
 const startedAt = Date.now()
 let currentStage
+const nativeDialogPages = new WeakSet()
 function stage(name) {
   currentStage = name
   console.error(JSON.stringify({ fixture: 'mainHostCode', stage: name, elapsedMs: Date.now() - startedAt }))
 }
 function observeNativeDialogs(page, surface) {
   page.on('dialog', dialog => {
+    nativeDialogPages.add(page)
     console.error(JSON.stringify({ fixture: 'mainHostCode', stage: currentStage, event: 'native-dialog', surface, type: dialog.type(), message: dialog.message().slice(0, 2048), elapsedMs: Date.now() - startedAt }))
   })
 }
@@ -120,7 +122,36 @@ async function palette(frame, command) {
   const page = frame.page(); await page.keyboard.down('Control'); await page.keyboard.down('Shift'); await page.keyboard.press('P'); await page.keyboard.up('Shift'); await page.keyboard.up('Control')
   await frame.waitForSelector('.quick-input-widget input', { visible: true })
   await frame.type('.quick-input-widget input', command)
-  await frame.waitForFunction(command => [...document.querySelectorAll('.quick-input-list .monaco-list-row.focused')].some(row => row.textContent.includes(command)), {}, command)
+  try {
+    await frame.waitForFunction(command => [...document.querySelectorAll('.quick-input-list .monaco-list-row.focused')].some(row => row.textContent.includes(command)), {}, command)
+  } catch (error) {
+    let state
+    // Native dialogs can block CDP evaluation; their existing event log is the evidence.
+    if (!nativeDialogPages.has(page)) {
+      try {
+        state = await frame.evaluate(() => {
+          const describe = element => element ? {
+            tag: element.tagName, role: element.getAttribute('role'),
+            label: element.getAttribute('aria-label')?.slice(0, 200),
+            className: String(element.className).slice(0, 200),
+          } : null
+          const input = document.querySelector('.quick-input-widget input')
+          return {
+            input: input?.value.slice(0, 200), inputVisible: !!input?.getClientRects().length,
+            documentFocused: document.hasFocus(), activeElement: describe(document.activeElement),
+            selectedResult: input?.getAttribute('aria-activedescendant'),
+            results: [...document.querySelectorAll('.quick-input-list .monaco-list-row')].slice(0, 5).map(row => ({
+              text: row.textContent.slice(0, 200), focused: row.classList.contains('focused'),
+              selected: row.getAttribute('aria-selected'),
+            })),
+            otherFocusedRows: [...document.querySelectorAll('.monaco-list-row.focused')].filter(row => !row.closest('.quick-input-widget')).slice(0, 4).map(row => row.textContent.slice(0, 200)),
+          }
+        })
+      } catch (diagnosticError) { state = { unavailable: String(diagnosticError).slice(0, 300) } }
+    }
+    console.error(JSON.stringify({ fixture: 'mainHostCode', stage: currentStage, event: 'palette-failure', command, nativeDialog: nativeDialogPages.has(page), state }))
+    throw error
+  }
   await page.keyboard.press('Enter')
 }
 async function codeFrame(page, nodeId = 'master') {

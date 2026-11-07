@@ -45,3 +45,5 @@ The source preparation pin is Code-OSS 1.141.0; route-shape tests do not prove a
 The remote-workspace data-folder command in `mainHostNodeCode.e2e.mjs` waits for the master frame’s Explorer root before checking master’s persisted workspace and unchanged remote roots. Keyboard dispatch alone does not settle the command.
 
 `Workspace_migration_and_defaults_publish_complete_replacement_files` holds readers across actual bootstrap requests and checks that old handles retain the prior complete document while reopening the path yields the replacement. The original-App per-Node fixture awaits the originating frame’s request acknowledgement before reading its workspace or starting another launcher interaction; the acknowledgement includes Explorer focus completion.
+
+The original-App Code fixture records bounded palette input, focus and result state only when its requested command-result wait fails. It rethrows the original error and avoids DOM evaluation after a native dialog has been reported, since that dialog can block CDP. This separates command-entry state from later editor-open failures without changing command selection or its timeout.
