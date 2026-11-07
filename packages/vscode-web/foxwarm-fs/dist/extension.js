@@ -1285,6 +1285,7 @@ async function openFoxwarmFile(request, provider) {
       );
     }
   }
+  await vscode3.commands.executeCommand("foxwarm-webui.waitForEditorRestore");
   await vscode3.window.showTextDocument(document, { preview: true, selection });
   await revealWorkspaceRoot(uri);
   if (existing?.isDirty) {

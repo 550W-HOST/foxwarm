@@ -308,3 +308,44 @@ test('early commands wait for saved roots instead of treating the startup snapsh
   assert.equal(workspaceFolders[0].uri.toString(), 'foxwarm://node+remote/new');
   delete vscodeMock.workspace.workspaceFile;
 });
+
+test('explicit file display waits for remembered editor restoration and never retries a rejected display', async () => {
+  workspaceFolders = [{ uri: MockUri.parse('foxwarm://node+master/remote/project') }];
+  statType = 1;
+  statError = undefined;
+  const uri = MockUri.parse('foxwarm://node+master/remote/project/notes.txt');
+  const document = { uri, lineCount: 1 };
+  const documentRead = Promise.withResolvers(), restored = Promise.withResolvers();
+  const originalExecute = vscodeMock.commands.executeCommand;
+  const originalOpen = vscodeMock.workspace.openTextDocument;
+  const originalShow = vscodeMock.window.showTextDocument;
+  const calls = [];
+  vscodeMock.workspace.textDocuments = [];
+  vscodeMock.workspace.openTextDocument = async () => { documentRead.resolve(); return document; };
+  vscodeMock.commands.executeCommand = async id => {
+    calls.push(id);
+    if (id === 'foxwarm-webui.waitForEditorRestore') await restored.promise;
+  };
+  vscodeMock.window.showTextDocument = async value => { assert.equal(value, document); calls.push('show'); };
+  const request = { kind: 'openFile', nodeId: 'master', path: '/remote/project/notes.txt' };
+  try {
+    const pending = commands.get('foxwarm-fs.handleOpenRequest')(request);
+    await documentRead.promise;
+    await Promise.resolve();
+    assert.deepEqual(calls, ['foxwarm-webui.waitForEditorRestore']);
+    restored.resolve();
+    assert.equal((await pending).status, 'opened');
+    assert.deepEqual(calls, ['foxwarm-webui.waitForEditorRestore', 'show', 'workbench.view.explorer', 'revealInExplorer']);
+
+    calls.length = 0;
+    const failure = new Error('editor rejected the input');
+    vscodeMock.window.showTextDocument = async () => { calls.push('show'); throw failure; };
+    await assert.rejects(commands.get('foxwarm-fs.handleOpenRequest')(request), error => error === failure);
+    assert.deepEqual(calls, ['foxwarm-webui.waitForEditorRestore', 'show']);
+  } finally {
+    restored.resolve();
+    vscodeMock.commands.executeCommand = originalExecute;
+    vscodeMock.workspace.openTextDocument = originalOpen;
+    vscodeMock.window.showTextDocument = originalShow;
+  }
+});

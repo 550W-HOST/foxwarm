@@ -327,7 +327,10 @@ try {
   }
   await clickReadableAction('[aria-label="Expand activity"]')
   await page.waitForFunction(() => document.querySelector('[data-activity-expanded="true"]')?.style.height === '')
-  await clickReadableAction('button[title="Open notes.txt in Code"]'); code = await codeFrame(page); await code.waitForSelector('.monaco-workbench', { timeout: 30000 })
+  await clickReadableAction('button[title="Open notes.txt in Code"]'); code = await codeFrame(page)
+  await code.waitForFunction(() => document.querySelector('.monaco-workbench')
+    && document.querySelector('.tab.active')?.getAttribute('aria-label')?.includes('notes.txt')
+    && document.querySelector('.editor-instance .view-lines')?.textContent.replaceAll('\u00a0', ' ').includes('selected second'), { timeout: 30000 })
   const persisted = JSON.parse(await readFile(join(owned.data, 'state/vscode-web/node-master.code-workspace'), 'utf8')); assert(persisted.folders.length >= 2); assert.equal(persisted.settings['yaml.schemaStore.enable'], false)
   assert.equal((await owned.api('GET', '/api/vscode-web/git/commit?workspace=' + encodeURIComponent(owned.work) + '&id=' + rootCommit)).body.comparison.mode, 'empty-tree')
   await page.evaluate(() => window.foxwarmTest.switchToSession('main'))

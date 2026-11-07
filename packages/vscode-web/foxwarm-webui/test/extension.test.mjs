@@ -270,3 +270,38 @@ test('reads legacy open-session restore state and writes the generalized target 
   assert.equal(executed.filter(item => item.id === 'vscode.openWith').at(-1).args[1], 'foxwarm-webui.chatEditor');
   assert.deepEqual(context.workspaceState.values.get('foxwarm-webui.openTabs.v2'), [{ kind: 'session', sessionId: 'agent/legacy', title: 'Legacy' }]);
 });
+
+test('startup restoration completion covers every remembered editor without starting another restore', async () => {
+  const context = mockContext();
+  context.workspaceState.values.set('foxwarm-webui.openTabs.v2', [{ kind: 'session', sessionId: 'main' }, { kind: 'setup' }]);
+  const firstStarted = Promise.withResolvers(), firstFinished = Promise.withResolvers();
+  const lastStarted = Promise.withResolvers(), lastFinished = Promise.withResolvers();
+  const original = vscodeMock.commands.executeCommand;
+  const opened = [];
+  vscodeMock.commands.executeCommand = async (id, uri, viewType) => {
+    assert.equal(id, 'vscode.openWith');
+    opened.push(viewType);
+    if (opened.length === 1) { firstStarted.resolve(); await firstFinished.promise; }
+    else { lastStarted.resolve(); await lastFinished.promise; }
+  };
+  try {
+    extension.activate(context);
+    const waitForRestore = commands.get('foxwarm-webui.waitForEditorRestore');
+    assert.equal(typeof waitForRestore, 'function');
+    let completed = false;
+    const pending = waitForRestore().then(() => { completed = true; });
+    await firstStarted.promise;
+    assert.equal(completed, false);
+    firstFinished.resolve();
+    await lastStarted.promise;
+    assert.equal(completed, false);
+    lastFinished.resolve();
+    await pending;
+    await waitForRestore();
+    assert.equal(completed, true);
+    assert.deepEqual(opened, [extension.FOXWARM_CHAT_EDITOR_VIEW_TYPE, extension.FOXWARM_SETUP_EDITOR_VIEW_TYPE]);
+  } finally {
+    firstFinished.resolve(); lastFinished.resolve();
+    vscodeMock.commands.executeCommand = original;
+  }
+});

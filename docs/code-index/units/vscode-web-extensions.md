@@ -26,7 +26,7 @@ Cross-module contract: [Code integration](../threads/code-integration.md).
 - Registers the writable, case-sensitive `foxwarm` filesystem provider.
 - Preferred URI: `foxwarm://node+<nodeId>/<absolute-path>`; reads the earlier `foxwarm://node/<nodeId>/...` form and writes current shape.
 - Implements stat/read-directory/read-file/write-file/create-directory/delete/rename through authenticated routes.
-- Contributes Add Folder and fixed hidden add-folder/open-file bridge handling. Folder additions deduplicate covered paths and replace contained roots. File requests add a containing cwd or parent as needed, then focus/reveal the file in Explorer.
+- Contributes Add Folder and fixed hidden add-folder/open-file bridge handling. Folder additions deduplicate covered paths and replace contained roots. File requests add a containing cwd or parent as needed, then wait for the WebUI extension’s startup restoration before showing the text document and focusing/revealing the file in Explorer.
 - Contributes command-palette actions for the authoritative master app and data roots. They use the fixed authenticated workspace-roots response and route to master’s workbench. Containment-aware additions preserve unrelated roots, assign stable labels to exact roots, and focus/reveal the target in Explorer.
 - Activates the optional Red Hat YAML contributor API and supplies bundled shared App/Models schemas, including executable Node-provider definitions, only for exact authoritative master config URIs. Missing YAML assets or APIs log and leave filesystem commands active.
 - The supported path is Foxwarm's per-Node persistent multi-root workbench. A custom filesystem can activate before saved workspace roots load; commands distinguish an empty saved workspace from this startup snapshot before mutating folders. The commands wait for its ordinary folder-change event and keep no global/workspace reload intent; direct bare empty/single-folder launches do not guarantee focus after a workbench reload.
@@ -55,10 +55,13 @@ Cross-module contract: [Code integration](../threads/code-integration.md).
 - Contributes the Foxwarm Activity Bar sidebar plus read-only custom editors for session Chat, Agents, and Setup.
 - Embeds strict leaf WebUI roots (`foxwarmEmbed=sidebar|chat|agents|setup`) through exact-source and random-nonce checked fixed messages.
 - Deterministic target URIs deduplicate editors. Workspace-scoped state independently restores each Node’s open targets; the former global target and session-only keys are read for migration and cleared on the new write.
+- `foxwarm-webui.waitForEditorRestore` is a hidden contributed command returning the existing single startup-restoration promise. Its activation completes without waiting for restoration; the filesystem extension awaits the receipt before `showTextDocument`. Restoration keeps its per-target error handling, and an explicit editor-open failure propagates without a retry.
 - Tab-group events publish the active Foxwarm target for singular sidebar selection plus all active Foxwarm Chat editor-group session IDs for the browser-local unread visibility contract; ordinary editors clear singular sidebar selection.
 - Embedded Chat can request `open-setup` with the fixed `focus: models` field. The controller activates the stable Setup editor, waits for its nonce-bound ready message, and forwards one fixed Models-focus signal; arbitrary focus targets or commands are not bridged.
 - Sidebar terminal actions invoke the Code terminal extension rather than nesting a WebUI terminal.
 - Same-origin cookie auth is current. Separate isolated webview origins do not yet have scoped credential exchange.
+
+The filesystem `workspaceCommands.test.mjs` holds startup restoration pending and verifies that explicit file display waits, while a rejected display is not retried. The WebUI extension test holds successive remembered editors and verifies that the one completion receipt covers the entire restoration. `mainHostCode.e2e.mjs` checks the requested text file is active and rendered after reopening a workspace with remembered custom editors.
 
 ## Commit markers
 

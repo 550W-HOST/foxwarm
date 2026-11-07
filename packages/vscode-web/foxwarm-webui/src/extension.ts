@@ -5,6 +5,7 @@ export const FOXWARM_CHAT_EDITOR_VIEW_TYPE = 'foxwarm-webui.chatEditor';
 export const FOXWARM_AGENTS_EDITOR_VIEW_TYPE = 'foxwarm-webui.agentsEditor';
 export const FOXWARM_SETUP_EDITOR_VIEW_TYPE = 'foxwarm-webui.setupEditor';
 export const FOXWARM_OPEN_SESSION_COMMAND = 'foxwarm-webui.openSession';
+export const FOXWARM_WAIT_FOR_EDITOR_RESTORE_COMMAND = 'foxwarm-webui.waitForEditorRestore';
 export const FOXWARM_EMBED_CHANNEL = 'foxwarm-webui-embed';
 export const FOXWARM_EMBED_HOST_CHANNEL = 'foxwarm-webui-host';
 export const FOXWARM_EMBED_VERSION = 1;
@@ -420,6 +421,9 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     vscode.window.tabGroups.onDidChangeTabGroups(() => controller.publishActiveTarget()),
   );
-  globalThis.setTimeout(() => { void controller.restoreTargets(); }, 0);
+  const restoration = controller.restoreTargets();
+  context.subscriptions.push(
+    vscode.commands.registerCommand(FOXWARM_WAIT_FOR_EDITOR_RESTORE_COMMAND, () => restoration),
+  );
   console.log(`Foxwarm WebUI integration registered. webUiBase=${deriveWebUiBaseUrl(context.extensionUri)}`);
 }

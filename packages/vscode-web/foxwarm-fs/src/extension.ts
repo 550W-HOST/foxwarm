@@ -203,6 +203,8 @@ async function openFoxwarmFile(
       );
     }
   }
+  // A remembered custom editor opening in this group can cancel the pending text input.
+  await vscode.commands.executeCommand('foxwarm-webui.waitForEditorRestore');
   await vscode.window.showTextDocument(document, { preview: true, selection });
   await revealWorkspaceRoot(uri);
   if (existing?.isDirty) {
