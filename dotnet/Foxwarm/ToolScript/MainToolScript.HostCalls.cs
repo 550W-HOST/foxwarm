@@ -98,7 +98,7 @@ internal sealed partial class MainToolScript
                     (
                         record["executedTools"] as JsonArray
                         ?? throw new InvalidDataException("Missing ToolScript tool history.")
-                    ).Add(toolName);
+                    ).Add((JsonNode?)toolName);
                     return result;
                 case "request_model_without_context":
                     var prompt =
@@ -302,7 +302,7 @@ internal sealed partial class MainToolScript
                     var placeholder = $"[{images.Length} image part(s) promoted]";
                     if (survivors.Count > 0)
                     {
-                        survivors.Add(placeholder);
+                        survivors.Add((System.Text.Json.Nodes.JsonNode?)(placeholder));
                         result["parts"] = survivors;
                     }
                     else

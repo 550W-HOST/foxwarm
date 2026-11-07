@@ -292,7 +292,7 @@ internal sealed partial class MessageRouter
 
     private static Task ReplyRouteAsync(ExternalChannelContext source, MessageRouteResult result)
     {
-        var value = JsonSerializer.SerializeToNode(result.Value)!.AsObject();
+        var value = JsonData.SerializeToNode(result.Value)!.AsObject();
         return source.Reply(
             SessionWait.Text(value["commandResponse"])
                 ?? SessionWait.Text(value["error"])

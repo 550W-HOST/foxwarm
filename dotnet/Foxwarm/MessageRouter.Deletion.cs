@@ -60,11 +60,11 @@ internal sealed partial class MessageRouter
             outcome["code"] = error.Code;
             return new(
                 error.Status >= 500 ? error.Status : 200,
-                new
+                new JsonObject
                 {
-                    success = error.Status < 500,
-                    commandResponse = reply,
-                    result = outcome,
+                    ["success"] = error.Status < 500,
+                    ["commandResponse"] = reply,
+                    ["result"] = JsonData.Node(outcome),
                 }
             );
         }
@@ -76,11 +76,11 @@ internal sealed partial class MessageRouter
             runtime.ReplyToCommand(context.SessionId, reply);
         return new(
             200,
-            new
+            new JsonObject
             {
-                success = true,
-                commandResponse = reply,
-                result,
+                ["success"] = true,
+                ["commandResponse"] = reply,
+                ["result"] = JsonData.Node(result),
             }
         );
     }

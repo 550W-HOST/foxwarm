@@ -84,11 +84,11 @@ internal sealed partial class MessageRouter
                 runtime.ReplyToCommand(owner.Id, reply);
             return new(
                 200,
-                new
+                new JsonObject
                 {
-                    success = true,
-                    commandResponse = reply,
-                    result,
+                    ["success"] = true,
+                    ["commandResponse"] = reply,
+                    ["result"] = JsonData.Node(result),
                 }
             );
         }
@@ -99,12 +99,12 @@ internal sealed partial class MessageRouter
                 runtime.ReplyToCommand(owner.Id, reply);
             return new(
                 500,
-                new
+                new JsonObject
                 {
-                    success = false,
-                    error = error.Message,
-                    commandResponse = reply,
-                    result = error.Details,
+                    ["success"] = false,
+                    ["error"] = error.Message,
+                    ["commandResponse"] = reply,
+                    ["result"] = JsonData.Node(error.Details),
                 }
             );
         }
@@ -116,11 +116,11 @@ internal sealed partial class MessageRouter
                 runtime.ReplyToCommand(owner.Id, reply);
             return new(
                 409,
-                new
+                new JsonObject
                 {
-                    success = false,
-                    error = error.Message,
-                    commandResponse = reply,
+                    ["success"] = false,
+                    ["error"] = error.Message,
+                    ["commandResponse"] = reply,
                 }
             );
         }

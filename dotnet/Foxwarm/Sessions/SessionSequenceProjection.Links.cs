@@ -71,7 +71,11 @@ internal sealed partial class SessionSequenceProjection
                                     at = AnchorTime(sender, ParseDeliverySeq(deliverySeq));
                                 // The sending row is older than this page; the client pairs it
                                 // by key once that page loads.
-                                if (at is null && pageFrom is double start && (sentAt ?? incoming.ConsumedAt) < start)
+                                if (
+                                    at is null
+                                    && pageFrom is double start
+                                    && (sentAt ?? incoming.ConsumedAt) < start
+                                )
                                     link["pending"] = "older";
                             }
                         }

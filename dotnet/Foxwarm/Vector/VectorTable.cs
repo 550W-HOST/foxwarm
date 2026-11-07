@@ -78,7 +78,7 @@ internal sealed class VectorTable : IDisposable
                 .ToList();
             foreach (var row in rows)
             {
-                var locator = JsonSerializer.SerializeToNode(row)!;
+                var locator = JsonData.SerializeToNode(row)!;
                 var key = (
                     locator["session_id"]!.GetValue<string>(),
                     checked((long)Sessions.SessionWait.Number(locator["block_id"])!.Value)
@@ -248,7 +248,7 @@ internal sealed class VectorTable : IDisposable
         var rows = await query
             .Select(Columns.Where(column => column != "vector").ToArray())
             .ToList();
-        return rows.Select(row => JsonSerializer.SerializeToNode(row)!.AsObject()).ToArray();
+        return rows.Select(row => JsonData.SerializeToNode(row)!.AsObject()).ToArray();
     }
 
     internal async Task MaintenanceAsync(double retentionHours, bool periodic)

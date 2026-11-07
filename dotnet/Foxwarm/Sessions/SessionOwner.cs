@@ -78,21 +78,21 @@ internal sealed partial class SessionOwner
     public object State()
     {
         var state = Metadata();
-        return new
+        return new JsonObject
         {
-            id = Id,
-            agent = Agent,
-            parentSessionId = state.ParentSessionId,
-            displayName = state.DisplayName,
-            busy = state.Busy,
-            stopping = state.Stopping,
-            queueCount = state.QueueLength,
-            messageCount = state.MessageCount,
-            nextMessageSeq = state.NextMessageSeq,
-            failureCount = Entry.BackgroundProcessorFailureCount,
-            bestEffortFailureCount = Entry.BestEffortFailureCount,
-            snapshotRefreshWarning = SnapshotRefreshWarning,
-            lastError = Entry.LastBackgroundProcessorFailure?.Message,
+            ["id"] = Id,
+            ["agent"] = Agent,
+            ["parentSessionId"] = state.ParentSessionId,
+            ["displayName"] = state.DisplayName,
+            ["busy"] = state.Busy,
+            ["stopping"] = state.Stopping,
+            ["queueCount"] = state.QueueLength,
+            ["messageCount"] = state.MessageCount,
+            ["nextMessageSeq"] = state.NextMessageSeq,
+            ["failureCount"] = Entry.BackgroundProcessorFailureCount,
+            ["bestEffortFailureCount"] = Entry.BestEffortFailureCount,
+            ["snapshotRefreshWarning"] = SnapshotRefreshWarning,
+            ["lastError"] = Entry.LastBackgroundProcessorFailure?.Message,
         };
     }
 
@@ -138,8 +138,7 @@ internal sealed partial class SessionOwner
         Entry.Committed = _ => Emit(SessionEventKind.StateChanged);
     }
 
-    private static JsonNode JsonSerializerNode(object value) =>
-        System.Text.Json.JsonSerializer.SerializeToNode(value)!;
+    private static JsonNode JsonSerializerNode(object value) => JsonData.SerializeToNode(value)!;
 
     public Task StartProcessing(bool retry = false, Action? admitted = null)
     {

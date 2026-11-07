@@ -10,11 +10,11 @@ internal sealed record SessionAuthorityDiagnostic(string? Field, string Reason)
     {
         var context = sessionId is null
             ? ""
-            : $"session={JsonSerializer.Serialize(sessionId)} file={JsonSerializer.Serialize("state/sessions/" + sessionId + ".json")} ";
+            : $"session={JsonData.Serialize(sessionId)} file={JsonData.Serialize("state/sessions/" + sessionId + ".json")} ";
         return context
-            + (Field is null ? "" : $"field={JsonSerializer.Serialize(Field)} ")
+            + (Field is null ? "" : $"field={JsonData.Serialize(Field)} ")
             + "reason="
-            + JsonSerializer.Serialize(Reason);
+            + JsonData.Serialize(Reason);
     }
 }
 

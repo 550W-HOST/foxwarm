@@ -20,9 +20,10 @@ internal sealed class ModelRetryNotice(SessionOwner hosted)
         var after = value.Final
             ? "No more retries."
             : $"Retry in {Math.Max(1, (int)Math.Ceiling((value.DelayMs ?? 0) / 1000d))} seconds...";
-        var text = value.Final && value.ConfigurationMessage() is { } configuration
-            ? configuration
-            : $"Attempt {value.Attempt}/{value.MaxRetries} failed{(descriptor.Length == 0 ? "." : ": " + descriptor + ".")} {after}";
+        var text =
+            value.Final && value.ConfigurationMessage() is { } configuration
+                ? configuration
+                : $"Attempt {value.Attempt}/{value.MaxRetries} failed{(descriptor.Length == 0 ? "." : ": " + descriptor + ".")} {after}";
         if (state.Committed is null)
             text = "⚠️ LLM Error: " + text;
         var initial = state.Committed is null;

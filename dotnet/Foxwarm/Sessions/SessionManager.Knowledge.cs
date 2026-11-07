@@ -42,7 +42,11 @@ internal sealed partial class SessionManager
                 affected.Add(owner.Id);
             }
         }
-        return new { affectedSessions = affected.ToArray(), inheritanceChain = AgentChain(name) };
+        return new JsonObject
+        {
+            ["affectedSessions"] = JsonData.Node(affected.ToArray()),
+            ["inheritanceChain"] = JsonData.Node(AgentChain(name)),
+        };
     }
 
     private static bool Stale(SessionOwner owner, long now) =>

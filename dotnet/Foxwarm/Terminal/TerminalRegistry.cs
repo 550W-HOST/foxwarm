@@ -74,9 +74,12 @@ internal sealed partial class TerminalRegistry : IAsyncDisposable
                 environment[key] = value;
         // SSH/service launches on macOS often have no locale, unlike Terminal.app.
         // Preserve explicit locale choices; otherwise match the UTF-8 WebUI.
-        if (OperatingSystem.IsMacOS()
+        if (
+            OperatingSystem.IsMacOS()
             && new[] { "LC_ALL", "LC_CTYPE", "LANG" }.All(key =>
-                !environment.TryGetValue(key, out var value) || string.IsNullOrWhiteSpace(value)))
+                !environment.TryGetValue(key, out var value) || string.IsNullOrWhiteSpace(value)
+            )
+        )
             environment["LANG"] = "en_US.UTF-8";
         environment["TERM"] = "xterm-256color";
         environment["COLORTERM"] = "truecolor";
@@ -331,13 +334,23 @@ internal sealed partial class TerminalRegistry : IAsyncDisposable
             }
             catch (IOException) { }
             catch (UnauthorizedAccessException) { }
-            if (OperatingSystem.IsMacOS() && rcFile is null && Volatile.Read(ref waitCompleted) == 0
+            if (
+                OperatingSystem.IsMacOS()
+                && rcFile is null
+                && Volatile.Read(ref waitCompleted) == 0
                 && processStartTicks is not null
-                && Foxwarm.Tools.NativeProcessFacts.ReadIdentity(native.Pid).Ticks == processStartTicks)
+                && Foxwarm.Tools.NativeProcessFacts.ReadIdentity(native.Pid).Ticks
+                    == processStartTicks
+            )
             {
-                var observed = Foxwarm.Tools.NativeProcessFacts.ReadDarwinWorkingDirectory(native.Pid);
-                if (observed is not null
-                    && Foxwarm.Tools.NativeProcessFacts.ReadIdentity(native.Pid).Ticks == processStartTicks)
+                var observed = Foxwarm.Tools.NativeProcessFacts.ReadDarwinWorkingDirectory(
+                    native.Pid
+                );
+                if (
+                    observed is not null
+                    && Foxwarm.Tools.NativeProcessFacts.ReadIdentity(native.Pid).Ticks
+                        == processStartTicks
+                )
                     Cwd = observed;
             }
             return new()
@@ -365,11 +378,11 @@ internal sealed partial class TerminalRegistry : IAsyncDisposable
                 if (closed != 0)
                     throw new InvalidOperationException("Terminal has exited.");
                 client.Enqueue(
-                    new
+                    new JsonObject
                     {
-                        type = "ready",
-                        terminal = Describe(),
-                        backlog = backlog.ToString(),
+                        ["type"] = "ready",
+                        ["terminal"] = JsonData.Node(Describe()),
+                        ["backlog"] = backlog.ToString(),
                     }
                 );
                 clients.Add(client);
@@ -508,18 +521,18 @@ internal sealed partial class TerminalRegistry : IAsyncDisposable
                     return new(false, null, "No Code terminal is attached to handle this request.");
                 pendingControls[requestId] = new(owner, completion);
                 owner.Enqueue(
-                    new
+                    new JsonObject
                     {
-                        type = "control",
-                        requestId,
-                        command = "open",
-                        request = new
+                        ["type"] = "control",
+                        ["requestId"] = requestId,
+                        ["command"] = "open",
+                        ["request"] = new JsonObject
                         {
-                            kind = request.Kind,
-                            nodeId = "master",
-                            path = request.Path,
-                            startLine = request.StartLine,
-                            startColumn = request.StartColumn,
+                            ["kind"] = request.Kind,
+                            ["nodeId"] = "master",
+                            ["path"] = request.Path,
+                            ["startLine"] = request.StartLine,
+                            ["startColumn"] = request.StartColumn,
                         },
                     }
                 );
@@ -607,7 +620,7 @@ internal sealed partial class TerminalRegistry : IAsyncDisposable
                         backlog.Remove(0, backlog.Length - BacklogLimit);
                     snapshot = clients.ToArray();
                     foreach (var client in snapshot)
-                        client.Enqueue(new { type = "output", data = text });
+                        client.Enqueue(new JsonObject { ["type"] = "output", ["data"] = text });
                 }
             }
         }
@@ -652,21 +665,22 @@ internal sealed partial class TerminalRegistry : IAsyncDisposable
                     {
                         if (result.Error == 0)
                             client.Enqueue(
-                                new
+                                new JsonObject
                                 {
-                                    type = "exit",
-                                    exitCode = result.Signal == 0
-                                        ? result.Code
-                                        : 128 + result.Signal,
-                                    signal = result.Signal,
+                                    ["type"] = "exit",
+                                    ["exitCode"] = JsonData.Node(
+                                        result.Signal == 0 ? result.Code : 128 + result.Signal
+                                    ),
+                                    ["signal"] = JsonData.Node(result.Signal),
                                 }
                             );
                         else
                             client.Enqueue(
-                                new
+                                new JsonObject
                                 {
-                                    type = "error",
-                                    message = $"Terminal process status was unavailable (errno {result.Error}).",
+                                    ["type"] = "error",
+                                    ["message"] =
+                                        $"Terminal process status was unavailable (errno {result.Error}).",
                                 }
                             );
                     }

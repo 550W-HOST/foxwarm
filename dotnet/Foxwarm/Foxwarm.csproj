@@ -44,7 +44,9 @@
       GeneratePathProperty="true"
       Condition="'$(RuntimeIdentifier)' == 'win-x64' or ('$(RuntimeIdentifier)' == '' and '$(OS)' == 'Windows_NT')"
     />
-    <PackageReference Include="LanceDB" Version="[2.5.0]" />
+    <!-- The original package supplies the unchanged RID-native libraries. -->
+    <PackageReference Include="LanceDB" Version="[2.5.0]" ExcludeAssets="compile;runtime" />
+    <ProjectReference Include="../Foxwarm.LanceDb/Foxwarm.LanceDb.csproj" />
     <PackageReference Include="Apache.Arrow" Version="[22.1.0]" />
     <Content
       Include="Vector/Licenses/*.txt"
@@ -66,7 +68,9 @@
     <MontyTargetRid Condition="'$(MontyTargetRid)' == ''"
       >$(NETCoreSdkPortableRuntimeIdentifier)</MontyTargetRid>
     <MontyExecutable Condition="'$(MontyTargetRid)' == 'win-x64'">monty.exe</MontyExecutable>
-    <MontyExecutable Condition="'$(MontyTargetRid)' == 'linux-x64' or '$(MontyTargetRid)' == 'osx-x64' or '$(MontyTargetRid)' == 'osx-arm64'">monty</MontyExecutable>
+    <MontyExecutable
+      Condition="'$(MontyTargetRid)' == 'linux-x64' or '$(MontyTargetRid)' == 'osx-x64' or '$(MontyTargetRid)' == 'osx-arm64'"
+      >monty</MontyExecutable>
     <MontyNativePrefix>$(MSBuildProjectDirectory)/obj/monty-0.0.19/$(MontyTargetRid)</MontyNativePrefix>
     <MontyPython Condition="'$(OS)' != 'Windows_NT'">python3</MontyPython>
     <MontyPython Condition="'$(OS)' == 'Windows_NT'">python</MontyPython>

@@ -88,7 +88,7 @@ internal sealed partial class WebUIChannel
                                 forced[id] = links = new JsonArray();
                             var next = path[index + 1]!.GetValue<string>();
                             if (!links.Any(item => item!.GetValue<string>() == next))
-                                links.Add(next);
+                                links.Add((System.Text.Json.Nodes.JsonNode?)(next));
                         }
                     result["children"] = children;
                     result["focus"] = focus["results"]!.DeepClone();
@@ -532,12 +532,12 @@ internal sealed partial class WebUIChannel
     {
         try
         {
-            return Results.Ok(build());
+            return Results.Ok(JsonData.WebNode(build()));
         }
         catch (SessionListQueryException error)
         {
             return Results.Json(
-                new { error = error.Message, code = error.Code },
+                new JsonObject { ["error"] = error.Message, ["code"] = error.Code },
                 statusCode: error.Code == "SESSION_NOT_FOUND" ? 404 : 400
             );
         }
@@ -550,7 +550,11 @@ internal sealed partial class WebUIChannel
             )
         {
             return Results.BadRequest(
-                new { error = "Invalid Session list request", code = "SESSION_LIST_DTO_INVALID" }
+                new JsonObject
+                {
+                    ["error"] = "Invalid Session list request",
+                    ["code"] = "SESSION_LIST_DTO_INVALID",
+                }
             );
         }
     }
@@ -565,14 +569,18 @@ internal sealed partial class WebUIChannel
             var body = await JsonNode.ParseAsync(request.Body) as JsonObject;
             return body is null
                 ? Results.BadRequest(
-                    new { error = "Request must be an object", code = "SESSION_LIST_DTO_INVALID" }
+                    new JsonObject
+                    {
+                        ["error"] = "Request must be an object",
+                        ["code"] = "SESSION_LIST_DTO_INVALID",
+                    }
                 )
                 : ListResult(() => build(body));
         }
         catch (System.Text.Json.JsonException)
         {
             return Results.BadRequest(
-                new { error = "Invalid JSON", code = "SESSION_LIST_DTO_INVALID" }
+                new JsonObject { ["error"] = "Invalid JSON", ["code"] = "SESSION_LIST_DTO_INVALID" }
             );
         }
     }

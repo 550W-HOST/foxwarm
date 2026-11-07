@@ -28,7 +28,9 @@ internal static class TriggerHttp
                     if (SessionWait.Text(text) is not { Length: > 0 } message)
                         throw new InvalidDataException("text must be a non-empty string.");
                     await runtime.QueueTriggerAsync(id, message);
-                    return Results.Ok(new { success = true, message = "Triggered" });
+                    return Results.Ok(
+                        new JsonObject { ["success"] = true, ["message"] = "Triggered" }
+                    );
                 }
                 catch (Exception error)
                     when (error
@@ -39,7 +41,10 @@ internal static class TriggerHttp
                     )
                 {
                     return Results.BadRequest(
-                        new { error = error is JsonException ? "Invalid JSON" : error.Message }
+                        new JsonObject
+                        {
+                            ["error"] = error is JsonException ? "Invalid JSON" : error.Message,
+                        }
                     );
                 }
             }

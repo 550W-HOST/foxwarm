@@ -220,7 +220,7 @@ internal sealed class ManagedChannels(
             try
             {
                 if (await StopCoreAsync(id))
-                    stopped.Add(id);
+                    stopped.Add((System.Text.Json.Nodes.JsonNode?)(id));
             }
             catch (Exception error)
             {
@@ -239,7 +239,7 @@ internal sealed class ManagedChannels(
             try
             {
                 if (await StartCoreAsync(id))
-                    started.Add(id);
+                    started.Add((System.Text.Json.Nodes.JsonNode?)(id));
             }
             catch (OperationCanceledException) when (closed)
             {

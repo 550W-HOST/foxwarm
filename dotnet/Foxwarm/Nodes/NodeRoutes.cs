@@ -17,11 +17,13 @@ internal static class NodeRoutes
             "/api/nodes",
             async (CancellationToken token) =>
                 Results.Json(
-                    new
+                    new JsonObject
                     {
-                        nodes = await sessions.NodeSummariesAsync(
-                            Foxwarm.Terminal.TerminalRegistry.IsSupported,
-                            token
+                        ["nodes"] = JsonData.WebNode(
+                            await sessions.NodeSummariesAsync(
+                                Foxwarm.Terminal.TerminalRegistry.IsSupported,
+                                token
+                            )
                         ),
                         agentDefaultNode = sessions.Models.ConfigurationOwner?.AgentDefaultNode,
                     }
@@ -46,7 +48,9 @@ internal static class NodeRoutes
                 context.Response.Headers.CacheControl = "no-store";
                 var offsetText = context.Request.Query["offset"].FirstOrDefault() ?? "0";
                 if (!int.TryParse(offsetText, out var offset) || offset < 0)
-                    return Results.BadRequest(new { error = "Invalid pending page." });
+                    return Results.BadRequest(
+                        new JsonObject { ["error"] = "Invalid pending page." }
+                    );
                 var entries = hub.ListPending()
                     .OfType<JsonObject>()
                     .Where(record => record["approvedNodeId"] is null)
@@ -65,13 +69,14 @@ internal static class NodeRoutes
                     })
                     .ToArray();
                 return Results.Ok(
-                    new
+                    new JsonObject
                     {
-                        items,
-                        total = entries.Length,
-                        nextOffset = offset + items.Length < entries.Length
-                            ? (int?)(offset + items.Length)
-                            : null,
+                        ["items"] = JsonData.WebNode(items),
+                        ["total"] = entries.Length,
+                        ["nextOffset"] =
+                            offset + items.Length < entries.Length
+                                ? (int?)(offset + items.Length)
+                                : null,
                     }
                 );
             }
@@ -190,11 +195,11 @@ internal static class NodeRoutes
                 try
                 {
                     hub.Remove(nodeId);
-                    return Results.Ok(new { success = true });
+                    return Results.Ok(new JsonObject { ["success"] = true });
                 }
                 catch (InvalidDataException error)
                 {
-                    return Results.BadRequest(new { error = error.Message });
+                    return Results.BadRequest(new JsonObject { ["error"] = error.Message });
                 }
             }
         );
@@ -207,8 +212,8 @@ internal static class NodeRoutes
                     .OfType<JsonObject>()
                     .FirstOrDefault(value => value["id"]!.GetValue<string>() == nodeId);
                 return node is null
-                    ? Results.NotFound(new { error = "Node not found." })
-                    : Results.Ok(node);
+                    ? Results.NotFound(new JsonObject { ["error"] = "Node not found." })
+                    : Results.Ok(JsonData.WebNode(node));
             }
         );
     }
@@ -232,11 +237,14 @@ internal static class NodeRoutes
                             cancellationToken: context.RequestAborted
                         ) as JsonObject
                         ?? throw new InvalidDataException("Request body must be an object.");
-                    return Results.Ok(await action(body, context));
+                    return Results.Ok(JsonData.WebNode(await action(body, context)));
                 }
                 catch (NotSupportedException error)
                 {
-                    return Results.Json(new { error = error.Message }, statusCode: 501);
+                    return Results.Json(
+                        new JsonObject { ["error"] = error.Message },
+                        statusCode: 501
+                    );
                 }
                 catch (InvalidDataException error)
                     when ((
@@ -251,14 +259,15 @@ internal static class NodeRoutes
                                 or "Pairing is no longer awaiting approval."
                     )
                 {
-                    return Results.Conflict(new { error = error.Message });
+                    return Results.Conflict(new JsonObject { ["error"] = error.Message });
                 }
                 catch (IOException)
                 {
                     return Results.Json(
-                        new
+                        new JsonObject
                         {
-                            error = "The request could not be completed. Refresh Nodes before trying again.",
+                            ["error"] =
+                                "The request could not be completed. Refresh Nodes before trying again.",
                         },
                         statusCode: 500
                     );
@@ -270,7 +279,7 @@ internal static class NodeRoutes
                                 or InvalidOperationException
                     )
                 {
-                    return Results.BadRequest(new { error = error.Message });
+                    return Results.BadRequest(new JsonObject { ["error"] = error.Message });
                 }
             }
         );

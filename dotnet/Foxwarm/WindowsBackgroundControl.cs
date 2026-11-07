@@ -71,19 +71,27 @@ internal sealed class WindowsBackgroundControl : IAsyncDisposable
                     var logs = Path.Combine(dataRoot, "state", "logs");
                     object response = command switch
                     {
-                        "status" => new
+                        "status" => new System.Text.Json.Nodes.JsonObject
                         {
-                            ok = true,
-                            pid = Environment.ProcessId,
-                            stopping = lifetime.ApplicationStopping.IsCancellationRequested,
-                            logDir = logs,
-                            stdoutLog = Path.Combine(logs, "foxwarm.stdout.log"),
-                            stderrLog = Path.Combine(logs, "foxwarm.stderr.log"),
+                            ["ok"] = true,
+                            ["pid"] = Environment.ProcessId,
+                            ["stopping"] = lifetime.ApplicationStopping.IsCancellationRequested,
+                            ["logDir"] = logs,
+                            ["stdoutLog"] = Path.Combine(logs, "foxwarm.stdout.log"),
+                            ["stderrLog"] = Path.Combine(logs, "foxwarm.stderr.log"),
                         },
-                        "stop" => new { ok = true, pid = Environment.ProcessId },
-                        _ => new { ok = false, error = "unknown command" },
+                        "stop" => new System.Text.Json.Nodes.JsonObject
+                        {
+                            ["ok"] = true,
+                            ["pid"] = Environment.ProcessId,
+                        },
+                        _ => new System.Text.Json.Nodes.JsonObject
+                        {
+                            ["ok"] = false,
+                            ["error"] = "unknown command",
+                        },
                     };
-                    var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(response));
+                    var bytes = Encoding.UTF8.GetBytes(JsonData.Serialize(response));
                     await pipe.WriteAsync(bytes, stopping.Token);
                     await pipe.FlushAsync(stopping.Token);
                     // Source socket.end completes with EOF. DisconnectNamedPipe instead

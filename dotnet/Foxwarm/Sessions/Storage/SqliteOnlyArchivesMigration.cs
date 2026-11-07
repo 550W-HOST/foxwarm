@@ -159,11 +159,11 @@ internal static class SqliteOnlyArchivesMigration
                 held = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
                 await held.WriteAsync(
                     Encoding.UTF8.GetBytes(
-                        JsonSerializer.Serialize(
-                            new
+                        JsonData.Serialize(
+                            new JsonObject
                             {
-                                pid = Environment.ProcessId,
-                                createdAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                                ["pid"] = Environment.ProcessId,
+                                ["createdAt"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                             }
                         )
                     )

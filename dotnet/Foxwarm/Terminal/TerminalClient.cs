@@ -41,7 +41,7 @@ internal sealed partial class TerminalRegistry
 
             internal void Enqueue(object value)
             {
-                var bytes = JsonSerializer.SerializeToUtf8Bytes(value);
+                var bytes = JsonData.SerializeToUtf8Bytes(value);
                 lock (sendGate)
                 {
                     if (completed)
@@ -121,8 +121,8 @@ internal sealed partial class TerminalRegistry
                         {
                             if (failure is not null)
                                 await socket.SendAsync(
-                                    JsonSerializer.SerializeToUtf8Bytes(
-                                        new { type = "error", message = failure }
+                                    JsonData.SerializeToUtf8Bytes(
+                                        new JsonObject { ["type"] = "error", ["message"] = failure }
                                     ),
                                     WebSocketMessageType.Text,
                                     true,

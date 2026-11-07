@@ -15,10 +15,10 @@ internal sealed partial class WebUIChannel
             {
                 var hosted = await FindRouteAsync(request, id);
                 if (hosted is null)
-                    return Results.NotFound(new { error = "Session not found" });
+                    return Results.NotFound(new JsonObject { ["error"] = "Session not found" });
                 var view = sessions.QuestionsView(hosted);
                 view["sessionId"] = hosted.Id;
-                return Results.Ok(view);
+                return Results.Ok(JsonData.WebNode(view));
             }
         );
         app.MapPost(
@@ -27,7 +27,7 @@ internal sealed partial class WebUIChannel
             {
                 var hosted = await FindRouteAsync(request, id);
                 if (hosted is null)
-                    return Results.NotFound(new { error = "Session not found" });
+                    return Results.NotFound(new JsonObject { ["error"] = "Session not found" });
                 if (!sessions.Accepting)
                     return Results.StatusCode(503);
                 JsonObject body;
@@ -39,11 +39,11 @@ internal sealed partial class WebUIChannel
                 }
                 catch (JsonException)
                 {
-                    return Results.BadRequest(new { error = "Invalid JSON" });
+                    return Results.BadRequest(new JsonObject { ["error"] = "Invalid JSON" });
                 }
                 catch (InvalidDataException error)
                 {
-                    return Results.BadRequest(new { error = error.Message });
+                    return Results.BadRequest(new JsonObject { ["error"] = error.Message });
                 }
                 try
                 {
@@ -51,18 +51,22 @@ internal sealed partial class WebUIChannel
                 }
                 catch (KeyNotFoundException error)
                 {
-                    return Results.NotFound(new { error = error.Message });
+                    return Results.NotFound(new JsonObject { ["error"] = error.Message });
                 }
                 catch (QuestionNotOpenException error)
                 {
                     return Results.Json(
-                        new { error = error.Message, code = "QUESTION_NOT_OPEN" },
+                        new JsonObject
+                        {
+                            ["error"] = error.Message,
+                            ["code"] = "QUESTION_NOT_OPEN",
+                        },
                         statusCode: 409
                     );
                 }
                 catch (InvalidDataException error)
                 {
-                    return Results.BadRequest(new { error = error.Message });
+                    return Results.BadRequest(new JsonObject { ["error"] = error.Message });
                 }
                 return Results.Accepted(
                     value: new JsonObject { ["accepted"] = true, ["questionId"] = questionId }

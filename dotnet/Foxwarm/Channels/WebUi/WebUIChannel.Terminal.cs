@@ -14,13 +14,13 @@ internal sealed partial class WebUIChannel
             "/api/terminals",
             async (HttpRequest request) =>
                 Results.Ok(
-                    new
+                    new JsonObject
                     {
-                        terminals = await terminalRouter.ListAsync(
-                            request.HttpContext.RequestAborted
+                        ["terminals"] = JsonData.WebNode(
+                            await terminalRouter.ListAsync(request.HttpContext.RequestAborted)
                         ),
-                        supported = terminalRouter.Supported,
-                        owner = "master",
+                        ["supported"] = terminalRouter.Supported,
+                        ["owner"] = "master",
                     }
                 )
         );
@@ -40,7 +40,7 @@ internal sealed partial class WebUIChannel
                 }
                 catch (Exception error) when (error is JsonException or InvalidDataException)
                 {
-                    return Results.BadRequest(new { error = error.Message });
+                    return Results.BadRequest(new JsonObject { ["error"] = error.Message });
                 }
                 try
                 {
@@ -56,18 +56,23 @@ internal sealed partial class WebUIChannel
                         request.HttpContext.RequestAborted
                     );
                     return Results.Ok(
-                        new
+                        new JsonObject
                         {
-                            success = true,
-                            terminal = record,
-                            streamPath = $"/api/terminals/stream?terminalId={Uri.EscapeDataString(record["id"]!.GetValue<string>())}",
+                            ["success"] = true,
+                            ["terminal"] = JsonData.WebNode(record),
+                            ["streamPath"] =
+                                $"/api/terminals/stream?terminalId={Uri.EscapeDataString(record["id"]!.GetValue<string>())}",
                         }
                     );
                 }
                 catch (CodeServiceException error)
                 {
                     return Results.Json(
-                        new { error = error.Message, code = error.Code },
+                        new JsonObject
+                        {
+                            ["error"] = error.Message,
+                            ["code"] = JsonData.WebNode(error.Code),
+                        },
                         statusCode: error.Status
                     );
                 }
@@ -80,7 +85,10 @@ internal sealed partial class WebUIChannel
                                 or ArgumentOutOfRangeException
                     )
                 {
-                    return Results.Json(new { error = error.Message }, statusCode: 400);
+                    return Results.Json(
+                        new JsonObject { ["error"] = error.Message },
+                        statusCode: 400
+                    );
                 }
             }
         );
@@ -92,13 +100,17 @@ internal sealed partial class WebUIChannel
                 {
                     var record = await terminalRouter.GetAsync(id, context.RequestAborted);
                     return record is null
-                        ? Results.NotFound(new { error = "Terminal not found." })
-                        : Results.Ok(new { terminal = record });
+                        ? Results.NotFound(new JsonObject { ["error"] = "Terminal not found." })
+                        : Results.Ok(new JsonObject { ["terminal"] = JsonData.WebNode(record) });
                 }
                 catch (CodeServiceException error)
                 {
                     return Results.Json(
-                        new { error = error.Message, code = error.Code },
+                        new JsonObject
+                        {
+                            ["error"] = error.Message,
+                            ["code"] = JsonData.WebNode(error.Code),
+                        },
                         statusCode: error.Status
                     );
                 }
@@ -111,12 +123,16 @@ internal sealed partial class WebUIChannel
                 try
                 {
                     await terminalRouter.CloseAsync(id, "client", context.RequestAborted);
-                    return Results.Ok(new { success = true, closed = true });
+                    return Results.Ok(new JsonObject { ["success"] = true, ["closed"] = true });
                 }
                 catch (CodeServiceException error)
                 {
                     return Results.Json(
-                        new { error = error.Message, code = error.Code },
+                        new JsonObject
+                        {
+                            ["error"] = error.Message,
+                            ["code"] = JsonData.WebNode(error.Code),
+                        },
                         statusCode: error.Status
                     );
                 }
@@ -143,7 +159,7 @@ internal sealed partial class WebUIChannel
                     {
                         context.Response.StatusCode = 404;
                         await context.Response.WriteAsJsonAsync(
-                            new { error = "Terminal not found." }
+                            new JsonObject { ["error"] = "Terminal not found." }
                         );
                         return;
                     }
@@ -152,7 +168,11 @@ internal sealed partial class WebUIChannel
                 {
                     context.Response.StatusCode = error.Status;
                     await context.Response.WriteAsJsonAsync(
-                        new { error = error.Message, code = error.Code }
+                        new JsonObject
+                        {
+                            ["error"] = error.Message,
+                            ["code"] = JsonData.WebNode(error.Code),
+                        }
                     );
                     return;
                 }
@@ -178,8 +198,12 @@ internal sealed partial class WebUIChannel
                     {
                         await socket.SendAsync(
                             System.Text.Encoding.UTF8.GetBytes(
-                                JsonSerializer.Serialize(
-                                    new { type = "error", message = error.Message }
+                                JsonData.Serialize(
+                                    new JsonObject
+                                    {
+                                        ["type"] = "error",
+                                        ["message"] = error.Message,
+                                    }
                                 )
                             ),
                             WebSocketMessageType.Text,

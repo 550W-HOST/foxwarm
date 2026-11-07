@@ -311,7 +311,7 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
                 if (id is null)
                     return " The attempted content was too large to cache for contentRef retry; call write again with content and "
                         + (parents ? "createDirs=true." : "overwrite=true.");
-                return $" The attempted content is cached. Retry write({{ filePath: {System.Text.Json.JsonSerializer.Serialize(pathText)}, contentRef: {System.Text.Json.JsonSerializer.Serialize(id)}, overwrite: true{(parents ? ", createDirs: true" : "")} }}). Use contentRef without content, or supply new content to replace it. The same cached text may be written to another permitted path in this session and agent. The contentRef expires in 15 minutes.";
+                return $" The attempted content is cached. Retry write({{ filePath: {JsonData.Serialize(pathText)}, contentRef: {JsonData.Serialize(id)}, overwrite: true{(parents ? ", createDirs: true" : "")} }}). Use contentRef without content, or supply new content to replace it. The same cached text may be written to another permitted path in this session and agent. The contentRef expires in 15 minutes.";
             }
             if (targetFiles is not null)
             {

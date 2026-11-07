@@ -3,7 +3,6 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Foxwarm;
 using Foxwarm.Models;
-using YamlDotNet.Serialization;
 
 namespace Foxwarm.Sessions;
 
@@ -213,7 +212,7 @@ internal sealed partial class AgentMemory(
         object? parsed;
         try
         {
-            parsed = new DeserializerBuilder().Build().Deserialize<object>(match.Groups[1].Value);
+            parsed = FrontMatterYaml.Parse(match.Groups[1].Value);
         }
         catch (YamlDotNet.Core.YamlException)
         {

@@ -7,7 +7,7 @@ namespace Foxwarm.Vector;
 // Private local owner transport, not a public API or a Session-worker facade.
 internal static class VectorWire
 {
-    internal static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
+    internal static readonly JsonSerializerOptions Json = JsonData.WebOptions;
 
     internal static async Task<JsonObject?> ReadAsync(
         Stream stream,
@@ -35,7 +35,7 @@ internal static class VectorWire
         CancellationToken token = default
     )
     {
-        var bytes = JsonSerializer.SerializeToUtf8Bytes(message, Json);
+        var bytes = JsonData.SerializeToUtf8Bytes(message, Json);
         var header = new byte[4];
         BinaryPrimitives.WriteInt32LittleEndian(header, bytes.Length);
         await lane.WaitAsync(token);
@@ -61,7 +61,7 @@ internal static class VectorWire
         switch (method)
         {
             case "search":
-                return JsonSerializer.SerializeToNode(
+                return JsonData.SerializeToNode(
                     await runtime.SearchAsync(
                         VectorText.Text(input["query"]),
                         (int)VectorRuntime.Number(input["limit"], 5),

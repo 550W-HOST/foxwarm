@@ -53,7 +53,10 @@ export async function createHostFixture(name, options = {}) {
     const startup = { ...testEnvironment.isolatedApplicationEnv(data), FOXWARM_SYNC_FILE_LOG: '0', ...(options.env || {}), FOXWARM_DATA_DIR: data, }
     ownedListener = false
     const source = options.runtime === 'source'
-    const child = spawn(source ? process.execPath : join(process.env.DOTNET_ROOT, 'dotnet'), [resolve(source ? 'lib/index.js' : options.corePath || 'dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')], {
+    const native = !source && (options.coreExecutable || process.env.FOXWARM_TEST_MAIN_EXECUTABLE)
+    const command = source ? process.execPath : native || join(process.env.DOTNET_ROOT, 'dotnet')
+    const arguments_ = native ? [] : [resolve(source ? 'lib/index.js' : options.corePath || 'dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')]
+    const child = spawn(command, arguments_, {
       stdio: ['ignore', 'pipe', 'pipe'], ...(options.cwd ? { cwd: options.cwd } : {}), env: startup
     })
     let output = ''

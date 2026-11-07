@@ -19,13 +19,19 @@ internal sealed partial class WebUIChannel
                 var input = await request.ReadFromJsonAsync<JsonObject>() ?? new JsonObject();
                 var path = WebUiDownloadSignatures.Text(input, "path");
                 if (string.IsNullOrEmpty(path) || !Path.IsPathFullyQualified(path))
-                    return Results.BadRequest(new { error = "An absolute file path is required." });
+                    return Results.BadRequest(
+                        new JsonObject { ["error"] = "An absolute file path is required." }
+                    );
                 if (!WorkspaceTools.RegularFile(path))
-                    return Results.NotFound(new { error = "File not found." });
+                    return Results.NotFound(new JsonObject { ["error"] = "File not found." });
                 var grant = downloads.Issue("path", path, input);
                 request.HttpContext.Response.Headers.CacheControl = "no-store";
                 return Results.Ok(
-                    new { url = "download" + grant.Query, expiresAt = grant.ExpiresAt }
+                    new JsonObject
+                    {
+                        ["url"] = "download" + grant.Query,
+                        ["expiresAt"] = grant.ExpiresAt,
+                    }
                 );
             }
         );
@@ -37,15 +43,17 @@ internal sealed partial class WebUIChannel
                     var path = WebUiDownloadSignatures.Text(context.Request.Query, "path");
                     if (string.IsNullOrEmpty(path) || !Path.IsPathFullyQualified(path))
                         return Results.BadRequest(
-                            new { error = "An absolute file path is required." }
+                            new JsonObject { ["error"] = "An absolute file path is required." }
                         );
                     try
                     {
                         if (!File.Exists(path))
-                            return Results.NotFound(new { error = "File not found." });
+                            return Results.NotFound(
+                                new JsonObject { ["error"] = "File not found." }
+                            );
                         if (!WorkspaceTools.RegularFile(path))
                             return Results.BadRequest(
-                                new { error = "Path is not a regular file." }
+                                new JsonObject { ["error"] = "Path is not a regular file." }
                             );
                         var stream = new FileStream(
                             path,
@@ -59,7 +67,7 @@ internal sealed partial class WebUIChannel
                         {
                             await stream.DisposeAsync();
                             return Results.BadRequest(
-                                new { error = "Path is not a regular file." }
+                                new JsonObject { ["error"] = "Path is not a regular file." }
                             );
                         }
                         var filename = WebUiDownloadSignatures.FileName(
@@ -78,7 +86,7 @@ internal sealed partial class WebUIChannel
                     catch (Exception error)
                         when (error is FileNotFoundException or DirectoryNotFoundException)
                     {
-                        return Results.NotFound(new { error = "File not found." });
+                        return Results.NotFound(new JsonObject { ["error"] = "File not found." });
                     }
                     catch (Exception error)
                         when (error

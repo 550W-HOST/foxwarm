@@ -32,35 +32,43 @@ internal sealed partial class WebUIChannel
                     .Select(row =>
                     {
                         var id = SessionCatalog.Text(row["id"])!;
-                        return new
+                        return new JsonObject
                         {
-                            id,
-                            displayName = SessionCatalog.Text(row["displayName"]) ?? id,
-                            busy = SessionCatalog.Flag(row["busy"]),
-                            queueLength = SessionCatalog.Number(row["queueLength"]) ?? 0,
-                            parentSessionId = SessionCatalog.Text(row["parentSessionId"]),
-                            childSessions = children.TryGetValue(id, out var childIds)
-                                ? childIds
-                                : [],
-                            messageCount = SessionCatalog.Number(row["messageCount"]) ?? 0,
-                            lastMessageTime = SessionCatalog.Number(row["lastMessageTime"]),
-                            archived = SessionCatalog.Flag(row["archived"]),
+                            ["id"] = id,
+                            ["displayName"] = SessionCatalog.Text(row["displayName"]) ?? id,
+                            ["busy"] = SessionCatalog.Flag(row["busy"]),
+                            ["queueLength"] = SessionCatalog.Number(row["queueLength"]) ?? 0,
+                            ["parentSessionId"] = SessionCatalog.Text(row["parentSessionId"]),
+                            ["childSessions"] = JsonData.WebNode(
+                                children.TryGetValue(id, out var childIds) ? childIds : []
+                            ),
+                            ["messageCount"] = SessionCatalog.Number(row["messageCount"]) ?? 0,
+                            ["lastMessageTime"] = SessionCatalog.Number(row["lastMessageTime"]),
+                            ["archived"] = SessionCatalog.Flag(row["archived"]),
                         };
                     })
                     .ToArray();
                 return Results.Ok(
-                    new
+                    new JsonObject
                     {
-                        agents,
-                        rootAgents = agents
-                            .Where(row => row.parentSessionId is null)
-                            .Select(row => row.id)
-                            .ToArray(),
+                        ["agents"] = JsonData.WebNode(agents),
+                        ["rootAgents"] = JsonData.WebNode(
+                            agents
+                                .Where(row => row["parentSessionId"] is null)
+                                .Select(row => SessionCatalog.Text(row["id"]))
+                                .ToArray()
+                        ),
                     }
                 );
             }
         );
-        app.MapGet("/api/agents", () => Results.Ok(new { agents = sessions.AgentRegistry() }));
+        app.MapGet(
+            "/api/agents",
+            () =>
+                Results.Ok(
+                    new JsonObject { ["agents"] = JsonData.WebNode(sessions.AgentRegistry()) }
+                )
+        );
         app.MapPost(
             "/api/agents",
             async (HttpRequest request) =>
@@ -86,7 +94,9 @@ internal sealed partial class WebUIChannel
                         || body["agentId"] is not JsonValue agent
                         || !agent.TryGetValue<string>(out var name)
                     )
-                        return Results.BadRequest(new { error = "agentId is required." });
+                        return Results.BadRequest(
+                            new JsonObject { ["error"] = "agentId is required." }
+                        );
                     if (
                         body.ContainsKey("restore")
                         && (
@@ -103,12 +113,12 @@ internal sealed partial class WebUIChannel
                             );
                         await sessions.RestoreRetainedAgentAsync(name.Trim());
                         return Results.Json(
-                            new
+                            new JsonObject
                             {
-                                success = true,
-                                agentId = name.Trim(),
-                                sessionId = (string?)null,
-                                restored = true,
+                                ["success"] = true,
+                                ["agentId"] = name.Trim(),
+                                ["sessionId"] = (string?)null,
+                                ["restored"] = true,
                             },
                             statusCode: 201
                         );
@@ -118,7 +128,11 @@ internal sealed partial class WebUIChannel
                         : body["inheritAgent"]!.GetValue<string>()?.Trim();
                     if (!string.IsNullOrEmpty(inherit) && sessions.AgentIsolated(inherit))
                         return Results.BadRequest(
-                            new { error = "An isolated Agent cannot be used as an inherit source." }
+                            new JsonObject
+                            {
+                                ["error"] =
+                                    "An isolated Agent cannot be used as an inherit source.",
+                            }
                         );
                     if (body.ContainsKey("rules") && body["rules"] is not JsonArray)
                         throw new InvalidDataException("rules must be an array.");
@@ -142,11 +156,11 @@ internal sealed partial class WebUIChannel
                             )
                         );
                     return Results.Json(
-                        new
+                        new JsonObject
                         {
-                            success = true,
-                            agentId = created.AgentName,
-                            sessionId = created.MainSessionId,
+                            ["success"] = true,
+                            ["agentId"] = created.AgentName,
+                            ["sessionId"] = created.MainSessionId,
                         },
                         statusCode: 201
                     );
@@ -154,11 +168,11 @@ internal sealed partial class WebUIChannel
                 catch (CommittedSessionCreationException error)
                 {
                     return Results.Json(
-                        new
+                        new JsonObject
                         {
-                            error = error.Message,
-                            sessionId = error.SessionId,
-                            agentCreated = true,
+                            ["error"] = error.Message,
+                            ["sessionId"] = error.SessionId,
+                            ["agentCreated"] = true,
                         },
                         statusCode: 409
                     );
@@ -171,7 +185,7 @@ internal sealed partial class WebUIChannel
                                 or InvalidOperationException
                     )
                 {
-                    return Results.BadRequest(new { error = error.Message });
+                    return Results.BadRequest(new JsonObject { ["error"] = error.Message });
                 }
             }
         );
@@ -184,9 +198,10 @@ internal sealed partial class WebUIChannel
                     var body = await JsonNode.ParseAsync(request.Body) as JsonObject;
                     if (SessionWait.Text(body?["confirmAgentId"]) != agentId)
                         return Results.BadRequest(
-                            new
+                            new JsonObject
                             {
-                                error = "Agent deletion requires confirmAgentId to match the target Agent.",
+                                ["error"] =
+                                    "Agent deletion requires confirmAgentId to match the target Agent.",
                             }
                         );
                     if (
@@ -201,22 +216,22 @@ internal sealed partial class WebUIChannel
                     {
                         await sessions.CleanupRetainedAgentAsync(agentId);
                         return Results.Ok(
-                            new
+                            new JsonObject
                             {
-                                success = true,
-                                agentId,
-                                retainedRecordRemoved = true,
-                                deletedSessions = Array.Empty<string>(),
+                                ["success"] = true,
+                                ["agentId"] = agentId,
+                                ["retainedRecordRemoved"] = true,
+                                ["deletedSessions"] = JsonData.WebNode(Array.Empty<string>()),
                             }
                         );
                     }
                     var deleted = await sessions.DeleteAgentAsync(agentId);
                     return Results.Ok(
-                        new
+                        new JsonObject
                         {
-                            success = true,
-                            agentId,
-                            deletedSessions = deleted,
+                            ["success"] = true,
+                            ["agentId"] = agentId,
+                            ["deletedSessions"] = JsonData.WebNode(deleted),
                         }
                     );
                 }
@@ -243,7 +258,10 @@ internal sealed partial class WebUIChannel
                         )
                             ? 409
                         : 400;
-                    return Results.Json(new { error = error.Message }, statusCode: status);
+                    return Results.Json(
+                        new JsonObject { ["error"] = error.Message },
+                        statusCode: status
+                    );
                 }
             }
         );
@@ -255,16 +273,18 @@ internal sealed partial class WebUIChannel
                 {
                     var manifest = sessions.AgentManifest(agentId);
                     return Results.Ok(
-                        new
+                        new JsonObject
                         {
-                            memoryRoot = manifest.MemoryRoot,
-                            files = manifest.Files.Select(file => new
-                            {
-                                path = file.Path,
-                                absolutePath = file.AbsolutePath,
-                                size = file.Size,
-                                modifiedAt = file.ModifiedAt,
-                            }),
+                            ["memoryRoot"] = manifest.MemoryRoot,
+                            ["files"] = JsonData.WebNode(
+                                manifest.Files.Select(file => new JsonObject
+                                {
+                                    ["path"] = file.Path,
+                                    ["absolutePath"] = file.AbsolutePath,
+                                    ["size"] = file.Size,
+                                    ["modifiedAt"] = file.ModifiedAt,
+                                })
+                            ),
                         }
                     );
                 }
@@ -272,7 +292,7 @@ internal sealed partial class WebUIChannel
                     when (error is IOException or InvalidDataException or ArgumentException)
                 {
                     return Results.Json(
-                        new { error = error.Message },
+                        new JsonObject { ["error"] = error.Message },
                         statusCode: sessions.Agents().Contains(agentId) ? 400 : 404
                     );
                 }
@@ -311,7 +331,7 @@ internal sealed partial class WebUIChannel
                             "Provide inheritAgent, isolatedNode, rules, defaultNode or defaultCwd."
                         );
                     if (!sessions.Agents().Contains(agentId))
-                        return Results.NotFound(new { error = "Agent not found." });
+                        return Results.NotFound(new JsonObject { ["error"] = "Agent not found." });
                     if (body.ContainsKey("rules"))
                         await sessions.SetAgentRulesAsync(
                             agentId,
@@ -337,27 +357,31 @@ internal sealed partial class WebUIChannel
                             body["inheritAgent"]?.GetValue<string>()
                         );
                     return Results.Ok(
-                        new
+                        new JsonObject
                         {
-                            success = true,
-                            agent = new
+                            ["success"] = true,
+                            ["agent"] = new JsonObject
                             {
-                                id = agentId,
-                                inherit = sessions.AgentInherit(agentId),
-                                inheritanceChain = sessions.AgentChain(agentId),
-                                createdBy = sessions
-                                    .AgentMetadata[agentId]
-                                    ?["createdBy"]?.DeepClone(),
-                                rules = sessions.AgentMetadata[agentId]?["rules"]?.DeepClone()
-                                    ?? new JsonArray(),
-                                defaultNode = sessions
-                                    .AgentMetadata[agentId]
-                                    ?["defaultNode"]?.DeepClone(),
-                                defaultCwd = sessions
-                                    .AgentMetadata[agentId]
-                                    ?["defaultCwd"]?.DeepClone(),
-                                isolated = sessions.AgentIsolated(agentId),
-                                isolatedNode = sessions.RecordedIsolationNode(agentId),
+                                ["id"] = agentId,
+                                ["inherit"] = sessions.AgentInherit(agentId),
+                                ["inheritanceChain"] = JsonData.WebNode(
+                                    sessions.AgentChain(agentId)
+                                ),
+                                ["createdBy"] = JsonData.WebNode(
+                                    sessions.AgentMetadata[agentId]?["createdBy"]?.DeepClone()
+                                ),
+                                ["rules"] = JsonData.WebNode(
+                                    sessions.AgentMetadata[agentId]?["rules"]?.DeepClone()
+                                        ?? new JsonArray()
+                                ),
+                                ["defaultNode"] = JsonData.WebNode(
+                                    sessions.AgentMetadata[agentId]?["defaultNode"]?.DeepClone()
+                                ),
+                                ["defaultCwd"] = JsonData.WebNode(
+                                    sessions.AgentMetadata[agentId]?["defaultCwd"]?.DeepClone()
+                                ),
+                                ["isolated"] = sessions.AgentIsolated(agentId),
+                                ["isolatedNode"] = sessions.RecordedIsolationNode(agentId),
                             },
                         }
                     );
@@ -370,7 +394,7 @@ internal sealed partial class WebUIChannel
                                 or InvalidOperationException
                     )
                 {
-                    return Results.BadRequest(new { error = error.Message });
+                    return Results.BadRequest(new JsonObject { ["error"] = error.Message });
                 }
             }
         );
@@ -382,18 +406,20 @@ internal sealed partial class WebUIChannel
                 var rows = runtime.ListSessions();
                 scoped?.Require();
                 return Results.Ok(
-                    new
+                    new JsonObject
                     {
-                        sessions = scoped is null
-                            ? rows
-                            : rows.Where(row => scoped.Allows(SessionCatalog.Text(row["id"])!))
-                                .Select(row => new JsonObject
-                                {
-                                    ["id"] = row["id"]?.DeepClone(),
-                                    ["displayName"] = row["displayName"]?.DeepClone(),
-                                    ["busy"] = row["busy"]?.DeepClone(),
-                                })
-                                .ToArray(),
+                        ["sessions"] = JsonData.WebNode(
+                            scoped is null
+                                ? rows
+                                : rows.Where(row => scoped.Allows(SessionCatalog.Text(row["id"])!))
+                                    .Select(row => new JsonObject
+                                    {
+                                        ["id"] = row["id"]?.DeepClone(),
+                                        ["displayName"] = row["displayName"]?.DeepClone(),
+                                        ["busy"] = row["busy"]?.DeepClone(),
+                                    })
+                                    .ToArray()
+                        ),
                     }
                 );
             }
@@ -472,7 +498,9 @@ internal sealed partial class WebUIChannel
                             if (SessionCatalog.Text(resolution["kind"]) == "ambiguous")
                                 throw new InvalidDataException("Parent Session ID is ambiguous.");
                             if (parentId is null)
-                                return Results.NotFound(new { error = "Parent Session not found" });
+                                return Results.NotFound(
+                                    new JsonObject { ["error"] = "Parent Session not found" }
+                                );
                         }
                         hosted =
                             parentId is not null
@@ -505,25 +533,27 @@ internal sealed partial class WebUIChannel
                         )
                     );
                     return Results.Ok(
-                        parentId is null
-                            ? new { success = true, sessionId = hosted.Id }
-                            : new
-                            {
-                                success = true,
-                                sessionId = hosted.Id,
-                                parentSessionId = parentId,
-                            }
+                        JsonData.WebNode(
+                            parentId is null
+                                ? new JsonObject { ["success"] = true, ["sessionId"] = hosted.Id }
+                                : new JsonObject
+                                {
+                                    ["success"] = true,
+                                    ["sessionId"] = hosted.Id,
+                                    ["parentSessionId"] = parentId,
+                                }
+                        )
                     );
                 }
                 catch (CommittedSessionCreationException error)
                 {
                     return Results.Json(
-                        new
+                        new JsonObject
                         {
-                            error = error.Message,
-                            sessionId = error.SessionId,
-                            committed = true,
-                            initialDeliveryCommitted = error.InitialDeliveryCommitted,
+                            ["error"] = error.Message,
+                            ["sessionId"] = error.SessionId,
+                            ["committed"] = true,
+                            ["initialDeliveryCommitted"] = error.InitialDeliveryCommitted,
                         },
                         statusCode: 409
                     );
@@ -531,7 +561,7 @@ internal sealed partial class WebUIChannel
                 catch (InvalidDataException error)
                     when (error.Message.Contains("already reserved", StringComparison.Ordinal))
                 {
-                    return Results.Conflict(new { error = error.Message });
+                    return Results.Conflict(new JsonObject { ["error"] = error.Message });
                 }
                 catch (Exception error)
                     when (error
@@ -540,7 +570,7 @@ internal sealed partial class WebUIChannel
                                 or InvalidOperationException
                     )
                 {
-                    return Results.BadRequest(new { error = error.Message });
+                    return Results.BadRequest(new JsonObject { ["error"] = error.Message });
                 }
                 catch (Exception error)
                 {
@@ -554,7 +584,9 @@ internal sealed partial class WebUIChannel
             {
                 var parent = await FindRouteAsync(request, id);
                 if (parent is null)
-                    return Results.NotFound(new { error = "Parent Session not found" });
+                    return Results.NotFound(
+                        new JsonObject { ["error"] = "Parent Session not found" }
+                    );
                 if (!sessions.Accepting)
                     return Results.StatusCode(503);
                 try
@@ -597,24 +629,24 @@ internal sealed partial class WebUIChannel
                         )
                     );
                     return Results.Ok(
-                        new
+                        new JsonObject
                         {
-                            success = true,
-                            sessionId = child.Id,
-                            parentSessionId = parent.Id,
-                            delivered,
+                            ["success"] = true,
+                            ["sessionId"] = child.Id,
+                            ["parentSessionId"] = parent.Id,
+                            ["delivered"] = delivered,
                         }
                     );
                 }
                 catch (CommittedSessionCreationException error)
                 {
                     return Results.Json(
-                        new
+                        new JsonObject
                         {
-                            error = error.Message,
-                            sessionId = error.SessionId,
-                            committed = true,
-                            initialDeliveryCommitted = error.InitialDeliveryCommitted,
+                            ["error"] = error.Message,
+                            ["sessionId"] = error.SessionId,
+                            ["committed"] = true,
+                            ["initialDeliveryCommitted"] = error.InitialDeliveryCommitted,
                         },
                         statusCode: 409
                     );
@@ -626,7 +658,7 @@ internal sealed partial class WebUIChannel
                                 or InvalidOperationException
                     )
                 {
-                    return Results.BadRequest(new { error = error.Message });
+                    return Results.BadRequest(new JsonObject { ["error"] = error.Message });
                 }
             }
         );
@@ -636,18 +668,18 @@ internal sealed partial class WebUIChannel
             {
                 var session = await FindRouteAsync(request, id);
                 if (session is null)
-                    return Results.NotFound(new { error = "Session not found" });
+                    return Results.NotFound(new JsonObject { ["error"] = "Session not found" });
                 if (!sessions.Accepting)
                     return Results.StatusCode(503);
                 try
                 {
                     var model = await sessions.RefreshSnapshotAsync(session);
                     return Results.Ok(
-                        new
+                        new JsonObject
                         {
-                            success = true,
-                            sessionId = session.Id,
-                            concreteModelId = model,
+                            ["success"] = true,
+                            ["sessionId"] = session.Id,
+                            ["concreteModelId"] = model,
                         }
                     );
                 }

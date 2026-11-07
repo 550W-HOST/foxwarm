@@ -285,7 +285,12 @@ internal sealed partial class WeWorkChannel : IManagedChannel
 
     private async Task SendResponseAsync(string url, string text, CancellationToken token)
     {
-        var result = await PostAsync(url, JsonContent.Create(Markdown(text)), 10000, token);
+        var result = await PostAsync(
+            url,
+            JsonContent.Create(Markdown(text), MainJsonContext.Default.JsonObject),
+            10000,
+            token
+        );
         if (result.ContainsKey("errcode") && !Zero(result["errcode"]))
             throw new IOException(
                 $"WeWork aibot response failed: {Text(result["errmsg"])} (code: {result["errcode"]})"
@@ -300,7 +305,12 @@ internal sealed partial class WeWorkChannel : IManagedChannel
         {
             try
             {
-                var result = await PostAsync(url, JsonContent.Create(payload), 10000, token);
+                var result = await PostAsync(
+                    url,
+                    JsonContent.Create(payload, MainJsonContext.Default.JsonObject),
+                    10000,
+                    token
+                );
                 if (!Zero(result["errcode"]))
                     throw new IOException(
                         $"WeWork API error: {Text(result["errmsg"])} (code: {result["errcode"]})"

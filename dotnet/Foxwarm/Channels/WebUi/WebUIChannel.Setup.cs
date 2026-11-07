@@ -58,7 +58,7 @@ internal sealed partial class WebUIChannel
                 catch (Exception error)
                 {
                     return Results.Json(
-                        new { error = configuration.SafeError(error) },
+                        new JsonObject { ["error"] = configuration.SafeError(error) },
                         statusCode: 500
                     );
                 }
@@ -95,7 +95,7 @@ internal sealed partial class WebUIChannel
                         ["available"] = false,
                         ["message"] = "External chat channels are unavailable on this server.",
                     };
-                    return Results.Ok(installation);
+                    return Results.Ok(JsonData.WebNode(installation));
                 }
                 catch (Exception error)
                     when (error
@@ -105,7 +105,9 @@ internal sealed partial class WebUIChannel
                                 or IOException
                     )
                 {
-                    return Results.BadRequest(new { error = configuration.SafeAppError(error) });
+                    return Results.BadRequest(
+                        new JsonObject { ["error"] = configuration.SafeAppError(error) }
+                    );
                 }
             }
         );
@@ -134,7 +136,7 @@ internal sealed partial class WebUIChannel
                             locale,
                             request.Headers.AcceptLanguage.ToString()
                         );
-                    return Results.Ok(installation);
+                    return Results.Ok(JsonData.WebNode(installation));
                 }
                 catch (Exception error)
                     when (error
@@ -145,7 +147,7 @@ internal sealed partial class WebUIChannel
                     )
                 {
                     return Results.BadRequest(
-                        new { error = configuration.SafeError(error, input) }
+                        new JsonObject { ["error"] = configuration.SafeError(error, input) }
                     );
                 }
             }
@@ -176,17 +178,17 @@ internal sealed partial class WebUIChannel
                 catch (SetupProviderRequestException error)
                 {
                     return Results.Json(
-                        new { error = error.Message },
+                        new JsonObject { ["error"] = error.Message },
                         statusCode: error.StatusCode
                     );
                 }
                 catch (JsonException error)
                 {
-                    return Results.BadRequest(new { error = error.Message });
+                    return Results.BadRequest(new JsonObject { ["error"] = error.Message });
                 }
                 catch (InvalidDataException error)
                 {
-                    return Results.BadRequest(new { error = error.Message });
+                    return Results.BadRequest(new JsonObject { ["error"] = error.Message });
                 }
             }
         );
@@ -229,20 +231,30 @@ internal sealed partial class WebUIChannel
                 }
                 catch (SetupProviderRequestException error)
                 {
-                    return Results.BadRequest(new { success = false, error = error.Message });
+                    return Results.BadRequest(
+                        new JsonObject { ["success"] = false, ["error"] = error.Message }
+                    );
                 }
                 catch (JsonException error)
                 {
-                    return Results.BadRequest(new { success = false, error = error.Message });
+                    return Results.BadRequest(
+                        new JsonObject { ["success"] = false, ["error"] = error.Message }
+                    );
                 }
                 catch (InvalidDataException error)
                 {
-                    return Results.BadRequest(new { success = false, error = error.Message });
+                    return Results.BadRequest(
+                        new JsonObject { ["success"] = false, ["error"] = error.Message }
+                    );
                 }
                 catch (Exception)
                 {
                     return Results.BadRequest(
-                        new { success = false, error = "Configured model request failed." }
+                        new JsonObject
+                        {
+                            ["success"] = false,
+                            ["error"] = "Configured model request failed.",
+                        }
                     );
                 }
             }

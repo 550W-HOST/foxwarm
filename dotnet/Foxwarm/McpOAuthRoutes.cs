@@ -53,7 +53,9 @@ internal static class McpOAuthRoutes
     private static IResult Failure(Exception error)
     {
         var safe = McpOAuthService.SafeError(error);
-        return Results.BadRequest(new { error = safe.Message, code = safe.Code });
+        return Results.BadRequest(
+            new JsonObject { ["error"] = safe.Message, ["code"] = safe.Code }
+        );
     }
 
     private static async Task<JsonObject> BodyAsync(HttpRequest request, McpOAuthService service)
@@ -75,7 +77,7 @@ internal static class McpOAuthRoutes
             {
                 try
                 {
-                    return Results.Json(client.Authorizations());
+                    return Results.Json(JsonData.WebNode(client.Authorizations()));
                 }
                 catch (Exception error)
                 {
@@ -91,7 +93,7 @@ internal static class McpOAuthRoutes
                 {
                     var body = await BodyAsync(context.Request, service);
                     await client.SetAuthorizationAsync(server, body);
-                    return Results.Ok(new { success = true });
+                    return Results.Ok(new JsonObject { ["success"] = true });
                 }
                 catch (Exception error)
                 {
@@ -108,7 +110,7 @@ internal static class McpOAuthRoutes
                     _ = await BodyAsync(context.Request, service);
                     var config = client.AuthorizationServer(server);
                     var url = await service.BeginAsync(server, config, context.RequestAborted);
-                    return Results.Ok(new { authorizationUrl = url });
+                    return Results.Ok(new JsonObject { ["authorizationUrl"] = url });
                 }
                 catch (Exception error)
                 {
@@ -125,7 +127,7 @@ internal static class McpOAuthRoutes
                     _ = await BodyAsync(context.Request, service);
                     _ = client.AuthorizationServer(server);
                     service.Disconnect(server);
-                    return Results.Ok(new { success = true });
+                    return Results.Ok(new JsonObject { ["success"] = true });
                 }
                 catch (Exception error)
                 {
@@ -142,7 +144,7 @@ internal static class McpOAuthRoutes
                 {
                     var query = await BodyAsync(context.Request, service);
                     await service.FinishAsync(query, context.RequestAborted);
-                    return Results.Ok(new { success = true });
+                    return Results.Ok(new JsonObject { ["success"] = true });
                 }
                 catch (Exception error)
                 {
@@ -157,7 +159,7 @@ internal static class McpOAuthRoutes
                 try
                 {
                     context.Response.Headers.CacheControl = "public, max-age=300";
-                    return Results.Json(service.ClientMetadata());
+                    return Results.Json(JsonData.WebNode(service.ClientMetadata()));
                 }
                 catch (Exception error)
                 {
@@ -175,10 +177,8 @@ internal static class McpOAuthRoutes
                     "default-src 'none'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'";
                 try
                 {
-                    var complete = JsonSerializer.Serialize(
-                        service.PublicUrl("/api/mcp/oauth/complete")
-                    );
-                    var home = JsonSerializer.Serialize(service.PublicUrl(""));
+                    var complete = JsonData.Serialize(service.PublicUrl("/api/mcp/oauth/complete"));
+                    var home = JsonData.Serialize(service.PublicUrl(""));
                     // No request/query value enters this document; the authenticated first-party POST exchanges the code.
                     return Results.Content(
                         CallbackDocument(complete, home),

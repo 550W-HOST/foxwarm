@@ -1,0 +1,75 @@
+--- a/src/Connection.cs
++++ b/src/Connection.cs
+@@ -95,3 +95,3 @@
+             byte[]? storageJson = options?.StorageOptions != null
+-                ? JsonSerializer.SerializeToUtf8Bytes(options.StorageOptions)
++                ? JsonSerializer.SerializeToUtf8Bytes(options.StorageOptions, LanceJsonContext.Default.DictionaryStringString)
+                 : null;
+@@ -153,3 +153,3 @@
+             byte[]? storageJson = options?.StorageOptions != null
+-                ? JsonSerializer.SerializeToUtf8Bytes(options.StorageOptions)
++                ? JsonSerializer.SerializeToUtf8Bytes(options.StorageOptions, LanceJsonContext.Default.DictionaryStringString)
+                 : null;
+@@ -219,3 +219,3 @@
+             byte[]? storageJson = options?.StorageOptions != null
+-                ? JsonSerializer.SerializeToUtf8Bytes(options.StorageOptions)
++                ? JsonSerializer.SerializeToUtf8Bytes(options.StorageOptions, LanceJsonContext.Default.DictionaryStringString)
+                 : null;
+@@ -269,3 +269,3 @@
+             byte[]? storageJson = options?.StorageOptions != null
+-                ? JsonSerializer.SerializeToUtf8Bytes(options.StorageOptions)
++                ? JsonSerializer.SerializeToUtf8Bytes(options.StorageOptions, LanceJsonContext.Default.DictionaryStringString)
+                 : null;
+@@ -347,3 +347,3 @@
+             byte[]? storageJson = options.StorageOptions != null
+-                ? JsonSerializer.SerializeToUtf8Bytes(options.StorageOptions)
++                ? JsonSerializer.SerializeToUtf8Bytes(options.StorageOptions, LanceJsonContext.Default.DictionaryStringString)
+                 : null;
+--- a/src/QueryBase.cs
++++ b/src/QueryBase.cs
+@@ -113,3 +113,3 @@
+         {
+-            return JsonSerializer.SerializeToUtf8Bytes(BuildParamsDict());
++            return JsonSerializer.SerializeToUtf8Bytes(BuildParamsDict(), LanceJsonContext.Default.DictionaryStringObject);
+         }
+--- a/src/Table.cs
++++ b/src/Table.cs
+@@ -915,3 +915,3 @@
+             byte[] fieldBytes = NativeCall.ToUtf8(fieldName);
+-            byte[] metaBytes = JsonSerializer.SerializeToUtf8Bytes(metadata);
++            byte[] metaBytes = JsonSerializer.SerializeToUtf8Bytes(metadata, LanceJsonContext.Default.DictionaryStringString);
+             await NativeCall.Async((completion, userData) =>
+@@ -943,3 +943,3 @@
+             string json = NativeCall.ReadStringAndFree(result);
+-            return JsonSerializer.Deserialize<List<VersionInfo>>(json)
++            return JsonSerializer.Deserialize(json, LanceJsonContext.Default.ListVersionInfo)
+                 ?? new List<VersionInfo>();
+@@ -1655,3 +1655,3 @@
+             string json = NativeCall.ReadStringAndFree(result);
+-            return JsonSerializer.Deserialize<OptimizeStats>(json) ?? new OptimizeStats();
++            return JsonSerializer.Deserialize(json, LanceJsonContext.Default.OptimizeStats) ?? new OptimizeStats();
+         }
+@@ -1712,3 +1712,3 @@
+         {
+-            byte[] onColumnsBytes = JsonSerializer.SerializeToUtf8Bytes(onColumns);
++            byte[] onColumnsBytes = JsonSerializer.SerializeToUtf8Bytes(onColumns, LanceJsonContext.Default.IReadOnlyListString);
+             byte[]? matchedFilterBytes = whenMatchedUpdateAllFilter != null
+--- /dev/null
++++ b/src/LanceJsonContext.cs
+@@ -0,0 +1,16 @@
++using System.Collections.Generic;
++using System.Text.Json.Serialization;
++
++namespace lancedb;
++
++// Scoped to the operations exercised by Foxwarm's VectorTable; not a complete SDK conversion.
++[JsonSerializable(typeof(Dictionary<string, string>))]
++[JsonSerializable(typeof(Dictionary<string, object>))]
++[JsonSerializable(typeof(IReadOnlyList<string>))]
++[JsonSerializable(typeof(string[]))]
++[JsonSerializable(typeof(string))]
++[JsonSerializable(typeof(int))]
++[JsonSerializable(typeof(bool))]
++[JsonSerializable(typeof(List<VersionInfo>))]
++[JsonSerializable(typeof(OptimizeStats))]
++internal partial class LanceJsonContext : JsonSerializerContext;

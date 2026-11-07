@@ -137,7 +137,7 @@ internal sealed class McpInboundHttp : IAsyncDisposable, IHostedService
                     )
                         throw new InvalidOperationException("Tool catalog exceeds size limit.");
                     return ValueTask.FromResult(
-                        JsonSerializer.Deserialize<ListToolsResult>(
+                        JsonData.Deserialize<ListToolsResult>(
                             new JsonObject { ["tools"] = tools }.ToJsonString(),
                             McpJsonUtilities.DefaultOptions
                         )!
@@ -331,7 +331,7 @@ internal sealed class McpInboundHttp : IAsyncDisposable, IHostedService
         }
         http.Response.StatusCode = status;
         http.Response.ContentType = "application/json";
-        await http.Response.WriteAsJsonAsync(new { error = text });
+        await http.Response.WriteAsJsonAsync(new JsonObject { ["error"] = text });
     }
 
     internal async Task HandleAsync(HttpContext http)
@@ -439,7 +439,7 @@ internal sealed class McpInboundHttp : IAsyncDisposable, IHostedService
                 _ = JsonNode.Parse(messageBytes); // Syntax only before exact context ownership lookup.
                 if (id is null)
                 {
-                    message = JsonSerializer.Deserialize<JsonRpcMessage>(
+                    message = JsonData.Deserialize<JsonRpcMessage>(
                         messageBytes,
                         McpJsonUtilities.DefaultOptions
                     );
@@ -564,7 +564,7 @@ internal sealed class McpInboundHttp : IAsyncDisposable, IHostedService
             }
             if (message is null)
                 message =
-                    JsonSerializer.Deserialize<JsonRpcMessage>(
+                    JsonData.Deserialize<JsonRpcMessage>(
                         messageBytes!,
                         McpJsonUtilities.DefaultOptions
                     ) ?? throw new JsonException();

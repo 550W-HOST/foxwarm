@@ -8,7 +8,7 @@ internal sealed partial class WebUIChannel
 {
     private static IResult TaskErrorResult(TaskError error) =>
         Results.Json(
-            new { code = error.Code, error = error.Message },
+            new JsonObject { ["code"] = error.Code, ["error"] = error.Message },
             statusCode: error.StatusCode
         );
 
@@ -35,10 +35,12 @@ internal sealed partial class WebUIChannel
                         limit = int.TryParse(raw, out var parsed) ? parsed : 51;
                     }
                     return Results.Ok(
-                        sessions
-                            .Tasks.ExecuteForWebUiAsync(args, null, limit)
-                            .GetAwaiter()
-                            .GetResult()
+                        JsonData.WebNode(
+                            sessions
+                                .Tasks.ExecuteForWebUiAsync(args, null, limit)
+                                .GetAwaiter()
+                                .GetResult()
+                        )
                     );
                 }
                 catch (TaskError error)
@@ -48,7 +50,11 @@ internal sealed partial class WebUIChannel
                 catch
                 {
                     return Results.Json(
-                        new { code = "TASK_READ_FAILED", error = "Tasks could not be loaded." },
+                        new JsonObject
+                        {
+                            ["code"] = "TASK_READ_FAILED",
+                            ["error"] = "Tasks could not be loaded.",
+                        },
                         statusCode: 500
                     );
                 }
@@ -73,7 +79,7 @@ internal sealed partial class WebUIChannel
                         )
                         .GetAwaiter()
                         .GetResult();
-                    return Results.Ok(result);
+                    return Results.Ok(JsonData.WebNode(result));
                 }
                 catch (TaskError error)
                 {
@@ -82,7 +88,11 @@ internal sealed partial class WebUIChannel
                 catch
                 {
                     return Results.Json(
-                        new { code = "TASK_READ_FAILED", error = "Tasks could not be loaded." },
+                        new JsonObject
+                        {
+                            ["code"] = "TASK_READ_FAILED",
+                            ["error"] = "Tasks could not be loaded.",
+                        },
                         statusCode: 500
                     );
                 }
@@ -155,7 +165,7 @@ internal sealed partial class WebUIChannel
                         ? await sessions.Tasks.ExecuteAsUserAsync(body)
                         : await sessions.Tasks.ExecuteForWebUiAsync(body, target);
                 context.Response.StatusCode = success;
-                await Results.Json(result).ExecuteAsync(context);
+                await Results.Json(JsonData.WebNode(result)).ExecuteAsync(context);
             }
             catch (TaskError error)
             {
@@ -175,7 +185,11 @@ internal sealed partial class WebUIChannel
             {
                 await Results
                     .Json(
-                        new { code = "TASK_READ_FAILED", error = "Tasks could not be loaded." },
+                        new JsonObject
+                        {
+                            ["code"] = "TASK_READ_FAILED",
+                            ["error"] = "Tasks could not be loaded.",
+                        },
                         statusCode: 500
                     )
                     .ExecuteAsync(context);
@@ -215,7 +229,7 @@ internal sealed partial class WebUIChannel
                     body["taskId"] = context.Request.RouteValues["id"]?.ToString();
                     var result = await sessions.Tasks.ExecuteAsUserAsync(body);
                     context.Response.StatusCode = 200;
-                    await Results.Json(result).ExecuteAsync(context);
+                    await Results.Json(JsonData.WebNode(result)).ExecuteAsync(context);
                 }
                 catch (TaskError error)
                 {
@@ -235,10 +249,10 @@ internal sealed partial class WebUIChannel
                 {
                     await Results
                         .Json(
-                            new
+                            new JsonObject
                             {
-                                code = "TASK_WRITE_FAILED",
-                                error = "Task operation could not be completed.",
+                                ["code"] = "TASK_WRITE_FAILED",
+                                ["error"] = "Task operation could not be completed.",
                             },
                             statusCode: 500
                         )

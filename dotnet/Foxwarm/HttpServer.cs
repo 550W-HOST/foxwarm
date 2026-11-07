@@ -99,10 +99,12 @@ internal sealed class HttpServer
             server.Limits.MaxRequestBodySize = 2 * 1024 * 1024
         );
         builder.Services.ConfigureHttpJsonOptions(options =>
+        {
+            options.SerializerOptions.TypeInfoResolver = MainJsonContext.Default;
             options.SerializerOptions.Converters.Add(
                 new Foxwarm.Images.ImageTransportConverterFactory()
-            )
-        );
+            );
+        });
         builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(options =>
             options.MultipartBodyLengthLimit = 51L * 1024 * 1024
         );
@@ -227,7 +229,9 @@ internal sealed class HttpServer
                 if (!valid && !resource)
                 {
                     context.Response.StatusCode = 401;
-                    await context.Response.WriteAsJsonAsync(new { error = "Unauthorized" });
+                    await context.Response.WriteAsJsonAsync(
+                        new JsonObject { ["error"] = "Unauthorized" }
+                    );
                     return;
                 }
                 if (scoped is not null && !resource)
@@ -235,7 +239,9 @@ internal sealed class HttpServer
                     if (!WebUiAccess.BrowserRoute(context))
                     {
                         context.Response.StatusCode = 403;
-                        await context.Response.WriteAsJsonAsync(new { error = "Forbidden" });
+                        await context.Response.WriteAsJsonAsync(
+                            new JsonObject { ["error"] = "Forbidden" }
+                        );
                         return;
                     }
                     try
@@ -250,10 +256,10 @@ internal sealed class HttpServer
                     {
                         context.Response.StatusCode = 403;
                         await context.Response.WriteAsJsonAsync(
-                            new
+                            new JsonObject
                             {
-                                error = "WebUI identity session binding changed.",
-                                code = "WEBUI_SESSION_NOT_ALLOWED",
+                                ["error"] = "WebUI identity session binding changed.",
+                                ["code"] = "WEBUI_SESSION_NOT_ALLOWED",
                             }
                         );
                     }
@@ -316,7 +322,7 @@ internal sealed class HttpServer
                     }
                     catch (JsonException)
                     {
-                        return Results.BadRequest(new { error = "Invalid JSON" });
+                        return Results.BadRequest(new JsonObject { ["error"] = "Invalid JSON" });
                     }
                     if (
                         body is null
@@ -329,19 +335,21 @@ internal sealed class HttpServer
                         )
                     )
                         return Results.Unauthorized();
-                    return Results.Ok(new { success = true });
+                    return Results.Ok(new JsonObject { ["success"] = true });
                 }
             );
             app.MapGet(
                 "/api/auth/session",
                 (HttpContext context) =>
                     Results.Ok(
-                        WebUiAccess.Request(context)?.AuthPayload()
-                            ?? new JsonObject
-                            {
-                                ["role"] = "admin",
-                                ["features"] = WebUiAccess.Features(true),
-                            }
+                        JsonData.WebNode(
+                            WebUiAccess.Request(context)?.AuthPayload()
+                                ?? new JsonObject
+                                {
+                                    ["role"] = "admin",
+                                    ["features"] = WebUiAccess.Features(true),
+                                }
+                        )
                     )
             );
             code!.Register(app);
@@ -353,7 +361,7 @@ internal sealed class HttpServer
             request => Authorized(request, apiToken, browserCookie),
             context => Foxwarm.Code.CodeWorkbench.DownloadAsync(context, sessions.NodeProviders)
         );
-        app.MapGet("/health", () => Results.Ok(new { status = "ready" }));
+        app.MapGet("/health", () => Results.Ok(new JsonObject { ["status"] = "ready" }));
         app.MapPost(
             "/admin/shutdown",
             (IHostApplicationLifetime lifetime) =>

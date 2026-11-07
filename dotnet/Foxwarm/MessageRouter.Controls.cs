@@ -52,7 +52,11 @@ internal sealed partial class MessageRouter
             owner.PublishStateChanged();
             return new(
                 httpStatus,
-                new { accepted = status == "accepted", success = status != "error" }
+                new JsonObject
+                {
+                    ["accepted"] = status == "accepted",
+                    ["success"] = status != "error",
+                }
             );
         }
         try

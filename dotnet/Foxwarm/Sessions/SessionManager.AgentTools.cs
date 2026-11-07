@@ -287,7 +287,7 @@ internal sealed partial class SessionManager
                         OptionalString(args, "inheritAgentName"),
                         OptionalBool(args, "refreshSnapshots") ?? false
                     );
-                    return (Output(System.Text.Json.JsonSerializer.Serialize(result)), false);
+                    return (Output(JsonData.Serialize(result)), false);
                 }
                 case "create_session":
                 {

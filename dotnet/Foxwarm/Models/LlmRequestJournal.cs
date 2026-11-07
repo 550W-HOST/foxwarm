@@ -183,12 +183,10 @@ public sealed class LlmRequestJournalStore : IDisposable, IAsyncDisposable
                             deltaDepth = prior.Value.Depth + 1;
                         }
                     }
-                    var checkpoint = baseRequest is null
-                        ? JsonSerializer.Serialize(messageIds)
-                        : null;
+                    var checkpoint = baseRequest is null ? JsonData.Serialize(messageIds) : null;
                     var appended = baseRequest is null
                         ? null
-                        : JsonSerializer.Serialize(messageIds[(commonPrefix ?? 0)..]);
+                        : JsonData.Serialize(messageIds[(commonPrefix ?? 0)..]);
                     using var command = connection.CreateCommand();
                     command.Transaction = transaction;
                     command.CommandText = """
@@ -1550,7 +1548,7 @@ public sealed class LlmRequestJournalStore : IDisposable, IAsyncDisposable
             throw new InvalidDataException("Missing journal request.");
         var checkpoint = reader.IsDBNull(0)
             ? null
-            : JsonSerializer.Deserialize<string[]>(reader.GetString(0));
+            : JsonData.Deserialize<string[]>(reader.GetString(0));
         var depth = reader.GetInt32(4);
         if (depth < 0 || depth > MaxDeltaDepth)
             throw new InvalidDataException("Invalid journal delta depth.");
@@ -1566,7 +1564,7 @@ public sealed class LlmRequestJournalStore : IDisposable, IAsyncDisposable
         var prefix = reader.IsDBNull(2) ? -1 : reader.GetInt32(2);
         var appended = reader.IsDBNull(3)
             ? throw new InvalidDataException("Journal delta is missing appended messages.")
-            : JsonSerializer.Deserialize<string[]>(reader.GetString(3)) ?? [];
+            : JsonData.Deserialize<string[]>(reader.GetString(3)) ?? [];
         var baseDepth = ReadScalar(
             connection,
             transaction,

@@ -183,7 +183,12 @@ internal sealed partial class SessionSequenceProjection
                     waiting.Add((session, span));
                 else if (cursor.Includes(span.First, session.Id, span.FirstSeq))
                 {
-                    var high = SqliteArchiveSequence.SeqBefore(connection, session.Id, span, cursor);
+                    var high = SqliteArchiveSequence.SeqBefore(
+                        connection,
+                        session.Id,
+                        span,
+                        cursor
+                    );
                     Push(connection, heap, new Source(session, span, high));
                 }
             }
@@ -198,10 +203,7 @@ internal sealed partial class SessionSequenceProjection
             {
                 while (
                     nextWaiting < waiting.Count
-                    && (
-                        heap.Count == 0
-                        || waiting[nextWaiting].Span.Last >= PeekTime(heap)
-                    )
+                    && (heap.Count == 0 || waiting[nextWaiting].Span.Last >= PeekTime(heap))
                 )
                 {
                     var (session, span) = waiting[nextWaiting++];
@@ -294,8 +296,7 @@ internal sealed partial class SessionSequenceProjection
             );
             foreach (var row in rows)
                 source.Buffer.Enqueue(row);
-            source.High =
-                rows.Count < PositionChunk ? source.Span.FirstSeq - 1 : rows[^1].Seq - 1;
+            source.High = rows.Count < PositionChunk ? source.Span.FirstSeq - 1 : rows[^1].Seq - 1;
         }
         if (source.Buffer.TryPeek(out var head))
             heap.Enqueue(source, (head.Timestamp, source.Session.Id, head.Seq));

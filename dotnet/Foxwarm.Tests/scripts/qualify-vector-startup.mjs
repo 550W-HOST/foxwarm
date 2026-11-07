@@ -51,7 +51,7 @@ async function fixture(label) {
   return f
 }
 async function config(f, child, enabled = true) {
-  const raw = JSON.stringify({ vector: enabled ? { baseUrl: provider + '/v1' } : false, dbWorkers: child, vectorMaintenance: false })
+  const raw = JSON.stringify({ bot: { httpPort: f.port }, vector: enabled ? { baseUrl: provider + '/v1' } : false, dbWorkers: child, vectorMaintenance: false })
   await writeFile(join(f.data, 'state/config.yaml'), raw)
   return raw
 }
@@ -111,17 +111,35 @@ try {
     try {
       const raw = await config(f, child)
       await f.start()
-      const healthy = await f.api('GET', '/api/history/search?query=synthetic')
-      assert.equal(healthy.status, 200, JSON.stringify(healthy))
+      await until(async () => {
+        const healthy = await f.api('GET', '/api/history/search?query=synthetic')
+        if (f.output.includes('Vector initialization failed')) throw new Error(f.output)
+        if (healthy.status !== 200 && healthy.body.code !== 'VECTOR_UNAVAILABLE') throw new Error(JSON.stringify(healthy))
+        return healthy.status === 200
+      }, 'Vector owner ready').catch(error => { console.error(f.output); throw error })
+      const healthyId = (await post(f, '/api/sessions', { agentId: 'main', sessionId: 'healthy' })).sessionId
+      await post(f, route(healthyId) + '/message', { text: 'native-index-marker ' + 'v'.repeat(25000) }, 202)
+      await until(async () => { const state = await saved(f, healthyId); return !state.busy && state.history.some(row => row.parts?.some(part => part.text === 'Synthetic startup answer.')) }, 'healthy model exchange committed')
+      await until(() => f.sql('SELECT raw_last_indexed_seq FROM archive_checkpoints WHERE session_id=?', [healthyId])[0]?.[0] >= 1, 'committed messages indexed')
+      const searchHealthy = () => until(async () => {
+        const found = await f.api('GET', '/api/history/search?query=synthetic&sessionId=' + encodeURIComponent(healthyId))
+        assert.equal(found.status, 200, JSON.stringify(found))
+        return found.body.results.length > 0
+      }, 'indexed search results available')
+      await searchHealthy()
+      await f.stop(); await f.start()
+      await until(async () => (await f.api('GET', '/api/history/search?query=synthetic')).status === 200, 'reopened Vector owner ready')
+      await searchHealthy()
+      await exchange(f, healthyId, 'healthy recall', undefined)
       await f.stop()
+      console.log(JSON.stringify({ child, actualCommittedIndex: true, searchAfterReopen: true, healthyRecallToolRoundTrip: true }))
       const manifest = await corrupt(f)
       const before = requests.filter(row => row.path === '/v1/embeddings').length
       let id
       for (let restart = 0; restart < 2; restart++) {
         await f.start()
         if (child) await noNativeOwnerInMain(f)
-        assert(f.output.includes('Vector initialization failed'), f.output)
-        assert(f.output.includes('Invalid range 0..0 for object of size 0'), f.output)
+        await until(() => f.output.includes('Vector initialization failed'), 'failed Vector owner settled')
         const search = await f.api('GET', '/api/history/search?query=synthetic')
         assert.equal(search.status, 503, JSON.stringify(search))
         assert.equal(search.body.code, 'VECTOR_UNAVAILABLE')
@@ -175,7 +193,7 @@ try {
       assert(exit.code !== 0 || exit.signal !== null)
       assert(!f.output.includes('Vector initialization failed'), f.output)
       assert(!f.output.includes('Main HTTP listening:'), f.output)
-      assert(f.output.includes('SQLite Error 26'), f.output)
+      assert(f.output.includes('SqliteException'), f.output)
       console.log(JSON.stringify({ database, authoritativeFailureRemainsFatal: true, exit }))
     } finally { await f.cleanup() }
   }

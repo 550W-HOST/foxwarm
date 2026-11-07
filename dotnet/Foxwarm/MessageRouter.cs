@@ -30,7 +30,7 @@ internal sealed partial class MessageRouter(SessionRuntime runtime)
                 runtime.Catalog.Resolve(context.SessionId)["sessionId"]
             );
             if (canonical is null)
-                return new(404, new { error = "Session not found" });
+                return new(404, new JsonObject { ["error"] = "Session not found" });
             return HandlePresentationCommand(context with { SessionId = canonical }, message.Text);
         }
         var owner =
@@ -77,7 +77,7 @@ internal sealed partial class MessageRouter(SessionRuntime runtime)
                     match.Groups[2].Success ? match.Groups[2].Value : null,
                     owner
                 );
-                return new(200, new { success = true });
+                return new(200, new JsonObject { ["success"] = true });
             }
         }
         if (command == "/node" || command.StartsWith("/node ", StringComparison.Ordinal))
@@ -94,17 +94,18 @@ internal sealed partial class MessageRouter(SessionRuntime runtime)
                         owner.Id,
                         $"✅ Archive indexing completed up to seq {latest}."
                     );
-                    return new(200, new { success = true, latestSeq = latest });
+                    return new(200, new JsonObject { ["success"] = true, ["latestSeq"] = latest });
                 }
                 catch (Exception error)
                 {
                     runtime.ReplyToCommand(owner.Id, "❌ Indexing failed: " + error.Message);
                     return new(
                         503,
-                        new
+                        new JsonObject
                         {
-                            error = error.Message,
-                            code = error is Foxwarm.Vector.VectorUnavailableException unavailable
+                            ["error"] = error.Message,
+                            ["code"] = error
+                                is Foxwarm.Vector.VectorUnavailableException unavailable
                                 ? unavailable.Code
                                 : "VECTOR_INDEX_FAILED",
                         }
@@ -120,11 +121,14 @@ internal sealed partial class MessageRouter(SessionRuntime runtime)
                 }
                 catch (AuthorityCommittedException error)
                 {
-                    return new(500, new { error = error.Message, committed = true });
+                    return new(
+                        500,
+                        new JsonObject { ["error"] = error.Message, ["committed"] = true }
+                    );
                 }
                 catch (InvalidOperationException error)
                 {
-                    return new(409, new { error = error.Message });
+                    return new(409, new JsonObject { ["error"] = error.Message });
                 }
             }
             if (System.Text.RegularExpressions.Regex.IsMatch(command, @"^/fork(?:\s|$)"))
@@ -146,25 +150,28 @@ internal sealed partial class MessageRouter(SessionRuntime runtime)
                 try
                 {
                     var child = await runtime.ForkCommandAsync(context.SessionId, suffix, initial);
-                    return new(200, new { success = true, newSessionId = child.Id });
+                    return new(
+                        200,
+                        new JsonObject { ["success"] = true, ["newSessionId"] = child.Id }
+                    );
                 }
                 catch (CommittedSessionCreationException error)
                 {
                     return new(
                         500,
-                        new
+                        new JsonObject
                         {
-                            error = error.Message,
-                            code = "partial_create",
-                            sessionId = error.SessionId,
-                            initialDeliveryCommitted = error.InitialDeliveryCommitted,
-                            parentNoticeCommitted = error.ParentNoticeCommitted,
+                            ["error"] = error.Message,
+                            ["code"] = "partial_create",
+                            ["sessionId"] = error.SessionId,
+                            ["initialDeliveryCommitted"] = error.InitialDeliveryCommitted,
+                            ["parentNoticeCommitted"] = error.ParentNoticeCommitted,
                         }
                     );
                 }
                 catch (InvalidDataException error)
                 {
-                    return new(400, new { error = error.Message });
+                    return new(400, new JsonObject { ["error"] = error.Message });
                 }
             }
             if (command == "/continue")
@@ -172,21 +179,27 @@ internal sealed partial class MessageRouter(SessionRuntime runtime)
                 try
                 {
                     await runtime.ContinueAsync(context.SessionId);
-                    return new(200, new { success = true });
+                    return new(200, new JsonObject { ["success"] = true });
                 }
                 catch (SessionContinuationUnavailableException error)
                 {
-                    return new(409, new { error = error.Message, code = error.Code });
+                    return new(
+                        409,
+                        new JsonObject { ["error"] = error.Message, ["code"] = error.Code }
+                    );
                 }
                 catch (InvalidOperationException error)
                 {
-                    return new(409, new { error = error.Message });
+                    return new(409, new JsonObject { ["error"] = error.Message });
                 }
             }
             if (System.Text.RegularExpressions.Regex.IsMatch(command, @"^/compact(?:\s|$)"))
             {
                 if (owner.Entry.HistoryMutation)
-                    return new(409, new { error = "Session history change is in progress." });
+                    return new(
+                        409,
+                        new JsonObject { ["error"] = "Session history change is in progress." }
+                    );
                 var keep = CommandArguments.CompactKeep(
                     command
                         .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
@@ -197,19 +210,20 @@ internal sealed partial class MessageRouter(SessionRuntime runtime)
                 return result.Started || result.AlreadyPending
                     ? new(
                         202,
-                        new
+                        new JsonObject
                         {
-                            accepted = true,
-                            compacting = true,
-                            alreadyPending = result.AlreadyPending,
-                            runsInBackground = result.Background,
+                            ["accepted"] = true,
+                            ["compacting"] = true,
+                            ["alreadyPending"] = result.AlreadyPending,
+                            ["runsInBackground"] = result.Background,
                         }
                     )
                     : new(
                         409,
-                        new
+                        new JsonObject
                         {
-                            error = "This model disables background compaction. Stop or wait for the current run to finish, then request compaction again.",
+                            ["error"] =
+                                "This model disables background compaction. Stop or wait for the current run to finish, then request compaction again.",
                         }
                     );
             }
@@ -218,12 +232,12 @@ internal sealed partial class MessageRouter(SessionRuntime runtime)
                 var result = await runtime.DequeueAsync(context.SessionId);
                 return new(
                     200,
-                    new
+                    new JsonObject
                     {
-                        success = true,
-                        queuedItems = result.QueuedItems,
-                        stoppedCurrent = result.StoppedCurrent,
-                        abortedInFlight = result.AbortedInFlight,
+                        ["success"] = true,
+                        ["queuedItems"] = result.QueuedItems,
+                        ["stoppedCurrent"] = result.StoppedCurrent,
+                        ["abortedInFlight"] = result.AbortedInFlight,
                     }
                 );
             }
@@ -232,22 +246,28 @@ internal sealed partial class MessageRouter(SessionRuntime runtime)
                 var result = await owner.Compactor.StopAsync();
                 return new(
                     200,
-                    new
+                    new JsonObject
                     {
-                        success = true,
-                        stoppedCompact = result.Cancelled,
-                        tooLate = result.TooLate,
+                        ["success"] = true,
+                        ["stoppedCompact"] = result.Cancelled,
+                        ["tooLate"] = result.TooLate,
                     }
                 );
             }
             if (command != "/stop")
-                return new(422, new { error = "This Session command has not been implemented." });
+                return new(
+                    422,
+                    new JsonObject { ["error"] = "This Session command has not been implemented." }
+                );
             if (owner.Compactor.Standalone)
-                return new(200, new { success = true, stoppedCurrent = false });
+                return new(200, new JsonObject { ["success"] = true, ["stoppedCurrent"] = false });
             if (!owner.Metadata().Busy)
-                return new(200, new { success = true, stoppedCurrent = false });
+                return new(200, new JsonObject { ["success"] = true, ["stoppedCurrent"] = false });
             var stopped = await runtime.StopAsync(context.SessionId);
-            return new(200, new { success = true, stoppedCurrent = stopped.StoppedCurrent });
+            return new(
+                200,
+                new JsonObject { ["success"] = true, ["stoppedCurrent"] = stopped.StoppedCurrent }
+            );
         }
         var parts = message.Parts ?? [new JsonObject { ["text"] = message.Text }];
         var item = new QueueItem(
@@ -263,10 +283,10 @@ internal sealed partial class MessageRouter(SessionRuntime runtime)
             await runtime.SubmitAndRunAsync(attachmentOwner, item, beforeAdmission);
         return new(
             202,
-            new
+            new JsonObject
             {
-                accepted = true,
-                note = "Queue save attempted; durable completion is not guaranteed.",
+                ["accepted"] = true,
+                ["note"] = "Queue save attempted; durable completion is not guaranteed.",
             }
         );
     }

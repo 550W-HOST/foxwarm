@@ -215,7 +215,7 @@ internal static class AgentToolDefinitions
                                     ["type"] = "string",
                                     ["maxLength"] = 128,
                                 };
-                                required.Add(key);
+                                required.Add((System.Text.Json.Nodes.JsonNode?)(key));
                             }
                             return (JsonNode?)
                                 new JsonObject

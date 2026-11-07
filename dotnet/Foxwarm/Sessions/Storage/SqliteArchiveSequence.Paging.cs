@@ -61,14 +61,14 @@ internal static partial class SqliteArchiveSequence
         )
             return cached.Span;
         var canonical =
-            cached?.Span?.Canonical ?? SqliteArchiveMessageStore.ResolveReadOnly(connection, session.Id);
+            cached?.Span?.Canonical
+            ?? SqliteArchiveMessageStore.ResolveReadOnly(connection, session.Id);
         ArchiveSpan? span = null;
         if (Edge(connection, canonical, last: true) is { } last)
         {
-            var first =
-                cached?.Span is { } known
-                    ? (known.FirstSeq, known.First)
-                    : Edge(connection, canonical, last: false)!.Value;
+            var first = cached?.Span is { } known
+                ? (known.FirstSeq, known.First)
+                : Edge(connection, canonical, last: false)!.Value;
             span = new(canonical, first.Item1, first.Item2, last.Seq, last.Timestamp);
         }
         Spans[key] = new(span, session.LastMessageTime, session.Busy, session.MessageCount);

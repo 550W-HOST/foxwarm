@@ -253,7 +253,7 @@ public sealed class VectorRecipeTests
                     )
                     .ToArray()
             ),
-            ["blocks"] = JsonSerializer.SerializeToNode(new[] { block }, VectorWire.Json),
+            ["blocks"] = JsonSerializer.SerializeToNode(new[] { block }, JsonSerializerOptions.Web),
             ["queries"] = new JsonArray(
                 queries.Select(query => (JsonNode?)JsonValue.Create(query)).ToArray()
             ),
@@ -332,14 +332,14 @@ public sealed class VectorRecipeTests
                 source["fts"]![index]!["compiled"],
                 JsonSerializer.SerializeToNode(
                     ArchiveSearchText.Compile(queries[index]),
-                    VectorWire.Json
+                    JsonSerializerOptions.Web
                 )
             );
             EqualJson(
                 source["fts"]![index]!["locators"],
                 JsonSerializer.SerializeToNode(
                     ArchiveLexicalRecall.Locators(queries[index]),
-                    VectorWire.Json
+                    JsonSerializerOptions.Web
                 )
             );
         }

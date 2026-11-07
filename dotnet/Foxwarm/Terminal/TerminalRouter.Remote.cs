@@ -167,11 +167,11 @@ internal sealed partial class TerminalRouter
         private void AddClientLocked(TerminalClient client, bool codeControl)
         {
             client.Enqueue(
-                new
+                new JsonObject
                 {
-                    type = "ready",
-                    terminal = descriptor.DeepClone(),
-                    backlog,
+                    ["type"] = "ready",
+                    ["terminal"] = JsonData.Node(descriptor.DeepClone()),
+                    ["backlog"] = backlog,
                 }
             );
             clients.Add(client);
@@ -392,12 +392,12 @@ internal sealed partial class TerminalRouter
                             );
                             controls[id] = new(controlOwner, target, timeout);
                             controlOwner.Enqueue(
-                                new
+                                new JsonObject
                                 {
-                                    type = "control",
-                                    requestId = id,
-                                    command = "open",
-                                    request = forwarded,
+                                    ["type"] = "control",
+                                    ["requestId"] = id,
+                                    ["command"] = "open",
+                                    ["request"] = JsonData.Node(forwarded),
                                 }
                             );
                         }
@@ -410,7 +410,7 @@ internal sealed partial class TerminalRouter
                     if (backlog.Length > TerminalRegistry.BacklogLimit)
                         backlog = backlog[^TerminalRegistry.BacklogLimit..];
                     foreach (var client in clients)
-                        client.Enqueue(new { type = "output", data = text });
+                        client.Enqueue(new JsonObject { ["type"] = "output", ["data"] = text });
                 }
                 else if (type == "exit")
                 {
@@ -419,12 +419,12 @@ internal sealed partial class TerminalRouter
                         return;
                     foreach (var client in clients)
                         client.Enqueue(
-                            new
+                            new JsonObject
                             {
-                                type = "exit",
-                                exitCode = exit.Value,
-                                signal = payload["signal"]?.DeepClone(),
-                                cwd = SessionWait.Text(payload["cwd"]),
+                                ["type"] = "exit",
+                                ["exitCode"] = exit.Value,
+                                ["signal"] = JsonData.Node(payload["signal"]?.DeepClone()),
+                                ["cwd"] = SessionWait.Text(payload["cwd"]),
                             }
                         );
                     _ = Task.Run(() => router.ForgetAsync(this, null));
@@ -432,10 +432,11 @@ internal sealed partial class TerminalRouter
                 else if (type == "error")
                     foreach (var client in clients)
                         client.Enqueue(
-                            new
+                            new JsonObject
                             {
-                                type = "error",
-                                message = SessionWait.Text(payload["error"]?["message"])
+                                ["type"] = "error",
+                                ["message"] =
+                                    SessionWait.Text(payload["error"]?["message"])
                                     ?? "Remote terminal operation failed.",
                             }
                         );
@@ -465,7 +466,7 @@ internal sealed partial class TerminalRouter
                 connectionLost = true;
                 snapshot = ResetLocked();
                 foreach (var client in snapshot)
-                    client.Enqueue(new { type = "error", message = reason });
+                    client.Enqueue(new JsonObject { ["type"] = "error", ["message"] = reason });
             }
             foreach (var client in snapshot)
                 _ = client.FinishAsync();
@@ -491,7 +492,7 @@ internal sealed partial class TerminalRouter
                 snapshot = ResetLocked();
                 if (error is not null)
                     foreach (var client in snapshot)
-                        client.Enqueue(new { type = "error", message = error });
+                        client.Enqueue(new JsonObject { ["type"] = "error", ["message"] = error });
             }
             await Task.WhenAll(snapshot.Select(c => c.FinishAsync()));
         }

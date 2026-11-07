@@ -47,8 +47,12 @@ internal sealed class ModelInteractionDiagnostics(string dataRoot)
                 4096,
                 FileOptions.Asynchronous
             );
-            await JsonSerializer
-                .SerializeAsync(file, value, new JsonSerializerOptions { WriteIndented = true })
+            await JsonData
+                .SerializeAsync(
+                    file,
+                    value,
+                    new JsonSerializerOptions(JsonData.Options) { WriteIndented = true }
+                )
                 .ConfigureAwait(false);
         }
         finally
@@ -216,7 +220,7 @@ internal sealed class ModelInteractionDiagnostics(string dataRoot)
                     )
                     .Where(value => value.Length > 0)
                     .Distinct(StringComparer.Ordinal)
-                    .SelectMany(value => new[] { value, JsonSerializer.Serialize(value)[1..^1] })
+                    .SelectMany(value => new[] { value, JsonData.Serialize(value)[1..^1] })
                     .Distinct(StringComparer.Ordinal)
                     .OrderByDescending(value => value.Length)
                     .ToArray();
@@ -425,9 +429,7 @@ internal sealed class ModelInteractionDiagnostics(string dataRoot)
                     string? decoded = null;
                     try
                     {
-                        decoded = JsonSerializer.Deserialize<string>(
-                            closed ? literal : literal + "\""
-                        );
+                        decoded = JsonData.Deserialize<string>(closed ? literal : literal + "\"");
                     }
                     catch (JsonException) { }
                     string? replacement = null;
@@ -435,7 +437,7 @@ internal sealed class ModelInteractionDiagnostics(string dataRoot)
                     {
                         var safe = ReplaceSecrets(closed ? decoded : TrimSecretPrefix(decoded));
                         if (safe != decoded)
-                            replacement = JsonSerializer.Serialize(safe);
+                            replacement = JsonData.Serialize(safe);
                     }
                     // An interrupted escape cannot be decoded safely. Omit
                     // only that literal, retaining the surrounding evidence.
@@ -558,7 +560,7 @@ internal sealed class ModelInteractionDiagnostics(string dataRoot)
             foreach (Match match in Regex.Matches(text, "\"(?:\\\\.|[^\"\\\\])*\""))
                 try
                 {
-                    var value = JsonSerializer.Deserialize<string>(match.Value);
+                    var value = JsonData.Deserialize<string>(match.Value);
                     if (
                         value is "b64_json" or "partial_image_b64"
                         || value?.Contains("image_generation_call", StringComparison.Ordinal)

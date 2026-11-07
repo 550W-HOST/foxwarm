@@ -32,7 +32,9 @@ internal sealed partial class WebUIChannel
                     await FindRouteAsync(request, id) is null
                     || RouteIdentity(request) is not string exact
                 )
-                    return Results.NotFound(new { error = "Session not found" });
+                    return Results.NotFound(
+                        new System.Text.Json.Nodes.JsonObject { ["error"] = "Session not found" }
+                    );
                 try
                 {
                     var record = await sessions.Artifacts.ReadAsync(
@@ -58,7 +60,9 @@ internal sealed partial class WebUIChannel
                         && error is not WebUiAccessException
                     )
                 {
-                    return Results.NotFound(new { error = "Artifact unavailable" });
+                    return Results.NotFound(
+                        new System.Text.Json.Nodes.JsonObject { ["error"] = "Artifact unavailable" }
+                    );
                 }
             }
         );
@@ -76,7 +80,9 @@ internal sealed partial class WebUIChannel
                     await FindRouteAsync(request, id) is null
                     || RouteIdentity(request) is not string exact
                 )
-                    return Results.NotFound(new { error = "Session not found" });
+                    return Results.NotFound(
+                        new System.Text.Json.Nodes.JsonObject { ["error"] = "Session not found" }
+                    );
                 try
                 {
                     var result = await sessions.Artifacts.ResourceAsync(
@@ -106,7 +112,9 @@ internal sealed partial class WebUIChannel
                         && error is not WebUiAccessException
                     )
                 {
-                    return Results.NotFound(new { error = "Resource unavailable" });
+                    return Results.NotFound(
+                        new System.Text.Json.Nodes.JsonObject { ["error"] = "Resource unavailable" }
+                    );
                 }
             }
         );

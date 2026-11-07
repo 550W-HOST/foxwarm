@@ -11,10 +11,14 @@ namespace Foxwarm.ToolScript;
 internal sealed class MontyWorker : IAsyncDisposable
 {
     internal static bool IsSupported =>
-        ((OperatingSystem.IsLinux() || OperatingSystem.IsWindows())
-            && RuntimeInformation.ProcessArchitecture == Architecture.X64)
-        || (OperatingSystem.IsMacOS()
-            && RuntimeInformation.ProcessArchitecture is Architecture.X64 or Architecture.Arm64);
+        (
+            (OperatingSystem.IsLinux() || OperatingSystem.IsWindows())
+            && RuntimeInformation.ProcessArchitecture == Architecture.X64
+        )
+        || (
+            OperatingSystem.IsMacOS()
+            && RuntimeInformation.ProcessArchitecture is Architecture.X64 or Architecture.Arm64
+        );
     internal const string Version = "0.0.19";
     private readonly Process process;
     private readonly Task stderrDrain;

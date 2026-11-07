@@ -310,7 +310,7 @@ internal sealed partial class ModelConfiguration
                 var virtualModel = type is "session-hash" or "failover";
                 var secret = SessionWait.Text(config["apiKey"]) ?? "";
                 if (!virtualModel && ModelApiKeys.IsPlaceholder(secret))
-                    placeholder.Add(key);
+                    placeholder.Add((System.Text.Json.Nodes.JsonNode?)(key));
                 var members =
                     config["models"] as JsonArray
                     ?? config["model"] as JsonArray

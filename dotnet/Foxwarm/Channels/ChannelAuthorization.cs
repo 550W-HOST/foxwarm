@@ -39,9 +39,9 @@ internal sealed record ChannelAuthorization(
                 "Authorize this user by adding it to config.yaml:",
                 "```yaml",
                 "channels:",
-                "  " + System.Text.Json.JsonSerializer.Serialize(source.Instance) + ":",
+                "  " + JsonData.Serialize(source.Instance) + ":",
                 "    allowedUsers:",
-                "      - " + System.Text.Json.JsonSerializer.Serialize(EffectiveId),
+                "      - " + JsonData.Serialize(EffectiveId),
                 "```",
             ]);
         return string.Join("\n", lines);

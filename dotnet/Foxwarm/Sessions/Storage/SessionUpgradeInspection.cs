@@ -192,7 +192,7 @@ internal static class SessionUpgradeInspection
                         new(
                             true,
                             "active Worker",
-                            $"session={JsonSerializer.Serialize(id)} state={state}; retained ownership must finish its existing handback before selecting this runtime."
+                            $"session={JsonData.Serialize(id)} state={state}; retained ownership must finish its existing handback before selecting this runtime."
                         )
                     );
             }
@@ -221,7 +221,7 @@ internal static class SessionUpgradeInspection
                 new(
                     false,
                     "retained mailbox",
-                    $"session={JsonSerializer.Serialize(session)} mailboxId={id} createdAt={created} kind={kind}; {disposition}. Record retained; this runtime does not replay legacy mailbox input."
+                    $"session={JsonData.Serialize(session)} mailboxId={id} createdAt={created} kind={kind}; {disposition}. Record retained; this runtime does not replay legacy mailbox input."
                 )
             );
         }

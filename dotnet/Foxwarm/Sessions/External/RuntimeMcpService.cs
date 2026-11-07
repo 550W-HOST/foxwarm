@@ -68,7 +68,7 @@ internal sealed class RuntimeMcpService(SessionRuntimeCredentialStore credential
                 body.Write(bytes, 0, count);
             }
             var message =
-                JsonSerializer.Deserialize<JsonRpcMessage>(
+                JsonData.Deserialize<JsonRpcMessage>(
                     body.ToArray(),
                     McpJsonUtilities.DefaultOptions
                 ) ?? throw new JsonException();
@@ -111,7 +111,7 @@ internal sealed class RuntimeMcpService(SessionRuntimeCredentialStore credential
                                 .ToArray()
                         );
                         return ValueTask.FromResult(
-                            JsonSerializer.Deserialize<ListToolsResult>(
+                            JsonData.Deserialize<ListToolsResult>(
                                 new JsonObject { ["tools"] = declarations }.ToJsonString(),
                                 McpJsonUtilities.DefaultOptions
                             )!

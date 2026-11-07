@@ -15,7 +15,7 @@ internal sealed partial class WebUIChannel
                 {
                     var canonical = CatalogRoute(request);
                     if (canonical is null)
-                        return Results.NotFound(new { error = "Session not found" });
+                        return Results.NotFound(new JsonObject { ["error"] = "Session not found" });
                     if (!sessions.Accepting)
                         return Results.StatusCode(503);
                     try
@@ -31,7 +31,7 @@ internal sealed partial class WebUIChannel
                                 || !value.TryGetValue<bool>(out var pinned)
                             )
                                 return Results.BadRequest(
-                                    new { error = "pinned must be a boolean" }
+                                    new JsonObject { ["error"] = "pinned must be a boolean" }
                                 );
                             change = runtime.ChangePresentation(catalog =>
                                 catalog.Pin(canonical, pinned)
@@ -56,16 +56,16 @@ internal sealed partial class WebUIChannel
                             change = runtime.ChangePresentation(catalog =>
                                 catalog.Move(canonical, body, action == "promote")
                             );
-                        return Results.Ok(change.Result);
+                        return Results.Ok(JsonData.WebNode(change.Result));
                     }
                     catch (SessionPresentationException error)
                     {
                         return Results.Json(
-                            new
+                            new JsonObject
                             {
-                                error = error.Message,
-                                code = error.Code,
-                                sessionId = canonical,
+                                ["error"] = error.Message,
+                                ["code"] = error.Code,
+                                ["sessionId"] = canonical,
                             },
                             statusCode: error.Status
                         );
@@ -73,11 +73,11 @@ internal sealed partial class WebUIChannel
                     catch (PresentationCommittedException error)
                     {
                         return Results.Json(
-                            new
+                            new JsonObject
                             {
-                                error = error.Message,
-                                committed = true,
-                                result = error.Change.Result,
+                                ["error"] = error.Message,
+                                ["committed"] = true,
+                                ["result"] = JsonData.WebNode(error.Change.Result),
                             },
                             statusCode: 500
                         );
@@ -85,20 +85,21 @@ internal sealed partial class WebUIChannel
                     catch (Microsoft.Data.Sqlite.SqliteException error)
                     {
                         return Results.Json(
-                            new
+                            new JsonObject
                             {
-                                error = error.Message,
-                                code = action == "archive" ? "ARCHIVE_SESSION_FAILED"
-                                : action == "move" ? "MOVE_SESSION_FAILED"
-                                : action == "promote" ? "PROMOTE_FAILED"
-                                : "PIN_SESSION_FAILED",
+                                ["error"] = error.Message,
+                                ["code"] =
+                                    action == "archive" ? "ARCHIVE_SESSION_FAILED"
+                                    : action == "move" ? "MOVE_SESSION_FAILED"
+                                    : action == "promote" ? "PROMOTE_FAILED"
+                                    : "PIN_SESSION_FAILED",
                             },
                             statusCode: 500
                         );
                     }
                     catch (System.Text.Json.JsonException error)
                     {
-                        return Results.BadRequest(new { error = error.Message });
+                        return Results.BadRequest(new JsonObject { ["error"] = error.Message });
                     }
                 }
             );

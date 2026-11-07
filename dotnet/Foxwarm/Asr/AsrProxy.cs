@@ -171,7 +171,10 @@ internal sealed partial class AsrProxy : IDisposable
     {
         if (!Configured)
             return Results.Json(
-                new { error = configurationError ?? "Speech service is not configured." },
+                new JsonObject
+                {
+                    ["error"] = configurationError ?? "Speech service is not configured.",
+                },
                 statusCode: 503
             );
         if (
@@ -180,7 +183,9 @@ internal sealed partial class AsrProxy : IDisposable
         )
             limit.MaxRequestBodySize = AudioLimit + ControlLimit + 65536;
         if (!context.Request.HasFormContentType)
-            return Results.BadRequest(new { error = "One multipart audio file is required." });
+            return Results.BadRequest(
+                new JsonObject { ["error"] = "One multipart audio file is required." }
+            );
         try
         {
             using var lifetime = Lifetime(context.RequestAborted, TimeSpan.FromMinutes(10));
@@ -194,13 +199,15 @@ internal sealed partial class AsrProxy : IDisposable
                 lifetime.Token
             );
             if (form.Files.Count != 1 || form.Files[0].Name != "audio")
-                return Results.BadRequest(new { error = "One audio file is required." });
+                return Results.BadRequest(
+                    new JsonObject { ["error"] = "One audio file is required." }
+                );
             var file = form.Files[0];
             if (file.Length == 0)
-                return Results.BadRequest(new { error = "Audio is empty." });
+                return Results.BadRequest(new JsonObject { ["error"] = "Audio is empty." });
             if (file.Length > AudioLimit)
                 return Results.Json(
-                    new { error = "Audio exceeds the 25 MiB limit." },
+                    new JsonObject { ["error"] = "Audio exceeds the 25 MiB limit." },
                     statusCode: 413
                 );
             if (
@@ -209,7 +216,9 @@ internal sealed partial class AsrProxy : IDisposable
                     + Encoding.UTF8.GetByteCount(pair.Value.ToString())
                 ) > ControlLimit
             )
-                return Results.BadRequest(new { error = "Audio metadata is too large." });
+                return Results.BadRequest(
+                    new JsonObject { ["error"] = "Audio metadata is too large." }
+                );
             using var multipart = new MultipartFormDataContent();
             await using var input = file.OpenReadStream();
             using var audio = new StreamContent(input);
@@ -245,7 +254,7 @@ internal sealed partial class AsrProxy : IDisposable
             var body = await ReadJsonAsync(response.Content, OutputLimit, lifetime.Token);
             if (!response.IsSuccessStatusCode)
                 return Results.Json(
-                    new { error = ServiceError },
+                    new JsonObject { ["error"] = ServiceError },
                     statusCode: (int)response.StatusCode is >= 400 and <= 599
                         ? (int)response.StatusCode
                         : 502
@@ -255,7 +264,7 @@ internal sealed partial class AsrProxy : IDisposable
                 || !value.TryGetValue<string>(out var textResult)
             )
                 throw new FormatException();
-            return Results.Json(Transcript(body, SafeText(textResult)));
+            return Results.Json(JsonData.WebNode(Transcript(body, SafeText(textResult))));
         }
         catch (OperationCanceledException)
             when (context.RequestAborted.IsCancellationRequested || stopped.IsCancellationRequested)
@@ -265,14 +274,17 @@ internal sealed partial class AsrProxy : IDisposable
         catch (OperationCanceledException)
         {
             return Results.Json(
-                new { error = "Transcription timed out. Try a shorter recording." },
+                new JsonObject { ["error"] = "Transcription timed out. Try a shorter recording." },
                 statusCode: 504
             );
         }
         catch (Exception error) when (error is InvalidDataException or BadHttpRequestException)
         {
             return Results.Json(
-                new { error = "Audio upload is invalid or exceeds the 25 MiB limit." },
+                new JsonObject
+                {
+                    ["error"] = "Audio upload is invalid or exceeds the 25 MiB limit.",
+                },
                 statusCode: error is BadHttpRequestException bad ? bad.StatusCode : 400
             );
         }
@@ -285,7 +297,7 @@ internal sealed partial class AsrProxy : IDisposable
                         or ArgumentException
             )
         {
-            return Results.Json(new { error = ServiceError }, statusCode: 502);
+            return Results.Json(new JsonObject { ["error"] = ServiceError }, statusCode: 502);
         }
     }
 

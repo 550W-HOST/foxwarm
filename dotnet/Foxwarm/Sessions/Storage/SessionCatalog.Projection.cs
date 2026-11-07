@@ -48,7 +48,7 @@ internal sealed partial class SessionCatalog
             var entry = Bounded(Trim(raw), length);
             if (entry.Length == 0 || !seen.Add(entry))
                 continue;
-            result.Add(entry);
+            result.Add((System.Text.Json.Nodes.JsonNode?)(entry));
             if (result.Count == count)
                 break;
         }

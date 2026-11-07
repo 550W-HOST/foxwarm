@@ -101,14 +101,14 @@ internal sealed class MainLog : IDisposable
             var now = DateTimeOffset.Now;
             file.WriteLine(
                 json
-                    ? JsonSerializer.Serialize(
-                        new
+                    ? JsonData.Serialize(
+                        new System.Text.Json.Nodes.JsonObject
                         {
-                            level = isError ? 50 : 30,
-                            time = now.ToUnixTimeMilliseconds(),
-                            pid = Environment.ProcessId,
-                            hostname = Environment.MachineName,
-                            msg = line,
+                            ["level"] = isError ? 50 : 30,
+                            ["time"] = now.ToUnixTimeMilliseconds(),
+                            ["pid"] = Environment.ProcessId,
+                            ["hostname"] = Environment.MachineName,
+                            ["msg"] = line,
                         }
                     )
                     : "["

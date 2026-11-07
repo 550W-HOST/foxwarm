@@ -19,7 +19,7 @@ internal sealed partial class WebUIChannel
             {
                 var parent = await FindRouteAsync(request, id);
                 if (parent is null)
-                    return Results.NotFound(new { error = "Session not found" });
+                    return Results.NotFound(new JsonObject { ["error"] = "Session not found" });
                 JsonObject? body;
                 try
                 {
@@ -27,33 +27,37 @@ internal sealed partial class WebUIChannel
                 }
                 catch (System.Text.Json.JsonException)
                 {
-                    return Results.BadRequest(new { error = "Invalid fork request" });
+                    return Results.BadRequest(
+                        new JsonObject { ["error"] = "Invalid fork request" }
+                    );
                 }
                 if (
                     body.Any(pair => pair.Key != "suffix")
                     || body.ContainsKey("suffix") && body["suffix"] is not JsonValue
                 )
-                    return Results.BadRequest(new { error = "Invalid fork suffix" });
+                    return Results.BadRequest(new JsonObject { ["error"] = "Invalid fork suffix" });
                 try
                 {
                     var child = await sessions.ForkAsync(parent, SessionWait.Text(body["suffix"]));
-                    return Results.Ok(new { success = true, newSessionId = child.Id });
+                    return Results.Ok(
+                        new JsonObject { ["success"] = true, ["newSessionId"] = child.Id }
+                    );
                 }
                 catch (CommittedSessionCreationException error)
                 {
                     return Results.Json(
-                        new
+                        new JsonObject
                         {
-                            error = error.Message,
-                            code = "partial_create",
-                            sessionId = error.SessionId,
+                            ["error"] = error.Message,
+                            ["code"] = "partial_create",
+                            ["sessionId"] = error.SessionId,
                         },
                         statusCode: 500
                     );
                 }
                 catch (InvalidDataException error)
                 {
-                    return Results.BadRequest(new { error = error.Message });
+                    return Results.BadRequest(new JsonObject { ["error"] = error.Message });
                 }
             }
         );
@@ -61,8 +65,10 @@ internal sealed partial class WebUIChannel
             "/api/sessions/{id}/state",
             async (string id, HttpRequest request) =>
                 await FindRouteAsync(request, id) is { } hosted
-                    ? Results.Ok(new { session = hosted.BuildDto() })
-                    : Results.NotFound(new { error = "Session not found" })
+                    ? Results.Ok(
+                        new JsonObject { ["session"] = JsonData.WebNode(hosted.BuildDto()) }
+                    )
+                    : Results.NotFound(new JsonObject { ["error"] = "Session not found" })
         );
         app.MapGet(
             "/api/sessions/{id}/debug-file",
@@ -70,10 +76,12 @@ internal sealed partial class WebUIChannel
             {
                 var resolved = CatalogRoute(request);
                 if (resolved is null || runtime.Catalog.Get(resolved) is null)
-                    return Results.NotFound(new { error = "Session not found" });
+                    return Results.NotFound(new JsonObject { ["error"] = "Session not found" });
                 var path = Path.Combine(sessions.DataRoot, "state", "sessions", resolved + ".json");
                 if (!File.Exists(path))
-                    return Results.NotFound(new { error = "Session file not found" });
+                    return Results.NotFound(
+                        new JsonObject { ["error"] = "Session file not found" }
+                    );
                 var payload =
                     JsonNode
                         .Parse(
@@ -100,7 +108,13 @@ internal sealed partial class WebUIChannel
                     strict: false,
                     request.HttpContext.RequestAborted
                 );
-                return Results.Ok(new { resolvedPath = path, payload });
+                return Results.Ok(
+                    new JsonObject
+                    {
+                        ["resolvedPath"] = path,
+                        ["payload"] = JsonData.WebNode(payload),
+                    }
+                );
             }
         );
         app.MapGet(
@@ -109,7 +123,7 @@ internal sealed partial class WebUIChannel
             {
                 var hosted = await FindRouteAsync(request, id);
                 if (hosted is null)
-                    return Results.NotFound(new { error = "Session not found" });
+                    return Results.NotFound(new JsonObject { ["error"] = "Session not found" });
                 var query = request.Query;
                 if (
                     query.Keys.Any(key =>
@@ -117,7 +131,11 @@ internal sealed partial class WebUIChannel
                     )
                 )
                     return Results.BadRequest(
-                        new { error = "Invalid history query", code = "HISTORY_RANGE_INVALID" }
+                        new JsonObject
+                        {
+                            ["error"] = "Invalid history query",
+                            ["code"] = "HISTORY_RANGE_INVALID",
+                        }
                     );
                 if (
                     !ReadInt(query, "tail", out var tail)
@@ -131,7 +149,11 @@ internal sealed partial class WebUIChannel
                     || (version.HasValue != (prefix.HasValue || after.HasValue))
                 )
                     return Results.BadRequest(
-                        new { error = "Invalid history query", code = "HISTORY_RANGE_INVALID" }
+                        new JsonObject
+                        {
+                            ["error"] = "Invalid history query",
+                            ["code"] = "HISTORY_RANGE_INVALID",
+                        }
                     );
                 var snapshot = hosted.Entry.Snapshot();
                 if (
@@ -139,12 +161,12 @@ internal sealed partial class WebUIChannel
                     || prefix.HasValue && prefix.Value > snapshot.History.Count
                 )
                     return Results.Conflict(
-                        new
+                        new JsonObject
                         {
-                            error = "History changed while loading",
-                            code = "SESSION_HISTORY_BOUNDARY_STALE",
-                            retryable = true,
-                            historyVersion = snapshot.HistoryVersion,
+                            ["error"] = "History changed while loading",
+                            ["code"] = "SESSION_HISTORY_BOUNDARY_STALE",
+                            ["retryable"] = true,
+                            ["historyVersion"] = snapshot.HistoryVersion,
                         }
                     );
                 var result = WebUiContract.History(
@@ -169,7 +191,7 @@ internal sealed partial class WebUIChannel
                     result["session"] = scoped.Session(result["session"]!.AsObject());
                     WebUiSessionImages.Project(result, hosted.Id, archive: false);
                 }
-                return Results.Ok(result);
+                return Results.Ok(JsonData.WebNode(result));
             }
         );
         app.MapGet(
@@ -178,7 +200,7 @@ internal sealed partial class WebUIChannel
             {
                 var hosted = await FindRouteAsync(request, id);
                 if (hosted is null)
-                    return Results.NotFound(new { error = "Session not found" });
+                    return Results.NotFound(new JsonObject { ["error"] = "Session not found" });
                 if (
                     !TryReadHistoryQuery(
                         request,
@@ -199,9 +221,11 @@ internal sealed partial class WebUIChannel
                         out error
                     )
                 )
-                    return Results.BadRequest(new { error });
+                    return Results.BadRequest(new JsonObject { ["error"] = error });
                 if (before is not null && after is not null)
-                    return Results.BadRequest(new { error = "Choose one paging direction." });
+                    return Results.BadRequest(
+                        new JsonObject { ["error"] = "Choose one paging direction." }
+                    );
                 var canonicalId = hosted.Id;
                 var latest = hosted.Entry.Snapshot().NextMessageSeq - 1;
                 var page = WebUiContinuousHistory.Read(hosted.Archive, before, after, latest);
@@ -213,7 +237,7 @@ internal sealed partial class WebUIChannel
                 );
                 if (CatalogRoute(request) != canonicalId)
                     return Results.Json(
-                        new { error = "Session binding changed." },
+                        new JsonObject { ["error"] = "Session binding changed." },
                         statusCode: 403
                     );
                 if (WebUiAccess.Request(request) is { } scoped)
@@ -221,7 +245,7 @@ internal sealed partial class WebUIChannel
                     scoped.Require(canonicalId);
                     WebUiSessionImages.Project(page, canonicalId, archive: true);
                 }
-                return Results.Ok(page);
+                return Results.Ok(JsonData.WebNode(page));
             }
         );
         app.MapGet(
@@ -230,7 +254,7 @@ internal sealed partial class WebUIChannel
             {
                 var hosted = await FindRouteAsync(request, id);
                 if (hosted is null)
-                    return Results.NotFound(new { error = "Session not found" });
+                    return Results.NotFound(new JsonObject { ["error"] = "Session not found" });
                 if (
                     !long.TryParse(
                         seq,
@@ -240,7 +264,7 @@ internal sealed partial class WebUIChannel
                     ) || index is <= 0 or > 9007199254740991L
                 )
                     return Results.BadRequest(
-                        new { error = "seq must be a positive safe integer." }
+                        new JsonObject { ["error"] = "seq must be a positive safe integer." }
                     );
                 var record = hosted
                     .Archive.ReadEffectiveMessagesRange(index, index)
@@ -255,17 +279,17 @@ internal sealed partial class WebUIChannel
                     ? null
                     : WebUiMessageTransport.Message(record.Message);
                 return record is null
-                    ? Results.NotFound(new { error = "Archived message not found" })
+                    ? Results.NotFound(new JsonObject { ["error"] = "Archived message not found" })
                     : Results.Ok(
-                        new
+                        new JsonObject
                         {
-                            seq = record.Seq,
-                            message = projectedMessage,
-                            messageJson = EcmaJson.Stringify(
+                            ["seq"] = record.Seq,
+                            ["message"] = JsonData.WebNode(projectedMessage),
+                            ["messageJson"] = EcmaJson.Stringify(
                                 Foxwarm.Images.ImageTransport.Project(projectedMessage)!
                             ),
-                            sourceSessionId = record.SessionId,
-                            inherited = record.SessionId != hosted.Id,
+                            ["sourceSessionId"] = record.SessionId,
+                            ["inherited"] = record.SessionId != hosted.Id,
                         }
                     );
             }
@@ -276,7 +300,7 @@ internal sealed partial class WebUIChannel
             {
                 var hosted = await FindRouteAsync(request, id);
                 if (hosted is null)
-                    return Results.NotFound(new { error = "Session not found" });
+                    return Results.NotFound(new JsonObject { ["error"] = "Session not found" });
                 if (
                     !long.TryParse(
                         blockId,
@@ -286,10 +310,10 @@ internal sealed partial class WebUIChannel
                     ) || index is <= 0 or > 9007199254740991L
                 )
                     return Results.BadRequest(
-                        new
+                        new JsonObject
                         {
-                            error = "blockId must be a positive integer.",
-                            code = "INVALID_CONTEXT_BLOCK_ID",
+                            ["error"] = "blockId must be a positive integer.",
+                            ["code"] = "INVALID_CONTEXT_BLOCK_ID",
                         }
                     );
                 var preview = 6000;
@@ -305,7 +329,10 @@ internal sealed partial class WebUIChannel
                     )
                 )
                     return Results.BadRequest(
-                        new { error = "previewLength must be a positive integer at most 20000." }
+                        new JsonObject
+                        {
+                            ["error"] = "previewLength must be a positive integer at most 20000.",
+                        }
                     );
                 var result = ContextBlockExpansion.Render(
                     hosted.Archive,
@@ -327,13 +354,13 @@ internal sealed partial class WebUIChannel
                 }
                 return result is null
                     ? Results.NotFound(
-                        new
+                        new JsonObject
                         {
-                            error = $"CTX-BLOCK B#{index} not found.",
-                            code = "CTX_BLOCK_NOT_FOUND",
+                            ["error"] = $"CTX-BLOCK B#{index} not found.",
+                            ["code"] = "CTX_BLOCK_NOT_FOUND",
                         }
                     )
-                    : Results.Ok(result);
+                    : Results.Ok(JsonData.WebNode(result));
             }
         );
         app.MapGet(
@@ -349,15 +376,19 @@ internal sealed partial class WebUIChannel
                     )
                 )
                     return Results.BadRequest(
-                        new { error = queryError, code = "HISTORY_SEARCH_INVALID" }
+                        new JsonObject
+                        {
+                            ["error"] = queryError,
+                            ["code"] = "HISTORY_SEARCH_INVALID",
+                        }
                     );
                 var search = query.GetValueOrDefault("query", "");
                 if (search.Length == 0 || search.Length > 2000)
                     return Results.BadRequest(
-                        new
+                        new JsonObject
                         {
-                            error = "Enter a search query (up to 2,000 characters).",
-                            code = "HISTORY_SEARCH_INVALID",
+                            ["error"] = "Enter a search query (up to 2,000 characters).",
+                            ["code"] = "HISTORY_SEARCH_INVALID",
                         }
                     );
                 if (
@@ -370,20 +401,20 @@ internal sealed partial class WebUIChannel
                     || limit is long limitValue && (limitValue < 1 || limitValue > 20)
                 )
                     return Results.BadRequest(
-                        new
+                        new JsonObject
                         {
-                            error = queryError ?? "limit must be between 1 and 20.",
-                            code = "HISTORY_SEARCH_INVALID",
+                            ["error"] = queryError ?? "limit must be between 1 and 20.",
+                            ["code"] = "HISTORY_SEARCH_INVALID",
                         }
                     );
                 var agentName = query.GetValueOrDefault("agentName", "");
                 var sessionId = query.GetValueOrDefault("sessionId", "");
                 if (agentName.Length > 200 || sessionId.Length > 300)
                     return Results.BadRequest(
-                        new
+                        new JsonObject
                         {
-                            error = "Agent or session name is too long.",
-                            code = "HISTORY_SEARCH_INVALID",
+                            ["error"] = "Agent or session name is too long.",
+                            ["code"] = "HISTORY_SEARCH_INVALID",
                         }
                     );
                 if (sessionId.Length > 0)
@@ -392,26 +423,31 @@ internal sealed partial class WebUIChannel
                     var session = runtime.Catalog.Get(sessionId);
                     if (session is null && !archive.HasReadOnlyIdentity())
                         return Results.NotFound(
-                            new { error = "Session not found", code = "SESSION_NOT_FOUND" }
+                            new JsonObject
+                            {
+                                ["error"] = "Session not found",
+                                ["code"] = "SESSION_NOT_FOUND",
+                            }
                         );
                     if (session is not null && agentName.Length > 0)
                     {
                         var sessionAgent = SessionCatalog.Text(session["agent"]) ?? "main";
                         if (!string.Equals(sessionAgent, agentName, StringComparison.Ordinal))
                             return Results.BadRequest(
-                                new
+                                new JsonObject
                                 {
-                                    error = "The selected session is not in that agent.",
-                                    code = "HISTORY_SEARCH_INVALID",
+                                    ["error"] = "The selected session is not in that agent.",
+                                    ["code"] = "HISTORY_SEARCH_INVALID",
                                 }
                             );
                     }
                     else if (session is null && agentName.Length > 0)
                         return Results.BadRequest(
-                            new
+                            new JsonObject
                             {
-                                error = "Search this archived session without an additional agent filter.",
-                                code = "HISTORY_SEARCH_INVALID",
+                                ["error"] =
+                                    "Search this archived session without an additional agent filter.",
+                                ["code"] = "HISTORY_SEARCH_INVALID",
                             }
                         );
                 }
@@ -427,12 +463,12 @@ internal sealed partial class WebUIChannel
                         var source in (result["results"] as JsonArray ?? []).OfType<JsonObject>()
                     )
                         WebUiMessageTransport.ProjectHistoryViewerMessages(source["messages"]);
-                    return Results.Ok(result);
+                    return Results.Ok(JsonData.WebNode(result));
                 }
                 catch (Foxwarm.Vector.VectorUnavailableException error)
                 {
                     return Results.Json(
-                        new { error = error.Message, code = error.Code },
+                        new JsonObject { ["error"] = error.Message, ["code"] = error.Code },
                         statusCode: error.Code is "VECTOR_DISABLED" or "VECTOR_UNAVAILABLE"
                             ? 503
                             : 500
@@ -441,7 +477,11 @@ internal sealed partial class WebUIChannel
                 catch (Exception error)
                 {
                     return Results.Json(
-                        new { error = error.Message, code = "HISTORY_SEARCH_FAILED" },
+                        new JsonObject
+                        {
+                            ["error"] = error.Message,
+                            ["code"] = "HISTORY_SEARCH_FAILED",
+                        },
                         statusCode: 500
                     );
                 }
@@ -460,16 +500,28 @@ internal sealed partial class WebUIChannel
                     )
                 )
                     return Results.BadRequest(
-                        new { error = queryError, code = "HISTORY_SEARCH_INVALID" }
+                        new JsonObject
+                        {
+                            ["error"] = queryError,
+                            ["code"] = "HISTORY_SEARCH_INVALID",
+                        }
                     );
                 var sessionId = query.GetValueOrDefault("sessionId", "");
                 if (string.IsNullOrWhiteSpace(sessionId))
                     return Results.BadRequest(
-                        new { error = "Choose a session.", code = "HISTORY_SEARCH_INVALID" }
+                        new JsonObject
+                        {
+                            ["error"] = "Choose a session.",
+                            ["code"] = "HISTORY_SEARCH_INVALID",
+                        }
                     );
                 if (sessionId.Length > 300)
                     return Results.BadRequest(
-                        new { error = "Choose a session.", code = "HISTORY_SEARCH_INVALID" }
+                        new JsonObject
+                        {
+                            ["error"] = "Choose a session.",
+                            ["code"] = "HISTORY_SEARCH_INVALID",
+                        }
                     );
                 var target = query.GetValueOrDefault("target", "");
                 if (
@@ -493,22 +545,26 @@ internal sealed partial class WebUIChannel
                     )
                 )
                     return Results.BadRequest(
-                        new { error = queryError, code = "HISTORY_SEARCH_INVALID" }
+                        new JsonObject
+                        {
+                            ["error"] = queryError,
+                            ["code"] = "HISTORY_SEARCH_INVALID",
+                        }
                     );
                 if (target.Length == 0 && before is null && after is null)
                     return Results.BadRequest(
-                        new
+                        new JsonObject
                         {
-                            error = "Choose a message reference or page direction.",
-                            code = "HISTORY_SEARCH_INVALID",
+                            ["error"] = "Choose a message reference or page direction.",
+                            ["code"] = "HISTORY_SEARCH_INVALID",
                         }
                     );
                 if (targetEnd is not null && (after is null || target.Length > 0))
                     return Results.BadRequest(
-                        new
+                        new JsonObject
                         {
-                            error = "targetEndSeq is only valid with afterSeq.",
-                            code = "HISTORY_SEARCH_INVALID",
+                            ["error"] = "targetEndSeq is only valid with afterSeq.",
+                            ["code"] = "HISTORY_SEARCH_INVALID",
                         }
                     );
                 if (
@@ -516,10 +572,10 @@ internal sealed partial class WebUIChannel
                     || target.Length > 0 && (before is not null || after is not null)
                 )
                     return Results.BadRequest(
-                        new
+                        new JsonObject
                         {
-                            error = "Choose one paging direction.",
-                            code = "HISTORY_SEARCH_INVALID",
+                            ["error"] = "Choose one paging direction.",
+                            ["code"] = "HISTORY_SEARCH_INVALID",
                         }
                     );
                 long? start = null;
@@ -541,10 +597,10 @@ internal sealed partial class WebUIChannel
                         )
                     )
                         return Results.BadRequest(
-                            new
+                            new JsonObject
                             {
-                                error = queryError ?? "Use msg#123 or msg#123-130.",
-                                code = "HISTORY_SEARCH_INVALID",
+                                ["error"] = queryError ?? "Use msg#123 or msg#123-130.",
+                                ["code"] = "HISTORY_SEARCH_INVALID",
                             }
                         );
                     start = parsedStart;
@@ -559,22 +615,30 @@ internal sealed partial class WebUIChannel
                         )
                     )
                         return Results.BadRequest(
-                            new { error = queryError, code = "HISTORY_SEARCH_INVALID" }
+                            new JsonObject
+                            {
+                                ["error"] = queryError,
+                                ["code"] = "HISTORY_SEARCH_INVALID",
+                            }
                         );
                     end = match.Groups[2].Success ? parsedEnd : start;
                     if (end < start)
                         return Results.BadRequest(
-                            new
+                            new JsonObject
                             {
-                                error = "Select an ascending message range.",
-                                code = "HISTORY_SEARCH_INVALID",
+                                ["error"] = "Select an ascending message range.",
+                                ["code"] = "HISTORY_SEARCH_INVALID",
                             }
                         );
                 }
                 var archive = sessions.ArchiveReader(sessionId);
                 if (runtime.Catalog.Get(sessionId) is null && !archive.HasReadOnlyIdentity())
                     return Results.NotFound(
-                        new { error = "Session not found", code = "SESSION_NOT_FOUND" }
+                        new JsonObject
+                        {
+                            ["error"] = "Session not found",
+                            ["code"] = "SESSION_NOT_FOUND",
+                        }
                     );
                 var all = archive.EffectiveMessageStats();
                 IReadOnlyList<ArchiveMessageRecord> records;
@@ -622,24 +686,32 @@ internal sealed partial class WebUIChannel
                     request.HttpContext.RequestAborted
                 );
                 return Results.Ok(
-                    new
+                    new JsonObject
                     {
-                        sessionId,
-                        messages,
-                        firstSeq = first,
-                        lastSeq = last,
-                        hasEarlier = first is long firstValue
+                        ["sessionId"] = sessionId,
+                        ["messages"] = JsonData.WebNode(messages),
+                        ["firstSeq"] = first,
+                        ["lastSeq"] = last,
+                        ["hasEarlier"] =
+                            first is long firstValue
                             && all.First is long archiveFirst
                             && archiveFirst < firstValue,
-                        hasLater = last is long lastValue
+                        ["hasLater"] =
+                            last is long lastValue
                             && all.Last is long archiveLast
                             && archiveLast > lastValue,
-                        requestedRange = start is null
-                            ? null
-                            : new { startSeq = start, endSeq = end },
-                        shownRange = first is null ? null : new { startSeq = first, endSeq = last },
-                        hasMoreInTarget = (start is not null || targetEnd is not null)
-                            && pageHasMore,
+                        ["requestedRange"] = JsonData.WebNode(
+                            start is null
+                                ? null
+                                : new JsonObject { ["startSeq"] = start, ["endSeq"] = end }
+                        ),
+                        ["shownRange"] = JsonData.WebNode(
+                            first is null
+                                ? null
+                                : new JsonObject { ["startSeq"] = first, ["endSeq"] = last }
+                        ),
+                        ["hasMoreInTarget"] =
+                            (start is not null || targetEnd is not null) && pageHasMore,
                     }
                 );
             }

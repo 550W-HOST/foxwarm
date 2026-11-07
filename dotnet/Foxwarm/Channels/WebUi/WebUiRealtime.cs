@@ -11,7 +11,11 @@ namespace Foxwarm.Channels.WebUi;
 internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs = null)
 {
     // Match JsonNode.ToJsonString's writer depth, not the serializer's 64-level default.
-    private static readonly JsonSerializerOptions SendJson = new() { MaxDepth = 1000 };
+    private static readonly JsonSerializerOptions SendJson = new()
+    {
+        MaxDepth = 1000,
+        TypeInfoResolver = MainJsonContext.Default,
+    };
 
     // Optional scheduling seam for the focused transport test; normal hosts leave it unset.
     internal Func<JsonObject, CancellationToken, Task>? BeforeQueuedSend { get; init; }
@@ -662,7 +666,7 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
                 if (data["session"] is JsonObject session)
                     data["session"] = scoped.Session(session);
             }
-            var bytes = JsonSerializer.SerializeToUtf8Bytes(
+            var bytes = JsonData.SerializeToUtf8Bytes(
                 Foxwarm.Images.ImageTransport.Project(data),
                 SendJson
             );

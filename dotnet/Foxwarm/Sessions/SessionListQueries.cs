@@ -122,22 +122,30 @@ internal sealed partial class SessionListQueries
     {
         var key = new JsonArray();
         if (!child)
-            key.Add(SessionCatalog.Flag(row["pinned"]) ? 0 : 1);
-        key.Add(SessionCatalog.Flag(row["archived"]) ? 1 : 0);
+            key.Add((System.Text.Json.Nodes.JsonNode?)(SessionCatalog.Flag(row["pinned"]) ? 0 : 1));
+        key.Add((System.Text.Json.Nodes.JsonNode?)(SessionCatalog.Flag(row["archived"]) ? 1 : 0));
         if (mode == "default")
         {
-            key.Add(SessionCatalog.Number(row["sidebarOrder"]) is null ? 1 : 0);
-            key.Add(SessionCatalog.Number(row["sidebarOrder"]) ?? 0);
+            key.Add(
+                (System.Text.Json.Nodes.JsonNode?)(
+                    SessionCatalog.Number(row["sidebarOrder"]) is null ? 1 : 0
+                )
+            );
+            key.Add(
+                (System.Text.Json.Nodes.JsonNode?)(SessionCatalog.Number(row["sidebarOrder"]) ?? 0)
+            );
         }
         var own = SessionCatalog.Number(row["lastMessageTime"]) ?? 0;
         key.Add(
-            -(
-                activity
-                    ? Math.Max(own, SessionCatalog.Number(row["subtreeActivityTime"]) ?? 0)
-                    : own
+            (System.Text.Json.Nodes.JsonNode?)(
+                -(
+                    activity
+                        ? Math.Max(own, SessionCatalog.Number(row["subtreeActivityTime"]) ?? 0)
+                        : own
+                )
             )
         );
-        key.Add(Id(row));
+        key.Add((System.Text.Json.Nodes.JsonNode?)(Id(row)));
         return key;
     }
 

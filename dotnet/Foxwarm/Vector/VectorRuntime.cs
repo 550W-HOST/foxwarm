@@ -147,7 +147,8 @@ internal sealed partial class VectorRuntime : IAsyncDisposable
         var input = WellFormed(Truncate((query ? QueryPrefix : "") + text));
         using var response = await embeddings.PostAsJsonAsync(
             uri.Uri,
-            new { model = "qwen3-embedding:0.6b", input }
+            new JsonObject { ["model"] = "qwen3-embedding:0.6b", ["input"] = input },
+            MainJsonContext.Default.JsonObject
         );
         var bodyText = await response.Content.ReadAsStringAsync();
         JsonObject? body;

@@ -190,7 +190,7 @@ internal sealed class VectorService : IAsyncDisposable
                     new()
                     {
                         ["root"] = root,
-                        ["configuration"] = JsonSerializer.SerializeToNode(
+                        ["configuration"] = JsonData.SerializeToNode(
                             Configuration,
                             VectorWire.Json
                         ),
@@ -457,7 +457,7 @@ internal sealed class VectorService : IAsyncDisposable
                 {
                     ["query"] = query,
                     ["limit"] = limit,
-                    ["options"] = JsonSerializer.SerializeToNode(options, VectorWire.Json),
+                    ["options"] = JsonData.SerializeToNode(options, VectorWire.Json),
                 }
             )
         )!.Deserialize<VectorSearchResult>(VectorWire.Json)!;
@@ -502,7 +502,7 @@ internal sealed class VectorService : IAsyncDisposable
             return;
         await MutateAsync(
             "facts",
-            new() { ["record"] = JsonSerializer.SerializeToNode(block, VectorWire.Json) }
+            new() { ["record"] = JsonData.SerializeToNode(block, VectorWire.Json) }
         );
     }
 

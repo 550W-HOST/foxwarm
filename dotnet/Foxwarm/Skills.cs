@@ -1,7 +1,6 @@
 using System.Collections;
 using System.Text.RegularExpressions;
 using Foxwarm.Sessions;
-using YamlDotNet.Serialization;
 
 namespace Foxwarm;
 
@@ -232,7 +231,7 @@ internal sealed partial class Skills(AgentCatalog agents, string globalRoot)
         var match = FrontMatter().Match(content);
         if (match.Success)
         {
-            var data = new DeserializerBuilder().Build().Deserialize<object>(match.Groups[1].Value);
+            var data = FrontMatterYaml.Parse(match.Groups[1].Value);
             if (
                 data is IDictionary map
                 && map["description"] is string description

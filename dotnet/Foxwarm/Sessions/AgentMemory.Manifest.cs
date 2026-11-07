@@ -194,27 +194,28 @@ internal sealed partial class SessionManager
                 var manifest = AgentManifest(name);
                 var owned = counts.GetValueOrDefault(name);
                 return (object)
-                    new
+                    new JsonObject
                     {
-                        id = name,
-                        inherit = AgentInherit(name),
-                        inheritanceChain = AgentChain(name),
-                        createdBy = agents.CreatedBy(name),
-                        ruleCount = (agents.MetadataSnapshot()[name]?["rules"] as JsonArray)?.Count
-                            ?? 0,
-                        defaultNode = agents.DefaultNode(name),
-                        defaultCwd = agents.DefaultCwd(name),
-                        isolated = AgentIsolated(name),
-                        isolatedNode = RecordedIsolationNode(name),
-                        sessionCount = owned.Total,
-                        activeSessionCount = owned.Active,
-                        queuedSessionCount = owned.Queued,
-                        memoryRoot = manifest.MemoryRoot,
-                        memoryFileCount = manifest.Files.Count,
-                        memoryLastModified = manifest.Files.Count == 0
-                            ? (double?)null
-                            : manifest.Files.Max(file => file.ModifiedAt),
-                        toolRuleCount = IsolatedToolCompatibility
+                        ["id"] = name,
+                        ["inherit"] = AgentInherit(name),
+                        ["inheritanceChain"] = JsonData.Node(AgentChain(name)),
+                        ["createdBy"] = agents.CreatedBy(name),
+                        ["ruleCount"] =
+                            (agents.MetadataSnapshot()[name]?["rules"] as JsonArray)?.Count ?? 0,
+                        ["defaultNode"] = agents.DefaultNode(name),
+                        ["defaultCwd"] = agents.DefaultCwd(name),
+                        ["isolated"] = AgentIsolated(name),
+                        ["isolatedNode"] = RecordedIsolationNode(name),
+                        ["sessionCount"] = owned.Total,
+                        ["activeSessionCount"] = owned.Active,
+                        ["queuedSessionCount"] = owned.Queued,
+                        ["memoryRoot"] = manifest.MemoryRoot,
+                        ["memoryFileCount"] = manifest.Files.Count,
+                        ["memoryLastModified"] =
+                            manifest.Files.Count == 0
+                                ? (double?)null
+                                : manifest.Files.Max(file => file.ModifiedAt),
+                        ["toolRuleCount"] = IsolatedToolCompatibility
                             .Metadata(agents.MetadataSnapshot()[name])
                             .Rules.Count,
                     };

@@ -152,18 +152,25 @@ internal sealed partial class MessageRouter
             }
             return new(
                 200,
-                new
+                new JsonObject
                 {
-                    success = true,
-                    commandResponse = reply,
-                    text = reply,
+                    ["success"] = true,
+                    ["commandResponse"] = reply,
+                    ["text"] = reply,
                 }
             );
         }
         catch (Exception error)
             when (error is InvalidDataException or InvalidOperationException or IOException)
         {
-            return new(400, new { error = error.Message, commandResponse = "❌ " + error.Message });
+            return new(
+                400,
+                new JsonObject
+                {
+                    ["error"] = error.Message,
+                    ["commandResponse"] = "❌ " + error.Message,
+                }
+            );
         }
     }
 

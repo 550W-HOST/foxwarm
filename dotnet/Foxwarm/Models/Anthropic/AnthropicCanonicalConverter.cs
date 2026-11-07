@@ -146,7 +146,7 @@ internal static class AnthropicCanonicalConverter
         var result = new JsonObject
         {
             ["inputTokens"] = Reported(usage["input_tokens"]) is double input
-                ? System.Text.Json.JsonSerializer.SerializeToNode(
+                ? JsonData.SerializeToNode(
                     input + (Reported(usage["cache_creation_input_tokens"]) ?? 0)
                 )
                 : null,

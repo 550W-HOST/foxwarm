@@ -84,11 +84,11 @@ internal static class MontyValues
                 return JsonValue.Create(value.Boolean);
             case MontyObject.KindOneofCase.Int:
                 budget.Charge(128);
-                return JsonValue.Create(JsonSerializer.SerializeToElement(value.Int));
+                return JsonValue.Create(JsonData.SerializeToElement(value.Int));
             case MontyObject.KindOneofCase.Float:
                 budget.Charge(128);
                 return double.IsFinite(value.Float)
-                    ? JsonValue.Create(JsonSerializer.SerializeToElement(value.Float))
+                    ? JsonValue.Create(JsonData.SerializeToElement(value.Float))
                     : null;
             case MontyObject.KindOneofCase.Str:
                 return JsonValue.Create(value.Str);

@@ -94,12 +94,12 @@ internal sealed partial class MessageRouter
             Reply(context.SessionId, "Command change committed, but its notification failed.");
             return new(
                 500,
-                new
+                new JsonObject
                 {
-                    error = error.Message,
-                    committed = true,
-                    commandResponse = "Command change committed, but its notification failed.",
-                    result = error.Change.Result,
+                    ["error"] = error.Message,
+                    ["committed"] = true,
+                    ["commandResponse"] = "Command change committed, but its notification failed.",
+                    ["result"] = JsonData.Node(error.Change.Result),
                 }
             );
         }
@@ -109,22 +109,22 @@ internal sealed partial class MessageRouter
             Reply(context.SessionId, reply);
             return new(
                 500,
-                new
+                new JsonObject
                 {
-                    success = false,
-                    error = error.Message,
-                    commandResponse = reply,
+                    ["success"] = false,
+                    ["error"] = error.Message,
+                    ["commandResponse"] = reply,
                 }
             );
         }
         Reply(context.SessionId, reply);
         return new(
             200,
-            new
+            new JsonObject
             {
-                success = true,
-                commandResponse = reply,
-                result = outcome,
+                ["success"] = true,
+                ["commandResponse"] = reply,
+                ["result"] = JsonData.Node(outcome),
             }
         );
     }

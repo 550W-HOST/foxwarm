@@ -83,7 +83,7 @@ internal static class ResponsesRequestPlan
                 if (!reasoning.ContainsKey("summary"))
                     reasoning["summary"] = "auto";
                 if (!include.Any(value => SessionWait.Text(value) == "reasoning.encrypted_content"))
-                    include.Add("reasoning.encrypted_content");
+                    include.Add((System.Text.Json.Nodes.JsonNode?)("reasoning.encrypted_content"));
                 body["include"] = include.DeepClone();
             }
             body["reasoning"] = reasoning.DeepClone();
@@ -97,7 +97,7 @@ internal static class ResponsesRequestPlan
         {
             var include = body["include"] as JsonArray ?? new JsonArray();
             if (!include.Any(value => SessionWait.Text(value) == HostedSearchSources.Include))
-                include.Add(HostedSearchSources.Include);
+                include.Add((System.Text.Json.Nodes.JsonNode?)(HostedSearchSources.Include));
             body["include"] = include.DeepClone();
         }
         return body;

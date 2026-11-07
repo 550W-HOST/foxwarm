@@ -134,7 +134,7 @@ public sealed class VectorTransientRecallTests
                     )
                     .ToArray()
             ),
-            ["blocks"] = JsonSerializer.SerializeToNode(new[] { block }, VectorWire.Json),
+            ["blocks"] = JsonSerializer.SerializeToNode(new[] { block }, JsonSerializerOptions.Web),
         };
         var inputPath = Path.Combine(f.Temp.Path, "transient-input.json");
         await File.WriteAllTextAsync(inputPath, EcmaJson.Stringify(input));

@@ -145,14 +145,18 @@ internal sealed partial class CodeWorkbench
             var mapped = (CodeServiceException)CodeServiceException.FileError(error);
             context.Response.StatusCode = mapped.Status;
             await context.Response.WriteAsJsonAsync(
-                new { error = mapped.Message, code = mapped.Code },
+                new JsonObject
+                {
+                    ["error"] = mapped.Message,
+                    ["code"] = JsonData.WebNode(mapped.Code),
+                },
                 context.RequestAborted
             );
         }
     }
 
     private static Task Json(HttpContext context, JsonNode value) =>
-        context.Response.WriteAsJsonAsync(value, context.RequestAborted);
+        context.Response.WriteAsJsonAsync(JsonData.WebNode(value), context.RequestAborted);
 
     private static string Target(HttpContext context, JsonObject? body = null)
     {

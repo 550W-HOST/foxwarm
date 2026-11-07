@@ -128,7 +128,7 @@ internal sealed partial class SessionCompactor
         var tool = function?["name"]?.GetValue<string>() ?? "unknown";
         var id = function?["tool_use_id"]?.GetValue<string>() ?? "unknown";
         var marker =
-            $"--- [foxwarm: historical tool response pruned; original: recall({{ target: \"msg#{seq}\" }}); tool={System.Text.Json.JsonSerializer.Serialize(tool)}; tool_use_id={System.Text.Json.JsonSerializer.Serialize(id)}; kept first {head.EnumerateRunes().Count()} and last {tail.EnumerateRunes().Count()} Unicode characters] ---";
+            $"--- [foxwarm: historical tool response pruned; original: recall({{ target: \"msg#{seq}\" }}); tool={JsonData.Serialize(tool)}; tool_use_id={JsonData.Serialize(id)}; kept first {head.EnumerateRunes().Count()} and last {tail.EnumerateRunes().Count()} Unicode characters] ---";
         var bounded = head + "\n\n" + marker + "\n\n" + tail;
         if (bounded.EnumerateRunes().Count() >= characters.Length)
             return null;

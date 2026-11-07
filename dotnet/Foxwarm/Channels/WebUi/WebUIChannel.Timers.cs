@@ -21,7 +21,7 @@ internal sealed partial class WebUIChannel
     }
 
     private static IResult TimerError(int status, string code, string message) =>
-        Results.Json(new { code, error = message }, statusCode: status);
+        Results.Json(new JsonObject { ["code"] = code, ["error"] = message }, statusCode: status);
 
     private static IResult TimerFailure(Exception error) =>
         error switch

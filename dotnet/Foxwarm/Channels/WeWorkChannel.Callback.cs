@@ -13,6 +13,9 @@ internal sealed partial class WeWorkChannel
     {
         var builder = WebApplication.CreateSlimBuilder(new WebApplicationOptions { Args = [] });
         builder.Logging.ClearProviders();
+        builder.Services.ConfigureHttpJsonOptions(options =>
+            options.SerializerOptions.TypeInfoResolver = MainJsonContext.Default
+        );
         builder.WebHost.ConfigureKestrel(options =>
         {
             options.Limits.MaxRequestBodySize = 100 * 1024; // Express json/text default.
@@ -182,7 +185,7 @@ internal sealed partial class WeWorkChannel
                 }
             }
             if (body is null)
-                return Results.Json(new { code = 0, msg = "success" });
+                return Results.Json(new JsonObject { ["code"] = 0, ["msg"] = "success" });
             var result = await ProcessInboundAsync(
                 body,
                 new("webhook", Text(body["response_url"])),
@@ -190,26 +193,28 @@ internal sealed partial class WeWorkChannel
             );
             if (result is not null)
                 return Results.Json(
-                    encrypted.Length > 0
-                    && timestamp.Length > 0
-                    && nonce.Length > 0
-                    && crypto is not null
-                        ? crypto.EncryptCallback(result.ToJsonString(), timestamp, nonce)
-                        : result
+                    JsonData.WebNode(
+                        encrypted.Length > 0
+                        && timestamp.Length > 0
+                        && nonce.Length > 0
+                        && crypto is not null
+                            ? crypto.EncryptCallback(result.ToJsonString(), timestamp, nonce)
+                            : result
+                    )
                 );
             return isAibot || Nonempty(Text(body["response_url"]))
                 ? Results.Text("")
-                : Results.Json(new { code = 0, msg = "success" });
+                : Results.Json(new JsonObject { ["code"] = 0, ["msg"] = "success" });
         }
         catch (Exception error)
         {
             log(error);
             return Results.Json(
-                new
+                new JsonObject
                 {
-                    code = -1,
-                    msg = "error",
-                    error = error.Message,
+                    ["code"] = -1,
+                    ["msg"] = "error",
+                    ["error"] = error.Message,
                 },
                 statusCode: 500
             );

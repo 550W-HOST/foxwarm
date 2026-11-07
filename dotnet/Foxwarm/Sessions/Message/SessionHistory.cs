@@ -23,7 +23,7 @@ public sealed class HistoryMessage
     private HistoryMessage(JsonElement owned) => Data = owned;
 
     public static HistoryMessage FromJson(JsonObject input) =>
-        new(JsonSerializer.SerializeToElement(input));
+        new(JsonData.SerializeToElement(input));
 
     public static HistoryMessage FromElement(JsonElement input)
     {

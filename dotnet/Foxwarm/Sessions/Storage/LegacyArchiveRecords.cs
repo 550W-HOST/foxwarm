@@ -72,7 +72,7 @@ internal static class LegacyArchiveRecords
                     candidates is [(var index, var record)]
                     && TornInsideString(line[..index])
                     && Text(record, "sessionId")
-                        == JsonSerializer.Deserialize<string>(header.Groups[1].Value)
+                        == JsonData.Deserialize<string>(header.Groups[1].Value)
                     && Number(record["seq"])
                         == double.Parse(
                             header.Groups[3].Value,

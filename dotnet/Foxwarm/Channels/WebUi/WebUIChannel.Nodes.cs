@@ -15,7 +15,7 @@ internal sealed partial class WebUIChannel
                 var canonical = CatalogRoute(request);
                 var row = canonical is null ? null : sessions.Catalog.Get(canonical);
                 if (row is null)
-                    return Results.NotFound(new { error = "Session not found" });
+                    return Results.NotFound(new JsonObject { ["error"] = "Session not found" });
                 var bound = sessions.BoundNode(SessionWait.Text(row["agent"]) ?? "main");
                 var locked = bound is null ? null : $"This agent is bound to node {bound}.";
                 var choices = new JsonArray();
@@ -66,7 +66,7 @@ internal sealed partial class WebUIChannel
                 {
                     var owner = await FindRouteAsync(request, id);
                     if (owner is null)
-                        return Results.NotFound(new { error = "Session not found" });
+                        return Results.NotFound(new JsonObject { ["error"] = "Session not found" });
                     if (!sessions.Accepting)
                         return Results.StatusCode(503);
                     var body =
@@ -100,7 +100,7 @@ internal sealed partial class WebUIChannel
                                 or NotSupportedException
                     )
                 {
-                    return Results.BadRequest(new { error = error.Message });
+                    return Results.BadRequest(new JsonObject { ["error"] = error.Message });
                 }
             }
         );

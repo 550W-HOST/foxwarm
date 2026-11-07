@@ -354,7 +354,7 @@ internal sealed partial class SessionCatalog
                 if (!owners.TryGetValue(alias, out var owner))
                     owners[alias] = owner = new();
                 if (owner.Count < 2)
-                    owner.Add(reader.GetString(1));
+                    owner.Add((System.Text.Json.Nodes.JsonNode?)(reader.GetString(1)));
                 count++;
             }
             QueryObserved?.Invoke(sql, count);

@@ -13,6 +13,7 @@ internal static class ToolResponseFormatting
 {
     private static readonly JsonSerializerOptions QuotedOptions = new()
     {
+        TypeInfoResolver = MainJsonContext.Default,
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     };
 
@@ -114,7 +115,7 @@ internal static class ToolResponseFormatting
             JsonValue leaf when leaf.TryGetValue<string>(out var text) => text,
             JsonValue leaf when leaf.TryGetValue<bool>(out var flag) => flag,
             JsonValue leaf when leaf.TryGetValue<long>(out var integer) => integer,
-            _ => JsonSerializer.Deserialize<JsonElement>(value.ToJsonString()).GetDouble(),
+            _ => JsonData.Deserialize<JsonElement>(value.ToJsonString()).GetDouble(),
         };
 
     private static string Flow(JsonNode? value) =>
@@ -148,6 +149,6 @@ internal static class ToolResponseFormatting
                 )
         )
             return text;
-        return JsonSerializer.Serialize(text, QuotedOptions);
+        return JsonData.Serialize(text, QuotedOptions);
     }
 }
