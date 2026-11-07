@@ -52,8 +52,11 @@ Logs starts after ordinary subscription initialization and does not enter the Se
 
 `/api/sessions/:sessionId/stream` remains a public SSE surface used by the shipped Multica bridge, with the ordinary WebUI state and committed `message` envelopes. Current WebUI components do not construct `EventSource`; per-Session SSE does not participate in the page connection-budget guarantee. The obsolete global Session-list SSE route is retired: refreshable WebUI consumers use the multiplexed WebSocket rather than an additional compatibility transport.
 
+Initial Session SSE delivery is `connected`, `session-state`, and a `session-event` carrying `tool-call-snapshot`, followed by subscribed live events. The initial state is already a JSON object and goes directly to `SendSse`, which owns final image projection and JSON writing; it must not invoke the default reflection serializer first.
+
 ## Tests
 
+- `packages/webui/test/mainHostSse.e2e.mjs` exercises the actual owned HTTP SSE route, checks initial state/tool snapshots and a subsequent committed model reply on the same open connection. The common host fixture runs this check against managed Main or a selected native executable.
 - Browser transport tests prove N logical consumers use one socket, disjoint list deltas remain isolated, later subscribers bootstrap on an already-open socket, reconnect resubscribes the union, and dispose fences stale callbacks.
 - Hub tests cover authentication, alias resolution, snapshot-before-buffered-live ordering, superseded revisions, cleanup, and the real HTTP WebSocket upgrade path.
 - Chat browser fixtures use the revisioned WebSocket handshake and preserve register-before-history behavior across reconnect.

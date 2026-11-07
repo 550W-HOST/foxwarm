@@ -541,19 +541,15 @@ internal sealed partial class WebUIChannel(
                     await SendSse(context, new JsonObject { ["type"] = "connected" });
                     await SendSse(
                         context,
-                        JsonSerializer
-                            .SerializeToNode(
-                                new JsonObject
-                                {
-                                    ["type"] = "session-state",
-                                    ["session"] = JsonData.WebNode(
-                                        scoped is null
-                                            ? hosted.BuildDto()
-                                            : scoped.Session(hosted.BuildDto())
-                                    ),
-                                }
-                            )!
-                            .AsObject()
+                        new JsonObject
+                        {
+                            ["type"] = "session-state",
+                            ["session"] = JsonData.WebNode(
+                                scoped is null
+                                    ? hosted.BuildDto()
+                                    : scoped.Session(hosted.BuildDto())
+                            ),
+                        }
                     );
                     await SendSse(context, WebUiContract.ToolCalls(hosted));
                     var available = reader.WaitToReadAsync(lifetime.Token).AsTask();
