@@ -7,7 +7,6 @@ type Recorded = { status: number; body: Json }
 type Binary = { type: string; base64: string }
 
 export type DemoSnapshot = {
-  format: 1
   recordedAt: number
   sessions: string[]
   rows: Record<string, Json>
@@ -16,7 +15,6 @@ export type DemoSnapshot = {
   activity: Record<string, Json>
   children: Record<string, Json[]>
   revision: string
-  continuous: Record<string, { messages: Json[]; [key: string]: Json }>
   get: Record<string, Recorded>
   post: Record<string, Recorded>
   binary: Record<string, Binary>
@@ -107,12 +105,12 @@ export function createDemoServer(snapshot: DemoSnapshot) {
   }
 
   function sliceContinuous(id: string, params: URLSearchParams): Json | null {
-    const page = snapshot.continuous[id]
-    if (!page) return null
+    const page = getIndex.get(`/sessions/${encodeURIComponent(id)}/history/continuous`)?.get('')?.body
+    if (!page || !Array.isArray(page.messages)) return null
     const before = Number(params.get('beforeSeq'))
     const after = Number(params.get('afterSeq'))
     const seqOf = (message: Json) => message?.__meta?.seq ?? message?.__meta?.contextBlock?.rawEndSeq ?? 0
-    let messages = page.messages
+    let messages: Json[] = page.messages
     if (params.has('beforeSeq')) messages = messages.filter(message => seqOf(message) < before)
     if (params.has('afterSeq')) messages = messages.filter(message => seqOf(message) > after)
     return { ...page, messages, firstSeq: messages.length ? seqOf(messages[0]) : undefined, lastSeq: messages.length ? seqOf(messages[messages.length - 1]) : undefined, hasMore: false }

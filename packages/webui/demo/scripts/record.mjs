@@ -50,16 +50,15 @@ export async function recordSnapshot({ baseUrl, token, log = () => {}, crawlFirs
     const parents = ids.slice(index, index + 20).map(parentSessionId => ({ parentSessionId }))
     children.children.push(...(await fetchApi('/session-list/children', { method: 'POST', body: JSON.stringify({ mode: 'default', limit: 20, parents }) })).body.children || [])
   }
-  const continuous = {}
   for (const id of ids) {
     const history = await recordGet(`/sessions/${enc(id)}/history?tail=100`)
-    continuous[id] = (await fetchApi(`/sessions/${enc(id)}/history/continuous`)).body
+    const continuous = await recordGet(`/sessions/${enc(id)}/history/continuous`)
     await recordGet(`/sessions/${enc(id)}/questions`)
-    for (const block of contextBlocks([history, continuous[id]])) {
+    for (const block of contextBlocks([history, continuous])) {
       await recordGet(`/sessions/${enc(id)}/context-blocks/${block}/expand?previewLength=4000`).catch(() => {})
       await recordGet(`/sessions/${enc(id)}/context-blocks/${block}/expand`).catch(() => {})
     }
-    for (const ref of references([history, continuous[id]])) {
+    for (const ref of references([history, continuous])) {
       if (ref.apiPath) await recordBinary(`api:${ref.apiPath.split('?')[0]}`, `${baseUrl}/api${ref.apiPath}`)
       if (ref.downloadPath) await recordBinary(`path:${ref.downloadPath}`, `${baseUrl}/download?${new URLSearchParams({ path: ref.downloadPath })}`)
     }
@@ -112,7 +111,6 @@ export async function recordSnapshot({ baseUrl, token, log = () => {}, crawlFirs
     activity: Object.fromEntries((activity.results || []).map(result => [result.sessionId, result])),
     children: Object.fromEntries((children.children || []).map(group => [group.parentSessionId, group.sessions])),
     revision: byId.revision,
-    continuous,
     get,
     post,
     binary,

@@ -22,6 +22,8 @@ import * as gallery from './gallery-script.mjs'
 import { recordSnapshot } from './record.mjs'
 import { matrixBot, matrixRoom, matrixToken, startMatrixStub } from './matrix-stub.mjs'
 import { sanitizeSnapshot } from './sanitize.mjs'
+import { deepStrictEqual } from 'node:assert/strict'
+import { packSnapshot, unpackSnapshot } from '../src/pack.mjs'
 
 const demoRoot = resolve(import.meta.dirname, '..')
 const args = new Set(process.argv.slice(2))
@@ -132,7 +134,7 @@ export async function generateSnapshot({ root, log = console.log }) {
     log('Recording snapshot')
     const recordedAt = Date.now()
     const recorded = await recordSnapshot({ baseUrl: result.host.baseUrl, token: demoToken, log, crawlFirst: ['gallery/live'] })
-    const snapshot = sanitizeSnapshot({ format: 1, recordedAt, ...recorded }, {
+    const snapshot = sanitizeSnapshot({ recordedAt, ...recorded }, {
       window: { start: result.startedAt, end: Date.now() },
       replacements: [[join(root, 'work'), '/app/test/work'], [root, '/app/test'], [repoRoot, '/app'], [result.model.url, 'https://models.example.com/v1'], [result.host.baseUrl, 'http://127.0.0.1:3001'], [result.matrix.url, 'https://matrix.example.org'], ['demo-provider-key', 'YOUR_API_KEY'], [matrixToken, 'YOUR_MATRIX_TOKEN']],
       forbidden: [demoToken, matrixToken, root, repoRoot, tmpdir(), '/tmp', process.env.npm_config_cache, 'demo-provider-key', process.env.HOME, process.env.USER && `/${process.env.USER}/`],
@@ -153,8 +155,11 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     result = await generateSnapshot({ root })
     await writeFile(join(root, 'model.log'), result.providerLog.join('\n') + '\n')
     const out = join(demoRoot, 'fixtures/snapshot.json')
-    await writeFile(out, JSON.stringify(result.snapshot) + '\n')
-    console.log(`Wrote ${out} (${Math.round(JSON.stringify(result.snapshot).length / 1024)} KiB)`)
+    const packed = JSON.stringify(packSnapshot(result.snapshot))
+    // The demo must replay exactly what was recorded.
+    deepStrictEqual(unpackSnapshot(JSON.parse(packed)), result.snapshot)
+    await writeFile(out, packed + '\n')
+    console.log(`Wrote ${out} (${Math.round(packed.length / 1024)} KiB; ${Math.round(JSON.stringify(result.snapshot).length / 1024)} KiB unpacked)`)
     if (args.has('--serve')) {
       console.log(`Main: ${result.host.baseUrl}/ token ${demoToken} data ${root}`)
       await new Promise(done => process.once('SIGINT', done))

@@ -11,9 +11,10 @@ import { tmpdir } from 'node:os'
 import { extname, join, normalize, resolve } from 'node:path'
 import test from 'node:test'
 import puppeteer from 'puppeteer-core'
+import { unpackSnapshot } from '../demo/src/pack.mjs'
 
 const webui = resolve(import.meta.dirname, '..')
-const snapshot = JSON.parse(await readFile(join(webui, 'demo/fixtures/snapshot.json'), 'utf8'))
+const snapshot = unpackSnapshot(JSON.parse(await readFile(join(webui, 'demo/fixtures/snapshot.json'), 'utf8')))
 const showcase = ['tidepool/fix-ci', 'tidepool/release', 'tidepool/support', 'tidepool/runner', 'tidepool/proration-v2']
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.woff2': 'font/woff2', '.ttf': 'font/ttf', '.wasm': 'application/wasm' }
 
