@@ -30,6 +30,28 @@ No API keys or existing account settings are included.
 To update, exit the app and replace the extracted folder with the new release.
 Settings and data stay in the user profile (see below).
 
+## WinUI build qualification
+
+This branch hosts the existing WebUI in WinUI 3 using Windows App SDK **2.6.5**
+and WebView2 SDK **1.0.4258.31**. Main remains in the same process. Managed
+publication is the default; `-p:PublishAot=true` selects a separate NativeAOT
+publication attempt. Enabling it does not qualify all Main services for AOT.
+
+The Windows App SDK is app-local (`WindowsAppSDKSelfContained=true`), independent
+of .NET self-containment. The WinUI target uses Windows SDK 19041 contracts and
+minimum API metadata 17763 (Windows 10 1809); this is not a new supported Windows
+minimum. The .NET 10 supported-OS policy continues to apply. Minimum-OS GUI
+qualification remains outstanding.
+
+**Delivery decision required before adoption:** the original WinForms Desktop
+could be cross-published on Linux. The WinUI SDK invokes Windows `mt.exe` to
+merge manifests and `makepri.exe` to build resources, including for the
+programmatic window used here. Linux restore and C# compilation do not produce
+a runnable package. Desktop publication now needs Windows; the public release
+workflow has not been moved in this attempt. NativeAOT also needs Windows native
+linker/SDK import libraries. No alternative backend or Linux emulation path is
+introduced.
+
 ## Packaging checks
 
 The **Release packages** workflow publishes this package with the same delivery
@@ -43,6 +65,8 @@ It also executes the packaged esbuild/sharp dependencies. A separate
 `desktop-acceptance` artifact records the acceptance result without user state,
 tokens or browser profiles.
 
+The existing managed-package acceptance lane must be rerun for WinUI before its
+results apply to this host. NativeAOT package validation is not yet qualified.
 These checks do not cover tray interaction, Windows sign-out, power-loss
 recovery, optional Vector/embedding services or the unbundled Code workbench.
 WebView2 debugging is enabled only for acceptance, through the test child's
@@ -109,8 +133,8 @@ and copied with its notices into output; no native binary is tracked. Git is
 an optional external tool for Code SCM, not a bundled dependency.
 
 Install the repository's npm dependencies (`npm ci`, `npm --prefix packages/webui ci`)
-and the .NET 10 SDK, then run the release packager from the repository root. It
-publishes Desktop self-contained for `win-x64` (also from Linux) and removes
+and the .NET 10 SDK on Windows, then run the release packager from the repository root. It
+publishes Desktop self-contained for `win-x64` on Windows and removes
 console-only entry files:
 
 ```sh
@@ -124,3 +148,17 @@ ship the console Core CLI or its apphost/runtimeconfig. Do not package applicati
 private configuration or source dependency caches. Preserve the
 artifact resources selected by the delivery collector, including their required
 `node_modules` directories; do not replace them with the source dependency tree.
+
+For a backend/UI compile before collecting release resources:
+
+```powershell
+dotnet build dotnet/Foxwarm.Desktop -c Release -p:FoxwarmConsoleEntry=false -p:ArtifactTargetRid=win-x64
+```
+
+NativeAOT additionally needs Visual Studio Build Tools with the Desktop development
+with C++ workload (x64/x86 tools and Windows SDK). The SDK locates the installed
+linker and import libraries through `vswhere`/`vcvarsall`; the portable NuGet
+Windows SDK BuildTools package alone does not supply that installation. Restore
+pins Windows SDK BuildTools 10.0.26100.4654 through Windows App SDK 2.6.5. The
+package's XAML compiler targets use .NET Framework 4.7.2 when XAML source is present;
+this host creates its two controls in C# and has no separate XAML view.

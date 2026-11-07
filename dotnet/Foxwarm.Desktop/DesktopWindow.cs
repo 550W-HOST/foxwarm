@@ -1,57 +1,49 @@
 using System.Diagnostics;
 using System.Net.Http.Json;
+using System.Text.Json.Nodes;
 using Foxwarm.Models;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Web.WebView2.Core;
-using Microsoft.Web.WebView2.WinForms;
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Windowing;
 
 namespace Foxwarm.Desktop;
 
-internal sealed class DesktopWindow : Form
+internal sealed partial class DesktopWindow : Window
 {
-    private readonly Label status = new()
+    private readonly TextBlock status = new()
     {
-        Dock = DockStyle.Fill,
         Text = "Starting Foxwarm…",
-        TextAlign = ContentAlignment.MiddleCenter,
-        Padding = new Padding(32),
+        HorizontalAlignment = HorizontalAlignment.Center,
+        VerticalAlignment = VerticalAlignment.Center,
+        TextWrapping = TextWrapping.Wrap,
+        Margin = new Thickness(32),
     };
-    private readonly WebView2 view = new() { Dock = DockStyle.Fill, Visible = false };
-    private readonly NotifyIcon tray;
-    private readonly ContextMenuStrip trayMenu = new();
+    private readonly WebView2 view = new() { Visibility = Visibility.Collapsed };
+    private readonly DesktopNative native;
     private MainHost? host;
     private Task startup = Task.CompletedTask;
     private bool exiting;
-    private bool closed;
     private Uri? endpoint;
 
     internal DesktopWindow()
     {
-        Text = "Foxwarm";
-        MinimumSize = new Size(800, 600);
-        Size = new Size(
-            Math.Min(1280, SystemInformation.WorkingArea.Width),
-            Math.Min(860, SystemInformation.WorkingArea.Height)
-        );
-        StartPosition = FormStartPosition.CenterScreen;
-        using var iconStream = typeof(DesktopWindow).Assembly.GetManifestResourceStream(
-            "Foxwarm.Desktop.Foxwarm.ico"
-        )!;
-        Icon = new Icon(iconStream);
-        Controls.Add(status);
-        Controls.Add(view);
-        trayMenu.Items.Add("Open", null, (_, _) => OpenWindow());
-        trayMenu.Items.Add("Exit", null, (_, _) => ExitApplication());
-        tray = new NotifyIcon
+        Title = "Foxwarm";
+        var content = new Grid();
+        content.Children.Add(view);
+        content.Children.Add(status);
+        Content = content;
+        native = new DesktopNative(this, OpenWindow, ExitApplication, Shutdown);
+        AppWindow.Closing += (_, e) =>
         {
-            Text = "Foxwarm",
-            Icon = Icon,
-            ContextMenuStrip = trayMenu,
-            Visible = true,
+            e.Cancel = true;
+            if (!exiting)
+                AppWindow.Hide();
         };
-        tray.DoubleClick += (_, _) => OpenWindow();
-        Shown += (_, _) => startup = StartAsync();
     }
+
+    internal void Start() => startup = StartAsync();
 
     private async Task StartAsync()
     {
@@ -107,8 +99,8 @@ internal sealed class DesktopWindow : Form
             if (exiting)
                 return;
             status.Text = "Opening Foxwarm…";
-            var environment = await CoreWebView2Environment.CreateAsync(
-                userDataFolder: Path.Combine(data, "webview2")
+            var environment = await CoreWebView2Environment.CreateWithOptionsAsync(
+                null, Path.Combine(data, "webview2"), null
             );
             if (exiting)
                 return;
@@ -148,13 +140,13 @@ internal sealed class DesktopWindow : Form
                     return;
                 if (e.IsSuccess)
                 {
-                    status.Visible = false;
-                    view.Visible = true;
+                    status.Visibility = Visibility.Collapsed;
+                    view.Visibility = Visibility.Visible;
                 }
                 else
                 {
-                    view.Visible = false;
-                    status.Visible = true;
+                    view.Visibility = Visibility.Collapsed;
+                    status.Visibility = Visibility.Visible;
                     status.Text = "Foxwarm could not open. Exit from the tray and try again.";
                 }
             };
@@ -167,10 +159,10 @@ internal sealed class DesktopWindow : Form
         {
             if (!exiting)
             {
-                view.Visible = false;
-                status.Visible = true;
+                view.Visibility = Visibility.Collapsed;
+                status.Visibility = Visibility.Visible;
                 status.Text =
-                    error is WebView2RuntimeNotFoundException
+                    error.HResult == unchecked((int)0x80070002)
                         ? "Microsoft Edge WebView2 Runtime is required. Install the Evergreen x64 Runtime, then restart Foxwarm."
                         : "Foxwarm could not start.\n\n"
                             + error.Message
@@ -193,7 +185,9 @@ internal sealed class DesktopWindow : Form
             UseProxy = false,
         };
         using var client = new HttpClient(handler) { BaseAddress = endpoint };
-        using var response = await client.PostAsJsonAsync("api/auth", new { token });
+        using var response = await client.PostAsJsonAsync(
+            "api/auth", new JsonObject { ["token"] = token }, MainJsonContext.Default.JsonObject
+        );
         response.EnsureSuccessStatusCode();
         var cookie = core.CookieManager.CreateCookie(
             "foxwarm_token",
@@ -204,7 +198,7 @@ internal sealed class DesktopWindow : Form
         cookie.IsHttpOnly = true;
         cookie.IsSecure = endpoint.Scheme == Uri.UriSchemeHttps;
         cookie.SameSite = CoreWebView2CookieSameSiteKind.Strict;
-        cookie.Expires = DateTime.UtcNow.AddDays(365);
+        cookie.Expires = DateTimeOffset.UtcNow.AddDays(365).ToUnixTimeSeconds();
         core.CookieManager.AddOrUpdateCookie(cookie);
     }
 
@@ -229,12 +223,7 @@ internal sealed class DesktopWindow : Form
         catch (Exception error)
             when (error is System.ComponentModel.Win32Exception or InvalidOperationException)
         {
-            MessageBox.Show(
-                "The link could not be opened in your browser.",
-                "Foxwarm",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Information
-            );
+            DesktopNative.ShowMessage("The link could not be opened in your browser.");
         }
     }
 
@@ -251,65 +240,42 @@ internal sealed class DesktopWindow : Form
     {
         if (exiting)
             return;
-        Show();
-        WindowState = FormWindowState.Normal;
+        AppWindow.Show();
+        if (AppWindow.Presenter is OverlappedPresenter presenter)
+            presenter.Restore();
         Activate();
+        native.Foreground();
     }
 
-    private void ExitApplication()
+    private async void ExitApplication()
     {
         if (exiting)
             return;
         exiting = true;
-        Close();
-    }
-
-    protected override async void OnFormClosing(FormClosingEventArgs e)
-    {
-        if (!exiting && e.CloseReason == CloseReason.UserClosing)
-        {
-            e.Cancel = true;
-            Hide();
-            return;
-        }
-        if (e.CloseReason == CloseReason.WindowsShutDown)
-        {
-            exiting = true;
-            // Do not veto Windows sign-out/shutdown or wait for UI-thread startup.
-            // Drain an already-created backend on a worker without a UI-context deadlock.
-            if (host is not null)
-                Task.Run(async () => await host.DisposeAsync()).GetAwaiter().GetResult();
-            tray.Visible = false;
-            tray.Dispose();
-            view.Dispose();
-            base.OnFormClosing(e);
-            return;
-        }
-        if (closed)
-        {
-            base.OnFormClosing(e);
-            return;
-        }
-        exiting = true;
-        e.Cancel = true;
-        Enabled = false;
         status.Text = "Closing Foxwarm…";
-        view.Visible = false;
-        status.Visible = true;
+        view.Visibility = Visibility.Collapsed;
+        status.Visibility = Visibility.Visible;
         try
         {
             await startup;
-            view.Dispose();
+            view.Close();
             if (host is not null)
                 await host.DisposeAsync();
         }
         finally
         {
-            tray.Visible = false;
-            tray.Dispose();
-            trayMenu.Dispose();
-            closed = true;
-            Close();
+            native.Dispose();
+            Application.Current.Exit();
         }
+    }
+
+    private void Shutdown()
+    {
+        exiting = true;
+        // Windows shutdown must not wait on startup's UI continuation or veto sign-out.
+        if (host is not null)
+            Task.Run(async () => await host.DisposeAsync()).GetAwaiter().GetResult();
+        view.Close();
+        native.Dispose();
     }
 }

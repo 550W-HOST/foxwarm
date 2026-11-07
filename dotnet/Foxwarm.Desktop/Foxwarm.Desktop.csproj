@@ -1,8 +1,19 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net10.0-windows</TargetFramework>
-    <UseWindowsForms>true</UseWindowsForms>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <UseWinUI>true</UseWinUI>
+    <WindowsPackageType>None</WindowsPackageType>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <WindowsAppSdkAutoInitialize>false</WindowsAppSdkAutoInitialize>
+    <WindowsAppSdkUndockedRegFreeWinRTInitialize>true</WindowsAppSdkUndockedRegFreeWinRTInitialize>
+    <WindowsAppSdkBootstrapInitialize>false</WindowsAppSdkBootstrapInitialize>
+    <WindowsAppSdkDeploymentManagerInitialize>false</WindowsAppSdkDeploymentManagerInitialize>
+    <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <CsWinRTAotOptimizerEnabled>true</CsWinRTAotOptimizerEnabled>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
@@ -20,7 +31,16 @@
       Version="1.0.4258.31"
       GeneratePathProperty="true"
     />
-    <EmbeddedResource Include="Foxwarm.ico" />
+    <PackageReference
+      Include="Microsoft.WindowsAppSDK"
+      Version="2.6.5"
+      GeneratePathProperty="true"
+    />
+    <Content
+      Include="Foxwarm.ico"
+      CopyToOutputDirectory="PreserveNewest"
+      CopyToPublishDirectory="PreserveNewest"
+    />
     <Content Include="README.md" CopyToPublishDirectory="PreserveNewest" />
     <Content
       Include="../../packages/webui/public/favicon.LICENSE.txt"
@@ -30,6 +50,10 @@
   </ItemGroup>
   <Target Name="DesktopPublishNotices" AfterTargets="Publish">
     <Copy
+      SourceFiles="$(PkgMicrosoft_WindowsAppSDK)/license.txt"
+      DestinationFiles="$(PublishDir)WindowsAppSDK-LICENSE.txt"
+    />
+    <Copy
       SourceFiles="$(PkgMicrosoft_Web_WebView2)/LICENSE.txt"
       DestinationFiles="$(PublishDir)WebView2-LICENSE.txt"
     />
@@ -37,14 +61,5 @@
       SourceFiles="$(PkgMicrosoft_Web_WebView2)/NOTICE.txt"
       DestinationFiles="$(PublishDir)WebView2-NOTICE.txt"
     />
-  </Target>
-  <!-- The SDK also adds WPF references; this host uses only WinForms. -->
-  <Target Name="RemoveUnusedWebView2WpfReference" BeforeTargets="ResolveAssemblyReferences">
-    <ItemGroup>
-      <Reference
-        Remove="@(Reference)"
-        Condition="'%(Reference.Filename)' == 'Microsoft.Web.WebView2.Wpf'"
-      />
-    </ItemGroup>
   </Target>
 </Project>

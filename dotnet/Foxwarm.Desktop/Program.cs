@@ -1,4 +1,6 @@
 using System.Security.Principal;
+using Microsoft.UI.Dispatching;
+using Microsoft.UI.Xaml;
 
 namespace Foxwarm.Desktop;
 
@@ -16,7 +18,6 @@ internal static class Program
             return;
         if (Foxwarm.Terminal.NativeHelperEntry.TryRunAsync(args).GetAwaiter().GetResult())
             return;
-        ApplicationConfiguration.Initialize();
         using var instance = new Mutex(
             false,
             "Foxwarm.Desktop." + WindowsIdentity.GetCurrent().User!.Value,
@@ -33,21 +34,37 @@ internal static class Program
         }
         if (!acquired)
         {
-            MessageBox.Show(
-                "Foxwarm is already running. Open it from the tray icon.",
-                "Foxwarm",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Information
-            );
+            DesktopNative.ShowMessage("Foxwarm is already running. Open it from the tray icon.");
             return;
         }
         try
         {
-            Application.Run(new DesktopWindow());
+            // Initialize the self-contained WinRT runtime only after private helper dispatch.
+            Microsoft.Windows.Foundation.UndockedRegFreeWinRTCS.AutoInitialize.AccessWindowsAppSDK();
+            WinRT.ComWrappersSupport.InitializeComWrappers();
+            Application.Start(initialization =>
+            {
+                SynchronizationContext.SetSynchronizationContext(
+                    new DispatcherQueueSynchronizationContext(DispatcherQueue.GetForCurrentThread())
+                );
+                _ = new DesktopApplication();
+            });
         }
         finally
         {
             instance.ReleaseMutex();
         }
+    }
+}
+
+internal sealed partial class DesktopApplication : Application
+{
+    private DesktopWindow? window;
+
+    protected override void OnLaunched(LaunchActivatedEventArgs args)
+    {
+        window = new DesktopWindow();
+        window.Activate();
+        window.Start();
     }
 }

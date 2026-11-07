@@ -21,7 +21,8 @@ export async function validateDesktopPackage(directory) {
   }
   for (const file of [
     'Foxwarm.Desktop.dll', 'Foxwarm.Desktop.deps.json', 'Foxwarm.dll',
-    'Microsoft.Web.WebView2.Core.dll', 'Microsoft.Web.WebView2.WinForms.dll',
+    'Microsoft.Web.WebView2.Core.Projection.dll', 'Microsoft.WinUI.dll',
+    'Foxwarm.ico', 'WindowsAppSDK-LICENSE.txt',
     'webui-dist/index.html', 'packages/webui/login.html',
     'templates/agents/00_SYSTEM.md', 'templates/models.example.yaml',
     'templates/node/run.ps1', 'templates/node/run.sh',
@@ -57,6 +58,7 @@ export async function validateDesktopPackage(directory) {
   assert((await readdir(join(root, 'webui-dist/assets'))).some(file => file.endsWith('.js')), 'Built WebUI JavaScript is missing')
   for (const file of [
     'Foxwarm.Desktop.exe', 'ToolScript/native/monty.exe',
+    'Microsoft.UI.Xaml.dll', 'Microsoft.WindowsAppRuntime.dll', 'Microsoft.Web.WebView2.Core.dll',
     'e_sqlite3.dll', 'libSkiaSharp.dll', 'lancedb_ffi.dll',
     'node_modules/@esbuild/win32-x64/esbuild.exe',
     'node_modules/@img/sharp-win32-x64/lib/sharp-win32-x64.node',
@@ -68,10 +70,10 @@ export async function validateDesktopPackage(directory) {
   await native(loader)
   const runtime = JSON.parse(await required('Foxwarm.Desktop.runtimeconfig.json')).runtimeOptions
   assert.equal(runtime.tfm, 'net10.0')
-  // Released Desktop packages embed the three shared frameworks; framework-dependent builds reference them.
+  // Released Desktop packages embed the two shared frameworks; framework-dependent builds reference them.
   const selfContained = runtime.includedFrameworks !== undefined
   const frameworks = runtime.includedFrameworks ?? runtime.frameworks ?? [runtime.framework]
-  for (const name of ['Microsoft.NETCore.App', 'Microsoft.WindowsDesktop.App', 'Microsoft.AspNetCore.App']) {
+  for (const name of ['Microsoft.NETCore.App', 'Microsoft.AspNetCore.App']) {
     assert(frameworks.some(item => item?.name === name && /^10\./.test(item.version)), `Missing .NET 10 shared framework: ${name}`)
   }
   if (selfContained) for (const file of ['coreclr.dll', 'hostfxr.dll', 'hostpolicy.dll']) await native(file)
