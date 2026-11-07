@@ -140,7 +140,15 @@ test('installer downloads are byte-exact copies of repository scripts', async ()
 test('the WebUI demo is built, unindexed, and not linked from the site', async () => {
   const html = await readFile(path.join(distRoot, 'demo', 'index.html'), 'utf8');
   assert.match(html, /<meta name="robots" content="noindex, nofollow"/);
-  assert.match(html, /<script type="module" crossorigin src="\.\/assets\/[^"]+\.js"><\/script>/);
+  const moduleEntries = [...html.matchAll(/<script\b([^>]*)>/g)]
+    .map(([, attributes]) => attributes)
+    .filter((attributes) => /\btype="module"/.test(attributes))
+    .map((attributes) => attributes.match(/\bsrc="(\.\/assets\/[^"]+\.js)"/)?.[1])
+    .filter(Boolean);
+  assert.ok(moduleEntries.length > 0, 'demo has a relative module entry under ./assets/');
+  for (const src of moduleEntries) {
+    assert.ok((await stat(path.join(distRoot, 'demo', src))).isFile(), `${src} exists`);
+  }
   const linking = [];
   for (const filePath of await htmlFiles()) {
     if (filePath.startsWith(path.join(distRoot, 'demo') + path.sep)) continue;
