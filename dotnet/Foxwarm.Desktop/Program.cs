@@ -61,6 +61,11 @@ internal sealed partial class DesktopApplication : Application
 {
     private DesktopWindow? window;
 
+    internal DesktopApplication()
+    {
+        Resources.MergedDictionaries.Add(new Microsoft.UI.Xaml.Controls.XamlControlsResources());
+    }
+
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
         window = new DesktopWindow();
