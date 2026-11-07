@@ -48,6 +48,12 @@
       CopyToPublishDirectory="PreserveNewest"
     />
   </ItemGroup>
+  <!-- XAML's temporary assembly also compiles the custom helper-first entry. -->
+  <Target
+    Name="PrepareDesktopWinRtInitializer"
+    BeforeTargets="MarkupCompilePass1"
+    DependsOnTargets="GenerateUndockedRegFreeWinRTCS"
+  />
   <Target Name="DesktopPublishNotices" AfterTargets="Publish">
     <Copy
       SourceFiles="$(PkgMicrosoft_WindowsAppSDK)/license.txt"

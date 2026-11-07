@@ -57,13 +57,13 @@ internal static class Program
     }
 }
 
-internal sealed partial class DesktopApplication : Application
+public sealed partial class DesktopApplication : Application
 {
     private DesktopWindow? window;
 
     internal DesktopApplication()
     {
-        Resources.MergedDictionaries.Add(new Microsoft.UI.Xaml.Controls.XamlControlsResources());
+        InitializeComponent();
     }
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)

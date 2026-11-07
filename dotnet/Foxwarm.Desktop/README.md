@@ -46,7 +46,7 @@ qualification remains outstanding.
 **Delivery decision required before adoption:** the original WinForms Desktop
 could be cross-published on Linux. The WinUI SDK invokes Windows `mt.exe` to
 merge manifests and `makepri.exe` to build resources, including for the
-programmatic window used here. Linux restore and C# compilation do not produce
+C#-constructed window used here; `App.xaml` owns the application resources. Linux restore and C# compilation do not produce
 a runnable package. Desktop publication now needs Windows; the public release
 workflow has not been moved in this attempt. NativeAOT also needs Windows native
 linker/SDK import libraries. No alternative backend or Linux emulation path is
@@ -160,5 +160,6 @@ with C++ workload (x64/x86 tools and Windows SDK). The SDK locates the installed
 linker and import libraries through `vswhere`/`vcvarsall`; the portable NuGet
 Windows SDK BuildTools package alone does not supply that installation. Restore
 pins Windows SDK BuildTools 10.0.26100.4654 through Windows App SDK 2.6.5. The
-package's XAML compiler targets use .NET Framework 4.7.2 when XAML source is present;
-this host creates its two controls in C# and has no separate XAML view.
+package's XAML compiler uses .NET Framework 4.7.2 for `App.xaml`, which supplies
+the application/control resources. The window and original WebUI remain unchanged
+by this resource definition.
