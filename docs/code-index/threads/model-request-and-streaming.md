@@ -70,6 +70,8 @@ Normal canonical append adds known costs to optional `stats.totalCost` at the ex
 
 Authority validates optional saved cost fields. Catalog schema v3 projects nullable fractional cost, maintains a known-value count alongside its bounded global subtotal, and uses presence-aware descendant windows and live-owner corrections. DTO `tokenUsage.cost` and summary `cost` stay absent when all contributors are unpriced. WebUI request/group/Conversation details and cumulative usage popovers render saved USD estimates; partial recorded amounts never derive missing prices from current model settings. Tiny positive estimates display below the formatter's precision rather than as exact zero. `session status` and `/status` include known last-request and cumulative estimates through the shared status path.
 
+[2026-11-09] Installation-wide usage aggregates the same recorded per-request `usage.cost` values through the journal's [usage ledger](./llm-request-journal.md#d-llm-request-journal-usage-ledger), across every request purpose. Its backfill copies recorded results; it does not reprice requests that were saved without a cost, which remain tokens-only. Setup model checks now save their computed cost in their journal result, like other purposes; they still add nothing to Session stats.
+
 Evidence: `ModelUsageCostTests`, `SessionUsageTests`, `ResponsesPrefixCommitTests`, `ResponsesWsTests`, `ModelConfigurationFormTests`, `SessionCatalogTests`, `SessionCatalogSourceTests`, and `packages/webui/test/usageCost.e2e.mjs` cover configuration, concrete request capture, protocol normalization, completion ownership, persistence, bounded summaries and rendered consumers.
 
 ## Canonical units and tests

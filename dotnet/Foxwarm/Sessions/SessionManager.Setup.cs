@@ -166,7 +166,14 @@ internal sealed partial class SessionManager
             var result = await service.ChatAsync("setup-model-test", setupHistory, timeout.Token);
             try
             {
-                await Journal.AppendChatResultAsync(requestId, 1, result, timeout.Token);
+                // Setup checks are real provider requests: record them priced like any other.
+                await Journal.AppendChatResultAsync(
+                    requestId,
+                    1,
+                    result with { Usage = ModelUsageCost.Complete(model, result) },
+                    timeout.Token,
+                    new LlmUsageAttribution(null, model.ProviderKey)
+                );
             }
             catch (Exception journalError)
             {

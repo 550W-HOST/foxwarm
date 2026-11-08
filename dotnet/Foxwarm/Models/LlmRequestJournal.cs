@@ -28,7 +28,7 @@ internal sealed record LlmJournalRequest(
 
 internal readonly record struct JournalRequestAdmission(string RequestId, Task Completion);
 
-public sealed class LlmRequestJournalStore : IDisposable, IAsyncDisposable
+public sealed partial class LlmRequestJournalStore : IDisposable, IAsyncDisposable
 {
     internal const string MigrationId = "sqlite-only-large-archives-v1";
     private const int MaxDeltaDepth = 8;
@@ -330,7 +330,8 @@ public sealed class LlmRequestJournalStore : IDisposable, IAsyncDisposable
         string outcome,
         JsonNode? result,
         JsonObject? error,
-        CancellationToken token = default
+        CancellationToken token = default,
+        UsageRow? ledger = null
     )
     {
         CheckOpen();
@@ -361,11 +362,14 @@ public sealed class LlmRequestJournalStore : IDisposable, IAsyncDisposable
                     Add(command, "$event", Guid.NewGuid().ToString());
                     Add(command, "$request", requestId);
                     Add(command, "$attempt", attempt);
-                    Add(command, "$completed", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+                    var completedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                    Add(command, "$completed", completedAt);
                     Add(command, "$outcome", outcome);
                     Add(command, "$result", resultJson);
                     Add(command, "$error", errorJson);
                     command.ExecuteNonQuery();
+                    if (ledger is not null)
+                        InsertUsageRow(connection, transaction, requestId, attempt, completedAt, ledger);
                     return true;
                 },
                 token
@@ -373,20 +377,32 @@ public sealed class LlmRequestJournalStore : IDisposable, IAsyncDisposable
             .ConfigureAwait(false);
     }
 
-    public Task AppendChatResultAsync(
+    /// <summary>
+    /// Records a successful attempt and its usage ledger row in one journal command, so the
+    /// installation usage overview is exactly as durable as the result it projects.
+    /// </summary>
+    internal async Task AppendChatResultAsync(
         string requestId,
         int attempt,
         ChatResult result,
-        CancellationToken token = default
-    ) =>
-        AppendAttemptResultAsync(
-            requestId,
-            attempt,
-            "success",
-            ToSourceResult(result),
-            null,
-            token
-        );
+        CancellationToken token = default,
+        LlmUsageAttribution? attribution = null
+    )
+    {
+        var ledger = PrepareUsageRow(result, attribution);
+        var receipt = await EnqueueAttemptResultAsync(
+                requestId,
+                attempt,
+                "success",
+                ToSourceResult(result),
+                null,
+                token,
+                ledger
+            )
+            .ConfigureAwait(false);
+        await receipt.Completion.ConfigureAwait(false);
+        NotifyUsageRecorded();
+    }
 
     public async Task<JsonObject> ReconstructAsync(
         string requestId,
@@ -1446,7 +1462,7 @@ public sealed class LlmRequestJournalStore : IDisposable, IAsyncDisposable
             CREATE TABLE IF NOT EXISTS llm_journal_attempt_starts(event_id TEXT PRIMARY KEY,request_id TEXT NOT NULL,attempt INTEGER NOT NULL,started_at INTEGER NOT NULL,concrete_model_id TEXT NOT NULL,virtual_model_key TEXT,provider_type TEXT NOT NULL,semantic_payload_sha256 TEXT NOT NULL,prompt_object_id TEXT);
             CREATE TABLE IF NOT EXISTS llm_journal_attempt_results(event_id TEXT PRIMARY KEY,request_id TEXT NOT NULL,attempt INTEGER NOT NULL,completed_at INTEGER NOT NULL,outcome TEXT NOT NULL,result_json TEXT,error_json TEXT);
             CREATE TABLE IF NOT EXISTS llm_journal_import_state(source_path TEXT PRIMARY KEY,imported_size INTEGER NOT NULL,updated_at INTEGER NOT NULL);
-            """;
+            """ + UsageSchemaSql;
         command.ExecuteNonQuery();
         using var columns = connection.CreateCommand();
         columns.Transaction = schema;

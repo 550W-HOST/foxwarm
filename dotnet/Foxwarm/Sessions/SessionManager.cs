@@ -42,6 +42,9 @@ internal sealed partial class SessionManager : IAsyncDisposable
     private readonly ModelRouting modelRouting = new();
     private readonly ModelInteractionDiagnostics diagnostics;
     internal LlmRequestJournalStore Journal { get; }
+
+    /// <summary>Installation-wide usage read from the journal's derived ledger.</summary>
+    internal UsageOverview Usage { get; }
     internal Foxwarm.Vector.VectorService Vector { get; }
     private readonly Foxwarm.Persistence.SqliteWriterOwners.Lease archiveWriter;
     internal TaskService Tasks { get; }
@@ -283,6 +286,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         waitTimeouts = new SessionWaitTimeouts(this);
         waitLiveness = new WaitLiveness(this);
         Journal = new LlmRequestJournalStore(this.root);
+        Usage = new UsageOverview(this, Journal);
         archiveWriter = SqliteArchiveMessageStore.AcquireWriter(ArchiveDatabase);
         Vector = new(
             this.root,
@@ -426,6 +430,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
                 );
         }
         await executor.RegisterRecordsAsync(id => Catalog.Get(id) is not null);
+        if (startMainServices)
+            Usage.StartBackfill(admissionStop.Token);
         var ids = Catalog
             .RestartIds()
             .Concat(executor.OwnerIds)
@@ -785,6 +791,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         await NodeProviders.DisposeAsync();
         Nodes.Dispose();
         await websockets.DisposeAsync();
+        await Usage.DisposeAsync();
         await Journal.DisposeAsync();
         await archiveWriter.DisposeAsync();
         Tasks.Dispose();

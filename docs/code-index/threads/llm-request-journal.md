@@ -42,6 +42,12 @@ Full request/attempt row structure, request and attempt-prompt object type/hash 
 
 Request listing uses a stable `(createdAt, requestId)` composite cursor, including when multiple requests share one millisecond timestamp.
 
+## Usage ledger
+
+The journal also keeps `llm_usage`, a derived per-attempt summary of successful results used for [installation usage](../units/usage-overview.md): request/attempt identity, completion time, Session and Agent, purpose, concrete model, provider, protocol, virtual route, and the recorded cached/input/output tokens and cost. It is written in the same writer batch as the success result, so a committed success always has its row; the Agent comes from the Session catalog when the row is written. The table and its indexes are additive and nothing reads it for reconstruction, so an older Foxwarm that ignores it keeps working on the same database.
+
+Results committed without a ledger row (from before the table existed, or by an older version after a downgrade) are added by a background backfill from each result's recorded `usage`, newest first, resuming from metadata checkpoints after a restart. Agents of backfilled rows are resolved from the catalog, falling back to the Session's Archive rows for deleted Sessions. Recorded costs are copied as recorded; a result without a cost stays tokens-only and no current price is applied ([D-model-usage-cost](./model-request-and-streaming.md#d-model-usage-cost)).
+
 ## Security boundary
 
 The canonical journal contains the same model-visible prompt/message classes needed for training and must be protected like session archives. It stores no authorization headers, API keys, provider-hydrated image expansion, or semantic provider payload body. Physical attempts store only a payload SHA-256 digest.
@@ -67,6 +73,10 @@ The normal journal never stores auth headers or provider-hydrated request payloa
 
 [2026-08-03] The dedicated SQLite database is the sole runtime authority. Legacy JSONL is a migration-only input that is strictly imported, verified, and moved to migration backup before completion; runtime does not dual-write it. SQLite commits use durable WAL/FULL boundaries, and compatibility JSONL is generated only by explicit export.
 
+### D-llm-request-journal-usage-ledger
+
+[2026-11-09, user decision] Installation-wide usage is read from a derived ledger inside the journal database rather than from Session stats or the Session catalog, because only the journal records every request purpose (normal turns, compaction, BTW, ToolScript, titles, setup checks, CLI and low-level calls) and outlives Session deletion. The ledger is written in the success result's own writer batch, not by a separate subscriber, so it cannot drift from the journal; older results enter through a resumable newest-first backfill. It stores only counters and attribution already present in the journal, never prompt content. It is a reporting projection with no budgets, limits or blocking. Dropping the table loses nothing that cannot be rebuilt from attempt results.
+
 ## Modules and units
 
 - [LLM module](../modules/llm.md)
@@ -77,3 +87,5 @@ The normal journal never stores auth headers or provider-hydrated request payloa
 - [src-btw](../units/src-btw.md)
 - [src-toolscript](../units/src-toolscript.md)
 - [model-cli](../units/model-cli.md)
+- [model-journal](../units/model-journal.md)
+- [usage-overview](../units/usage-overview.md)

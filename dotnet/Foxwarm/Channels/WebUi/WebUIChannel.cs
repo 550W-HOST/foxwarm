@@ -232,6 +232,7 @@ internal sealed partial class WebUIChannel(
         RegisterHistoryRoutes(app);
         RegisterTaskRoutes(app);
         RegisterTimerRoutes(app);
+        RegisterUsageRoutes(app);
         RegisterUploadAndImageRoutes(app);
         RegisterFileRoutes(app);
         RegisterArtifactRoutes(app);
