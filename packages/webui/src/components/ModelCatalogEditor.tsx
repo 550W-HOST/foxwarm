@@ -28,7 +28,7 @@ export default function ModelCatalogEditor({ yaml, onChange }: ModelCatalogEdito
   return (
     <section data-model-catalog className="mt-8 max-w-3xl" aria-labelledby="model-catalog-heading">
       <h2 id="model-catalog-heading" className="text-base font-semibold text-fw-text-strong">Recommended models</h2>
-      <p className="mt-1 text-sm text-fw-text">Tell Agents which model suits which kind of work. They see these descriptions when they start new Sessions. Save models to apply changes.</p>
+      <p className="mt-1 text-sm text-fw-text">Tell Agents which model suits which kind of work, so they can pick one when creating Sessions. Save models to apply changes.</p>
       {!reading.ok ? (
         <p data-model-catalog-unavailable className="mt-3 text-sm text-fw-text-muted">Fix the models YAML to edit recommendations here.</p>
       ) : (
