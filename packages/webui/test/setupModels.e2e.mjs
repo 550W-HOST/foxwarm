@@ -370,6 +370,12 @@ async function attachRequestMocks(targetPage, options = {}) {
       void respondJson(request, { summary: options.globalSummary ?? { total: 0, busy: 0 } })
       return
     }
+    if (url.pathname.endsWith('/api/usage')) {
+      const boundaries = (url.searchParams.get('boundaries') || '').split(',').filter(Boolean).map(Number)
+      const empty = { requests: 0, cachedTokens: 0, inputTokens: 0, outputTokens: 0, unpricedRequests: 0 }
+      void respondJson(request, { boundaries, groupBy: null, agent: null, total: empty, buckets: boundaries.slice(1).map(() => empty), coverage: { earliest: null, complete: true } })
+      return
+    }
     if (url.pathname.endsWith('/api/agents')) {
       void respondJson(request, { agents: [] })
       return
