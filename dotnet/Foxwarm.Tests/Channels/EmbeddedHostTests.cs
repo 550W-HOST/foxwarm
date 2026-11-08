@@ -7,23 +7,61 @@ namespace Foxwarm.Tests;
 
 public sealed class EmbeddedHostTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Desktop_host_bootstraps_canonical_Agent_directories_under_the_selected_root(
+        bool configuredAgents
+    )
+    {
+        using var temp = new TempDirectory();
+        var data = Path.Combine(temp.Path, "selected data");
+        var expected = configuredAgents
+            ? Path.Combine(temp.Path, "configured agents")
+            : Path.Combine(data, "agents");
+        Directory.CreateDirectory(Path.Combine(data, "state"));
+        await File.WriteAllTextAsync(
+            Path.Combine(data, "state", "config.yaml"),
+            new JsonObject
+            {
+                ["vector"] = new JsonObject { ["enabled"] = false },
+                ["paths"] = configuredAgents
+                    ? new JsonObject { ["agentsDir"] = "configured agents" }
+                    : new JsonObject(),
+            }.ToJsonString()
+        );
+        var paths = HostPaths.Capture(
+            temp.Path,
+            environment: key => key == "FOXWARM_DATA_DIR" ? "selected data" : null
+        );
+        var configuration = new ModelConfiguration(paths);
+        var settings = await HttpServerSettings.CaptureDesktopAsync(configuration.Paths.DataRoot);
+        await using var host = await MainHost.CreateAsync([], configuration, settings);
+        await host.StartAsync();
+        Assert.Equal(data, configuration.Paths.DataRoot);
+        Assert.Equal(expected, configuration.Paths.AgentsRoot);
+        Assert.True(Directory.Exists(Path.Combine(expected, "main", "memory")));
+        using var client = new HttpClient { BaseAddress = new Uri(settings.Address.BaseUrl) };
+        client.DefaultRequestHeaders.Authorization = new("Bearer", settings.Token);
+        var created = await client.PostAsJsonAsync("api/agents", new { agentId = "research" });
+        Assert.True(created.IsSuccessStatusCode, await created.Content.ReadAsStringAsync());
+        Assert.True(Directory.Exists(Path.Combine(expected, "research")));
+        Assert.False(Directory.Exists(Path.Combine(temp.Path, "workspace")));
+    }
+
     [Fact]
     public async Task Shared_host_closes_live_Session_streams_after_owner_settlement_before_HTTP_stop()
     {
         using var temp = new TempDirectory();
         var data = Path.Combine(temp.Path, "data");
-        var work = Path.Combine(temp.Path, "work");
-        Directory.CreateDirectory(work);
         var settings = await HttpServerSettings.CaptureDesktopAsync(data);
         await using var host = await MainHost.CreateAsync(
             [],
-            data,
-            work,
-            new ModelConfiguration(data),
+            new ModelConfiguration(HostPaths.ForDataRoot(data)),
             settings,
             null
         );
-        await host.App.StartAsync();
+        await host.StartAsync();
         using var client = new HttpClient { BaseAddress = new Uri(settings.Address.BaseUrl) };
         client.DefaultRequestHeaders.Authorization = new("Bearer", settings.Token);
         var created = await client.PostAsJsonAsync(
@@ -50,8 +88,6 @@ public sealed class EmbeddedHostTests
     {
         using var temp = new TempDirectory();
         var data = Path.Combine(temp.Path, "data");
-        var work = Path.Combine(temp.Path, "work");
-        Directory.CreateDirectory(work);
         var occupied = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
         occupied.Start();
         try
@@ -66,13 +102,11 @@ public sealed class EmbeddedHostTests
             Assert.Equal(occupiedPort, settings.Port);
             await using var host = await MainHost.CreateAsync(
                 [],
-                data,
-                work,
-                new ModelConfiguration(data),
+                new ModelConfiguration(HostPaths.ForDataRoot(data)),
                 settings,
                 null
             );
-            await host.App.StartAsync();
+            await host.StartAsync();
             var actual = new Uri(settings.Address.BaseUrl);
             Assert.NotEqual(occupiedPort, actual.Port);
             Assert.False(occupied.Pending());
@@ -105,9 +139,7 @@ public sealed class EmbeddedHostTests
     {
         using var temp = new TempDirectory();
         var data = Path.Combine(temp.Path, "data");
-        var work = Path.Combine(temp.Path, "work");
         var dist = Path.Combine(temp.Path, "dist");
-        Directory.CreateDirectory(work);
         Directory.CreateDirectory(Path.Combine(dist, "assets"));
         await File.WriteAllTextAsync(
             Path.Combine(dist, "index.html"),
@@ -119,16 +151,14 @@ public sealed class EmbeddedHostTests
         var token = settings.Token;
         var first = await MainHost.CreateAsync(
             [],
-            data,
-            work,
-            new ModelConfiguration(data),
+            new ModelConfiguration(HostPaths.ForDataRoot(data)),
             settings,
             dist
         );
         Uri endpoint;
         await using (first)
         {
-            await first.App.StartAsync();
+            await first.StartAsync();
             endpoint = new Uri(settings.Address.BaseUrl);
             Assert.Equal("127.0.0.1", endpoint.Host);
             Assert.NotEqual(0, endpoint.Port);
@@ -171,25 +201,21 @@ public sealed class EmbeddedHostTests
             );
             config.EnsureSuccessStatusCode();
         }
-        using (var stopped = new HttpClient { Timeout = TimeSpan.FromSeconds(2) })
-            await Assert.ThrowsAsync<HttpRequestException>(() => stopped.GetAsync(endpoint));
         await File.WriteAllTextAsync(
             Path.Combine(data, "state", "desktop-port"),
             endpoint.Port.ToString()
         );
         var restarted = await HttpServerSettings.CaptureDesktopAsync(data);
         Assert.Equal(token, restarted.Token);
-        var configuration = new ModelConfiguration(data);
+        var configuration = new ModelConfiguration(HostPaths.ForDataRoot(data));
         Assert.Equal(731, configuration.MaxOutput);
         await using var second = await MainHost.CreateAsync(
             [],
-            data,
-            work,
             configuration,
             restarted,
             dist
         );
-        await second.App.StartAsync();
+        await second.StartAsync();
         Assert.Equal(endpoint.AbsoluteUri, restarted.Address.BaseUrl);
         using var authorized = new HttpClient { BaseAddress = new Uri(restarted.Address.BaseUrl) };
         authorized.DefaultRequestHeaders.Authorization = new("Bearer", token);

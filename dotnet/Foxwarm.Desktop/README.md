@@ -32,10 +32,10 @@ Settings and data stay in the user profile (see below).
 
 ## WinUI build qualification
 
-This branch hosts the existing WebUI in WinUI 3 using Windows App SDK **2.6.5**
+Desktop hosts the existing WebUI in WinUI 3 using the Windows App SDK WinUI component **2.6.5**
 and WebView2 SDK **1.0.4258.31**. Main remains in the same process. Managed
 publication is the default; `-p:PublishAot=true` selects a separate NativeAOT
-publication attempt. Enabling it does not qualify all Main services for AOT.
+publication. Enabling it does not qualify all Main services for AOT.
 
 The Windows App SDK is app-local (`WindowsAppSDKSelfContained=true`), independent
 of .NET self-containment. The WinUI target uses Windows SDK 19041 contracts and
@@ -43,14 +43,10 @@ minimum API metadata 17763 (Windows 10 1809); this is not a new supported Window
 minimum. The .NET 10 supported-OS policy continues to apply. Minimum-OS GUI
 qualification remains outstanding.
 
-**Delivery decision required before adoption:** the original WinForms Desktop
-could be cross-published on Linux. The WinUI SDK invokes Windows `mt.exe` to
-merge manifests and `makepri.exe` to build resources, including for the
-C#-constructed window used here; `App.xaml` owns the application resources. Linux restore and C# compilation do not produce
-a runnable package. Desktop publication now needs Windows; the public release
-workflow has not been moved in this attempt. NativeAOT also needs Windows native
-linker/SDK import libraries. No alternative backend or Linux emulation path is
-introduced.
+Desktop publication requires Windows SDK manifest/XAML/resource tools. The
+Windows release job builds this package through the existing managed packager;
+the Ubuntu producer continues to build Linux/Windows server packages. Compiling
+C# alone on Linux does not create a runnable WinUI package.
 
 ## Packaging checks
 
@@ -58,8 +54,9 @@ The **Release packages** workflow publishes this package with the same delivery
 graph as the server packages. A Windows job extracts the finished ZIP and checks
 the WebUI, native x64 dependencies, the embedded .NET 10 runtime, collected
 artifact/extension resources and licenses. It then launches that extracted
-executable with disposable data and workspace, attaches to its actual WebView2
-view, verifies native cookie sign-in and Setup, runs a native ToolScript turn
+executable with disposable data and a configured canonical Agent root, attaches to
+its actual WebView2 view, verifies native cookie sign-in, authenticated WebSockets
+and Setup, runs a native ToolScript turn with exec-helper execution
 against a local model fixture, and checks ordinary shutdown/restart persistence.
 It also executes the packaged esbuild/sharp dependencies. A separate
 `desktop-acceptance` artifact records the acceptance result without user state,
@@ -68,11 +65,12 @@ tokens or browser profiles.
 Managed and NativeAOT direct-publish lanes have exercised native cookie sign-in,
 original Setup, a native ToolScript turn with real exec-helper execution, artifact
 dependencies, extension bundles, shutdown/restart persistence and the window/tray
-lifetime. Native process inspection confirms that CoreCLR is not loaded. The full
-release ZIP (including optional Code workbench assets), NativeAOT package-layout
-validation and the optional Main services remain separate qualification steps.
-Physical notification-area gestures, Windows sign-out and power-loss
-recovery, plus optional Vector/embedding services, remain outside these checks.
+lifetime. Native process inspection confirms that CoreCLR is not loaded. Managed release acceptance validates the complete extracted ZIP, including the
+pinned Code workbench and YAML assets. NativeAOT package-layout/release selection
+and optional Main services remain separate qualification steps. Real Explorer
+recreation and pointer-driven tray restore/Exit have also been exercised; Windows
+sign-out, power-loss recovery and optional Vector/embedding services remain
+outside these checks.
 WebView2 debugging is enabled only for acceptance, through the test child's
 environment or an app-specific policy on the disposable Windows runner. Normal
 Desktop startup does not enable it.
@@ -87,16 +85,21 @@ lock applies to the same user across Windows login sessions, so those sessions
 cannot run competing writers against the same user data. External links open in
 your default browser; the app view remains on its own local WebUI.
 
-Settings, conversations, workspace and the owned WebView2 profile live under
-`%LOCALAPPDATA%\Foxwarm\Desktop`, not in the extracted ZIP. Host state is in
-its `data` subdirectory and the workspace is a separate `workspace` subdirectory. They remain when the
-app is restarted or the ZIP is replaced. Do not share that directory: it can
-contain provider credentials and chat history. Exit Foxwarm before backing it up.
-For isolated development, `FOXWARM_DATA_DIR` changes the host data directory; by default its sibling
-`workspace` is the tool workspace. These two directories must not overlap. Server port/bind/public-URL
-settings do not change the desktop's loopback listener.
+Settings, conversations and the owned WebView2 profile live under
+`%LOCALAPPDATA%\Foxwarm\Desktop\data`, not in the extracted ZIP. Each Agent owns
+its own directory: `data/agents/main`, `data/agents/<name>`. `paths.agentsDir` in
+`state/config.yaml` can select a different Agent root, using the normal
+installation-relative path rules. `FOXWARM_DATA_DIR` selects a different data
+directory for isolated development. These locations remain when the app is
+restarted or the ZIP is replaced; they can contain provider credentials and
+private history. Exit Foxwarm before backing them up.
 
-## Prototype limits
+The former Desktop sibling `workspace` layout is retired. Desktop does not
+detect or migrate it, and does not move or delete old files. This does not change
+the server's independently supported legacy-data readers. Server port/bind/public-URL
+settings do not change the Desktop loopback listener.
+
+## Runtime limits
 
 The existing WebUI and .NET host provide native Windows PowerShell execution,
 ConPTY terminals and ordinary Monty 0.0.19 ToolScript. Independent exec commands
@@ -164,7 +167,7 @@ NativeAOT additionally needs Visual Studio Build Tools with the Desktop developm
 with C++ workload (x64/x86 tools and Windows SDK). The SDK locates the installed
 linker and import libraries through `vswhere`/`vcvarsall`; the portable NuGet
 Windows SDK BuildTools package alone does not supply that installation. Restore
-pins Windows SDK BuildTools 10.0.26100.4654 through Windows App SDK 2.6.5. The
+pins Windows SDK BuildTools 10.0.26100.4654 through Windows App SDK WinUI component 2.6.5. The
 package's XAML compiler uses .NET Framework 4.7.2 for `App.xaml`, which supplies
 the application/control resources. The window and original WebUI remain unchanged
 by this resource definition.
@@ -186,3 +189,15 @@ executable. NativeAOT does not make this a single-file application. Keep PDB
 symbols separately from the application archive. The selected WebUI/host path
 is qualified; outstanding trim/AOT warnings in other Main services must be
 assessed before expanding that support claim.
+
+### Windows App SDK components
+
+Desktop references `Microsoft.WindowsAppSDK.WinUI`, whose supported dependency
+closure supplies Base, Foundation and InteractiveExperiences plus WebView2.
+`WindowsAppSDKSelfContained` keeps the SDK's own component manifest/resource and
+payload-copy targets in charge. The umbrella-only ML, AI, Search, Widgets and
+DWrite component packages are not selected; no post-publish DLL blacklist is used.
+The separate Runtime package supplies framework-package deployment, which this
+app-local self-contained host does not use. WinUI's license also covers the
+identical Foundation/InteractiveExperiences license terms; its supplied notice
+and the retained WebView2/Main dependency notices ship with the application.

@@ -58,7 +58,7 @@ internal sealed partial class DesktopWindow : Window
                         "data"
                     )
             );
-            var work = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(data)!, "workspace"));
+            var configuration = new ModelConfiguration(HostPaths.ForDataRoot(data));
             var dist = Path.Combine(AppContext.BaseDirectory, "webui-dist");
             if (
                 !File.Exists(Path.Combine(dist, "index.html"))
@@ -67,22 +67,19 @@ internal sealed partial class DesktopWindow : Window
                 throw new InvalidDataException(
                     "The WebUI is missing. Extract the complete Foxwarm ZIP and try again."
                 );
-            Directory.CreateDirectory(work);
             var http = await HttpServerSettings.CaptureDesktopAsync(data);
             host = await Task.Run(async () =>
             {
                 var embedded = await MainHost.CreateAsync(
                     [],
-                    data,
-                    work,
-                    new ModelConfiguration(data),
+                    configuration,
                     http,
                     dist,
                     captureDiagnostics: true
                 );
                 try
                 {
-                    await embedded.App.StartAsync();
+                    await embedded.StartAsync();
                     return embedded;
                 }
                 catch

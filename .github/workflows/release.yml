@@ -25,7 +25,7 @@ jobs:
 
   packages:
     needs: code-resources
-    name: Build Linux and Windows packages
+    name: Build Linux and Windows server packages
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -54,13 +54,11 @@ jobs:
         with:
           name: code-resources
           path: dist
-      - name: Prepare Desktop Code resources
-        run: |
-          mkdir -p packages/vscode-web/assets
-          tar -xzf dist/foxwarm-code-*.tar.gz -C packages/vscode-web/assets
-          node scripts/test/prepare-browser.mjs --check-code
-      - name: Build Linux and Windows packages
-        run: node scripts/release/package.mjs --build-assets --output dist
+      - name: Build Linux and Windows server packages
+        run: >-
+          node scripts/release/package.mjs --build-assets --output dist
+          --target linux-x64 --target linux-x64-self-contained
+          --target win-x64 --target win-x64-self-contained
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-packages-linux-windows
@@ -134,7 +132,7 @@ jobs:
 
   aggregate:
     name: Aggregate release assets and checksums
-    needs: [packages, macos, native-cli]
+    needs: [packages, macos, native-cli, windows]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -198,7 +196,7 @@ jobs:
             bash /repo/scripts/release/smoke-server.sh /repo/dist/foxwarm-linux-x64-self-contained.tar.gz'
 
   windows:
-    name: Qualify Windows packages
+    name: Build Desktop and qualify Windows packages
     needs: packages
     runs-on: windows-2025
     timeout-minutes: 35
@@ -210,7 +208,9 @@ jobs:
         with:
           node-version: 24.21.0
           cache: npm
-          cache-dependency-path: package-lock.json
+          cache-dependency-path: |
+            package-lock.json
+            packages/webui/package-lock.json
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: '10.0.x'
@@ -218,8 +218,28 @@ jobs:
         with:
           name: release-packages-linux-windows
           path: dist
-      - name: Install the Desktop acceptance driver
-        run: npm ci
+      - name: Install Desktop build and acceptance dependencies
+        run: npm ci && npm --prefix packages/webui ci
+      - name: Prepare shared Code resources and build Desktop on Windows
+        shell: pwsh
+        run: |
+          # The server artifact forwards the shared code-resources archive unchanged.
+          New-Item -ItemType Directory -Force packages/vscode-web/assets | Out-Null
+          $code = @(Get-ChildItem dist/foxwarm-code-*.tar.gz)
+          if ($code.Count -ne 1) { throw 'Expected one shared Code resource archive' }
+          tar -xzf $code[0].FullName -C packages/vscode-web/assets
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/test/prepare-browser.mjs --check-code
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/release/package.mjs --build-assets --output dist --target desktop-win-x64
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-packages-desktop
+          path: dist/foxwarm-desktop-win-x64.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
       - name: Framework-dependent server package
         shell: pwsh
         run: ./scripts/release/smoke-server.ps1 -Package dist/foxwarm-win-x64.zip

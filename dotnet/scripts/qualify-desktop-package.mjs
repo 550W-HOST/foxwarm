@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { spawn, execFileSync } from 'node:child_process'
 import { once } from 'node:events'
 import { createServer } from 'node:http'
-import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, writeFile, rm, access } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { createRequire } from 'node:module'
@@ -16,9 +16,10 @@ assert.equal(process.argv.length, 4, 'Usage: node dotnet/scripts/qualify-desktop
 const payload = resolve(process.argv[2]), report = resolve(process.argv[3])
 const root = await mkdtemp(join(tmpdir(), 'foxwarm-desktop-'))
 const data = join(root, 'selected data'), cwd = join(root, 'unrelated cwd')
+const agents = join(root, 'configured agents')
 await mkdir(join(data, 'state'), { recursive: true })
 await mkdir(cwd)
-await writeFile(join(data, 'state/config.yaml'), 'vector:\n  enabled: false\n')
+await writeFile(join(data, 'state/config.yaml'), JSON.stringify({ vector: { enabled: false }, paths: { agentsDir: agents } }))
 const env = { ...process.env }
 for (const key of Object.keys(env)) {
   if (key.startsWith('FOXWARM_') || key.startsWith('WEBVIEW2_') || ['CONFIG_PATH', 'MCP_CONFIG_PATH', 'ASPNETCORE_URLS', 'NODE_OPTIONS'].includes(key)) delete env[key]
@@ -39,7 +40,7 @@ const peer = createServer(async (request, response) => {
     assert(requests <= 2, 'Unexpected extra model request')
     const output = requests === 1
       ? [{ type: 'function_call', call_id: 'desktop-native', name: 'run_script', arguments: JSON.stringify({
-        code: "call_tool('write', {'filePath':'desktop-native-effect.txt','content':'packaged Windows Monty'})\nreturn {'answer':6*7}\n",
+        code: "call_tool('write', {'filePath':'desktop-native-effect.txt','content':'packaged Windows Monty'})\ncall_tool('exec', {'summary':'Check packaged exec helper','command':\"[IO.File]::WriteAllText('desktop-exec-effect.txt','packaged helper')\"})\nreturn {'answer':6*7}\n",
       }) }]
       : [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'DESKTOP-NATIVE-DONE' }] }]
     response.writeHead(200, { 'content-type': 'text/event-stream' })
@@ -127,6 +128,20 @@ try {
   stage = 'Desktop startup and native WebView2 authentication'
   const page = await start()
   assert.equal((await fetch(origin + '/api/auth/session')).status, 401)
+  await access(join(agents, 'main/memory'))
+  assert.equal(await page.evaluate(() => new Promise((resolve, reject) => {
+    const url = new URL('api/webui/stream', location.href)
+    url.protocol = 'ws:'
+    const socket = new WebSocket(url)
+    const timer = setTimeout(() => { socket.close(); reject(new Error('WebSocket timeout')) }, 10000)
+    socket.onmessage = event => {
+      if (JSON.parse(event.data).type === 'connected') {
+        clearTimeout(timer); socket.close(); resolve(true)
+      }
+    }
+    socket.onerror = () => { clearTimeout(timer); socket.close(); reject(new Error('WebSocket failed')) }
+  })), true)
+
   assert.equal((await api('GET', '/api/setup/status')).body.oobe, true)
   assert.deepEqual((await api('GET', '/api/sessions')).body.sessions, [])
   await page.evaluate(() => { location.hash = 'setup' })
@@ -149,7 +164,10 @@ try {
   assert.equal((await api('POST', route + '/message', { text: 'Run the owned desktop qualification.' })).status, 202)
   await until(async () => JSON.stringify((await api('GET', route + '/history')).body).includes('DESKTOP-NATIVE-DONE'), 'native ToolScript turn')
   assert.equal(requests, 2)
-  assert.equal(await readFile(join(root, 'workspace/desktop-native-effect.txt'), 'utf8'), 'packaged Windows Monty')
+  assert.equal(await readFile(join(agents, 'main/desktop-native-effect.txt'), 'utf8'), 'packaged Windows Monty')
+  assert.equal(await readFile(join(agents, 'main/desktop-exec-effect.txt'), 'utf8'), 'packaged helper')
+  assert.equal((await api('POST', '/api/agents', { agentId: 'research' })).status, 200)
+  await access(join(agents, 'research'))
   const savedToken = token, savedOrigin = origin
   const savedModels = await readFile(join(data, 'state/models.yaml'), 'utf8')
   stage = 'ordinary shutdown and restart'
@@ -160,7 +178,7 @@ try {
   assert.equal(await readFile(join(data, 'state/models.yaml'), 'utf8'), savedModels)
   assert(JSON.stringify((await api('GET', route + '/history')).body).includes('DESKTOP-NATIVE-DONE'))
   await stop()
-  await writeFile(report, JSON.stringify({ result: 'passed', extractedDesktop: true, nativeWebView2Cookie: true, setup: true, nativeToolScript: true, artifactDependencies: true, extensionBundles: 4, restartPreserved: true, vectorEnabled: false }, null, 2) + '\n')
+  await writeFile(report, JSON.stringify({ result: 'passed', extractedDesktop: true, nativeWebView2Cookie: true, setup: true, nativeToolScript: true, nativeExecHelper: true, canonicalAgentRoot: true, configuredAgentRoot: true, webSocketCookie: true, artifactDependencies: true, extensionBundles: 4, restartPreserved: true, vectorEnabled: false }, null, 2) + '\n')
   console.log('Extracted Desktop startup, WebView2, native ToolScript and restart acceptance passed.')
 } catch (error) {
   // Keep diagnostics useful without uploading tokens, state, profiles or request bodies.

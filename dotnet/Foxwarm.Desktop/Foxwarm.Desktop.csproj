@@ -32,7 +32,7 @@
       GeneratePathProperty="true"
     />
     <PackageReference
-      Include="Microsoft.WindowsAppSDK"
+      Include="Microsoft.WindowsAppSDK.WinUI"
       Version="2.6.5"
       GeneratePathProperty="true"
     />
@@ -56,11 +56,11 @@
   />
   <Target Name="DesktopPublishNotices" AfterTargets="Publish">
     <Copy
-      SourceFiles="$(PkgMicrosoft_WindowsAppSDK)/license.txt"
+      SourceFiles="$(PkgMicrosoft_WindowsAppSDK_WinUI)/license.txt"
       DestinationFiles="$(PublishDir)WindowsAppSDK-LICENSE.txt"
     />
     <Copy
-      SourceFiles="$(PkgMicrosoft_WindowsAppSDK)/NOTICE.txt"
+      SourceFiles="$(PkgMicrosoft_WindowsAppSDK_WinUI)/NOTICE.txt"
       DestinationFiles="$(PublishDir)WindowsAppSDK-NOTICE.txt"
     />
     <Copy
