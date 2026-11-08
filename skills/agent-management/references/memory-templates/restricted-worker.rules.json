@@ -1,0 +1,79 @@
+[
+  {
+    "id": "no-master",
+    "node": { "exact": "master" },
+    "action": "deny",
+    "reason": "Workers never act on master, even when a Session is placed there."
+  },
+  {
+    "id": "no-memory-writes",
+    "tool": { "source": "builtin", "name": ["write_memory", "edit_memory", "delete_memory", "apply_patch_memory"] },
+    "action": "deny",
+    "reason": "Every worker shares this Agent's memory, so no worker may change it."
+  },
+  {
+    "id": "no-user-questions",
+    "tool": { "source": "builtin", "name": "ask_user" },
+    "action": "deny",
+    "reason": "Workers ask their parent Session through a Task."
+  },
+  {
+    "id": "current-node-tools",
+    "tool": { "source": "node" },
+    "node": { "current": true },
+    "action": "allow",
+    "reason": "Files and commands on the Session's current Node. Without the node-source scope this would also allow selecting, inspecting and destroying that Node."
+  },
+  {
+    "id": "report-to-parent",
+    "tool": { "source": "builtin", "name": "send_to_session" },
+    "args": { "sessionId": { "session": { "relation": "parent" } } },
+    "action": "allow"
+  },
+  {
+    "id": "own-tasks",
+    "tool": { "source": "builtin", "name": "task" },
+    "args": { "action": ["get", "update", "complete"], "taskId": { "task": { "owned": true } } },
+    "action": "allow"
+  },
+  {
+    "id": "list-own-tasks",
+    "tool": { "source": "builtin", "name": "task" },
+    "args": { "action": "list", "scope": "owned" },
+    "action": "allow"
+  },
+  {
+    "id": "ask-parent",
+    "tool": { "source": "builtin", "name": "task" },
+    "args": { "action": "create", "ownerSessionId": { "session": { "relation": "parent" } } },
+    "action": "allow"
+  },
+  {
+    "id": "own-history",
+    "tool": { "source": "builtin", "name": ["get_archived_messages", "get_archived_blocks"] },
+    "args": { "sessionId": { "session": { "self": true } } },
+    "action": "allow"
+  },
+  {
+    "id": "own-recall",
+    "tool": { "source": "builtin", "name": "recall" },
+    "args": { "sessionId": { "session": { "self": true } }, "vector_query": { "exists": false } },
+    "action": "allow"
+  },
+  {
+    "id": "skills",
+    "tool": { "source": "builtin", "name": "skill" },
+    "args": { "action": ["list", "load"], "agentName": { "exists": false } },
+    "action": "allow"
+  },
+  {
+    "id": "session-controls",
+    "tool": { "source": "builtin", "name": ["wait", "search_tools", "submit_compact_plan"] },
+    "action": "allow"
+  },
+  {
+    "id": "deny-everything-else",
+    "action": "deny",
+    "reason": "This worker Agent's rules allow only its current Node, its parent, its own Tasks and its own history."
+  }
+]

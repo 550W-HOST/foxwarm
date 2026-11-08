@@ -1,0 +1,57 @@
+[
+  {
+    "id": "no-master",
+    "node": { "exact": "master" },
+    "action": "deny",
+    "reason": "This assistant never acts on master, even when a Session is placed there."
+  },
+  {
+    "id": "no-memory-writes",
+    "tool": { "source": "builtin", "name": ["write_memory", "edit_memory", "delete_memory", "apply_patch_memory"] },
+    "action": "deny",
+    "reason": "Conversations must not change the assistant's instructions."
+  },
+  {
+    "id": "current-node-tools",
+    "tool": { "source": "node" },
+    "node": { "current": true },
+    "action": "allow",
+    "reason": "Files and commands on the Session's current Node. Without the node-source scope this would also allow selecting, inspecting and destroying that Node."
+  },
+  {
+    "id": "send-files-here",
+    "tool": { "source": "builtin", "name": "send_file" },
+    "node": { "current": true },
+    "args": { "sessionId": { "session": { "self": true } } },
+    "action": "allow",
+    "reason": "Files from the current Node, delivered to this conversation only."
+  },
+  {
+    "id": "own-history",
+    "tool": { "source": "builtin", "name": ["get_archived_messages", "get_archived_blocks"] },
+    "args": { "sessionId": { "session": { "self": true } } },
+    "action": "allow"
+  },
+  {
+    "id": "own-recall",
+    "tool": { "source": "builtin", "name": "recall" },
+    "args": { "sessionId": { "session": { "self": true } }, "vector_query": { "exists": false } },
+    "action": "allow"
+  },
+  {
+    "id": "skills",
+    "tool": { "source": "builtin", "name": "skill" },
+    "args": { "action": ["list", "load"], "agentName": { "exists": false } },
+    "action": "allow"
+  },
+  {
+    "id": "session-controls",
+    "tool": { "source": "builtin", "name": ["wait", "search_tools", "submit_compact_plan"] },
+    "action": "allow"
+  },
+  {
+    "id": "deny-everything-else",
+    "action": "deny",
+    "reason": "This assistant's rules allow only its current Node, files sent to this conversation, its own history and skills."
+  }
+]
