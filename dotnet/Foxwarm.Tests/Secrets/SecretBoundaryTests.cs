@@ -582,4 +582,73 @@ public sealed class SecretBoundaryTests
             await SetConfig(Config("${secret:provider-key}"))
         );
     }
+
+    [Fact]
+    public async Task Approval_records_and_their_presentation_never_keep_known_values()
+    {
+        await using var f = await ExternalChannelFixture.CreateAsync();
+        f.Configuration.Secrets.Store.Set("provider-key", ProviderKey);
+        await f.Manager.Authorization.InstallAsync(
+            Encoding.UTF8.GetBytes(
+                """
+                version: 1
+                rules:
+                  - id: confirm-write
+                    action: ask
+                    tool: {source: node, name: write}
+                """
+            ),
+            CancellationToken.None
+        );
+        var call = f.ToolAsync(
+            "write",
+            new JsonObject { ["filePath"] = "note.txt", ["content"] = "key " + ProviderKey }
+        );
+        JsonObject? pending = null;
+        await Until(() =>
+        {
+            pending = f
+                .Owner.Entry.WithState(state => SessionApprovals.Records(state.Meta))
+                .FirstOrDefault(record => SessionApprovals.Status(record) == "pending");
+            return pending is not null;
+        });
+        await f.Manager.DecideToolApprovalAsync(
+            f.Owner,
+            SessionWait.Text(pending!["id"])!,
+            approve: true,
+            note: "Fine, it uses " + ProviderKey,
+            new JsonObject { ["kind"] = "administrator" }
+        );
+        _ = await call.WaitAsync(TimeSpan.FromSeconds(30));
+        var meta = f.Owner.Entry.Snapshot().Meta.ToJsonString();
+        Assert.DoesNotContain(ProviderKey, meta);
+        Assert.Contains("[[FW_SECRET:provider-key]]", meta);
+
+        // The decision shown on the paired tool result is masked like the rest of history.
+        var row = new JsonObject
+        {
+            ["role"] = "user",
+            ["parts"] = new JsonArray(
+                new JsonObject
+                {
+                    ["functionResponse"] = new JsonObject { ["name"] = "write" },
+                    ["__meta"] = new JsonObject
+                    {
+                        ["approval"] = new JsonObject { ["note"] = "uses " + ProviderKey },
+                        ["resolvedPaths"] = new JsonArray("note.txt"),
+                    },
+                }
+            ),
+        };
+        var masked = SecretMessageRedaction.Message(
+            f.Configuration.Secrets.Redactor,
+            row,
+            new SecretMessageRedaction.Findings()
+        );
+        Assert.DoesNotContain(ProviderKey, masked.ToJsonString());
+        Assert.Equal(
+            "note.txt",
+            masked["parts"]![0]!["__meta"]!["resolvedPaths"]![0]!.GetValue<string>()
+        );
+    }
 }

@@ -27,11 +27,9 @@ internal static class SecretMessageRedaction
         var changed = false;
         foreach (var key in copy.Select(pair => pair.Key).ToArray())
         {
-            // Message metadata is not content, except the user's structured question answer.
             if (key == "__meta")
             {
-                if (copy[key] is JsonObject meta && meta.ContainsKey("questionAnswer"))
-                    changed |= Field(redactor, meta, "questionAnswer", findings);
+                changed |= MetaContent(redactor, copy[key], findings);
                 continue;
             }
             if (key == "providerMeta")
@@ -75,10 +73,28 @@ internal static class SecretMessageRedaction
         var changed = false;
         foreach (var key in part.Select(pair => pair.Key).ToArray())
         {
-            if (key is "providerMeta" or "inlineData" or "inlineDataRef" or "__meta")
+            if (key == "__meta")
+            {
+                changed |= MetaContent(redactor, part[key], findings);
+                continue;
+            }
+            if (key is "providerMeta" or "inlineData" or "inlineDataRef")
                 continue;
             changed |= Field(redactor, part, key, findings);
         }
+        return changed;
+    }
+
+    // Metadata is not content, except people's words carried in it: a structured question
+    // answer and an approval's decision note.
+    private static bool MetaContent(SecretRedactor redactor, JsonNode? node, Findings findings)
+    {
+        if (node is not JsonObject meta)
+            return false;
+        var changed = false;
+        foreach (var key in new[] { "questionAnswer", "approval" })
+            if (meta.ContainsKey(key))
+                changed |= Field(redactor, meta, key, findings);
         return changed;
     }
 
