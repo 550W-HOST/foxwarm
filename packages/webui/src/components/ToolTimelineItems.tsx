@@ -45,6 +45,8 @@ import { useThreadCardOverflowFade } from './useThreadCardOverflowFade'
 import { useThreadCardHeightTransition } from './useThreadCardHeightTransition'
 import ReasoningTokenBadge from './ReasoningTokenBadge'
 import { AskUserToolCard } from './QuestionCard'
+import { ToolApprovalNotice } from './ApprovalCard'
+import { useSessionQuestionsContext } from '../sessionQuestionsState'
 import { isAskUserCall } from '../sessionQuestions'
 import type { ReasoningBadgeInfo } from './reasoningParts'
 
@@ -848,6 +850,14 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
   const hasResponseContent = responses.length > 0 || imageParts.length > 0
   const runningCallIds = useContext(ToolCallActivityContext)
   const showRunning = (runningCallIds ? !!call?.id && runningCallIds.has(call.id) : runningTool) && !!call && !hasResponseContent && !partialToolCall
+  // Approval of this call: the Session's live record while it waits, then the stored outcome.
+  const sessionQuestions = useSessionQuestionsContext()
+  const liveApproval = call?.id && !hasResponseContent ? sessionQuestions?.approvalByCallId.get(call.id) : undefined
+  const pendingApproval = liveApproval?.status === 'pending' ? liveApproval : undefined
+  const approval = pendingApproval || primaryResponse?.__meta?.approval
+  const approvalNotice = approval && (
+    <ToolApprovalNotice approval={approval} onReview={pendingApproval && sessionQuestions ? () => sessionQuestions.requestDock(pendingApproval.id) : undefined} />
+  )
   const showDiffToggles = !!call && !partialToolCall && (isLegacyDiffToolName(call.name) || isPatchCall(call))
 
   const responsePreview = useMemo(() => {
@@ -872,7 +882,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
   }, [call, hideCollapsedContent, imageParts.length, responses])
 
   const baseTextClass = 'font-mono text-fw-text'
-  const hasBody = expanded || !hideCollapsedContent && (!!responsePreview || hasToolScriptProgress || showRunning)
+  const hasBody = expanded || !hideCollapsedContent && (!!responsePreview || hasToolScriptProgress || showRunning) || !!approvalNotice
 
   const actionButtonsToneClass = `foxwarm-tool-action-buttons-${tagTone}`
   const resultSeparatorClass = `pt-2 border-t ${isError ? 'border-fw-danger-border dark:border-fw-danger-border/40' : 'border-fw-tool-border dark:border-fw-tool-border/40'}`
@@ -941,6 +951,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
         <div className={baseTextClass}>
           <div className="space-y-1">
             {header(true)}
+            {approvalNotice}
             {!hideCollapsedContent && ((responsePreview && !hasToolScriptProgress) || showRunning) && <div ref={resultFade.ref} {...resultFade.overflowFadeProps} className="foxwarm-tool-result-preview pr-2 text-fw-text" style={{ ...clampContentStyle(3), ...resultFade.overflowFadeProps.style }}>{showRunning ? 'Running...' : responsePreview}</div>}
             {!hideCollapsedContent && hasToolScriptProgress && <ToolScriptSubCallsTags subCalls={toolScriptSubCalls!} neutralSuccess={neutralSuccess} />}
           </div>
@@ -948,6 +959,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
       ) : (
         <div className={baseTextClass}>
           {header(false, true)}
+          {approvalNotice && <div className="mt-1">{approvalNotice}</div>}
 
           {(hasResponseContent || hasToolScriptProgress || showRunning) && (
             <div className="foxwarm-tool-expanded-content foxwarm-tool-result-content mt-1 min-w-0 max-w-full cursor-default pr-2" onClick={(e) => e.stopPropagation()}>

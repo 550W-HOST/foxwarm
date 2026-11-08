@@ -116,6 +116,8 @@ internal sealed class WebUiAccess(SessionRuntime runtime, AccessConfiguration co
                     or "/api/sessions/{id}/history/continuous"
                     or "/api/sessions/{id}/stream"
                     or "/api/sessions/{id}/questions"
+                    // Approvers additionally need to be named by the request's rules.
+                    or "/api/sessions/{id}/approvals/{approvalId}"
             ) => true,
             (
                 "POST",
@@ -123,6 +125,7 @@ internal sealed class WebUiAccess(SessionRuntime runtime, AccessConfiguration co
                     or "/api/session-sequence"
                     or "/api/sessions/{id}/message"
                     or "/api/sessions/{id}/questions/{questionId}/answer"
+                    or "/api/sessions/{id}/approvals/{approvalId}"
                     or "/api/sessions/{id}/blobs/{blobId}/download"
             ) => true,
             ("GET" or "HEAD", "/api/sessions/{id}/blobs/{blobId}") => true,

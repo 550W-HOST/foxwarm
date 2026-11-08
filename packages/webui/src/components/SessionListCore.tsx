@@ -2,7 +2,7 @@ import { getSessionRuntimeTone } from '../sessionRuntimeState'
 import { useState, useRef, useEffect, useMemo, type ReactNode } from 'react'
 import { useDndContext, useDraggable, useDroppable } from '@dnd-kit/core'
 import { API_BASE_PATH } from '../config'
-import { SlidersHorizontal, MoreVertical, Plus, Settings, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X, CornerDownRight, ListTree, Clock3, Rows3, Pin, PinOff, Bell, BellRing, GitBranch, Server, Copy, SquarePlus, MessageCircleQuestion } from 'lucide-react'
+import { SlidersHorizontal, MoreVertical, Plus, Settings, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X, CornerDownRight, ListTree, Clock3, Rows3, Pin, PinOff, Bell, BellRing, GitBranch, Server, Copy, SquarePlus, MessageCircleQuestion, ShieldAlert } from 'lucide-react'
 import RuntimeBusySpinner from './RuntimeBusySpinner'
 import MobilePageHeader from './MobilePageHeader'
 import ContextMenu, { type ContextMenuAnchorRect, type ContextMenuEntry } from './ContextMenu'
@@ -1332,11 +1332,13 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     )
 
     const questionAttention = getSessionQuestionAttention(session)
-    const questionLabel = questionAttentionLabel(questionAttention, session.questions?.open)
+    const questionLabel = questionAttentionLabel(questionAttention, session.questions?.open, session.questions?.approvals)
     const questionBadge = questionAttention && (
       <span role="img" aria-label={questionLabel} title={questionLabel} data-session-question={questionAttention}
         className={`inline-flex shrink-0 items-center justify-center ${questionAttention === 'waiting' ? 'h-5 w-5 rounded-full bg-fw-warning-surface text-fw-warning ring-1 ring-fw-warning-border dark:bg-fw-warning-surface-strong/30' : 'h-3.5 w-3.5 text-fw-accent'}`}>
-        <MessageCircleQuestion className="h-3.5 w-3.5" strokeWidth={questionAttention === 'waiting' ? 2.25 : 1.75} aria-hidden="true" />
+        {(session.questions?.approvals ?? 0) > 0
+          ? <ShieldAlert className="h-3.5 w-3.5" strokeWidth={2.25} aria-hidden="true" />
+          : <MessageCircleQuestion className="h-3.5 w-3.5" strokeWidth={questionAttention === 'waiting' ? 2.25 : 1.75} aria-hidden="true" />}
       </span>
     )
     const isCurrentSession = resolvedCurrentSessionId === session.id

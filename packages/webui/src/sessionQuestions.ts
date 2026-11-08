@@ -1,4 +1,5 @@
 import { API_BASE_PATH } from './config'
+import type { ToolApprovalRecord } from './sessionApprovals'
 
 /** One `ask_user` option as stored by the Session. */
 export interface QuestionOption {
@@ -36,11 +37,16 @@ export interface SessionQuestionsView {
   revision: number
   waitingQuestionIds: string[]
   questions: QuestionRecord[]
+  /** Tool approval requests, pending and recently settled. */
+  approvals?: ToolApprovalRecord[]
 }
 
 /** Bounded list/catalog projection carried by Session rows and Session state. */
 export interface SessionQuestionsProjection {
+  /** Open questions plus pending tool approvals. */
   open: number
+  /** Pending tool approvals; the Session waits on each of them. */
+  approvals?: number
   revision?: number
   waiting?: true
 }
@@ -53,7 +59,8 @@ export function getSessionQuestionAttention(session: { questions?: SessionQuesti
   return projection.waiting ? 'waiting' : 'open'
 }
 
-export function questionAttentionLabel(attention: SessionQuestionAttention, open = 1): string {
+export function questionAttentionLabel(attention: SessionQuestionAttention, open = 1, approvals = 0): string {
+  if (approvals > 0) return approvals === 1 ? 'Tool call waiting for approval' : `${approvals} tool calls waiting for approval`
   if (attention === 'waiting') return 'Waiting for your answer'
   if (attention === 'open') return open === 1 ? 'Has an open question' : `Has ${open} open questions`
   return ''

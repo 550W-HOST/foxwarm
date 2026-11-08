@@ -107,6 +107,12 @@ internal sealed partial class SessionManager
                     waited.Select(value => (JsonNode?)JsonValue.Create(value)).ToArray()
                 ),
                 ["questions"] = new JsonArray(items),
+                ["approvals"] = new JsonArray(
+                    SessionApprovals
+                        .Records(state.Meta)
+                        .Select(record => (JsonNode?)record.DeepClone())
+                        .ToArray()
+                ),
             };
         });
 

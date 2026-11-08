@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { fetchSessionQuestions, submitQuestionAnswer, type QuestionAnswerBody, type QuestionRecord, type SessionQuestionsProjection, type SessionQuestionsView } from './sessionQuestions'
+import { submitApprovalDecision, type ApprovalDecisionBody, type ToolApprovalRecord } from './sessionApprovals'
 
 export interface SessionQuestionsState {
   sessionId: string
@@ -7,9 +8,15 @@ export interface SessionQuestionsState {
   byId: Map<string, QuestionRecord>
   open: QuestionRecord[]
   waitingIds: ReadonlySet<string>
+  /** Pending tool approvals, oldest first. */
+  approvals: ToolApprovalRecord[]
+  approvalById: Map<string, ToolApprovalRecord>
+  /** Approval records by the tool call that requested them. */
+  approvalByCallId: Map<string, ToolApprovalRecord>
   submit: (questionId: string, body: QuestionAnswerBody) => Promise<void>
+  decide: (approvalId: string, body: ApprovalDecisionBody) => Promise<void>
   reload: () => void
-  /** Latest request from a timeline card to open the dock on one question. */
+  /** Latest request from a timeline card to open the dock on one question or approval. */
   dockRequest: { questionId: string; nonce: number } | null
   requestDock: (questionId: string) => void
 }
@@ -43,18 +50,27 @@ export function useSessionQuestions(sessionId: string, projection: SessionQuesti
     try { await submitQuestionAnswer(sessionId, questionId, body) }
     finally { reload() }
   }, [sessionId, reload])
+  const decide = useCallback(async (approvalId: string, body: ApprovalDecisionBody) => {
+    try { await submitApprovalDecision(sessionId, approvalId, body) }
+    finally { reload() }
+  }, [sessionId, reload])
   return useMemo(() => {
     const questions = view?.questions || []
+    const approvals = view?.approvals || []
     return {
       sessionId,
       view,
       byId: new Map(questions.map(record => [record.id, record])),
       open: questions.filter(record => record.status === 'open'),
       waitingIds: new Set(view?.waitingQuestionIds || []),
+      approvals: approvals.filter(record => record.status === 'pending'),
+      approvalById: new Map(approvals.map(record => [record.id, record])),
+      approvalByCallId: new Map(approvals.filter(record => record.toolCallId).map(record => [record.toolCallId!, record])),
       submit,
+      decide,
       reload,
       dockRequest,
       requestDock,
     }
-  }, [sessionId, view, submit, reload, dockRequest, requestDock])
+  }, [sessionId, view, submit, decide, reload, dockRequest, requestDock])
 }

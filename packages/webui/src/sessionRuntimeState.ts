@@ -47,6 +47,8 @@ export interface SessionRuntimeState {
     total?: number
     executionNode?: string
     argsPreview?: string
+    /** Set while the call waits for a tool approval decision. */
+    approval?: { id: string; status: 'pending' }
     startedAt: number
   }
   waiting?: {

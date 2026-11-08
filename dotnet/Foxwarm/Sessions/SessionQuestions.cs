@@ -216,8 +216,16 @@ internal static class SessionQuestions
             return null;
         var open = Open(meta);
         var waited = SessionWait.Strings(SessionWait.Current(meta)?["waitQuestionIds"]);
-        var result = new JsonObject { ["open"] = open.Length, ["revision"] = Revision(meta) };
-        if (open.Any(record => waited.Contains(SessionWait.Text(record["id"]))))
+        // A pending tool approval is an open request the Session is waiting on.
+        var approvals = SessionApprovals.Pending(meta).Length;
+        var result = new JsonObject
+        {
+            ["open"] = open.Length + approvals,
+            ["revision"] = Revision(meta),
+        };
+        if (approvals > 0)
+            result["approvals"] = approvals;
+        if (approvals > 0 || open.Any(record => waited.Contains(SessionWait.Text(record["id"]))))
             result["waiting"] = true;
         return result;
     }

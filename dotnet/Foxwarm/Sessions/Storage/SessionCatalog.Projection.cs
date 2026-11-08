@@ -99,9 +99,11 @@ internal sealed partial class SessionCatalog
             return null;
         var result = new JsonObject
         {
-            ["open"] = (long)Math.Min(open, SessionQuestions.MaxOpen),
+            ["open"] = (long)Math.Min(open, SessionQuestions.MaxOpen + SessionApprovals.MaxPending),
             ["revision"] = (long)(Number(questions["revision"]) ?? 0),
         };
+        if (Number(questions["approvals"]) is { } approvals && approvals > 0)
+            result["approvals"] = (long)Math.Min(approvals, SessionApprovals.MaxPending);
         if (Flag(questions["waiting"]))
             result["waiting"] = true;
         return result;

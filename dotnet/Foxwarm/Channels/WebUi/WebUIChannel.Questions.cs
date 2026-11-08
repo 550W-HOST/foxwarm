@@ -18,6 +18,7 @@ internal sealed partial class WebUIChannel
                     return Results.NotFound(new JsonObject { ["error"] = "Session not found" });
                 var view = sessions.QuestionsView(hosted);
                 view["sessionId"] = hosted.Id;
+                MarkDecidableApprovals(request, view);
                 return Results.Ok(JsonData.WebNode(view));
             }
         );

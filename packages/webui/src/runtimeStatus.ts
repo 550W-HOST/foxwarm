@@ -30,6 +30,7 @@ export function describeRuntimeTool(runtime: SessionRuntimeState): { label: stri
   if (tool.executionNode) details.push(['Node', tool.executionNode])
   if (typeof tool.index === 'number' && typeof tool.total === 'number') details.push(['Batch', `${tool.index + 1}/${tool.total}`])
   if (tool.argsPreview) details.push(['Arguments', tool.argsPreview])
+  if (tool.approval?.status === 'pending') return { label: `Waiting for approval · ${name}`, details }
   return { label: tool.executionNode && tool.executionNode !== 'master' ? `${label} · ${tool.executionNode}` : label, details }
 }
 
@@ -83,6 +84,7 @@ export function getRuntimeStatusView(runtime: SessionRuntimeState | undefined, f
   if (state === 'requesting-model') return !runtime || runtime.active?.phase === 'unknown'
     ? { kind: 'unknown', tone: 'muted', label: 'Running…', details }
     : { kind: 'request', tone: 'accent', label: 'Requesting model…', playful: true, details }
+  if (state === 'running-tool' && runtime?.tool?.approval?.status === 'pending') { const tool = describeRuntimeTool(runtime); return { kind: 'waiting', tone: 'warning', label: tool.label, details: [...tool.details, ...details] } }
   if (state === 'running-tool' && runtime) { const tool = describeRuntimeTool(runtime); return { kind: 'tool', tone: 'special', label: tool.label, details: [...tool.details, ...details] } }
   if (state === 'waiting' && runtime) { const wait = describeRuntimeWaiting(runtime); return { kind: 'waiting', tone: 'warning', label: wait.label, details: [...wait.details, ...details] } }
   if (compact) return { kind: 'compact', tone: 'muted', label: 'Compacting in background…', secondary: true, details }

@@ -438,6 +438,40 @@ public sealed class ToolApprovalGateTests
     }
 
     [Fact]
+    public async Task Approval_of_a_call_whose_targets_change_while_waiting_asks_again_then_fails()
+    {
+        await using var f = await ScriptFixture.Create();
+        await Policy(f.Manager, AskWrite);
+        Directory.CreateDirectory(Path.Combine(f.Work, "a"));
+        Directory.CreateDirectory(Path.Combine(f.Work, "b"));
+        var link = Path.Combine(f.Work, "current");
+        File.CreateSymbolicLink(link, "a");
+        var call = Start(f, "call-moving", "write", Write("current/out.txt"));
+        var settled = new HashSet<string>(StringComparer.Ordinal);
+        for (var round = 0; round < 3; round++)
+        {
+            var pending = (await PendingAsync(f.Owner)).Single(record =>
+                !settled.Contains(record["id"]!.GetValue<string>())
+            );
+            var id = pending["id"]!.GetValue<string>();
+            settled.Add(id);
+            // The write's target moves before every decision.
+            File.Delete(link);
+            File.CreateSymbolicLink(link, round % 2 == 0 ? "b" : "a");
+            await f.Manager.DecideToolApprovalAsync(f.Owner, id, true, null, Administrator);
+        }
+        var result = (await call.WaitAsync(TimeSpan.FromSeconds(30))).Response!.AsObject();
+        Assert.Equal("tool_approval_unavailable", result["error"]!["type"]!.GetValue<string>());
+        Assert.Equal(
+            "This call's targets changed while it was waiting for approval. It was not executed.",
+            result["error"]!["message"]!.GetValue<string>()
+        );
+        Assert.Equal(3, Approvals(f.Owner).Length);
+        Assert.False(File.Exists(Path.Combine(f.Work, "a", "out.txt")));
+        Assert.False(File.Exists(Path.Combine(f.Work, "b", "out.txt")));
+    }
+
+    [Fact]
     public async Task Covered_scope_compares_the_primary_call_facts_but_not_internal_steps()
     {
         await using var f = await ScriptFixture.Create();

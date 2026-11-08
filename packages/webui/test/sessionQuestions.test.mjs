@@ -13,6 +13,7 @@ const questions = await load('../src/sessionQuestions.ts')
 const presentation = await load('../src/sessionListPresentation.ts')
 const runtime = await load('../src/runtimeStatus.ts')
 const notifications = await load('../src/sessionIdleNotifications.ts')
+const approvals = await load('../src/sessionApprovals.ts')
 
 const single = { question: 'Database?', options: [{ label: 'PostgreSQL', recommended: true }, { label: 'SQLite' }] }
 const multi = { ...single, multiSelect: true }
@@ -115,4 +116,38 @@ test('question notification mode is stored per browser with All sessions as the 
   assert.equal(store.has(notifications.QUESTION_NOTIFICATIONS_STORAGE_KEY), false)
   assert.equal(notifications.readQuestionNotificationMode({ getItem: () => 'garbage' }), 'all')
   assert.equal(notifications.readQuestionNotificationMode({ getItem() { throw new Error('blocked') } }), 'all')
+})
+
+test('approval decisions trim notes and outcomes name who settled them', () => {
+  assert.deepEqual(approvals.buildApprovalDecisionBody('approve', '  '), { decision: 'approve' })
+  assert.deepEqual(approvals.buildApprovalDecisionBody('reject', ' use the staging host '), { decision: 'reject', note: 'use the staging host' })
+  assert.equal(approvals.describeApprovalOutcome({ status: 'approved', decidedBy: { kind: 'identity', id: 'reviewer' } }), 'Approved by reviewer')
+  assert.equal(approvals.describeApprovalOutcome({ status: 'rejected', decidedBy: { kind: 'administrator' } }), 'Rejected')
+  assert.equal(approvals.describeApprovalOutcome({ status: 'expired', decidedBy: { kind: 'system', reason: 'restart' } }), 'Expired at restart')
+  assert.equal(approvals.describeApprovalOutcome({ status: 'pending' }), 'Waiting for approval')
+})
+
+test('approval review text: tool identity, targets, deadline and shortened arguments', () => {
+  assert.equal(approvals.approvalToolLabel({ source: 'mcp', server: 'tracker', name: 'close_issue' }), 'tracker · close_issue')
+  assert.equal(approvals.approvalToolLabel({ source: 'node', name: 'exec' }), 'exec')
+  assert.deepEqual(approvals.approvalTargets({ facts: { paths: [{ raw: 'a.txt', resolved: '/w/a.txt', node: 'dev' }], nodeTargets: ['dev'], sessionTarget: { id: 'peer' } } }), ['dev:/w/a.txt', 'Node dev', 'Session peer'])
+  assert.equal(approvals.approvalTimeLeft(undefined), '')
+  assert.equal(approvals.approvalTimeLeft(1_000 + 45_000, 1_000), '45s left')
+  assert.equal(approvals.approvalTimeLeft(1_000 + 4 * 60_000, 1_000), '4m left')
+  assert.equal(approvals.approvalTimeLeft(1_000 + 5 * 3_600_000, 1_000), '5h left')
+  assert.equal(approvals.approvalTimeLeft(0, 1_000), '')
+  assert.equal(approvals.approvalArgsText({ args: { command: 'ls' } }), '{\n  "command": "ls"\n}')
+  assert.equal(approvals.approvalArgsText({ argsPreview: '{"command":"xx', argsTruncated: true }), '{"command":"xx…')
+})
+
+test('pending approvals read as waiting in the Session list and runtime status', () => {
+  const row = { id: 'a', questions: { open: 2, approvals: 1, waiting: true } }
+  assert.equal(questions.getSessionQuestionAttention(row), 'waiting')
+  assert.equal(questions.questionAttentionLabel('waiting', 2, 1), 'Tool call waiting for approval')
+  assert.equal(questions.questionAttentionLabel('waiting', 3, 3), '3 tool calls waiting for approval')
+  assert.equal(questions.questionAttentionLabel('waiting', 1, 0), 'Waiting for your answer')
+  const view = runtime.getRuntimeStatusView({ state: 'running-tool', queueLength: 0, busy: true, tool: { name: 'exec', source: 'node', startedAt: 1, approval: { id: 'ap-1', status: 'pending' } } })
+  assert.equal(view.label, 'Waiting for approval · exec')
+  assert.equal(view.tone, 'warning')
+  assert.equal(runtime.getRuntimeStatusView({ state: 'running-tool', queueLength: 0, busy: true, tool: { name: 'exec', source: 'node', startedAt: 1 } }).label, 'Executing exec')
 })

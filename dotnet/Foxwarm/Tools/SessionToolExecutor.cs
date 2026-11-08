@@ -77,6 +77,13 @@ internal sealed partial class SessionToolExecutor(
                     current.Approval = SessionManager.ApprovalMeta(record);
                 gate.Grant = SessionManager.ApprovalOutcome(pending, record);
             }
+            catch (ToolApprovalRequiredException) when (gate is not null)
+            {
+                throw new ToolApprovalOutcomeException(
+                    "tool_approval_unavailable",
+                    "This call's targets changed while it was waiting for approval. It was not executed."
+                );
+            }
         RequireRuntime();
     }
 

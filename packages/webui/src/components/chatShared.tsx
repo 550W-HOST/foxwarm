@@ -1,4 +1,5 @@
 import * as Diff from 'diff'
+import type { ToolApprovalMeta } from '../sessionApprovals'
 import {
   Brain,
   BookOpen,
@@ -128,7 +129,7 @@ export const formatToolLabel = (name: string, args?: any): string => {
 export interface FunctionResponse {
   tool_use_id?: string
   executionTiming?: { startedAt: number; completedAt: number; durationMs: number }
-  __meta?: { resolvedPaths?: Array<{ raw: string; resolved: string; nodeId: string }>; toolScriptSubCalls?: ToolScriptSubCall[]; sessionMessages?: Array<{ id: string; targetSessionId: string; message: string; truncated?: boolean }> }
+  __meta?: { resolvedPaths?: Array<{ raw: string; resolved: string; nodeId: string }>; toolScriptSubCalls?: ToolScriptSubCall[]; sessionMessages?: Array<{ id: string; targetSessionId: string; message: string; truncated?: boolean }>; approval?: ToolApprovalMeta }
   name: string
   response: any
 }

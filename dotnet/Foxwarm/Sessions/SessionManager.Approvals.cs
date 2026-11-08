@@ -290,8 +290,10 @@ internal sealed partial class SessionManager
         {
             "approved" => new(pending.Id, pending.Fingerprint, note),
             // Cancellation settles only after the call's own token was cancelled.
-            "cancelled" => throw new InvalidOperationException(
-                "Tool call was not started because its approval request was cancelled; it was not executed."
+            "cancelled" => throw new ToolApprovalOutcomeException(
+                "tool_call_cancelled",
+                "This tool call's approval request was cancelled. It was not executed.",
+                pending.Id
             ),
             "rejected" => throw new ToolApprovalOutcomeException(
                 "tool_approval_rejected",

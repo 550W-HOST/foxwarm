@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
-import { Check, ChevronDown, ChevronLeft, MessageCircleQuestion, X } from 'lucide-react'
+import { Check, ChevronDown, ChevronLeft, MessageCircleQuestion, ShieldAlert, X } from 'lucide-react'
 import {
   askUserArgs,
   askUserQuestionId,
@@ -21,6 +21,8 @@ import { useSessionQuestionsContext } from '../sessionQuestionsState'
 import { questionContentSummary } from '../questionContent'
 import QuestionContent from './QuestionContent'
 import type { FunctionCall, FunctionResponse } from './chatShared'
+import { ApprovalDecisionForm } from './ApprovalCard'
+import { approvalToolLabel, type ToolApprovalRecord } from '../sessionApprovals'
 
 const isTextEntry = (target: EventTarget | null) => target instanceof HTMLElement && (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT' && (target as HTMLInputElement).type === 'text')
 
@@ -291,11 +293,27 @@ export function AskUserToolCard({ call, response }: { call: FunctionCall; respon
   )
 }
 
-/** Pinned dock above the composer: open questions answerable in place, driven by Session state. */
+type DockItem = { kind: 'approval'; id: string; record: ToolApprovalRecord } | { kind: 'question'; id: string; record: QuestionRecord }
+
+const dockItemTitle = (item: DockItem): string => item.kind === 'approval'
+  ? [approvalToolLabel(item.record.tool), item.record.summary].filter(Boolean).join(' · ')
+  : item.record.questions[0]?.question || ''
+
+function dockHeading(approvals: number, questions: number): string {
+  if (!questions) return approvals === 1 ? 'Tool call needs approval' : `${approvals} tool calls need approval`
+  if (!approvals) return questions === 1 ? 'Open question' : `${questions} open questions`
+  return `${approvals + questions} open requests`
+}
+
+/**
+ * Pinned dock above the composer, driven by Session state: pending tool approvals, which the
+ * agent always waits on, then open questions answerable in place.
+ */
 export function QuestionDock({ isMobile = false }: { isMobile?: boolean }) {
   const questions = useSessionQuestionsContext()
   const open = questions?.open || []
-  const waitingAny = open.some(record => questions?.waitingIds.has(record.id))
+  const approvals = questions?.approvals || []
+  const waitingAny = approvals.length > 0 || open.some(record => questions?.waitingIds.has(record.id))
   const [expanded, setExpanded] = useState<boolean | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const sessionId = questions?.sessionId
@@ -308,35 +326,48 @@ export function QuestionDock({ isMobile = false }: { isMobile?: boolean }) {
     setSelectedId(request.questionId)
     setFocusToken(request.nonce)
   }, [request])
-  if (!questions || open.length === 0) return null
-  const ordered = [...open].sort((a, b) => Number(questions.waitingIds.has(b.id)) - Number(questions.waitingIds.has(a.id)))
-  const current = ordered.find(record => record.id === selectedId) || ordered[0]
+  if (!questions || open.length + approvals.length === 0) return null
+  const ordered: DockItem[] = [
+    ...approvals.map(record => ({ kind: 'approval' as const, id: record.id, record })),
+    ...[...open]
+      .sort((a, b) => Number(questions.waitingIds.has(b.id)) - Number(questions.waitingIds.has(a.id)))
+      .map(record => ({ kind: 'question' as const, id: record.id, record })),
+  ]
+  const current = ordered.find(item => item.id === selectedId) || ordered[0]
   const isExpanded = expanded ?? waitingAny
-  const currentWaiting = questions.waitingIds.has(current.id)
+  const isWaiting = (item: DockItem) => item.kind === 'approval' || questions.waitingIds.has(item.id)
+  const Icon = approvals.length ? ShieldAlert : MessageCircleQuestion
+  const waitingLabel = approvals.length ? 'Waiting for approval' : 'Waiting for your answer'
   return (
     <div data-question-dock data-question-dock-expanded={isExpanded ? 'true' : 'false'} className={`mb-2 min-w-0 rounded-lg border shadow-sm ${waitingAny ? 'border-fw-warning-border bg-fw-surface' : 'border-fw-accent-border bg-fw-surface'}`}>
       <button type="button" aria-expanded={isExpanded} onClick={() => setExpanded(!isExpanded)} className="flex w-full min-w-0 items-center gap-2 px-3 py-2 text-left text-sm">
-        <MessageCircleQuestion size={16} aria-hidden="true" className={`shrink-0 ${waitingAny ? 'text-fw-warning' : 'text-fw-accent'}`} />
-        <span className="shrink-0 font-medium text-fw-text-strong">{open.length === 1 ? 'Open question' : `${open.length} open questions`}</span>
-        {!isExpanded && <span className="min-w-0 truncate text-fw-text-muted">· {current.questions[0]?.question}</span>}
-        {waitingAny && <span className="ml-auto shrink-0 text-xs font-medium text-fw-warning">{isMobile ? 'Waiting' : 'Waiting for your answer'}</span>}
+        <Icon size={16} aria-hidden="true" className={`shrink-0 ${waitingAny ? 'text-fw-warning' : 'text-fw-accent'}`} />
+        <span className="shrink-0 font-medium text-fw-text-strong">{dockHeading(approvals.length, open.length)}</span>
+        {!isExpanded && <span className="min-w-0 truncate text-fw-text-muted">· {dockItemTitle(current)}</span>}
+        {waitingAny && <span className="ml-auto shrink-0 text-xs font-medium text-fw-warning">{isMobile ? 'Waiting' : waitingLabel}</span>}
         <ChevronDown size={14} aria-hidden="true" className={`shrink-0 text-fw-text-muted ${waitingAny ? '' : 'ml-auto'} ${isExpanded ? 'rotate-180' : ''}`} />
       </button>
       {isExpanded && (
         <div className="max-h-[min(55vh,28rem)] overflow-y-auto border-t border-fw-border px-3 pb-3 pt-2">
           {ordered.length > 1 && (
-            <div role="tablist" aria-label="Open questions" className="mb-2 flex flex-wrap gap-1">
-              {ordered.map((record, index) => (
-                <button key={record.id} type="button" role="tab" aria-selected={record.id === current.id} onClick={() => setSelectedId(record.id)}
-                  className={`max-w-[12rem] truncate rounded-md px-2 py-1 text-xs ${record.id === current.id ? 'bg-fw-accent-surface text-fw-accent dark:bg-fw-accent-surface-strong/30' : 'text-fw-text-muted hover:bg-fw-hover'}`}
-                  title={record.questions[0]?.question}>
-                  {questions.waitingIds.has(record.id) ? '● ' : ''}{index + 1}. {record.questions[0]?.question}
+            <div role="tablist" aria-label="Open requests" className="mb-2 flex flex-wrap gap-1">
+              {ordered.map((item, index) => (
+                <button key={item.id} type="button" role="tab" aria-selected={item.id === current.id} data-dock-item={item.kind} onClick={() => setSelectedId(item.id)}
+                  className={`max-w-[12rem] truncate rounded-md px-2 py-1 text-xs ${item.id === current.id ? 'bg-fw-accent-surface text-fw-accent dark:bg-fw-accent-surface-strong/30' : 'text-fw-text-muted hover:bg-fw-hover'}`}
+                  title={dockItemTitle(item)}>
+                  {isWaiting(item) ? '● ' : ''}{index + 1}. {item.kind === 'approval' ? approvalToolLabel(item.record.tool) : dockItemTitle(item)}
                 </button>
               ))}
             </div>
           )}
-          {!currentWaiting && <div className="mb-1 text-xs text-fw-text-muted">The agent keeps working while this is open.</div>}
-          <QuestionAnswerForm key={current.id} record={current} compact={isMobile} focusToken={current.id === request?.questionId ? focusToken : 0} onSubmit={body => questions.submit(current.id, body)} />
+          {current.kind === 'approval' ? (
+            <ApprovalDecisionForm key={current.id} record={current.record} sessionId={questions.sessionId} focusToken={current.id === request?.questionId ? focusToken : 0} onDecide={body => questions.decide(current.id, body)} />
+          ) : (
+            <>
+              {!isWaiting(current) && <div className="mb-1 text-xs text-fw-text-muted">The agent keeps working while this is open.</div>}
+              <QuestionAnswerForm key={current.id} record={current.record} compact={isMobile} focusToken={current.id === request?.questionId ? focusToken : 0} onSubmit={body => questions.submit(current.id, body)} />
+            </>
+          )}
         </div>
       )}
     </div>
