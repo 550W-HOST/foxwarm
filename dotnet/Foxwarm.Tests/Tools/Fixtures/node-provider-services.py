@@ -8,13 +8,19 @@ open and serves the node_service_* frames as NDJSON until stdin reaches EOF. Eve
 and every service frame is appended to ROOT/channel.jsonl so tests can assert launch counts.
 """
 import base64
+import fcntl
 import json
 import os
 import pathlib
+import pty
+import signal
+import struct
 import subprocess
 import sys
+import termios
 import threading
 import time
+import uuid
 
 root = pathlib.Path(sys.argv[1])
 mode = sys.argv[2] if len(sys.argv) > 2 else "normal"
@@ -184,11 +190,141 @@ def vscode_git(operation, args):
     raise ServiceError("UnsupportedOperation", "Unsupported vscode-git operation: " + operation, 400)
 
 
+class Terminal:
+    def __init__(self, cwd, cols, rows):
+        self.id = os.environ.get("FIXTURE_TERMINAL_ID_PREFIX", "t") + uuid.uuid4().hex[:6]
+        if mode == "fixed-terminal-ids":
+            self.id = "1"
+        self.cwd = cwd
+        self.cols, self.rows = cols, rows
+        self.created = int(time.time() * 1000)
+        self.backlog = ""
+        self.attached = False
+        self.closed = False
+        self.done = threading.Event()
+        pid, fd = pty.fork()
+        if pid == 0:
+            os.chdir(cwd)
+            os.environ["TERM"] = "xterm-256color"
+            os.execv("/bin/sh", ["/bin/sh", "-i"])
+        self.pid, self.fd = pid, fd
+        self.resize(cols, rows)
+        threading.Thread(target=self.read, daemon=True).start()
+        threading.Thread(target=self.wait, daemon=True).start()
+
+    def describe(self):
+        return {"id": self.id, "shell": "/bin/sh", "cwd": self.cwd, "cols": self.cols,
+                "rows": self.rows, "createdAt": self.created, "pid": self.pid}
+
+    def resize(self, cols, rows):
+        self.cols, self.rows = cols, rows
+        fcntl.ioctl(self.fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+
+    def read(self):
+        decoder = __import__("codecs").getincrementaldecoder("utf-8")("replace")
+        while True:
+            try:
+                data = os.read(self.fd, 4096)
+            except OSError:
+                break
+            if not data:
+                break
+            text = decoder.decode(data)
+            with state_lock:
+                self.backlog = (self.backlog + text)[-200000:]
+                if self.attached and not self.closed:
+                    emit({"type": "node_service_event", "service": "vscode-pty",
+                          "event": {"type": "output", "terminalId": self.id, "data": text}})
+
+    def wait(self):
+        _, status = os.waitpid(self.pid, 0)
+        time.sleep(0.2)  # let the reader publish final output before the exit event
+        with state_lock:
+            terminals.pop(self.id, None)
+            if not self.closed:
+                event = {"type": "exit", "terminalId": self.id,
+                         "exitCode": os.waitstatus_to_exitcode(status) if os.WIFEXITED(status) else 0,
+                         "signal": os.WTERMSIG(status) if os.WIFSIGNALED(status) else 0}
+                emit({"type": "node_service_event", "service": "vscode-pty", "event": event})
+            self.closed = True
+        try:
+            os.close(self.fd)
+        except OSError:
+            pass
+        self.done.set()
+
+    def close(self):
+        with state_lock:
+            self.closed = True
+        for sig in (signal.SIGHUP, signal.SIGKILL):
+            try:
+                os.kill(self.pid, sig)
+            except ProcessLookupError:
+                break
+            if self.done.wait(1):
+                break
+        self.done.wait(2)
+
+
+terminals = {}
+state_lock = threading.RLock()
+
+
+def terminal(args):
+    found = terminals.get(str(args.get("terminalId", "")).strip())
+    if found is None:
+        raise ServiceError("Unknown", "Terminal not found: " + str(args.get("terminalId")), 404)
+    return found
+
+
+def vscode_pty(operation, args):
+    if operation == "create":
+        cwd = args.get("cwd")
+        if not isinstance(cwd, str) or not os.path.isdir(cwd):
+            raise ServiceError("Unknown", "Directory does not exist: " + str(cwd), 400)
+        record = Terminal(cwd, max(20, int(args.get("cols", 100))), max(5, int(args.get("rows", 30))))
+        with state_lock:
+            terminals[record.id] = record
+        return {"terminal": record.describe()}
+    if operation == "list":
+        with state_lock:
+            return {"terminals": [t.describe() for t in sorted(terminals.values(), key=lambda t: -t.created)]}
+    if operation == "get":
+        with state_lock:
+            found = terminals.get(str(args.get("terminalId", "")))
+            return {"terminal": found.describe() if found else None}
+    if operation == "attach":
+        with state_lock:
+            record = terminal(args)
+            record.attached = True
+            return {"terminal": record.describe(), "backlog": record.backlog}
+    if operation == "detach":
+        with state_lock:
+            terminal(args).attached = False
+        return {"success": True}
+    if operation == "input":
+        os.write(terminal(args).fd, str(args.get("data", "")).encode())
+        return {"success": True}
+    if operation == "resize":
+        terminal(args).resize(max(20, int(args["cols"])), max(5, int(args["rows"])))
+        return {"success": True}
+    if operation == "close":
+        found = terminals.get(str(args.get("terminalId", "")))
+        if found:
+            found.close()
+        return {"success": True}
+    if operation == "code-result":
+        return {"success": True}
+    raise ServiceError("UnsupportedOperation", "Unsupported vscode-pty operation: " + operation, 400)
+
+
 def serve(service, operation, args):
     if service == "vscode-fs":
         return fs(operation, args)
     if service == "vscode-git":
         return vscode_git(operation, args)
+    if service == "vscode-pty":
+        return vscode_pty(operation, args)
     raise ServiceError("Unknown", "Unsupported node service: " + service, 400)
 
 
@@ -235,6 +371,13 @@ def connect(request):
         if frame.get("operation") == "slow":
             time.sleep(0.2)
         if frame["type"] == "node_service_command":
+            try:
+                serve(frame["service"], frame["operation"], frame.get("args", {}))
+            except Exception as error:
+                emit({"type": "node_service_event", "service": frame["service"], "event": {
+                    "type": "error", "operation": frame["operation"],
+                    "terminalId": frame.get("args", {}).get("terminalId"),
+                    "error": {"code": "Unknown", "message": str(error), "statusCode": 500}}})
             continue
         try:
             result = serve(frame["service"], frame["operation"], frame.get("args", {}))

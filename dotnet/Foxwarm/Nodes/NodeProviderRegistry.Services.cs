@@ -134,6 +134,16 @@ internal sealed partial class NodeProviderRegistry : IAsyncDisposable
         return shared;
     }
 
+    /// <summary>
+    /// Populates the discovery projection once after startup so that service enumeration (for
+    /// example the terminal list) can include Provider Nodes before any Node picker request.
+    /// </summary>
+    internal async Task EnsureDiscoveredAsync(CancellationToken token)
+    {
+        if (providers.Count > 0 && discovered.IsEmpty)
+            _ = await ListAsync(token);
+    }
+
     /// <summary>Currently known Nodes advertising a service, from the discovery projection.</summary>
     internal string[] ServiceNodes(string service) =>
         native

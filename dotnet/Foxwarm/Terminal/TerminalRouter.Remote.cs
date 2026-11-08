@@ -31,18 +31,21 @@ internal sealed partial class TerminalRouter
         private bool connectionLost;
         private TerminalClient? controlOwner;
         internal string Id { get; }
+        internal string RemoteId { get; }
         internal string NodeId { get; }
 
         internal RemoteTerminal(
             TerminalRouter router,
             NodeServiceTarget target,
-            JsonObject descriptor
+            JsonObject descriptor,
+            string remoteId
         )
         {
             this.router = router;
             this.target = target;
             this.descriptor = descriptor;
             Id = descriptor["id"]!.GetValue<string>();
+            RemoteId = remoteId;
             NodeId = target.NodeId;
         }
 
@@ -104,11 +107,11 @@ internal sealed partial class TerminalRouter
                         await router.nodes.RequestServiceAsync(
                             endpoint,
                             "attach",
-                            new() { ["terminalId"] = Id },
+                            new() { ["terminalId"] = RemoteId },
                             token,
                             response =>
                             {
-                                var value = DescribeRemote(NodeId, response["terminal"]);
+                                var value = DescribeRemote(NodeId, response["terminal"], out _);
                                 if (SessionWait.Text(value["id"]) != Id)
                                     throw new CodeServiceException(
                                         "NodeServiceError",
@@ -219,7 +222,7 @@ internal sealed partial class TerminalRouter
                         }
                     );
                 if (detach)
-                    await TryCommandAsync(endpoint, "detach", new() { ["terminalId"] = Id });
+                    await TryCommandAsync(endpoint, "detach", new() { ["terminalId"] = RemoteId });
             }
             finally
             {
@@ -256,7 +259,7 @@ internal sealed partial class TerminalRouter
             return router.nodes.CommandServiceAsync(
                 endpoint,
                 "input",
-                new() { ["terminalId"] = Id, ["data"] = text },
+                new() { ["terminalId"] = RemoteId, ["data"] = text },
                 router.lifetime
             );
         }
@@ -273,7 +276,7 @@ internal sealed partial class TerminalRouter
                 "resize",
                 new()
                 {
-                    ["terminalId"] = Id,
+                    ["terminalId"] = RemoteId,
                     ["cols"] = cols,
                     ["rows"] = rows,
                 },
@@ -503,7 +506,7 @@ internal sealed partial class TerminalRouter
                 detach = attached;
             }
             if (detach)
-                await TryCommandAsync(endpoint, "detach", new() { ["terminalId"] = Id });
+                await TryCommandAsync(endpoint, "detach", new() { ["terminalId"] = RemoteId });
             await DisconnectAsync("Terminal transport closed.");
         }
     }

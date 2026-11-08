@@ -13,7 +13,7 @@ namespace Foxwarm.Tests;
 // persistent service channel, over the real administrator HTTP routes.
 public sealed class ProviderCodeServicesTests
 {
-    private sealed class Fixture : IAsyncDisposable
+    internal sealed class Fixture : IAsyncDisposable
     {
         internal readonly TempDirectory Temp = new();
         internal SessionManager Manager = null!;
@@ -24,7 +24,7 @@ public sealed class ProviderCodeServicesTests
         internal string Target => Path.Combine(Temp.Path, "target");
         internal string Work => Path.Combine(Target, "work");
 
-        internal static async Task<Fixture> Create()
+        internal static async Task<Fixture> Create(string mode = "normal")
         {
             var f = new Fixture();
             Directory.CreateDirectory(Path.Combine(f.Data, "state"));
@@ -37,7 +37,7 @@ public sealed class ProviderCodeServicesTests
                     ["vector"] = false,
                     ["nodeProviders"] = new JsonObject
                     {
-                        ["fixture"] = ProviderServiceChannelTests.Configuration(f.Target),
+                        ["fixture"] = ProviderServiceChannelTests.Configuration(f.Target, mode),
                     },
                 }.ToJsonString()
             );
@@ -63,7 +63,23 @@ public sealed class ProviderCodeServicesTests
             var port = ((IPEndPoint)socket.LocalEndpoint).Port;
             socket.Stop();
             f.Terminals = new(f.Data, CancellationToken.None);
-            f.Server = new([], port, "fixture-provider-token", null, f.Manager, f.Terminals);
+            f.Server = new(
+                [],
+                port,
+                "fixture-provider-token",
+                null,
+                f.Manager,
+                f.Terminals,
+                webUiEnabled: true
+            );
+            var runtime = new SessionRuntime(f.Manager);
+            new Foxwarm.Channels.WebUi.WebUIChannel(
+                f.Manager,
+                runtime,
+                new MessageRouter(runtime),
+                f.Terminals,
+                f.Server.Downloads
+            ).Register(f.Server.App);
             await f.Server.App.StartAsync();
             f.Client = new HttpClient
             {
