@@ -54,8 +54,15 @@ try {
   await start(); await fixture.openApp(); assert([201, 409].includes((await fixture.api('POST', '/api/agents', { agentId: 'team' })).status)); await mkdir(marks, { recursive: true })
     const launch = await create('launch'), deniedCwd = join(own, 'no-search'); await mkdir(deniedCwd); await chmod(deniedCwd, 0)
     try {
+      const launchIds = ['launch-success-one', 'launch-error', 'launch-success-two']
+      const launchSettled = snapshot => {
+        const responses = snapshot.messages.flatMap(row => row.parts || []).map(part => part.functionResponse?.tool_use_id)
+        return !snapshot.session.busy && launchIds.every(id => responses.includes(id))
+      }
+      // A new Session is idle before its accepted message starts; idle alone is not completion.
+      const initial = await history(launch); assert.equal(launchSettled(initial), false)
       const before = records.length; await send(launch, 'launch-failure', [call('launch-success-one', 'touch launch-success-one; printf success-one'), call('launch-error', 'printf forbidden', { cwd: 'no-search' }), call('launch-success-two', 'touch launch-success-two; printf success-two')])
-      await until(async () => !(await history(launch)).session.busy, 'real launch failure and successful siblings settle')
+      await until(async () => launchSettled(await history(launch)), 'real launch failure and successful siblings settle')
       assert(await exists(join(own, 'launch-success-one'))); assert(await exists(join(own, 'launch-success-two')))
       const snapshot = await history(launch); console.log(JSON.stringify({ realCwdFailureProbe: true, responseCount: snapshot.messages.flatMap(row => row.parts || []).filter(part => part.functionResponse).length, providerRequests: records.length - before, state: (await fixture.api('GET', route(launch) + '/state')).body.session }))
       assert(await pair(launch, 'launch-error'), 'ordinary launch failure must retain its own paired response')
