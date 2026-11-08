@@ -34,6 +34,7 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
         var listIds = new HashSet<string>(StringComparer.Ordinal);
         var listActive = false;
         var initializing = false;
+        var closing = false;
         var pending = new List<(JsonObject Data, SessionOwner? Owner)>();
         long queuedBytes = 0;
         string? logsId = null;
@@ -210,7 +211,10 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
         try
         {
             await Send(new JsonObject { ["type"] = "connected" });
-            while (socket.State == WebSocketState.Open && !stopped.IsCancellationRequested)
+            while (
+                socket.State is WebSocketState.Open or WebSocketState.CloseSent
+                && !stopped.IsCancellationRequested
+            )
             {
                 JsonObject? input;
                 try
@@ -220,11 +224,17 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
                 catch (Exception error)
                     when (error is FormatException or System.Text.Json.JsonException)
                 {
+                    lock (gate)
+                        if (closing)
+                            continue;
                     await ProtocolError("Invalid subscription frame.");
                     break;
                 }
                 if (input is null)
                     break;
+                lock (gate)
+                    if (closing)
+                        continue;
                 if (
                     input["type"]?.GetValue<string>() != "set-subscriptions"
                     || input["revision"] is not JsonValue revisionValue
@@ -304,6 +314,8 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
                     .ToArray();
                 lock (gate)
                 {
+                    if (closing)
+                        continue;
                     if (logsId != logRequest?.Id)
                     {
                         stopLogs?.Invoke();
@@ -479,10 +491,7 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
                         },
                         requested
                     );
-                    lock (gate)
-                        if (revision != requested)
-                            return;
-                    lifetime.Cancel();
+                    await CloseFailedInitialization(requested);
                     return;
                 }
                 var existing = semantic
@@ -627,10 +636,7 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
                     },
                     requested
                 );
-                lock (gate)
-                    if (revision != requested)
-                        return;
-                lifetime.Cancel();
+                await CloseFailedInitialization(requested);
             }
             finally
             {
@@ -670,7 +676,8 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
                     // Recheck at the same barrier that orders snapshots and actual writes.
                     lock (gate)
                         if (
-                            (expectedRevision is long expected && expected != revision)
+                            closing
+                            || (expectedRevision is long expected && expected != revision)
                             || (expectedLogsId is not null && expectedLogsId != logsId)
                         )
                             return;
@@ -692,6 +699,31 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
             {
                 if (!queued)
                     Interlocked.Add(ref queuedBytes, -bytes.Length);
+            }
+        }
+        async Task CloseFailedInitialization(long requested)
+        {
+            await sendGate.WaitAsync(lifetime.Token);
+            try
+            {
+                lock (gate)
+                {
+                    if (revision != requested || closing)
+                        return;
+                    closing = true;
+                }
+                // Do not cancel the pending receive: cancellation aborts the socket and can
+                // discard the error frame. Let the receive loop complete the close handshake.
+                if (socket.State == WebSocketState.Open)
+                    await socket.CloseOutputAsync(
+                        WebSocketCloseStatus.NormalClosure,
+                        "Subscription closed",
+                        lifetime.Token
+                    );
+            }
+            finally
+            {
+                sendGate.Release();
             }
         }
         async Task ProtocolError(string message)

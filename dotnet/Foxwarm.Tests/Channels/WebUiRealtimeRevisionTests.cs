@@ -797,6 +797,268 @@ public sealed class WebUiRealtimeRevisionTests
         Assert.Empty(manager.Owners());
     }
 
+    [Fact]
+    public async Task Failed_initialization_sends_error_before_graceful_close_and_waits_for_peer()
+    {
+        using var temp = new TempDirectory();
+        var data = Path.Combine(temp.Path, "data");
+        using (var catalog = new SessionCatalog(data))
+        {
+            catalog.Initialize();
+            catalog.Upsert([SessionCatalogTests.Row("known", 0)]);
+        }
+        var options = new ResponsesClientOptions(
+            new Uri("http://127.0.0.1:1"),
+            "wire",
+            "a",
+            "",
+            "",
+            713
+        );
+        await using var manager = new SessionManager(
+            data,
+            Path.Combine(temp.Path, "work"),
+            options,
+            HostModels.ForTest(options)
+        );
+        await manager.LoadAsync();
+        using var stopped = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var socket = new ProbeSocket { AutoReplyToClose = false };
+        var running = new WebUiRealtime(new SessionRuntime(manager)).RunAsync(
+            socket,
+            stopped.Token
+        );
+        try
+        {
+            socket.SetSubscriptions(1, "known");
+            await socket.CloseOutputStarted.Task.WaitAsync(stopped.Token);
+            Assert.Contains(
+                socket.Frames,
+                frame => frame["code"]?.ToString() == "SESSION_STATE_UNAVAILABLE"
+            );
+            Assert.False(running.IsCompleted);
+            Assert.False(socket.ReceiveCancelled);
+            socket.ReplyToClose();
+            await running.WaitAsync(stopped.Token);
+            Assert.False(socket.ReceiveCancelled);
+        }
+        finally
+        {
+            stopped.Cancel();
+            await running;
+        }
+    }
+
+    [Fact]
+    public async Task Superseded_failure_does_not_close_newer_subscription()
+    {
+        using var temp = new TempDirectory();
+        var data = Path.Combine(temp.Path, "data");
+        using (var catalog = new SessionCatalog(data))
+        {
+            catalog.Initialize();
+            await SessionCatalogMigrationTests.Authority(data, "healthy");
+            catalog.Upsert([
+                SessionCatalogTests.Row("known", 0),
+                SessionCatalogTests.Row("healthy", 0),
+            ]);
+        }
+        var options = new ResponsesClientOptions(
+            new Uri("http://127.0.0.1:1"),
+            "wire",
+            "a",
+            "",
+            "",
+            713
+        );
+        await using var manager = new SessionManager(
+            data,
+            Path.Combine(temp.Path, "work"),
+            options,
+            HostModels.ForTest(options)
+        );
+        await manager.LoadAsync();
+        var errorSending = Signal();
+        var releaseError = Signal();
+        var healthyAdmission = Signal();
+        manager.BeforeAdmissionRead = (id, _) =>
+        {
+            if (id == "healthy")
+                healthyAdmission.TrySetResult();
+            return Task.CompletedTask;
+        };
+        using var stopped = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var socket = new ProbeSocket();
+        socket.BeforeSend = async (frame, token) =>
+        {
+            if (frame["code"]?.ToString() == "SESSION_STATE_UNAVAILABLE")
+            {
+                errorSending.TrySetResult();
+                await releaseError.Task.WaitAsync(token);
+            }
+        };
+        var running = new WebUiRealtime(new SessionRuntime(manager)).RunAsync(
+            socket,
+            stopped.Token
+        );
+        try
+        {
+            socket.SetSessionUnion(1, ["known"]);
+            await errorSending.Task.WaitAsync(stopped.Token);
+            socket.SetSessionUnion(2, ["healthy"]);
+            await healthyAdmission.Task.WaitAsync(stopped.Token);
+            releaseError.TrySetResult();
+            await Until(
+                () =>
+                    socket.Frames.Any(frame =>
+                        frame["type"]?.ToString() == "subscriptions-applied"
+                        && frame["revision"]?.GetValue<long>() == 2
+                    ),
+                stopped.Token
+            );
+            Assert.False(socket.CloseOutputStarted.Task.IsCompleted);
+            Assert.Contains(
+                socket.Frames,
+                frame =>
+                    frame["type"]?.ToString() == "session-state"
+                    && frame["sessionId"]?.ToString() == "healthy"
+            );
+        }
+        finally
+        {
+            releaseError.TrySetResult();
+            stopped.Cancel();
+            await running;
+        }
+    }
+
+    [Fact]
+    public async Task Missing_authority_error_precedes_close_over_real_websockets()
+    {
+        using var temp = new TempDirectory();
+        var data = Path.Combine(temp.Path, "data");
+        var work = Path.Combine(temp.Path, "work");
+        Directory.CreateDirectory(work);
+        using (var catalog = new SessionCatalog(data))
+        {
+            catalog.Initialize();
+            catalog.Upsert([SessionCatalogTests.Row("known", 0)]);
+        }
+        var options = new ResponsesClientOptions(
+            new Uri("http://127.0.0.1:1"),
+            "wire",
+            "a",
+            "",
+            "",
+            713
+        );
+        await using var manager = new SessionManager(
+            data,
+            work,
+            options,
+            HostModels.ForTest(options)
+        );
+        await manager.LoadAsync();
+        await manager.CreateNamedAsync("main", "healthy", null, null);
+        await using var terminals = new Foxwarm.Terminal.TerminalRegistry(
+            data,
+            CancellationToken.None
+        );
+        var runtime = new SessionRuntime(manager);
+        var server = new HttpServer(
+            [],
+            0,
+            "owned-test",
+            null,
+            manager,
+            terminals,
+            webUiEnabled: true
+        );
+        new WebUIChannel(
+            manager,
+            runtime,
+            new MessageRouter(runtime),
+            terminals,
+            server.Downloads
+        ).Register(server.App);
+        await server.App.StartAsync();
+        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        try
+        {
+            var uri = new UriBuilder(server.App.Urls.Single())
+            {
+                Scheme = "ws",
+                Path = "/api/webui/stream",
+            }.Uri;
+            async Task Probe()
+            {
+                using var socket = new ClientWebSocket();
+                socket.Options.SetRequestHeader("Authorization", "Bearer owned-test");
+                await socket.ConnectAsync(uri, stop.Token);
+                async Task<JsonObject?> ReadFrame()
+                {
+                    using var stream = new MemoryStream();
+                    var buffer = new byte[4096];
+                    WebSocketReceiveResult result;
+                    do
+                    {
+                        result = await socket.ReceiveAsync(buffer, stop.Token);
+                        if (result.MessageType == WebSocketMessageType.Close)
+                            return null;
+                        stream.Write(buffer, 0, result.Count);
+                    } while (!result.EndOfMessage);
+                    return JsonNode.Parse(stream.ToArray())!.AsObject();
+                }
+                async Task Subscribe(long revision, params string[] ids)
+                {
+                    var message = new JsonObject
+                    {
+                        ["type"] = "set-subscriptions",
+                        ["revision"] = revision,
+                        ["sessionListActive"] = false,
+                        ["sessionListIds"] = new JsonArray(),
+                        ["sessionIds"] = new JsonArray(
+                            ids.Select(id => (JsonNode?)JsonValue.Create(id)).ToArray()
+                        ),
+                    };
+                    await socket.SendAsync(
+                        Encoding.UTF8.GetBytes(message.ToJsonString()),
+                        WebSocketMessageType.Text,
+                        true,
+                        stop.Token
+                    );
+                }
+                Assert.Equal("connected", (await ReadFrame())?["type"]?.ToString());
+                await Subscribe(1, "healthy");
+                JsonObject? frame;
+                do
+                {
+                    frame = await ReadFrame();
+                    Assert.NotNull(frame);
+                } while (frame["type"]?.ToString() != "subscriptions-applied");
+                await Subscribe(2, "healthy", "known");
+                var seenError = false;
+                while ((frame = await ReadFrame()) is not null)
+                {
+                    if (frame["code"]?.ToString() == "SESSION_STATE_UNAVAILABLE")
+                    {
+                        Assert.Equal(2, frame["revision"]!.GetValue<int>());
+                        seenError = true;
+                    }
+                    Assert.NotEqual("session-deleted", frame["type"]?.ToString());
+                }
+                Assert.True(seenError);
+                await socket.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "", stop.Token);
+            }
+            await Task.WhenAll(Enumerable.Range(0, 32).Select(_ => Probe()));
+        }
+        finally
+        {
+            await server.App.StopAsync();
+            await server.App.DisposeAsync();
+        }
+    }
+
     [Theory]
     [InlineData("deleted")]
     [InlineData("retired")]
@@ -1029,7 +1291,13 @@ public sealed class WebUiRealtimeRevisionTests
 
     private sealed class ProbeSocket : WebSocket
     {
-        private readonly Channel<byte[]> incoming = Channel.CreateUnbounded<byte[]>();
+        private readonly Channel<byte[]?> incoming = Channel.CreateUnbounded<byte[]?>();
+        internal bool AutoReplyToClose { get; init; } = true;
+        internal bool ReceiveCancelled { get; private set; }
+        internal TaskCompletionSource CloseOutputStarted { get; } = Signal();
+
+        internal void ReplyToClose() => incoming.Writer.TryWrite(null);
+
         private WebSocketState state = WebSocketState.Open;
         public ConcurrentQueue<JsonObject> Frames { get; } = new();
         internal Func<JsonObject, CancellationToken, Task>? BeforeSend { get; set; }
@@ -1113,14 +1381,35 @@ public sealed class WebUiRealtimeRevisionTests
             WebSocketCloseStatus status,
             string? description,
             CancellationToken token
-        ) => CloseAsync(status, description, token);
+        )
+        {
+            state = WebSocketState.CloseSent;
+            CloseOutputStarted.TrySetResult();
+            if (AutoReplyToClose)
+                ReplyToClose();
+            return Task.CompletedTask;
+        }
 
         public override async Task<WebSocketReceiveResult> ReceiveAsync(
             ArraySegment<byte> buffer,
             CancellationToken token
         )
         {
-            var bytes = await incoming.Reader.ReadAsync(token);
+            byte[]? bytes;
+            try
+            {
+                bytes = await incoming.Reader.ReadAsync(token);
+            }
+            catch (OperationCanceledException)
+            {
+                ReceiveCancelled = true;
+                throw;
+            }
+            if (bytes is null)
+            {
+                state = WebSocketState.Closed;
+                return new WebSocketReceiveResult(0, WebSocketMessageType.Close, true);
+            }
             bytes.AsSpan().CopyTo(buffer.AsSpan());
             return new WebSocketReceiveResult(bytes.Length, WebSocketMessageType.Text, true);
         }
