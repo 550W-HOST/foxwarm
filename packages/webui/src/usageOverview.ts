@@ -57,6 +57,7 @@ export const USAGE_GROUPINGS: Array<{ id: UsageGrouping; label: string }> = [
 
 export const USAGE_PURPOSE_LABELS: Record<string, string> = {
   'normal-turn': 'Conversation turns',
+  normal: 'Older conversation turns',
   'compact-plan': 'Context compaction',
   btw: 'Side questions',
   'toolscript-one-shot': 'ToolScript model calls',

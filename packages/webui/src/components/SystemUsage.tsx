@@ -170,7 +170,7 @@ export default function SystemUsage({ request, onOpenSession }: SystemUsageProps
           <section className={card} data-usage-summary="requests">
             <div className="text-[10px] text-fw-text-muted">Model requests</div>
             <strong className="mt-1 block text-2xl font-semibold tabular-nums text-fw-text-strong" data-usage-total-requests>{shown.report.total.requests.toLocaleString('en')}</strong>
-            <p className="mt-1 text-xs text-fw-text-muted">Turns, compaction, titles, side questions and setup checks.</p>
+            <p className="mt-1 text-xs text-fw-text-muted">Every model request, including compaction, titles and other background work.</p>
           </section>
         </div>
 

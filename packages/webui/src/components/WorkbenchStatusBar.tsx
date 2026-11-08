@@ -7,7 +7,7 @@ import type { Session } from './SessionListCore'
 import { NodeStatusBadge, StatusBadge, TaskStatusBadge } from './StatusBadge'
 import TokenUsageDetails, { formatUsageNumber, type TokenUsage } from './TokenUsageDetails'
 import { useLocalDay, useUsageReport } from '../useUsageReport'
-import { formatUsdCost } from '../usageCost'
+import { formatUsdCost, formatUsdCostCompact } from '../usageCost'
 import { usageQuery, usageRange, type UsagePeriod } from '../usageOverview'
 import { getSessionRuntimeStateName, isSessionRuntimeActive } from '../sessionRuntimeState'
 
@@ -178,7 +178,7 @@ export default function WorkbenchStatusBar({ running, sessions, nodes, currentSe
         {tasks && <button {...itemProps('tasks', `Tasks: ${tasks.active} active, ${tasks.open} open`)}><ClipboardList aria-hidden="true" /><span>Tasks</span><span data-status-task-counts>{tasks.active} active · {tasks.open} open</span></button>}
       </div>
       <div className="foxwarm-status-usage-group flex h-full items-center gap-0.5">
-        <button {...itemProps('total-usage', 'Total token usage')} title={`Total token usage · ${totalPeriodLabel.toLowerCase()}${totalUsage?.cost !== undefined ? ` · ${formatUsdCost(totalUsage.cost)}` : ''}`}><ChartPie aria-hidden="true" /><span>Total</span><span>{usageValue(totalUsage)}</span></button>
+        <button {...itemProps('total-usage', 'Total token usage')} title={`Total token usage · ${totalPeriodLabel.toLowerCase()}${totalUsage?.cost !== undefined ? ` · ${formatUsdCost(totalUsage.cost)}` : ''}`}><ChartPie aria-hidden="true" /><span data-status-usage-label>{totalPeriodLabel}</span><span>{totalUsage?.cost !== undefined ? formatUsdCostCompact(totalUsage.cost) : usageValue(totalUsage)}</span></button>
         {currentSessionId && <button {...itemProps('session-usage', 'Current Session token usage')}><ChartPie aria-hidden="true" /><span>Session</span><span>{usageValue(currentSession?.tokenUsage)}</span></button>}
         <button {...itemProps('nodes', `Nodes: ${onlineNodes} online, ${nodes.length} total`)}><Server aria-hidden="true" /><span>Nodes</span><span>{onlineNodes}/{nodes.length}</span></button>
       </div>

@@ -2335,7 +2335,7 @@ test('Status usage separates global totals from the focused Chat and follows foc
   try {
     const total = '[data-workbench-status-bar] button[aria-label="Total token usage"]'
     const current = '[data-workbench-status-bar] button[aria-label="Current Session token usage"]'
-    await page.waitForFunction(() => document.querySelector('[aria-label="Total token usage"]')?.textContent.includes('3.2B'))
+    await page.waitForFunction(() => document.querySelector('[aria-label="Total token usage"]')?.textContent === 'Today3.2B')
     assert.match(await page.$eval(current, element => element.textContent), /13.2K/)
     await clickReadyControl(page, total)
     await page.waitForSelector('[data-workbench-status-popup]', { visible: true })

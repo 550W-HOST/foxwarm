@@ -76,6 +76,7 @@ test('group labels name special groups and keep technical keys as detail', () =>
   assert.equal(usageGroupLabel({ key: 'main', kind: 'deleted', agent: 'main' }), 'Deleted sessions')
   assert.equal(usageGroupDetail({ key: 'main', kind: 'deleted', agent: 'main' }), 'main')
   assert.equal(usageGroupLabel({ key: 'compact-plan', kind: 'purpose' }), 'Context compaction')
+  assert.equal(usageGroupLabel({ key: 'normal', kind: 'purpose' }), 'Older conversation turns')
   assert.equal(usageGroupDetail({ key: 'compact-plan', kind: 'purpose' }), 'compact-plan')
   assert.equal(usageGroupLabel({ key: 'future-purpose', kind: 'purpose' }), 'future-purpose')
   assert.equal(usageGroupLabel({ key: 'main/x1', kind: 'tree', label: 'Release work', agent: 'main' }), 'Release work')

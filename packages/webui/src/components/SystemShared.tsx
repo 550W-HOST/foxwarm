@@ -86,18 +86,19 @@ export function UsagePie({ usage, loaded = false, global = false }: { usage?: To
   }, [position])
   return <>
     <button ref={trigger} type="button" aria-label={global ? 'Global token usage' : loaded ? 'Loaded token usage' : 'Token usage'} aria-haspopup="dialog" aria-expanded={!!position}
-      title={usage ? `${usageNumber(total)} ${loaded ? 'loaded tokens' : 'tokens'}` : 'Token usage unavailable'}
+      title={usage ? `${usageNumber(total)} ${global ? 'tokens in conversation turns of existing sessions' : loaded ? 'loaded tokens' : 'tokens'}` : 'Token usage unavailable'}
       onKeyDown={event => event.stopPropagation()}
       onClick={event => { event.stopPropagation(); const rect = event.currentTarget.getBoundingClientRect(); setPosition(position ? null : { left: Math.max(8, Math.min(rect.right - 280, window.innerWidth - 288)), top: rect.bottom + 210 < window.innerHeight ? rect.bottom + 8 : Math.max(8, rect.top - 210) }) }}
       className={`flex shrink-0 items-center rounded-lg transition-colors hover:bg-fw-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fw-focus-ring ${global ? 'gap-3 px-3 py-1.5 text-left' : 'h-8 w-8 justify-center'}`}>
       <span aria-hidden="true" className={`${global ? 'h-8 w-8' : 'h-5 w-5'} shrink-0 rounded-full ring-1 ring-inset ring-fw-border/30`} style={{ background: total ? `conic-gradient(var(--foxwarm-color-text-subtle) 0% ${cached}%, var(--foxwarm-color-accent) ${cached}% ${inputEnd}%, var(--foxwarm-color-special) ${inputEnd}% 100%)` : 'var(--foxwarm-color-border)' }} />
       {global ? <>
-        <span className="flex flex-col gap-0.5"><span className="text-[10px] font-medium tracking-wide text-fw-text-muted">Usage</span><strong className="text-lg font-semibold leading-none tabular-nums text-fw-text-strong">{usage ? usageNumber(total) : '—'}</strong></span>
+        <span className="flex flex-col gap-0.5"><span className="text-[10px] font-medium tracking-wide text-fw-text-muted">Conversation turns</span><strong className="text-lg font-semibold leading-none tabular-nums text-fw-text-strong">{usage ? usageNumber(total) : '—'}</strong></span>
         <ChevronRight aria-hidden="true" className={`ml-1 h-3.5 w-3.5 text-fw-text-muted transition-transform ${position ? '-rotate-90' : 'rotate-90'}`} />
       </> : null}
     </button>
     {position ? createPortal(<div ref={popup} role="dialog" aria-label="Token usage" onClick={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()}
       className="fixed z-[1000] w-[280px] max-w-[calc(100vw-16px)] rounded-xl border border-fw-border bg-fw-surface p-4 shadow-xl" style={position}>
+      {global ? <p className="mb-3 text-xs text-fw-text-muted" data-usage-pie-scope>Conversation turns of existing sessions. System › Usage counts every model request.</p> : null}
       <UsageDetails usage={usage} loaded={loaded} detailed />
     </div>, document.body) : null}
   </>

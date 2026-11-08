@@ -68,7 +68,7 @@ try {
 
   // The status bar Total is today's installation-wide ledger total.
   const total = '[data-workbench-status-bar] button[aria-label="Total token usage"]'
-  await page.waitForFunction(selector => /4\.5K/.test(document.querySelector(selector)?.textContent || ''), {}, total)
+  await page.waitForFunction(selector => document.querySelector(selector)?.textContent === 'Today$0.008', {}, total)
   await page.click(total)
   await page.waitForSelector('[data-workbench-status-popup]')
   const popup = await page.$eval('[data-workbench-status-popup]', element => element.textContent)

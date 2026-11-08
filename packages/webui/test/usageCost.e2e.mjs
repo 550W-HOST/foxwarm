@@ -105,7 +105,7 @@ test('Workbench Total reads the installation ledger for today or this month and 
   await mount()
   await page.evaluate(() => localStorage.removeItem('foxwarm.statusUsage.period'))
   await page.reload({ waitUntil: 'load' })
-  await page.waitForFunction(() => document.querySelector('#status [aria-label="Total token usage"]')?.textContent.includes('15'))
+  await page.waitForFunction(() => document.querySelector('#status [aria-label="Total token usage"]')?.textContent === 'Today$1.25')
   const today = await page.evaluate(() => { const now = new Date(); return [new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime(), new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime()] })
   assert.deepEqual(await page.evaluate(() => window.usageReads.at(-1)), today)
   await page.click('#status [aria-label="Total token usage"]')
@@ -131,6 +131,9 @@ test('System keeps global and loaded-window recorded estimates separate', async 
   await page.click('#architecture [aria-label="Global token usage"]')
   await page.waitForSelector('[role="dialog"][aria-label="Token usage"]')
   assert.match(await text('[role="dialog"][aria-label="Token usage"]'), /\$1\.25 USD/)
+  // The Sessions pie names its scope so it is not read as the installation total.
+  assert.match(await text('[role="dialog"][aria-label="Token usage"] [data-usage-pie-scope]'), /Conversation turns of existing sessions/)
+  assert.match(await text('#architecture [aria-label="Global token usage"]'), /Conversation turns/)
   await page.keyboard.press('Escape')
   await page.click('#architecture [data-system-tab="agents"]')
   await page.waitForSelector('#architecture [data-architecture-agent-id="main"] [aria-label="Loaded token usage"]')
