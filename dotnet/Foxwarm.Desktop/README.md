@@ -1,5 +1,7 @@
 # Foxwarm Desktop for Windows
 
+The separate [macOS AppKit host](../Foxwarm.Desktop.Mac/README.md) has source-build instructions and platform qualification notes. It has no macOS Desktop release package or release-pipeline target.
+
 ## Install and run
 
 This is an unsigned **Windows x64** desktop app. The release package includes the

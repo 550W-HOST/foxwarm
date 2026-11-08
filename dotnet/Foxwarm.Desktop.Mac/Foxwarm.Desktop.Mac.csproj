@@ -1,0 +1,49 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0-macos</TargetFramework>
+    <AssemblyName>Foxwarm.Desktop</AssemblyName>
+    <OutputType>Exe</OutputType>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <SupportedOSPlatformVersion>14.0</SupportedOSPlatformVersion>
+    <RuntimeIdentifier>osx-arm64</RuntimeIdentifier>
+    <TargetLatestRuntimePatch>true</TargetLatestRuntimePatch>
+    <ApplicationTitle>Foxwarm</ApplicationTitle>
+    <ApplicationDisplayVersion>$(Version)</ApplicationDisplayVersion>
+    <ApplicationVersion>1</ApplicationVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <BundleResource Include="Foxwarm.icns" />
+    <BundleResource
+      Include="../../packages/webui/public/favicon.LICENSE.txt"
+      LogicalName="Foxwarm-icon-LICENSE.txt"
+    />
+    <ProjectReference
+      Include="../Foxwarm/Foxwarm.csproj"
+      AdditionalProperties="FoxwarmConsoleEntry=false;ArtifactTargetRid=$(RuntimeIdentifier)"
+    />
+  </ItemGroup>
+  <!-- Keep Main's resource-relative paths beneath AppContext.BaseDirectory. The
+       Apple SDK cannot infer locations for Content inherited through project references. -->
+  <Target Name="PrepareMacBundleResources" BeforeTargets="_ComputePublishLocation">
+    <ItemGroup>
+      <ResolvedFileToPublish
+        Remove="@(ResolvedFileToPublish)"
+        Condition="'%(ResolvedFileToPublish.RelativePath)' == 'Foxwarm.runtimeconfig.json'"
+      />
+    </ItemGroup>
+    <RemoveDuplicates Inputs="@(ResolvedFileToPublish)">
+      <Output TaskParameter="Filtered" ItemName="_MacPublishFiles" />
+    </RemoveDuplicates>
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)" />
+      <ResolvedFileToPublish Include="@(_MacPublishFiles)" />
+      <ResolvedFileToPublish
+        Update="@(ResolvedFileToPublish)"
+        Condition="'%(ResolvedFileToPublish.MSBuildSourceProjectFile)' != '' and '%(ResolvedFileToPublish.PublishFolderType)' == '' and '%(ResolvedFileToPublish.Extension)' != '.dylib'"
+      >
+        <PublishFolderType>Assembly</PublishFolderType>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
+</Project>
