@@ -128,17 +128,19 @@ for (const runtime of ['source', 'dotnet']) {
     assert.equal(good(state, 'programmatic').result.content, 'raw-capture'); assert.equal(good(state, 'programmatic').result.status, 'completed')
     const local = await create('temporary-target'); await fixture.api('POST', route(local) + '/cwd', { cwd: fixture.work })
     state = await turn(local, 'temporary-target', [[call('temporary', 'call_tool', { toolId: 'node:exec-cli/exec', args: { command: 'printf once >> temporary-count' } })]])
-    good(state, 'temporary'); assert.equal(state.currentNode, 'master'); assert.equal(await readFile(join(cwd, 'temporary-count'), 'utf8'), 'once'); assert.equal(execCalls(local)[0].sessionCwd, undefined)
+    good(state, 'temporary'); assert.equal(state.currentNode, 'master'); assert.equal(await readFile(join(cwd, 'agents/main/temporary-count'), 'utf8'), 'once'); assert.equal(execCalls(local)[0].sessionCwd, undefined)
     const stopped = await create('stopped'); await select(stopped)
+    assert.equal((await saved(stopped)).cwd, undefined)
     await begin(stopped, 'stopped', [[call('stopped', 'exec', { command: 'printf start > stopped-count; sleep 3; printf done >> stopped-count', timeout: 30 })]])
-    await until(() => exists(join(cwd, 'stopped-count')), 'new CLI starts before real Stop')
+    await until(() => exists(join(cwd, 'agents/main/stopped-count')), 'new CLI starts before real Stop')
     assert.equal((await fixture.api('POST', route(stopped) + (runtime === 'source' ? '/message' : '/stop'), runtime === 'source' ? { text: '/stop' } : {})).status, 200)
     await until(async () => pair(await saved(stopped), 'stopped'), 'Stop saves actual background tool result')
     state = await saved(stopped); assert.match(good(state, 'stopped').output, /not killed/)
     const stoppedRequest = execCalls(stopped)[0]
+    assert.equal(stoppedRequest.sessionCwd, undefined)
     assert(wire.some(row => row.value.type === 'tool_call_cancel' && row.value.callId === stoppedRequest.callId))
     await until(async () => (await saved(stopped)).meta.acceptedExternalEventIds?.includes('remote-exec-completion:' + stoppedRequest.backgroundExecId), 'Stop completion admitted')
-    assert.equal(await readFile(join(cwd, 'stopped-count'), 'utf8'), 'startdone')
+    assert.equal(await readFile(join(cwd, 'agents/main/stopped-count'), 'utf8'), 'startdone')
     // Fresh Agent collision reaches Main's actual exact-ID retry path before any command effect.
     assert.equal((await fixture.api('POST', '/api/agents', { agentId: 'collision' })).status, 201)
     const collision = await create('collision', 'collision'); await select(collision); injectCollision = true
@@ -146,7 +148,7 @@ for (const runtime of ['source', 'dotnet']) {
     good(state, 'collision'); assert.equal(execCalls(collision).length, 2)
     assert.notEqual(execCalls(collision)[0].backgroundExecId, execCalls(collision)[1].backgroundExecId)
     assert(wire.some(row => row.value.type === 'tool_call_error' && row.value.execStarted === false && row.value.error.code === 'PERSISTENT_EXEC_ID_COLLISION'))
-    assert.equal(await readFile(join(cwd, 'collision-count'), 'utf8'), 'once')
+    assert.equal(await readFile(join(cwd, 'agents/collision/collision-count'), 'utf8'), 'once')
     // Real wait uses Main's reserved identity; only accepted completion wakes it.
     const waited = await create('waited'); await select(waited)
     state = await turn(waited, 'waited', [[call('waited-exec', 'exec', { command: 'printf once > waited-count; sleep 2', timeout: 1 })], async () => {
@@ -163,7 +165,7 @@ for (const runtime of ['source', 'dotnet']) {
     await stop(cli); await fixture.stop(); held.delete(replayCall.backgroundExecId)
     await fixture.start(); cli = await launch()
     await until(async () => !(await tracked()).execs.some(entry => entry.id === replayCall.backgroundExecId), 'retained durable receipt ACK after Main/CLI restart')
-    assert.equal(await readFile(join(cwd, 'replay-count'), 'utf8'), 'once')
+    assert.equal(await readFile(join(cwd, 'agents/main/replay-count'), 'utf8'), 'once')
     assert.equal((await saved(replay)).meta.acceptedExternalEventIds.filter(id => id === 'remote-exec-completion:' + replayCall.backgroundExecId).length, 1)
     console.log(JSON.stringify({ runtime, actualSourceJobsRecoveredByNewCli: originals.length, exactMainReservationsAndAck: true, stopWaitAndCwd: true, nativeToolScript: true, hostStarts: fixture.hostPids.length, cliStarts: clients.length, modelRequests: [...rounds.values()].reduce((a, b) => a + b, 0) }))
   } catch (error) { console.error(runtime, fixture.output, clients.map(client => client.output).join('\n')); throw error }
