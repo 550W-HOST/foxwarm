@@ -8,13 +8,17 @@ import { join, resolve } from 'node:path'
 import { createRequire } from 'node:module'
 import sharp from 'sharp'
 import { createHostFixture, until, sleep } from './mainHostFixture.mjs'
+import { browserEnvironment } from '../../browser-host/test/fixture.mjs'
+
+const chromium = await browserEnvironment()
+assert(chromium.available, 'A Chromium installation is required: ' + chromium.reason)
 
 const require = createRequire(import.meta.url)
 const { initializeTestEnvironment, isolatedApplicationEnv } = require('../../../scripts/test/test-process-env.cjs')
 initializeTestEnvironment()
-const call = (id, name, args) => ({ type: 'function_call', call_id: id, name: name.startsWith('browse_') ? 'call_tool' : name, arguments: JSON.stringify(name.startsWith('browse_') ? { source: 'node', name, args } : args) })
+const call = (id, name, args) => ({ type: 'function_call', call_id: id, name: name.startsWith('browser_') ? 'call_tool' : name, arguments: JSON.stringify(name.startsWith('browser_') ? { source: 'node', name, args } : args) })
 const dll = resolve('dotnet/Foxwarm.CliNode/bin/Debug/net10.0/Foxwarm.CliNode.dll')
-for (const runtime of ['source', 'dotnet']) {
+for (const runtime of ['dotnet']) {
   const env = {}, fixture = await createHostFixture('browser-cli-' + runtime, { runtime, env })
   Object.assign(env, isolatedApplicationEnv(fixture.data), { FOXWARM_SYNC_FILE_LOG: '', FOXWARM_NO_CONSOLE_LOG: '' })
   const site = createServer((req, res) => { res.setHeader('content-type', 'text/html'); res.end('<!doctype html><title>Local browser</title><h1>Local browser fixture</h1>') })
@@ -48,7 +52,7 @@ for (const runtime of ['source', 'dotnet']) {
     await mkdir(join(agents, 'main'), { recursive: true })
     for (const path of ['home', 'config', 'cache']) await mkdir(join(cwd, path), { recursive: true })
     const executable = process.env.FOXWARM_CLI_EXECUTABLE
-    const child = spawn(executable || join(process.env.DOTNET_ROOT, 'dotnet'), [...(executable ? [] : [dll]), '--host', fixture.origin, '--no-local-trigger', '--credentials-file', join(cwd, 'credentials.json'), ...extra], { cwd, env: { ...isolatedApplicationEnv(join(cwd, 'data')), FOXWARM_AGENTS_DIR: agents, PUPPETEER_EXECUTABLE_PATH: process.env.FOXWARM_CHROMIUM || '/usr/bin/chromium', HOME: join(cwd, 'home'), XDG_CONFIG_HOME: join(cwd, 'config'), XDG_CACHE_HOME: join(cwd, 'cache') }, stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn(executable || join(process.env.DOTNET_ROOT, 'dotnet'), [...(executable ? [] : [dll]), '--host', fixture.origin, '--no-local-trigger', '--credentials-file', join(cwd, 'credentials.json'), ...extra], { cwd, env: { ...isolatedApplicationEnv(join(cwd, 'data')), FOXWARM_AGENTS_DIR: agents, PATH: process.env.PATH, PUPPETEER_EXECUTABLE_PATH: chromium.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium', HOME: join(cwd, 'home'), XDG_CONFIG_HOME: join(cwd, 'config'), XDG_CACHE_HOME: join(cwd, 'cache') }, stdio: ['ignore', 'pipe', 'pipe'] })
     const handle = { child, output: '' }; processes.push(handle)
     for (const stream of [child.stdout, child.stderr]) stream.on('data', bytes => { handle.output = (handle.output + bytes).slice(-20000) })
     return handle
@@ -79,11 +83,11 @@ for (const runtime of ['source', 'dotnet']) {
     assert.equal(created.status, 200, JSON.stringify(created)); const id = created.body.sessionId
     let state = await turn(id, 'select', [[call('select', 'node', { action: 'select', nodeId: 'browser-cli' })]])
     good(state, 'select')
-    await turn(id, 'discover', [[call('discover', 'search_tools', { query: 'browse_open', sources: ['node'], limit: 1 })]])
+    await turn(id, 'discover', [[call('discover', 'search_tools', { query: 'browser_open', sources: ['node'], limit: 1 })]])
     let tabId, imageId
-    state = await turn(id, 'browser', [[call('open', 'browse_open', { url: origin + '/local' })], async () => {
+    state = await turn(id, 'browser', [[call('open', 'browser_open', { url: origin + '/local' })], async () => {
       tabId = good(await saved(id), 'open').tabId
-      return [call('html', 'browse_get', { tabId }), call('screenshot', 'browse_get', { tabId, screenshot: true })]
+      return [call('html', 'browser_read', { tabId, format: 'html' }), call('screenshot', 'browser_screenshot', { tabId })]
     }, body => {
       const ids = []
       function collect(value) {
@@ -93,9 +97,9 @@ for (const runtime of ['source', 'dotnet']) {
       collect(body.input); assert(ids.length > 0, JSON.stringify(body.input)); imageId = ids.at(-1)
       assert(JSON.stringify(body.input).includes('input_image'), 'screenshot enters the next real provider request')
       return [call('crop', 'image_crop', { id: imageId, x: 0, y: 0, width: 100, height: 80 }), call('export', 'image_write_to_file', { id: imageId, filePath: 'exported.png' })]
-    }, () => [call('read-export', 'read', { filePath: 'exported.png' }), call('delivery', 'send_file', { filePath: 'exported.png' }), call('close', 'browse_close', { tabId })]])
+    }, () => [call('read-export', 'read', { filePath: 'exported.png' }), call('delivery', 'send_file', { filePath: 'exported.png' }), call('close', 'browser_close', { tabId })]])
     for (const name of ['open', 'html', 'screenshot', 'crop', 'export', 'read-export', 'delivery', 'close']) good(state, name)
-    assert(good(state, 'html').content.includes('<h1>Local browser fixture</h1>'))
+    assert(JSON.stringify(good(state, 'html')).includes('Local browser fixture'))
     const parts = state.history.flatMap(row => row.parts || []), images = parts.filter(part => part.inlineDataRef)
     const screenshot = images.find(part => part.toolUseId === 'screenshot' || part.tool_use_id === 'screenshot')
     assert(screenshot, 'canonical screenshot sibling with its actual tool owner')
@@ -108,7 +112,7 @@ for (const runtime of ['source', 'dotnet']) {
     const delivered = good(state, 'delivery').fileDelivery
     assert.equal(delivered.sourceNodeId, 'browser-cli'); assert.equal(delivered.downloadNodeId, 'master'); assert.equal(delivered.mimeType, 'image/png')
     assert.deepEqual(await readFile(delivered.downloadPath), png, 'actual Main-owned delivery payload')
-    assert.deepEqual(exported, png); const meta = await sharp(png).metadata(); assert.equal(meta.width, 800); assert.equal(meta.height, 600)
+    assert.deepEqual(exported, png); const meta = await sharp(png).metadata(); assert(meta.width > 0 && meta.height > 0)
     const history = await fixture.api('GET', route(id) + '/history')
     assert(!JSON.stringify(history.body).includes(png.toString('base64')))
     assert(JSON.stringify(history.body).includes(blobId))

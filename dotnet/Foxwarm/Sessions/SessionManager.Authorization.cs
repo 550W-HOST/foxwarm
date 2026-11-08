@@ -191,7 +191,7 @@ internal sealed partial class SessionManager
         {
             if (toolScriptSourceRead && resolved.ExecutionNode == "master")
                 RequireFileNodeBoundary(owner, resolved.ExecutionNode);
-            else if (!IsMasterBrowser(resolved.Source, resolved.Name, resolved.ExecutionNode))
+            else
                 RequireNodeBoundary(owner, resolved.ExecutionNode);
         }
         if (
@@ -519,11 +519,6 @@ internal sealed partial class SessionManager
             );
     }
 
-    // This exception reaches generic policy and the existing exact isolated capability check.
-    // It does not grant selection, exec, file export or any other off-bound-Node authority.
-    private static bool IsMasterBrowser(string source, string name, string node) =>
-        source == "node" && node == "master" && MainBrowserDefinitions.Contains(name);
-
     internal bool ToolVisible(
         SessionOwner owner,
         string source,
@@ -571,7 +566,6 @@ internal sealed partial class SessionManager
             source == "node"
             && AgentIsolated(owner.Agent)
             && targetNode != (RecordedIsolationNode(owner.Agent) ?? "master")
-            && !IsMasterBrowser(source, name, targetNode)
         )
             return false;
         var unknownNodeTargets =

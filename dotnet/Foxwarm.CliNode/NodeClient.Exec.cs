@@ -86,8 +86,11 @@ internal sealed partial class NodeClient
         CancellationTokenSource? cancellation = null;
         if (
             Text(frame, "type") == "tool_call"
-            && Text(frame, "tool") == "exec"
             && !frame.ContainsKey("owner")
+            && (
+                Text(frame, "tool") == "exec"
+                || Text(frame, "tool")?.StartsWith("browser_", StringComparison.Ordinal) == true
+            )
         )
         {
             cancellation = new();

@@ -55,9 +55,10 @@ Use packages from the actual runtime distro:
 - optional adjacent PTY shim and a real shell for Code terminals. The Linux
   kernel must provide the existing pidfd operations, including `pidfd_open`
   (upstream Linux 5.3, subject to vendor backports);
-- optional installed Chromium plus its OS libraries for browser tools. Select
-  it with `PUPPETEER_EXECUTABLE_PATH` or `CHROME_PATH`; the CLI does not download
-  one.
+- optional installed `node` plus Chromium and its OS libraries for browser tools
+  (the host bundle `browser-host.bundle.cjs` ships beside the executable and
+  runs under that `node`). Select Chromium with `PUPPETEER_EXECUTABLE_PATH`;
+  the CLI downloads neither.
 
 For example, Ubuntu 22.04 uses `libicu70`, `libssl3`, `ca-certificates`,
 `libstdc++6`, `zlib1g` and `bash`; UBI 9 uses `libicu`, `openssl-libs`,
@@ -135,10 +136,12 @@ For PTY absence, bind only the existing executable file at
 `/native/Foxwarm.CliNode` instead of the whole artifact directory, and set
 `FOXWARM_TEST_EXPECT_PTY=0`. Do not rebuild a different executable. For a
 representative browser run, use a Debian 13 smoke image with its official
-`chromium` package and set `PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium`; allow
-2 GiB/512 PIDs for that container. This additionally checks both built-in ARIA
-selector signatures and host evaluate serialization. It does not qualify browser
-packages on the other distros.
+`chromium` package, `node` and a test-owned launcher script
+(`PUPPETEER_EXECUTABLE_PATH=/usr/local/bin/chromium-test-launcher`, because the
+restricted container cannot create Chromium's sandbox); allow 2 GiB/512 PIDs for
+that container. This additionally checks that browser tools are advertised only
+when both exist, plus refs, fill, evaluation and screenshots. It does not qualify
+browser packages on the other distros.
 
 Inspect both output ELF files with `file`, `readelf -h -l -d -V` and
 `objdump -T`. Direct ELF dependencies alone miss ICU/OpenSSL loaded on demand;
@@ -238,6 +241,7 @@ its output. Package it from a committed checkout:
 docker build --platform=linux/amd64 --progress=plain \
   -f scripts/native-aot/cli-linux-musl-x64.Dockerfile \
   --target distribution --output type=local,dest=.temp/native-publish .
+npm ci --ignore-scripts && npm run build:host   # browser host bundle packaged beside the executable
 python3 scripts/native-aot/package-cli.py \
   --publish .temp/native-publish --output .temp/native-cli-downloads \
   --source-commit "$(git rev-parse HEAD)" --source-epoch "$(git show -s --format=%ct HEAD)" \

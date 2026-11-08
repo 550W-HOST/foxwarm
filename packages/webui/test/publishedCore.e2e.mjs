@@ -53,9 +53,9 @@ const peer = createServer(async (request, response) => {
         args: { resource: join(payload, 'skills/code-index/INITIALIZATION.md') },
       }) }]
       : requests.length === 2
-      ? [{ type: 'function_call', call_id: 'packaged-browser-open', name: 'browse_open', arguments: JSON.stringify({ url: `http://127.0.0.1:${peer.address().port}/browser-fixture` }) }]
+      ? [{ type: 'function_call', call_id: 'packaged-browser-open', name: 'browser_open', arguments: JSON.stringify({ url: `http://127.0.0.1:${peer.address().port}/browser-fixture` }) }]
       : requests.length === 3
-      ? [{ type: 'function_call', call_id: 'packaged-browser-image', name: 'browse_get', arguments: JSON.stringify({ tabId: 'tab1', screenshot: true }) }]
+      ? [{ type: 'function_call', call_id: 'packaged-browser-image', name: 'browser_screenshot', arguments: JSON.stringify({ tabId: 1 }) }]
       : requests.length === 4
       ? [{ type: 'function_call', call_id: 'packaged-react-artifact', name: 'artifact', arguments: JSON.stringify({ action: 'publish', filePath: join(payload, 'skills/react-artifacts/examples/sorting.json') }) }]
       : [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'PACKAGED-NATIVE-DONE' }] }]
@@ -142,7 +142,7 @@ try {
     return JSON.stringify(qualificationHistory).includes('PACKAGED-NATIVE-DONE')
   }, 'packaged native/browser/image/artifact turn', 60_000)
   assert.equal(requests.length, 5)
-  assert.match(JSON.stringify(requests[2].input), /Tab opened: tab1/)
+  assert.match(JSON.stringify(requests[2].input), /Packaged browser/)
   assert.match(JSON.stringify(requests[3].input), /input_image/)
   const history = (await api('GET', '/api/sessions/' + encodeURIComponent(id) + '/history')).body
   const artifactIds = [...new Set(JSON.stringify(history).match(/art_[a-f0-9]{32}/g) || [])]

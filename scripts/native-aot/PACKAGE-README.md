@@ -13,9 +13,14 @@ It is not Main, a service installer or an automatic updater.
   process/cwd inspection; descriptor closure needs usable `close_range` or its
   procfs fallback. PTY requires `pidfd_open` and `pidfd_send_signal` support
   (upstream Linux 5.3 or suitable vendor backports).
-- Optional Git for Code Git operations; optional installed Chromium and its
-  own OS dependencies for browser tools. Use `PUPPETEER_EXECUTABLE_PATH` or
-  `CHROME_PATH` to select Chromium. No browser is bundled or downloaded.
+- Optional Git for Code Git operations. Browser tools additionally need an
+  installed `node` on `PATH` (the bundled `browser-host.bundle.cjs` sits beside
+  the executable and runs under it) and an installed Chromium with its own OS
+  dependencies. Chromium is found through `PUPPETEER_EXECUTABLE_PATH` or common
+  installed names; without both, the CLI does not advertise browser tools. The
+  browser keeps its own sandbox: where Chromium cannot create one (root,
+  restricted containers), select a launcher script suited to that environment
+  through `PUPPETEER_EXECUTABLE_PATH`. No browser or Node.js is bundled or downloaded.
 
 Static linkage is not a minimum-kernel or CPU-floor qualification. The bounded
 source qualification used Alpine 3.23, UBI 8 and Debian 13 userspaces on a modern

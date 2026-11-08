@@ -47,8 +47,8 @@ Linux 安装包需要 glibc 2.34 或更新版本（例如 Ubuntu 22.04、Debian 
 
 部分功能会用到的可选工具：
 
-- `PATH` 上的 **Node.js**：用于准备 Agent 在 WebUI 中展示的图表、图片和 React artifact，其他功能不需要它。
-- **Chromium 或 Chrome**：浏览器工具。
+- `PATH` 上的 **Node.js**：用于准备 Agent 在 WebUI 中展示的图表、图片和 React artifact，也用于运行 `browser_*` 工具，其他功能不需要它。
+- **Chromium 或 Chrome**：`browser_*` 工具需要它；只有 Node.js 与浏览器都已安装时，该机器才提供这些工具。可通过 `PUPPETEER_EXECUTABLE_PATH` 指定浏览器。Foxwarm 保持浏览器自身的沙箱开启；在 Chromium 无法创建沙箱的环境（以 root 运行、受限容器）中，请让 `PUPPETEER_EXECUTABLE_PATH` 指向适合该环境的启动脚本。
 - **Git**：Code 工作台的源代码管理视图。
 
 ## Linux x64 或 x64 WSL

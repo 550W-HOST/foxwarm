@@ -16,7 +16,8 @@ internal sealed record RegisteredTool(
     JsonObject Definition,
     string Source,
     bool DefaultInject,
-    Func<SessionToolExecutor, JsonObject, CancellationToken, Task<JsonNode?>> Execute
+    Func<SessionToolExecutor, JsonObject, CancellationToken, Task<JsonNode?>> Execute,
+    Func<bool>? Available = null
 );
 
 internal sealed class ToolRegistry(
@@ -53,7 +54,9 @@ internal sealed class ToolRegistry(
         );
     }
 
-    internal void RegisterBrowser(JsonObject definition)
+    // Browser tools stay out of discovery while the machine cannot run them. A direct call still
+    // reaches the host, which reports the precise reason.
+    internal void RegisterBrowser(JsonObject definition, Func<bool> available)
     {
         var name = SessionWait.Text(definition["name"])!;
         entries.Add(
@@ -62,7 +65,8 @@ internal sealed class ToolRegistry(
                 (JsonObject)definition.DeepClone(),
                 "node",
                 false,
-                (owner, args, _) => owner.Browser.Execute(name, args)
+                (owner, args, token) => owner.Browser.Execute(name, args, token),
+                available
             )
         );
     }
@@ -301,7 +305,7 @@ internal sealed class ToolRegistry(
         id == "master"
             ? new JsonArray(
                 entries
-                    .Values.Where(entry => entry.Source == "node")
+                    .Values.Where(entry => entry.Source == "node" && (entry.Available?.Invoke() ?? true))
                     .Select(entry => (JsonNode?)entry.Definition.DeepClone())
                     .ToArray()
             )

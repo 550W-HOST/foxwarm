@@ -1,0 +1,10 @@
+{
+  "name": "@foxwarm/browser-host",
+  "private": true,
+  "type": "module",
+  "description": "Managed headless Chromium host for the browser_* tools. Builds with the repository root's puppeteer-core and esbuild.",
+  "scripts": {
+    "build": "node scripts/build-bundle.js",
+    "test": "node --test test/*.test.mjs"
+  }
+}

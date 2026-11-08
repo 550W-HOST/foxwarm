@@ -8,7 +8,7 @@ Files: `dotnet/Foxwarm.CliNode/NodeStdioHost.cs`, `dotnet/Foxwarm.CliNode/Foxwar
 
 A separate .NET 10 executable implements a headless-by-default CLI Node with file tools, persistent native exec for Session and external owners, and fixed Code filesystem/read-only Git and optional native terminal services, a loopback Session-event trigger, the client Session list/history/send API and process-owned browser tools. It references the [small native primitive library](./dotnet-node-primitives.md), not the Main executable. The TypeScript CLI remains available on other platforms. [Native onboarding](./native-node-bootstrap.md) selects the qualified static Linux x64 package and published Windows x64/macOS arm64 native channels through shared Main-generated templates. Platform publication requires its own executable qualification.
 
-The implemented current model tools are `read`, `write`, `edit`, `exec`, `get_default_cwd` and the five `browse_*` tools. Capability definitions retain the corresponding TypeScript CLI descriptions and schemas. The CLI also retains the `apply_patch` wire handler/advertisement for older Main; current Main hides it from discovery. The CLI advertises `fileStream:1`, `unifiedEdit`, `programmaticToolData`, `execWaitCancellation`, `remoteExecBackgroundRegistration` and `execPlacement`. Negotiated-v3 headless connections also advertise `externalToolOwner:1`; an installed approval interceptor omits it and rejects external tools before effects. Fixed `vscode-fs:1` and `vscode-git:2` services are advertised separately. Code services are not advertised on platforms without the implemented native filesystem backend. Native `vscode-pty:1` is advertised only when its actual backend loads; missing optional PTY leaves file/Git/model/transfer services available. An explicit [native interactive entry](./dotnet-cli-interactive.md) uses the same client for approvals, bound Session history and messages. Browser tools remain unavailable to external owners. The Session client methods are an internal caller API, not a new model tool or HTTP command surface.
+The implemented current model tools are `read`, `write`, `edit`, `exec`, `get_default_cwd` and, only when its managed browser host can run (installed `node` and Chromium), the fourteen `browser_*` tools described by that host. Other capability definitions retain the corresponding TypeScript CLI descriptions and schemas. The CLI also retains the `apply_patch` wire handler/advertisement for older Main; current Main hides it from discovery. The CLI advertises `fileStream:1`, `unifiedEdit`, `programmaticToolData`, `execWaitCancellation`, `remoteExecBackgroundRegistration`, `execPlacement` and `toolCallCancellation`. Negotiated-v3 headless connections also advertise `externalToolOwner:1`; an installed approval interceptor omits it and rejects external tools before effects. Fixed `vscode-fs:1` and `vscode-git:2` services are advertised separately. Code services are not advertised on platforms without the implemented native filesystem backend. Native `vscode-pty:1` is advertised only when its actual backend loads; missing optional PTY leaves file/Git/model/transfer services available. An explicit [native interactive entry](./dotnet-cli-interactive.md) uses the same client for approvals, bound Session history and messages. Browser tools remain unavailable to external owners. The Session client methods are an internal caller API, not a new model tool or HTTP command surface.
 
 ## Stable symbols and caller paths
 
@@ -29,7 +29,7 @@ The implemented current model tools are `read`, `write`, `edit`, `exec`, `get_de
 | `NodeClient.ValidateProtocol` | Current 1–3 offer, newest compatible selection, missing legacy negotiation and rejection before credential registration effects. |
 | `MasterProxy.Resolve`, `Create`, `Safe` | Environment-only proxy selection, credentials and password-redacted presentation. |
 | `NodePaths.AgentDirectory`, `Resolve`, `ExecCwd`, `Transfer` | Startup-root Agent directories, native file/cwd expansion and lexical transfer restriction. |
-| `NodeBrowserTools.Execute`, `EnsureBrowser`, `DisposeAsync` | CLI process-owned browser/tab map, lazy executable selection, five tools/eleven actions, JS return-by-value semantics and final disposal. |
+| `NodeBrowserTools.Definitions`, `Execute`, `DisposeAsync` | Thin adapter over the [managed browser host](./browser-host.md): host-described `browser_*` definitions (empty when unavailable), cancellable dispatch and final disposal. |
 | `NodeFileTools.Execute` | CLI-native file effects and errors, image/programmatic results and success-only resolved-path sidecars. |
 | `NodeFileTransfer.Read`, `Write` | Existing whole-file base64/SHA-256 wire protocol and same-directory publication. |
 | `NodeFileStream.Read`, `Write` | Authenticated HTTP data requests, bounded streaming and same-directory temporary publication. |
@@ -66,7 +66,7 @@ Transfer paths use Agent roots rather than Session cwd, preserve caller restrict
 
 ## CLI browser and Main image boundary
 
-The [CLI browser adapter](./dotnet-cli-browser.md) owns process-local tabs, five tools/eleven actions and final browser disposal. That unit defines caller semantics, package diagnostics, Main image routing and native browser/platform qualification. Main-local semantics and the shared evaluate assembly are owned by the [Main browser unit](./dotnet-main-browser.md).
+The [managed browser host](./browser-host.md) owns the `browser_*` contract, process-local tabs, the cancellable call path (browser calls register a cancellation controller so `tool_call_cancel` reaches the host) and final disposal with the CLI. Main image routing is unchanged.
 
 ## Fixed Code services
 
@@ -104,7 +104,7 @@ Each runtime keeps twenty completed outputs in insertion order; replacing a reta
 
 ## Validation and limits
 
-The protocol registration fixture includes the six ordinary native capabilities and the five CLI-owned browser capabilities confirmed by the [browser adapter](./dotnet-cli-browser.md).
+The protocol registration fixture includes the six ordinary native capabilities and, when the host can run, the fourteen `browser_*` capabilities from the [managed browser host](./browser-host.md); a Node without `node` or Chromium advertises none.
 
 `CliNodeFileTests`, `CliNodeFileStreamTimeoutTests` and the protocol/file process fixtures cover native paths, replacement/patch ownership, transfer publication and deadlines, images/programmatic data, credentials/pairing/proxy/heartbeat and exact old-connection effects. Normal Source and C# Main fixtures exercise actual file/model/transfer/image callers and peer restarts.
 

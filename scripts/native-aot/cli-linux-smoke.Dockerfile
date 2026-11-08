@@ -19,6 +19,13 @@ RUN if command -v apt-get >/dev/null; then \
       && dnf clean all; \
     fi
 COPY --from=driver /usr/local/bin/node /test-driver/node
+# Browser-capable runs need an installed node for the browser host, and a launcher that lets
+# Chromium start inside this restricted container. Both are test environment, not product options.
+RUN if [ "$INSTALL_CHROMIUM" = 1 ]; then \
+      ln -s /test-driver/node /usr/local/bin/node \
+      && printf '#!/bin/sh\nexec /usr/bin/chromium --no-sandbox "$@"\n' > /usr/local/bin/chromium-test-launcher \
+      && chmod 755 /usr/local/bin/chromium-test-launcher; \
+    fi
 # The artifact and repository fixtures are supplied read-only at run time.
 USER 65532:65532
 WORKDIR /tmp

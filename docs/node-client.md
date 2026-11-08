@@ -155,7 +155,7 @@ Main supplies its current Node protocol generation. This is a compatibility
 channel, not an application version. The client needs no Node.js or .NET runtime.
 It includes the native PTY implementation; Bash, ordinary shell utilities,
 appropriate CA trust, writable state/temp and supported Linux kernel facilities
-remain required. Optional Git and Chromium are installed separately. See the
+remain required. Optional Git is installed separately. Browser tools additionally need an installed Node.js and Chromium (selected through `PUPPETEER_EXECUTABLE_PATH` or found by common names); without both they are not advertised. See the
 [native package prerequisites](../scripts/native-aot/PACKAGE-README.md).
 
 Other platforms retain the existing source path:
@@ -239,7 +239,7 @@ curl pipeline. Other platforms retain the JavaScript interactive client.
 Optional extras:
 
 ```bash
---auto-approve="read|browse_list|browse_get"
+--auto-approve="read|browser_tabs|browser_read"
 --timeout=60
 ```
 

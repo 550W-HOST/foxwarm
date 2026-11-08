@@ -7,13 +7,13 @@ Trusted foreground exec signals enter the shared wait and launch fence, not proc
 
 ## Purpose
 
-Provides shared file system tools, shell execution, browser automation, and utility functions used by node-side agents. These tools enable reading/writing/editing files, executing commands with background process support, browsing web pages via Puppeteer, and formatting tool responses.
+Provides shared file system tools, shell execution and utility functions used by node-side agents. These tools enable reading/writing/editing files, executing commands with background process support, and formatting tool responses.
 
 ## Key Exports
 
 - `isCoreNodeId`, `splitProviderNodeId`, `MAX_CORE_NODE_ID_LENGTH` — pure bounded native/qualified Node identity grammar shared by Core, WebUI and Code URI consumers. Native leading underscores/hyphens retain their existing contract; adapter-local identities keep their protocol-specific alphanumeric start.
 
-- `nodeTools` — aggregated object of all node tool functions (read, write, edit, apply_patch, exec, get_default_cwd, browse_*)
+- `nodeTools` — aggregated object of all node tool functions (read, write, edit, apply_patch, exec, get_default_cwd)
 - `read`, `write`, `edit`, `apply_patch`, `exec`, `get_default_cwd` — file and shell tool functions
 - `readFileToolPath`, `writeFileToolPath`, `applyPatchOperations`, `readDirectoryListing`, `findWriteParentIssue`, `formatWriteParentIssueMessage` — shared file read/write/patch core used by Main and Node wrappers
 - `detectRasterImageMimeType`, `RASTER_IMAGE_HEADER_BYTES`, `RasterImageMimeType` — pure raster-signature recognition shared by file reads and provider image acceptance; recognition does not decode or validate an image
@@ -23,8 +23,6 @@ Provides shared file system tools, shell execution, browser automation, and util
 - `FileOperations`, `nativeFileOperations`, `readWholeFile`, `fileOperationPathExists` — low-level target-local stat/ranged-read/list/write/mkdir/remove contract, native implementation, and composition helpers
 - `NodeToolContext.resolveFilePath` / async-capable `dirnameFilePath` — optional target-namespace path seam used by primitive Node providers so Core can compose canonical file tools while the provider owns its namespace parent relation
 - `NodeToolContext.externalOwner` / `externalExecManager` — disjoint authenticated CLI execution context, never an Agent fallback or fabricated Session. Its pre-reserved real ID, completion capability, cwd and foreground/background callbacks keep output in the external Node namespace.
-- `browse_open`, `browse_list`, `browse_get`, `browse_close`, `browse_interact` — browser automation tools
-- `buildBrowserScreenshotResult` — builds the current structured `inlineData` screenshot result without source-specific base64 fields
 - `CLI_NODE_CAPABILITIES` — tool schema definitions for all node tools (used for LLM tool registration)
 - `resolveNodePath`, `resolveNodeAgentDir`, `getNodeAgentDir`, `resolveNodeTransferPath` — path resolution utilities
 - `readNodeTransferFile`, `writeNodeTransferFile` — base64 file transfer helpers
@@ -70,13 +68,6 @@ Provides shared file system tools, shell execution, browser automation, and util
 | `apply_patch(args, ctx)` | file tools | Retained CLI wire handler for older Main; executes existing patch core |
 | `exec(args, ctx)` | ~160 | Tool: executes shell commands with timeout and background support |
 | `get_default_cwd(args, ctx)` | ~230 | Tool: returns the default working directory |
-| `SharedBrowserManager` (class) | ~235 | Manages Puppeteer browser tabs with open/get/close/interact |
-| `buildBrowserScreenshotResult(tab, buffer)` | after `SharedBrowserManager` | Builds the canonical screenshot tool result used on the node wire |
-| `browse_open(args)` | ~305 | Tool: opens a browser tab |
-| `browse_list()` | ~306 | Tool: lists open browser tabs |
-| `browse_get(args)` | ~307 | Tool: gets tab content or screenshot |
-| `browse_close(args)` | ~308 | Tool: closes a browser tab |
-| `browse_interact(args)` | ~309 | Tool: interacts with a browser tab |
 | `buildNodeTransferFilePayload` / `buildNodeTransferWriteResult` | nodeFileTransfer | Shared binary metadata and established SHA256 receipt construction |
 | `readPrimitiveTransferFile` / `writePrimitiveTransferFile` | nodeFileTransfer | Bounded binary reads and create/overwrite plus append transfer composition over target-owned operations |
 | `expandHomePath(filePath)` (nodeFileTransfer) | ~20 | Expands ~ to home directory |
@@ -149,10 +140,7 @@ Non-image file reads above 1 MiB must not full-read or decode their source befor
 ### D-file-read-exact-lines-and-footer
 
 [2026-09-05] Canonical text-file `read` uses physical lines delimited by LF, CRLF, or bare CR. Empty files have zero lines; each terminator closes one line without creating a virtual line after EOF; remaining nonempty EOF bytes form the final nonterminated line. Every selected line includes its original recognized terminator when present, including the final selected line, and spaces/tabs count as content. Ordinary retained text keeps existing UTF-8 decoding rather than promising arbitrary invalid-byte round trips; bounded excerpts keep their existing conversion/binary safeguards. Ordinary whole/range reads always append a metadata footer containing exact total lines and `File size: N bytes.`. If selection includes the physical final nonempty line and the file has no trailing terminator, insert one tool LF before `---` and state `File has no trailing newline.`; otherwise add no separator and use the selected final line's LF, CRLF, or bare CR. Selected empty lines keep their terminators and receive an empty-content footer note. Zero-line and reversed normalized ranges use a nonempty tool-authored notice. Large no-range reads do not scan for lines; explicit large ranges report total lines only when their existing bounded scan reaches EOF. Fractional bounds are floored and `0` remains omitted for canonical read execution.
-- `SharedBrowserManager` lazily launches a headless Puppeteer instance and manages tabs by UUID
-- Shared browser screenshots write current structured inline data. Old remote-node screenshot shapes are read only under [D-node-thread-tool-result-compatibility](../threads/node-communication.md#d-node-thread-tool-result-compatibility).
-- Shared Node `browse_get` returns page HTML when screenshot is absent/false, a viewport image for `true`, and a full-page image for the literal `full`; unlike the master browser wrapper, a string path is not a screenshot-save destination.
-- `CLI_NODE_CAPABILITIES` advertises unified `edit` plus the legacy `apply_patch` wire definition for older Main. Current Main projects only `edit` to models. Node-specific path copy and the browser screenshot distinction remain environment-owned. Tests cover schema/runtime behavior without pinning editorial wording.
+- `CLI_NODE_CAPABILITIES` advertises unified `edit` plus the legacy `apply_patch` wire definition for older Main. Current Main projects only `edit` to models. Node-specific path copy remains environment-owned. Tests cover schema/runtime behavior without pinning editorial wording.
 - Directory reads are paginated (50 items default) with navigation hints
 - File and directory read `startLine`/`endLine` values of `0` are treated as omitted, matching master-side read compatibility for optional numeric placeholders
 - Native CLI transfer functions enforce path traversal restrictions by default and retain unique temporary publication/cleanup. Primitive transfer composition instead uses bounded binary reads and 1 MiB writes (`w`/`wx` first, `a` later); a later failure leaves the ordinary partial prefix without replay or rollback. Metadata/digest receipt builders are shared with native Main/CLI wrappers. FileOperations supports binary append, and ordinary model file tools retain their existing create/replace semantics.
@@ -174,3 +162,5 @@ Non-image file reads above 1 MiB must not full-read or decode their source befor
 - `estimateTokenCount` is shared across master and node packages for context budget management
 - Re-exported from `index.ts` as the public API surface of the `shared` package
 - Master-side `src/tools/helpers.ts` imports `fileToolCore` from `packages/shared/dist/fileToolCore`, so the root build must build `packages/shared` before compiling `src`.
+
+Browser automation is not part of this package: the `browser_*` tools are owned by the [managed browser host](./browser-host.md), and the package has no browser dependency.

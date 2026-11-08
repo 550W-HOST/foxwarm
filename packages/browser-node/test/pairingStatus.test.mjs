@@ -199,7 +199,7 @@ test('completed sharing revocation cancels a targetless listing across an indepe
       data: JSON.stringify({
         type: 'tool_call',
         callId: 'listing',
-        tool: 'list_tabs',
+        tool: 'browser_tabs',
         args: {},
         sessionId: 'synthetic-session',
         agentName: 'synthetic-agent',

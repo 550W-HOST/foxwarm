@@ -51,7 +51,7 @@ test('session status action reports current identity, usage, cwd, node, compact 
         parts: [{
           functionResponse: {
             tool_use_id: 'status-image',
-            name: 'browse_get',
+            name: 'browser_screenshot',
             response: {
               inlineData: {
                 mimeType: 'image/png',

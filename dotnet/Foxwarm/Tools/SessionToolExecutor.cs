@@ -1134,8 +1134,9 @@ internal sealed partial class SessionToolExecutor(
                 handlers[name]
             );
         }
-        foreach (var definition in MainBrowserDefinitions.All().OfType<JsonObject>())
-            registry.RegisterBrowser(definition);
+        var browser = new BrowserHost(BrowserHost.DefaultBundlePath());
+        foreach (var definition in MainBrowserDefinitions.All(browser).OfType<JsonObject>())
+            registry.RegisterBrowser(definition, () => browser.Describe().Available);
         return registry;
     }
 }

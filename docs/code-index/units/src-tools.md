@@ -1,6 +1,6 @@
 # Unit: src-tools
 
-Files: src/tools.ts (facade), src/toolCallControls.ts, src/toolCallControls.test.ts, src/tools/resolvedTools.ts, src/tools/placement.ts, src/tools/helpers.ts, src/tools/fileTools.ts, src/tools/fileTools.test.ts, src/tools/memoryTools.ts, src/tools/execTools.ts, src/tools/imageTools.ts, src/tools/browserTools.ts, src/tools/mcpTools.ts, src/tools/nodeTools.ts, src/tools/vectorTools.ts, src/tools/unifiedSearch.ts, src/tools/definitions.ts, src/tools/placement.test.ts, src/tools/agentPathMetadata.test.ts, src/utils/pathResolve.test.ts, src/tools/applyPatchOutput.test.ts, src/utils/pathResolve.ts
+Files: src/tools.ts (facade), src/toolCallControls.ts, src/toolCallControls.test.ts, src/tools/resolvedTools.ts, src/tools/placement.ts, src/tools/helpers.ts, src/tools/fileTools.ts, src/tools/fileTools.test.ts, src/tools/memoryTools.ts, src/tools/execTools.ts, src/tools/imageTools.ts, src/tools/mcpTools.ts, src/tools/nodeTools.ts, src/tools/vectorTools.ts, src/tools/unifiedSearch.ts, src/tools/definitions.ts, src/tools/placement.test.ts, src/tools/agentPathMetadata.test.ts, src/utils/pathResolve.test.ts, src/tools/applyPatchOutput.test.ts, src/utils/pathResolve.ts
 Secondary files: src/tools/configTools.ts, src/tools/nodeRemove.test.ts, src/handoffConfirmationEnabled.test.ts, src/tools/unifiedTools.test.ts, src/sessionWorkerToolPlacement.test.ts
 
 ## Purpose
@@ -77,15 +77,6 @@ Implements the core tool registry and execution layer for the agent system. Defi
 | `tool_image_crop` | Crops a region from a referenced session image, including generated images |
 | `tool_image_write_to_file` | Writes a referenced session image, including generated images, to disk |
 
-### tools/browserTools.ts — Headless browser
-| Function | Description |
-|----------|-------------|
-| `tool_browse_open` | Opens a URL in headless browser |
-| `tool_browse_list` | Lists open browser tabs |
-| `tool_browse_get` | Gets content or screenshot from a tab |
-| `tool_browse_close` | Closes a browser tab |
-| `tool_browse_interact` | Interacts with a browser tab (click, type, etc.) |
-
 ### tools/mcpTools.ts — MCP server integration
 | Function | Description |
 |----------|-------------|
@@ -152,7 +143,6 @@ Implements the core tool registry and execution layer for the agent system. Defi
 - `./config` — `WORKSPACE_DIR`, `getAgentDir`, `getAgentMemoryDir`
 - `./isolatedCheck` — tool permission checks; `./utils/agentPathAccess` — the pure master-side path guard.
 - `./mcpClient` — MCP server communication
-- `./browser` — `browserManager` for headless browser tools
 - `./nodes/manager` — `nodesManager` for remote node orchestration
 - `./nodes/bootstrapInfo` — Node pairing/bootstrap utilities
 - `./execManager` — Persistent command execution lifecycle
@@ -209,7 +199,7 @@ Implements the core tool registry and execution layer for the agent system. Defi
 - Connects non-master Node capabilities through the Main-owned Node provider registry; authenticated remote execution is adapted to `nodesManager` behind that boundary.
 - Integrates with MCP servers for extensible external tool access.
 - Uses `execManager` for long-running shell processes with lifecycle tracking.
-- Browser tools delegate to `browserManager` for web automation capabilities.
+- The TypeScript runtime has no browser tools; `browser_*` is owned by the [managed browser host](./browser-host.md).
 
 ## Design Decisions
 

@@ -31,7 +31,7 @@ Options:
   --node-id=ID            Node name (default: node-<hostname>)
   --state-dir=DIR         Persistent data dir (default: ./data)
   --source-dir=DIR        Source dir for node client (default: ./foxwarm-node)
-  --auto-approve=REGEX    Auto-approve tools matching regex (e.g. "read|browse_list")
+  --auto-approve=REGEX    Auto-approve tools matching regex (e.g. "read|browser_tabs")
   --timeout=SECONDS       Auto-reject after N seconds of no input
   --help                  Show this help
 
@@ -41,7 +41,7 @@ Examples:
 
   # Auto-approve read-only tools:
   curl ... | bash -s -- --pairing=TOKEN --node-id=macbook \
-    --auto-approve="read|browse_list|browse_get"
+    --auto-approve="read|browser_tabs|browser_read"
 
   # Auto-reject after 60s of no input:
   curl ... | bash -s -- --pairing=TOKEN --node-id=macbook --timeout=60

@@ -19,10 +19,10 @@ This thread owns the authenticated remote transport contract among the master [n
 1. Main's generic Node registry resolves the exact selected Node to the authenticated remote provider after current-node/isolation permission evaluation.
 2. Master dispatch sends `tool_call` with call/session IDs.
 3. CLI node resolves shared `nodeTools` and optionally asks its TUI interceptor.
-4. Browser Node resolves its advertised short-name handlers and applies extension tab/window/site sharing.
+4. Browser Node resolves its advertised `browser_*` handlers and applies extension tab/window/site sharing.
 5. `tool_call_response` or `tool_call_error` resolves the master request. Current nodes write canonical structured image fields. The master applies the isolated old-node result reader described in [D-node-thread-tool-result-compatibility](#d-node-thread-tool-result-compatibility) only at this remote response ingress.
 
-The browser extension's short-name Node tools and shared Puppeteer `browse_*` tools are distinct surfaces; see [Browser Node](../modules/browser-node.md#d-browser-node-distinct-tools).
+The browser extension and a machine's managed headless browser expose the same `browser_*` contract, so a Node is selected by where the browser runs; see [Browser Node](../modules/browser-node.md#d-browser-node-shared-contract) and the [managed browser host](../units/browser-host.md).
 
 ## File transfer and backend services
 
@@ -110,7 +110,7 @@ Browser setup credentials are modal-owned, not persisted or placed in ordinary s
 
 ### D-node-thread-call-cancellation
 
-A Node may advertise optional `capabilities.features.toolCallCancellation: true` for ordinary non-exec calls. C# Main sends correlated `tool_call_cancel {callId}` when that dispatched call's Session cancellation or deadline ends its wait. Only that authenticated connection receives the cancel; unsupported clients retain unknown-outcome behavior. Browser Node aborts the exact call's pending Ask/queued work and discards canceled results. Already accepted page effects cannot be undone and are not retried.
+A Node may advertise optional `capabilities.features.toolCallCancellation: true` for ordinary non-exec calls. C# Main sends correlated `tool_call_cancel {callId}` when that dispatched call's Session cancellation or deadline ends its wait. Only that authenticated connection receives the cancel; unsupported clients retain unknown-outcome behavior. Browser Node aborts the exact call's pending Ask/queued work and discards canceled results; the C# CLI Node forwards the cancel to its managed browser host. Already accepted page effects cannot be undone and are not retried.
 
 This capability does not change persistent exec. Its separately negotiated `execWaitCancellation` still ends foreground waiting through the existing background-registration handshake while retaining exec reply correlation and process lifetime. No Browser-specific Core routing is introduced.
 

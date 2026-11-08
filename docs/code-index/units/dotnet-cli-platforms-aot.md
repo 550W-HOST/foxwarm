@@ -1,11 +1,11 @@
 # Unit: Windows/macOS Native AOT CLI delivery
 
 Files: `scripts/native-aot/publish-platform.py`, `scripts/native-aot/qualify-platform.py`, `.github/workflows/native-cli-platforms.yml`, `packages/webui/test/dotnetCliNodeAot.e2e.mjs`, `scripts/native-aot/tests/bootstrap-windows.test.mjs`
-Secondary/integration references: `dotnet/Foxwarm.CliNode/Foxwarm.CliNode.csproj`, `dotnet/Foxwarm.NodePrimitives/Foxwarm.NodePrimitives.csproj`, `dotnet/Foxwarm.BrowserSupport/Foxwarm.BrowserSupport.csproj`, `.github/workflows/release.yml`, `scripts/test/test-inventory.mjs`
+Secondary/integration references: `dotnet/Foxwarm.CliNode/Foxwarm.CliNode.csproj`, `dotnet/Foxwarm.NodePrimitives/Foxwarm.NodePrimitives.csproj`, `.github/workflows/release.yml`, `scripts/test/test-inventory.mjs`
 
 ## Build and delivery contract
 
-The first non-Linux targets are **win-x64** and **osx-arm64**. Their native-host jobs use Windows and Apple Silicon runners, SDK 10.0.403 and runtime/ILCompiler 10.0.14, publishing the same CLI/NodePrimitives/BrowserSupport graph as Linux. The build does not cross-compile across operating systems, build Main, change dependency versions, suppress upstream trim/AOT diagnostics or remove features. `publish-platform.py` checks host architecture and selects the exact SDK through a temporary invocation-directory `global.json` with roll-forward disabled (never a repository pin), retains the actual toolchain/package inventory and collects managed dependency notices.
+The first non-Linux targets are **win-x64** and **osx-arm64**. Their native-host jobs use Windows and Apple Silicon runners, SDK 10.0.403 and runtime/ILCompiler 10.0.14, publishing the same CLI/NodePrimitives graph as Linux. The build does not cross-compile across operating systems, build Main, change dependency versions, suppress upstream trim/AOT diagnostics or remove features. `publish-platform.py` checks host architecture and selects the exact SDK through a temporary invocation-directory `global.json` with roll-forward disabled (never a repository pin), retains the actual toolchain/package inventory and collects managed dependency notices.
 
 The [distribution unit](./native-cli-distribution.md) owns archive layout, size limits, checksums and publication. Windows uses its system PowerShell and ConPTY; macOS includes the shared PTY dylib and its architecture-matched helper. The macOS inventory checks all three native images for Homebrew/build-machine dependencies. System CA trust, writable state/temp, optional external Git and an explicitly selected installed browser remain runtime dependencies. The lane does not sign or notarize packages.
 

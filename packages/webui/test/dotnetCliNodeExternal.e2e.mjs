@@ -84,7 +84,7 @@ try {
     }
     const missing = await tool(handle, owned, 'exec', { command: 'printf no' })
     assert.equal(missing.execStarted, false); assert.match(missing.error.message, /reserved execution ID/)
-    for (const name of ['browse_open', 'browse_list', 'browse_get', 'browse_close', 'browse_interact'])
+    for (const name of ['browser_open', 'browser_tabs', 'browser_read', 'browser_close', 'browser_evaluate'])
       assert.equal((await tool(handle, owned, name, { url: 'http://127.0.0.1:9' })).type, 'tool_call_error')
     assert.equal(good(await tool(handle, owned, 'get_default_cwd')).output, handle.cwd)
     good(await tool(handle, owned, 'write', { filePath: 'text.txt', content: 'one' }, { sessionCwd: base }))

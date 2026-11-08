@@ -49,7 +49,7 @@ Use the extension popup to share a tab or an entire window with **Ask** or **Aut
 
 Page operations show Chrome's debugging banner. Pressing **Cancel** or the extension's **Stop** stops Browser Node until you deliberately Connect again. Debugger permission is broad and the extension enforces sharing; Chrome does not isolate this permission by window. Avoid editing the same tab at the same time as an Agent. The first distribution supports unpacked Chrome/Chromium, not Firefox or a browser store.
 
-Browser tools have short Node-local names such as `list_tabs`, `get_tab_content`, `fill` and `screenshot`. They control your shared logged-in tabs. The separate `browse_*` tools use a process-owned browser. You can leave a development Node selected and explicitly target Browser Node through tool discovery and `call_tool`.
+Browser Node uses the same `browser_*` tools as a machine's headless browser (`browser_tabs`, `browser_read`, `browser_fill`, `browser_screenshot` and so on). They control your shared logged-in tabs. You can leave a development Node selected and explicitly target Browser Node through tool discovery and `call_tool`.
 
 ## Select the execution Node
 

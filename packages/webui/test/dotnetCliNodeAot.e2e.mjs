@@ -1,6 +1,7 @@
 // Focused Native AOT qualification through the real executable and an owned TLS peer.
 import assert from 'node:assert/strict'
 import { createServer } from 'node:https'
+import { createServer as createHttpServer } from 'node:http'
 import { once } from 'node:events'
 import { spawn, execFileSync } from 'node:child_process'
 import { mkdir, readFile, writeFile, readlink, readdir, rm, chmod, symlink, realpath } from 'node:fs/promises'
@@ -241,23 +242,28 @@ async function optionalServices(client) {
     await waitForWindowsProcessExit(terminal.pid, 'PTY')
     evidence.ptyShellDimensionsUnicodeAndCodeHelper = true
   }
+  const registration = frames.find(row => row.socket === client.socket && row.value.type === 'node_register').value
+  const advertised = registration.capabilities.tools.map(row => row.name).filter(name => name.startsWith('browser_'))
   if (process.env.PUPPETEER_EXECUTABLE_PATH) {
-    const tab = await tool(client, 'browse_open', { url: 'data:text/html,<title>Native browser</title><button>Click</button><button>Item</button><button>Item</button>' })
-    assert.equal(tab.title, 'Native browser')
-    const interact = (action, params) => tool(client, 'browse_interact', { tabId: tab.tabId, action, params })
-    await interact('wait', { selector: 'aria/Click' })
-    await interact('wait', { selector: '::-p-aria(Item):nth-of-type(2)' })
-    const evaluated = await interact('evaluate', { code: '({unicode:"é🙂",number:1e-7})' })
-    assert.equal(evaluated.output, 'Evaluated: {"unicode":"é🙂","number":1e-7}')
-    await tool(client, 'browse_close', { tabId: tab.tabId })
-    evidence.browser = { executable: process.env.PUPPETEER_EXECUTABLE_PATH, version: execFileSync(process.env.PUPPETEER_EXECUTABLE_PATH, ['--version'], { encoding: 'utf8' }).trim(), selectorsAndEvaluate: true }
+    assert(advertised.includes('browser_open') && advertised.includes('browser_read'), 'browser tools are advertised when node and Chromium exist: ' + advertised)
+    const site = createHttpServer((request, response) => { response.setHeader('content-type', 'text/html'); response.end('<!doctype html><title>Native browser</title><button>Click</button><input aria-label="Entry">') })
+    site.listen(0, '127.0.0.1'); await once(site, 'listening')
+    try {
+      const tab = await tool(client, 'browser_open', { url: `http://127.0.0.1:${site.address().port}/` })
+      assert.equal(tab.title, 'Native browser')
+      const snapshot = await tool(client, 'browser_read', { tabId: tab.tabId })
+      const entry = snapshot.elements.find(row => row.label === 'Entry')
+      await tool(client, 'browser_fill', { tabId: tab.tabId, ref: entry.ref, text: 'é🙂' })
+      const evaluated = await tool(client, 'browser_evaluate', { tabId: tab.tabId, code: 'document.querySelector("input").value' })
+      assert.equal(evaluated.result, 'é🙂')
+      const shot = await tool(client, 'browser_screenshot', { tabId: tab.tabId })
+      assert.equal(shot.inlineData.mimeType, 'image/png')
+      await tool(client, 'browser_close', { tabId: tab.tabId })
+    } finally { await new Promise(done => site.close(done)) }
+    evidence.browser = { executable: process.env.PUPPETEER_EXECUTABLE_PATH, version: execFileSync(process.env.PUPPETEER_EXECUTABLE_PATH, ['--version'], { encoding: 'utf8' }).trim(), refsFillEvaluateScreenshot: true }
   } else {
-    evidence.browser = 'not provisioned; missing-browser failure must not affect core tools'
-    const callId = 'browser-missing-' + ++sequence
-    client.socket.send(JSON.stringify({ type: 'tool_call', callId, tool: 'browse_open', sessionId: 'main/owned', agentName: 'main', args: { url: 'about:blank' } }))
-    const reply = await until(() => frames.find(row => row.value.callId === callId)?.value, 'missing browser diagnostic')
-    assert.equal(reply.type, 'tool_call_error')
-    evidence.missingBrowserError = reply.error
+    assert.deepEqual(advertised, [], 'a Node without a browser never advertises browser tools')
+    evidence.browser = 'not provisioned; browser tools are not advertised and core tools are unaffected'
   }
 }
 try {

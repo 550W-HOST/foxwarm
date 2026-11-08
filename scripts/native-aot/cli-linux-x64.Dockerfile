@@ -13,7 +13,6 @@ COPY package.json ./
 COPY dotnet/Directory.Build.props dotnet/
 COPY dotnet/Foxwarm.CliNode/ dotnet/Foxwarm.CliNode/
 COPY dotnet/Foxwarm.NodePrimitives/ dotnet/Foxwarm.NodePrimitives/
-COPY dotnet/Foxwarm.BrowserSupport/ dotnet/Foxwarm.BrowserSupport/
 RUN dotnet --info && clang --version && gcc --version && ldd --version
 RUN dotnet publish dotnet/Foxwarm.CliNode/Foxwarm.CliNode.csproj \
     -c Release -r linux-x64 -p:PublishAot=true -p:RuntimeFrameworkVersion=10.0.14 \

@@ -307,10 +307,10 @@ try {
   const tab = await browser.newPage(); await tab.goto(`http://127.0.0.1:${peer.address().port}/owned-page`)
   const sharedWindow = await popup.evaluate(async () => (await chrome.tabs.query({ url: '*://127.0.0.1/*' }))[0].windowId)
   await popup.evaluate(windowId => chrome.runtime.sendMessage({ type: 'set_window_permission', windowId, level: 'auto' }), sharedWindow)
-  state = await turn(actor, 'browser-list', [call('browser-select', 'node', { action: 'select', nodeId: 'owned-browser' }), call('browser-list', 'list_tabs', {})])
+  state = await turn(actor, 'browser-list', [call('browser-select', 'node', { action: 'select', nodeId: 'owned-browser' }), call('browser-list', 'browser_tabs', {})])
   const ownedTab = pair(state, 'browser-list').tabs.find(tab => tab.url.endsWith('/owned-page')); assert(ownedTab)
-  state = await turn(actor, 'browser-text', [call('browser-text', 'get_tab_content', { tabId: ownedTab.tabId, format: 'text' })]); assert.match(pair(state, 'browser-text').text, /Owned external Node tab/)
-  state = await turn(actor, 'browser-image', [call('browser-image', 'screenshot', { tabId: ownedTab.tabId })])
+  state = await turn(actor, 'browser-text', [call('browser-text', 'browser_read', { tabId: ownedTab.tabId, format: 'text' })]); assert.match(pair(state, 'browser-text').text, /Owned external Node tab/)
+  state = await turn(actor, 'browser-image', [call('browser-image', 'browser_screenshot', { tabId: ownedTab.tabId })])
   const screenshotRow = state.history.find(row => row.parts?.some(part => part.functionResponse?.tool_use_id === 'browser-image'))
   const image = screenshotRow.parts.find(part => part.inlineDataRef)?.inlineDataRef
   assert(image?.blobId, JSON.stringify(screenshotRow.parts.map(part => ({ keys: Object.keys(part), inlineData: part.inlineData ? Object.keys(part.inlineData) : null }))))

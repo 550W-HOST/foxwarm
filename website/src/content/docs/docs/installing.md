@@ -49,8 +49,8 @@ Linux packages need glibc 2.34 or later (for example Ubuntu 22.04, Debian 12, RH
 
 Optional tools used by some features:
 
-- **Node.js** on `PATH` prepares chart, image and React artifacts that agents show in the WebUI. Everything else works without it.
-- **Chromium or Chrome** for the browser tool.
+- **Node.js** on `PATH` prepares chart, image and React artifacts that agents show in the WebUI, and runs the `browser_*` tools. Everything else works without it.
+- **Chromium or Chrome** for the `browser_*` tools, which are available on a machine only when both Node.js and a browser are installed. Select a browser with `PUPPETEER_EXECUTABLE_PATH`, or install one under a common name. Foxwarm keeps the browser's own sandbox on; where Chromium cannot create one (running as root, restricted containers), point `PUPPETEER_EXECUTABLE_PATH` at a launcher script suited to that environment.
 - **Git** for the Code workbench's source control view.
 
 ## Linux x64 or x64 WSL

@@ -9,7 +9,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
 });
 async function changed(predicate) {
   permissions.cancelConfirmations(predicate);
-  ws.cancelCalls((entry) => entry.tool === 'list_tabs' || predicate(entry));
+  ws.cancelCalls((entry) => entry.tool === 'browser_tabs' || predicate(entry));
   for (const tab of await chrome.tabs.query({}))
     if ((await permissions.resolvePermission(tab.id)) === 'off') await driver.detach(tab.id);
   chrome.runtime.sendMessage({ type: 'sharing_changed' }).catch(() => {});

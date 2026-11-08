@@ -9,7 +9,6 @@ COPY package.json ./
 COPY dotnet/Directory.Build.props dotnet/
 COPY dotnet/Foxwarm.CliNode/ dotnet/Foxwarm.CliNode/
 COPY dotnet/Foxwarm.NodePrimitives/ dotnet/Foxwarm.NodePrimitives/
-COPY dotnet/Foxwarm.BrowserSupport/ dotnet/Foxwarm.BrowserSupport/
 COPY scripts/native-aot/pty-native-probe.c scripts/native-aot/
 RUN dotnet --info && apk info -v && clang --version && gcc --version
 RUN gcc -std=c11 -O2 -Wall -Wextra -Werror -static -DFOXWARM_STATIC_MUSL \

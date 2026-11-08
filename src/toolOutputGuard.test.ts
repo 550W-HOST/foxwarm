@@ -287,9 +287,9 @@ test('canonical remote CLI screenshots below and above the text limit become ima
   const originalGetNode = nodesManager.getNode;
   const originalExecuteTool = nodesManager.executeTool;
   (nodesManager as any).getCurrentNode = async () => 'cli-fixture';
-  (nodesManager as any).getNode = () => ({ id: 'cli-fixture', ws: {}, tools: new Set(['browse_get']) });
+  (nodesManager as any).getNode = () => ({ id: 'cli-fixture', ws: {}, tools: new Set(['read']) });
   (nodesManager as any).executeTool = async (_nodeId: string, _toolName: string, args: Record<string, any>) => {
-    const data = args.tabId === 'large' ? largePngBase64 : TINY_PNG_BASE64;
+    const data = args.filePath === 'large' ? largePngBase64 : TINY_PNG_BASE64;
     return {
       id: args.tabId,
       url: `https://${args.tabId}.example.test/`,
@@ -309,8 +309,8 @@ test('canonical remote CLI screenshots below and above the text limit become ima
     assert.ok(TINY_PNG_BASE64.length < TOOL_OUTPUT_GUARD_CHAR_LIMIT);
     assert.ok(largePngBase64.length > TOOL_OUTPUT_GUARD_CHAR_LIMIT);
     const toolMessage = await executeTools([
-      { id: 'cli-small', name: 'browse_get', args: { tabId: 'small', screenshot: true } },
-      { id: 'cli-large', name: 'browse_get', args: { tabId: 'large', screenshot: true } },
+      { id: 'cli-small', name: 'read', args: { filePath: 'small' } },
+      { id: 'cli-large', name: 'read', args: { filePath: 'large' } },
     ], {
       sessionId,
       session,

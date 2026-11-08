@@ -24,6 +24,8 @@ COPY packages/shared ./packages/shared
 COPY packages/webui ./packages/webui
 COPY packages/cli-node ./packages/cli-node
 COPY packages/cli-node-runtime ./packages/cli-node-runtime
+COPY packages/browser-node ./packages/browser-node
+COPY packages/browser-host ./packages/browser-host
 COPY packages/vscode-web ./packages/vscode-web
 COPY LICENSE ./LICENSE
 

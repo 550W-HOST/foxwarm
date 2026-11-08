@@ -121,7 +121,8 @@ internal sealed partial class NodeClient
                             ["type"] = Authenticated ? "node_register" : "pair_request",
                             ["nodeType"] = "cli-node",
                             ["capabilities"] = Capabilities(
-                                options.ToolCallInterceptor is not null
+                                options.ToolCallInterceptor is not null,
+                                browserTools.Definitions()
                             ),
                             ["nodeProtocol"] = new JsonObject { ["min"] = 1, ["max"] = 3 },
                             ["requestedName"] = Authenticated ? null : requestedName,
@@ -383,10 +384,11 @@ internal sealed partial class NodeClient
                             cancellation?.Token ?? CancellationToken.None,
                             () => execStarted = true
                         )
-                    : Text(frame, "tool")?.StartsWith("browse_", StringComparison.Ordinal) == true
+                    : Text(frame, "tool")?.StartsWith("browser_", StringComparison.Ordinal) == true
                         ? await browserTools.Execute(
                             Text(frame, "tool")!,
-                            frame["args"] as JsonObject
+                            frame["args"] as JsonObject,
+                            cancellation?.Token ?? CancellationToken.None
                         )
                     : await tools.Execute(
                         Text(frame, "tool") ?? "",
@@ -595,7 +597,7 @@ internal sealed partial class NodeClient
 
     private static string? Text(JsonObject value, string key) => NodeFileTools.Text(value[key]);
 
-    internal static JsonObject Capabilities(bool intercepted = false)
+    internal static JsonObject Capabilities(bool intercepted = false, JsonArray? browser = null)
     {
         using var stream = typeof(NodeClient).Assembly.GetManifestResourceStream(
             "Foxwarm.CliNode.Capabilities.json"
@@ -615,6 +617,9 @@ internal sealed partial class NodeClient
             capabilities["features"]!.AsObject().Remove("remoteExecBackgroundRegistration");
             capabilities["features"]!.AsObject().Remove(ExecPlacement.Feature);
         }
+        if (browser is not null)
+            foreach (var definition in browser)
+                capabilities["tools"]!.AsArray().Add(definition?.DeepClone());
         if (
             !OperatingSystem.IsLinux()
             && !OperatingSystem.IsMacOS()

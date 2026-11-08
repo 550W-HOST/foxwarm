@@ -55,7 +55,7 @@ The governing [two-stage output policy](../modules/tools-and-permissions.md#d-to
 
 - [Unified tools](../units/tools-registry.md)
 - [Authorization](../units/tool-authorization.md)
-- [Main browser and shared evaluation](../units/dotnet-main-browser.md)
+- [Managed browser host](../units/browser-host.md)
 - [Local I/O](../units/tools-local-io.md)
 - [MCP](../units/mcp.md)
 - [Remote Node compatibility](./remote-node-compatibility.md)

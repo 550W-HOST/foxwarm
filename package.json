@@ -43,11 +43,12 @@
     "build:reference": "npm run build:node && node -e \"for (const file of ['lib/nodeClient.js','lib/nodeClient.js.map','lib/nodes/client.js','lib/nodes/client.js.map','lib/nodes/interactive-client.js','lib/nodes/interactive-client.js.map']) require('fs').rmSync(file, { force: true })\" && tsc",
     "build:core": "node scripts/build-source.js --core-only",
     "build:artifacts": "tsc -p tsconfig.artifacts.json",
-    "build:assets": "npm run build:node && npm run build:artifacts && npm --prefix packages/webui run build && npm --prefix packages/vscode-web/foxwarm-fs run build && npm --prefix packages/vscode-web/foxwarm-scm run build && npm --prefix packages/vscode-web/foxwarm-webui run build && npm --prefix packages/vscode-web/foxwarm-terminal run build",
+    "build:assets": "npm run build:node && npm run build:host && npm run build:artifacts && npm --prefix packages/webui run build && npm --prefix packages/vscode-web/foxwarm-fs run build && npm --prefix packages/vscode-web/foxwarm-scm run build && npm --prefix packages/vscode-web/foxwarm-webui run build && npm --prefix packages/vscode-web/foxwarm-terminal run build",
     "build:delivery": "node scripts/build-source.js",
     "publish:core": "npm run build:assets && dotnet publish dotnet/Foxwarm/Foxwarm.csproj -c Release --self-contained false",
     "test:reference": "node scripts/test/run-tests.mjs reference",
     "build:node": "npm --prefix packages/shared run build && npm --prefix packages/cli-node run build",
+    "build:host": "node packages/browser-host/scripts/build-bundle.js",
     "test:managed": "node scripts/test/run-tests.mjs managed",
     "test:published": "node scripts/test/run-tests.mjs published"
   },

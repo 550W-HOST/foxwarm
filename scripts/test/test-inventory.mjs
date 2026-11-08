@@ -66,7 +66,7 @@ function classify(file) {
   if (file === 'scripts/test/reference-isolation.test.mjs') return 'reference-isolation'
   if (/^packages\/shared\/src\/.*\.test\.ts$/.test(file)) return 'shared'
   if (/^packages\/cli-node\/src\/.*\.test\.ts$/.test(file)) return 'cli-node'
-  if (/^packages\/browser-node\/test\/.*\.test\.mjs$/.test(file)) return 'browser-node'
+  if (/^packages\/browser-(?:node|host)\/test\/.*\.test\.mjs$/.test(file)) return 'browser-node'
   if (/^packages\/android-node\/test_[^/]+\.py$/.test(file)) return 'python'
   if (/^docs\/code-index\/scripts\/tests\/test_[^/]+\.py$/.test(file)) return 'python'
   if (/^scripts\/.*\.test\.(?:js|mjs)$/.test(file)) return 'scripts'

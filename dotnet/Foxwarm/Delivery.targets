@@ -70,6 +70,20 @@
       CopyToPublishDirectory="PreserveNewest"
     />
     <Content
+      Include="../../packages/browser-host/dist/browser-host.bundle.cjs"
+      Condition="Exists('../../packages/browser-host/dist/browser-host.bundle.cjs')"
+      Link="packages/browser-host/dist/browser-host.bundle.cjs"
+      CopyToOutputDirectory="PreserveNewest"
+      CopyToPublishDirectory="PreserveNewest"
+    />
+    <Content
+      Include="../../packages/browser-host/dist/browser-host.bundle.cjs.LEGAL.txt"
+      Condition="Exists('../../packages/browser-host/dist/browser-host.bundle.cjs.LEGAL.txt')"
+      Link="packages/browser-host/dist/browser-host.bundle.cjs.LEGAL.txt"
+      CopyToOutputDirectory="PreserveNewest"
+      CopyToPublishDirectory="PreserveNewest"
+    />
+    <Content
       Include="../../packages/cli-node-runtime/**/*"
       Exclude="../../packages/cli-node-runtime/node_modules/**/*"
       Link="packages/cli-node-runtime/%(RecursiveDir)%(Filename)%(Extension)"
@@ -249,7 +263,7 @@
       Text="Artifact runtime for $(ArtifactTargetRid) is incomplete. Prepare the installed target-native esbuild/sharp dependencies and fixed WebUI React runtime before complete delivery."
     />
     <ItemGroup>
-      <RequiredDeliveryAsset Include="../../packages/webui/dist/index.html;../../packages/cli-node/dist/client.bundle.js;../../packages/cli-node/dist/tui.bundle.js;../../packages/shared/dist/index.js;../../lib/artifacts/managedPrepare.js;../../lib/artifacts/reactCompiler.js;../../lib/artifacts/rasterMetadata.js;../../packages/vscode-web/foxwarm-fs/dist/extension.js;../../packages/vscode-web/foxwarm-scm/dist/extension.js;../../packages/vscode-web/foxwarm-terminal/dist/extension.js;../../packages/vscode-web/foxwarm-webui/dist/extension.js" />
+      <RequiredDeliveryAsset Include="../../packages/webui/dist/index.html;../../packages/cli-node/dist/client.bundle.js;../../packages/cli-node/dist/tui.bundle.js;../../packages/browser-host/dist/browser-host.bundle.cjs;../../packages/shared/dist/index.js;../../lib/artifacts/managedPrepare.js;../../lib/artifacts/reactCompiler.js;../../lib/artifacts/rasterMetadata.js;../../packages/vscode-web/foxwarm-fs/dist/extension.js;../../packages/vscode-web/foxwarm-scm/dist/extension.js;../../packages/vscode-web/foxwarm-terminal/dist/extension.js;../../packages/vscode-web/foxwarm-webui/dist/extension.js" />
     </ItemGroup>
     <Error
       Condition="!Exists('%(RequiredDeliveryAsset.Identity)')"

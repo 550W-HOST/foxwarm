@@ -8,6 +8,8 @@ on:
       - 'scripts/native-aot/**'
       - 'packages/webui/test/dotnetCliNodeAot*.e2e.mjs'
       - '.github/workflows/native-cli-platforms.yml'
+      - 'packages/browser-host/**'
+      - 'packages/browser-node/background/**'
       - 'scripts/test/test-process-env.cjs'
       - 'package.json'
       - 'LICENSE'
@@ -51,6 +53,10 @@ jobs:
             -f scripts/native-aot/cli-linux-musl-x64.Dockerfile \
             --target distribution --output type=local,dest=.temp/native-publish . \
             2>&1 | tee .temp/native-build.log
+      - name: Build the browser host bundle
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run build:host
       - name: Package and measure the complete archive
         run: |
           python3 scripts/native-aot/package-cli.py \
@@ -85,7 +91,7 @@ jobs:
             -e FOXWARM_CLI_EXECUTABLE=/native/Foxwarm.CliNode \
             -e FOXWARM_TEST_TLS_CERT=/cert/cert.pem -e FOXWARM_TEST_TLS_KEY=/cert/key.pem \
             -e SSL_CERT_FILE=/cert/cert.pem -e SSL_CERT_DIR=/nonexistent \
-            -e FOXWARM_TEST_EXPECT_STATIC=1 -e PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium \
+            -e FOXWARM_TEST_EXPECT_STATIC=1 -e PUPPETEER_EXECUTABLE_PATH=/usr/local/bin/chromium-test-launcher \
             native-cli-smoke | tee .temp/native-cli-downloads/qualification.json
           cp .temp/native-build.log .temp/native-cli-downloads/build.log
       - name: Upload the qualified distribution and build evidence

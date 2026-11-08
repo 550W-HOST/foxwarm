@@ -43,3 +43,5 @@ __pycache__/
 # Source build staging and retained runnable outputs
 /build/
 /runtime/
+/packages/browser-host/dist
+/packages/browser-host/node_modules

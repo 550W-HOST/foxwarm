@@ -52,7 +52,7 @@ Remote background exec completion is a narrower acknowledged protocol exception.
 
 ## Tool-result and transport compatibility
 
-Current CLI/browser writers use structured image result fields; any old source-specific image shapes belong only in a read-old adapter at remote response ingress, never in generic image processing or new writers. Browser extension short-name tools and shared Puppeteer `browse_*` tools remain distinct; the extension policy/CDP contract is owned by [Browser Node](../modules/browser-node.md). The .NET transport supports both socket ping/pong liveness and the official extension's JSON ping/pong. The packaged MV3 extension path is qualified through the disposable host/browser harness.
+Current CLI/browser writers use structured image result fields; any old source-specific image shapes belong only in a read-old adapter at remote response ingress, never in generic image processing or new writers. The browser extension and the managed headless host share the `browser_*` contract owned by the [managed browser host](../units/browser-host.md); the extension policy/CDP contract is owned by [Browser Node](../modules/browser-node.md). The .NET transport supports both socket ping/pong liveness and the official extension's JSON ping/pong. The packaged MV3 extension path is qualified through the disposable host/browser harness.
 
 ## Current gaps
 

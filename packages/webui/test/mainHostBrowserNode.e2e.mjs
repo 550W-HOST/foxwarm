@@ -267,7 +267,7 @@ try {
   stage = 'Browser functional qualification';
   const redTab = local.find((tab) => tab.url.endsWith('/red')),
     blueTab = local.find((tab) => tab.url.endsWith('/blue'));
-  assert.deepEqual((await invoke('list_tabs')).tabs, []);
+  assert.deepEqual((await invoke('browser_tabs')).tabs, []);
   // Normal tab observations must never pair a private old URL/title with a later grant.
   await msg({ type: 'set_domain_permission', domain: '127.0.0.1', level: 'auto' });
   const metadataTabs = await popup.evaluate(
@@ -298,7 +298,7 @@ try {
         'complete',
       'private metadata fixture loaded',
     );
-    const listing = invoke('list_tabs');
+    const listing = invoke('browser_tabs');
     await sleep(5);
     await popup.evaluate(({ tabId, url }) => chrome.tabs.update(tabId, { url }), {
       tabId: metadataTabs.target,
@@ -347,13 +347,13 @@ try {
     ]),
     'discover',
   );
-  assert(JSON.stringify(discovered).includes('node:owned-browser/fill'));
-  let snapshot = await invoke('get_tab_content', { tabId: redTab.id });
+  assert(JSON.stringify(discovered).includes('node:owned-browser/browser_fill'));
+  let snapshot = await invoke('browser_read', { tabId: redTab.id });
   assert(snapshot.elements, JSON.stringify(snapshot));
   assert(!JSON.stringify(snapshot).includes('SYNTHETIC-SECRET'));
   for (const format of ['text', 'html'])
     assert(
-      !JSON.stringify(await invoke('get_tab_content', { tabId: redTab.id, format })).includes(
+      !JSON.stringify(await invoke('browser_read', { tabId: redTab.id, format })).includes(
         'SYNTHETIC-SECRET',
       ),
     );
@@ -367,10 +367,10 @@ try {
       }),
     );
   });
-  assert((await invoke('click', { tabId: redTab.id, ref: buttons[1].ref })).clicked);
+  assert((await invoke('browser_click', { tabId: redTab.id, ref: buttons[1].ref })).clicked);
   assert.equal(await red.evaluate(() => document.body.dataset.clicked), '1:true');
-  assert((await invoke('click', { tabId: redTab.id, selector: 'button' })).error);
-  assert((await invoke('fill', { tabId: redTab.id, selector: '#field', text: 'agent Ω' })).filled);
+  assert((await invoke('browser_click', { tabId: redTab.id, selector: 'button' })).error);
+  assert((await invoke('browser_fill', { tabId: redTab.id, selector: '#field', text: 'agent Ω' })).filled);
   assert.equal(await red.$eval('#field', (el) => el.value), 'agent Ω');
   for (const [selector, text] of [
     ['#search', 'query'],
@@ -381,11 +381,11 @@ try {
     ['#area', 'multiline'],
     ['#edit', 'editable'],
   ]) {
-    assert((await invoke('fill', { tabId: redTab.id, selector, text })).filled);
+    assert((await invoke('browser_fill', { tabId: redTab.id, selector, text })).filled);
     assert.equal(await red.$eval(selector, (el) => el.value ?? el.textContent), text);
   }
   await red.focus('#field');
-  const unsupportedDate = await invoke('fill', {
+  const unsupportedDate = await invoke('browser_fill', {
     tabId: redTab.id,
     selector: '#date',
     text: '2026-05-06',
@@ -395,28 +395,28 @@ try {
   assert.equal(await red.evaluate(() => document.activeElement.id), 'field');
 
   assert(
-    (await invoke('select_option', { tabId: redTab.id, selector: '#choice', values: ['b'] }))
+    (await invoke('browser_select', { tabId: redTab.id, selector: '#choice', values: ['b'] }))
       .selected,
   );
   assert.equal(await red.$eval('#choice', (el) => el.value), 'b');
   assert.equal(
-    (await invoke('execute_js', { tabId: redTab.id, code: 'Promise.resolve(42)' })).result,
+    (await invoke('browser_evaluate', { tabId: redTab.id, code: 'Promise.resolve(42)' })).result,
     42,
   );
-  const boundedJs = await invoke('execute_js', { tabId: redTab.id, code: '"x".repeat(120000)' });
+  const boundedJs = await invoke('browser_evaluate', { tabId: redTab.id, code: '"x".repeat(120000)' });
   assert.equal(boundedJs.outputTruncated, true);
   const boundedValue = yaml.load(await readFile(boundedJs.outputFullPath, 'utf8'));
   assert.equal(boundedValue.result.length, 100000);
   assert.equal(boundedValue.truncated, true);
   assert(
-    (await invoke('press_key', { tabId: redTab.id, selector: '#field', key: 'Backspace' })).pressed,
+    (await invoke('browser_press', { tabId: redTab.id, selector: '#field', key: 'Backspace' })).pressed,
   );
   assert(
-    (await invoke('wait_for', { tabId: redTab.id, condition: 'text', text: 'Owned /red' })).matched,
+    (await invoke('browser_wait', { tabId: redTab.id, condition: 'text', text: 'Owned /red' })).matched,
   );
   assert(
     (
-      await invoke('wait_for', {
+      await invoke('browser_wait', {
         tabId: redTab.id,
         condition: 'element',
         selector: '#missing',
@@ -429,7 +429,7 @@ try {
   const shotKey = 'image';
   const state = await turn(shotKey, [
     call(shotKey, 'call_tool', {
-      toolId: 'node:owned-browser/screenshot',
+      toolId: 'node:owned-browser/browser_screenshot',
       args: { tabId: redTab.id },
     }),
   ]);
@@ -454,27 +454,27 @@ try {
   assert.deepEqual([...pixels.data.subarray(offset, offset + 3)], [255, 0, 0]);
   assert((await popup.evaluate((id) => chrome.tabs.get(id), blueTab.id)).active);
   const shot = pair(state, shotKey);
-  assert((await invoke('click', { tabId: redTab.id, x: 1, y: 1, pageId: shot.pageId })).clicked);
+  assert((await invoke('browser_click', { tabId: redTab.id, x: 1, y: 1, pageId: shot.pageId })).clicked);
   // A fresh snapshot invalidates previous snapshot references, without selector reconstruction.
-  await invoke('get_tab_content', { tabId: redTab.id });
-  assert((await invoke('click', { tabId: redTab.id, ref: buttons[0].ref })).error);
+  await invoke('browser_read', { tabId: redTab.id });
+  assert((await invoke('browser_click', { tabId: redTab.id, ref: buttons[0].ref })).error);
   await red.reload();
-  assert((await invoke('click', { tabId: redTab.id, x: 1, y: 1, pageId: shot.pageId })).error);
+  assert((await invoke('browser_click', { tabId: redTab.id, x: 1, y: 1, pageId: shot.pageId })).error);
 
-  assert((await invoke('click', { tabId: redTab.id, selector: '#link' })).clicked);
+  assert((await invoke('browser_click', { tabId: redTab.id, selector: '#link' })).clicked);
   await until(() => red.url().endsWith('/linked'), 'selector link navigation');
-  snapshot = await invoke('get_tab_content', { tabId: redTab.id });
+  snapshot = await invoke('browser_read', { tabId: redTab.id });
   const linkRef = snapshot.elements.find((el) => el.tag === 'a' && el.label === 'Next page').ref;
-  assert((await invoke('click', { tabId: redTab.id, ref: linkRef })).clicked);
-  assert((await invoke('click', { tabId: redTab.id, ref: linkRef })).error);
-  const leaving = await invoke('click', { tabId: redTab.id, selector: '#off-link' });
+  assert((await invoke('browser_click', { tabId: redTab.id, ref: linkRef })).clicked);
+  assert((await invoke('browser_click', { tabId: redTab.id, ref: linkRef })).error);
+  const leaving = await invoke('browser_click', { tabId: redTab.id, selector: '#off-link' });
   assert(leaving.clicked, JSON.stringify(leaving));
   assert(!leaving.url && !leaving.title && !leaving.pageId);
   await until(() => red.url().includes('/off'), 'link leaving direct origin sharing');
   assert.equal((await msg({ type: 'resolve_permission', tabId: redTab.id })).level, 'off');
-  assert((await invoke('get_tab_content', { tabId: redTab.id })).error);
+  assert((await invoke('browser_read', { tabId: redTab.id })).error);
   await red.goto(origin + '/red');
-  const leavingExplicitly = await invoke('navigate', {
+  const leavingExplicitly = await invoke('browser_navigate', {
     tabId: redTab.id,
     url: origin.replace('127.0.0.1', 'localhost') + '/off',
   });
@@ -483,12 +483,12 @@ try {
   await red.goto(origin + '/red');
   await msg({ type: 'set_window_permission', windowId: redTab.windowId, level: 'auto' });
   await msg({ type: 'remove_tab_permission', tabId: redTab.id });
-  const opened = await invoke('open_tab', { windowId: redTab.windowId, url: origin + '/new' });
+  const opened = await invoke('browser_open', { windowId: redTab.windowId, url: origin + '/new' });
   assert(opened.tabId);
   assert((await popup.evaluate((id) => chrome.tabs.get(id), blueTab.id)).active);
-  assert((await invoke('list_tabs')).tabs.some((tab) => tab.tabId === opened.tabId));
+  assert((await invoke('browser_tabs')).tabs.some((tab) => tab.tabId === opened.tabId));
   await msg({ type: 'set_tab_permission', tabId: opened.tabId, level: 'off' });
-  assert(!(await invoke('list_tabs')).tabs.some((tab) => tab.tabId === opened.tabId));
+  assert(!(await invoke('browser_tabs')).tabs.some((tab) => tab.tabId === opened.tabId));
   await msg({ type: 'remove_tab_permission', tabId: opened.tabId });
   const otherWindow = await popup.evaluate(() =>
     chrome.windows.create({ url: 'about:blank', focused: false }),
@@ -504,7 +504,7 @@ try {
   });
   assert.equal((await msg({ type: 'resolve_permission', tabId: opened.tabId })).level, 'auto');
   await msg({ type: 'set_tab_permission', tabId: redTab.id, level: 'ask' });
-  let request = await ask('fill', {
+  let request = await ask('browser_fill', {
     tabId: redTab.id,
     selector: '#password',
     text: 'SECOND-SECRET',
@@ -516,7 +516,7 @@ try {
   await msg({ type: 'confirmation_response', requestId: request.entry.requestId, approved: true });
   assert(pair(await finish(request.key), request.key).filled);
   assert(!JSON.stringify(pair(await saved(), request.key)).includes('SECOND-SECRET'));
-  request = await ask('get_tab_content', { tabId: redTab.id, format: 'text' });
+  request = await ask('browser_read', { tabId: redTab.id, format: 'text' });
   await red.goto(origin.replace('127.0.0.1', 'localhost') + '/private');
   await msg({ type: 'set_domain_permission', domain: 'localhost', level: 'off' });
   assert.equal(
@@ -532,7 +532,7 @@ try {
   assert(pair(await finish(request.key), request.key).error);
   await red.goto(origin + '/red');
   await msg({ type: 'set_tab_permission', tabId: redTab.id, level: 'ask' });
-  request = await ask('click', { tabId: redTab.id, selector: 'button:nth-child(2)' });
+  request = await ask('browser_click', { tabId: redTab.id, selector: 'button:nth-child(2)' });
   await msg({ type: 'set_tab_permission', tabId: redTab.id, level: 'off' });
   assert.equal(
     (
@@ -546,7 +546,7 @@ try {
   );
   assert(pair(await finish(request.key), request.key).error);
   await msg({ type: 'set_tab_permission', tabId: redTab.id, level: 'ask' });
-  request = await ask('get_tab_content', { tabId: redTab.id });
+  request = await ask('browser_read', { tabId: redTab.id });
   await popup.evaluate(({ id, windowId }) => chrome.tabs.move(id, { windowId, index: -1 }), {
     id: redTab.id,
     windowId: otherWindow.id,
@@ -563,7 +563,7 @@ try {
   );
   assert(pair(await finish(request.key), request.key).error);
   // Stop a second Session's queued operation while the first Session owns a pending Ask.
-  const held = await ask('get_tab_content', { tabId: redTab.id });
+  const held = await ask('browser_read', { tabId: redTab.id });
   const queuedSession = (
     await fixture.api('POST', '/api/sessions', { agentId: 'main', sessionId: 'browser-queued' })
   ).body.sessionId;
@@ -572,7 +572,7 @@ try {
     'queued-call',
     [
       call('queued-call', 'call_tool', {
-        toolId: 'node:owned-browser/fill',
+        toolId: 'node:owned-browser/browser_fill',
         args: { tabId: redTab.id, selector: '#field', text: 'MUST-NOT-RUN' },
       }),
     ],
@@ -598,7 +598,7 @@ try {
   await finish(held.key);
   assert.equal(await red.$eval('#field', (el) => el.value), valueBeforeQueue);
   assert.equal((await pending()).length, 0);
-  request = await ask('get_tab_content', { tabId: redTab.id });
+  request = await ask('browser_read', { tabId: redTab.id });
   assert.equal(
     (await fixture.api('POST', '/api/sessions/' + encodeURIComponent(sessionId) + '/stop', {}))
       .status,
@@ -624,26 +624,26 @@ try {
   // Ordinary Node authorization is applied even when the explicit Browser target is not selected.
   await writeFile(
     join(fixture.work, 'deny-browser.yaml'),
-    'version: 1\nrules:\n  - id: deny-browser\n    action: deny\n    match:\n      tool: {source: node, name: list_tabs}\n      targetNode: owned-browser\n',
+    'version: 1\nrules:\n  - id: deny-browser\n    action: deny\n    match:\n      tool: {source: node, name: browser_tabs}\n      targetNode: owned-browser\n',
   );
   await turn('policy', [
     call('policy', 'set_config', { target: 'tool-rules', filePath: 'deny-browser.yaml' }),
   ]);
-  assert.equal((await invoke('list_tabs')).error.type, 'tool_authorization_denied');
+  assert.equal((await invoke('browser_tabs')).error.type, 'tool_authorization_denied');
   await writeFile(join(fixture.work, 'allow-browser.yaml'), 'version: 1\n');
   await turn('restore', [
     call('restore', 'set_config', { target: 'tool-rules', filePath: 'allow-browser.yaml' }),
   ]);
   await msg({ type: 'set_tab_permission', tabId: redTab.id, level: 'auto' });
-  const navigated = await invoke('navigate', { tabId: redTab.id, url: origin + '/navigated' });
+  const navigated = await invoke('browser_navigate', { tabId: redTab.id, url: origin + '/navigated' });
   assert(navigated.pageId, JSON.stringify(navigated));
-  assert((await invoke('scroll', { tabId: redTab.id, deltaY: 50 })).scrolled);
-  assert((await invoke('close_tab', { tabId: opened.tabId })).closed);
+  assert((await invoke('browser_scroll', { tabId: redTab.id, deltaY: 50 })).scrolled);
+  assert((await invoke('browser_close', { tabId: opened.tabId })).closed);
   if (ownedXvfb) {
     // OS keyboard input stays in the person's foreground tab during background fill.
     await blue.bringToFront();
     await blue.focus('#field');
-    await invoke('fill', { tabId: redTab.id, selector: '#field', text: 'background-agent' });
+    await invoke('browser_fill', { tabId: redTab.id, selector: '#field', text: 'background-agent' });
     execFileSync('python3', ['packages/browser-node/test/x11.py', 'key', 'a']);
     await until(
       async () => (await blue.$eval('#field', (el) => el.value)) === 'a',
@@ -651,7 +651,7 @@ try {
     );
     assert.equal(await red.$eval('#field', (el) => el.value), 'background-agent');
     await red.bringToFront();
-    await invoke('get_tab_content', { tabId: redTab.id });
+    await invoke('browser_read', { tabId: redTab.id });
     await sleep(250);
     if (process.env.FOXWARM_BROWSER_SCREENSHOT) {
       const rgb = execFileSync('python3', ['packages/browser-node/test/x11.py', 'screen'], {

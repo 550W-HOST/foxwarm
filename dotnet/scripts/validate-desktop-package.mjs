@@ -29,6 +29,7 @@ export async function validateDesktopPackage(directory) {
     'skills/code-index/SKILL.md', 'skills/code-index/INITIALIZATION.md',
     'skills/react-artifacts/examples/sorting.json',
     'packages/cli-node/dist/client.bundle.js', 'packages/cli-node/dist/tui.bundle.js',
+    'packages/browser-host/dist/browser-host.bundle.cjs', 'packages/browser-host/dist/browser-host.bundle.cjs.LEGAL.txt',
     'packages/shared/dist/index.js', 'packages/cli-node-runtime/package-lock.json',
     'lib/artifacts/managedPrepare.js', 'lib/artifacts/reactCompiler.js', 'lib/artifacts/rasterMetadata.js',
     'node_modules/esbuild/lib/main.js', 'node_modules/esbuild/LICENSE.md',
