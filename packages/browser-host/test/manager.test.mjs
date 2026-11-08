@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { BrowserManager, LAUNCH_ARGS } from '../src/manager.js';
+import { locateChromium } from '../src/chromium.js';
 import { browserEnvironment, context, startSite } from './fixture.mjs';
 
 const environment = await browserEnvironment();
@@ -248,6 +252,39 @@ describe('launch policy', () => {
       manager.execute('browser_open', { url: 'http://127.0.0.1:9/' }, context()),
       /seccomp-chromium\.json[\s\S]*PUPPETEER_EXECUTABLE_PATH/,
     );
+  });
+
+  test('a browser that exits during startup reports its own sandbox diagnostic', async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'fw-fake-chromium-'));
+    const executable = path.join(directory, 'chromium');
+    fs.writeFileSync(executable, '#!/bin/sh\necho "[1:1:FATAL:zygote_host_impl_linux.cc] No usable sandbox!" >&2\nexit 1\n', {
+      mode: 0o755,
+    });
+    const manager = new BrowserManager({
+      env: { PUPPETEER_EXECUTABLE_PATH: executable },
+      launch: async () => {
+        throw new Error('Protocol error (Target.setDiscoverTargets): Target closed');
+      },
+    });
+    await assert.rejects(
+      manager.execute('browser_open', { url: 'http://127.0.0.1:9/' }, context()),
+      /Target closed\n.*No usable sandbox![\s\S]*seccomp-chromium\.json/,
+    );
+  });
+
+  test('the installed browser explains a missing sandbox in this environment', {
+    skip: environment.wrapper ? false : 'this environment provides the Chromium sandbox',
+  }, async () => {
+    const found = locateChromium(process.env);
+    const manager = new BrowserManager({ env: { ...process.env, PUPPETEER_EXECUTABLE_PATH: found.path } });
+    try {
+      await assert.rejects(
+        manager.execute('browser_open', { url: 'http://127.0.0.1:9/' }, context()),
+        /sandbox[\s\S]*seccomp-chromium\.json/i,
+      );
+    } finally {
+      await manager.close();
+    }
   });
 
   test('a missing executable fails clearly without launching', async () => {

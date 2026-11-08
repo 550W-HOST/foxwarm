@@ -2,6 +2,7 @@
 // shared by every caller. Tool semantics follow the shared browser_* contract; element logic
 // (snapshots, refs, occlusion, native-setter fill, select, conditions) is the extension's
 // pageFunctions.js, and key input / bounded evaluation come from the shared CDP operations.
+import { execFile } from 'node:child_process';
 import crypto from 'node:crypto';
 import puppeteer from 'puppeteer-core';
 import { toolDefinitions, validateArgs } from '../../browser-node/background/contract.js';
@@ -58,6 +59,27 @@ function sandboxHint(message) {
     : message;
 }
 
+// The pipe transport reports a browser that exits during startup only as a closed target, while
+// Chromium writes the reason (such as "No usable sandbox!") to its own stderr. After a failed launch,
+// one bounded headless run of the same executable recovers that line.
+function launchDiagnostic(executablePath, env) {
+  return new Promise((resolve) => {
+    execFile(
+      executablePath,
+      ['--headless', '--dump-dom', 'about:blank'],
+      { env, timeout: 10000, maxBuffer: 1024 * 1024 },
+      (_error, _stdout, stderr) =>
+        resolve(
+          String(stderr || '')
+            .split('\n')
+            .map((line) => line.trim())
+            .find((line) => /sandbox/i.test(line))
+            ?.slice(0, 500) ?? '',
+        ),
+    );
+  });
+}
+
 const allowedFrameUrl = (url) => /^(https?:|about:blank$|chrome-error:)/i.test(url);
 
 export class BrowserManager {
@@ -100,7 +122,9 @@ export class BrowserManager {
         args: LAUNCH_ARGS,
       });
     } catch (error) {
-      throw new Error(sandboxHint(String(error?.message || error)));
+      const message = String(error?.message || error);
+      const detail = /sandbox/i.test(message) ? '' : await launchDiagnostic(found.path, this.env);
+      throw new Error(sandboxHint(detail ? message + '\n' + detail : message));
     }
     try {
       // Pages must not write files: downloads are refused instead of landing somewhere unchecked.
