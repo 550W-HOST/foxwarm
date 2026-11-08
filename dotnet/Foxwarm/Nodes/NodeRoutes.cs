@@ -25,7 +25,9 @@ internal static class NodeRoutes
                                 token
                             )
                         ),
-                        agentDefaultNode = sessions.Models.ConfigurationOwner?.AgentDefaultNode,
+                        ["agentDefaultNode"] = sessions.Models
+                            .ConfigurationOwner
+                            ?.AgentDefaultNode,
                     }
                 )
         );
