@@ -873,9 +873,20 @@ internal sealed class TaskStore : IDisposable
         for (var i = 0; i < reader.FieldCount; i++)
             row[reader.GetName(i)] = reader.IsDBNull(i)
                 ? null
-                : JsonValue.Create(reader.GetValue(i));
+                : Value(reader.GetValue(i));
         return row;
     }
+
+    // Task columns are text and integers. Build the DOM primitive from its actual type so a
+    // row clone or save never needs runtime-type serialization in a native publication.
+    private static JsonValue Value(object value) =>
+        value switch
+        {
+            string text => JsonValue.Create(text),
+            long number => JsonValue.Create(number),
+            int number => JsonValue.Create((long)number),
+            _ => JsonValue.Create(Convert.ToString(value, CultureInfo.InvariantCulture)),
+        };
 
     private JsonObject CanonicalReferences(JsonObject row)
     {

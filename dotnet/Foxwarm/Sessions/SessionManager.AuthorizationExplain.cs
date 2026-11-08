@@ -87,7 +87,7 @@ internal sealed partial class SessionManager
 
         var results = new JsonArray();
         foreach (var probe in probes.OfType<JsonObject>())
-            results.Add(await ExplainProbeAsync(caller, probe, variants, token));
+            results.Add((JsonNode?)await ExplainProbeAsync(caller, probe, variants, token));
         var output = new JsonObject
         {
             ["policy"] =
