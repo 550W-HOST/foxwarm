@@ -114,11 +114,19 @@ test('Tests and Release reuse one cache-backed Code producer and consume its per
   const packaged = codeProducer.steps.findIndex(step => step.run?.includes('package.mjs --code-only'))
   assert.ok(packaged > codeProducer.steps.indexOf(build))
   assert.ok(packaged < codeProducer.steps.indexOf(uploaded))
-  for (const job of [jobs.chromium, release.jobs.packages]) {
-    const download = job.steps.find(step => step.uses?.startsWith('actions/download-artifact@') && step.with.name === uploaded.with.name)
+  const downloads = (job, name) => job.steps.find(step => step.uses?.startsWith('actions/download-artifact@') && step.with.name === name)
+  const builtCode = job => job.steps.some(step => /build:code|prepare-browser.mjs --code-only/.test(step.run || ''))
+  // Release's server producer forwards the Code archive; Windows extracts it for Desktop.
+  const forwarded = release.jobs.packages.steps.find(step => step.uses?.startsWith('actions/upload-artifact@'))
+  assert.ok(downloads(release.jobs.packages, uploaded.with.name))
+  assert.equal(forwarded.with.path, 'dist/')
+  assert.ok(!builtCode(release.jobs.packages))
+  for (const [job, artifact] of [[jobs.chromium, uploaded.with.name], [release.jobs.windows, forwarded.with.name]]) {
+    const download = downloads(job, artifact)
     assert.ok(download)
     const extraction = job.steps.find(step => step.run?.includes('tar -xzf') && step.run.includes('foxwarm-code-'))
+    assert.ok(extraction)
     assert.ok(job.steps.indexOf(download) < job.steps.indexOf(extraction))
-    assert.ok(!job.steps.some(step => /build:code|prepare-browser.mjs --code-only/.test(step.run || '')))
+    assert.ok(!builtCode(job))
   }
 })
