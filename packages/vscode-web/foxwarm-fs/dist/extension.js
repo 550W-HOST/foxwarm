@@ -890,6 +890,8 @@ var APP_CONFIG_SCHEMA = {
                 type: "object",
                 additionalProperties: false,
                 minProperties: 1,
+                if: { required: ["webhook"] },
+                then: { maxProperties: 1 },
                 properties: {
                   webui: {
                     type: "object",
@@ -899,14 +901,56 @@ var APP_CONFIG_SCHEMA = {
                       sessions: { type: "array", minItems: 1, maxItems: 256, uniqueItems: true, items: { type: "string", minLength: 1, maxLength: 512 } }
                     }
                   },
-                  mcp: { type: "object", additionalProperties: false, maxProperties: 0 }
+                  mcp: { type: "object", additionalProperties: false, maxProperties: 0 },
+                  webhook: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["session", "verify"],
+                    allOf: [
+                      { if: { not: { properties: { verify: { const: "github" } } } }, then: { not: { required: ["events"] } } },
+                      {
+                        if: { required: ["action"], properties: { action: { const: "toolscript" } } },
+                        then: { required: ["script"], not: { required: ["wake"] } },
+                        else: { not: { required: ["script"] } }
+                      }
+                    ],
+                    properties: {
+                      session: { type: "string", minLength: 1, maxLength: 512, pattern: "^[^*]+$" },
+                      verify: {
+                        oneOf: [
+                          { type: "string", enum: ["github", "bearer"] },
+                          {
+                            type: "object",
+                            additionalProperties: false,
+                            required: ["header"],
+                            properties: { header: { type: "string", pattern: "^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,128}$" } }
+                          }
+                        ]
+                      },
+                      events: { type: "array", minItems: 1, maxItems: 64, uniqueItems: true, items: { type: "string", pattern: "^[A-Za-z0-9_.:-]{1,128}$" } },
+                      action: { type: "string", enum: ["message", "toolscript"], default: "message" },
+                      wake: { type: "boolean", default: true },
+                      script: {
+                        type: "object",
+                        additionalProperties: false,
+                        properties: {
+                          code: { type: "string", minLength: 1 },
+                          filePath: { type: "string", minLength: 1 },
+                          node: { type: "string", minLength: 1 },
+                          args: { type: "object", not: { required: ["webhook"] } },
+                          timeoutSecs: { type: "number", exclusiveMinimum: 0 }
+                        },
+                        anyOf: [{ required: ["code"] }, { required: ["filePath"] }]
+                      }
+                    }
+                  }
                 }
               }
             }
           }
         }
       },
-      description: "Startup-only shared WebUI and inbound MCP identities. Declare each surface explicitly and restart after changes."
+      description: "Shared WebUI, inbound MCP and webhook identities. Declare each surface explicitly; a webhook identity declares only the webhook surface. Saved identities apply while the HTTP server is running."
     },
     agentTree: {
       type: "object",
