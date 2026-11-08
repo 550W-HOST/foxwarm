@@ -319,7 +319,8 @@ internal sealed partial class SessionManager
                 owner,
                 (JsonObject)timer["script"]!,
                 acceptedTimer: true,
-                "Timer owner lifetime is unavailable."
+                "Timer owner lifetime is unavailable.",
+                "timer"
             );
             if (outcome is JsonObject result && result["error"] is not null)
                 Console.Error.WriteLine(
@@ -359,7 +360,8 @@ internal sealed partial class SessionManager
             await RequiredAsync(sessionId),
             script,
             acceptedTimer: false,
-            "Webhook target lifetime is unavailable."
+            "Webhook target lifetime is unavailable.",
+            "webhook"
         );
 
     // Unattended ToolScript owned by one Session, shared by ToolScript timers and webhook handlers.
@@ -367,7 +369,8 @@ internal sealed partial class SessionManager
         SessionOwner owner,
         JsonObject script,
         bool acceptedTimer,
-        string unavailable
+        string unavailable,
+        string origin
     )
     {
         using (BeginOwnerMutation(owner, acceptedTimer))
@@ -390,7 +393,8 @@ internal sealed partial class SessionManager
             owner,
             this,
             tools,
-            unattended: true
+            unattended: true,
+            unattendedOrigin: origin
         );
         return await dispatcher.ExecuteAsync(
                 new JsonObject { ["name"] = "run_script", ["args"] = script.DeepClone() },

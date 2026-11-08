@@ -132,6 +132,8 @@ test('approval decisions trim notes and outcomes name who settled them', () => {
   assert.equal(approvals.approvalWorkingDirectoryLabel({ tool: { source: 'node', name: 'exec' }, workingDirectory: '/srv/app' }), 'in /srv/app')
   assert.equal(approvals.approvalWorkingDirectoryLabel({ tool: { source: 'node', name: 'exec' } }), "in the Node's default directory")
   assert.equal(approvals.approvalWorkingDirectoryLabel({ tool: { source: 'node', name: 'write' } }), '')
+  assert.equal(approvals.approvalOriginLabel('webhook'), 'From a webhook')
+  assert.equal(approvals.approvalOriginLabel('timer'), 'From a scheduled run')
 })
 
 test('approval review text: tool identity, targets, deadline and shortened arguments', () => {

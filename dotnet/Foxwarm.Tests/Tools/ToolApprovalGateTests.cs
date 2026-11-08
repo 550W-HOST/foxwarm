@@ -405,6 +405,37 @@ public sealed class ToolApprovalGateTests
     }
 
     [Fact]
+    public async Task Webhook_handler_calls_wait_with_the_unattended_deadline_and_name_their_origin()
+    {
+        await using var f = await ScriptFixture.Create();
+        await Policy(f.Manager, AskWrite);
+        var run = f.Manager.RunWebhookScriptAsync(
+            f.Owner.Id,
+            new JsonObject
+            {
+                ["code"] =
+                    "call_tool('write', {'filePath': 'hook.txt', 'content': 'from hook'})\nreturn 'done'",
+            }
+        );
+        var pending = Assert.Single(await PendingAsync(f.Owner));
+        Assert.Equal("webhook", pending["origin"]!.GetValue<string>());
+        Assert.Equal(
+            SessionApprovals.UnattendedTimeoutSeconds,
+            pending["timeoutSeconds"]!.GetValue<long>()
+        );
+        Assert.NotNull(pending["expiresAt"]);
+        await f.Manager.DecideToolApprovalAsync(
+            f.Owner,
+            pending["id"]!.GetValue<string>(),
+            false,
+            null,
+            Administrator
+        );
+        await run.WaitAsync(TimeSpan.FromSeconds(60));
+        Assert.False(File.Exists(Path.Combine(f.Work, "hook.txt")));
+    }
+
+    [Fact]
     public async Task Pending_limit_refuses_further_requests_without_waiting()
     {
         await using var f = await ScriptFixture.Create();

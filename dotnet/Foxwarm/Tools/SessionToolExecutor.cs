@@ -8,7 +8,9 @@ internal sealed partial class SessionToolExecutor(
     SessionOwner hosted,
     SessionManager sessions,
     ToolRegistry registry,
-    bool unattended = false
+    bool unattended = false,
+    // What started an unattended dispatcher, as approval requests name it: timer or webhook.
+    string unattendedOrigin = "timer"
 ) : ITurnToolExecutor, ITurnToolControl
 {
     private int finishPending;
@@ -119,7 +121,7 @@ internal sealed partial class SessionToolExecutor(
 
     private ToolApprovalOrigin ApprovalOrigin() =>
         new(
-            unattended ? "timer"
+            unattended ? unattendedOrigin
                 : Programmatic ? "script"
                 : ClaudeRuntimeState.IsExternal(hosted.Entry.Snapshot().AuthorityEnvelope)
                     ? "runtime"

@@ -7,7 +7,7 @@ export interface ToolApprovalRecord {
   id: string
   status: ToolApprovalStatus
   createdAt?: number
-  origin?: 'turn' | 'script' | 'timer' | 'runtime'
+  origin?: 'turn' | 'script' | 'timer' | 'webhook' | 'runtime'
   tool: { source?: string; name: string; server?: string; executionNode?: string; invocationName?: string }
   summary?: string
   /** Where an exec command runs; absent when the Node uses its own default. */
@@ -138,6 +138,7 @@ export function approvalOriginLabel(origin: ToolApprovalRecord['origin']): strin
   switch (origin) {
     case 'script': return 'From a script'
     case 'timer': return 'From a scheduled run'
+    case 'webhook': return 'From a webhook'
     default: return ''
   }
 }

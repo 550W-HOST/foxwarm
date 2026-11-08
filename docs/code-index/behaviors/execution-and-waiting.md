@@ -111,7 +111,7 @@ A terminal handoff can also end a turn, with or without a Session activity wait.
 - **Stop or Run queued:** the request is settled as cancelled and the call receives the ordinary not-started receipt.
 - **Restart:** a pending request expires and its call is not replayed; the resumed turn is told which call did not run.
 - **Parallel exec:** all approvals of a segment are requested before any member starts.
-- **Deadlines:** foreground calls wait without a default deadline unless the rule sets `approval.timeoutSeconds`; unattended timer script slices default to one hour.
+- **Deadlines:** foreground calls wait without a default deadline unless the rule sets `approval.timeoutSeconds`; unattended timer script slices and webhook handler runs default to one hour.
 
 The Claude Code runtime calls tools over its Foxwarm MCP server. That server entry declares a timeout of the longest approval deadline plus a margin, so the effective bound there is the rule's deadline or that server timeout, whichever is shorter. This bound is taken from Claude Code's documented MCP timeout behavior and still needs qualification with a real CLI.
 
