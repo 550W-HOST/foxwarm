@@ -1,5 +1,4 @@
 import { parseUnifiedEdit, applyTextEdits } from './unifiedEdit';
-import crypto from 'crypto';
 import fs from 'fs-extra';
 import type { Dirent } from 'node:fs';
 import path from 'path';

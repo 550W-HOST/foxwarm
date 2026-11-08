@@ -56,7 +56,9 @@ try {
   await fixture.start()
   const created = await fixture.api('POST', '/api/sessions', { agentId: 'main', sessionId: 'provider-lifecycle' })
   assert.equal(created.status, 200); route = '/api/sessions/' + encodeURIComponent(created.body.sessionId)
-  let state = await turn('discover', [call('discover', 'run_script', { code: "x=call_tool('node', {'action':'list'})\ny=call_tool('builtin:node', {'action':'inspect','providerId':'external'})\nreturn [x,y]" })])
+  // Return only the asserted fields: the full list carries every Node's tool schemas, and its size
+  // depends on which optional tools this machine has (an oversized result is saved, not inlined).
+  let state = await turn('discover', [call('discover', 'run_script', { code: "x=call_tool('node', {'action':'list'})\ny=call_tool('builtin:node', {'action':'inspect','providerId':'external'})\nreturn [{'currentNode':x['currentNode'],'providers':x['providers']},y]" })])
   const discovery = result(state, 'discover')
   assert.equal(discovery.status, 'completed', JSON.stringify(discovery))
   assert.equal(discovery.result[0].currentNode, 'master')
