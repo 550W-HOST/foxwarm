@@ -1,4 +1,4 @@
-"""Target-side helper sent over SSH; no Foxwarm installation or daemon required."""
+"""Target-side helper sent over SSH or a container engine's exec; no Foxwarm installation or daemon required."""
 import base64
 from datetime import datetime, timezone
 import errno
@@ -84,7 +84,7 @@ def filesystem(request, default_cwd):
 
 
 def run_command(directory):
-    """A detached supervisor records shell completion after the SSH request exits."""
+    """A detached supervisor records shell completion after the transport request exits."""
     directory = Path(directory)
     metadata = json.loads((directory / "launch.json").read_text())
     try:
@@ -118,7 +118,7 @@ def start(request, cwd, state_dir):
     ref = str(uuid.uuid4())
     directory = state_dir / ref
     directory.mkdir(mode=0o700)
-    # The supervisor is independent of this request's Python and SSH processes.
+    # The supervisor is independent of this request's Python and transport processes.
     (directory / "runner.py").write_text(SOURCE, encoding="utf-8")
     cwd_path = shlex.quote(str(directory / "cwd.txt"))
     # Use a separately quoted trap body so target paths are shell data, never code.
@@ -180,6 +180,13 @@ def main():
         if operation == "probe":
             if not os.path.isdir(cwd):
                 raise NotADirectoryError(errno.ENOTDIR, "Default working directory does not exist.")
+            if request.get("requireExec"):
+                # A newly created environment must be able to keep files and run commands.
+                state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+                if not os.access(cwd, os.W_OK) or not os.access(state_dir, os.W_OK):
+                    raise PermissionError(errno.EACCES, "Working or state directory is not writable.")
+                if not os.access("/bin/bash", os.X_OK):
+                    raise FileNotFoundError(errno.ENOENT, "/bin/bash is not available.")
             result = {"cwd": cwd}
         elif operation == "filesystem":
             result = filesystem(request, cwd)

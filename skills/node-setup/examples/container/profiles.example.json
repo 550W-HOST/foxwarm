@@ -1,0 +1,26 @@
+{
+  "engine": ["podman"],
+  "engineEnv": {
+    "XDG_RUNTIME_DIR": "/run/user/1000"
+  },
+  "maxNodes": 20,
+  "profiles": {
+    "offline": {
+      "description": "2 CPUs, 4 GB memory, no network.",
+      "image": "localhost/foxwarm-sandbox:latest",
+      "user": "1000:1000",
+      "cpus": 2,
+      "memory": "4g",
+      "pids": 512
+    },
+    "offline-code": {
+      "description": "Like offline, with Code and Terminal for administrators.",
+      "image": "localhost/foxwarm-sandbox-code:latest",
+      "user": "1000:1000",
+      "cpus": 2,
+      "memory": "4g",
+      "pids": 512,
+      "services": true
+    }
+  }
+}

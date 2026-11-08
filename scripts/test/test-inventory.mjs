@@ -33,6 +33,8 @@ const testLike = /(?:\.test\.(?:ts|js|mjs|cjs)|\.e2e\.mjs|\/test_[^/]+\.py)$/
 
 const manualGroups = new Map([
   ['packages/webui/test/mainHostFirefoxNode.e2e.mjs', 'manual-smoke'],
+  // Needs a real Docker or Podman engine and a locally built image; see the container adapter README.
+  ['packages/webui/test/mainHostProviderContainer.e2e.mjs', 'manual-smoke'],
   ['scripts/native-aot/pty-native-probe.c', 'manual-smoke'],
   ['scripts/native-aot/tests/test_package.py', 'manual-smoke'],
   ['dotnet/Foxwarm.Tests/scripts/qualify-native-onboarding.mjs', 'manual-smoke'],

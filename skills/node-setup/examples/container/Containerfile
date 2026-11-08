@@ -1,0 +1,32 @@
+# Example image for the container Node provider. Build it locally, then put the
+# resulting image ID or registry digest in a profile; the provider never pulls.
+#
+#   podman build -t foxwarm-sandbox -f Containerfile .
+#   podman build -t foxwarm-sandbox-code --target with-code -f Containerfile .
+#
+# Requirements: Linux, python3, /bin/bash, and a working directory writable by the
+# container user. Add the tools your work needs to the base stage.
+FROM debian:trixie-slim AS base
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends bash ca-certificates git python3 \
+    && rm -rf /var/lib/apt/lists/*
+RUN useradd --create-home --uid 1000 --shell /bin/bash worker \
+    && mkdir /workspace \
+    && chown worker:worker /workspace
+USER worker
+WORKDIR /workspace
+
+# Optional Code and Terminal support for profiles with "services": true. The native
+# CLI Node serves them over `foxwarm-node --stdio`; it needs no credential or network.
+# Use the package matching your Main server's Node protocol version (linux-x64 only).
+FROM base AS with-code
+USER root
+ARG FOXWARM_CLI_URL=https://foxwarm.net/downloads/native-cli-node-latest-v3.tar.gz
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && curl -fsSL "$FOXWARM_CLI_URL" -o /tmp/native-cli-node.tar.gz \
+    && tar -xzf /tmp/native-cli-node.tar.gz -C /opt \
+    && rm /tmp/native-cli-node.tar.gz \
+    && ln -s /opt/native-cli-node-linux-x64/Foxwarm.CliNode /usr/local/bin/foxwarm-node \
+    && apt-get purge -y curl && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
+USER worker
