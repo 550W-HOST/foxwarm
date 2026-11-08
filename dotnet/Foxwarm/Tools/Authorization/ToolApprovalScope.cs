@@ -21,6 +21,10 @@ internal sealed class ToolApprovalScope(SessionOwner owner)
 
     internal ToolApprovalGrant? Grant { get; set; }
 
+    // Set when the invocation dispatches its call. An approved call that never dispatched is
+    // recorded as not started.
+    internal bool Dispatched { get; set; }
+
     // The call the gate authorizes. A grant covers it only for the facts the approver saw;
     // other checks inside the invocation are its internal steps.
     internal ResolvedTool? Primary { get; set; }
@@ -36,6 +40,15 @@ internal sealed class ToolApprovalScope(SessionOwner owner)
             !ReferenceEquals(resolved, Primary)
             || grant.Fingerprint == Fingerprint(resolved, request)
         );
+
+    // The grant of the current invocation for effect work that continues outside its flow, such
+    // as a detached transfer task or a later reception callback. That work must enter the
+    // returned scope explicitly: the ambient value does not reach it. Every check inside it is
+    // an internal step of the approved call.
+    internal static ToolApprovalScope? Detach(SessionOwner owner) =>
+        current.Value is { Grant: { } grant } scope && ReferenceEquals(scope.Owner, owner)
+            ? new ToolApprovalScope(owner) { Grant = grant }
+            : null;
 
     // Synchronous so the value stays visible to the calling async method and its callees.
     internal static IDisposable Enter(ToolApprovalScope? scope)

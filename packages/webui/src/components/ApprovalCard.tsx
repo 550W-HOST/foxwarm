@@ -9,6 +9,7 @@ import {
   approvalToolLabel,
   buildApprovalDecisionBody,
   describeApprovalOutcome,
+  approvalWorkingDirectoryLabel,
   fetchApprovalArgs,
   type ApprovalDecisionBody,
   type ToolApprovalMeta,
@@ -94,6 +95,7 @@ export function ApprovalDecisionForm({ record, sessionId, onDecide, focusToken =
   const targets = approvalTargets(record)
   const origin = approvalOriginLabel(record.origin)
   const timeLeft = approvalTimeLeft(record.expiresAt, now)
+  const workingDirectory = approvalWorkingDirectoryLabel(record)
   return (
     <div ref={rootRef} tabIndex={-1} data-approval-form={record.id} className="min-w-0 outline-none">
       <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
@@ -103,6 +105,7 @@ export function ApprovalDecisionForm({ record, sessionId, onDecide, focusToken =
         {timeLeft && <span data-approval-deadline className="ml-auto text-xs text-fw-text-muted">{timeLeft}</span>}
       </div>
       {record.summary && <div className="mt-1 line-clamp-3 whitespace-pre-wrap break-all font-mono text-xs text-fw-text">{record.summary}</div>}
+      {workingDirectory && <div data-approval-cwd className="mt-0.5 min-w-0 truncate font-mono text-xs text-fw-text-muted" title={workingDirectory}>{workingDirectory}</div>}
       {!!targets.length && (
         <ul className="mt-1.5 flex flex-col gap-0.5 text-xs text-fw-text-muted">
           {targets.map(target => <li key={target} className="min-w-0 truncate font-mono" title={target}>{target}</li>)}
@@ -157,7 +160,8 @@ export function ToolApprovalNotice({ approval, onReview }: {
     <div data-tool-approval={approval.status} className="flex min-w-0 items-center gap-1.5 font-sans text-xs text-fw-text-muted" onClick={event => event.stopPropagation()}>
       <Icon size={13} aria-hidden="true" className={`shrink-0 ${tone}`} />
       <span className={`shrink-0 ${pending ? 'font-medium text-fw-warning' : ''}`}>{describeApprovalOutcome(approval)}</span>
-      {approval.note && <span className="min-w-0 truncate" title={approval.note}>· {approval.note}</span>}
+      {approval.note && <span aria-hidden="true" className="shrink-0">·</span>}
+      {approval.note && <span className="min-w-0 truncate" title={approval.note}>{approval.note}</span>}
       {pending && onReview && (
         <button type="button" data-tool-approval-review onClick={onReview} className="ml-1 shrink-0 rounded px-1.5 py-0.5 text-fw-text hover:bg-fw-hover hover:underline">Review</button>
       )}

@@ -10,6 +10,8 @@ export interface ToolApprovalRecord {
   origin?: 'turn' | 'script' | 'timer' | 'runtime'
   tool: { source?: string; name: string; server?: string; executionNode?: string; invocationName?: string }
   summary?: string
+  /** Where an exec command runs; absent when the Node uses its own default. */
+  workingDirectory?: string
   timeoutSeconds?: number
   expiresAt?: number
   toolCallId?: string
@@ -26,6 +28,9 @@ export interface ToolApprovalRecord {
   approvers?: string[]
   decidedAt?: number
   decidedBy?: { kind: 'administrator' | 'identity' | 'system'; id?: string; reason?: string }
+  /** The approval of a call that then ended without running. */
+  approvedBy?: ToolApprovalRecord['decidedBy']
+  approvedAt?: number
   note?: string
   /** Whether the current WebUI identity may decide this pending request. */
   canDecide?: boolean
@@ -37,6 +42,8 @@ export interface ToolApprovalMeta {
   status: ToolApprovalStatus
   decidedBy?: ToolApprovalRecord['decidedBy']
   decidedAt?: number
+  approvedBy?: ToolApprovalRecord['decidedBy']
+  approvedAt?: number
   note?: string
 }
 
@@ -72,12 +79,24 @@ export function approvalDeciderLabel(approval: Pick<ToolApprovalMeta, 'status' |
   if (by.kind === 'identity' && by.id) return `by ${by.id}`
   if (by.kind === 'system' && by.reason === 'restart') return 'at restart'
   if (by.kind === 'system' && by.reason === 'stop') return 'by Stop'
+  if (by.kind === 'system' && by.reason === 'shutdown') return 'at shutdown'
   return ''
 }
 
-/** One-line outcome, for example "Approved by reviewer · only this once". */
-export function describeApprovalOutcome(approval: Pick<ToolApprovalMeta, 'status' | 'decidedBy' | 'note'>): string {
+/** One-line outcome, for example "Approved by reviewer" or "Approved by reviewer · cancelled by Stop". */
+export function describeApprovalOutcome(approval: Pick<ToolApprovalMeta, 'status' | 'decidedBy' | 'approvedBy'>): string {
+  if (approval.status === 'cancelled' && approval.approvedBy) {
+    const approved = ['Approved', approvalDeciderLabel({ status: 'approved', decidedBy: approval.approvedBy })].filter(Boolean).join(' ')
+    const ended = approvalDeciderLabel(approval)
+    return `${approved} · ${ended ? `cancelled ${ended}` : 'not run'}`
+  }
   return [approvalStatusLabel(approval.status), approvalDeciderLabel(approval)].filter(Boolean).join(' ')
+}
+
+/** Where an exec command will run, as the approver reads it; empty for other tools. */
+export function approvalWorkingDirectoryLabel(record: Pick<ToolApprovalRecord, 'tool' | 'workingDirectory'>): string {
+  if (record.workingDirectory) return `in ${record.workingDirectory}`
+  return record.tool.source === 'node' && record.tool.name === 'exec' ? "in the Node's default directory" : ''
 }
 
 /** Remaining time before a pending request expires, such as "4m left"; empty without a deadline. */

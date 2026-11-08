@@ -229,26 +229,35 @@ public sealed partial class LocalSessionTurnHost
     )
     {
         var call = planned.Call;
+        // A prepared approval of a call skipped before it starts ends with the call.
+        Task<TurnToolExecution> Skipped(TurnToolExecution value) =>
+            tools is SessionToolExecutor approving
+                ? approving.SkippedPrepared(value, prepared, token)
+                : Task.FromResult(value);
         if (token.IsCancellationRequested || Closing)
-            return new(
-                new JsonObject
-                {
-                    ["canceled"] = true,
-                    ["error"] = new JsonObject
+            return await Skipped(
+                new(
+                    new JsonObject
                     {
-                        ["type"] = "tool_call_cancelled",
-                        ["message"] =
-                            $"Tool call was not started because {(Closing && !entry.WithState(state => state.Stopping) ? "process shutdown" : entry.ToolCancellationSource)} cancelled it; it was not executed.",
-                    },
-                }
+                        ["canceled"] = true,
+                        ["error"] = new JsonObject
+                        {
+                            ["type"] = "tool_call_cancelled",
+                            ["message"] =
+                                $"Tool call was not started because {(Closing && !entry.WithState(state => state.Stopping) ? "process shutdown" : entry.ToolCancellationSource)} cancelled it; it was not executed.",
+                        },
+                    }
+                )
             );
         if (planned.Preset is JsonObject preset)
             return new((JsonObject)preset.DeepClone());
         if (tools is ITurnToolControl fatal && fatal.PolicyUnavailable)
-            return new(
-                UnsupportedTurnToolExecutor.ToolError(
-                    "tool_call_skipped",
-                    "Tool call was not started because tool authorization policy was unavailable."
+            return await Skipped(
+                new(
+                    UnsupportedTurnToolExecutor.ToolError(
+                        "tool_call_skipped",
+                        "Tool call was not started because tool authorization policy was unavailable."
+                    )
                 )
             );
         if (

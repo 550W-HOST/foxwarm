@@ -14,10 +14,14 @@ initializeTestEnvironment()
 
 const shots = process.env.FOXWARM_TOOL_APPROVAL_SCREENSHOTS
 const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
-const expandLatestActivity = page => page.$$eval('[data-timeline-activity]', activities => {
-  const button = activities.at(-1)?.querySelector('[data-activity-toggle="top"], button')
-  if (button && button.getAttribute('aria-expanded') !== 'true') button.click()
-})
+// Finishing a turn can re-render its activity collapsed, so expand collapsed activities until
+// the approval notice itself is rendered rather than expanding once.
+const revealApproval = (page, selector) => until(async () => {
+  const found = await page.$(selector)
+  if (found) return found
+  await page.$$eval('[data-timeline-activity] [data-activity-toggle="top"][aria-expanded="false"]', buttons => buttons.forEach(button => button.click()))
+  return null
+}, selector)
 const final = key => [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'APPROVAL-DONE-' + key }] }]
 
 test('a scoped approver reviews and decides tool calls that match an ask rule', { timeout: 180000 }, async () => {
@@ -82,8 +86,7 @@ test('a scoped approver reviews and decides tool calls that match an ask rule', 
     await screenshot(page, 'approval-dock')
     assert.doesNotMatch(review, /Node master/)
     // The waiting call in the timeline offers a shortcut back to the request.
-    await expandLatestActivity(page)
-    await page.waitForSelector('[data-tool-approval="pending"] [data-tool-approval-review]')
+    await revealApproval(page, '[data-tool-approval="pending"] [data-tool-approval-review]')
 
     await page.type(`${form} textarea`, 'Only in the workspace.')
     await page.click(`${form} [data-approval-decision="approve"]`)
@@ -94,7 +97,7 @@ test('a scoped approver reviews and decides tool calls that match an ask rule', 
     const approved = (await view(gated)).approvals.find(record => record.id === first.id)
     assert.equal(approved.status, 'approved')
     assert.deepEqual(approved.decidedBy, { kind: 'identity', id: 'reviewer' })
-    const notice = await page.waitForSelector('[data-tool-approval="approved"]')
+    const notice = await revealApproval(page, '[data-tool-approval="approved"]')
     assert.match(await notice.evaluate(node => node.innerText.replace(/\s+/g, ' ')), /Approved by reviewer · Only in the workspace\./)
     await page.waitForSelector('[data-question-dock]', { hidden: true })
 
@@ -109,9 +112,7 @@ test('a scoped approver reviews and decides tool calls that match an ask rule', 
     assert.match(inputs.get('reject')[1], /tool_approval_rejected/)
     assert.match(inputs.get('reject')[1], /Use the staging copy\./)
     assert.equal(existsSync(join(fixture.work, 'rejected.txt')), false)
-    await until(async () => (await page.$$('[data-timeline-activity]')).length >= 2, 'rejection activity shown')
-    await expandLatestActivity(page)
-    await page.waitForSelector('[data-tool-approval="rejected"]')
+    await revealApproval(page, '[data-tool-approval="rejected"]')
     await screenshot(page, 'approval-rejected')
 
     // Stop settles a waiting request as cancelled; the call never runs.

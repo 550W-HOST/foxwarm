@@ -276,9 +276,132 @@ public sealed class ToolApprovalGateTests
             "version: 1\nrules: [{action: deny, tool: {source: node, name: write}}]"
         );
         await f.Manager.DecideToolApprovalAsync(f.Owner, id, true, null, Administrator);
-        var response = (await call.WaitAsync(TimeSpan.FromSeconds(30))).Response!.AsObject();
+        var result = await call.WaitAsync(TimeSpan.FromSeconds(30));
+        var response = result.Response!.AsObject();
         Assert.Equal("tool_authorization_denied", response["error"]!["type"]!.GetValue<string>());
         Assert.False(File.Exists(Path.Combine(f.Work, "policy.txt")));
+        // The record says what happened: approved, then not run.
+        var record = Assert.Single(Approvals(f.Owner));
+        Assert.Equal("cancelled", record["status"]!.GetValue<string>());
+        Assert.Equal("notStarted", record["decidedBy"]!["reason"]!.GetValue<string>());
+        Assert.Equal("administrator", record["approvedBy"]!["kind"]!.GetValue<string>());
+        Assert.Equal("cancelled", result.Approval!["status"]!.GetValue<string>());
+        Assert.Equal("administrator", result.Approval!["approvedBy"]!["kind"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task Stop_after_an_approval_but_before_the_start_records_the_call_as_cancelled()
+    {
+        await using var f = await ScriptFixture.Create();
+        await Policy(
+            f.Manager,
+            "version: 1\nrules: [{action: ask, tool: {source: node, name: exec}}]"
+        );
+        var call = new JsonObject
+        {
+            ["id"] = "exec-stopped",
+            ["name"] = "exec",
+            ["args"] = new JsonObject { ["command"] = "printf ok > stopped.txt", ["timeout"] = 15 },
+        };
+        var preparations = new[] { await f.Tools.PrepareDirectExecAsync(call, default) };
+        var id = Assert.Single(await PendingAsync(f.Owner))["id"]!.GetValue<string>();
+        var settle = f.Tools.SettleApprovalsAsync(preparations, default);
+        await f.Manager.DecideToolApprovalAsync(f.Owner, id, true, "Go ahead.", Administrator);
+        await settle.WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.NotNull(preparations[0]!.Grant);
+        using var stop = new CancellationTokenSource();
+        stop.Cancel();
+        // A turn skips the member before it starts; a direct caller sees the cancellation.
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            f.Tools.ExecuteAttributedAsync(call, stop.Token, approved: preparations[0])
+        );
+        Assert.False(File.Exists(Path.Combine(f.Work, "stopped.txt")));
+        var record = Assert.Single(Approvals(f.Owner));
+        Assert.Equal("cancelled", record["status"]!.GetValue<string>());
+        Assert.Equal("stop", record["decidedBy"]!["reason"]!.GetValue<string>());
+        Assert.Equal("administrator", record["approvedBy"]!["kind"]!.GetValue<string>());
+        Assert.Equal("Go ahead.", record["note"]!.GetValue<string>());
+
+        // A cancellation that loses the race to an approval settles the same way.
+        await f.Owner.Entry.SaveLane.MutateQuestionsAsync(meta =>
+        {
+            SessionApprovals.Add(
+                meta,
+                new JsonObject
+                {
+                    ["id"] = "ap-raced",
+                    ["status"] = "approved",
+                    ["decidedBy"] = Administrator,
+                    ["tool"] = new JsonObject { ["source"] = "node", ["name"] = "exec" },
+                }
+            );
+            return "raced";
+        });
+        var raced = await f.Manager.AbandonApprovedToolAsync(f.Owner, "ap-raced", "stop");
+        Assert.Equal("cancelled", raced!["status"]!.GetValue<string>());
+        Assert.Equal("administrator", raced["approvedBy"]!["kind"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task Exec_requests_show_the_directory_the_command_runs_in()
+    {
+        await using var f = await ScriptFixture.Create();
+        await Policy(
+            f.Manager,
+            "version: 1\nrules: [{action: ask, tool: {source: node, name: exec}}]"
+        );
+        JsonObject Exec(string id, JsonObject args) =>
+            new()
+            {
+                ["id"] = id,
+                ["name"] = "exec",
+                ["args"] = args,
+            };
+        var preparations = new[]
+        {
+            await f.Tools.PrepareDirectExecAsync(
+                Exec("exec-default", new JsonObject { ["command"] = "rm -rf build" }),
+                default
+            ),
+            await f.Tools.PrepareDirectExecAsync(
+                Exec("exec-sub", new JsonObject { ["command"] = "rm -rf build", ["cwd"] = "sub" }),
+                default
+            ),
+        };
+        var pending = await PendingAsync(f.Owner, 2);
+        var root = pending[0]["workingDirectory"]!.GetValue<string>();
+        Assert.True(Path.IsPathRooted(root));
+        Assert.Equal(
+            Path.GetFullPath(Path.Combine(root, "sub")),
+            pending[1]["workingDirectory"]!.GetValue<string>()
+        );
+        Assert.Equal("master", pending[0]["tool"]!["executionNode"]!.GetValue<string>());
+        foreach (var record in pending)
+            await f.Manager.DecideToolApprovalAsync(
+                f.Owner,
+                record["id"]!.GetValue<string>(),
+                false,
+                null,
+                Administrator
+            );
+        await f
+            .Tools.SettleApprovalsAsync(preparations, default)
+            .WaitAsync(TimeSpan.FromSeconds(30));
+        // Other tools carry their targets as path facts instead.
+        await Policy(f.Manager, AskWrite);
+        var write = Start(f, "call-write", "write", Write("plain.txt"));
+        var written = (await PendingAsync(f.Owner)).Single(record =>
+            record["toolCallId"]!.GetValue<string>() == "call-write"
+        );
+        Assert.Null(written["workingDirectory"]);
+        await f.Manager.DecideToolApprovalAsync(
+            f.Owner,
+            written["id"]!.GetValue<string>(),
+            false,
+            null,
+            Administrator
+        );
+        await write.WaitAsync(TimeSpan.FromSeconds(30));
     }
 
     [Fact]
@@ -378,19 +501,22 @@ public sealed class ToolApprovalGateTests
     {
         await using var f = await ScriptFixture.Create();
         await Policy(f.Manager, AskWrite);
+        // A warm script worker keeps startup out of the timed slice.
+        await f.Call("run_script", new JsonObject { ["code"] = "return 1" });
         var run = f.Call(
             "run_script",
             new JsonObject
             {
                 ["code"] =
                     "call_tool('write', {'filePath': 'script.txt', 'content': 'from script'})\nreturn 'done'",
-                ["timeoutSecs"] = 1,
+                // The approval wait below is longer than this budget.
+                ["timeoutSecs"] = 2,
             }
         );
         var pending = Assert.Single(await PendingAsync(f.Owner));
         Assert.Equal("script", pending["origin"]!.GetValue<string>());
         Assert.StartsWith("tsr_", pending["runId"]!.GetValue<string>());
-        await Task.Delay(TimeSpan.FromSeconds(2));
+        await Task.Delay(TimeSpan.FromSeconds(4));
         await f.Manager.DecideToolApprovalAsync(
             f.Owner,
             pending["id"]!.GetValue<string>(),
@@ -467,6 +593,16 @@ public sealed class ToolApprovalGateTests
             result["error"]!["message"]!.GetValue<string>()
         );
         Assert.Equal(3, Approvals(f.Owner).Length);
+        // Each approval was for facts the call no longer had; none of them ran.
+        Assert.All(
+            Approvals(f.Owner),
+            record =>
+            {
+                Assert.Equal("cancelled", record["status"]!.GetValue<string>());
+                Assert.Equal("notStarted", record["decidedBy"]!["reason"]!.GetValue<string>());
+                Assert.NotNull(record["approvedBy"]);
+            }
+        );
         Assert.False(File.Exists(Path.Combine(f.Work, "a", "out.txt")));
         Assert.False(File.Exists(Path.Combine(f.Work, "b", "out.txt")));
     }

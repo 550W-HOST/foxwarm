@@ -273,6 +273,119 @@ public sealed partial class ToolAuthorizationEffectsTests
     }
 
     [Fact]
+    public async Task Approved_copy_carries_its_grant_into_the_detached_transfer()
+    {
+        using var temp = new TempDirectory();
+        await Seed(temp.Path);
+        await using var manager = Manager(temp.Path);
+        await manager.LoadAsync();
+        var owner = await manager.RequiredAsync("foreign");
+        var execution = Executor(manager, owner, temp.Path);
+        await using var mcp = execution.Mcp;
+        var workspace = Path.Combine(temp.Path, "workspace", "agents", owner.Agent);
+        await File.WriteAllTextAsync(Path.Combine(workspace, "source.txt"), "copied");
+        await Policy(
+            manager,
+            """
+            version: 1
+            rules:
+              - id: confirm-copy
+                action: ask
+                tool: {source: builtin, name: copy_between_nodes}
+              - id: confirm-read
+                action: ask
+                tool: {source: node, name: read}
+            """
+        );
+        var call = Call(
+            execution.Tools,
+            "copy_between_nodes",
+            Obj(
+                """{"sourceNode":"master","sourcePath":"source.txt","targetNode":"master","targetPath":"target.txt"}"""
+            )
+        );
+        var pending = await PendingApprovalAsync(owner);
+        Assert.Equal("copy_between_nodes", pending["tool"]!["name"]!.GetValue<string>());
+        await Approve(manager, owner, pending["id"]!.GetValue<string>());
+        var response = await call.WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.Null(Error(response));
+        Assert.Equal("copied", await File.ReadAllTextAsync(Path.Combine(workspace, "target.txt")));
+        // The transfer's recheck and its Node read are internal steps of the approved call.
+        Assert.Equal(1, ApprovalCount(owner));
+    }
+
+    [Fact]
+    public async Task Startup_settles_pending_approvals_of_Sessions_that_were_not_busy()
+    {
+        using var temp = new TempDirectory();
+        using var copy = new TempDirectory();
+        await Seed(temp.Path);
+        await using (var manager = Manager(temp.Path))
+        {
+            await manager.LoadAsync();
+            var owner = await manager.RequiredAsync("foreign");
+            var execution = Executor(manager, owner, temp.Path);
+            await using var mcp = execution.Mcp;
+            await Policy(
+                manager,
+                "version: 1\nrules: [{action: ask, tool: {source: node, name: write}}]"
+            );
+            _ = Call(execution.Tools, "write", Obj("""{"filePath":"later.txt","content":"no"}"""));
+            await PendingApprovalAsync(owner);
+            Assert.False(owner.Entry.WithState(state => state.Busy));
+            for (
+                var attempt = 0;
+                !manager.Catalog.PendingApprovalIds().Contains("foreign");
+                attempt++
+            )
+            {
+                Assert.True(attempt < 400, "The catalog never announced the pending approval.");
+                await Task.Delay(25);
+            }
+            // The process ends without settling the request, as in a crash.
+            CopyTree(temp.Path, copy.Path);
+        }
+
+        await using var restarted = Manager(copy.Path);
+        await restarted.LoadAsync();
+        Assert.Empty(restarted.Catalog.PendingApprovalIds());
+        Assert.DoesNotContain(
+            restarted.Catalog.QuestionRows(50),
+            row => SessionCatalog.Text(row["id"]) == "foreign"
+        );
+        var saved = JsonNode.Parse(
+            await File.ReadAllTextAsync(
+                Path.Combine(copy.Path, "data", "state", "sessions", "foreign.json")
+            )
+        )!;
+        var record = saved["meta"]!["questions"]!["approvals"]![0]!;
+        Assert.Equal("expired", record["status"]!.GetValue<string>());
+        Assert.Equal("restart", record["decidedBy"]!["reason"]!.GetValue<string>());
+        Assert.False(
+            File.Exists(Path.Combine(copy.Path, "workspace", "agents", "beta", "later.txt"))
+        );
+    }
+
+    private static void CopyTree(string from, string to)
+    {
+        foreach (
+            var directory in Directory.EnumerateDirectories(from, "*", SearchOption.AllDirectories)
+        )
+            Directory.CreateDirectory(Path.Combine(to, Path.GetRelativePath(from, directory)));
+        foreach (var file in Directory.EnumerateFiles(from, "*", SearchOption.AllDirectories))
+            using (
+                var source = new FileStream(
+                    file,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete
+                )
+            )
+            using (var target = File.Create(Path.Combine(to, Path.GetRelativePath(from, file))))
+                source.CopyTo(target);
+    }
+
+    [Fact]
     public async Task Restart_expires_pending_approvals_and_tells_the_resumed_turn_without_replay()
     {
         using var temp = new TempDirectory();

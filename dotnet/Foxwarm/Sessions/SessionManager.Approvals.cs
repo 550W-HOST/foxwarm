@@ -29,7 +29,8 @@ internal sealed partial class SessionManager
         SessionOwner owner,
         ToolApprovalRequiredException required,
         ToolApprovalOrigin origin,
-        bool unattended
+        bool unattended,
+        string? workingDirectory = null
     )
     {
         var assessment = required.Assessment;
@@ -63,6 +64,8 @@ internal sealed partial class SessionManager
             record["timeoutSeconds"] = seconds;
             record["expiresAt"] = now + seconds * 1000;
         }
+        if (workingDirectory is not null)
+            record["workingDirectory"] = workingDirectory;
         if (!string.IsNullOrEmpty(origin.ToolCallId))
             record["toolCallId"] = origin.ToolCallId;
         if (!string.IsNullOrEmpty(origin.RunId))
@@ -134,7 +137,7 @@ internal sealed partial class SessionManager
                     $"This Session already has {count} tool calls waiting for approval. This call was not executed."
                 );
             throw new InvalidOperationException(
-                "The Session is stopping; the call was not started."
+                "This Session is stopping. The call was not started."
             );
         }
         // External channels cannot decide; they only learn that the WebUI has a request.
@@ -176,7 +179,7 @@ internal sealed partial class SessionManager
             {
                 return await SettleToolApprovalAsync(owner, pending.Id, "expired", "timeout")
                     ?? throw new InvalidOperationException(
-                        "The Session is stopping; the call was not started."
+                        "This Session is stopping. The call was not started."
                     );
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
@@ -218,12 +221,17 @@ internal sealed partial class SessionManager
         JsonObject? final = null;
         await owner.Entry.SaveLane.MutateQuestionsAsync(meta =>
         {
-            SessionApprovals.Resolve(
-                meta,
-                id,
-                status,
-                new JsonObject { ["kind"] = "system", ["reason"] = reason }
-            );
+            // A cancellation that loses to an approval still means the call never started.
+            if (
+                !SessionApprovals.Resolve(
+                    meta,
+                    id,
+                    status,
+                    new JsonObject { ["kind"] = "system", ["reason"] = reason }
+                )
+                && status == "cancelled"
+            )
+                SessionApprovals.Abandon(meta, id, reason);
             final = SessionApprovals.Find(meta, id)?.DeepClone() as JsonObject;
             return final is null ? null : id;
         });
@@ -318,10 +326,32 @@ internal sealed partial class SessionManager
             ["id"] = record["id"]?.DeepClone(),
             ["status"] = record["status"]?.DeepClone(),
         };
-        foreach (var key in new[] { "decidedBy", "decidedAt", "note" })
+        foreach (var key in new[] { "decidedBy", "decidedAt", "note", "approvedBy", "approvedAt" })
             if (record[key] is { } value)
                 meta[key] = value.DeepClone();
         return meta;
+    }
+
+    /// <summary>
+    /// Records that an approved call did not start. Returns the settled presentation, or null
+    /// when the record is no longer approved or no longer retained.
+    /// </summary>
+    internal async Task<JsonObject?> AbandonApprovedToolAsync(
+        SessionOwner owner,
+        string id,
+        string reason
+    )
+    {
+        try
+        {
+            var final = await SettleToolApprovalAsync(owner, id, "cancelled", reason);
+            return final is null ? null : ApprovalMeta(final);
+        }
+        catch (Exception error)
+            when (error is InvalidOperationException or IOException or ObjectDisposedException)
+        {
+            return null;
+        }
     }
 
     // Restart text for calls whose approval wait ended with the previous process.

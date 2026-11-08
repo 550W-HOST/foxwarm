@@ -15,6 +15,7 @@ internal sealed partial class SessionManager
         string target,
         string targetPath,
         bool overwrite,
+        ToolApprovalScope? approval,
         CancellationToken shutdown
     )
     {
@@ -25,6 +26,9 @@ internal sealed partial class SessionManager
         internal readonly string Target = target;
         internal readonly string TargetPath = targetPath;
         internal readonly bool Overwrite = overwrite;
+
+        // The approved invocation's grant; the transfer task does not inherit the caller's flow.
+        internal readonly ToolApprovalScope? Approval = approval;
         internal readonly CancellationTokenSource Stop =
             CancellationTokenSource.CreateLinkedTokenSource(
                 owner.Entry.IdentityLossToken,
@@ -75,6 +79,7 @@ internal sealed partial class SessionManager
             target,
             targetPath,
             overwrite,
+            ToolApprovalScope.Detach(owner),
             admissionStop.Token
         );
         var copiedArgs = (JsonObject)args.DeepClone();
@@ -125,6 +130,7 @@ internal sealed partial class SessionManager
         TransferSource? source = null;
         TransferStartStream? start = null;
         Task<(string Path, string Sha256)>? writing = null;
+        using var approval = ToolApprovalScope.Enter(transfer.Approval);
         try
         {
             using (BeginOwnerMutation(owner))

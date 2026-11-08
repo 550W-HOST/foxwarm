@@ -18,7 +18,7 @@ import { SessionQuestionsContext } from ${JSON.stringify(stateEntry)}
 
 const pending = (id, extra) => ({ id, status: 'pending', createdAt: 1, origin: 'turn', tool: { source: 'node', name: 'exec', executionNode: 'build-box' }, summary: 'rm -rf build', rules: [{ layer: 'global', id: 'confirm-exec', reason: 'Commands on shared hosts' }], approvers: [], ...extra })
 const approvals = [
-  pending('ap-large', { canDecide: true, argsTruncated: true, argsPreview: '{"command":"rm -rf build', expiresAt: Date.now() + 4 * 60_000, facts: { paths: [{ raw: 'build', resolved: '/w/build', node: 'build-box' }] } }),
+  pending('ap-large', { canDecide: true, workingDirectory: '/srv/app', argsTruncated: true, argsPreview: '{"command":"rm -rf build', expiresAt: Date.now() + 4 * 60_000, facts: { paths: [{ raw: 'build', resolved: '/w/build', node: 'build-box' }] } }),
   pending('ap-other', { canDecide: false, tool: { source: 'mcp', server: 'tracker', name: 'close_issue' }, summary: 'close #12', args: { issue: 12 } }),
 ]
 const question = { id: 'q-1', status: 'open', questions: [{ question: 'Which branch?' }] }
@@ -89,6 +89,7 @@ test('pending approvals open the dock first and decide with the note', async () 
   const form = await page.$eval('[data-approval-form="ap-large"]', el => el.innerText)
   assert.match(form, /exec/)
   assert.match(form, /on build-box/)
+  assert.match(form, /in \/srv\/app/)
   assert.match(form, /rm -rf build/)
   assert.match(form, /build-box:\/w\/build/)
   assert.match(form, /Rule confirm-exec — Commands on shared hosts/)

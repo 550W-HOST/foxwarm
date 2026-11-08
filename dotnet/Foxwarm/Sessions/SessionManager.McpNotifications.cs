@@ -28,10 +28,7 @@ internal sealed partial class SessionManager
         var id = owner.Id;
         var generation = owner.McpGeneration;
         // Reception continues under an approved start; an ask outcome needs that approval.
-        var approved =
-            action == "start" && ToolApprovalScope.Current is { Grant: not null } scope
-                ? scope
-                : null;
+        var approved = action == "start" ? ToolApprovalScope.Detach(owner) : null;
         var receptionArgs = new JsonObject { ["action"] = "start", ["server"] = server };
         var resolved = new ResolvedTool(
             "mcp_notifications",

@@ -434,6 +434,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
             Usage.StartBackfill(admissionStop.Token);
         var ids = Catalog
             .RestartIds()
+            .Concat(Catalog.PendingApprovalIds())
             .Concat(executor.OwnerIds)
             .Distinct(StringComparer.Ordinal)
             .ToArray();

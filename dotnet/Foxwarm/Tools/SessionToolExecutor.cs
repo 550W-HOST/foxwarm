@@ -65,12 +65,20 @@ internal sealed partial class SessionToolExecutor(
             catch (ToolApprovalRequiredException required)
                 when (gate is not null && attempt < MaxApprovalRequests)
             {
+                // The superseded approval's call never ran with the facts it showed.
+                if (gate.Grant is { } superseded)
+                    await sessions.AbandonApprovedToolAsync(
+                        hosted,
+                        superseded.ApprovalId,
+                        "notStarted"
+                    );
                 gate.Grant = null;
                 var pending = await sessions.BeginToolApprovalAsync(
                     hosted,
                     required,
                     ApprovalOrigin(),
-                    unattended
+                    unattended,
+                    ApprovalWorkingDirectory(resolved)
                 );
                 var record = await AwaitApprovalAsync(pending, token);
                 if (invocation.Value is { } current)
@@ -88,6 +96,26 @@ internal sealed partial class SessionToolExecutor(
     }
 
     private const int MaxApprovalRequests = 3;
+
+    // Where an exec command runs, so an approver can judge relative commands. Master resolves
+    // the directory as the launch will; another Node receives the declared or Session cwd, and
+    // null leaves its own default.
+    private string? ApprovalWorkingDirectory(ResolvedTool resolved)
+    {
+        if (resolved is not { Source: "node", Name: "exec" })
+            return null;
+        var declared = SessionWait.Text(resolved.Args["cwd"]);
+        if (resolved.ExecutionNode == "master")
+            try
+            {
+                return ExecFiles.Paths.ExecCwd(declared);
+            }
+            catch (ArgumentException)
+            {
+                return declared;
+            }
+        return declared ?? (ExecutionNode == resolved.ExecutionNode ? ExecutionCwd : null);
+    }
 
     private ToolApprovalOrigin ApprovalOrigin() =>
         new(
@@ -309,7 +337,8 @@ internal sealed partial class SessionToolExecutor(
                         hosted,
                         required,
                         new("turn", SessionWait.Text(call["id"]), null),
-                        unattended
+                        unattended,
+                        ApprovalWorkingDirectory(resolved)
                     )
                 );
             }
@@ -349,6 +378,33 @@ internal sealed partial class SessionToolExecutor(
             return new(UnsupportedTurnToolExecutor.ToolError("tool_error", error.Message));
         }
     }
+
+    // An approved call that ends without dispatch did not run: its record must not stay approved.
+    private Task<JsonObject?> AbandonApprovalAsync(
+        ToolApprovalGrant grant,
+        CancellationToken token
+    ) =>
+        sessions.AbandonApprovedToolAsync(
+            hosted,
+            grant.ApprovalId,
+            !token.IsCancellationRequested ? "notStarted"
+                : hosted.Registry.Runner.Closing && !hosted.Entry.WithState(state => state.Stopping)
+                    ? "shutdown"
+                : "stop"
+        );
+
+    /// <summary>Settles a prepared approval whose exec segment member is skipped before start.</summary>
+    internal async Task<TurnToolExecution> SkippedPrepared(
+        TurnToolExecution skipped,
+        TurnToolPreparation? prepared,
+        CancellationToken token
+    ) =>
+        prepared?.Grant is { } grant
+            ? skipped with
+            {
+                Approval = await AbandonApprovalAsync(grant, token) ?? prepared.Approval,
+            }
+            : skipped;
 
     internal TurnToolExecution PreparedFailure(TurnToolPreparation prepared)
     {
@@ -390,12 +446,22 @@ internal sealed partial class SessionToolExecutor(
         };
         invocation.Value = current;
         // Each invocation gets its own approval scope; nested calls never inherit a grant.
-        using var approvalScope = ToolApprovalScope.Enter(
-            new ToolApprovalScope(hosted) { Grant = approved?.Grant }
-        );
+        var scope = new ToolApprovalScope(hosted) { Grant = approved?.Grant };
+        using var approvalScope = ToolApprovalScope.Enter(scope);
         try
         {
-            var response = await ExecuteCoreAsync(call, token);
+            JsonNode? response;
+            try
+            {
+                response = await ExecuteCoreAsync(call, token);
+            }
+            catch when (scope is { Grant: not null, Dispatched: false })
+            {
+                await AbandonApprovalAsync(scope.Grant, token);
+                throw;
+            }
+            if (scope is { Grant: { } grant, Dispatched: false })
+                current.Approval = await AbandonApprovalAsync(grant, token) ?? current.Approval;
             if (!unattended && !Programmatic && current.Receipt is not null)
                 turnReceipts.Add(current.Receipt);
             return new(
@@ -656,6 +722,8 @@ internal sealed partial class SessionToolExecutor(
                 hosted.Registry.Runner.AssertCanContinue();
             BroadcastVerboseToolStart(functionCall);
             dispatched = true;
+            if (ToolApprovalScope.Current is { } approvalScope)
+                approvalScope.Dispatched = true;
             var runtimeLease =
                 Programmatic || unattended ? null : hosted.BeginTool(ToolRuntime(resolved));
             var startedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();

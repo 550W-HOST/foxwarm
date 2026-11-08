@@ -26,6 +26,26 @@ internal sealed partial class SessionCatalog
         }
     }
 
+    // Sessions whose last save announced pending tool approvals. No approval survives a restart,
+    // so startup loads these owners to expire the records and settle the projection. The open
+    // condition keeps the lookup on the question presence index.
+    internal string[] PendingApprovalIds()
+    {
+        lock (gate)
+        {
+            EnsureInitialized();
+            using var command = Command(
+                db!,
+                "SELECT session_id FROM session_catalog WHERE json_extract(metadata_json,'$.meta.questions.open')>0 AND json_extract(metadata_json,'$.meta.questions.approvals')>0"
+            );
+            using var reader = command.ExecuteReader();
+            var ids = new List<string>();
+            while (reader.Read())
+                ids.Add(reader.GetString(0));
+            return ids.ToArray();
+        }
+    }
+
     internal string[] RecentWaitIds(long activityCutoff)
     {
         lock (gate)

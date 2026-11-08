@@ -69,6 +69,24 @@ internal static class SessionApprovals
         return true;
     }
 
+    /// <summary>
+    /// Settles an approved record whose call did not start, for example because Stop won after
+    /// the decision. The record ends cancelled and keeps the approver's decision beside it.
+    /// </summary>
+    internal static bool Abandon(JsonObject meta, string id, string reason)
+    {
+        var record = Find(meta, id);
+        if (record is null || Status(record) != "approved")
+            return false;
+        record["approvedBy"] = record["decidedBy"]?.DeepClone();
+        record["approvedAt"] = record["decidedAt"]?.DeepClone();
+        record["status"] = "cancelled";
+        record["decidedAt"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        record["decidedBy"] = new JsonObject { ["kind"] = "system", ["reason"] = reason };
+        SessionQuestions.Touch(meta);
+        return true;
+    }
+
     /// <summary>Expires every pending record of a Session loaded after a restart.</summary>
     internal static JsonObject[] ExpireStale(JsonObject meta)
     {

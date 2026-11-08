@@ -125,6 +125,13 @@ test('approval decisions trim notes and outcomes name who settled them', () => {
   assert.equal(approvals.describeApprovalOutcome({ status: 'rejected', decidedBy: { kind: 'administrator' } }), 'Rejected')
   assert.equal(approvals.describeApprovalOutcome({ status: 'expired', decidedBy: { kind: 'system', reason: 'restart' } }), 'Expired at restart')
   assert.equal(approvals.describeApprovalOutcome({ status: 'pending' }), 'Waiting for approval')
+  // An approved call that did not start ends cancelled and keeps its approval.
+  assert.equal(approvals.describeApprovalOutcome({ status: 'cancelled', decidedBy: { kind: 'system', reason: 'stop' }, approvedBy: { kind: 'identity', id: 'reviewer' } }), 'Approved by reviewer · cancelled by Stop')
+  assert.equal(approvals.describeApprovalOutcome({ status: 'cancelled', decidedBy: { kind: 'system', reason: 'notStarted' }, approvedBy: { kind: 'administrator' } }), 'Approved · not run')
+  assert.equal(approvals.describeApprovalOutcome({ status: 'cancelled', decidedBy: { kind: 'system', reason: 'stop' } }), 'Cancelled by Stop')
+  assert.equal(approvals.approvalWorkingDirectoryLabel({ tool: { source: 'node', name: 'exec' }, workingDirectory: '/srv/app' }), 'in /srv/app')
+  assert.equal(approvals.approvalWorkingDirectoryLabel({ tool: { source: 'node', name: 'exec' } }), "in the Node's default directory")
+  assert.equal(approvals.approvalWorkingDirectoryLabel({ tool: { source: 'node', name: 'write' } }), '')
 })
 
 test('approval review text: tool identity, targets, deadline and shortened arguments', () => {
