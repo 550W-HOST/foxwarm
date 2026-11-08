@@ -710,6 +710,11 @@ var MODELS_CONFIG_SCHEMA = {
       description: "Default model settings. Concrete providers and model entries may override these values.",
       properties: modelDefaultProperties
     },
+    catalog: {
+      type: "object",
+      additionalProperties: { type: "string", minLength: 1 },
+      description: "Recommended models, in listing order: a selectable model key mapped to a description of the work it suits. Agents see these when they start new Sessions. Advisory only; other models stay selectable."
+    },
     providers: {
       type: "object",
       minProperties: 1,
