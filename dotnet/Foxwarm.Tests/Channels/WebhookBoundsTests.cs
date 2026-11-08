@@ -88,6 +88,53 @@ public sealed class WebhookBoundsTests
     }
 
     [Fact]
+    public async Task A_shaped_passive_delivery_keeps_its_wake_marker()
+    {
+        using var temp = new TempDirectory();
+        await using var provider = new ScriptedResponsesSequenceServer(
+            1,
+            (_, _, _) => throw new InvalidOperationException("unexpected model request")
+        );
+        var data = await WriteDataAsync(
+            temp,
+            provider.BaseUri,
+            "bot: {enableWebUI: false}",
+            Identities
+        );
+        var config = new ModelConfiguration(HostPaths.ForDataRoot(data));
+        await SeedMainAsync(data, config, provider.BaseUri);
+        await using var manager = new SessionManager(
+            data,
+            config.Paths.AgentsRoot,
+            new ResponsesClientOptions(provider.BaseUri, "wire", "local/wire", "", "", 713),
+            config.Models,
+            hostPaths: config.Paths
+        );
+        await manager.LoadMainHostAsync();
+        var runtime = new SessionRuntime(manager);
+        // The soft bound replaces a delivery with a freshly built metadata-only frame.
+        Assert.True(
+            await runtime.SubmitWebhookAsync(
+                "main",
+                WebhookHttp.Frame("quiet", null, null, null, "payload"),
+                null,
+                wake: false,
+                (_, _) => WebhookHttp.Frame("quiet", null, null, null, null)
+            )
+        );
+        var owner = await manager.RequiredAsync("main");
+        var queued = Assert.Single(owner.Entry.Snapshot().Queue);
+        Assert.False(queued.Trigger);
+        Assert.Contains(
+            queued.Parts!,
+            part => SessionWait.Text(part["system"]) == WebhookHttp.OmittedNotice
+        );
+        Assert.False(owner.Registry.HasRunnableWork(owner.Entry));
+        Assert.False(owner.Entry.WithState(state => state.Busy));
+        Assert.Equal(0, provider.RequestCount);
+    }
+
+    [Fact]
     public async Task Status_notices_are_coalesced_and_unverified_requests_raise_none()
     {
         var activity = new WebhookActivity(TimeSpan.FromMilliseconds(300));
@@ -403,6 +450,12 @@ public sealed class WebhookBoundsTests
         );
         Assert.Contains($"QUIET-{WebhookHttp.PassiveCountLimit - 1}-END", authority);
         Assert.DoesNotContain($"QUIET-{WebhookHttp.PassiveCountLimit}-END", authority);
+        // Metadata-only deliveries stay passive too: nothing here may start a turn, which would
+        // read (and so clear) the backlog that the hard bound below counts.
+        Assert.All(
+            JsonNode.Parse(authority)!["queue"]!.AsArray(),
+            queued => Assert.False(queued!["trigger"]!.GetValue<bool>())
+        );
 
         // At the hard bound passive deliveries are refused and counted, not listed.
         var refused = await Post(

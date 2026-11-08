@@ -28,6 +28,7 @@ public sealed partial class SessionSaveLane
     /// <summary>
     /// <paramref name="shape"/> sees the current queue under the admission gate and returns the
     /// item to admit, a replacement, or null to admit nothing; it runs after the duplicate check.
+    /// A replacement keeps the admitted item's wake marker, which ingress owns.
     /// </summary>
     internal Task<bool> AdmitWebhookAsync(
         QueueItem item,
@@ -138,7 +139,7 @@ public sealed partial class SessionSaveLane
                             Items: (IReadOnlyList<QueueItem>)[]
                         );
                     }
-                    item = shaped;
+                    item = shaped with { Trigger = item.Trigger };
                 }
                 // Question answers resolve in the same staged meta as the wait they release.
                 item = SessionQuestions.ApplyAdmission(meta, item);
