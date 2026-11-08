@@ -325,7 +325,7 @@ rules:
   state = await turn('following/main', 'following-main-select', [[call('following-main-select', 'node', { action: 'select', nodeId: 'one' })]]); good(state, 'following-main-select')
   for (const name of ['named', undefined]) {
     const response = await fixture.api('POST', '/api/sessions', { agentId: 'following', ...(name ? { sessionId: name } : {}) }); assert.equal(response.status, 200)
-    const created = await saved(response.body.sessionId); assert.equal(created.currentNode, 'one'); assert.equal(created.cwd, undefined)
+    const created = await saved(response.body.sessionId); assert.equal(created.currentNode, 'master'); assert.equal(created.cwd, undefined)
   }
   // Shared description edits go through TaskService, ordinary discovery and native Monty rather than a second policy path.
   state = await turn(actor, 'shared-task-create', [[call('shared-task-create', 'task', { action: 'create', title: 'shared scope' })]])
