@@ -105,6 +105,38 @@ public sealed class TaskCompletionUsageTests
             );
         }
 
+        // A committed Responses commentary prefix: the request's model, but no usage yet.
+        internal Task AppendPrefixAsync(string modelId, long timestamp) =>
+            Worker.Entry.SaveLane.CommitCanonicalAppendAsync(state =>
+                LocalSessionTurnHost.PrepareCanonicalAppend(
+                    state,
+                    [
+                        new JsonObject
+                        {
+                            ["role"] = "model",
+                            ["parts"] = new JsonArray(new JsonObject { ["text"] = "working" }),
+                            ["__meta"] = new JsonObject
+                            {
+                                ["timestamp"] = timestamp,
+                                ["modelId"] = modelId,
+                                ["llmRequestId"] = "request-1",
+                                ["llmAttempt"] = 1,
+                                ["llmSegment"] = new JsonObject
+                                {
+                                    ["outputStart"] = 0,
+                                    ["outputEndExclusive"] = 1,
+                                    ["complete"] = false,
+                                },
+                            },
+                        },
+                    ],
+                    [],
+                    updateLastMessageTime: false,
+                    finalizing: false,
+                    () => timestamp
+                )
+            );
+
         internal async Task<string> CompleteAsync(string taskId)
         {
             var before = Creator.Entry.Snapshot().Queue.Count;
@@ -171,7 +203,9 @@ public sealed class TaskCompletionUsageTests
     {
         await using var f = await Fixture.CreateAsync();
         var taskId = await f.AssignAsync("no requests");
-        // Notices and commentary prefixes carry no concrete model attribution.
+        // Notices carry no concrete model attribution; an unfinished request's prefix is not
+        // a successful request.
+        await f.AppendPrefixAsync("a/m", Now() + 1);
         await f.Worker.Entry.SaveLane.CommitCanonicalAppendAsync(state =>
             LocalSessionTurnHost.PrepareCanonicalAppend(
                 state,
@@ -196,6 +230,18 @@ public sealed class TaskCompletionUsageTests
         var text = await f.CompleteAsync(taskId);
         Assert.DoesNotContain("Task owner usage", text);
         Assert.Contains("Task completed:", text);
+    }
+
+    [Fact]
+    public async Task Commentary_prefixes_do_not_make_a_priced_request_unavailable()
+    {
+        await using var f = await Fixture.CreateAsync();
+        var taskId = await f.AssignAsync("streamed commentary");
+        var start = Now();
+        await f.AppendPrefixAsync("a/m", start + 1);
+        await f.AppendRequestAsync("a/m", .5, start + 2);
+        var text = await f.CompleteAsync(taskId);
+        Assert.Contains("\nTask owner usage: a/m; estimated cost $0.50 USD.", text);
     }
 
     [Fact]

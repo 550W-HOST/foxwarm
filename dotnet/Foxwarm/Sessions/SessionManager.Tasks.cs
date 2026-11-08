@@ -22,10 +22,15 @@ internal sealed partial class SessionManager
         var requests = 0;
         foreach (var row in owner.Archive.ReadEffectiveMessagesBetween(assignedAt, completedAt + 1))
         {
+            // A committed commentary prefix carries its request's model but no usage; the
+            // completing row of the same request owns the usage and cost.
             if (
                 row.Role != "model"
                 || row.Message["__meta"] is not JsonObject meta
                 || SessionWait.Text(meta["modelId"]) is not { Length: > 0 } modelId
+                || meta["llmSegment"]?["complete"] is JsonValue segmentComplete
+                    && segmentComplete.TryGetValue<bool>(out var isComplete)
+                    && !isComplete
             )
                 continue;
             requests++;
