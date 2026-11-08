@@ -24,7 +24,7 @@ public sealed class ProviderCodeServicesTests
         internal string Target => Path.Combine(Temp.Path, "target");
         internal string Work => Path.Combine(Target, "work");
 
-        internal static async Task<Fixture> Create(string mode = "normal")
+        internal static async Task<Fixture> Create(string mode = "normal", string? cli = null)
         {
             var f = new Fixture();
             Directory.CreateDirectory(Path.Combine(f.Data, "state"));
@@ -37,7 +37,12 @@ public sealed class ProviderCodeServicesTests
                     ["vector"] = false,
                     ["nodeProviders"] = new JsonObject
                     {
-                        ["fixture"] = ProviderServiceChannelTests.Configuration(f.Target, mode),
+                        ["fixture"] = ProviderServiceChannelTests.Configuration(
+                            f.Target,
+                            mode,
+                            5,
+                            cli
+                        ),
                     },
                 }.ToJsonString()
             );

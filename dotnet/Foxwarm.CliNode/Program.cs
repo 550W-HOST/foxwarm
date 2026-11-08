@@ -36,6 +36,12 @@ internal static class Program
                 Console.WriteLine(Help);
                 return 0;
             }
+            if (args.Contains("--stdio"))
+            {
+                if (args.Length != 1)
+                    throw new InvalidDataException("--stdio does not accept other options.");
+                return await NodeStdioHost.Run(stop.Token);
+            }
             var (options, interactive) = Parse(args);
             if (interactive is not null)
                 await ConsoleNode.Run(options, interactive, stop.Token);
@@ -158,6 +164,8 @@ internal static class Program
                                         This does not set an exec command's foreground wait.
           --local-trigger-port PORT     Loopback trigger port (default: OS-selected)
           --no-local-trigger            Disable the loopback trigger
+          --stdio                       Serve only the Code/Terminal services over stdin/stdout
+                                        for a caller that owns the pipe (no other options)
           --help, -h                    Show this help
 
         Native default: headless.

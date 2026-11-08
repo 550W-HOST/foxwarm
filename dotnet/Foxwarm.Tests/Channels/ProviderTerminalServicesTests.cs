@@ -8,14 +8,15 @@ namespace Foxwarm.Tests;
 // Browser terminals on executable-Provider Nodes through the persistent service channel.
 public sealed class ProviderTerminalServicesTests
 {
-    private sealed class Stream : IAsyncDisposable
+    internal sealed class Stream : IAsyncDisposable
     {
         private readonly ClientWebSocket socket = new();
         private readonly List<JsonObject> frames = [];
 
         internal static async Task<Stream> Open(
             ProviderCodeServicesTests.Fixture f,
-            string terminalId
+            string terminalId,
+            bool control = false
         )
         {
             var stream = new Stream();
@@ -29,6 +30,7 @@ public sealed class ProviderTerminalServicesTests
                         + f.Client.BaseAddress!.Authority
                         + "/api/terminals/stream?terminalId="
                         + Uri.EscapeDataString(terminalId)
+                        + (control ? "&control=code" : "")
                 ),
                 default
             );
@@ -122,7 +124,7 @@ public sealed class ProviderTerminalServicesTests
         }
     }
 
-    private static async Task<JsonObject> Create(
+    internal static async Task<JsonObject> Create(
         ProviderCodeServicesTests.Fixture f,
         string node,
         string? cwd = null

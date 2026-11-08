@@ -220,7 +220,7 @@ Core starts the channel the first time a service is used, not at discovery. It l
 {"protocol":"foxwarm-node-provider","providerId":"provider-id","requestId":"generated-request-id","operation":"connect","ok":true,"result":{"nodeId":"example-node","services":{"vscode-fs":1,"vscode-git":2,"vscode-pty":1}}}
 ```
 
-`result.nodeId` must repeat the requested local ID, and `result.services` lists the services and versions this process actually serves; those versions are authoritative for the channel. A failure uses the normal `ok:false` error envelope, whose safe message is shown to the administrator. An identity mismatch, a different `nodeId`, a malformed confirmation, an early exit, or no confirmation within `timeoutSeconds` fails the start, terminates the process and is not retried. Unsolicited frames before the confirmation are invalid.
+`result.nodeId` must repeat the requested local ID, and `result.services` lists the services and versions this process actually serves; those versions are the ones in force for the channel. Core starts a channel only when the `list` declaration already satisfies the requested service version, so the confirmation should not report less than the declaration (a lower confirmed version makes later requests for the higher version fail with `UnsupportedService`). A failure uses the normal `ok:false` error envelope, whose safe message is shown to the administrator. An identity mismatch, a different `nodeId`, a malformed confirmation, an early exit, or no confirmation within `timeoutSeconds` fails the start, terminates the process and is not retried. Unsolicited frames before the confirmation are invalid.
 
 ### Frames
 
@@ -246,6 +246,15 @@ The operations, arguments, results and event shapes of the three services are ex
 - Terminal IDs need be unique only within the Node. Core never shows them to the browser unchanged for a Provider Node: it derives the browser identity from the qualified Node ID and the terminal ID, and sends only the Node's own ID back. Two Nodes of one or different Providers may therefore return the same ID.
 - Losing the channel is not a terminal exit. Core reports a transport error to attached browsers and keeps the terminal record. After the next generation connects, Core lists or gets the terminal again; if the provider returns it, it is usable, and `get` returning `null` removes the record. Because the channel is a child of Main, whether terminals survive it is the provider's choice. A provider whose terminals end with its process should say so (for example in `dataRetention`); one that keeps them should return them from `list` after reconnect.
 - A shell `code` helper that opens a file or folder in Code is optional: the provider sends `{ "type": "code-request", "terminalId", "requestId", "request": { "kind": "openFile"|"addFolder", "path", "startLine"?, "startColumn"? } }` and Core answers with a `code-result` command (`requestId`, `ok`, `message`/`error`). Without it the terminal still works.
+
+### Using a CLI Node as the target
+
+A provider need not implement the services itself. The CLI Node binary can serve exactly this channel on a pipe the caller owns: `foxwarm-node --stdio` (no other options). A provider's `connect` can therefore reduce to starting that command inside the target environment, for example `docker exec -i CONTAINER foxwarm-node --stdio` or `ssh HOST foxwarm-node --stdio`, and relaying bytes in both directions.
+
+- The process first writes one line `{"type":"node_stdio_ready","services":{"vscode-fs":1,"vscode-git":2,"vscode-pty":1}}` (`vscode-pty` only on supported platforms). The provider turns it into the `connect` confirmation above (`nodeId` from Core's request, `services` from the line). The provider declares the same services in `list`.
+- After that stdin accepts only `node_service_request` and `node_service_command` frames for the three services, and stdout carries only `node_service_response`, `node_service_error` and `node_service_event`. Any other frame (a model tool call, exec, an unknown type or service) ends the process with exit code 2 without running anything: this mode has no model-tool or exec surface. There is no pairing, token, credential file or outbound connection; whoever holds the pipe is the administrator's own channel.
+- Stdin EOF ends the process. Its terminals end with it (terminals do not survive the channel in this mode), so the provider should close the relayed pipe's stdin on EOF and make sure the remote process ends (the CLI does so itself on EOF; a relay such as `ssh` or `docker exec` must also propagate it). Frames use the same 72 MiB limit. Diagnostics go to stderr; stdout carries frames only.
+- The optional `code` shell helper works unchanged: the CLI emits the `code-request` terminal event and Core answers with `code-result`.
 
 ### Limits
 

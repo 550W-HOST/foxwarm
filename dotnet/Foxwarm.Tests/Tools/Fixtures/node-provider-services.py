@@ -29,7 +29,7 @@ root.mkdir(parents=True, exist_ok=True)
 log_lock = threading.Lock()
 out_lock = threading.Lock()
 
-SERVICES = {"vscode-fs": 1, "vscode-git": 1, "vscode-pty": 1}
+SERVICES = {"vscode-fs": 1, "vscode-git": 2 if mode == "cli-stdio" else 1, "vscode-pty": 1}
 
 
 def log(entry):
@@ -328,8 +328,47 @@ def serve(service, operation, args):
     raise ServiceError("Unknown", "Unsupported node service: " + service, 400)
 
 
+def pipe_to_cli(request, node_id):
+    """Adapter shape for a real environment: the pipe is handed to `foxwarm-node --stdio`.
+
+    Production adapters would put `docker exec -i ... foxwarm-node --stdio` or an `ssh` command
+    here. This one starts the local CLI Node binary given as the fourth argument, with the
+    .NET installation root given as the fifth (Main passes providers a minimal environment).
+    """
+    env = dict(os.environ)
+    if len(sys.argv) > 4:
+        env["DOTNET_ROOT"] = sys.argv[4]
+    child = subprocess.Popen([sys.argv[3], "--stdio"], stdin=subprocess.PIPE, env=env,
+                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    ready = json.loads(child.stdout.readline())
+    log({"connect": node_id, "pid": os.getpid(), "cliPid": child.pid})
+    response = {key: request[key] for key in ("protocol", "providerId", "requestId", "operation")}
+    response.update(ok=True, result={"nodeId": node_id, "services": ready["services"]})
+    emit(response)
+
+    def forward_output():
+        for line in child.stdout:
+            with out_lock:
+                sys.stdout.buffer.write(line)
+                sys.stdout.buffer.flush()
+        os._exit(0)  # the CLI ended: end this channel generation
+
+    threading.Thread(target=forward_output, daemon=True).start()
+    for line in sys.stdin.buffer:
+        child.stdin.write(line)
+        child.stdin.flush()
+    log({"eof": node_id})
+    child.stdin.close()  # EOF is the disconnect; the CLI ends its terminals and exits
+    try:
+        child.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        child.kill()
+
+
 def connect(request):
     node_id = request["request"]["nodeId"]
+    if mode == "cli-stdio":
+        return pipe_to_cli(request, node_id)
     log({"connect": node_id, "pid": os.getpid()})
     if mode == "stderr-flood":
         sys.stderr.write("x" * 300000)

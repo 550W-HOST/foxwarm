@@ -6,6 +6,8 @@ The CLI node is the full remote worker client. It connects to the master over We
 
 The separate [.NET headless CLI Node](../units/dotnet-cli-node.md) implements headless connection/authentication, file tools, persistent native exec for Session and external owners, fixed Code filesystem/read-only Git and optional terminal services, a loopback trigger, the client Session list/history/send API and process-owned browser tools. Its browser/Native AOT limits and Main image boundary are documented in that unit. The [native-aware bootstrap](../units/native-node-bootstrap.md) selects qualified published packages, with retained TypeScript fallback on unsupported or unpublished Windows/macOS targets. This page otherwise maps the retained full TypeScript client.
 
+The `--stdio` mode serves only the Code/Terminal service frames over a caller-owned pipe for executable-Provider channels; see the [.NET CLI Node unit](../units/dotnet-cli-node.md).
+
 ## Units
 
 - [cli-node-client](../units/cli-node-client.md) — connection, pairing/auth, tool/service dispatch, file transfer, heartbeat, trigger server, and PTY host.

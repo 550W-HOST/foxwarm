@@ -14,15 +14,33 @@ public sealed class ProviderServiceChannelTests
     internal static JsonObject Configuration(
         string root,
         string mode = "normal",
-        int timeout = 5
-    ) =>
-        new()
+        int timeout = 5,
+        string? cli = null
+    )
+    {
+        var arguments = new JsonArray(Script, root, mode);
+        if (cli is not null)
+        {
+            arguments.Add(cli);
+            arguments.Add(
+                Path.GetFullPath(
+                    Path.Combine(
+                        System.Runtime.InteropServices.RuntimeEnvironment.GetRuntimeDirectory(),
+                        "..",
+                        "..",
+                        ".."
+                    )
+                )
+            );
+        }
+        return new()
         {
             ["type"] = "executable",
             ["command"] = "python3",
-            ["args"] = new JsonArray(Script, root, mode),
+            ["args"] = arguments,
             ["timeoutSeconds"] = (double)timeout,
         };
+    }
 
     internal sealed class Rig : IAsyncDisposable
     {
