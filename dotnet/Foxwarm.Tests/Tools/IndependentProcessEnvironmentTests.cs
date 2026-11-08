@@ -62,6 +62,36 @@ public sealed class IndependentProcessEnvironmentTests
     }
 
     [Fact]
+    public async Task Main_exec_drops_inherited_variables_whose_value_is_a_known_secret()
+    {
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
+            return;
+        using var temp = new TempDirectory();
+        using var environment = new HostEnvironment(temp.Path);
+        var previous = Environment.GetEnvironmentVariable("FOXWARM_SECRET_PROBE");
+        Environment.SetEnvironmentVariable("FOXWARM_SECRET_PROBE", "synthetic-known-secret-value");
+        try
+        {
+            await using var manager = new LocalExecManager(temp.Path, _ => temp.Path, (_, _, _) => Task.CompletedTask)
+            {
+                InheritedSecret = value => value == "synthetic-known-secret-value",
+            };
+            var result = await manager.ExecuteAsync("main/owned", new JsonObject
+            {
+                ["command"] = "printf '%s|%s\\n' \"${FOXWARM_SECRET_PROBE-unset}\" \"$FOXWARM_ENV_PROBE\"; FOXWARM_SECRET_PROBE=explicit /bin/bash -c 'printf \"%s\\n\" \"$FOXWARM_SECRET_PROBE\"'",
+                ["timeout"] = 10,
+            }, default);
+            Assert.Null(result["error"]);
+            Assert.Contains("unset|ordinary value\nexplicit\n", result["output"]!.ToString());
+            Assert.Equal("synthetic-known-secret-value", Environment.GetEnvironmentVariable("FOXWARM_SECRET_PROBE"));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("FOXWARM_SECRET_PROBE", previous);
+        }
+    }
+
+    [Fact]
     public async Task Cli_exec_passes_clean_environment_to_its_native_launch_boundary()
     {
         using var temp = new TempDirectory();
