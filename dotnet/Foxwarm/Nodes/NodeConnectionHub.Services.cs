@@ -7,18 +7,9 @@ namespace Foxwarm.Nodes;
 
 internal sealed partial class NodeConnectionHub
 {
-    internal sealed record ServiceTarget(
-        string NodeId,
-        string Service,
-        Guid ConnectionId,
-        int Version
-    );
-
-    internal sealed record ServiceEvent(ServiceTarget Target, JsonObject Event);
-
     private sealed record ServiceInvocation(
         Connection Connection,
-        ServiceTarget Target,
+        NodeServiceTarget Target,
         TaskCompletionSource<JsonObject> Result,
         Action<JsonObject>? Receive
     );
@@ -26,7 +17,7 @@ internal sealed partial class NodeConnectionHub
     private readonly ConcurrentDictionary<string, ServiceInvocation> serviceCalls = new(
         StringComparer.Ordinal
     );
-    internal event Action<ServiceEvent>? ServiceReceived;
+    internal event Action<NodeServiceEvent>? ServiceReceived;
     internal event Action<Guid, string>? ServicesDisconnected;
 
     private static int ServiceVersion(Connection connection, string service) =>
@@ -37,7 +28,7 @@ internal sealed partial class NodeConnectionHub
             ? (int)version
             : 0;
 
-    internal ServiceTarget Service(string id, string service, int minimumVersion = 1)
+    internal NodeServiceTarget Service(string id, string service, int minimumVersion = 1)
     {
         lock (gate)
         {
@@ -61,14 +52,14 @@ internal sealed partial class NodeConnectionHub
         }
     }
 
-    internal ServiceTarget[] Services(string service)
+    internal NodeServiceTarget[] Services(string service)
     {
         lock (gate)
             return nodes
                 .Values.Where(c =>
                     !c.Retired && c.Executable && c.Open && ServiceVersion(c, service) >= 1
                 )
-                .Select(c => new ServiceTarget(
+                .Select(c => new NodeServiceTarget(
                     c.Id!,
                     service,
                     c.Generation,
@@ -77,7 +68,7 @@ internal sealed partial class NodeConnectionHub
                 .ToArray();
     }
 
-    private Connection RequireService(ServiceTarget target)
+    private Connection RequireService(NodeServiceTarget target)
     {
         var current = Service(target.NodeId, target.Service, target.Version);
         if (current.ConnectionId != target.ConnectionId)
@@ -99,7 +90,7 @@ internal sealed partial class NodeConnectionHub
     ) => RequestServiceAsync(Service(id, service, minimumVersion), operation, args, token);
 
     internal async Task<JsonObject> RequestServiceAsync(
-        ServiceTarget target,
+        NodeServiceTarget target,
         string operation,
         JsonObject args,
         CancellationToken token,
@@ -156,7 +147,7 @@ internal sealed partial class NodeConnectionHub
     }
 
     internal async Task CommandServiceAsync(
-        ServiceTarget target,
+        NodeServiceTarget target,
         string operation,
         JsonObject args,
         CancellationToken token = default
@@ -180,7 +171,7 @@ internal sealed partial class NodeConnectionHub
     }
 
     private async Task SendServiceAsync(
-        ServiceTarget target,
+        NodeServiceTarget target,
         Connection connection,
         JsonObject message,
         CancellationToken token,
@@ -240,52 +231,15 @@ internal sealed partial class NodeConnectionHub
             if (!serviceCalls.TryRemove(id, out _))
                 return;
         }
-        if (success)
-        {
-            if (message["result"] is JsonObject result)
-            {
-                try
-                {
-                    var copy = (JsonObject)result.DeepClone();
-                    // Attachment readiness is published before this socket admits subsequent stream events.
-                    invocation.Receive?.Invoke(copy);
-                    invocation.Result.TrySetResult(copy);
-                }
-                catch (Exception error)
-                {
-                    invocation.Result.TrySetException(error);
-                }
-            }
-            else
-                invocation.Result.TrySetException(
-                    new CodeServiceException(
-                        "NodeServiceError",
-                        "Invalid Node service response.",
-                        502
-                    )
-                );
-        }
-        else
-        {
-            var error = message["error"] as JsonObject;
-            var status = SessionWait.Number(error?["statusCode"]);
-            invocation.Result.TrySetException(
-                new CodeServiceException(
-                    SessionWait.Text(error?["code"]) ?? "NodeServiceError",
-                    SessionWait.Text(error?["message"])
-                        ?? SessionWait.Text(message["error"])
-                        ?? "Node service failed.",
-                    status is >= 400 and <= 599 ? (int)status : 500
-                )
-            );
-        }
+        NodeServiceReplies.Complete(message, success, invocation.Result, invocation.Receive);
     }
 
     private void HandleServiceEvent(Connection connection, JsonObject message)
     {
         var service = SessionWait.Text(message["service"]);
         if (
-            service is not ("vscode-fs" or "vscode-git" or "vscode-pty")
+            service is null
+            || !NodeServiceReplies.FixedServices.Contains(service)
             || message["event"] is not JsonObject payload
         )
             return;

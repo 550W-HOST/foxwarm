@@ -27,6 +27,10 @@ internal sealed partial class NodeProviderRegistry
     {
         this.native = native;
         this.pending = pending ?? new();
+        forwardEvent = value => ServiceReceived?.Invoke(value);
+        forwardDisconnect = (generation, reason) =>
+            ServicesDisconnected?.Invoke(generation, reason);
+        ConnectServiceEvents();
         var app = new JsonObject();
         if (configuration is not null)
             app["nodeProviders"] = configuration.DeepClone();
@@ -141,6 +145,7 @@ internal sealed partial class NodeProviderRegistry
         discovered.Clear();
         foreach (var value in inventories.Values.SelectMany(nodes => nodes.OfType<JsonObject>()))
             PublishDescriptor(value);
+        ReconcileChannels();
         return Snapshot();
     }
 
@@ -221,6 +226,7 @@ internal sealed partial class NodeProviderRegistry
             PublishDescriptor(descriptor);
         else
             discovered.TryRemove(id, out _);
+        ReconcileChannels(id);
         return descriptor;
     }
 
@@ -326,7 +332,9 @@ internal sealed partial class NodeProviderRegistry
             ["online"] = ready,
             ["connected"] = ready,
             ["executable"] = ready,
-            ["services"] = new JsonObject(),
+            ["services"] = ready
+                ? descriptor["services"]?.DeepClone() ?? new JsonObject()
+                : new JsonObject(),
             ["tools"] = DefinitionsFor(descriptor),
         };
     }

@@ -46,10 +46,16 @@ internal sealed partial class CodeWorkbench
                 <h1>Code is not installed</h1>
                 <p>This Foxwarm installation does not currently include the optional browser workbench assets. Choose one preparation method, then reload this page.</p>
                 <section class="option">
-                  <strong>Download Code OSS for Foxwarm {{WebUtility.HtmlEncode(ProductVersion.Value)}}</strong>
+                  <strong>Download Code OSS for Foxwarm {{WebUtility.HtmlEncode(
+                ProductVersion.Value
+            )}}</strong>
                   <p>Run on the computer running Foxwarm, then reload this page.</p>
-                  <details><summary>Linux / macOS</summary><code>{{WebUtility.HtmlEncode(InstallCommand(Assets, false))}}</code></details>
-                  <details><summary>Windows PowerShell</summary><code>{{WebUtility.HtmlEncode(InstallCommand(Assets, true))}}</code></details>
+                  <details><summary>Linux / macOS</summary><code>{{WebUtility.HtmlEncode(
+                InstallCommand(Assets, false)
+            )}}</code></details>
+                  <details><summary>Windows PowerShell</summary><code>{{WebUtility.HtmlEncode(
+                InstallCommand(Assets, true)
+            )}}</code></details>
                 </section>
                 <section class="option">
                   <strong>Build the MIT-licensed Code - OSS workbench from source</strong>
@@ -59,7 +65,9 @@ internal sealed partial class CodeWorkbench
                   <strong>Download Microsoft's prebuilt workbench for development or licensed internal use</strong>
                   <code>npm run download:code</code>
                 </section>
-                <p class="hint">The npm commands require a source checkout. Install Code assets into <span class="path">{{WebUtility.HtmlEncode(Assets)}}</span>.</p>
+                <p class="hint">The npm commands require a source checkout. Install Code assets into <span class="path">{{WebUtility.HtmlEncode(
+                Assets
+            )}}</span>.</p>
               </main>
             </body>
             </html>
@@ -233,7 +241,7 @@ internal sealed partial class CodeWorkbench
 
     internal static Task DownloadAsync(
         HttpContext context,
-        Foxwarm.Nodes.NodeConnectionHub nodes
+        Foxwarm.Nodes.NodeProviderRegistry nodes
     ) =>
         Guard(
             context,

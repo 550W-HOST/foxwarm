@@ -22,7 +22,7 @@ internal sealed partial class WebUIChannel(
     private WebUiRealtime realtime = null!;
     private readonly Foxwarm.Terminal.TerminalRouter terminalRouter = new(
         terminals,
-        sessions.Nodes
+        sessions.NodeProviders
     );
 
     public void Register(WebApplication app)

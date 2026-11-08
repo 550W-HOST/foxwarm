@@ -23,7 +23,7 @@ Commands and fixed arguments are administrator configuration. Core uses `shell:f
 
 The single current protocol identifier is `foxwarm-node-provider`. There is no protocol-version field, negotiation, legacy exec adapter or fallback.
 
-Each request launches a new process. Core writes one JSON request to stdin and closes stdin. The provider writes exactly one JSON response to stdout and exits. Diagnostics belong on stderr. Echo these four identity fields exactly:
+Each model-tool, exec, lifecycle and discovery request launches a new process. Core writes one JSON request to stdin and closes stdin. The provider writes exactly one JSON response to stdout and exits. Diagnostics belong on stderr. Code and Terminal services use the separate, optional [service channel](#optional-service-channel) below. Echo these four identity fields exactly:
 
 ```json
 {
@@ -36,7 +36,7 @@ Each request launches a new process. Core writes one JSON request to stdin and c
 
 Operations with inputs add `request`. Success adds `"ok": true, "result": ...`; failure adds `"ok": false, "error": { "code": "SafeCode", "message": "Safe message", "retryable": false }`. Result and error are mutually exclusive. Error text must be safe for the caller: do not include credentials, private launcher arguments or raw transport diagnostics.
 
-Operations are `describe`, `list`, `filesystem`, `exec-start`, `exec-poll`, and declared `create`, `ensure`, `inspect`, `destroy` lifecycle actions. A response identity mismatch or malformed response fails the call; Core does not try another protocol or replay effects.
+Operations are `describe`, `list`, `filesystem`, `exec-start`, `exec-poll`, declared `create`, `ensure`, `inspect`, `destroy` lifecycle actions, and `connect`, which opens the optional service channel instead of answering one request. A response identity mismatch or malformed response fails the call; Core does not try another protocol or replay effects.
 
 ## Describe
 
@@ -77,11 +77,12 @@ Agents use `node({action:"inspect",providerId:"provider-id"})` to discover the d
   "availability": "ready",
   "defaultCwd": "provider-defined://root",
   "filesystem": "read-write",
-  "exec": true
+  "exec": true,
+  "services": { "vscode-fs": 1, "vscode-git": 2, "vscode-pty": 1 }
 }
 ```
 
-`label`, `kind`, `defaultCwd` and `exec` are optional. Kind is `remote` (the default) or `sandbox`; the latter is provider metadata, not an isolation guarantee. Availability is `ready`, `offline`, `unavailable` or `error`.
+`label`, `kind`, `defaultCwd`, `exec` and `services` are optional. `services` declares the fixed Code/Terminal services the Node can serve over the [service channel](#optional-service-channel), with the same names and versions as a resident Node's capabilities. A Provider that omits it keeps today's behavior; no version or negotiation field is added. Names Core does not know are ignored; a malformed shape or a version that is not a positive integer rejects the inventory. Kind is `remote` (the default) or `sandbox`; the latter is provider metadata, not an isolation guarantee. Availability is `ready`, `offline`, `unavailable` or `error`.
 
 `filesystem:"read"` derives canonical `read`. `filesystem:"read-write"` also derives `write`, `edit` and `apply_patch`. `exec:true` derives canonical `exec`. Every executable-provider Node exposes at least a read filesystem: exec logs must be readable in the same Node namespace. Providers do not supply model tool schemas, tool formatting or patch semantics. Unsupported capabilities never fall back to Main.
 
@@ -201,12 +202,59 @@ CreatedBy-bearing internal callers must give an explicit `ensure.nodeId`; Core t
 
 Core checks global identity, retains Main-owned mutation ordering, requires exact destroy confirmation, and does not infer deletion, erasure, isolation or lease guarantees. Create/ensure do not select the Node, create an Agent or assign work. Destroy does not acquire a new busy-exec restriction or implicitly kill commands: subsequent polls report the provider's actual finished/lost behavior.
 
+## Optional service channel
+
+Code (file browser, editor, source control) and Terminal use three fixed administrator services: `vscode-fs` (version 1), `vscode-git` (version 1; immutable commit details need 2) and `vscode-pty` (version 1). They are not model tools: they do not pass model-tool approval and are available only to the administrator web interface for Nodes admitted to the authorization tree. A Node that declares `services` in `list` can serve them over one long-lived pipe to the same `command`/`args`. A one-shot request per file or Git call is not used: Code issues many small concurrent requests, the one-shot admission limit of eight would reject them, and every call would re-enter the target environment.
+
+### Connecting
+
+Core starts the channel the first time a service is used, not at discovery. It launches the executable like any request, then writes one standard envelope line to stdin and **keeps stdin and stdout open**:
+
+```json
+{"protocol":"foxwarm-node-provider","providerId":"provider-id","requestId":"generated-request-id","operation":"connect","request":{"nodeId":"example-node"}}
+```
+
+`nodeId` is the local ID, as in every other request. The provider connects to that environment and writes one confirmation line using the usual response envelope. It must echo `protocol`, `providerId`, `requestId` and `operation` exactly:
+
+```json
+{"protocol":"foxwarm-node-provider","providerId":"provider-id","requestId":"generated-request-id","operation":"connect","ok":true,"result":{"nodeId":"example-node","services":{"vscode-fs":1,"vscode-git":2,"vscode-pty":1}}}
+```
+
+`result.nodeId` must repeat the requested local ID, and `result.services` lists the services and versions this process actually serves; those versions are authoritative for the channel. A failure uses the normal `ok:false` error envelope, whose safe message is shown to the administrator. An identity mismatch, a different `nodeId`, a malformed confirmation, an early exit, or no confirmation within `timeoutSeconds` fails the start, terminates the process and is not retried. Unsolicited frames before the confirmation are invalid.
+
+### Frames
+
+After confirmation both directions exchange newline-delimited JSON objects (one UTF-8 JSON text per line, LF terminated, no embedded newlines) using the same `node_service_*` frames as resident Nodes:
+
+| Direction | Frame | Fields |
+|---|---|---|
+| Core → provider | `node_service_request` | `requestId`, `service`, `operation`, `args` |
+| Core → provider | `node_service_command` | `service`, `operation`, `args` (one-way; no reply) |
+| Provider → Core | `node_service_response` | `requestId`, `result` (object) |
+| Provider → Core | `node_service_error` | `requestId`, `error`: `{ "code", "message", "statusCode" }` (HTTP 400–599) |
+| Provider → Core | `node_service_event` | `service`, `event` (object) |
+
+The operations, arguments, results and event shapes of the three services are exactly those of resident Nodes, so a provider implementation maps one-to-one onto them: `vscode-fs` `stat`, `read-directory`, `read-file`, `write-file`, `create-directory`, `delete`, `rename`; `vscode-git` `status`, `commit` (2), `content`. Requests can be outstanding concurrently and replies can arrive in any order; correlate by `requestId`. A reply for an unknown or finished request is ignored. Any other frame type, malformed JSON, or an event for a service the channel did not confirm ends the channel. Service request deadlines are 30 seconds; Core does not retry or replay a request whose outcome is uncertain, and has no request cancellation frame.
+
+`vscode-fs` requires absolute paths in the target's POSIX-style namespace and rejects relative ones with `InvalidPath`. Code can open a Provider workspace only with a usable absolute root, so a Node that declares services should also give an absolute `defaultCwd`. Content crosses as canonical base64; a file of up to 50 MiB is read or written in a single frame.
+
+### Limits
+
+Each frame in either direction is limited to 72 MiB (a 50 MiB file is about 67 MiB as base64 plus its envelope). An oversize or unterminated frame ends the channel. Core drains the provider's stderr continuously and discards it; the one-shot stderr limit does not apply to a channel, and diagnostics are never returned to callers. The eight active one-shot requests per provider do not count channel requests.
+
+### Lifecycle
+
+There is one channel per Node, started lazily and shared by all callers. The channel is a **transport generation**. The generation ends when the provider process exits, stdout closes, a frame is invalid, a write fails, discovery no longer reports the Node ready with services, or Main shuts down or restarts. Core detects disconnection by pipe EOF and process exit only; there is no heartbeat. To end a channel Core closes stdin and gives the process a short time to exit before terminating it, so a provider must exit when stdin reaches EOF and release its environment connection (for example the `ssh` or `docker exec` child). When a generation ends, outstanding requests fail with `NodeUnavailable` and their effects are not retried, and attached terminals receive a transport error rather than a process exit. The next use starts a new generation with a new `connect`; earlier requests are never replayed, and a stale endpoint is never moved to the new generation.
+
+Because the channel is a child of the Main server, it always closes when Main restarts. Whether state behind it survives (for example, running terminals) is the provider's choice. A provider that keeps terminals across channels should list them again after reconnect and describe that retention in `describe.description` or `dataRetention`, as exec retention is described.
+
 ## Bounds and failure handling
 
 - Request JSON: 4 MiB; list and process metadata stdout: 256 KiB.
 - Filesystem stdout: 8 MiB; description/lifecycle stdout: 512 KiB; lifecycle details: 64 KiB.
 - Parameter schemas: 16 KiB each; stderr: 64 KiB; Nodes per provider: 100.
 - Active requests per provider: 8; configured deadline: 1–300 seconds, default 90; poll deadline capped at 5 seconds.
+- Service channel: one per Node; `connect` confirmation line 64 KiB within the configured deadline; 72 MiB per frame; service requests 30 seconds.
 
 Malformed, multiple or oversized responses, identity mismatches, abnormal exits, cancellation and deadline failures terminate that RPC without fallback or automatic replay. The transport bounds graceful-first termination and direct-child exit confirmation; raw stderr and launcher paths are not returned. An `exec-start` transport failure may still have caused a remote effect.
 

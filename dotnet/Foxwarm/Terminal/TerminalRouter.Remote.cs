@@ -20,11 +20,11 @@ internal sealed partial class TerminalRouter
 
         private sealed record PendingControl(
             TerminalClient Owner,
-            NodeConnectionHub.ServiceTarget Target,
+            NodeServiceTarget Target,
             Timer Timeout
         );
 
-        private NodeConnectionHub.ServiceTarget target;
+        private NodeServiceTarget target;
         private JsonObject descriptor;
         private string backlog = "";
         private bool attached;
@@ -35,7 +35,7 @@ internal sealed partial class TerminalRouter
 
         internal RemoteTerminal(
             TerminalRouter router,
-            NodeConnectionHub.ServiceTarget target,
+            NodeServiceTarget target,
             JsonObject descriptor
         )
         {
@@ -52,7 +52,7 @@ internal sealed partial class TerminalRouter
                 return (JsonObject)descriptor.DeepClone();
         }
 
-        internal void Refresh(NodeConnectionHub.ServiceTarget newTarget, JsonObject value)
+        internal void Refresh(NodeServiceTarget newTarget, JsonObject value)
         {
             if (newTarget.NodeId != NodeId || SessionWait.Text(value["id"]) != Id)
                 throw new CodeServiceException(
@@ -90,7 +90,12 @@ internal sealed partial class TerminalRouter
                         needsAttach = !attached;
                     if (needsAttach)
                     {
-                        var endpoint = router.nodes.Service(NodeId, "vscode-pty");
+                        var endpoint = await router.nodes.ServiceAsync(
+                            NodeId,
+                            "vscode-pty",
+                            1,
+                            token
+                        );
                         lock (gate)
                         {
                             target = endpoint;
@@ -181,7 +186,7 @@ internal sealed partial class TerminalRouter
             {
                 List<(string Id, PendingControl Pending)> rejected;
                 bool detach;
-                NodeConnectionHub.ServiceTarget endpoint;
+                NodeServiceTarget endpoint;
                 lock (gate)
                 {
                     if (!clients.Remove(client))
@@ -223,7 +228,7 @@ internal sealed partial class TerminalRouter
         }
 
         private async Task TryCommandAsync(
-            NodeConnectionHub.ServiceTarget endpoint,
+            NodeServiceTarget endpoint,
             string operation,
             JsonObject args
         )
@@ -245,7 +250,7 @@ internal sealed partial class TerminalRouter
         {
             if (Encoding.UTF8.GetByteCount(text) > 64 * 1024)
                 throw new InvalidDataException("Terminal input is too large.");
-            NodeConnectionHub.ServiceTarget endpoint;
+            NodeServiceTarget endpoint;
             lock (gate)
                 endpoint = target;
             return router.nodes.CommandServiceAsync(
@@ -260,7 +265,7 @@ internal sealed partial class TerminalRouter
         {
             cols = Math.Max(20, cols);
             rows = Math.Max(5, rows);
-            NodeConnectionHub.ServiceTarget endpoint;
+            NodeServiceTarget endpoint;
             lock (gate)
                 endpoint = target;
             await router.nodes.CommandServiceAsync(
@@ -318,7 +323,7 @@ internal sealed partial class TerminalRouter
             );
         }
 
-        internal void Receive(NodeConnectionHub.ServiceEvent value)
+        internal void Receive(NodeServiceEvent value)
         {
             // Hub admission already binds the authenticated connection. Never copy peer-supplied identity or arbitrary fields.
             string? rejectId = null;
@@ -490,7 +495,7 @@ internal sealed partial class TerminalRouter
 
         internal async Task ShutdownAsync()
         {
-            NodeConnectionHub.ServiceTarget endpoint;
+            NodeServiceTarget endpoint;
             bool detach;
             lock (gate)
             {

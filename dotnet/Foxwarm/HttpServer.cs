@@ -351,7 +351,7 @@ internal sealed class HttpServer
             sessions,
             accessConfiguration,
             request => Authorized(request, apiToken, browserCookie),
-            context => Foxwarm.Code.CodeWorkbench.DownloadAsync(context, sessions.Nodes)
+            context => Foxwarm.Code.CodeWorkbench.DownloadAsync(context, sessions.NodeProviders)
         );
         app.MapGet("/health", () => Results.Ok(new { status = "ready" }));
         app.MapPost(

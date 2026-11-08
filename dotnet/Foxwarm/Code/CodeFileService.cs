@@ -9,7 +9,13 @@ internal static class CodeFileService
     internal static string Node(string? value)
     {
         var id = string.IsNullOrWhiteSpace(value) ? "master" : value.Trim();
-        if (!System.Text.RegularExpressions.Regex.IsMatch(id, "^[A-Za-z0-9._-]+$"))
+        // Resident IDs are one segment; Provider Nodes are provider/local (the Code URI encodes the slash).
+        if (
+            !System.Text.RegularExpressions.Regex.IsMatch(
+                id,
+                "^(?:[A-Za-z0-9._-]+|[A-Za-z0-9][A-Za-z0-9._-]{0,63}/[A-Za-z0-9][A-Za-z0-9._:-]{0,127})$"
+            )
+        )
             throw new CodeServiceException("InvalidNode", "Invalid node id.");
         return id;
     }

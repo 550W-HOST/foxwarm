@@ -21,7 +21,7 @@ internal sealed partial class CodeWorkbench
     private readonly string defaultFolder;
     private readonly string workspacePath;
     private readonly bool hasPty;
-    private readonly Foxwarm.Nodes.NodeConnectionHub nodes;
+    private readonly Foxwarm.Nodes.NodeProviderRegistry nodes;
     private readonly object workspaceGate = new();
     private readonly string capabilityRoute =
         "webview/" + Convert.ToHexString(RandomNumberGenerator.GetBytes(24)).ToLowerInvariant();
@@ -36,7 +36,7 @@ internal sealed partial class CodeWorkbench
     internal CodeWorkbench(SessionManager sessions, PublicWebAddress address, bool hasPty)
     {
         this.hasPty = hasPty;
-        nodes = sessions.Nodes;
+        nodes = sessions.NodeProviders;
         publicAddress = address;
         dataRoot = sessions.DataRoot;
         var config = sessions.Models.ConfigurationOwner;

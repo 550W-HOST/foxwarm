@@ -28,6 +28,7 @@ internal sealed partial class ExecutableNodeProvider(string id, JsonObject confi
     private readonly object descriptionGate = new();
     private Task<JsonObject>? description;
     internal string Id => id;
+    internal int TimeoutSeconds => timeoutSeconds;
     internal string? ParentNode => SessionWait.Text(config["parentNode"]);
     private static readonly string[] EnvironmentKeys =
     [
@@ -130,7 +131,17 @@ internal sealed partial class ExecutableNodeProvider(string id, JsonObject confi
         var node = Object(raw);
         Keys(
             node,
-            ["id", "label", "kind", "type", "availability", "filesystem", "exec", "defaultCwd"]
+            [
+                "id",
+                "label",
+                "kind",
+                "type",
+                "availability",
+                "filesystem",
+                "exec",
+                "defaultCwd",
+                "services",
+            ]
         );
         var local = Exact(node["id"], 128, "^[A-Za-z0-9][A-Za-z0-9._:-]*$");
         if (local.Equals("master", StringComparison.OrdinalIgnoreCase))
@@ -155,10 +166,39 @@ internal sealed partial class ExecutableNodeProvider(string id, JsonObject confi
         if (node.ContainsKey("defaultCwd"))
             Bounded(node["defaultCwd"], 4096);
         var qualified = (JsonObject)node.DeepClone();
+        if (node.ContainsKey("services"))
+            qualified["services"] = DeclaredServices(node["services"]);
         qualified["id"] = id + "/" + local;
         qualified["provider"] = id;
         qualified["kind"] ??= "remote";
         return qualified;
+    }
+
+    /// <summary>Fixed Code/Terminal services a Provider Node may declare.</summary>
+    internal static readonly string[] ServiceNames = ["vscode-fs", "vscode-git", "vscode-pty"];
+
+    // Shape is validated strictly; names Main does not know are ignored so a newer adapter's
+    // extra declarations do not invalidate its whole inventory.
+    private static JsonObject DeclaredServices(JsonNode? value)
+    {
+        if (value is not JsonObject declared || declared.Count > 16)
+            throw Invalid("Provider services must be an object.");
+        var result = new JsonObject();
+        foreach (var (name, version) in declared)
+        {
+            if (!Regex.IsMatch(name, "^[a-z][a-z0-9-]{0,63}$", RegexOptions.CultureInvariant))
+                throw Invalid("Provider service name is invalid.");
+            if (
+                SessionWait.Number(version) is not double number
+                || number < 1
+                || number > 1000
+                || number != Math.Truncate(number)
+            )
+                throw Invalid("Provider service version is invalid.");
+            if (ServiceNames.Contains(name))
+                result[name] = (int)number;
+        }
+        return result;
     }
 
     internal async Task<JsonObject> LifecycleAsync(
@@ -305,59 +345,72 @@ internal sealed partial class ExecutableNodeProvider(string id, JsonObject confi
             {
                 throw Invalid("Provider stdout must contain exactly one JSON response.");
             }
-            Keys(
-                response,
-                ["protocol", "providerId", "requestId", "operation", "ok", "result", "error"]
-            );
-            foreach (var key in new[] { "protocol", "providerId", "requestId", "operation" })
-                if (SessionWait.Text(response[key]) != SessionWait.Text(envelope[key]))
-                    throw new NodeProviderException(
-                        "NODE_PROVIDER_"
-                            + (
-                                key == "protocol" ? "PROTOCOL"
-                                : key == "providerId" ? "ID"
-                                : key == "requestId" ? "REQUEST"
-                                : "OPERATION"
-                            )
-                            + "_MISMATCH",
-                        "Provider response identity does not match the request."
-                    );
-            if (response["ok"] is JsonValue ok && ok.TryGetValue<bool>(out var success))
-            {
-                if (success && response.ContainsKey("result") && !response.ContainsKey("error"))
-                    return response["result"]?.DeepClone();
-                if (
-                    !success
-                    && !response.ContainsKey("result")
-                    && response["error"] is JsonObject error
-                )
-                {
-                    Keys(error, ["code", "message", "retryable"]);
-                    var code = Exact(error["code"], 128, "^[A-Za-z0-9][A-Za-z0-9_.:-]*$");
-                    var message = SessionWait.Text(error["message"]);
-                    if (
-                        message is not { Length: > 0 and <= 16384 }
-                        || message.Any(c => c is < ' ' and not ('\t' or '\n' or '\r') || c == 127)
-                        || error.ContainsKey("retryable")
-                            && (
-                                error["retryable"] is not JsonValue retry
-                                || !retry.TryGetValue<bool>(out _)
-                            )
-                    )
-                        throw Invalid("Provider error is invalid.");
-                    throw new NodeProviderException(
-                        operation == "filesystem" ? code : "NODE_PROVIDER_REPORTED_ERROR",
-                        message,
-                        error["retryable"]?.GetValue<bool>() == true
-                    );
-                }
-            }
-            throw Invalid("Provider response must contain either a result or error envelope.");
+            return ParseResponse(operation, envelope, response);
         }
         finally
         {
             Interlocked.Decrement(ref active);
         }
+    }
+
+    /// <summary>
+    /// Validates the echoed identity and the result/error exclusivity shared by one-shot responses
+    /// and the persistent channel's connect confirmation.
+    /// </summary>
+    internal static JsonNode? ParseResponse(
+        string operation,
+        JsonObject envelope,
+        JsonObject response
+    )
+    {
+        Keys(
+            response,
+            ["protocol", "providerId", "requestId", "operation", "ok", "result", "error"]
+        );
+        foreach (var key in new[] { "protocol", "providerId", "requestId", "operation" })
+            if (SessionWait.Text(response[key]) != SessionWait.Text(envelope[key]))
+                throw new NodeProviderException(
+                    "NODE_PROVIDER_"
+                        + (
+                            key == "protocol" ? "PROTOCOL"
+                            : key == "providerId" ? "ID"
+                            : key == "requestId" ? "REQUEST"
+                            : "OPERATION"
+                        )
+                        + "_MISMATCH",
+                    "Provider response identity does not match the request."
+                );
+        if (response["ok"] is JsonValue ok && ok.TryGetValue<bool>(out var success))
+        {
+            if (success && response.ContainsKey("result") && !response.ContainsKey("error"))
+                return response["result"]?.DeepClone();
+            if (
+                !success
+                && !response.ContainsKey("result")
+                && response["error"] is JsonObject error
+            )
+            {
+                Keys(error, ["code", "message", "retryable"]);
+                var code = Exact(error["code"], 128, "^[A-Za-z0-9][A-Za-z0-9_.:-]*$");
+                var message = SessionWait.Text(error["message"]);
+                if (
+                    message is not { Length: > 0 and <= 16384 }
+                    || message.Any(c => c is < ' ' and not ('\t' or '\n' or '\r') || c == 127)
+                    || error.ContainsKey("retryable")
+                        && (
+                            error["retryable"] is not JsonValue retry
+                            || !retry.TryGetValue<bool>(out _)
+                        )
+                )
+                    throw Invalid("Provider error is invalid.");
+                throw new NodeProviderException(
+                    operation == "filesystem" ? code : "NODE_PROVIDER_REPORTED_ERROR",
+                    message,
+                    error["retryable"]?.GetValue<bool>() == true
+                );
+            }
+        }
+        throw Invalid("Provider response must contain either a result or error envelope.");
     }
 
     internal static JsonObject Object(JsonNode? node) =>

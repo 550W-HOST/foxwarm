@@ -7,14 +7,10 @@ namespace Foxwarm.Nodes;
 
 internal sealed partial class ExecutableNodeProvider
 {
-    private async Task<string> RunChildAsync(
-        byte[] input,
-        int stdoutLimit,
-        int deadlineSeconds,
-        CancellationToken token
-    )
+    /// <summary>Starts the configured executable with redirected stdio and the allowlisted environment.</summary>
+    internal Process StartProcess()
     {
-        using var child = new Process();
+        var child = new Process();
         child.StartInfo = new ProcessStartInfo(command)
         {
             UseShellExecute = false,
@@ -36,12 +32,24 @@ internal sealed partial class ExecutableNodeProvider
         catch (Exception error)
             when (error is Win32Exception or InvalidOperationException or IOException)
         {
+            child.Dispose();
             throw new NodeProviderException(
                 "NODE_PROVIDER_PROCESS_START",
                 "Provider executable failed to start.",
                 true
             );
         }
+        return child;
+    }
+
+    private async Task<string> RunChildAsync(
+        byte[] input,
+        int stdoutLimit,
+        int deadlineSeconds,
+        CancellationToken token
+    )
+    {
+        using var child = StartProcess();
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
         deadline.CancelAfter(TimeSpan.FromSeconds(deadlineSeconds));
         var signal = deadline.Token;
@@ -146,7 +154,7 @@ internal sealed partial class ExecutableNodeProvider
         }
     }
 
-    private static async Task TerminateAsync(Process child)
+    internal static async Task TerminateAsync(Process child)
     {
         if (child.HasExited)
             return;

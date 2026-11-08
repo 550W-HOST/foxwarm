@@ -780,6 +780,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         await executor.DisposeAsync();
         await Browser.DisposeAsync();
         await mcp.DisposeAsync();
+        await NodeProviders.DisposeAsync();
         Nodes.Dispose();
         await websockets.DisposeAsync();
         await Journal.DisposeAsync();

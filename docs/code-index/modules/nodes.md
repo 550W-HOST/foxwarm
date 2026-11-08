@@ -35,7 +35,7 @@ Client implementations are separate modules: [CLI node](./cli-node.md) and [brow
 - Approved-node list/authenticate/remove/move operations.
 - `nodesManager` — registration, model-tool dispatch, backend-service dispatch, runtime disconnect, and access checks.
 - `nodeProviderRegistry` — production registry for fixed master/authenticated-remote providers plus normalized startup executable providers.
-- `foxwarm-node-provider` — one-shot bounded JSON stdin/stdout contract for trusted executable providers exposing describe/list, filesystem primitives, optional process start/poll, and optional create/ensure/inspect/destroy operations; see `docs/executable-node-provider-protocol.md`.
+- `foxwarm-node-provider` — one-shot (per request) bounded JSON stdin/stdout contract for trusted executable providers exposing describe/list, filesystem primitives, optional process start/poll, and optional create/ensure/inspect/destroy operations, plus an optional long-lived stdio service channel (`connect`) for the fixed Code/Terminal services; see `docs/executable-node-provider-protocol.md`.
 - `executeNodeTool()` — placement-neutral service caller for direct and dynamic non-master Node capability execution.
 - `readNodeFile()` — source-fenced complete non-master file reader behind ToolScript source loading; it retains canonical read authorization and provider availability rather than using displayed tool text.
 

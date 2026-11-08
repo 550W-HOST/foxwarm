@@ -16,7 +16,7 @@ Callers: host `Program.cs`/`HttpServer`, `WebUIChannel.Terminal`, Code workbench
 
 ## Remote router
 
-`TerminalRouter` keeps `TerminalRegistry`/`TerminalNative` as the local PTY implementation and uses advertised `vscode-pty` for remote create/list/get/attach/input/resize/detach/close. Remote records are transient browser attachment descriptors, not durable Main process ownership. List/get after reconnect or a Main restart query the unchanged CLI service and rediscover actual process IDs; missing/offline services do not invent terminal success or fall back to Master.
+`TerminalRouter` keeps `TerminalRegistry`/`TerminalNative` as the local PTY implementation and uses `NodeProviderRegistry` service routing (resident Nodes and admitted executable Providers) for advertised `vscode-pty` for remote create/list/get/attach/input/resize/detach/close. Remote records are transient browser attachment descriptors, not durable Main process ownership. List/get after reconnect or a Main restart query the unchanged CLI service and rediscover actual process IDs; missing/offline services do not invent terminal success or fall back to Master.
 
 List responses register returned descriptors and return the observed snapshot; absent entries do not delete cached records or disconnect live attachments, including terminals created while an older list is in flight. Definitive get-null, exit, explicit close and connection lifecycle signals retain their existing cleanup behavior.
 
