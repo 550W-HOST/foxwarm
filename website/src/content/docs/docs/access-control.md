@@ -56,7 +56,7 @@ rules:
 
 A matching call waits until someone approves or rejects it in the WebUI. The request appears above the message box with the tool, its arguments and targets, and the rule's reason. You can add a note for the agent either way. The call runs only after approval; a rejected or expired request returns an error to the agent, and Stop cancels a waiting call.
 
-- You can always decide as administrator. A [scoped identity](#scoped-webui-access) can decide only when it can see the Session and every rule that asked names it in `approvers`.
+- You can always decide as administrator. A [scoped identity](#scoped-webui-access) can decide only when it can see the Session and every rule that asked names it in `approvers`. Anyone who can open the Session can see the request and its arguments; `approvers` only limits who decides.
 - Without `timeoutSeconds`, a call waits until someone decides or the turn is stopped. Scheduled scripts give up after an hour unless the rule sets a deadline.
 - A request still waiting when Foxwarm restarts is dropped. The call does not run later.
 - Each approval covers one call. Repeating the call asks again.
