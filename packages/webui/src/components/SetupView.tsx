@@ -1,7 +1,7 @@
 import MobilePageHeader from './MobilePageHeader'
 import ContextMenu, {type ContextMenuAnchorRect} from './ContextMenu'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Bell, Bot, CheckCircle2, Palette, RefreshCw, Settings, SlidersHorizontal, XCircle } from 'lucide-react'
+import { Bell, Bot, CheckCircle2, KeyRound, Palette, RefreshCw, Settings, SlidersHorizontal, XCircle } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
 import { buildModelSetupYaml, defaultModelsYaml, formFromPreset, readModelSetupForm, validateModelSetupForm, type ModelSetupForm } from '../setupModels'
 import ModelSetupFormPanel from './ModelSetupFormPanel'
@@ -13,6 +13,7 @@ import SimpleCodeEditor from './SimpleCodeEditor'
 import ThemeManager from './ThemeManager'
 import FoxLoaderPreview from './FoxLoaderPreview'
 import NotificationSettings from './NotificationSettings'
+import SecretsPanel from './SecretsPanel'
 import WebUiBrandingSettings, { type WebUiBrandingSettingsValue } from './WebUiBrandingSettings'
 
 type SetupStatus = {
@@ -96,9 +97,9 @@ function StatusPill({ ok, label }: { ok: boolean; label: string }) {
 }
 
 type SaveResult = { kind: 'success' | 'error'; message: string }
-type SetupTab = 'appearance' | 'models' | 'config' | 'notifications'
+type SetupTab = 'appearance' | 'models' | 'config' | 'secrets' | 'notifications'
 type ModelsView = 'form' | 'yaml'
-const SETUP_TABS: SetupTab[] = ['appearance', 'models', 'config', 'notifications']
+const SETUP_TABS: SetupTab[] = ['appearance', 'models', 'config', 'secrets', 'notifications']
 
 function SaveFeedback({ section, result }: { section: 'models' | 'config'; result: SaveResult | null }) {
   if (!result) return null
@@ -167,6 +168,7 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
   const configTabRef = useRef<HTMLButtonElement | null>(null)
   const appearanceTabRef = useRef<HTMLButtonElement | null>(null)
   const notificationsTabRef = useRef<HTMLButtonElement | null>(null)
+  const secretsTabRef = useRef<HTMLButtonElement | null>(null)
   const rawModelsYamlRef = useRef(rawModelsYaml)
   const configYamlRef = useRef(configYaml)
   const modelsRevisionRef = useRef(0)
@@ -284,7 +286,7 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
 
   const activateTab = (tab: SetupTab, focus = false) => {
     setActiveTab(tab)
-    if (focus) requestAnimationFrame(() => ({ models: modelsTabRef, config: configTabRef, appearance: appearanceTabRef, notifications: notificationsTabRef })[tab].current?.focus())
+    if (focus) requestAnimationFrame(() => ({ models: modelsTabRef, config: configTabRef, appearance: appearanceTabRef, secrets: secretsTabRef, notifications: notificationsTabRef })[tab].current?.focus())
   }
 
   const handleTabKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
@@ -474,7 +476,7 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
       <ContentHeader
         icon={<Settings className="h-5 w-5" />}
         title={forced ? 'Foxwarm first-time setup' : 'Foxwarm Setup'}
-        subtitle={forced ? 'Add your model settings to continue.' : 'Manage models, channels, app settings, appearance, and notifications.'}
+        subtitle={forced ? 'Add your model settings to continue.' : 'Manage models, channels, app settings, secrets, appearance, and notifications.'}
         actions={
           <div className="flex items-center gap-2">
             <button
@@ -501,6 +503,7 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
         {key:'appearance',label:'Appearance',checked:activeTab==='appearance',selection:'radio',icon:<Palette size={16}/>,onSelect:()=>activateTab('appearance')},
         {key:'models',label:'Models',checked:activeTab==='models',selection:'radio',icon:<Bot size={16}/>,onSelect:()=>activateTab('models')},
         {key:'config',label:'Config',checked:activeTab==='config',selection:'radio',icon:<SlidersHorizontal size={16}/>,onSelect:()=>activateTab('config')},
+        {key:'secrets',label:'Secrets',checked:activeTab==='secrets',selection:'radio',icon:<KeyRound size={16}/>,onSelect:()=>activateTab('secrets')},
         {key:'notifications',label:'Notifications',checked:activeTab==='notifications',selection:'radio',icon:<Bell size={16}/>,onSelect:()=>activateTab('notifications')},
         {key:'sep',type:'separator'}, {key:'refresh',label:'Refresh',icon:<RefreshCw size={16}/>,onSelect:()=>{void loadStatus()}},
       ]} />
@@ -569,6 +572,22 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
                   {configTabStatus === 'complete' && <CheckCircle2 data-setup-tab-status="complete" className="h-4 w-4 shrink-0 text-fw-success dark:text-fw-success" aria-hidden="true" />}
                   {configTabStatus === 'attention' && <XCircle data-setup-tab-status="attention" className="h-4 w-4 shrink-0 text-fw-warning dark:text-fw-warning" aria-hidden="true" />}
                   {configTabStatus && <span className="sr-only">{configTabStatus === 'complete' ? 'Channels ready' : 'Channels need attention'}</span>}
+                </button>
+                <button
+                  ref={secretsTabRef}
+                  id="setup-tab-secrets"
+                  type="button"
+                  role="tab"
+                  aria-selected={activeTab === 'secrets'}
+                  aria-controls="setup-panel-secrets"
+                  tabIndex={activeTab === 'secrets' ? 0 : -1}
+                  data-setup-tab="secrets"
+                  onClick={() => activateTab('secrets')}
+                  onKeyDown={handleTabKeyDown}
+                  className={`inline-flex min-w-0 items-center gap-2 rounded-t-lg border-b-2 px-4 py-3 text-sm font-medium transition-colors ${activeTab === 'secrets' ? 'border-fw-accent-border text-fw-accent' : 'border-transparent text-fw-text hover:bg-fw-hover hover:text-fw-text-strong'}`}
+                >
+                  <KeyRound className="h-4 w-4 shrink-0" aria-hidden="true" />
+                  <span>Secrets</span>
                 </button>
                 <button
                   ref={notificationsTabRef}
@@ -669,6 +688,10 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
                   {forced && !canLeave && <span className="text-sm text-fw-warning dark:text-fw-warning">Save a valid model configuration to continue.</span>}
                 </div>
               </div>
+            </section>
+
+            <section id="setup-panel-secrets" role="tabpanel" aria-labelledby="setup-tab-secrets" data-setup-section="secrets" hidden={activeTab !== 'secrets'} className="min-h-0 flex-1 overflow-y-auto p-4 md:p-5">
+              {activeTab === 'secrets' && <SecretsPanel />}
             </section>
 
             <section id="setup-panel-notifications" role="tabpanel" aria-labelledby="setup-tab-notifications" data-setup-section="notifications" hidden={activeTab !== 'notifications'} className="min-h-0 flex-1 overflow-y-auto p-4 md:p-5">

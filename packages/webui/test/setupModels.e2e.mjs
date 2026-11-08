@@ -155,6 +155,10 @@ async function attachRequestMocks(targetPage, options = {}) {
   let mockConfigRawYaml = options.configRawYaml ?? statusPayload.config.rawYaml
   let mockOobe = !!options.oobe
   let mockSessionModel = 'route'
+  const secretRequests = options.secretRequests ?? []
+  let mockSecrets = [
+    { name: 'openai-key', description: 'Primary provider', isSet: true, redactable: true, createdAt: 1, updatedAt: 1, setAt: 1, retiredVersions: 0, retainedUntil: null, usages: [{ kind: 'provider', id: 'openai' }] },
+  ]
   let mockSessionEffort = null
   let mockChildModel = null
   let mockChildEffort = null
@@ -274,6 +278,26 @@ async function attachRequestMocks(targetPage, options = {}) {
         mockOobe = false
         void respondJson(request, { success: true, models: { ...statusPayload.models, rawYaml: savedRequest.yaml } })
       }
+      return
+    }
+    if (url.pathname.includes('/api/setup/secrets')) {
+      const body = request.postData() ? JSON.parse(request.postData()) : null
+      secretRequests.push({ method: request.method(), path: url.pathname, body })
+      const name = decodeURIComponent(url.pathname.split('/api/setup/secrets/')[1] || '')
+      if (request.method() === 'PUT' && body?.value) {
+        mockSecrets = [...mockSecrets.filter(secret => secret.name !== name), { name, description: body.description || '', isSet: true, redactable: body.value.length >= 12, createdAt: 2, updatedAt: 2, setAt: 2, retiredVersions: 0, retainedUntil: null, usages: [] }]
+        void respondJson(request, { secret: mockSecrets.at(-1), restartedChannels: [], ...(body.value.length < 12 ? { warning: 'Values shorter than 12 characters cannot be hidden from tool output and model requests.' } : {}) })
+        return
+      }
+      void respondJson(request, {
+        locked: false,
+        keyFile: '/srv/foxwarm/keys/secrets.key',
+        minimumRedactableLength: 12,
+        retiredRetentionDays: 90,
+        secrets: mockSecrets,
+        missing: mockSecrets.some(secret => secret.name === 'telegram-token') ? [] : [{ name: 'telegram-token', usages: [{ kind: 'channel', id: 'telegram' }] }],
+        exposures: [{ label: 'openai-key', count: 2, firstSeenAt: 1, lastSeenAt: 3, lastSource: 'tool-output', lastSessionId: 'main' }],
+      })
       return
     }
     if (url.pathname.endsWith('/api/auth/session')) {
@@ -611,11 +635,12 @@ after(async () => {
   preview?.kill('SIGTERM')
 })
 
-test('Setup uses accessible Appearance, Models, Config and Notifications tabs with status icons and product copy', async () => {
+test('Setup uses accessible Appearance, Models, Config, Secrets and Notifications tabs with status icons and product copy', async () => {
   const setupPage = await browser.newPage()
   const requestStart = requestPaths.length
   await setupPage.setBypassServiceWorker(true)
-  await attachRequestMocks(setupPage)
+  const secretRequests = []
+  await attachRequestMocks(setupPage, { secretRequests })
   try {
     await setupPage.goto(`${productionBaseUrl}/#setup`, { waitUntil: 'networkidle2' })
     await waitForWebUiReady(setupPage)
@@ -641,6 +666,7 @@ test('Setup uses accessible Appearance, Models, Config and Notifications tabs wi
       { tab: 'appearance', selected: 'true', status: null },
       { tab: 'models', selected: 'false', status: 'complete' },
       { tab: 'config', selected: 'false', status: null },
+      { tab: 'secrets', selected: 'false', status: null },
       { tab: 'notifications', selected: 'false', status: null },
     ])
     assert.deepEqual(await setupPage.$$eval('[data-monaco-model-uri]', (elements) => elements.map((element) => element.getAttribute('data-monaco-model-uri'))), [
@@ -672,6 +698,22 @@ test('Setup uses accessible Appearance, Models, Config and Notifications tabs wi
     await setupPage.waitForFunction(() => document.body.textContent?.includes('Connected as weixin-e2e-user. Channel config saved and reloaded.'))
 
     await setupPage.focus('[data-setup-tab="config"]')
+    await setupPage.keyboard.press('ArrowRight')
+    await setupPage.waitForSelector('[data-setup-tab="secrets"][aria-selected="true"]')
+    await setupPage.waitForSelector('[data-secret="openai-key"]')
+    const secretsText = await setupPage.$eval('[data-setup-section="secrets"]', element => element.textContent || '')
+    assert.ok(secretsText.includes('Used by Model provider openai'))
+    assert.ok(secretsText.includes('Tool output in main'))
+    await setupPage.click('[data-missing-secret="telegram-token"] button')
+    assert.equal(await setupPage.$eval('form[aria-label="Add secret"] input[placeholder="openai-key"]', input => input.value), 'telegram-token')
+    await setupPage.type('form[aria-label="Add secret"] input[type="password"]', 'short-value')
+    await setupPage.click('form[aria-label="Add secret"] button[type="submit"]')
+    await setupPage.waitForSelector('[data-secret="telegram-token"]')
+    await setupPage.waitForFunction(() => document.querySelector('[data-setup-section="secrets"] [role="status"]')?.textContent?.includes('cannot be hidden'))
+    assert.deepEqual(secretRequests.filter(entry => entry.method === 'PUT').map(entry => ({ ...entry, path: entry.path.replace(/^.*\/api\//, '/api/') })), [{ method: 'PUT', path: '/api/setup/secrets/telegram-token', body: { value: 'short-value' } }])
+    assert.equal(await setupPage.$eval('form[aria-label="Add secret"] input[type="password"]', input => input.value), '')
+    assert.equal((await setupPage.$eval('[data-setup-section="secrets"]', element => element.textContent || '')).includes('short-value'), false)
+    await setupPage.focus('[data-setup-tab="secrets"]')
     await setupPage.keyboard.press('ArrowRight')
     await setupPage.waitForSelector('[data-setup-tab="notifications"][aria-selected="true"]')
     assert.equal(await setupPage.$eval('[data-setup-section="notifications"]', (panel) => panel.hidden), false)
