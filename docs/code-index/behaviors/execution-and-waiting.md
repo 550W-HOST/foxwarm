@@ -102,6 +102,19 @@ A terminal handoff can also end a turn, with or without a Session activity wait.
 
 [2026-11-06] User decisions. `ask_user` asks the user one to four questions, optionally with choices. By default (`afterAsk:"wait"`) it is the same terminal control as `wait` on the new question ID: it applies after the batch and a sibling tool error suppresses it. `afterAsk:"continue"` returns at once and the answer arrives later as user input. Answers are user input, not system events: a WebUI card answer becomes a user message carrying structured answer metadata, and while the Session waits on a question any ordinary user message (WebUI or external channel) is its answer. Messages from other Sessions, timers and system events never answer. The first answer wins; there is no default answer or timeout choice. Delegated Sessions are told to ask their parent first. Records, projection, reminder and WebUI behavior are owned by the [structured user questions](../units/session-questions.md) unit.
 
+## A call can wait for approval
+
+[2026-11-08] User decisions ([D-dispatch-approval-ask](../threads/tool-dispatch-authorization.md#d-dispatch-approval-ask)). When policy answers `ask` for a call, that call pauses inside its own invocation until an approver decides in the WebUI, the rule's deadline passes, or the user stops the turn. Nothing else in the Session is suspended by the request itself, but the foreground batch does not continue past the waiting call, and the runtime state shows the call waiting for approval.
+
+- **Approved:** the call is authorized again against the current policy and then runs once; a deny installed meanwhile still wins. The approver's note accompanies the result.
+- **Rejected or expired:** the call never starts and returns an error with the approval ID; a rejection carries the note.
+- **Stop or Run queued:** the request is settled as cancelled and the call receives the ordinary not-started receipt.
+- **Restart:** a pending request expires and its call is not replayed; the resumed turn is told which call did not run.
+- **Parallel exec:** all approvals of a segment are requested before any member starts.
+- **Deadlines:** foreground calls wait without a default deadline unless the rule sets `approval.timeoutSeconds`; unattended timer script slices default to one hour.
+
+The Claude Code runtime calls tools over its Foxwarm MCP server. That server entry declares a timeout of the longest approval deadline plus a margin, so the effective bound there is the rule's deadline or that server timeout, whichever is shorter. This bound is taken from Claude Code's documented MCP timeout behavior and still needs qualification with a real CLI.
+
 ## ToolScript completion is not a return-value control protocol
 
 A completed program, a paused run, and a caller-Session wait have separate effects. [ToolScript and scheduled work](automation-and-scheduled-work.md#end-the-callers-turn-deliberately) owns the normal outer-completion/last-host-call rule for nested `wait`, with native inputs, print/return results, saved continuations, and quiet timer invocations. Returning data that resembles a control receipt is not a substitute for executing the authorized control operation.

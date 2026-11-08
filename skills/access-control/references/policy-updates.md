@@ -58,7 +58,7 @@ Identity edits use `set_config` with `target: config` or WebUI Setup Config and 
 
 ## Explain a decision before or without calling
 
-`explain_tool_authorization` is a hidden builtin found through `search_tools`. Each probe names an existing caller Session and the concrete tool in `call_tool` form; the call is resolved at that Session's current Node and evaluated with its real Agent layers, paths, relations and isolation, without running it. The result shows, per layer, the matching rule (position, ID, action, reason, match) or the default, the isolation outcome and the facts used. Pre-policy Node/path boundary denials appear as `precheck`; tool-local validation is not evaluated.
+`explain_tool_authorization` is a hidden builtin found through `search_tools`. Each probe names an existing caller Session and the concrete tool in `call_tool` form; the call is resolved at that Session's current Node and evaluated with its real Agent layers, paths, relations and isolation, without running it. The result shows the final `decision` (`allow`, `ask` or `deny`; `allowed` is true only for allow), per layer its `decision` and the matching rule (position, ID, action, reason, match, and `approval` for ask) or the default, the isolation outcome and the facts used. An ask result adds the combined `approval` options. Pre-policy Node/path boundary denials appear as `precheck`; tool-local validation is not evaluated.
 
 ```json
 {
@@ -73,7 +73,7 @@ Identity edits use `set_config` with `target: config` or WebUI Setup Config and 
 }
 ```
 
-Without `policyFilePath` it explains the active policy. A candidate replaces only the global layer and is never installed. `compare` adds per-probe `active`/`candidate`/`changed` and a `ruleDiff` of normalized rules by ID (`added`, `removed`, `changed`, `moved`, and a changed `defaultAction`); layout-only YAML changes are not reported, and omitted IDs (`rule-N`) shift with position. The caller needs the builtin grant plus master `read` of the active policy and of the candidate. Up to 32 probes per call.
+Without `policyFilePath` it explains the active policy. A candidate replaces only the global layer and is never installed. `compare` adds per-probe `active`/`candidate`/`changed` (the final decision differs) and a `ruleDiff` of normalized rules by ID (`added`, `removed`, `changed`, `moved`, and a changed `defaultAction`); layout-only YAML changes are not reported, and omitted IDs (`rule-N`) shift with position. The caller needs the builtin grant plus master `read` of the active policy and of the candidate. Up to 32 probes per call.
 
 ## Diagnose a denial
 
@@ -88,6 +88,7 @@ Without `policyFilePath` it explains the active policy. A candidate replaces onl
 | --- | --- |
 | Setter denied | Current setter permission, current master read permission for the exact candidate, and isolated path restrictions |
 | Candidate rejected | Strict field names, version, duplicate IDs, bounded sizes, scalar operators, supported path variables, registered Session-target family |
+| Call waits or returns `tool_approval_*` | An `ask` rule or default matched: decide in the WebUI dock, or check `approvers`, the identity's Session scope and `timeoutSeconds`. `tool_approval_unavailable` means the ask applied to an internal step, the call's targets kept changing while it waited, or the Session's pending limit was reached |
 | Tool is visible but call denied | Discovery is conservative; argument/path/target conditions are checked strictly at invocation |
 | External call unexpectedly allowed | Earlier identity-neutral/broad allow rules; `defaultAction: allow` alone is not the cause |
 | External Session rule never matches | Use `args.sessionId` for the target; do not add a Node target to a Node-less operation |

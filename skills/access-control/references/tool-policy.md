@@ -27,8 +27,8 @@ rules:
 
 This complete example restricts internal calls from the `reviewer` Agent while preserving the internal default for other Agents. It does not create that Agent or change its isolation/Node binding. Merge rules into the real policy only after reviewing existing ordering.
 
-- Top level: `version: 1`, optional `defaultAction: allow | deny` (omission means `allow`), and optional `rules` (omission means an empty list). Prefer writing both optional fields explicitly.
-- Rule: optional unique non-empty `id` (omission assigns `rule-<position>`), optional `enabled` (defaults to `true`), optional `match` (omission/`{}` matches all callers), required `action: allow | deny`, and optional `reason`.
+- Top level: `version: 1`, optional `defaultAction: allow | ask | deny` (omission means `allow`), and optional `rules` (omission means an empty list). Prefer writing both optional fields explicitly.
+- Rule: optional unique non-empty `id` (omission assigns `rule-<position>`), optional `enabled` (defaults to `true`), optional `match` (omission/`{}` matches all callers), required `action: allow | ask | deny`, optional `reason`, and optional `approval` (only with `ask`; see [Require approval](#require-approval)).
 - Limits: at most 256 rules and 256 KiB of policy bytes; IDs up to 128 bytes, reasons up to 1,024 bytes, matcher strings up to 512 bytes, and scalar lists up to 64 items.
 - Unknown fields, unsupported versions/operators/path variables, unsafe dotted argument paths, and duplicate IDs are rejected.
 
@@ -86,7 +86,7 @@ For list access, grant `args: { action: list, scope: owned }`. `owned` includes 
 
 The first **enabled matching rule** wins. Present conditions within one rule are AND; a list of exact alternatives within one scalar matcher is OR. Use separate rules for alternative sets of conditions. An early allow is not overridden by a later deny. A rule without `agent`, `session`, or `externalId` can match both internal and external callers.
 
-For unmatched internal calls, `defaultAction` applies. For unmatched external calls, the result is always deny, even with `defaultAction: allow`. A missing policy file preserves internal default-allow compatibility and denies unmatched external calls. Other read errors and invalid YAML fail closed after the loader's fresh retry; an old expired cache is not a fallback.
+For unmatched internal calls, `defaultAction` applies. For unmatched external calls, the result is always deny, even with `defaultAction: allow` or `ask`. A matching `ask` rule also denies an external call. A missing policy file preserves internal default-allow compatibility and denies unmatched external calls. Other read errors and invalid YAML fail closed after the loader's fresh retry; an old expired cache is not a fallback.
 
 Choose the policy's purpose before writing rules:
 
@@ -103,6 +103,30 @@ Before granting a builtin, check:
 4. **Expressibility:** can existing matchers enforce the intended boundary? If not, omit the capability from the baseline or make it a separately reviewed grant; do not compensate with an unconditional allow.
 
 A familiar name in the legacy default list is not evidence that an unconditional allow is safe after isolation is removed. Use [the offline baseline generator](isolated-rules.md) when its conservative scope fits; review its omissions rather than treating it as an exact migration.
+
+## Require approval
+
+`action: ask` makes a matching internal call wait for a person's decision before it runs. The request appears in the WebUI dock of the calling Session with the tool, arguments, resolved targets and the asking rules' reasons; the approver may add a note, which the agent receives on approval and on rejection.
+
+```yaml
+- id: confirm-production
+  agent: ops
+  tool: { source: node, name: exec }
+  node: production
+  action: ask
+  reason: Commands on production
+  approval:
+    timeoutSeconds: 1800
+    approvers: [alex]
+```
+
+- `approval` is optional and valid only with `ask`. `timeoutSeconds` is an integer from 30 to 604800. `approvers` lists 1–64 access identity IDs. Ask cannot be combined with an `externalId` selector.
+- The instance administrator can always decide. A scoped WebUI identity decides only when its `webui.sessions` scope includes the Session and every rule that asked for this call names it. When several layers ask, the shortest timeout applies.
+- Layers combine deny over ask over allow: any denying layer denies the call; otherwise any asking layer makes it wait. Legacy isolation is checked before the request is made, and the call is authorized again against the current policy after approval, so a deny installed meanwhile still wins.
+- Without `timeoutSeconds`, foreground calls wait until a decision or Stop. Unattended timer script slices use one hour. A pending request expires when Foxwarm restarts; the call is not replayed.
+- An approval covers exactly one call and the internal checks of that call. An ask that applies only to an internal step of another allowed call (for example, a tool that reads the policy file as part of its work) is not requested and fails the call; ask for the outer tool instead. Nested ToolScript calls are separate calls and ask on their own.
+- A timer that would later create a Session through an asking `create_session` outcome is rejected at registration.
+- Discovery treats an asking tool as possibly invocable. Other Channels receive only a notice that a call is waiting.
 
 ## Match fields
 

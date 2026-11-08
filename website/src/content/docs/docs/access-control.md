@@ -35,6 +35,35 @@ rules:
 
 To restrict one Agent, list what it may do and finish with a deny for that Agent, as above. Ask the agent to load the `access-control` Skill for the complete matcher reference and safe update steps.
 
+## Ask before a tool runs
+
+A rule can ask for a decision instead of allowing or denying:
+
+```yaml
+version: 1
+defaultAction: allow
+rules:
+  - id: confirm-production
+    agent: ops
+    tool: { source: node, name: exec }
+    node: production
+    action: ask
+    reason: Commands on production
+    approval:
+      timeoutSeconds: 1800
+      approvers: [alex]
+```
+
+A matching call waits until someone approves or rejects it in the WebUI. The request appears above the message box with the tool, its arguments and targets, and the rule's reason. You can add a note for the agent either way. The call runs only after approval; a rejected or expired request returns an error to the agent, and Stop cancels a waiting call.
+
+- You can always decide as administrator. A [scoped identity](#scoped-webui-access) can decide only when it can see the Session and every rule that asked names it in `approvers`.
+- Without `timeoutSeconds`, a call waits until someone decides or the turn is stopped. Scheduled scripts give up after an hour unless the rule sets a deadline.
+- A request still waiting when Foxwarm restarts is dropped. The call does not run later.
+- Each approval covers one call. Repeating the call asks again.
+- Rules in every layer still apply: a deny anywhere wins, and the call waits only when no layer denies it. `defaultAction: ask` and Agent rule lists can ask too.
+- External MCP clients cannot wait, so for them a rule that asks counts as a deny.
+- Other Channels receive a notice that a call is waiting; decisions are made in the WebUI.
+
 ## Rules for each Agent
 
 Every Agent can also carry its own rule list. These rules use the same format, minus the caller selectors (`agent`, `session`, `externalId`): they always apply to calls from that Agent.

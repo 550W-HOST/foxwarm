@@ -54,7 +54,7 @@ Updating an existing native file through overwrite, exact edit, or patch Update 
 | --- | --- | --- |
 | Node environment | Available filesystem/process/browser capabilities and their actual effects. | Agent identity, tool authorization, or OS/network containment merely from its Node label. |
 | Agent isolation | Current legacy Agent-level target/path/relationship restrictions, including its bound Node and Agent-scoped Main paths. | Exclusive Node ownership or virtualization. Memory inheritance is not permission inheritance. |
-| Generic tool policy | Whether this caller may perform this resolved capability with these arguments, paths, and actual Node effects. | Bypass of structural checks, service availability, or the environment's own restrictions. |
+| Generic tool policy | Whether this caller may perform this resolved capability with these arguments, paths, and actual Node effects: allow, deny, or ask for an approver's decision first. | Bypass of structural checks, service availability, or the environment's own restrictions. |
 | Entry identity | Authority granted to an authenticated inbound MCP or scoped WebUI caller. | A fabricated internal Agent or automatic permission for the runtime Agent in an accessible Session. |
 | Administrator WebUI | Existing full-access instance administration and its fixed Code/Terminal routes. | A model tool-policy decision on behalf of a selected Session. |
 
@@ -68,7 +68,7 @@ Discovery, default schema injection, strict authorization, and execution are sep
 
 1. Discovery projects available capabilities through current policy and structural visibility. A definite denial is hidden; an argument-dependent possible allow may remain visible.
 2. Invocation resolves the actual builtin, MCP server, or Node capability. `call_tool` and ToolScript do not substitute their wrapper identity for the concrete operation.
-3. Strict authorization evaluates the actual arguments and affected endpoints. A multi-Node allow must cover every endpoint; a matching Node deny can stop the operation.
+3. Strict authorization evaluates the actual arguments and affected endpoints. A multi-Node allow must cover every endpoint; a matching Node deny can stop the operation. An `ask` outcome makes the call wait for an approver; discovery treats it as possibly invocable ([approval waits](execution-and-waiting.md#a-call-can-wait-for-approval)).
 4. The target still validates its own paths, advertised capabilities, connection, and service requirements. A visible tool may therefore reject a particular request.
 
 An authorized operator can ask how stages 2–3 would decide a call by an existing Session, or how a candidate policy would change that, with the hidden [`explain_tool_authorization`](../units/tool-authorization.md#authorization-explanation) builtin. It does not run stage 4.
