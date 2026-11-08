@@ -12,7 +12,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: tests-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: tests-${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
