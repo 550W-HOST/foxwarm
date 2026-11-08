@@ -115,10 +115,13 @@ internal sealed partial class SessionManager
             if (string.IsNullOrWhiteSpace(requested))
                 throw new InvalidDataException("Each probe requires sessionId.");
             var reference = requested.Trim();
-            var self = IsCurrentSessionReference(caller, reference);
+            var self = reference == caller.Id;
             SessionOwner? target;
             try
             {
+                if (!self)
+                    self =
+                        SessionCatalog.Text(Catalog.Resolve(reference)["sessionId"]) == caller.Id;
                 target = await GetExistingAsync(reference, token);
             }
             catch (Exception error) when (!self && error is not OperationCanceledException)
@@ -141,9 +144,7 @@ internal sealed partial class SessionManager
                         target
                     );
                 }
-                catch (Exception error)
-                    when (error is not OperationCanceledException
-                        && error is not ToolAuthorizationUnavailableException)
+                catch (Exception error) when (error is not OperationCanceledException)
                 {
                     target = null;
                 }
