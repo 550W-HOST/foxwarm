@@ -190,6 +190,116 @@ public sealed partial class NodeFileTransferTests
     }
 
     [Fact]
+    public async Task Transfer_deadlines_cover_request_start_receipt_and_no_progress()
+    {
+        await using var f = new Fixture();
+        await f.Start();
+        var sourceCredentials = f.Manager.Nodes.Registry.Create("deadline-source");
+        var sourceSocket = await f.Connect("deadline-source", sourceCredentials, streaming: true);
+        var receiptCredentials = f.Manager.Nodes.Registry.Create("deadline-receipt");
+        var receiptSocket = await f.Connect(
+            "deadline-receipt",
+            receiptCredentials,
+            streaming: true
+        );
+        var startCredentials = f.Manager.Nodes.Registry.Create("deadline-start");
+        var startSocket = await f.Connect("deadline-start", startCredentials, streaming: true);
+        await File.WriteAllBytesAsync(Path.Combine(f.Work, "source.bin"), new byte[128 * 1024]);
+        f.Owner.Entry.WithState(state => state.Busy = true);
+        var sourceCopy = f.Manager.CopyBetweenNodesAsync(
+            f.Owner,
+            new JsonObject
+            {
+                ["sourceNode"] = "deadline-source",
+                ["sourcePath"] = "source.bin",
+                ["targetNode"] = "master",
+                ["targetPath"] = "stalled.bin",
+                ["timeout"] = 1,
+            },
+            default
+        );
+        var receiptCopy = f.Manager.CopyBetweenNodesAsync(
+            f.Owner,
+            CopyArgs("deadline-receipt"),
+            default
+        );
+        var startCopy = f.Manager.CopyBetweenNodesAsync(
+            f.Owner,
+            CopyArgs("deadline-start"),
+            default
+        );
+        var sourceRequest = await Fixture.Read(sourceSocket);
+        var receiptRequest = await Fixture.Read(receiptSocket);
+        _ = await Fixture.Read(startSocket);
+        using var sourceHttp = new HttpClient { BaseAddress = new Uri(f.App.Urls.Single()) };
+        sourceHttp.DefaultRequestHeaders.Add("X-Foxwarm-Node", "deadline-source");
+        sourceHttp.DefaultRequestHeaders.Authorization = new(
+            "Bearer",
+            sourceCredentials["authToken"]!.ToString()
+        );
+        using var content = new GatedContent();
+        var upload = sourceHttp.PutAsync(
+            "/node/transfer/" + sourceRequest["transferId"]!.ToString(),
+            content
+        );
+        await content.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        using var targetHttp = new HttpClient { BaseAddress = new Uri(f.App.Urls.Single()) };
+        targetHttp.DefaultRequestHeaders.Add("X-Foxwarm-Node", "deadline-receipt");
+        targetHttp.DefaultRequestHeaders.Authorization = new(
+            "Bearer",
+            receiptCredentials["authToken"]!.ToString()
+        );
+        using (
+            var response = await targetHttp.GetAsync(
+                "/node/transfer/" + receiptRequest["transferId"]!.ToString()
+            )
+        )
+            _ = await response.Content.ReadAsByteArrayAsync();
+        var sourceId = (await sourceCopy)["transferId"]!.ToString();
+        var receiptId = (await receiptCopy)["transferId"]!.ToString();
+        var startId = (await startCopy)["transferId"]!.ToString();
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(70));
+        async Task<QueueItem> Event(string id)
+        {
+            while (true)
+            {
+                var item = f.Owner.Entry.WithState(state =>
+                    state.Queue.FirstOrDefault(value =>
+                        SessionWait.Text(value.OpenFields?["execId"]) == id
+                    )
+                );
+                if (item is not null)
+                    return item;
+                await Task.Delay(100, deadline.Token);
+            }
+        }
+        try
+        {
+            var receiptEvent = await Event(receiptId);
+            Assert.True(clock.Elapsed > TimeSpan.FromSeconds(25));
+            Assert.Contains("\"status\":\"failed\"", receiptEvent.Parts![0]["system"]!.ToString());
+            var startEvent = await Event(startId);
+            Assert.Contains("\"status\":\"failed\"", startEvent.Parts![0]["system"]!.ToString());
+            var sourceEvent = await Event(sourceId);
+            Assert.True(clock.Elapsed > TimeSpan.FromSeconds(55));
+            Assert.Contains("\"status\":\"failed\"", sourceEvent.Parts![0]["system"]!.ToString());
+            Assert.False(File.Exists(Path.Combine(f.Work, "stalled.bin")));
+        }
+        finally
+        {
+            content.Release.TrySetResult();
+            try
+            {
+                using var _ = await upload;
+            }
+            catch (Exception error)
+                when (error is HttpRequestException or OperationCanceledException) { }
+            f.Owner.Entry.WithState(state => state.Busy = false);
+        }
+    }
+
+    [Fact]
     public async Task A_slow_upload_is_not_cut_off_by_the_servers_minimum_data_rate()
     {
         await using var f = new Fixture();
