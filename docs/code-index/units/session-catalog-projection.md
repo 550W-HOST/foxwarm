@@ -1,6 +1,6 @@
 # Unit: Session catalog projections and indexed queries
 
-Files: `dotnet/Foxwarm/Sessions/Storage/SessionCatalog.Projection.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionCatalog.Queries.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionCatalog.Groups.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionCatalog.Activity.cs`
+Files: `dotnet/Foxwarm/Sessions/Storage/SessionCatalog.Projection.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionCatalog.Queries.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionCatalog.Groups.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionCatalog.Activity.cs`, dotnet/Foxwarm.Tests/Sessions/SessionCatalogActivityTests.cs, dotnet/Foxwarm.Tests/Sessions/SessionListActivityTests.cs, dotnet/Foxwarm.Tests/Channels/WebUiStartupTests.SidebarChildWindow.cs
 
 ## Purpose
 
