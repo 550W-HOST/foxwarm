@@ -91,21 +91,26 @@ public sealed partial class CompactRetentionTests
         );
         await manager.LoadMainHostAsync();
         var owner = await manager.CreateNamedAsync("main", "sparse-exchange", null, null);
-        owner.Registry.TriggerOverride = _ => Task.CompletedTask;
+        // This fixture manually drives queue consumption. Public ingress forces Trigger=true,
+        // so use the trusted save lane for passive fixture inputs: a preceding standalone
+        // compact may still be handing runnable work to a foreground processor after DrainAsync.
+        async Task EnqueuePassive(QueueItem item)
+        {
+            Assert.True(
+                await owner.Entry.SaveLane.AdmitAsync(item with { Trigger = false }, SaveKind.Strict)
+            );
+            Assert.False(owner.Registry.HasRunnableWork(owner.Entry));
+        }
         async Task<long> Append(string role, params JsonObject[] parts)
         {
-            await owner.Registry.Ingress.EnqueueAsync(
-                owner.Id,
+            await EnqueuePassive(
                 QueueItem.Prebuilt(
                     new JsonObject
                     {
                         ["role"] = role,
                         ["parts"] = new JsonArray(parts.Select(part => (JsonNode)part).ToArray()),
                     }
-                ) with
-                {
-                    Trigger = false,
-                }
+                )
             );
             await owner
                 .Registry.HostFor(owner.Id)
@@ -209,10 +214,7 @@ public sealed partial class CompactRetentionTests
         if (deliberate)
         {
             pending["inContext"] = true;
-            await owner.Registry.Ingress.EnqueueAsync(
-                owner.Id,
-                QueueItem.UserText("Apply the selected compact plan.")
-            );
+            await EnqueuePassive(QueueItem.UserText("Apply the selected compact plan."));
             await owner.StartProcessing().WaitAsync(TimeSpan.FromSeconds(30));
             Assert.Single(
                 requests[3]["input"]!.AsArray().OfType<JsonObject>(),
