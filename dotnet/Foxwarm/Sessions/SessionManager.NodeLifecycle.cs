@@ -22,9 +22,43 @@ internal sealed partial class SessionManager
         if (action == "list")
         {
             ToolRegistry.Keys(args, ["action"]);
-            var nodes = await ToolNodeTopologyAsync(owner, token);
-            var providers = await NodeProviders.ListProvidersAsync(isolated, token);
-            var currentNode = CurrentNode(owner);
+            // One caller snapshot decides every Node and Provider row of this list.
+            var visibility = VisibilityFor(owner);
+            var declared = await NodeProviders.ListProvidersAsync(isolated, token);
+            var destroyProviders = declared
+                .OfType<JsonObject>()
+                .Where(value =>
+                    value["lifecycle"]!.AsArray().Any(item => SessionWait.Text(item) == "destroy")
+                )
+                .Select(value => value["id"]!.GetValue<string>())
+                .ToHashSet(StringComparer.Ordinal);
+            var nodes = await ToolNodeTopologyAsync(visibility, destroyProviders, token);
+            var providers = new JsonArray();
+            foreach (var provider in declared.OfType<JsonObject>())
+            {
+                var id = provider["id"]!.GetValue<string>();
+                var actions = VisibleProviderActions(
+                    visibility,
+                    id,
+                    provider["lifecycle"]!.AsArray(),
+                    nodes
+                        .OfType<JsonObject>()
+                        .Any(node =>
+                            SessionWait
+                                .Text(node["id"])!
+                                .StartsWith(id + "/", StringComparison.Ordinal)
+                            && node["manage"]!
+                                .AsArray()
+                                .Any(item => SessionWait.Text(item) == "destroy")
+                        )
+                );
+                if (actions.Count == 0)
+                    continue;
+                var visible = (JsonObject)provider.DeepClone();
+                visible["lifecycle"] = actions;
+                providers.Add(visible);
+            }
+            var currentNode = visibility.CurrentNode;
             var result = new JsonObject
             {
                 ["output"] =
@@ -35,16 +69,26 @@ internal sealed partial class SessionManager
                             .OfType<JsonObject>()
                             .Select(value =>
                                 $"- `{value["id"]!.GetValue<string>()}` ({value["kind"]!.GetValue<string>()}) — {value["availability"]!.GetValue<string>()}"
+                                + (
+                                    value["select"]!.GetValue<bool>()
+                                    || value["id"]!.GetValue<string>() == currentNode
+                                        ? ""
+                                        : "; not selectable"
+                                )
                             )
                     )
-                    + "\nProviders:\n"
-                    + string.Join(
-                        '\n',
-                        providers
-                            .OfType<JsonObject>()
-                            .Select(value =>
-                                $"- `{value["id"]!.GetValue<string>()}` ({string.Join(", ", value["lifecycle"]!.AsArray().Select(SessionWait.Text))})"
-                            )
+                    + (
+                        providers.Count == 0
+                            ? ""
+                            : "\nProviders:\n"
+                                + string.Join(
+                                    '\n',
+                                    providers
+                                        .OfType<JsonObject>()
+                                        .Select(value =>
+                                            $"- `{value["id"]!.GetValue<string>()}` ({string.Join(", ", value["lifecycle"]!.AsArray().Select(SessionWait.Text))})"
+                                        )
+                                )
                     ),
             };
             if (programmatic)
@@ -168,35 +212,49 @@ internal sealed partial class SessionManager
         return text;
     }
 
-    private async Task<JsonArray> ToolNodeTopologyAsync(SessionOwner owner, CancellationToken token)
+    // Lists Nodes where the caller might do work (Node tools or file transfer), plus its current
+    // Node. Selection and management are reported per listed Node but never admit one alone.
+    private async Task<JsonArray> ToolNodeTopologyAsync(
+        ToolVisibilityContext context,
+        IReadOnlySet<string> destroyProviders,
+        CancellationToken token
+    )
     {
         var result = new JsonArray();
         var totalBytes = Encoding.UTF8.GetByteCount("{\"nodes\":[]}");
-        var current = CurrentNode(owner);
+        var current = context.CurrentNode;
         foreach (var summary in (await NodeSummariesAsync(token: token)).OfType<JsonObject>())
         {
             var id = SessionWait.Text(summary["id"])!;
             var type = SessionWait.Text(summary["type"]);
             if (id.Length > 193 || type is not { Length: > 0 and <= 64 })
                 continue;
-            if (
-                AgentIsolated(owner.Agent)
-                && id != "master"
-                && id != (RecordedIsolationNode(owner.Agent) ?? current)
-                && id != current
-            )
-                continue;
-            if (result.Count == 100)
-                break;
             var tools =
                 id == "master" ? this.tools.NodeDefinitions(id) : NodeProviders.Definitions(id);
+            var definitions = tools
+                .OfType<JsonObject>()
+                .Take(200)
+                .Where(definition =>
+                    SessionWait.Text(definition["name"]) is { Length: > 0 and <= 128 }
+                )
+                .ToArray();
+            var slash = id.IndexOf('/');
+            var facets = ProbeNode(
+                context,
+                id,
+                definitions.Select(definition => SessionWait.Text(definition["name"])!),
+                slash > 0 && destroyProviders.Contains(id[..slash])
+            );
+            if (!facets.Usable && id != current)
+                continue;
+            // The cap applies to listed Nodes, so hidden ones cannot crowd them out.
+            if (result.Count == 100)
+                break;
             var visible = new JsonArray();
-            foreach (var definition in tools.OfType<JsonObject>().Take(200))
+            foreach (var definition in definitions)
             {
-                var name = SessionWait.Text(definition["name"]);
-                if (name is not { Length: > 0 and <= 128 })
-                    continue;
-                if (!ToolVisible(owner, "node", name, node: id))
+                var name = SessionWait.Text(definition["name"])!;
+                if (!facets.Tools.Contains(name))
                     continue;
                 var tool = new JsonObject { ["name"] = name };
                 if (SessionWait.Text(definition["description"]) is string description)
@@ -237,6 +295,14 @@ internal sealed partial class SessionManager
                         : "offline"
                     ),
                 ["tools"] = visible,
+                ["select"] = facets.Select,
+                ["transfer"] = facets.Transfer,
+                ["manage"] = new JsonArray(
+                    new[] { facets.Inspect ? "inspect" : null, facets.Destroy ? "destroy" : null }
+                        .OfType<string>()
+                        .Select(action => (JsonNode?)JsonValue.Create(action))
+                        .ToArray()
+                ),
             };
             if (
                 SessionWait.Number(summary["lastActivity"]) is double activity

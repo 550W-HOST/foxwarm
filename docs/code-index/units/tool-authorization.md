@@ -76,6 +76,10 @@ Exact builtin `create_session` rules accept `args.agentName: {agent: {sameAgent:
 
 `EvaluateCreationTarget` is a timer-only precheck of the same ordered generic policy. Caller/tool/Agent facts are known; other creation arguments are unknown, not supplied as absent or invented values. Each unknown condition retains its possible first-match effect until a decisive rule or default. All possible effects must allow in each global/Agent layer; any definite denial rejects, and mixed outcomes report indeterminate authorization. Ordinary `Evaluate` and discovery keep their existing semantics. The caller-facing boundary and persistence exclusions belong to [scheduled work](../behaviors/automation-and-scheduled-work.md#schedule-a-message-or-execute-a-quiet-script).
 
+## Node list visibility
+
+The model's Node list is a presentation projection of this policy; see [Node list visibility](./node-list-visibility.md).
+
 ## Authorization explanation
 
 `SessionManager.AssessToolAsync` is the single fact-construction and per-layer evaluation path. `AuthorizeToolAsync` enforces its first denying layer, then legacy isolation, then an uncovered ask outcome; nothing else re-evaluates policy. The governing decision is [D-dispatch-authorization-explanation](../threads/tool-dispatch-authorization.md#d-dispatch-authorization-explanation).

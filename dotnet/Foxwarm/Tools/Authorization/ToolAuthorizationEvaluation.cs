@@ -535,7 +535,8 @@ internal static class ToolAuthorizationEvaluation
         ToolAuthorizationPolicy policy,
         ToolAuthorizationRequest request,
         bool unknownNode = false,
-        bool unknownNodeTargets = false
+        bool unknownNodeTargets = false,
+        IReadOnlySet<string>? knownArgs = null
     )
     {
         if (!unknownNodeTargets)
@@ -548,9 +549,24 @@ internal static class ToolAuthorizationEvaluation
                 || !Identity(match, request, unknownNode, unknownNodeTargets, Restrictive(rule))
             )
                 continue;
+            // Arguments the caller states as known are matched exactly; the rest stay unresolved.
+            var unknownArgs = false;
+            var argsMismatch = false;
+            foreach (var pair in match["args"] as JsonObject ?? new())
+            {
+                if (knownArgs?.Contains(pair.Key.Split('.')[0]) != true)
+                    unknownArgs = true;
+                else if (!ArgumentMatches(pair.Key, pair.Value, request))
+                {
+                    argsMismatch = true;
+                    break;
+                }
+            }
+            if (argsMismatch)
+                continue;
             var conditional =
                 match.ContainsKey("path")
-                || match["args"] is JsonObject args && args.Count > 0
+                || unknownArgs
                 || unknownNode && match.ContainsKey("targetNode")
                 || unknownNodeTargets && match.ContainsKey("node");
             // A call that can proceed after approval remains discoverable.

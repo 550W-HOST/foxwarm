@@ -19,6 +19,12 @@ internal sealed partial class WebUIChannel
                 var bound = sessions.BoundNode(SessionWait.Text(row["agent"]) ?? "main");
                 var locked = bound is null ? null : $"This agent is bound to node {bound}.";
                 var choices = new JsonArray();
+                // Administrator selection is not limited by the Session's tool policy; the hint
+                // only shows where this Session's tools could not work. No hints without a policy.
+                var visibility = sessions.CatalogVisibility(canonical!, row);
+                Func<string, bool>? usable = visibility is null
+                    ? null
+                    : node => sessions.NodeUsable(visibility, node);
                 foreach (
                     var node in (
                         await sessions.NodeSummariesAsync(token: request.HttpContext.RequestAborted)
@@ -30,6 +36,16 @@ internal sealed partial class WebUIChannel
                         continue;
                     var ready = node["executable"]!.GetValue<bool>();
                     var online = node["online"]!.GetValue<bool>();
+                    string? hint = null;
+                    try
+                    {
+                        if (usable?.Invoke(nodeId) == false)
+                            hint = "This session's tools can't use this node.";
+                    }
+                    catch (Foxwarm.Tools.ToolAuthorizationUnavailableException)
+                    {
+                        usable = null;
+                    }
                     choices.Add(
                         new JsonObject
                         {
@@ -50,6 +66,7 @@ internal sealed partial class WebUIChannel
                                     : !online ? "Offline"
                                     : "Unavailable"
                                 ),
+                            ["hint"] = hint,
                         }
                     );
                 }

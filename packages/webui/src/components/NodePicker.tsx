@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { Check, Server } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
 
-type NodeOption = { id: string; label: string; selectable: boolean; reason: string | null }
+type NodeOption = { id: string; label: string; selectable: boolean; reason: string | null; hint?: string | null }
 
 export default function NodePicker({ sessionId, currentNode = 'master', disabled, onChangeNode }: {
   sessionId: string
@@ -182,14 +182,14 @@ export default function NodePicker({ sessionId, currentNode = 'master', disabled
                 data-node-option={node.id}
                 aria-pressed={node.id === currentNode}
                 disabled={disabled || saving || !node.selectable}
-                title={node.reason || node.label}
+                title={node.reason || node.hint || node.label}
                 onClick={() => void selectNode(node.id)}
                 className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-fw-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-fw-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <Check size={14} className={`shrink-0 text-fw-accent ${node.id === currentNode ? '' : 'invisible'}`} aria-hidden="true" />
                 <span className="min-w-0 flex-1">
                   <span className="block truncate">{node.id}</span>
-                  {(node.reason || node.label !== node.id) && <span className="block truncate text-xs text-fw-text-muted">{node.reason || node.label}</span>}
+                  {(node.reason || node.hint || node.label !== node.id) && <span className="block truncate text-xs text-fw-text-muted">{node.reason || node.hint || node.label}</span>}
                 </span>
               </button>
             ))}

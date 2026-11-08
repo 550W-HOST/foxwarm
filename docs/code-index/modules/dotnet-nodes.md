@@ -25,6 +25,7 @@ Main-owned [authorization forests](../behaviors/nodes-workspaces-and-permissions
 - [External exec authority and Node Session events](../units/remote-exec.md)
 - [Unified tools and Session tool execution](../units/tools-registry.md)
 - [Tool authorization and isolation compatibility](../units/tool-authorization.md)
+- [Node list visibility](../units/node-list-visibility.md)
 
 ## Tests and callers
 

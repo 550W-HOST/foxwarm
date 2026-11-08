@@ -1,0 +1,20 @@
+# Unit: Node list visibility
+
+Files: `dotnet/Foxwarm/Sessions/SessionManager.NodeVisibility.cs`, `dotnet/Foxwarm/Sessions/SessionManager.NodeLifecycle.cs`
+
+The `node` list uses the projection below. It relies on the known-argument `Visible` overload in [tool authorization](./tool-authorization.md), and the Chat picker route in `WebUIChannel.Nodes.cs` uses it for hints.
+
+## Contract
+
+**Directly requested presentation projection (2026-11-09).** `node(action:"list")` shows only Nodes where the caller might do work, derived from the same policy, Agent layers and legacy isolation as discovery. Visibility never authorizes: selection, Node tools, transfer and lifecycle keep their strict per-call checks, and a listed Node may still reject a call.
+
+- `SessionManager.ToolVisibilityContext` captures one caller (Agent, Session, current Node, external runtime), its isolation, Agent layers, the global policy on first use and one Node forest. `ToolVisible(owner, …)` delegates to it, so default injection, `search_tools` and the list share one evaluation. Unreadable isolation/rule metadata makes nothing visible; an unavailable global policy propagates (`TOOL_AUTH_POLICY_UNAVAILABLE`), so the list fails rather than returning an unfiltered inventory.
+- `ProbeNode` reports per-Node facets. A Node is listed when a Node tool is possibly allowed (advertised definitions, or `read`/`write`/`edit`/`exec` when none are advertised, as for offline Nodes) or a transfer endpoint is (`copy_between_nodes`, `send_file`, `image_write_to_file` with that Node as the known endpoint; the other copy endpoint stays the caller's choice). The current Node is always listed. Select, inspect and destroy are annotations and never admit a Node, because broad builtin `node` grants are common. Isolated callers keep their structural limits: no select or destroy, inspect only on the bound Node, transfer only between master and the bound/current Node.
+- `ToolAuthorizationEvaluation.Visible` accepts `knownArgs`: argument matchers on those keys are evaluated exactly, others stay conditional. Builtin `node` probes state `action`/`nodeId`/`providerId` (and `confirmation` for destroy) as known. Conditional possible allows and `ask` count as visible; a conditional deny alone hides nothing.
+- Providers are listed with only the lifecycle actions the caller might use: inspect by policy on `{action:inspect, providerId}`; create/ensure by policy against the configured Provider parent (create also needs a parent for delegated Agents; isolated callers get neither); destroy when a listed Node of that Provider has the destroy facet. Fixed `master`/`authenticated-remote` therefore appear only when inspection might be allowed. The 100-Node cap applies after filtering; the model is not told how many Nodes were hidden.
+- Administrator surfaces are not filtered. The Chat Node picker route computes `NodeUsable` from catalog facts without hydrating the Session and adds a hint on Nodes the Session's tools can't use; such Nodes remain selectable, and no hint is added when policy is unavailable. `/node`, System › Nodes and `/api/nodes` are unchanged. Inbound MCP `foxwarm_node list` keeps its own capability-derived list.
+- Hiding is not confidentiality: Node IDs remain visible through Session status, histories, errors and `explain_tool_authorization`.
+
+## Tests
+
+`NodeAuthorizationTreeTests.ListVisibility.cs` covers list admission by work facets versus broad `node` grants, ancestry and created children, offline and copy-only Nodes, `current:true`, conditional and ask rules, Agent layers, Provider action filtering, the catalog-only picker check and fail-closed policy unavailability. `pickerOpenCentering.e2e.mjs` checks that a hinted picker option stays selectable. Existing `ProviderFileConsumerTests.Lifecycle.cs` keeps unrestricted list and Provider rows.
