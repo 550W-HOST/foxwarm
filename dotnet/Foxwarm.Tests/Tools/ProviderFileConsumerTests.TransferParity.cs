@@ -116,11 +116,11 @@ public sealed partial class ProviderFileConsumerTests
                 ["sourceNode"] = f.Node,
                 ["sourcePath"] = "large.bin",
                 ["targetNode"] = "provider-peer",
-                ["targetPath"] = "large.bin",
+                ["targetPath"] = Path.Combine(root, "large.bin"),
             };
             var first = await f.Manager.CopyBetweenNodesAsync(f.Owner, args, default);
             args["sourceNode"] = "provider-peer";
-            args["sourcePath"] = "large.bin";
+            args["sourcePath"] = Path.Combine(root, "large.bin");
             args["targetNode"] = f.Node;
             args["targetPath"] = "copy.bin";
             var second = await f.Manager.CopyBetweenNodesAsync(f.Owner, args, default);

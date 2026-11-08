@@ -1,6 +1,6 @@
 // Real file consumers through two unchanged official CLI clients and the original WebUI.
 import assert from 'node:assert/strict'
-import { createServer } from 'node:http'
+import { createServer, request as httpRequest } from 'node:http'
 import { once } from 'node:events'
 import { spawn } from 'node:child_process'
 import { mkdir, readFile, writeFile, access, readdir } from 'node:fs/promises'
@@ -43,7 +43,16 @@ const peer = createServer(async (request, response) => {
 })
 peer.listen(0, '127.0.0.1'); await once(peer, 'listening')
 await writeFile(fixture.modelPath, JSON.stringify({ default: 'local', providers: { local: { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${peer.address().port}`, models: ['wire'] } } }))
-const proxyServer = createServer(), proxy = new WebSocketServer({ server: proxyServer, maxPayload: 75 * 1024 * 1024 })
+// Keep the intercepted WebSocket and the Node-initiated streaming requests on the same origin.
+const proxyServer = createServer((request, response) => {
+  const upstream = httpRequest(new URL(request.url, fixture.origin), { method: request.method, headers: request.headers }, reply => {
+    response.writeHead(reply.statusCode, reply.headers); reply.pipe(response)
+  })
+  request.on('aborted', () => upstream.destroy())
+  response.on('close', () => { if (!response.writableFinished) upstream.destroy() })
+  upstream.on('error', error => { if (!response.headersSent) response.writeHead(502); response.end(); failures.push(error.stack) })
+  request.pipe(upstream)
+}), proxy = new WebSocketServer({ server: proxyServer, maxPayload: 75 * 1024 * 1024 })
 proxyServer.listen(0, '127.0.0.1'); await once(proxyServer, 'listening')
 const nodeHost = `http://127.0.0.1:${proxyServer.address().port}`
 proxy.on('connection', (downstream, request) => {
@@ -108,7 +117,10 @@ try {
   const binary = Buffer.from(Array.from({ length: 1024 * 1024 + 7 }, (_, i) => i % 256)), unicode = '中文 café 🦊\n', remoteOne = join(homes.one.agents, 'main'), remoteTwo = join(homes.two.agents, 'main')
   await writeFile(join(fixture.work, '二进制.bin'), binary); await writeFile(join(remoteOne, '中文.txt'), unicode); await writeFile(join(homes.one.project, 'cwd-only.txt'), 'real selected cwd')
   state = await turn(actor, 'copies', [[copy('to-one', 'master', '二进制.bin', 'one', 'nested/binary.bin'), copy('between', 'one', 'nested/binary.bin', 'two', 'copied.bin'), copy('to-main', 'two', 'copied.bin', 'master', 'back.bin'), copy('unicode', 'one', '中文.txt', 'two', 'café.txt'), copy('same', 'one', '中文.txt', 'one', 'same.txt'), call('ordinary-cwd', 'read', { filePath: 'cwd-only.txt' })]])
-  for (const id of ['to-one', 'between', 'to-main', 'unicode', 'same', 'ordinary-cwd']) good(state, id)
+  for (const id of ['to-one', 'between', 'to-main', 'unicode', 'same', 'ordinary-cwd']) {
+    const result = good(state, id)
+    if (['to-one', 'between', 'to-main'].includes(id)) assert.equal(result.transferId, undefined, `${id} must finish before the next copy`)
+  }
   assert(good(state, 'ordinary-cwd').output.includes('real selected cwd'))
   for (const path of [join(remoteOne, 'nested/binary.bin'), join(remoteTwo, 'copied.bin'), join(fixture.work, 'back.bin')]) assert.deepEqual(await readFile(path), binary)
   assert.equal(await readFile(join(remoteTwo, 'café.txt'), 'utf8'), unicode); assert(!await exists(join(homes.one.project, 'nested/binary.bin')))
@@ -120,9 +132,9 @@ try {
   good(state, 'boundary'); good(state, 'boundary-write'); assert.deepEqual(await readFile(join(fixture.work, 'boundary.bin')), boundary); assert.deepEqual(await readFile(join(remoteTwo, 'boundary.bin')), boundary)
   const aboveCodeLimit = Buffer.alloc(boundary.length + 1, 0x71)
   await writeFile(join(fixture.work, 'above-code-limit.bin'), aboveCodeLimit)
-  const writesBefore = wire.filter(entry => entry.type === 'file_write_request').length
+  const writesBefore = wire.filter(entry => entry.type === 'file_stream_write_request').length
   state = await turn(actor, 'above-code-limit', [[copy('above-code-limit', 'master', 'above-code-limit.bin', 'two', 'above-code-limit.bin')]])
-  good(state, 'above-code-limit'); assert.equal(wire.filter(entry => entry.type === 'file_write_request').length, writesBefore + 1); assert.deepEqual(await readFile(join(remoteTwo, 'above-code-limit.bin')), aboveCodeLimit)
+  good(state, 'above-code-limit'); assert.equal(wire.filter(entry => entry.type === 'file_stream_write_request').length, writesBefore + 1); assert.deepEqual(await readFile(join(remoteTwo, 'above-code-limit.bin')), aboveCodeLimit)
   // Whole source after hundreds of comment lines, from Session cwd, runs in Main Monty with normal nested routing.
   const source = '# source beyond ordinary preview\n' + '# bounded full source 中文\n'.repeat(40000) + 'r = call_tool("builtin:copy_between_nodes", {"sourceNode": "one", "sourcePath": "中文.txt", "targetNode": "two", "targetPath": "monty-copy.txt"})\nreturn {"last_line_executed": True, "copy": r}\n' + '# trailing bounded comments\n'.repeat(40000)
   await writeFile(join(homes.one.project, 'whole.py'), source)
@@ -136,9 +148,9 @@ try {
   assert.equal(wire.findLast(entry => entry.node === 'two' && entry.tool === 'read' && entry.args?.filePath === 'other-source.py').sessionCwd, undefined)
   const otherRun = JSON.parse(await readFile(join(fixture.data, 'state/toolscript-runs', good(state, 'other-source').runId + '.json'), 'utf8')); assert.equal(otherRun.sourceNode, 'two')
   await writeFile(join(remoteTwo, 'reject.py'), 'return "must not execute"')
-  const rejectedTransfers = wire.filter(entry => entry.node === 'two' && entry.type === 'file_read_request').length
+  const rejectedTransfers = wire.filter(entry => entry.node === 'two' && ['file_read_request', 'file_stream_read_request'].includes(entry.type)).length
   state = await turn(actor, 'approval-rejected', [[call('approval-rejected', 'run_script', { node: 'two', filePath: 'reject.py' })]])
-  assert(pair(state, 'approval-rejected').error); assert.equal(wire.filter(entry => entry.node === 'two' && entry.type === 'file_read_request').length, rejectedTransfers)
+  assert(pair(state, 'approval-rejected').error); assert.equal(wire.filter(entry => entry.node === 'two' && ['file_read_request', 'file_stream_read_request'].includes(entry.type)).length, rejectedTransfers)
   for (const name of ['run_script', 'read']) {
     await writeFile(join(fixture.work, 'source-policy.yaml'), `version: 1
 rules:
@@ -162,7 +174,7 @@ rules:
   await writeFile(join(homes.one.project, 'waiting.py'), waitingSource)
   state = await turn(actor, 'source-wait', [[call('source-wait', 'run_script', { filePath: 'waiting.py', mode: 'background' })]])
   const paused = good(state, 'source-wait'); assert.equal(paused.status, 'waiting'); assert.equal(paused.stdout, 'before\n')
-  const sourceReads = wire.filter(entry => entry.type === 'file_read_request' && entry.filePath === join(homes.one.project, 'waiting.py')).length
+  const sourceReads = wire.filter(entry => ['file_read_request', 'file_stream_read_request'].includes(entry.type) && entry.filePath === join(homes.one.project, 'waiting.py')).length
   assert.equal(sourceReads, 0, 'Complete approved programmatic content does not require a second transfer.')
   const sourceRequest = wire.findLast(entry => entry.node === 'one' && entry.tool === 'read' && entry.args?.filePath === 'waiting.py')
   assert.equal(sourceRequest.programmatic, true)
@@ -172,7 +184,7 @@ rules:
   await writeFile(join(homes.one.project, 'waiting.py'), 'call_tool("node:one/write", {"filePath": "must-not-reload", "content": "forbidden"})\nreturn "changed"')
   state = await turn(actor, 'source-continue', [[call('source-select-two', 'node', { action: 'select', nodeId: 'two' }), call('source-continue', 'continue_script', { runId: paused.runId, continuationId: paused.continuationId, input: 'accepted' })]])
   const resumed = good(state, 'source-continue'); assert.equal(resumed.status, 'completed'); assert.deepEqual(resumed.result, { answer: 'accepted', remote: unicode })
-  assert.equal(wire.filter(entry => entry.type === 'file_read_request' && entry.filePath === join(homes.one.project, 'waiting.py')).length, sourceReads); assert.equal(wire.filter(entry => entry.node === 'one' && entry.tool === 'read' && entry.args?.filePath === 'waiting.py').length, sourceApprovals); assert(!await exists(join(remoteOne, 'must-not-reload')))
+  assert.equal(wire.filter(entry => ['file_read_request', 'file_stream_read_request'].includes(entry.type) && entry.filePath === join(homes.one.project, 'waiting.py')).length, sourceReads); assert.equal(wire.filter(entry => entry.node === 'one' && entry.tool === 'read' && entry.args?.filePath === 'waiting.py').length, sourceApprovals); assert(!await exists(join(remoteOne, 'must-not-reload')))
   state = await turn(actor, 'source-return-one', [[call('source-return-one', 'node', { action: 'select', nodeId: 'one' })]])
   good(state, 'source-return-one'); assert.equal((await fixture.api('POST', route(actor) + '/cwd', { cwd: homes.one.project })).status, 200)
   // Concrete source and destination permission decisions; neither denial dispatches a transfer.
@@ -230,11 +242,11 @@ rules:
   await writeFile(join(fixture.work, 'policy.yaml'), 'version: 1\nrules:\n- id: ordinary-remote-files\n  action: deny\n  match:\n    tool: {source: node, name: [read, write]}\n    targetNode: [one, two]\n')
   state = await turn(actor, 'node-file-deny-policy', [[call('node-file-deny-policy', 'call_tool', { toolId: 'builtin:set_config', args: { target: 'tool-rules', filePath: join(fixture.work, 'policy.yaml') } })]])
   good(state, 'node-file-deny-policy')
-  const deniedSourceReadsBefore = wire.filter(entry => entry.type === 'file_read_request' && entry.filePath === join(homes.one.project, 'waiting.py')).length
+  const deniedSourceReadsBefore = wire.filter(entry => ['file_read_request', 'file_stream_read_request'].includes(entry.type) && entry.filePath === join(homes.one.project, 'waiting.py')).length
   state = await turn(actor, 'builtin-grants', [[copy('builtin-copy', 'one', '中文.txt', 'two', 'builtin-copy.txt'), call('builtin-export', 'image_write_to_file', { id: 'crop#1', filePath: 'builtin/crop.png', node: 'two' }), call('builtin-send', 'send_file', { filePath: 'builtin/crop.png', node: 'two', sessionId: target }), call('denied-ordinary-read', 'call_tool', { toolId: 'node:one/read', args: { filePath: '中文.txt' } }), call('denied-source-read', 'run_script', { filePath: 'waiting.py' })]])
   for (const id of ['builtin-copy', 'builtin-export', 'builtin-send']) good(state, id)
   assert(pair(state, 'denied-ordinary-read').error); assert(pair(state, 'denied-source-read').error || pair(state, 'denied-source-read').status === 'failed')
-  assert.equal(wire.filter(entry => entry.type === 'file_read_request' && entry.filePath === join(homes.one.project, 'waiting.py')).length, deniedSourceReadsBefore, 'run_script retains the real node:read source grant before transfer')
+  assert.equal(wire.filter(entry => ['file_read_request', 'file_stream_read_request'].includes(entry.type) && entry.filePath === join(homes.one.project, 'waiting.py')).length, deniedSourceReadsBefore, 'run_script retains the real node:read source grant before transfer')
   assert.equal(await readFile(join(remoteTwo, 'builtin-copy.txt'), 'utf8'), unicode); assert.deepEqual(await readFile(join(remoteTwo, 'builtin/crop.png')), cropped)
   // Actual original picker upload into a bound Agent: Administrator ingress does not impersonate a tool caller.
   assert.equal((await fixture.api('POST', '/api/agents', { agentId: 'bound' })).status, 201)

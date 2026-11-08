@@ -514,7 +514,7 @@ public sealed partial class NodeFileTransferTests
                     ["sourceNode"] = "slow-source",
                     ["sourcePath"] = "source.bin",
                     ["targetNode"] = "cancel-target",
-                    ["targetPath"] = "destination.bin",
+                    ["targetPath"] = Path.Combine(root, "destination.bin"),
                     ["timeout"] = 1,
                 },
                 default
@@ -534,7 +534,7 @@ public sealed partial class NodeFileTransferTests
             await content.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
             var receipt = await copying.WaitAsync(TimeSpan.FromSeconds(5));
             var id = receipt["transferId"]!.ToString();
-            var directory = Path.Combine(root, "agents", "main");
+            var directory = root;
             using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             while (
                 !Directory.Exists(directory) || Directory.GetFiles(directory, "*.tmp").Length == 0
@@ -545,7 +545,7 @@ public sealed partial class NodeFileTransferTests
                 .Manager.NodeProviders.ExecuteAsync(
                     "cancel-target",
                     "read",
-                    new JsonObject { ["filePath"] = "control.txt" },
+                    new JsonObject { ["filePath"] = Path.Combine(directory, "control.txt") },
                     f.Owner.Id,
                     f.Owner.Agent,
                     "cancel-target",

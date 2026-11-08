@@ -116,10 +116,10 @@ public sealed partial class NodeFileTransferTests
             args["sourceNode"] = "ts-stream";
             args["sourcePath"] = "first.bin";
             args["targetNode"] = "cs-stream";
-            args["targetPath"] = "second.bin";
+            args["targetPath"] = Path.Combine(csRoot, "second.bin");
             var second = await f.Manager.CopyBetweenNodesAsync(f.Owner, args, default);
             args["sourceNode"] = "cs-stream";
-            args["sourcePath"] = "second.bin";
+            args["sourcePath"] = Path.Combine(csRoot, "second.bin");
             args["targetNode"] = "master";
             args["targetPath"] = "roundtrip.bin";
             var third = await f.Manager.CopyBetweenNodesAsync(f.Owner, args, default);
