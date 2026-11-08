@@ -28,6 +28,7 @@ internal static class IsolatedToolCompatibility
         "skill",
         "image_crop",
         "copy_between_nodes",
+        "cancel_transfer",
         "get_archived_messages",
         "get_archived_blocks",
         "recall",

@@ -417,6 +417,7 @@ internal sealed partial class SessionManager
             operation.RetirementStarted.Add(id);
             mcp.InvalidateOwner(owner);
             Nodes.RetireSession(owner);
+            await RetireCopyTransfersAsync(owner);
             await owner.Compactor.StopAsync();
             await owner.DrainForegroundAsync();
             await waitTimeouts.RetireAsync(id);

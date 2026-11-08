@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json.Nodes;
+using Foxwarm.Sessions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Logging;
@@ -8,6 +9,51 @@ namespace Foxwarm.Tests;
 
 public sealed partial class ProviderFileConsumerTests
 {
+    [Fact]
+    public async Task Cancelling_a_provider_write_leaves_the_completed_prefix_without_replay()
+    {
+        if (!OperatingSystem.IsLinux())
+            return;
+        await using var f = await Fixture.Create("slow");
+        var source = Path.Combine(f.Work, "source.bin");
+        Directory.CreateDirectory(f.Work);
+        await using (
+            var file = new FileStream(source, FileMode.CreateNew, FileAccess.Write, FileShare.None)
+        )
+            file.SetLength(16 * 1024 * 1024);
+        var copy = await f.Manager.CopyBetweenNodesAsync(
+            f.Owner,
+            new JsonObject
+            {
+                ["sourceNode"] = "master",
+                ["sourcePath"] = "source.bin",
+                ["targetNode"] = f.Node,
+                ["targetPath"] = "partial.bin",
+                ["timeout"] = 1,
+            },
+            default
+        );
+        var id = copy["transferId"]!.ToString();
+        var target = f.FilePath("partial.bin");
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        while (!File.Exists(target) || new FileInfo(target).Length == 0)
+            await Task.Delay(25, deadline.Token);
+        f.Owner.Entry.WithState(state => state.Busy = true);
+        _ = await f.Manager.CancelCopyTransferAsync(
+            f.Owner,
+            new JsonObject { ["transferId"] = id },
+            default
+        );
+        while (
+            !f.Owner.Entry.WithState(state =>
+                state.Queue.Any(item => SessionWait.Text(item.OpenFields?["execId"]) == id)
+            )
+        )
+            await Task.Delay(25, deadline.Token);
+        Assert.InRange(new FileInfo(target).Length, 1, 16 * 1024 * 1024 - 1);
+        f.Owner.Entry.WithState(state => state.Busy = false);
+    }
+
     [Fact]
     public async Task Provider_and_resident_CLI_copy_in_both_directions_over_streams()
     {

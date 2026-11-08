@@ -878,7 +878,13 @@ internal sealed partial class SessionToolExecutor(
         handlers["exec"] = (owner, args, token) => owner.ExecuteExecAsync(args, token);
         handlers["artifact"] = (owner, args, token) => owner.ExecuteArtifactAsync(args, token);
         handlers["recall"] = (owner, args, token) =>
-            ArchiveRecallTool.ExecuteAsync(owner.Manager, owner.Hosted, args, token, owner.Programmatic);
+            ArchiveRecallTool.ExecuteAsync(
+                owner.Manager,
+                owner.Hosted,
+                args,
+                token,
+                owner.Programmatic
+            );
         handlers["get_archived_messages"] = (owner, args, token) =>
             ArchiveControlTools.ReadMessagesAsync(owner.Manager, owner.Hosted, args, token);
         handlers["get_archived_blocks"] = (owner, args, token) =>
@@ -932,6 +938,8 @@ internal sealed partial class SessionToolExecutor(
                 owner.Manager.ExecuteTimerToolAsync(owner.Hosted, name, args, token);
         handlers["copy_between_nodes"] = (owner, args, token) =>
             owner.Manager.CopyBetweenNodesAsync(owner.Hosted, args, token);
+        handlers["cancel_transfer"] = (owner, args, token) =>
+            owner.Manager.CancelCopyTransferAsync(owner.Hosted, args, token);
         handlers["send_file"] = (owner, args, token) =>
             owner.Manager.SendFileAsync(
                 owner.Hosted,

@@ -70,9 +70,9 @@ internal static class WaitToolDefinitions
                         true
                     ),
                     ["waitExecIds"] = Array(
-                        "Background executions whose completion you are waiting for. Use an active execId owned by this session or agent, or one whose completion is already queued. Use the execId returned by exec, not a process ID or file path. Empty lists are treated as omitted. If wakeIfNoActivityAfterSeconds is omitted and waitForInput is not true, a nonempty list adds a 600-second fallback wake. Set wakeIfNoActivityAfterSeconds to null to disable that default.",
+                        "Background executions or copies whose completion you are waiting for. Use an active execId from exec or transferId from copy_between_nodes, owned by this session or agent, or one whose completion is already queued, not a process ID or file path. Empty lists are treated as omitted. If wakeIfNoActivityAfterSeconds is omitted and waitForInput is not true, a nonempty list adds a 600-second fallback wake. Set wakeIfNoActivityAfterSeconds to null to disable that default.",
                         1,
-                        "Execution ID returned by exec."
+                        "Execution ID returned by exec, or transfer ID returned by copy_between_nodes."
                     ),
                     ["waitQuestionIds"] = Array(
                         "Questions from ask_user whose answers you need. While waiting on them, any message the user sends is treated as the answer.",

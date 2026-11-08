@@ -33,6 +33,7 @@ internal sealed partial class NodeConnectionHub
         Action<long>? beforeMaterialize = null
     )
     {
+        using var admission = owner.Entry.AdmitMutation();
         var charged = false;
         void Charge(long length)
         {
@@ -123,6 +124,7 @@ internal sealed partial class NodeConnectionHub
         CancellationToken token
     )
     {
+        using var admission = owner.Entry.AdmitMutation();
         if (bytes.Length < StreamThreshold || !StreamingAvailable(node))
             return await WriteFileLegacyAsync(node, path, bytes, overwrite, owner, restrict, token);
         using var source = new MemoryStream(bytes, writable: false);
@@ -152,10 +154,20 @@ internal sealed partial class NodeConnectionHub
         bool overwrite,
         SessionOwner owner,
         bool restrict,
-        CancellationToken token
+        CancellationToken token,
+        bool detachAfterDispatch = false
     )
     {
-        var response = await TransferAsync(node, path, owner, restrict, bytes, overwrite, token);
+        var response = await TransferAsync(
+            node,
+            path,
+            owner,
+            restrict,
+            bytes,
+            overwrite,
+            token,
+            detachAfterDispatch
+        );
         var result =
             response["result"] as JsonObject
             ?? throw new InvalidDataException(
@@ -189,7 +201,8 @@ internal sealed partial class NodeConnectionHub
         bool restrict,
         byte[]? bytes,
         bool overwrite,
-        CancellationToken token
+        CancellationToken token,
+        bool detachAfterDispatch = false
     )
     {
         if (
@@ -201,25 +214,33 @@ internal sealed partial class NodeConnectionHub
             );
         token.ThrowIfCancellationRequested();
         owner.Entry.RequireIdentityAuthority();
-        using var admission = owner.Entry.AdmitMutation();
+        var admission = owner.Entry.AdmitMutation();
         var id = "file_" + Guid.NewGuid().ToString("N");
         Connection connection;
         var result = new TaskCompletionSource<JsonObject>(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
         var kind = bytes is null ? "read" : "write";
-        lock (gate)
+        try
         {
-            connection = Require(node);
-            if (
-                !connection.Capabilities["tools"]!
-                    .AsArray()
-                    .Any(tool => SessionWait.Text(tool?["name"]) == kind)
-            )
-                throw new NotSupportedException(
-                    "Node does not advertise file " + kind + ": " + node
-                );
-            transfers[id] = new(connection, "file_" + kind + "_response", result);
+            lock (gate)
+            {
+                connection = Require(node);
+                if (
+                    !connection.Capabilities["tools"]!
+                        .AsArray()
+                        .Any(tool => SessionWait.Text(tool?["name"]) == kind)
+                )
+                    throw new NotSupportedException(
+                        "Node does not advertise file " + kind + ": " + node
+                    );
+                transfers[id] = new(connection, "file_" + kind + "_response", result);
+            }
+        }
+        catch
+        {
+            admission?.Dispose();
+            throw;
         }
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token, shutdown.Token);
         deadline.CancelAfter(TimeSpan.FromSeconds(30));
@@ -246,6 +267,11 @@ internal sealed partial class NodeConnectionHub
                     throw new IOException("Node connection changed before file transfer.");
             attempted = true;
             await SendAsync(connection, request, deadline.Token);
+            if (detachAfterDispatch)
+            {
+                admission?.Dispose();
+                admission = null;
+            }
             return await result.Task.WaitAsync(deadline.Token);
         }
         catch (System.Net.WebSockets.WebSocketException error)
@@ -263,6 +289,7 @@ internal sealed partial class NodeConnectionHub
         }
         finally
         {
+            admission?.Dispose();
             transfers.TryRemove(id, out _);
         }
     }

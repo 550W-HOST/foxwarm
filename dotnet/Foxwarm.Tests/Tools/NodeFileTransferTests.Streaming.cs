@@ -87,6 +87,24 @@ public sealed partial class NodeFileTransferTests
                 file.Position = length - 1;
                 await file.WriteAsync(new byte[] { 123 });
             }
+            var baseline = GC.GetTotalMemory(false);
+            long peak = baseline;
+            using var sampling = new Timer(
+                _ =>
+                {
+                    var current = GC.GetTotalMemory(false);
+                    long previous;
+                    do
+                    {
+                        previous = Interlocked.Read(ref peak);
+                        if (current <= previous)
+                            break;
+                    } while (Interlocked.CompareExchange(ref peak, current, previous) != previous);
+                },
+                null,
+                TimeSpan.Zero,
+                TimeSpan.FromMilliseconds(10)
+            );
             var args = new JsonObject
             {
                 ["sourceNode"] = "master",
@@ -128,6 +146,10 @@ public sealed partial class NodeFileTransferTests
                 Convert.ToHexStringLower(await SHA256.HashDataAsync(delivered))
             );
             Assert.NotNull(delivery["fileDelivery"]);
+            Assert.True(
+                Interlocked.Read(ref peak) - baseline < 80L * 1024 * 1024,
+                $"Managed memory grew by {(Interlocked.Read(ref peak) - baseline) / 1024 / 1024} MiB during a 105 MiB transfer."
+            );
         }
         finally
         {
@@ -245,6 +267,20 @@ public sealed partial class NodeFileTransferTests
             )
         )
             Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        var otherCredentials = f.Manager.Nodes.Registry.Create("other-node");
+        using (var other = new HttpClient { BaseAddress = http.BaseAddress })
+        {
+            other.DefaultRequestHeaders.Add("X-Foxwarm-Node", "other-node");
+            other.DefaultRequestHeaders.Authorization = new(
+                "Bearer",
+                otherCredentials["authToken"]!.ToString()
+            );
+            using var response = await other.PutAsync(
+                "/node/transfer/" + id,
+                new ByteArrayContent(bytes)
+            );
+            Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        }
         using var content = new ByteArrayContent(bytes);
         var uploading = http.PutAsync("/node/transfer/" + id, content);
         await using var source = await opening.WaitAsync(TimeSpan.FromSeconds(5));

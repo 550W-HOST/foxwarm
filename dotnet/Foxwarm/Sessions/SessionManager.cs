@@ -440,6 +440,17 @@ internal sealed partial class SessionManager : IAsyncDisposable
         }
         var mandatory = ids.Select(RecoverOwnerAsync).ToList();
         await Task.WhenAll(mandatory);
+        foreach (var row in catalogRows)
+        {
+            var id = SessionCatalog.Text(row["id"])!;
+            if (
+                SessionWait
+                    .Strings(CatalogMetadata(id)?.Wait?["waitExecIds"])
+                    .Any(value => value.StartsWith("transfer_", StringComparison.Ordinal))
+                && await GetExistingAsync(id) is { } owner
+            )
+                await owner.Entry.SaveLane.ClearLostCopyWaitsAsync();
+        }
         if (startMainServices)
             Console.WriteLine($"Session startup: loadedOwners={sessions.Count}.");
         servicesReady = true;
@@ -716,6 +727,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
             )
         );
         await Task.WhenAll(current.Select(session => session.DrainForegroundAsync()));
+        await DrainCopyTransfersAsync();
         await waitTimeouts.DrainAsync();
         await waitLiveness.DrainAsync();
         // Planners are independently owned. Release foreground waits first, then

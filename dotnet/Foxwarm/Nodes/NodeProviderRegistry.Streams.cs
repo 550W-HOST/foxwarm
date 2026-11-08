@@ -21,7 +21,8 @@ internal static class TransferStream
         Stream input,
         Stream output,
         long length,
-        CancellationToken token
+        CancellationToken token,
+        Action<long>? progress = null
     )
     {
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
@@ -35,6 +36,7 @@ internal static class TransferStream
             hash.AppendData(buffer, 0, count);
             await output.WriteAsync(buffer.AsMemory(0, count), token);
             total += count;
+            progress?.Invoke(total);
         }
         if (total != length)
             throw new IOException("Source file changed or transfer was interrupted.");
@@ -79,7 +81,8 @@ internal sealed partial class NodeProviderRegistry
         bool overwrite,
         SessionOwner owner,
         bool ingress,
-        CancellationToken token
+        CancellationToken token,
+        Action<long>? progress = null
     )
     {
         if (!IsProviderNode(node))
@@ -92,7 +95,8 @@ internal sealed partial class NodeProviderRegistry
                 overwrite,
                 owner,
                 ingress,
-                token
+                token,
+                progress
             );
         }
         owner.Entry.RequireIdentityAuthority();
@@ -109,7 +113,7 @@ internal sealed partial class NodeProviderRegistry
         catch (NodeProviderException error) when (error.Code == "ENOENT") { }
         await operations.MakeDirectoryAsync(await operations.ParentAsync(path, token), token);
         await using var output = new PrimitiveWriteStream(operations, path, overwrite);
-        var sha = await TransferStream.CopyAsync(input, output, length, token);
+        var sha = await TransferStream.CopyAsync(input, output, length, token, progress);
         await output.CompleteAsync(token);
         return (path, sha);
     }

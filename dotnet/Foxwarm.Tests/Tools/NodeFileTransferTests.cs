@@ -40,6 +40,9 @@ public sealed partial class NodeFileTransferTests
             var builder = WebApplication.CreateBuilder();
             builder.Logging.ClearProviders();
             builder.WebHost.UseUrls("http://127.0.0.1:0");
+            builder.WebHost.ConfigureKestrel(server =>
+                server.Limits.MaxRequestBodySize = 2 * 1024 * 1024
+            );
             App = builder.Build();
             App.UseWebSockets();
             App.Map("/node_ws", Manager.Nodes.HandleAsync);

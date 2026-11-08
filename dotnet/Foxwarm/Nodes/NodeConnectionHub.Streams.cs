@@ -36,6 +36,7 @@ internal sealed partial class NodeConnectionHub
         internal Stream? Input;
         internal long Length;
         internal string? Sha256;
+        internal Action<long>? Progress;
         internal int Claimed;
 
         internal void Abort(Exception error)
@@ -152,6 +153,10 @@ internal sealed partial class NodeConnectionHub
             var first = await invocation.Start.Task.WaitAsync(TimeSpan.FromSeconds(30), token);
             if (first is JsonObject inline)
             {
+                if (SessionWait.Number(inline["file"]?["sizeBytes"]) >= StreamThreshold)
+                    throw new InvalidDataException(
+                        "Node returned an oversized inline file response."
+                    );
                 var file = DecodeReadResponse(inline, path, beforeMaterialize);
                 EndFileStream(id, invocation);
                 return new(
@@ -185,7 +190,8 @@ internal sealed partial class NodeConnectionHub
         bool overwrite,
         SessionOwner owner,
         bool restrict,
-        CancellationToken token
+        CancellationToken token,
+        Action<long>? progress = null
     )
     {
         if (length < StreamThreshold || !StreamingAvailable(node))
@@ -199,8 +205,10 @@ internal sealed partial class NodeConnectionHub
                 overwrite,
                 owner,
                 restrict,
-                token
+                token,
+                detachAfterDispatch: true
             );
+            progress?.Invoke(length);
             return (
                 SessionWait.Text(result["absolutePath"])
                     ?? SessionWait.Text(result["filePath"])
@@ -211,6 +219,7 @@ internal sealed partial class NodeConnectionHub
         var invocation = BeginFileStream(node, path, owner, false, token, out var id);
         invocation.Input = input;
         invocation.Length = length;
+        invocation.Progress = progress;
         try
         {
             var control = StreamControl(id, path, owner, restrict, false);
@@ -257,7 +266,9 @@ internal sealed partial class NodeConnectionHub
         {
             invocation.Abort(error);
             throw new IOException(
-                "File write failed after dispatch. The destination may already have been published; it was not retried.",
+                "File write failed after dispatch: "
+                    + error.Message
+                    + ". The destination may already have been published; it was not retried.",
                 error
             );
         }
@@ -378,9 +389,10 @@ internal sealed partial class NodeConnectionHub
         );
         try
         {
+            var stopToken = pending.Stop.Token;
             pending.Start.TrySetResult(context);
             if (pending.Read)
-                await pending.Finished.Task.WaitAsync(pending.Stop.Token);
+                await pending.Finished.Task.WaitAsync(stopToken);
             else
             {
                 context.Response.ContentLength = pending.Length;
@@ -389,7 +401,8 @@ internal sealed partial class NodeConnectionHub
                     pending.Input!,
                     new ProgressWriteStream(context.Response.Body, pending.Stop),
                     pending.Length,
-                    pending.Stop.Token
+                    pending.Stop.Token,
+                    pending.Progress
                 );
                 pending.Stop.CancelAfter(Timeout.InfiniteTimeSpan);
                 pending.Finished.TrySetResult(true);

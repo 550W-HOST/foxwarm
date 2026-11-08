@@ -8,18 +8,14 @@ internal static class FileDeliveryDefinitions
         new(
             Definition(
                 "copy_between_nodes",
-                "Copy a file between Nodes, including master. Both paths are checked against the applicable permissions. Relative paths use the Agent directory on master and CLI Nodes, or the environment's default directory on other Nodes, not the Session working directory.",
+                "Copy a file between Nodes, including master. Both paths are checked against the applicable permissions. Relative paths use the Agent directory on master and CLI Nodes, or the environment's default directory on other Nodes, not the Session working directory. If the copy outlasts timeout, it continues in the background and returns a transferId; a later event reports completion. Stop or Run queued ends the wait without cancelling the copy; use cancel_transfer to stop it.",
                 new JsonObject
                 {
-                    ["sourceNode"] = String(
-                        "Node containing the source file."
-                    ),
+                    ["sourceNode"] = String("Node containing the source file."),
                     ["sourcePath"] = String(
                         "Source file path on sourceNode. Relative paths use the Agent directory on master and CLI Nodes, or the environment's default directory on other Nodes. On master and CLI Nodes, ~/ paths are accepted and a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected."
                     ),
-                    ["targetNode"] = String(
-                        "Node that will receive the file."
-                    ),
+                    ["targetNode"] = String("Node that will receive the file."),
                     ["targetPath"] = String(
                         "Destination file path on targetNode. Relative paths use the Agent directory on master and CLI Nodes, or the environment's default directory on other Nodes. On master and CLI Nodes, ~/ paths are accepted and a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected."
                     ),
@@ -29,11 +25,27 @@ internal static class FileDeliveryDefinitions
                         ["description"] =
                             "Allow replacement of an existing destination file. Defaults to false.",
                     },
+                    ["timeout"] = new JsonObject
+                    {
+                        ["type"] = "number",
+                        ["minimum"] = 1,
+                        ["description"] =
+                            "Seconds to wait before returning a still-running copy as a background transfer. Defaults to 15; values above 60 are reduced to 60 with a warning.",
+                    },
                 },
                 "sourceNode",
                 "sourcePath",
                 "targetNode",
                 "targetPath"
+            ),
+            Definition(
+                "cancel_transfer",
+                "Cancel a background copy started by copy_between_nodes in this session. Already transferred bytes are not undone: an unfinished copy publishes nothing on master and CLI Nodes, while other Nodes may keep a partial destination file.",
+                new JsonObject
+                {
+                    ["transferId"] = String("Transfer ID returned by copy_between_nodes."),
+                },
+                "transferId"
             ),
             Definition(
                 "send_file",

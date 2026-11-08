@@ -246,6 +246,41 @@ public sealed partial class SessionSaveLane
             }
         );
 
+    internal Task<string?> ClearLostCopyWaitsAsync() =>
+        MutateWaitAsync(
+            (meta, queue, _) =>
+            {
+                var wait = SessionWait.Current(meta);
+                var ids = SessionWait.Strings(wait?["waitExecIds"]);
+                var queued = queue
+                    .Select(item => SessionWait.Text(item.OpenFields?["execId"]))
+                    .OfType<string>()
+                    .ToHashSet(StringComparer.Ordinal);
+                var retained = ids.Where(id =>
+                        !id.StartsWith("transfer_", StringComparison.Ordinal) || queued.Contains(id)
+                    )
+                    .ToArray();
+                if (wait is null || retained.Length == ids.Length)
+                    return null;
+                if (retained.Length > 0)
+                    wait["waitExecIds"] = new JsonArray(
+                        retained.Select(id => (JsonNode?)JsonValue.Create(id)).ToArray()
+                    );
+                else
+                {
+                    wait.Remove("waitExecIds");
+                    if (
+                        wait["waitAll"] is null
+                        && wait["waitAnySessions"] is null
+                        && wait["waitQuestionIds"] is null
+                        && wait["waitForInput"] is null
+                    )
+                        meta.Remove("wait");
+                }
+                return SessionWait.Text(wait["id"]);
+            }
+        );
+
     // Question records share the strict wait/queue lane so ask, answer and close stay ordered.
     internal Task<string?> MutateQuestionsAsync(Func<JsonObject, string?> mutate) =>
         MutateWaitAsync((meta, _, _) => mutate(meta));
