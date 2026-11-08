@@ -142,19 +142,13 @@ internal sealed partial class TerminalRouter : IAsyncDisposable
     internal async Task<IReadOnlyList<JsonObject>> ListAsync(CancellationToken token)
     {
         var result = local.List().ToList();
-        try
-        {
-            await nodes.EnsureDiscoveredAsync(token);
-        }
-        catch (Exception error) when (error is not OperationCanceledException)
-        {
-            // A failing Provider inventory does not hide local or resident terminals.
-        }
-        foreach (var nodeId in nodes.ServiceNodes("vscode-pty"))
+        // Listing never starts a Provider channel: only resident Nodes and Provider Nodes whose
+        // channel is already live are asked. Opening Code or a terminal on a Provider Node starts it.
+        foreach (var nodeId in nodes.LiveServiceNodes("vscode-pty"))
         {
             try
             {
-                var target = await nodes.ServiceAsync(nodeId, "vscode-pty", 1, token);
+                var target = nodes.LiveServiceTarget(nodeId, "vscode-pty", 1);
                 var response = await nodes.RequestServiceAsync(target, "list", new(), token);
                 if (response["terminals"] is not JsonArray values)
                     throw new CodeServiceException(

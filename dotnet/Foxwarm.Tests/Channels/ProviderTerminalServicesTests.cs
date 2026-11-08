@@ -191,6 +191,42 @@ public sealed class ProviderTerminalServicesTests
     }
 
     [Fact]
+    public async Task Listing_terminals_never_starts_a_Provider_channel_for_an_idle_Node()
+    {
+        if (!OperatingSystem.IsLinux())
+            return;
+        await using var f = await ProviderCodeServicesTests.Fixture.Create();
+        // The page's startup requests: the Node inventory, then repeated terminal lists.
+        await f.Json(await f.Client.GetAsync("/api/nodes"));
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            var idle = await f.Json(await f.Client.GetAsync("/api/terminals"));
+            Assert.True(idle["supported"]!.GetValue<bool>());
+            Assert.Empty(idle["terminals"]!.AsArray());
+        }
+        Assert.Equal(0, f.Count("connect"));
+        // Using one Node starts only its channel; from then on its terminals are listed.
+        var terminal = await Create(f, "fixture/svc");
+        Assert.Equal(1, f.Count("connect"));
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            var listed = await f.Json(await f.Client.GetAsync("/api/terminals"));
+            Assert.Equal(
+                terminal["id"]!.ToString(),
+                Assert.Single(listed["terminals"]!.AsArray())!["id"]!.ToString()
+            );
+        }
+        Assert.Equal(1, f.Count("connect"));
+        Assert.Equal(
+            ["svc"],
+            File.ReadAllLines(Path.Combine(f.Target, "channel.jsonl"))
+                .Select(line => JsonNode.Parse(line)!.AsObject())
+                .Where(entry => entry.ContainsKey("connect"))
+                .Select(entry => entry["connect"]!.ToString())
+        );
+    }
+
+    [Fact]
     public async Task Equal_Provider_terminal_ids_on_different_Nodes_stay_distinct()
     {
         if (!OperatingSystem.IsLinux())

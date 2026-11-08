@@ -135,13 +135,36 @@ internal sealed partial class NodeProviderRegistry : IAsyncDisposable
     }
 
     /// <summary>
-    /// Populates the discovery projection once after startup so that service enumeration (for
-    /// example the terminal list) can include Provider Nodes before any Node picker request.
+    /// Nodes that can be asked now without starting anything: resident Nodes advertising the
+    /// service, and Provider Nodes whose service channel already has a live generation.
     /// </summary>
-    internal async Task EnsureDiscoveredAsync(CancellationToken token)
+    internal string[] LiveServiceNodes(string service) =>
+        native
+            .Services(service)
+            .Select(target => target.NodeId)
+            .Concat(
+                channels
+                    .Where(pair =>
+                        pair.Value.Live is { } live
+                        && live.Version(service) >= 1
+                        && discovered.TryGetValue(pair.Key, out var known)
+                        && SessionWait.Text(known["availability"]) == "ready"
+                        && Admitted(pair.Key)
+                    )
+                    .Select(pair => pair.Key)
+            )
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+    /// <summary>The target for a Node returned by <see cref="LiveServiceNodes"/>; never starts a channel.</summary>
+    internal NodeServiceTarget LiveServiceTarget(string id, string service, int minimumVersion)
     {
-        if (providers.Count > 0 && discovered.IsEmpty)
-            _ = await ListAsync(token);
+        if (!IsProviderNode(id))
+            return native.Service(id, service, minimumVersion);
+        var channel = Channel(id);
+        return channel.Live is { } live && Admitted(id)
+            ? channel.Target(live, service, minimumVersion)
+            : throw Unavailable($"Node '{id}' has no live service channel.");
     }
 
     /// <summary>Currently known Nodes advertising a service, from the discovery projection.</summary>
