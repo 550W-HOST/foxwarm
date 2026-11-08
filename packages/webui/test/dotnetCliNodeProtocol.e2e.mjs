@@ -50,7 +50,7 @@ async function request(socket, type, body) {
 const tool = (socket, name, args, extra = {}) => request(socket, 'tool_call', { tool: name, args, sessionId: 'main/fixture', agentName: 'main', ...extra })
 function observe(socket) { socket.on('message', bytes => replies.push(JSON.parse(bytes))) }
 function normalize(value, cwd) { return JSON.parse(JSON.stringify(value).replaceAll(cwd, '<root>').replaceAll(/\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z/g, '<mtime>')) }
-async function nativeCorpus(socket, cwd) {
+async function nativeCorpus(socket, cwd, native) {
   const agent = join(cwd, 'agents/main'); await mkdir(agent, { recursive: true })
   await writeFile(join(agent, 'mixed.txt'), 'first\r\nsecond\rthird\nlast')
   await writeFile(join(agent, 'large.bin'), Buffer.alloc(1024 * 1024 + 3, 0))
@@ -119,7 +119,10 @@ async function nativeCorpus(socket, cwd) {
   await take('edit', { filePath: 'mixed.txt', oldText: '$', newText: '$$', replaceAll: true })
   await take('edit', { apply_patch: '*** Begin Patch\n*** Add File: unified-added.txt\n+unified\n*** End Patch' })
   await take('edit', { filePath: 'mixed.txt', apply_patch: '*** Begin Patch\n*** Delete File: mixed.txt\n*** End Patch' })
-  await take('get_default_cwd', {})
+  // Agent-owned native exec follows its Agent directory; the retained Source CLI
+  // reports its process startup directory. Check both without folding away the difference.
+  const defaultCwd = await tool(socket, 'get_default_cwd', {})
+  assert.equal(defaultCwd.result.output, native ? agent : cwd)
   await take('read', { filePath: 'mixed.txt' }, { sessionCwd: agent, programmatic: true })
   for (const name of ['added.txt', 'partial.txt', 'mixed.txt', 'parents/child/file']) rows.push(await readFile(join(agent, name), 'utf8'))
   await symlink(join(agent, 'mixed.txt'), join(agent, 'link.txt'))
@@ -159,8 +162,8 @@ try {
   const native = await launch('native', main.origin + '/deployment', ['--id', 'native', '--auth-token', 'native-only', '--credentials-file', join(root, 'native/credentials.json')])
   await until(() => connected.get('native'), 'new CLI register')
   assert.deepEqual(capabilities.get('native').tools.map(tool => tool.name), ['read', 'write', 'edit', 'apply_patch', 'exec', 'get_default_cwd', 'browse_open', 'browse_list', 'browse_get', 'browse_close', 'browse_interact'])
-  assert.deepEqual(capabilities.get('native').features, { unifiedEdit: true, programmaticToolData: true, execWaitCancellation: true, remoteExecBackgroundRegistration: true, externalToolOwner: 1, fileStream: 1 }); assert.deepEqual(capabilities.get('native').services, { 'vscode-fs': 1, 'vscode-git': 2, 'vscode-pty': 1 })
-  assert.deepEqual(await nativeCorpus(connected.get('native'), native.cwd), await nativeCorpus(connected.get('source'), source.cwd))
+  assert.deepEqual(capabilities.get('native').features, { unifiedEdit: true, programmaticToolData: true, execWaitCancellation: true, remoteExecBackgroundRegistration: true, externalToolOwner: 1, fileStream: 1, execPlacement: true }); assert.deepEqual(capabilities.get('native').services, { 'vscode-fs': 1, 'vscode-git': 2, 'vscode-pty': 1 })
+  assert.deepEqual(await nativeCorpus(connected.get('native'), native.cwd, true), await nativeCorpus(connected.get('source'), source.cwd, false))
   assert.equal((await stat(join(native.cwd, 'credentials.json'))).mode & 0o777, 0o600)
   await stop(source); await stop(native)
 
