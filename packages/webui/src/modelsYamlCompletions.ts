@@ -122,6 +122,15 @@ function indentation(line: string): number {
   return line.match(/^\s*/)?.[0].length || 0
 }
 
+/** Keys a catalog entry can name: concrete `provider/model` keys, then aliases and virtual routes. */
+export function selectableModelKeys(rawYaml: string): string[] {
+  const suggestions = parseModelsYamlSuggestions(rawYaml)
+  if (!suggestions) return []
+  const concrete = new Set(suggestions.concreteKeys)
+  const virtualKeys = suggestions.modelKeys.filter((key) => !concrete.has(key))
+  return [...new Set([...suggestions.historyModelKeys, ...virtualKeys])]
+}
+
 export function getModelsCompletionKind(lines: string[], lineIndex: number): 'default' | 'targets' | 'sameModelAs' | 'sameProviderAs' | null {
   const line = lines[lineIndex] || ''
   if (/^\s*default\s*:/.test(line)) return 'default'

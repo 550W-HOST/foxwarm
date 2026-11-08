@@ -5,6 +5,7 @@ import { Bell, Bot, CheckCircle2, Palette, RefreshCw, Settings, SlidersHorizonta
 import { API_BASE_PATH } from '../config'
 import { buildModelSetupYaml, defaultModelsYaml, formFromPreset, readModelSetupForm, validateModelSetupForm, type ModelSetupForm } from '../setupModels'
 import ModelSetupFormPanel from './ModelSetupFormPanel'
+import ModelCatalogEditor from './ModelCatalogEditor'
 import { refreshModelOptions } from '../modelOptionsLoader'
 import { APP_CONFIG_YAML_MODEL_URI, MODELS_YAML_MODEL_URI } from '../yamlConfigSchemas'
 import ContentHeader from './ContentHeader'
@@ -669,6 +670,7 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
                   {forced && !canLeave && <span className="text-sm text-fw-warning dark:text-fw-warning">Save a valid model configuration to continue.</span>}
                 </div>
               </div>
+              {modelConfigured && <ModelCatalogEditor yaml={rawModelsYaml} onChange={updateModelsYaml} />}
             </section>
 
             <section id="setup-panel-notifications" role="tabpanel" aria-labelledby="setup-tab-notifications" data-setup-section="notifications" hidden={activeTab !== 'notifications'} className="min-h-0 flex-1 overflow-y-auto p-4 md:p-5">

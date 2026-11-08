@@ -1,6 +1,6 @@
 # Unit: WebUI Setup view
 
-Files: packages/webui/src/components/SetupView.tsx, packages/webui/src/components/ModelSetupFormPanel.tsx, packages/webui/src/components/WebUiBrandingSettings.tsx, packages/webui/src/components/NotificationSettings.tsx, packages/webui/src/setupModels.ts, packages/webui/test/setupModels.test.mjs, packages/webui/test/setupModels.e2e.mjs
+Files: packages/webui/src/components/SetupView.tsx, packages/webui/src/components/ModelSetupFormPanel.tsx, packages/webui/src/components/WebUiBrandingSettings.tsx, packages/webui/src/components/NotificationSettings.tsx, packages/webui/src/setupModels.ts, packages/webui/src/components/ModelCatalogEditor.tsx, packages/webui/src/modelCatalog.ts, packages/webui/test/modelCatalog.test.mjs, packages/webui/test/setupModels.test.mjs, packages/webui/test/setupModels.e2e.mjs
 Secondary files: packages/webui/package.json, packages/webui/src/yamlConfigSchemas.ts, packages/webui/src/components/SimpleCodeEditor.tsx, packages/webui/src/components/ThemeManager.tsx
 
 ## Purpose
@@ -96,6 +96,10 @@ OOBE is the absence of the active data-directory models configuration. The force
 ### D-setup-models-form
 
 [2026-11-03, user-approved; replaces the former raw-YAML-only decision] Setup offers a structured form for a first provider, while the schema-aware YAML editor remains the complete view. An earlier multi-provider form (removed in `7a61eb08`) tried to replace YAML and gave poor results, so this form deliberately covers one concrete provider and nothing else. It is offered only when it can represent the document faithfully; otherwise YAML is shown so aliases, failover, several providers, other model settings, comments and unknown fields are never lost. The form writes models YAML through the same raw save path, so backend validation and byte-preserving installation remain authoritative.
+
+### D-setup-models-catalog
+
+[2026-11-08, directly selected] Setup → Models lists the user's [recommended models](./model-configuration.md#d-model-catalog) below the models editor in both views: ordered rows of a model key chosen from the configured selectable keys (concrete `provider/model` keys first, then aliases and virtual routes) and a description, with add, remove and move up/down. The editor reads and rewrites the `catalog` section of the same models YAML text (`modelCatalog.ts`), so the YAML view, the single-provider form and this list always agree, unrelated content and comments are kept, and Save models remains the one save path with backend validation authoritative. The section is hidden until a models file exists and disabled with a short notice while the YAML does not parse. The single-provider form represents a catalog (`ModelSetupForm.catalog`): removing a model drops its row, renaming the provider rewrites its keys, and validation blocks saving a row whose key no longer exists or has no description. `setupModels.test.mjs`/`modelCatalog.test.mjs` cover the pure logic and `setupModels.e2e.mjs` covers row editing and save.
 
 ### D-setup-editor-height
 

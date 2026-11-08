@@ -2178,6 +2178,53 @@ test('an existing configuration opens in the form only when the form can keep al
   }
 })
 
+test('recommended models are edited as ordered rows and saved with the models document', async () => {
+  const catalogPage = await browser.newPage()
+  const modelsSaveRequests = []
+  await catalogPage.setViewport({ width: 1280, height: 900 })
+  const modelsRawYaml = '# kept comment\ndefault: leaf/model-a\nproviders:\n  leaf:\n    providerType: openai-completions\n    baseUrl: http://127.0.0.1:11434/v1\n    models: [model-a, model-b]\n  quick: leaf/model-b\ncatalog:\n  quick: Fast exploration\n'
+  await attachRequestMocks(catalogPage, { modelsRawYaml, modelsSaveRequests })
+  const rows = () => catalogPage.$$eval('[data-model-catalog-row]', items => items.map(item => ({
+    key: item.querySelector('[data-model-catalog-field="key"]').value,
+    description: item.querySelector('[data-model-catalog-field="description"]').value,
+  })))
+  try {
+    await catalogPage.goto(`${productionBaseUrl}/#setup`, { waitUntil: 'networkidle2' })
+    await waitForWebUiReady(catalogPage)
+    await catalogPage.click('[data-setup-tab="models"]')
+    await catalogPage.waitForSelector('[data-model-catalog]')
+    assert.deepEqual(await rows(), [{ key: 'quick', description: 'Fast exploration' }])
+
+    await catalogPage.click('[data-model-catalog-action="add"]')
+    await catalogPage.waitForFunction(() => document.querySelectorAll('[data-model-catalog-row]').length === 2)
+    assert.deepEqual(await catalogPage.$$eval('[data-model-catalog-row]:nth-child(2) [data-model-catalog-field="key"] option', options => options.map(option => option.value)), ['leaf/model-a', 'leaf/model-b'])
+    assert.equal((await rows())[1].key, 'leaf/model-a')
+    await catalogPage.type('[data-model-catalog-row]:nth-child(2) [data-model-catalog-field="description"]', 'Deep work')
+    await catalogPage.click('[data-model-catalog-row]:nth-child(2) [data-model-catalog-action="up"]')
+    await catalogPage.waitForFunction(() => document.querySelector('[data-model-catalog-row] [data-model-catalog-field="key"]').value === 'leaf/model-a')
+    assert.deepEqual(await rows(), [{ key: 'leaf/model-a', description: 'Deep work' }, { key: 'quick', description: 'Fast exploration' }])
+    assert.equal(await catalogPage.$eval('[data-model-catalog-row]:first-child [data-model-catalog-action="up"]', button => button.disabled), true)
+
+    await catalogPage.click('button::-p-text(Save models)')
+    await catalogPage.waitForFunction(() => document.querySelector('[data-save-feedback="models"]')?.textContent === 'Models saved.')
+    assert.equal(modelsSaveRequests.length, 1)
+    const saved = modelsSaveRequests[0].yaml
+    assert.match(saved, /^# kept comment\n/)
+    assert.match(saved, /catalog:\n {2}leaf\/model-a: Deep work\n {2}quick: Fast exploration\n$/)
+
+    await catalogPage.click('[data-model-catalog-row]:first-child [data-model-catalog-action="remove"]')
+    await catalogPage.click('[data-model-catalog-row]:first-child [data-model-catalog-action="remove"]')
+    await catalogPage.waitForFunction(() => document.querySelectorAll('[data-model-catalog-row]').length === 0)
+    await catalogPage.click('button::-p-text(Save models)')
+    await catalogPage.waitForFunction(() => document.querySelector('[data-save-feedback="models"]')?.textContent === 'Models saved.')
+    assert.equal(modelsSaveRequests.length, 2)
+    assert.doesNotMatch(modelsSaveRequests[1].yaml, /catalog/)
+    await setupScreenshot(catalogPage, '05-recommended-models.png')
+  } finally {
+    await catalogPage.close()
+  }
+})
+
 test('embedded model filter selects one result and keeps the accessible Setup bridge', async () => {
   const hostPage = await browser.newPage()
   await hostPage.setBypassServiceWorker(true)
