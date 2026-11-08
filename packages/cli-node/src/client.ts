@@ -24,6 +24,7 @@ import {
   type ExternalNodeOwner,
 } from '../../shared/dist/nodeProtocol';
 import { readNodeTransferFile, writeNodeTransferFile } from '../../shared/dist/nodeFileTransfer';
+import { streamReadFile, streamWriteFile } from './fileStream';
 import { executeVscodeNodeService, serializeVscodeNodeServiceError, VSCODE_NODE_SERVICE_VERSIONS, type VscodeNodeServiceName } from '../../shared/dist/vscodeNodeService';
 import { createMasterWebSocketOptions, getMasterProxyInfo } from './masterProxy';
 import { loadNodePtyService, type NodePtyService, type NodePtyServiceEvent } from './nodePtyService';
@@ -222,7 +223,7 @@ export class NodeClient {
   private getNodeCapabilities() {
     return {
       ...CLI_NODE_CAPABILITIES,
-      features: { unifiedEdit: true, execWaitCancellation: true, remoteExecBackgroundRegistration: true, programmaticToolData: true, ...(!this.toolCallInterceptor ? { externalToolOwner: 1 } : {}) },
+      features: { fileStream: 1, unifiedEdit: true, execWaitCancellation: true, remoteExecBackgroundRegistration: true, programmaticToolData: true, ...(!this.toolCallInterceptor ? { externalToolOwner: 1 } : {}) },
       services: {
         ...CLI_NODE_CAPABILITIES.services,
         ...(this.nodePtyService ? { 'vscode-pty': 1 } : {}),
@@ -502,6 +503,7 @@ export class NodeClient {
     });
 
     this.ws.on('close', async (code: number, reason: Buffer) => {
+      for (const controller of this.fileStreams) controller.abort();
       this.stopHeartbeat();
       const reasonText = reason.toString();
       this.rejectPendingRequests(new Error(`Remote node connection closed before master acknowledged the request (${code}${reasonText ? `: ${reasonText}` : ''})`));
@@ -638,6 +640,10 @@ export class NodeClient {
       case 'external_exec_release':
         this.handleExternalExecRelease(message.owner);
         break;
+      case 'file_stream_read_request':
+      case 'file_stream_write_request':
+        await this.handleFileStreamRequest(message);
+        break;
       case 'file_read_request':
         await this.handleFileReadRequest(message);
         break;
@@ -662,6 +668,36 @@ export class NodeClient {
         break;
       default:
         logger.warn({ type: message.type }, 'Unknown message type from master');
+    }
+  }
+
+  private readonly fileStreams = new Set<AbortController>();
+
+  private async handleFileStreamRequest(message: any): Promise<void> {
+    const transferId = String(message.transferId || '');
+    const socket = this.ws;
+    const controller = new AbortController();
+    this.fileStreams.add(controller);
+    try {
+      if (!this.connectedNodeId || !this.authToken) throw new Error('Node is not authenticated.');
+      const connection = { host: this.host, nodeId: this.connectedNodeId, authToken: this.authToken, signal: controller.signal };
+      const input = {
+        transferId,
+        filePath: String(message.filePath || ''),
+        agentName: typeof message.agentName === 'string' && message.agentName.trim() ? message.agentName : 'main',
+        restrictToAgentDir: message.restrictToAgentDir === true,
+      };
+      if (message.type === 'file_stream_read_request') {
+        const file = await streamReadFile(connection, input);
+        if (file && this.ws === socket) this.send({ type: 'file_read_response', transferId, file });
+      } else {
+        const result = await streamWriteFile(connection, { ...input, overwrite: message.overwrite === true, sizeBytes: message.sizeBytes });
+        if (this.ws === socket) this.send({ type: 'file_write_response', transferId, result });
+      }
+    } catch (error: any) {
+      if (this.ws === socket && !controller.signal.aborted) this.send({ type: 'file_transfer_error', transferId, error: error.message || String(error) });
+    } finally {
+      this.fileStreams.delete(controller);
     }
   }
 
