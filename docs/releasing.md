@@ -62,7 +62,7 @@ Windows uses the background launch and the data-root-specific control pipe of th
 
 ## Building
 
-`scripts/release/package.mjs` publishes the packages from built delivery assets:
+`scripts/release/package.mjs` publishes the packages from built delivery assets. It requires native Python 3 on `PATH` (`python` on Windows, `python3` on Linux/macOS):
 
 ```bash
 npm ci && npm --prefix packages/webui ci

@@ -27,7 +27,7 @@ test('Windows ZIP archives preserve deeply nested Code resource paths', { skip: 
   fs.mkdirSync(output)
   fs.writeFileSync(resource, 'deep Code resource')
   const file = archive('desktop-win-x64', payload, output)
-  const read = spawnSync('python3', ['-c',
+  const read = spawnSync('python', ['-c',
     'import sys,zipfile; print(zipfile.ZipFile(sys.argv[1]).read(sys.argv[2]).decode())',
     file, 'payload/' + relative], { encoding: 'utf8' })
   assert.equal(read.status, 0, read.stderr)

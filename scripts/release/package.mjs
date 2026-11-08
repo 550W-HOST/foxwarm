@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const version = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version
+const python = process.platform === 'win32' ? 'python' : 'python3'
 
 export const TARGETS = {
   'linux-x64': { kind: 'server', rid: 'linux-x64', selfContained: false, archive: 'tar.gz' },
@@ -156,7 +157,7 @@ export function archive(name, staging, output) {
   fs.rmSync(file, { force: true })
   const top = path.basename(staging)
   if (TARGETS[name].archive === 'zip') {
-    run('python3', ['-c', `
+    run(python, ['-c', `
 import os, sys, zipfile
 base, top, out = sys.argv[1:4]
 with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
@@ -175,7 +176,7 @@ with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as archive
 function tarArchive(base, entries, file) {
   const epoch = capture('git', ['show', '-s', '--format=%ct', 'HEAD'])
   // Normalize metadata on both GNU and BSD hosts, retaining all shipped resources.
-  run('python3', ['-c', `
+  run(python, ['-c', `
 import gzip, os, sys, tarfile
 base, out, epoch, *entries = sys.argv[1:]
 epoch = int(epoch)
