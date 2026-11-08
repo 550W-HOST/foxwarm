@@ -166,7 +166,7 @@ try {
   assert.equal(requests, 2)
   assert.equal(await readFile(join(agents, 'main/desktop-native-effect.txt'), 'utf8'), 'packaged Windows Monty')
   assert.equal(await readFile(join(agents, 'main/desktop-exec-effect.txt'), 'utf8'), 'packaged helper')
-  assert.equal((await api('POST', '/api/agents', { agentId: 'research' })).status, 200)
+  assert.equal((await api('POST', '/api/agents', { agentId: 'research' })).status, 201)
   await access(join(agents, 'research'))
   const savedToken = token, savedOrigin = origin
   const savedModels = await readFile(join(data, 'state/models.yaml'), 'utf8')
