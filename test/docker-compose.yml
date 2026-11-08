@@ -15,6 +15,7 @@ services:
       - "0.0.0.0:3002:3001"
     volumes:
       - ./state:/data/state
+      - ./keys:/data/keys
       - ./agents:/data/agents
     restart: unless-stopped
     stop_grace_period: 30s

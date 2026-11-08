@@ -4,7 +4,7 @@ Files: `dotnet/Foxwarm/Models/AppConfigurationRules.cs`, `dotnet/Foxwarm/Models/
 
 ## Purpose
 
-Captures model YAML, derives concrete and virtual hosts, selects failover targets, tracks request owner/scope, and validates setup/configuration forms before a request reaches a provider.
+Captures model YAML, derives concrete and virtual hosts, selects failover targets, tracks request owner/scope, and validates setup/configuration forms before a request reaches a provider. Key fields may use [`${secret:NAME}`](./dotnet-secrets.md).
 
 ## Stable methods and callers
 

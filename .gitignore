@@ -1,6 +1,7 @@
 node_modules
 /lib
 /state
+/keys
 /data_dir
 /foxwarm.pid
 /workspace
@@ -24,6 +25,7 @@ __pycache__/
 # Test environment
 /test/.env
 /test/state
+/test/keys
 /test/workspace
 /test/agents
 /test/node-client-state

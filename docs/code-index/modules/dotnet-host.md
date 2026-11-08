@@ -15,6 +15,7 @@ This module documents current .NET source behavior. Cross-module contracts belon
 - [macOS Desktop host](../units/desktop-macos.md)
 - [Main JSON and frontmatter serialization](../units/dotnet-serialization.md)
 - [Shared access identities and scoped WebUI](../units/dotnet-access-identities.md)
+- [Secret store, references and redaction](../units/dotnet-secrets.md)
 - [Message routing and presentation commands](../units/message-routing.md)
 - [Public command administration](../units/dotnet-command-administration.md)
 - [Shared external channels and managed adapters](../units/dotnet-external-channels.md)
