@@ -10,6 +10,7 @@ internal sealed class DesktopNative : IDisposable
 {
     private const uint TrayMessage = 0x8001;
     private readonly nint hwnd;
+    private readonly uint taskbarCreatedMessage;
     private readonly SubclassProcedure procedure;
     private readonly Action open;
     private readonly Action exit;
@@ -24,6 +25,9 @@ internal sealed class DesktopNative : IDisposable
         this.exit = exit;
         this.shutdown = shutdown;
         hwnd = WinRT.Interop.WindowNative.GetWindowHandle(window);
+        taskbarCreatedMessage = RegisterWindowMessage("TaskbarCreated");
+        if (taskbarCreatedMessage == 0)
+            throw new Win32Exception(Marshal.GetLastWin32Error());
         procedure = WindowProcedure;
         if (!SetWindowSubclass(hwnd, procedure, 1, 0))
             throw new Win32Exception(Marshal.GetLastWin32Error());
@@ -63,6 +67,14 @@ internal sealed class DesktopNative : IDisposable
 
     private nint WindowProcedure(nint window, uint message, nuint wParam, nint lParam, nuint id, nuint data)
     {
+        if (message == taskbarCreatedMessage)
+        {
+            // Explorer recreates the taskbar without retaining notification icons.
+            if (!disposed)
+                ShellNotifyIcon(0, ref tray);
+            return 0;
+        }
+
         switch (message)
         {
             case TrayMessage:
@@ -201,6 +213,9 @@ internal sealed class DesktopNative : IDisposable
     [DllImport("user32.dll", EntryPoint = "PostMessageW")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool PostMessage(nint hwnd, uint message, nuint wParam, nint lParam);
+
+    [DllImport("user32.dll", EntryPoint = "RegisterWindowMessageW", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint RegisterWindowMessage(string message);
 
     [DllImport("user32.dll")]
     private static extern uint GetDpiForWindow(nint hwnd);

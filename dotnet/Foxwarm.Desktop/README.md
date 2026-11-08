@@ -80,7 +80,8 @@ Desktop startup does not enable it.
 ## Window and tray
 
 Closing the window hides it to the tray. Double-click the fox tray icon or use
-**Open** to restore it. Use **Exit** to stop the app and backend. Starting another
+**Open** to restore it. The icon returns if Explorer recreates the taskbar while
+Foxwarm is running. Use **Exit** to stop the app and backend. Starting another
 copy shows a message instead of starting another backend. The single-instance
 lock applies to the same user across Windows login sessions, so those sessions
 cannot run competing writers against the same user data. External links open in
