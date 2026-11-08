@@ -16,7 +16,10 @@ internal sealed partial class ModelConfiguration
             () =>
                 File.Exists(ActivePath)
                     ? ModelLiterals(
-                        ConfigurationYaml.Parse(File.ReadAllText(ActivePath, Encoding.UTF8), "models config")
+                        ConfigurationYaml.Parse(
+                            File.ReadAllText(ActivePath, Encoding.UTF8),
+                            "models config"
+                        )
                     )
                     : []
         );
@@ -38,9 +41,15 @@ internal sealed partial class ModelConfiguration
                 var values = new List<KnownSecret>();
                 if (Access.ReservedInstanceToken is { Length: > 0 } token)
                     values.Add(new KnownSecret("instance-token", token));
-                var capability = Path.Combine(Paths.DataRoot, "state", "node_event_capability_secret");
+                var capability = Path.Combine(
+                    Paths.DataRoot,
+                    "state",
+                    "node_event_capability_secret"
+                );
                 if (File.Exists(capability))
-                    values.Add(new KnownSecret("node-event-secret", File.ReadAllText(capability).Trim()));
+                    values.Add(
+                        new KnownSecret("node-event-secret", File.ReadAllText(capability).Trim())
+                    );
                 return values;
             }
         );
@@ -56,7 +65,11 @@ internal sealed partial class ModelConfiguration
             {
                 if (!usages.TryGetValue(name, out var list))
                     usages[name] = list = [];
-                if (!list.Any(item => SessionWait.Text(item["kind"]) == kind && SessionWait.Text(item["id"]) == id))
+                if (
+                    !list.Any(item =>
+                        SessionWait.Text(item["kind"]) == kind && SessionWait.Text(item["id"]) == id
+                    )
+                )
                     list.Add(new JsonObject { ["kind"] = kind, ["id"] = id });
             }
         }
@@ -64,7 +77,10 @@ internal sealed partial class ModelConfiguration
         {
             if (File.Exists(ActivePath))
             {
-                var root = ConfigurationYaml.Parse(File.ReadAllText(ActivePath, Encoding.UTF8), "models config");
+                var root = ConfigurationYaml.Parse(
+                    File.ReadAllText(ActivePath, Encoding.UTF8),
+                    "models config"
+                );
                 if ((root["providers"] ?? root["models"]) is JsonObject providers)
                     foreach (var (key, provider) in providers)
                         Add(provider, "provider", key);
@@ -95,8 +111,10 @@ internal sealed partial class ModelConfiguration
             path =>
                 "models."
                 + (
-                    path.StartsWith("providers.", StringComparison.Ordinal) ? path["providers.".Length..]
-                    : path.StartsWith("models.", StringComparison.Ordinal) ? path["models.".Length..]
+                    path.StartsWith("providers.", StringComparison.Ordinal)
+                        ? path["providers.".Length..]
+                    : path.StartsWith("models.", StringComparison.Ordinal)
+                        ? path["models.".Length..]
                     : path
                 )
         );
@@ -129,12 +147,19 @@ internal sealed partial class ModelConfiguration
         var fallback = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         if (app["llm"] is JsonObject llm)
             foreach (var family in new[] { "openai", "anthropic" })
-                if (SessionWait.Text(llm[family + "ApiKey"]) is string text && SecretReferences.Contains(text))
+                if (
+                    SessionWait.Text(llm[family + "ApiKey"]) is string text
+                    && SecretReferences.Contains(text)
+                )
                 {
                     if (ReferenceEquals(resolvedApp, app))
                         resolvedApp = (JsonObject)app.DeepClone();
                     var names = new List<string>();
-                    resolvedApp["llm"]![family + "ApiKey"] = SecretReferences.Resolve(text, Lookup, names);
+                    resolvedApp["llm"]![family + "ApiKey"] = SecretReferences.Resolve(
+                        text,
+                        Lookup,
+                        names
+                    );
                     fallback[family] = names;
                 }
         var missing = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);

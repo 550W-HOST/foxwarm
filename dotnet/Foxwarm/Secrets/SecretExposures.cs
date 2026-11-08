@@ -56,7 +56,12 @@ internal sealed class SecretExposures : IDisposable
             }
             while (entries.Count > MaximumLabels)
                 entries.Remove(entries.Values.MinBy(entry => entry.LastSeenAt)!.Label);
-            pending ??= clock.CreateTimer(_ => Flush(), null, PersistDelay, Timeout.InfiniteTimeSpan);
+            pending ??= clock.CreateTimer(
+                _ => Flush(),
+                null,
+                PersistDelay,
+                Timeout.InfiniteTimeSpan
+            );
         }
     }
 
@@ -75,7 +80,12 @@ internal sealed class SecretExposures : IDisposable
         {
             Load();
             if (entries.Remove(label))
-                pending ??= clock.CreateTimer(_ => Flush(), null, TimeSpan.Zero, Timeout.InfiniteTimeSpan);
+                pending ??= clock.CreateTimer(
+                    _ => Flush(),
+                    null,
+                    TimeSpan.Zero,
+                    Timeout.InfiniteTimeSpan
+                );
         }
     }
 
@@ -135,7 +145,8 @@ internal sealed class SecretExposures : IDisposable
         try
         {
             if (
-                JsonNode.Parse(File.ReadAllText(path, Encoding.UTF8))?["labels"] is not JsonObject labels
+                JsonNode.Parse(File.ReadAllText(path, Encoding.UTF8))?["labels"]
+                is not JsonObject labels
             )
                 return;
             foreach (var (label, node) in labels)

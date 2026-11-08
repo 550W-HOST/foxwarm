@@ -108,7 +108,10 @@ internal static class SetupProviderRequests
         try
         {
             var wrapped = secrets.Resolve(
-                new JsonObject { ["providers"] = new JsonObject { ["setup"] = provider.DeepClone() } },
+                new JsonObject
+                {
+                    ["providers"] = new JsonObject { ["setup"] = provider.DeepClone() },
+                },
                 Foxwarm.Secrets.SecretSinks.Models,
                 "Model settings",
                 missing
@@ -137,7 +140,9 @@ internal static class SetupProviderRequests
         }
         throw new SetupProviderRequestException(
             "secret-unavailable",
-            Foxwarm.Secrets.SecretUnavailableException.For("This provider", missing.Distinct()).Message,
+            Foxwarm
+                .Secrets.SecretUnavailableException.For("This provider", missing.Distinct())
+                .Message,
             400
         );
     }

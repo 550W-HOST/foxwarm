@@ -23,7 +23,9 @@ internal static class SecretRequestStage
             return new(instructions, tools, history);
         var findings = new SecretMessageRedaction.Findings();
         var maskedInstructions = redactor.Redact(instructions, findings.Masked);
-        var maskedTools = tools is null ? null : (JsonArray?)redactor.Redact(tools, findings.Masked);
+        var maskedTools = tools is null
+            ? null
+            : (JsonArray?)redactor.Redact(tools, findings.Masked);
         RequestHistory.Row[]? rows = null;
         for (var index = 0; index < history.Rows.Count; index++)
         {
@@ -44,6 +46,10 @@ internal static class SecretRequestStage
     }
 
     // Text sent to other model-facing services (embeddings, external runtimes).
-    internal static string Text(InstanceSecrets? secrets, string text, string source, string? sessionId) =>
-        secrets is null ? text : secrets.Redact(text, source, sessionId);
+    internal static string Text(
+        InstanceSecrets? secrets,
+        string text,
+        string source,
+        string? sessionId
+    ) => secrets is null ? text : secrets.Redact(text, source, sessionId);
 }

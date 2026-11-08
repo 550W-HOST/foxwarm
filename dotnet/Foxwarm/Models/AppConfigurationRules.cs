@@ -15,7 +15,11 @@ internal static class AppConfigurationRules
 
     internal static void Validate(JsonObject app)
     {
-        Foxwarm.Secrets.SecretReferences.Validate(app, Foxwarm.Secrets.SecretSinks.App, "Configuration");
+        Foxwarm.Secrets.SecretReferences.Validate(
+            app,
+            Foxwarm.Secrets.SecretSinks.App,
+            "Configuration"
+        );
         if (app.ContainsKey("url"))
             HttpUrl(app["url"], "app config `url`");
         Channels(app["channels"], app.ContainsKey("channels"));

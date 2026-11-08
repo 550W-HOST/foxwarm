@@ -39,6 +39,7 @@ internal sealed partial class SecretStore
     private JsonObject? document;
     private byte[]? encryptionKey;
     private string? keyId;
+
     // Decrypted values keyed by their unique nonce, so a reused name never sees stale text.
     private readonly Dictionary<string, string> plaintext = new(StringComparer.Ordinal);
     private long generation = 1;
@@ -102,15 +103,15 @@ internal sealed partial class SecretStore
             var now = Now();
             var values = new List<(string, string)>();
             foreach (var (name, node) in Entries())
-                foreach (var version in Versions(node!.AsObject()))
-                {
-                    if (
-                        SessionWait.Text(version["state"]) == "retired"
-                        && (SessionWait.Number(version["redactUntil"]) ?? 0) <= now
-                    )
-                        continue;
-                    values.Add((name, Decrypt(name, version)));
-                }
+            foreach (var version in Versions(node!.AsObject()))
+            {
+                if (
+                    SessionWait.Text(version["state"]) == "retired"
+                    && (SessionWait.Number(version["redactUntil"]) ?? 0) <= now
+                )
+                    continue;
+                values.Add((name, Decrypt(name, version)));
+            }
             return values;
         }
     }
@@ -142,7 +143,8 @@ internal sealed partial class SecretStore
                 entry["description"] = description;
             var versions = entry["versions"]!.AsArray();
             var number =
-                versions.Select(version => (int)(SessionWait.Number(version?["version"]) ?? 0))
+                versions
+                    .Select(version => (int)(SessionWait.Number(version?["version"]) ?? 0))
                     .DefaultIfEmpty(0)
                     .Max() + 1;
             foreach (var version in versions.OfType<JsonObject>())
@@ -229,7 +231,9 @@ internal sealed partial class SecretStore
             return null;
         description = description.Trim();
         if (description.Length > 500 || description.IndexOfAny(['\r', '\n', '\0']) >= 0)
-            throw new InvalidDataException("Descriptions are single-line text up to 500 characters.");
+            throw new InvalidDataException(
+                "Descriptions are single-line text up to 500 characters."
+            );
         return description;
     }
 
@@ -382,7 +386,8 @@ internal sealed partial class SecretStore
         {
             opened = keys();
         }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException)
+        catch (Exception error)
+            when (error is IOException or UnauthorizedAccessException or InvalidDataException)
         {
             throw new SecretStoreLockedException(
                 "The secret store is locked: the instance key is unavailable.",
@@ -429,7 +434,9 @@ internal sealed partial class SecretStore
         try
         {
             var nonce = Convert.FromBase64String(nonceText);
-            var sealedValue = Convert.FromBase64String(SessionWait.Text(version["ciphertext"]) ?? "");
+            var sealedValue = Convert.FromBase64String(
+                SessionWait.Text(version["ciphertext"]) ?? ""
+            );
             if (nonce.Length != 12 || sealedValue.Length < 16)
                 throw new CryptographicException();
             var output = new byte[sealedValue.Length - 16];

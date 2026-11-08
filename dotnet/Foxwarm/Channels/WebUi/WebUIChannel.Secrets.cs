@@ -27,13 +27,17 @@ internal sealed partial class WebUIChannel
                 }
                 catch (JsonException)
                 {
-                    return Results.BadRequest(new JsonObject { ["error"] = "Secret input must be JSON." });
+                    return Results.BadRequest(
+                        new JsonObject { ["error"] = "Secret input must be JSON." }
+                    );
                 }
                 return await SecretRouteAsync(async () =>
                 {
                     ToolRegistry.Keys(input, ["value", "description"]);
                     var value = input["value"] is null ? null : TextField(input, "value");
-                    var description = input["description"] is null ? null : TextField(input, "description");
+                    var description = input["description"] is null
+                        ? null
+                        : TextField(input, "description");
                     SecretMetadata metadata;
                     if (value is not null)
                         metadata = secrets.Store.Set(name, value, description);
@@ -47,7 +51,10 @@ internal sealed partial class WebUIChannel
                         if (!metadata.Redactable)
                             result["warning"] =
                                 $"Values shorter than {SecretStore.MinimumRedactableLength} characters cannot be hidden from tool output and model requests.";
-                        result["restartedChannels"] = await RestartChannelsAsync(configuration, name);
+                        result["restartedChannels"] = await RestartChannelsAsync(
+                            configuration,
+                            name
+                        );
                     }
                     return result;
                 });
@@ -105,19 +112,29 @@ internal sealed partial class WebUIChannel
         var secrets = configuration.Secrets;
         var usages = configuration.SecretUsages(sessions.OutboundMcp.Configuration.Snapshot());
         var listed = secrets.Store.List();
-        var defined = new HashSet<string>(listed.Where(item => item.IsSet).Select(item => item.Name));
+        var defined = new HashSet<string>(
+            listed.Where(item => item.IsSet).Select(item => item.Name)
+        );
         var locked = secrets.Locked;
         return new JsonObject
         {
             ["locked"] = locked,
-            ["lockMessage"] = locked ? MainLog.SafeFailure(secrets.KeyError ?? new SecretStoreLockedException("The secret store is locked.")) : null,
+            ["lockMessage"] = locked
+                ? MainLog.SafeFailure(
+                    secrets.KeyError
+                        ?? new SecretStoreLockedException("The secret store is locked.")
+                )
+                : null,
             ["keyFile"] = secrets.KeyPath,
             ["minimumRedactableLength"] = SecretStore.MinimumRedactableLength,
             ["retiredRetentionDays"] = (int)SecretStore.RetiredRetention.TotalDays,
             ["secrets"] = new JsonArray(
                 listed
                     .Select(item =>
-                        (JsonNode)Metadata(item, usages.TryGetValue(item.Name, out var used) ? used : [])
+                        (JsonNode)Metadata(
+                            item,
+                            usages.TryGetValue(item.Name, out var used) ? used : []
+                        )
                     )
                     .ToArray()
             ),
@@ -130,7 +147,9 @@ internal sealed partial class WebUIChannel
                             new JsonObject
                             {
                                 ["name"] = pair.Key,
-                                ["usages"] = new JsonArray(pair.Value.Select(item => item.DeepClone()).ToArray()),
+                                ["usages"] = new JsonArray(
+                                    pair.Value.Select(item => item.DeepClone()).ToArray()
+                                ),
                             }
                     )
                     .ToArray()
@@ -175,7 +194,10 @@ internal sealed partial class WebUIChannel
             ? text
             : throw new InvalidDataException($"Secret {key} must be a string.");
 
-    private static async Task<JsonArray> RestartChannelsAsync(ModelConfiguration configuration, string name) =>
+    private static async Task<JsonArray> RestartChannelsAsync(
+        ModelConfiguration configuration,
+        string name
+    ) =>
         configuration.ManagedChannels is { } channels
             ? new JsonArray(
                 (await channels.RestartReferencingAsync(name)).Select(id => (JsonNode)id).ToArray()

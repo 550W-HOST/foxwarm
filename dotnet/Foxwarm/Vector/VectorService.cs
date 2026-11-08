@@ -32,6 +32,7 @@ internal sealed class VectorService : IAsyncDisposable
     private CancellationTokenSource? restart;
     private readonly VectorLexicalRuntime preinitLexical;
     private bool started;
+
     // Known-secret masking for embedding input in the in-process runtime. A Vector child
     // process indexes text that was already masked when it entered Session history.
     internal Func<string, string>? EmbeddingRedaction { get; set; }

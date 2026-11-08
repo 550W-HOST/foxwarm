@@ -18,6 +18,7 @@ internal sealed partial class InstanceSecrets : IDisposable
     private long builtGeneration = -1;
     private long builtAt;
     private int invalidated = 1;
+    private int rebuildScheduled;
     private string? lastBuildFailure;
 
     internal string KeyPath { get; }
@@ -108,7 +109,18 @@ internal sealed partial class InstanceSecrets : IDisposable
         Invalidate();
     }
 
-    internal void Invalidate() => Interlocked.Exchange(ref invalidated, 1);
+    internal void Invalidate()
+    {
+        Interlocked.Exchange(ref invalidated, 1);
+        // Log lines and canonical appends use the last built matcher and never rebuild it;
+        // rebuild in the background so they see changes without waiting for other traffic.
+        if (Interlocked.Exchange(ref rebuildScheduled, 1) == 0)
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                Interlocked.Exchange(ref rebuildScheduled, 0);
+                _ = Redactor;
+            });
+    }
 
     // The last built matcher without refreshing sources. Log writers use this: a rebuild
     // takes configuration locks and must never run under a console writer lock.
@@ -122,20 +134,16 @@ internal sealed partial class InstanceSecrets : IDisposable
     {
         get
         {
-            if (building)
+            if (building || Current(clock.GetTimestamp()))
                 return Volatile.Read(ref redactor);
-            var now = clock.GetTimestamp();
-            if (
-                Volatile.Read(ref invalidated) == 0
-                && Store.Generation == Interlocked.Read(ref builtGeneration)
-                && clock.GetElapsedTime(Interlocked.Read(ref builtAt), now) < SourceRefresh
-            )
-                return Volatile.Read(ref redactor);
-            if (!Monitor.TryEnter(buildGate))
-                return Volatile.Read(ref redactor);
+            // Wait for a concurrent rebuild rather than masking with an older matcher.
+            Monitor.Enter(buildGate);
             building = true;
             try
             {
+                var now = clock.GetTimestamp();
+                if (Current(now))
+                    return redactor;
                 Interlocked.Exchange(ref invalidated, 0);
                 var generation = Store.Generation;
                 var known = new List<KnownSecret>();
@@ -145,7 +153,8 @@ internal sealed partial class InstanceSecrets : IDisposable
                         known.Add(new KnownSecret(name, value));
                 }
                 catch (Exception error)
-                    when (error is SecretStoreLockedException or InvalidDataException or IOException)
+                    when (error is SecretStoreLockedException or InvalidDataException or IOException
+                    )
                 {
                     Report("store", error);
                 }
@@ -173,9 +182,15 @@ internal sealed partial class InstanceSecrets : IDisposable
         }
     }
 
+    private bool Current(long now) =>
+        Volatile.Read(ref invalidated) == 0
+        && Store.Generation == Interlocked.Read(ref builtGeneration)
+        && clock.GetElapsedTime(Interlocked.Read(ref builtAt), now) < SourceRefresh;
+
     private void Report(string source, Exception error)
     {
-        var line = "Secret redaction source " + source + " is unavailable: " + MainLog.SafeFailure(error);
+        var line =
+            "Secret redaction source " + source + " is unavailable: " + MainLog.SafeFailure(error);
         if (line == lastBuildFailure)
             return;
         lastBuildFailure = line;
@@ -207,8 +222,11 @@ internal sealed partial class InstanceSecrets : IDisposable
     }
 
     // Canonical history/request message masking; reasoning is reported, never rewritten.
-    internal JsonObject RedactMessage(JsonObject message, string source, string? sessionId = null) =>
-        RedactMessage(Redactor, message, source, sessionId);
+    internal JsonObject RedactMessage(
+        JsonObject message,
+        string source,
+        string? sessionId = null
+    ) => RedactMessage(Redactor, message, source, sessionId);
 
     internal JsonObject RedactMessage(
         SecretRedactor current,
@@ -281,7 +299,9 @@ internal sealed partial class InstanceSecrets : IDisposable
             if (separator >= 0)
                 parts.Add(Uri.UnescapeDataString(uri.UserInfo[(separator + 1)..]));
         }
-        foreach (var item in uri.Query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries))
+        foreach (
+            var item in uri.Query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries)
+        )
         {
             var equals = item.IndexOf('=');
             parts.Add(Uri.UnescapeDataString(equals >= 0 ? item[(equals + 1)..] : item));

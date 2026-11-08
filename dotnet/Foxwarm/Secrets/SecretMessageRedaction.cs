@@ -15,7 +15,11 @@ internal static class SecretMessageRedaction
     }
 
     // Returns the same instance when nothing changed.
-    internal static JsonObject Message(SecretRedactor redactor, JsonObject message, Findings findings)
+    internal static JsonObject Message(
+        SecretRedactor redactor,
+        JsonObject message,
+        Findings findings
+    )
     {
         if (redactor.IsEmpty || !redactor.Contains(message))
             return message;
@@ -35,7 +39,12 @@ internal static class SecretMessageRedaction
             {
                 foreach (var block in blocks.OfType<JsonObject>())
                 {
-                    if (SessionWait.Text(block["type"]) is "thinking" or "redacted_thinking" or "reasoning")
+                    if (
+                        SessionWait.Text(block["type"])
+                        is "thinking"
+                            or "redacted_thinking"
+                            or "reasoning"
+                    )
                     {
                         Report(redactor, block, findings);
                         continue;
@@ -76,7 +85,12 @@ internal static class SecretMessageRedaction
             || SessionWait.Text(value["openaiResponses"]?["outputItem"]?["type"]) == "reasoning"
         );
 
-    private static bool Field(SecretRedactor redactor, JsonObject owner, string key, Findings findings)
+    private static bool Field(
+        SecretRedactor redactor,
+        JsonObject owner,
+        string key,
+        Findings findings
+    )
     {
         var node = owner[key];
         if (node is JsonValue && SessionWait.Text(node) is string text)

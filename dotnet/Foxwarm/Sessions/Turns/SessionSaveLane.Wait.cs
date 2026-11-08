@@ -232,7 +232,9 @@ public sealed partial class SessionSaveLane
     {
         if (entry.State.HistoryRedaction is null)
             return item;
-        var message = item.Message is null ? null : entry.State.RedactForHistory(item.Message, "input");
+        var message = item.Message is null
+            ? null
+            : entry.State.RedactForHistory(item.Message, "input");
         IReadOnlyList<JsonObject>? parts = item.Parts;
         if (parts is not null)
         {

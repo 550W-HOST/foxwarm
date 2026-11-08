@@ -19,9 +19,13 @@ internal static class SecretConfigurationChanges
     internal const string McpServerDenied =
         "MCP server \"{0}\" uses stored secrets. mcp_config can only enable or disable it or change its description or timeout; ask the user to make other changes.";
 
-    internal static void RequireModelWritable(ModelConfiguration configuration, string target, string raw)
+    internal static void RequireModelWritable(
+        ModelConfiguration configuration,
+        string target,
+        string raw
+    )
     {
-        SecretMarkerGuard.Require(raw);
+        SecretMarkerGuard.Require(raw, configuration.Secrets.Redactor.HasLabel);
         JsonObject candidate;
         JsonObject current;
         try
@@ -72,30 +76,37 @@ internal static class SecretConfigurationChanges
             throw new InvalidDataException(string.Format(McpServerDenied, name));
     }
 
-    private static IEnumerable<(string Unit, JsonNode? Before, JsonNode? After, bool Inherited)> Units(
-        string target,
-        JsonObject current,
-        JsonObject candidate,
-        JsonObject app
-    )
+    private static IEnumerable<(
+        string Unit,
+        JsonNode? Before,
+        JsonNode? After,
+        bool Inherited
+    )> Units(string target, JsonObject current, JsonObject candidate, JsonObject app)
     {
         if (target == "models")
         {
-            var before = (current["providers"] ?? current["models"]) as JsonObject ?? new JsonObject();
-            var after = (candidate["providers"] ?? candidate["models"]) as JsonObject ?? new JsonObject();
-            foreach (var key in before.Select(pair => pair.Key).Union(after.Select(pair => pair.Key)))
+            var before =
+                (current["providers"] ?? current["models"]) as JsonObject ?? new JsonObject();
+            var after =
+                (candidate["providers"] ?? candidate["models"]) as JsonObject ?? new JsonObject();
+            foreach (
+                var key in before.Select(pair => pair.Key).Union(after.Select(pair => pair.Key))
+            )
                 yield return (
                     "provider " + key,
                     before[key],
                     after[key],
-                    UsesReferencedFallback(before[key], app) || UsesReferencedFallback(after[key], app)
+                    UsesReferencedFallback(before[key], app)
+                        || UsesReferencedFallback(after[key], app)
                 );
             yield break;
         }
         var channelsBefore = current["channels"] as JsonObject ?? new JsonObject();
         var channelsAfter = candidate["channels"] as JsonObject ?? new JsonObject();
         foreach (
-            var id in channelsBefore.Select(pair => pair.Key).Union(channelsAfter.Select(pair => pair.Key))
+            var id in channelsBefore
+                .Select(pair => pair.Key)
+                .Union(channelsAfter.Select(pair => pair.Key))
         )
             yield return ("channel " + id, channelsBefore[id], channelsAfter[id], false);
         yield return ("llm", current["llm"], candidate["llm"], false);
@@ -108,10 +119,13 @@ internal static class SecretConfigurationChanges
         if (provider is not JsonObject value || HostModels.Text(value, "apiKey") is not null)
             return false;
         var type =
-            HostModels.Text(value, "providerType") ?? HostModels.Text(value, "provider") ?? "openai-completions";
+            HostModels.Text(value, "providerType")
+            ?? HostModels.Text(value, "provider")
+            ?? "openai-completions";
         var family =
             type == "anthropic" ? "anthropic"
-            : type is "openai" or "openai-responses" or "openai-ws" or "openai-completions" ? "openai"
+            : type is "openai" or "openai-responses" or "openai-ws" or "openai-completions"
+                ? "openai"
             : null;
         return family is not null
             && SecretReferences.Contains(SessionWait.Text(app["llm"]?[family + "ApiKey"]));

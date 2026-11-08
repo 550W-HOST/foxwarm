@@ -131,7 +131,8 @@ internal sealed class SecretSinks
 }
 
 // Safe to show and log: the message names the consumer and secret names only.
-internal sealed class SecretUnavailableException(string message) : InvalidOperationException(message)
+internal sealed class SecretUnavailableException(string message)
+    : InvalidOperationException(message)
 {
     internal static SecretUnavailableException For(string consumer, IEnumerable<string> names) =>
         new(
@@ -178,7 +179,9 @@ internal static partial class SecretReferences
         {
             var name = match.Groups[1].Value;
             if (!SecretStore.NamePattern().IsMatch(name))
-                throw new InvalidDataException("Invalid secret reference name: " + Quote(name) + ".");
+                throw new InvalidDataException(
+                    "Invalid secret reference name: " + Quote(name) + "."
+                );
             names.Add(name);
             covered++;
         }
@@ -194,7 +197,11 @@ internal static partial class SecretReferences
         return names;
     }
 
-    internal static string Resolve(string text, Func<string, string?> lookup, ICollection<string> missing)
+    internal static string Resolve(
+        string text,
+        Func<string, string?> lookup,
+        ICollection<string> missing
+    )
     {
         _ = Names(text);
         return Reference()
@@ -317,32 +324,43 @@ internal static partial class SecretReferences
     private static string Quote(string name) => name.Length > 70 ? name[..70] + "…" : name;
 }
 
-// Masked reads must not be written back: a marker would replace the real value.
-internal static class SecretMarkerGuard
+// Masked reads must not be written back: a marker would replace the real value. Only
+// markers for currently known labels are rejected, so source and documentation that
+// mention the marker format stay writable.
+internal static partial class SecretMarkerGuard
 {
     internal const string Message =
         "This input contains a secret marker ([[FW_SECRET:…]]). Markers stand in for secret values hidden from you; writing one would replace the real value with marker text. Use a ${secret:NAME} reference in a configuration field that accepts it, or ask the user to make the change.";
 
-    internal static bool Contains(JsonNode? node)
+    [GeneratedRegex(@"\[\[FW_SECRET:([A-Za-z0-9._:/-]+)\]\]", RegexOptions.CultureInvariant)]
+    private static partial Regex Marker();
+
+    internal static bool Contains(string text, Func<string, bool> known)
+    {
+        if (!text.Contains(SecretRedactor.MarkerPrefix, StringComparison.Ordinal))
+            return false;
+        foreach (Match match in Marker().Matches(text))
+            if (known(match.Groups[1].Value))
+                return true;
+        return false;
+    }
+
+    internal static bool Contains(JsonNode? node, Func<string, bool> known)
     {
         var found = false;
-        SecretSinks.Walk(
-            node,
-            [],
-            (_, text) => found |= text.Contains(SecretRedactor.MarkerPrefix, StringComparison.Ordinal)
-        );
+        SecretSinks.Walk(node, [], (_, text) => found = found || Contains(text, known));
         return found;
     }
 
-    internal static void Require(JsonNode? node)
+    internal static void Require(JsonNode? node, Func<string, bool> known)
     {
-        if (Contains(node))
+        if (Contains(node, known))
             throw new InvalidDataException(Message);
     }
 
-    internal static void Require(string text)
+    internal static void Require(string text, Func<string, bool> known)
     {
-        if (text.Contains(SecretRedactor.MarkerPrefix, StringComparison.Ordinal))
+        if (Contains(text, known))
             throw new InvalidDataException(Message);
     }
 }

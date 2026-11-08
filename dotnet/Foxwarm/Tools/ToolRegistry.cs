@@ -37,6 +37,9 @@ internal sealed class ToolRegistry(
     // Provider and ToolScript-nested), before the output guard saves or returns it.
     internal Func<JsonNode?, string, JsonNode?>? Redaction { get; set; }
 
+    // True for a marker label of a currently masked value; writers reject such markers.
+    internal Func<string, bool>? KnownSecretLabel { get; set; }
+
     internal void Register(
         JsonObject definition,
         string source,
@@ -212,11 +215,12 @@ internal sealed class ToolRegistry(
         await owner.AuthorizeAsync(resolved, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         if (
-            resolved
-            is { Source: "node", Name: "write" or "edit" or "apply_patch" }
-                or { Source: "builtin", Name: "mcp_config" }
+            KnownSecretLabel is { } known
+            && resolved
+                is { Source: "node", Name: "write" or "edit" or "apply_patch" }
+                    or { Source: "builtin", Name: "mcp_config" }
         )
-            Foxwarm.Secrets.SecretMarkerGuard.Require(resolved.Args);
+            Foxwarm.Secrets.SecretMarkerGuard.Require(resolved.Args, known);
         var result =
             resolved.Source == "mcp"
                 ? await mcp.CallAsync(

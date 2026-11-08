@@ -59,8 +59,11 @@ internal sealed partial class HostModels
     {
         if (MissingSecrets.TryGetValue(leaf.ProviderKey, out var names) && names.Count > 0)
             throw new ModelPreparationException(
-                Foxwarm.Secrets.SecretUnavailableException
-                    .For("Model provider " + leaf.ProviderKey, names)
+                Foxwarm
+                    .Secrets.SecretUnavailableException.For(
+                        "Model provider " + leaf.ProviderKey,
+                        names
+                    )
                     .Message
             );
     }

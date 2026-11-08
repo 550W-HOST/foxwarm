@@ -43,7 +43,11 @@ internal sealed class MainLog : IDisposable
             return error.GetType().Name
                 + ": "
                 + unavailable.Diagnostic.Format(unavailable.SessionId);
-        if (error is Foxwarm.Secrets.SecretUnavailableException or Foxwarm.Secrets.SecretStoreLockedException)
+        if (
+            error
+            is Foxwarm.Secrets.SecretUnavailableException
+                or Foxwarm.Secrets.SecretStoreLockedException
+        )
             return error.GetType().Name + ": " + error.Message;
         if (Foxwarm.Sessions.SessionAuthorityErrors.Detail(error) is { } diagnostic)
             return error.GetType().Name + ": " + diagnostic.Format();

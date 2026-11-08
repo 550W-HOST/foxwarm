@@ -25,6 +25,7 @@ internal sealed class SecretRedactor
     private readonly Dictionary<ulong, Pattern[]> candidates = new();
     private readonly bool[] filter = new bool[1 << FilterBits];
     private readonly HashSet<string> exactValues = new(StringComparer.Ordinal);
+    private readonly HashSet<string> labels = new(StringComparer.Ordinal);
     private readonly int window;
     private readonly ulong power = 1;
 
@@ -38,6 +39,7 @@ internal sealed class SecretRedactor
             if (secret.Value.Length < SecretStore.MinimumRedactableLength)
                 continue;
             var label = Label(secret.Label);
+            labels.Add(label);
             foreach (var form in Forms(secret.Value))
                 if (form.Length >= SecretStore.MinimumRedactableLength)
                     patterns.TryAdd(form, label);
@@ -53,7 +55,9 @@ internal sealed class SecretRedactor
                 .GroupBy(pattern => Hash(pattern.Text.AsSpan(0, window)))
         )
         {
-            candidates[group.Key] = group.OrderByDescending(pattern => pattern.Text.Length).ToArray();
+            candidates[group.Key] = group
+                .OrderByDescending(pattern => pattern.Text.Length)
+                .ToArray();
             filter[Slot(group.Key)] = true;
         }
     }
@@ -61,6 +65,9 @@ internal sealed class SecretRedactor
     internal bool IsEmpty => candidates.Count == 0;
 
     internal int KnownValueCount => exactValues.Count;
+
+    // Whether a marker label stands for a value this matcher masks.
+    internal bool HasLabel(string label) => labels.Contains(label);
 
     internal static string Marker(string label) => MarkerPrefix + label + "]]";
 
@@ -215,7 +222,9 @@ internal sealed class SecretRedactor
     internal static IEnumerable<string> Forms(string value)
     {
         yield return value;
-        yield return JsonEncodedText.Encode(value, JavaScriptEncoder.UnsafeRelaxedJsonEscaping).Value;
+        yield return JsonEncodedText
+            .Encode(value, JavaScriptEncoder.UnsafeRelaxedJsonEscaping)
+            .Value;
         yield return JsonEncodedText.Encode(value).Value;
         var percent = Uri.EscapeDataString(value);
         yield return percent;

@@ -20,6 +20,7 @@ internal sealed class MainHost : IAsyncDisposable
     internal IHostApplicationLifetime Lifetime =>
         host.Services.GetRequiredService<IHostApplicationLifetime>();
     internal bool HttpEnabled => host is WebApplication;
+    internal SessionManager Sessions => sessions;
 
     internal async Task StartAsync()
     {

@@ -288,6 +288,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
             mcp.Configuration.SecretLookup = owned.Lookup;
             owned.AddSource("mcp", () => McpSecretLiterals(mcp));
             tools.Redaction = (result, sessionId) => owned.Redact(result, "tool-output", sessionId);
+            tools.KnownSecretLabel = label => owned.Redactor.HasLabel(label);
             executor.InheritedSecret = value => owned.Redactor.IsKnownValue(value);
             owned.AddSource(
                 "nodes",
@@ -316,7 +317,9 @@ internal sealed partial class SessionManager : IAsyncDisposable
             Console.Error.WriteLine("Vector " + code + (id.Length == 0 ? "" : " session=" + id));
     }
 
-    private static IEnumerable<Foxwarm.Secrets.KnownSecret> McpSecretLiterals(Foxwarm.McpClient client)
+    private static IEnumerable<Foxwarm.Secrets.KnownSecret> McpSecretLiterals(
+        Foxwarm.McpClient client
+    )
     {
         var values = new List<Foxwarm.Secrets.KnownSecret>();
         foreach (var (name, server) in client.Configuration.Snapshot())
@@ -328,7 +331,9 @@ internal sealed partial class SessionManager : IAsyncDisposable
                 )
             );
         values.AddRange(
-            client.OAuth.Credentials().Select(value => new Foxwarm.Secrets.KnownSecret("mcp-oauth", value))
+            client
+                .OAuth.Credentials()
+                .Select(value => new Foxwarm.Secrets.KnownSecret("mcp-oauth", value))
         );
         return values;
     }
