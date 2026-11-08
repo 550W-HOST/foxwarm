@@ -40,18 +40,133 @@ internal sealed partial class SessionToolExecutor(
             }
         }
         RequireRuntime();
-        await sessions.AuthorizeToolAsync(
-            hosted,
-            resolved,
+        var files =
             resolved.Name is "run_script" or "start_toolscript_run"
-                    ? invocation.Value?.ScriptSource?.Files ?? Files
-                : resolved.Name == "artifact" && ToolRegistry.ArtifactFileSource(resolved.Args)
-                    ? ArtifactFiles(resolved.ExecutionNode)
-                : resolved.Name == "exec" ? ExecFiles
-                : Files,
-            token
-        );
+                ? invocation.Value?.ScriptSource?.Files ?? Files
+            : resolved.Name == "artifact" && ToolRegistry.ArtifactFileSource(resolved.Args)
+                ? ArtifactFiles(resolved.ExecutionNode)
+            : resolved.Name == "exec" ? ExecFiles
+            : Files;
+        // This is the dispatch gate of the invocation's own call: only here may an ask outcome
+        // become an approval request. Every other check inside the invocation fails closed.
+        var gate =
+            ToolApprovalScope.Current is { } scope && ReferenceEquals(scope.Owner, hosted)
+                ? scope
+                : null;
+        if (gate is not null)
+            gate.Primary = resolved;
+        for (var attempt = 0; ; attempt++)
+            try
+            {
+                await sessions.AuthorizeToolAsync(hosted, resolved, files, token);
+                break;
+            }
+            // A grant whose facts no longer match the call is replaced by a new request.
+            catch (ToolApprovalRequiredException required)
+                when (gate is not null && attempt < MaxApprovalRequests)
+            {
+                gate.Grant = null;
+                var pending = await sessions.BeginToolApprovalAsync(
+                    hosted,
+                    required,
+                    ApprovalOrigin(),
+                    unattended
+                );
+                var record = await AwaitApprovalAsync(pending, token);
+                if (invocation.Value is { } current)
+                    current.Approval = SessionManager.ApprovalMeta(record);
+                gate.Grant = SessionManager.ApprovalOutcome(pending, record);
+            }
         RequireRuntime();
+    }
+
+    private const int MaxApprovalRequests = 3;
+
+    private ToolApprovalOrigin ApprovalOrigin() =>
+        new(
+            unattended ? "timer"
+                : Programmatic ? "script"
+                : ClaudeRuntimeState.IsExternal(hosted.Entry.Snapshot().AuthorityEnvelope)
+                    ? "runtime"
+                : "turn",
+            invocation.Value?.CallId,
+            scriptScope.Value?.RunId
+        );
+
+    // While a foreground call waits, the Session's runtime state names the pending approval.
+    // Approval wait time does not count toward a ToolScript slice limit.
+    private async Task<JsonObject> AwaitApprovalAsync(
+        PendingToolApproval pending,
+        CancellationToken token
+    )
+    {
+        object? lease = null;
+        if (!Programmatic && !unattended)
+        {
+            var details = ToolRuntime(pending.Resolved);
+            details["approval"] = new JsonObject { ["id"] = pending.Id, ["status"] = "pending" };
+            lease = hosted.BeginTool(details, callActivity: false);
+        }
+        var started = ToolApprovalWaitMeter.Start();
+        try
+        {
+            return await sessions.AwaitToolApprovalAsync(hosted, pending, token);
+        }
+        finally
+        {
+            ToolApprovalWaitMeter.Stop(started);
+            if (lease is not null)
+                hosted.EndTool(lease);
+        }
+    }
+
+    /// <summary>
+    /// Waits for every approval requested while preparing a parallel exec segment, so no member
+    /// starts before all decisions. Approved members carry their grant into execution.
+    /// </summary>
+    internal async Task SettleApprovalsAsync(
+        TurnToolPreparation?[] preparations,
+        CancellationToken token
+    )
+    {
+        async Task<TurnToolPreparation?> Settle(TurnToolPreparation? prepared)
+        {
+            if (prepared?.Pending is not { } pending)
+                return prepared;
+            try
+            {
+                var record = await AwaitApprovalAsync(pending, token);
+                var meta = SessionManager.ApprovalMeta(record);
+                try
+                {
+                    return new(
+                        null,
+                        Grant: SessionManager.ApprovalOutcome(pending, record),
+                        Approval: meta
+                    );
+                }
+                catch (ToolAuthorizationDeniedException error)
+                {
+                    return new(error.ToolError(), Approval: meta);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                return new(
+                    UnsupportedTurnToolExecutor.ToolError(
+                        "tool_call_cancelled",
+                        "Tool call canceled before execution."
+                    )
+                );
+            }
+            catch (Exception error)
+                when (error is InvalidOperationException or IOException or InvalidDataException)
+            {
+                return new(UnsupportedTurnToolExecutor.ToolError("tool_error", error.Message));
+            }
+        }
+        var settled = await Task.WhenAll(preparations.Select(Settle));
+        settled.CopyTo(preparations, 0);
     }
 
     private readonly List<string> explicitWaitIds = [];
@@ -173,8 +288,24 @@ internal sealed partial class SessionToolExecutor(
                 execSnapshot.Value?.Node ?? sessions.CurrentNode(hosted),
                 token
             );
-            await AuthorizeAsync(resolved, token);
-            return null;
+            try
+            {
+                await AuthorizeAsync(resolved, token);
+                return null;
+            }
+            catch (ToolApprovalRequiredException required)
+            {
+                // Requested now, decided together before any member of the segment starts.
+                return new(
+                    null,
+                    Pending: await sessions.BeginToolApprovalAsync(
+                        hosted,
+                        required,
+                        new("turn", SessionWait.Text(call["id"]), null),
+                        unattended
+                    )
+                );
+            }
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
@@ -216,7 +347,10 @@ internal sealed partial class SessionToolExecutor(
     {
         if (prepared.PolicyUnavailable)
             Interlocked.Exchange(ref policyUnavailable, 1);
-        return new((JsonObject)prepared.Response.DeepClone());
+        return new(
+            (JsonObject)prepared.Response!.DeepClone(),
+            Approval: (JsonObject?)prepared.Approval?.DeepClone()
+        );
     }
 
     internal async Task<TurnToolExecution> ExecuteAttributedAsync(
@@ -224,7 +358,8 @@ internal sealed partial class SessionToolExecutor(
         CancellationToken token,
         int? index = null,
         int? total = null,
-        string? scriptDelivery = null
+        string? scriptDelivery = null,
+        TurnToolPreparation? approved = null
     )
     {
         await sessions.WaitForIdentityMutationAsync(hosted.Id, token);
@@ -244,8 +379,13 @@ internal sealed partial class SessionToolExecutor(
             // Only a model batch call has a committed anchor; a script subcall inherits its parent's ID.
             AnchorSeq = index is null ? null : foregroundBatch,
             InheritedDelivery = scriptDelivery,
+            Approval = (JsonObject?)approved?.Approval?.DeepClone(),
         };
         invocation.Value = current;
+        // Each invocation gets its own approval scope; nested calls never inherit a grant.
+        using var approvalScope = ToolApprovalScope.Enter(
+            new ToolApprovalScope(hosted) { Grant = approved?.Grant }
+        );
         try
         {
             var response = await ExecuteCoreAsync(call, token);
@@ -260,7 +400,8 @@ internal sealed partial class SessionToolExecutor(
                 current.Receipt,
                 current.SessionMessages,
                 current.DeferredCwdNode,
-                current.ExecPlacement
+                current.ExecPlacement,
+                current.Approval
             );
         }
         finally
@@ -514,7 +655,16 @@ internal sealed partial class SessionToolExecutor(
             var monotonic = System.Diagnostics.Stopwatch.GetTimestamp();
             try
             {
-                return await registry.ExecuteAsync(resolved, this, cancellationToken);
+                var result = await registry.ExecuteAsync(resolved, this, cancellationToken);
+                // The approver's note reaches the model beside the result; native ToolScript
+                // values are never altered.
+                if (
+                    !Programmatic
+                    && ToolApprovalScope.Current?.Grant?.Note is { } note
+                    && result is JsonObject value
+                )
+                    value["approvalNote"] = note;
+                return result;
             }
             finally
             {
@@ -1136,7 +1286,15 @@ internal sealed partial class SessionToolExecutor(
     }
 }
 
-internal sealed record TurnToolPreparation(JsonObject Response, bool PolicyUnavailable = false);
+// A failed preparation has a Response. A segment member that needed approval carries its pending
+// request until the segment settles, then its grant into execution.
+internal sealed record TurnToolPreparation(
+    JsonObject? Response,
+    bool PolicyUnavailable = false,
+    PendingToolApproval? Pending = null,
+    ToolApprovalGrant? Grant = null,
+    JsonObject? Approval = null
+);
 
 internal sealed record TurnToolExecution(
     JsonNode? Response,
@@ -1147,7 +1305,8 @@ internal sealed record TurnToolExecution(
     TurnToolReceipt? Receipt = null,
     JsonArray? SessionMessages = null,
     string? DeferredCwdNode = null,
-    JsonObject? ExecPlacement = null
+    JsonObject? ExecPlacement = null,
+    JsonObject? Approval = null
 );
 
 internal sealed record TurnToolReceipt(
@@ -1179,6 +1338,9 @@ internal sealed class TurnToolInvocation(string callId)
     internal TurnToolReceipt? Receipt { get; set; }
     internal JsonArray? SessionMessages { get; set; }
     internal JsonObject? ExecPlacement { get; set; }
+
+    // Presentation-only outcome of this call's approval request.
+    internal JsonObject? Approval { get; set; }
 
     internal string? DeliverySeq(bool script) =>
         InheritedDelivery ?? SessionManager.BatchDeliverySeq(AnchorSeq, Index, Total, script);

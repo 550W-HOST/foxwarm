@@ -44,7 +44,7 @@ internal static class SessionQuestions
 
     internal static string NewId() => "q-" + Guid.NewGuid().ToString("N")[..10];
 
-    private static JsonObject Container(JsonObject meta)
+    internal static JsonObject Container(JsonObject meta)
     {
         if (meta["questions"] is not JsonObject container)
             meta["questions"] = container = new JsonObject();
@@ -53,10 +53,11 @@ internal static class SessionQuestions
         return container;
     }
 
-    private static void Touch(JsonObject meta)
+    internal static void Touch(JsonObject meta)
     {
         var container = Container(meta);
         container["revision"] = Revision(meta) + 1;
+        SessionApprovals.Prune(container);
         var items = container["items"]!.AsArray();
         var resolved = items
             .OfType<JsonObject>()
@@ -542,6 +543,7 @@ internal static class SessionQuestions
             )
                 throw SessionAuthorityErrors.Invalid("Invalid question record.");
         }
+        SessionApprovals.Validate(container);
     }
 
     // ---- Helpers ----------------------------------------------------------------------

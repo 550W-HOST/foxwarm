@@ -171,12 +171,22 @@ internal sealed partial class SessionManager
                 );
             AgentMemory.NormalizePersistedSelection(snapshot.AuthorityEnvelope);
             var recoveringBusy = snapshot.Busy;
-            snapshot = recoveringBusy ? RecoverBusySnapshot(snapshot) : snapshot;
+            // A pending approval belonged to a waiter of the previous process; nothing replays it.
+            JsonObject[] expired = [];
+            if (SessionApprovals.Pending(snapshot.Meta).Length > 0)
+            {
+                var meta = (JsonObject)snapshot.Meta.DeepClone();
+                expired = SessionApprovals.ExpireStale(meta);
+                snapshot = snapshot with { Meta = meta };
+            }
+            snapshot = recoveringBusy
+                ? RecoverBusySnapshot(snapshot, ExpiredApprovalText(expired))
+                : snapshot;
             token.ThrowIfCancellationRequested();
             var owner = MakeSession(id, agent, store);
             owner.Registry.Add(id, snapshot);
             BindMutations(owner);
-            if (recoveringBusy)
+            if (recoveringBusy || expired.Length > 0)
                 await owner.Entry.SaveLane.SaveStrictAsync(token);
             PublishOwner(owner, slot, acceptedTimer);
             if (servicesReady && !IsDeletionClaimed(owner.Id))
@@ -192,7 +202,10 @@ internal sealed partial class SessionManager
         }
     }
 
-    private static SessionSnapshot RecoverBusySnapshot(SessionSnapshot snapshot)
+    private static SessionSnapshot RecoverBusySnapshot(
+        SessionSnapshot snapshot,
+        string? expiredApprovals = null
+    )
     {
         if (ClaudeRuntimeState.IsExternal(snapshot.AuthorityEnvelope))
         {
@@ -208,7 +221,11 @@ internal sealed partial class SessionManager
             };
         }
         var queue = snapshot.Queue.Select(item => item.CloneItem()).ToList();
-        if (queue.LastOrDefault() is not { } last || !HasTrailingResumeEvent(last))
+        if (
+            queue.LastOrDefault() is not { } last
+            || !HasTrailingResumeEvent(last)
+            || expiredApprovals is not null
+        )
         {
             queue.Add(
                 new QueueItem(
@@ -219,6 +236,7 @@ internal sealed partial class SessionManager
                             ["system"] = SessionBoundary.SystemEvent(
                                 "session-resumed",
                                 "The Foxwarm process restarted while this session was busy. Foxwarm is resuming session processing."
+                                    + (expiredApprovals is null ? "" : " " + expiredApprovals)
                             ),
                         },
                     ]

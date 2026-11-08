@@ -167,7 +167,7 @@ internal sealed partial class SessionManager
         // person approved, including its internal steps and effect-owner rechecks.
         if (
             assessment.Effect == ToolAuthorizationEffect.Ask
-            && ToolApprovalScope.Current?.Covers(owner) != true
+            && ToolApprovalScope.Current?.Covers(owner, resolved, assessment.Request) != true
         )
             throw new ToolApprovalRequiredException(assessment, resolved);
         if (!IsCurrentOwner(owner))
@@ -349,13 +349,16 @@ internal sealed partial class SessionManager
         ToolAuthorizationRequest request
     )
     {
+        AuthorizationDecision? ask = null;
         foreach (var policy in policies)
         {
             var decision = ToolAuthorizationEvaluation.Evaluate(policy, request);
-            if (!decision.Allowed)
+            if (decision.Effect == ToolAuthorizationEffect.Deny)
                 return decision;
+            if (decision.Effect == ToolAuthorizationEffect.Ask)
+                ask ??= decision;
         }
-        return new(ToolAuthorizationEffect.Allow, null);
+        return ask ?? new(ToolAuthorizationEffect.Allow, null);
     }
 
     private async Task AuthorizeCreateSessionTargetAsync(

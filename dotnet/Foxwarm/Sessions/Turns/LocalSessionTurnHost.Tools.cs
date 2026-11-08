@@ -75,6 +75,8 @@ public sealed partial class LocalSessionTurnHost
                         .PrepareDirectExecAsync(value.Call, token)
                         .ConfigureAwait(false);
                 }
+            if (tools is SessionToolExecutor settling)
+                await settling.SettleApprovalsAsync(preparation, token).ConfigureAwait(false);
             async Task WorkAsync()
             {
                 while (true)
@@ -129,6 +131,12 @@ public sealed partial class LocalSessionTurnHost
             {
                 var meta = response["__meta"] as JsonObject ?? new JsonObject();
                 meta["exec"] = placement.DeepClone();
+                response["__meta"] = meta;
+            }
+            if (result.Approval is { } approval)
+            {
+                var meta = response["__meta"] as JsonObject ?? new JsonObject();
+                meta["approval"] = approval.DeepClone();
                 response["__meta"] = meta;
             }
             if (result.SessionMessages is { Count: > 0 } deliveries)
@@ -263,7 +271,7 @@ public sealed partial class LocalSessionTurnHost
                 );
             return new(UnsupportedTurnToolExecutor.ToolError("invalid_tool_arguments", error));
         }
-        if (prepared is not null && tools is SessionToolExecutor executor)
+        if (prepared?.Response is not null && tools is SessionToolExecutor executor)
             return executor.PreparedFailure(prepared);
         entry.ToolProgress?.Invoke(call, true);
         try
@@ -271,7 +279,7 @@ public sealed partial class LocalSessionTurnHost
             var owned = (JsonObject)call.DeepClone();
             return tools is SessionToolExecutor current
                 ? await current
-                    .ExecuteAttributedAsync(owned, token, index, total)
+                    .ExecuteAttributedAsync(owned, token, index, total, approved: prepared)
                     .ConfigureAwait(false)
                 : new(await tools.ExecuteAsync(owned, token).ConfigureAwait(false));
         }

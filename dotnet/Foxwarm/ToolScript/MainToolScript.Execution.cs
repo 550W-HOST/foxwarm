@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
+using Foxwarm.Tools;
 using Google.Protobuf;
 using Monty.V1;
 using Exception = System.Exception;
@@ -40,6 +41,10 @@ internal sealed partial class MainToolScript
         var oldSnapshot = Text(record["snapshotBase64"]);
         var persistenceFailure = false;
         var slice = Stopwatch.StartNew();
+        // Time spent waiting for approval decisions does not count toward the slice limit.
+        var approvalWait = new ToolApprovalWaitMeter();
+        using var approvalMeter = ToolApprovalWaitMeter.Enter(approvalWait);
+        TimeSpan Elapsed() => slice.Elapsed - approvalWait.Total;
         record["hostCallCount"] = 0;
         record["subCalls"] = new JsonArray();
         record.Remove("lastHostCall");
@@ -275,7 +280,7 @@ internal sealed partial class MainToolScript
                 }
                 run.Cancel.Token.ThrowIfCancellationRequested();
                 context.Owner.Entry.RequireIdentityAuthority();
-                if (slice.Elapsed.TotalSeconds >= Number(record["timeoutSecs"], 30))
+                if (Elapsed().TotalSeconds >= Number(record["timeoutSecs"], 30))
                 {
                     await WaitAsync("timeout", null, outcome);
                     return ProjectSlice();
@@ -311,7 +316,7 @@ internal sealed partial class MainToolScript
                     {
                         ["timeoutSecs"] = record["timeoutSecs"]!.DeepClone(),
                         ["pendingResume"] = pending,
-                        ["elapsedMs"] = slice.Elapsed.TotalMilliseconds,
+                        ["elapsedMs"] = Elapsed().TotalMilliseconds,
                         ["pausedAtFunctionName"] = "call_tool",
                         ["pausedAtSummaryName"] = record["lastHostCall"]
                             ?["functionName"]?.DeepClone(),

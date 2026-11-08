@@ -27,6 +27,11 @@ internal sealed partial class SessionManager
         );
         var id = owner.Id;
         var generation = owner.McpGeneration;
+        // Reception continues under an approved start; an ask outcome needs that approval.
+        var approved =
+            action == "start" && ToolApprovalScope.Current is { Grant: not null } scope
+                ? scope
+                : null;
         var receptionArgs = new JsonObject { ["action"] = "start", ["server"] = server };
         var resolved = new ResolvedTool(
             "mcp_notifications",
@@ -54,7 +59,11 @@ internal sealed partial class SessionManager
             );
             var policies = EffectivePolicies(owner.Agent, authorization.Load());
             request = PopulateEffectiveTargets(request, owner, policies);
-            if (!EffectiveDecision(policies, request).Allowed)
+            var decision = EffectiveDecision(policies, request);
+            if (
+                !decision.Allowed
+                && !(decision.Effect == ToolAuthorizationEffect.Ask && approved is not null)
+            )
                 throw new ToolAuthorizationDeniedException(
                     "MCP notification reception is not permitted."
                 );
@@ -63,7 +72,8 @@ internal sealed partial class SessionManager
         async Task Authorize(CancellationToken current)
         {
             Check();
-            await AuthorizeToolAsync(owner, resolved, null, current);
+            using (ToolApprovalScope.Enter(approved))
+                await AuthorizeToolAsync(owner, resolved, null, current);
             Check();
         }
         return await mcp.ManageNotificationsAsync(

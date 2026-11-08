@@ -558,7 +558,8 @@ internal sealed partial class SessionOwner
         }
     }
 
-    internal object BeginTool(JsonObject? details = null)
+    // An approval wait publishes its call without the tool-call activity of a started call.
+    internal object BeginTool(JsonObject? details = null, bool callActivity = true)
     {
         var projection = new JsonObject
         {
@@ -571,7 +572,8 @@ internal sealed partial class SessionOwner
             foregroundRuntime = projection;
         try
         {
-            SetToolCallActivity(projection, true);
+            if (callActivity)
+                SetToolCallActivity(projection, true);
             PublishStateChanged();
         }
         catch

@@ -17,6 +17,10 @@ internal sealed class ClaudeSessionDriver(
     LocalSessionTurnHost host
 )
 {
+    // Longest approval deadline plus a margin, in milliseconds.
+    internal const long RuntimeToolTimeoutMs =
+        (Foxwarm.Tools.ToolAuthorizationPolicy.MaxApprovalTimeoutSeconds + 60) * 1000L;
+
     private readonly HashSet<string> observed = new(StringComparer.Ordinal);
     private readonly StringBuilder text = new();
     private readonly StringBuilder reasoning = new();
@@ -189,6 +193,10 @@ internal sealed class ClaudeSessionDriver(
                         {
                             ["type"] = "http",
                             ["url"] = endpoint.AbsoluteUri,
+                            // Claude Code otherwise ends HTTP MCP requests after 60 seconds and
+                            // idle ones after 5 minutes. Foxwarm tools keep their own bounds and
+                            // Stop; this lets a call wait for the longest approval deadline.
+                            ["timeout"] = RuntimeToolTimeoutMs,
                             ["headers"] = new JsonObject
                             {
                                 ["Authorization"] = "Bearer " + run.Token,
