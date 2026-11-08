@@ -324,6 +324,54 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
         return new JsonObject { ["session"] = result };
     }
 
+    internal const int MinApprovalTimeoutSeconds = 30;
+    internal const int MaxApprovalTimeoutSeconds = 7 * 24 * 60 * 60;
+
+    // Approval options of an ask rule: an optional deadline and the scoped WebUI identities that
+    // may decide in addition to the administrator.
+    private static JsonObject Approval(JsonNode? value)
+    {
+        if (value is not JsonObject approval)
+            throw new InvalidDataException("Policy approval must be an object.");
+        Fields(approval, "timeoutSeconds", "approvers");
+        var result = new JsonObject();
+        if (approval.ContainsKey("timeoutSeconds"))
+        {
+            var seconds = Number(approval["timeoutSeconds"]);
+            if (
+                seconds is not double number
+                || number != Math.Floor(number)
+                || number < MinApprovalTimeoutSeconds
+                || number > MaxApprovalTimeoutSeconds
+            )
+                throw new InvalidDataException(
+                    $"Policy approval timeoutSeconds must be an integer from {MinApprovalTimeoutSeconds} to {MaxApprovalTimeoutSeconds}."
+                );
+            result["timeoutSeconds"] = (long)number;
+        }
+        if (approval.ContainsKey("approvers"))
+        {
+            if (approval["approvers"] is not JsonArray list || list.Count is < 1 or > 64)
+                throw new InvalidDataException(
+                    "Policy approval approvers must list 1 to 64 identity IDs."
+                );
+            var approvers = new JsonArray();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var item in list)
+            {
+                if (
+                    SessionWait.Text(item) is not string identity
+                    || !Regex.IsMatch(identity, "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+                )
+                    throw new InvalidDataException("Policy approver must be an identity ID.");
+                if (seen.Add(identity))
+                    approvers.Add(identity);
+            }
+            result["approvers"] = approvers;
+        }
+        return result;
+    }
+
     internal static ToolAuthorizationPolicy Normalize(JsonObject root)
     {
         Fields(root, "version", "defaultAction", "rules");
@@ -332,7 +380,7 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
         var action = root.ContainsKey("defaultAction")
             ? SessionWait.Text(root["defaultAction"])
             : "allow";
-        if (action is not ("allow" or "deny"))
+        if (action is not ("allow" or "ask" or "deny"))
             throw new InvalidDataException("Invalid policy defaultAction.");
         var raw = root.ContainsKey("rules")
             ? root["rules"] as JsonArray
@@ -353,6 +401,7 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
                 "match",
                 "action",
                 "reason",
+                "approval",
                 "agent",
                 "session",
                 "externalId",
@@ -379,8 +428,10 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
                 throw new InvalidDataException("Duplicate policy rule ID.");
             var enabled = !rule.ContainsKey("enabled") || Boolean(rule["enabled"]);
             var effect = SessionWait.Text(rule["action"]);
-            if (effect is not ("allow" or "deny"))
+            if (effect is not ("allow" or "ask" or "deny"))
                 throw new InvalidDataException("Invalid policy action.");
+            if (rule.ContainsKey("approval") && effect != "ask")
+                throw new InvalidDataException("Policy approval options require action ask.");
             var match = new JsonObject();
             if (shorthand || rule.ContainsKey("match"))
             {
@@ -505,6 +556,12 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
                     match["args"] = arguments;
                 }
             }
+            // An inbound external principal has no Session or approver; an ask rule naming one
+            // could never be satisfied.
+            if (effect == "ask" && match.ContainsKey("externalId"))
+                throw new InvalidDataException(
+                    "Action ask cannot select external callers; they cannot wait for approval."
+                );
             var normalized = new JsonObject
             {
                 ["id"] = id,
@@ -512,6 +569,8 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
                 ["match"] = match,
                 ["action"] = effect,
             };
+            if (rule.ContainsKey("approval"))
+                normalized["approval"] = Approval(rule["approval"]);
             if (rule.ContainsKey("reason"))
             {
                 var reason =

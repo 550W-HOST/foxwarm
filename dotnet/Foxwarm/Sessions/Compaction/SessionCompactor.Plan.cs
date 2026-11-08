@@ -323,8 +323,8 @@ internal sealed partial class SessionCompactor
                         detached,
                         calls,
                         prompt,
-                        error is ToolAuthorizationDeniedException
-                            ? "tool_authorization_denied"
+                        error is ToolAuthorizationDeniedException denied
+                            ? denied.ErrorType
                             : "tool_io_error"
                     );
                 }

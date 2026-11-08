@@ -15,6 +15,7 @@ internal static class ToolAuthorizationExplain
         var result = new JsonObject
         {
             ["layer"] = layer.Layer is null ? "global" : "agent:" + layer.Layer,
+            ["decision"] = AuthorizationDecision.Name(layer.Decision.Effect),
             ["allowed"] = layer.Decision.Allowed,
         };
         if (layer.Decision.Rule is { } rule)
@@ -27,6 +28,8 @@ internal static class ToolAuthorizationExplain
             };
             if (rule["reason"] is { } reason)
                 matched["reason"] = reason.DeepClone();
+            if (rule["approval"] is { } approval)
+                matched["approval"] = approval.DeepClone();
             matched["match"] = rule["match"]?.DeepClone();
             result["rule"] = matched;
         }

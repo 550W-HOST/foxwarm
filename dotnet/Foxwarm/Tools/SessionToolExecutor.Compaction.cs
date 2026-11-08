@@ -131,10 +131,9 @@ internal sealed partial class SessionToolExecutor
             {
                 result["stagingError"] = new JsonObject
                 {
-                    ["type"] =
-                        saveError is ToolAuthorizationDeniedException
-                            ? "tool_authorization_denied"
-                            : "tool_io_error",
+                    ["type"] = saveError is ToolAuthorizationDeniedException denied
+                        ? denied.ErrorType
+                        : "tool_io_error",
                     ["message"] = saveError.Message,
                 };
             }

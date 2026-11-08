@@ -40,7 +40,35 @@ internal sealed record ToolAuthorizationRequest(
     Foxwarm.Nodes.NodeAuthorizationForest? NodeForest = null
 );
 
-internal sealed record AuthorizationDecision(bool Allowed, JsonObject? Rule);
+internal enum ToolAuthorizationEffect
+{
+    Allow,
+    Ask,
+    Deny,
+}
+
+// Allowed means the call proceeds without a person. Consumers that cannot ask anyone read only
+// Allowed and therefore treat Ask as a denial.
+internal sealed record AuthorizationDecision(ToolAuthorizationEffect Effect, JsonObject? Rule)
+{
+    internal bool Allowed => Effect == ToolAuthorizationEffect.Allow;
+
+    internal static ToolAuthorizationEffect Parse(string? action) =>
+        action switch
+        {
+            "allow" => ToolAuthorizationEffect.Allow,
+            "ask" => ToolAuthorizationEffect.Ask,
+            _ => ToolAuthorizationEffect.Deny,
+        };
+
+    internal static string Name(ToolAuthorizationEffect effect) =>
+        effect switch
+        {
+            ToolAuthorizationEffect.Allow => "allow",
+            ToolAuthorizationEffect.Ask => "ask",
+            _ => "deny",
+        };
+}
 
 // Layer is null for the global policy, otherwise the Agent that owns the local rules.
 internal sealed record AuthorizationLayerDecision(
@@ -55,12 +83,64 @@ internal sealed record AuthorizationAssessment(
 )
 {
     internal AuthorizationLayerDecision? Denied =>
-        Layers.FirstOrDefault(layer => !layer.Decision.Allowed);
+        Layers.FirstOrDefault(layer => layer.Decision.Effect == ToolAuthorizationEffect.Deny);
+
+    internal IReadOnlyList<AuthorizationLayerDecision> Asking =>
+        Layers.Where(layer => layer.Decision.Effect == ToolAuthorizationEffect.Ask).ToArray();
+
+    // Deny in any layer wins; otherwise any asking layer requires approval.
+    internal ToolAuthorizationEffect Effect =>
+        Denied is not null ? ToolAuthorizationEffect.Deny
+        : Asking.Count > 0 ? ToolAuthorizationEffect.Ask
+        : ToolAuthorizationEffect.Allow;
+
+    internal ToolApprovalOptions Approval => ToolApprovalOptions.Combine(Asking);
+}
+
+// Combined options of every asking layer: the shortest deadline, and only identities that every
+// asking layer admits. The administrator may always decide.
+internal sealed record ToolApprovalOptions(long? TimeoutSeconds, IReadOnlyList<string> Approvers)
+{
+    internal static ToolApprovalOptions Combine(IEnumerable<AuthorizationLayerDecision> asking)
+    {
+        long? timeout = null;
+        HashSet<string>? approvers = null;
+        foreach (var layer in asking)
+        {
+            var approval = layer.Decision.Rule?["approval"] as JsonObject;
+            if (SessionWait.Number(approval?["timeoutSeconds"]) is double seconds)
+                timeout = timeout is long current
+                    ? Math.Min(current, (long)seconds)
+                    : (long)seconds;
+            var admitted = SessionWait
+                .Strings(approval?["approvers"])
+                .ToHashSet(StringComparer.Ordinal);
+            if (approvers is null)
+                approvers = admitted;
+            else
+                approvers.IntersectWith(admitted);
+        }
+        return new(timeout, (approvers ?? []).Order(StringComparer.Ordinal).ToArray());
+    }
+
+    internal JsonObject ToJson()
+    {
+        var result = new JsonObject
+        {
+            ["approvers"] = new JsonArray(
+                Approvers.Select(value => (JsonNode?)JsonValue.Create(value)).ToArray()
+            ),
+        };
+        if (TimeoutSeconds is long seconds)
+            result["timeoutSeconds"] = seconds;
+        return result;
+    }
 }
 
 internal enum CreationTargetDecision
 {
     Allow,
+    Ask,
     Deny,
     Indeterminate,
 }
@@ -290,13 +370,19 @@ internal static class ToolAuthorizationEvaluation
         )
             throw new InvalidDataException("Creation target authorization requires an Agent.");
         var allow = false;
+        var ask = false;
         var deny = false;
+        CreationTargetDecision Outcome() =>
+            allow && (ask || deny) ? CreationTargetDecision.Indeterminate
+            : allow ? CreationTargetDecision.Allow
+            : deny ? CreationTargetDecision.Deny
+            : CreationTargetDecision.Ask;
         foreach (var rule in policy.Value["rules"]!.AsArray().OfType<JsonObject>())
         {
             var match = rule["match"]!.AsObject();
             if (
                 !rule["enabled"]!.GetValue<bool>()
-                || !Identity(match, request, deny: SessionWait.Text(rule["action"]) == "deny")
+                || !Identity(match, request, deny: Restrictive(rule))
                 || !Paths(match["path"] as JsonObject, request)
             )
                 continue;
@@ -314,22 +400,41 @@ internal static class ToolAuthorizationEvaluation
             }
             if (!matches)
                 continue;
-            allow |= SessionWait.Text(rule["action"]) == "allow";
-            deny |= SessionWait.Text(rule["action"]) == "deny";
+            var effect = AuthorizationDecision.Parse(SessionWait.Text(rule["action"]));
+            allow |= effect == ToolAuthorizationEffect.Allow;
+            ask |= effect == ToolAuthorizationEffect.Ask;
+            deny |= effect == ToolAuthorizationEffect.Deny;
             if (!unknown)
-                return allow && deny ? CreationTargetDecision.Indeterminate
-                    : allow ? CreationTargetDecision.Allow
-                    : CreationTargetDecision.Deny;
+                return Outcome();
         }
-        var fallback =
-            request.Principal == "internal"
-            && SessionWait.Text(policy.Value["defaultAction"]) == "allow";
-        allow |= fallback;
-        deny |= !fallback;
-        return allow && deny ? CreationTargetDecision.Indeterminate
-            : allow ? CreationTargetDecision.Allow
-            : CreationTargetDecision.Deny;
+        var fallback = Default(policy, request);
+        allow |= fallback == ToolAuthorizationEffect.Allow;
+        ask |= fallback == ToolAuthorizationEffect.Ask;
+        deny |= fallback == ToolAuthorizationEffect.Deny;
+        return Outcome();
     }
+
+    // Deny and ask rules restrict; unresolved multi-target facts match them conservatively.
+    private static bool Restrictive(JsonObject rule) =>
+        SessionWait.Text(rule["action"]) is "deny" or "ask";
+
+    // External principals never fall through to a grant and cannot be asked.
+    private static ToolAuthorizationEffect Default(
+        ToolAuthorizationPolicy policy,
+        ToolAuthorizationRequest request
+    ) =>
+        request.Principal == "internal"
+            ? AuthorizationDecision.Parse(SessionWait.Text(policy.Value["defaultAction"]))
+            : ToolAuthorizationEffect.Deny;
+
+    private static ToolAuthorizationEffect RuleEffect(
+        JsonObject rule,
+        ToolAuthorizationRequest request
+    ) =>
+        AuthorizationDecision.Parse(SessionWait.Text(rule["action"])) is var effect
+        && (effect != ToolAuthorizationEffect.Ask || request.Principal == "internal")
+            ? effect
+            : ToolAuthorizationEffect.Deny;
 
     internal static bool Within(string? path, string root)
     {
@@ -417,17 +522,13 @@ internal static class ToolAuthorizationEvaluation
             var match = rule["match"]!.AsObject();
             if (
                 rule["enabled"]!.GetValue<bool>()
-                && Identity(match, request, deny: SessionWait.Text(rule["action"]) == "deny")
+                && Identity(match, request, deny: Restrictive(rule))
                 && Arguments(match["args"] as JsonObject, request)
                 && Paths(match["path"] as JsonObject, request)
             )
-                return new(SessionWait.Text(rule["action"]) == "allow", rule);
+                return new(RuleEffect(rule, request), rule);
         }
-        return new(
-            request.Principal == "internal"
-                && SessionWait.Text(policy.Value["defaultAction"]) == "allow",
-            null
-        );
+        return new(Default(policy, request), null);
     }
 
     internal static bool Visible(
@@ -444,13 +545,7 @@ internal static class ToolAuthorizationEvaluation
             var match = rule["match"]!.AsObject();
             if (
                 !rule["enabled"]!.GetValue<bool>()
-                || !Identity(
-                    match,
-                    request,
-                    unknownNode,
-                    unknownNodeTargets,
-                    SessionWait.Text(rule["action"]) == "deny"
-                )
+                || !Identity(match, request, unknownNode, unknownNodeTargets, Restrictive(rule))
             )
                 continue;
             var conditional =
@@ -458,14 +553,14 @@ internal static class ToolAuthorizationEvaluation
                 || match["args"] is JsonObject args && args.Count > 0
                 || unknownNode && match.ContainsKey("targetNode")
                 || unknownNodeTargets && match.ContainsKey("node");
-            var allow = SessionWait.Text(rule["action"]) == "allow";
+            // A call that can proceed after approval remains discoverable.
+            var possible = RuleEffect(rule, request) != ToolAuthorizationEffect.Deny;
             if (!conditional)
-                return allow;
-            if (allow)
+                return possible;
+            if (possible)
                 return true;
         }
-        return request.Principal == "internal"
-            && SessionWait.Text(policy.Value["defaultAction"]) == "allow";
+        return Default(policy, request) != ToolAuthorizationEffect.Deny;
     }
 
     internal static bool NeedsTaskTarget(
@@ -479,11 +574,7 @@ internal static class ToolAuthorizationEvaluation
             .OfType<JsonObject>()
             .Any(rule =>
                 rule["enabled"]!.GetValue<bool>()
-                && Identity(
-                    rule["match"]!.AsObject(),
-                    request,
-                    deny: SessionWait.Text(rule["action"]) == "deny"
-                )
+                && Identity(rule["match"]!.AsObject(), request, deny: Restrictive(rule))
                 && (rule["match"]?["args"] as JsonObject ?? new()).Any(pair =>
                     pair.Value is JsonObject map && map.ContainsKey("task")
                 )
@@ -498,11 +589,7 @@ internal static class ToolAuthorizationEvaluation
             .OfType<JsonObject>()
             .Any(rule =>
                 rule["enabled"]!.GetValue<bool>()
-                && Identity(
-                    rule["match"]!.AsObject(),
-                    request,
-                    deny: SessionWait.Text(rule["action"]) == "deny"
-                )
+                && Identity(rule["match"]!.AsObject(), request, deny: Restrictive(rule))
                 && (rule["match"]?["args"] as JsonObject ?? new()).Any(pair =>
                     pair.Value is JsonObject map && map.ContainsKey("session")
                 )

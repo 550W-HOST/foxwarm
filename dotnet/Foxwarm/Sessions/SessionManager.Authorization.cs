@@ -163,6 +163,13 @@ internal sealed partial class SessionManager
             assessment.Request,
             AuthorizationTarget
         );
+        // Deny and isolation are final above. An ask outcome passes only within the invocation a
+        // person approved, including its internal steps and effect-owner rechecks.
+        if (
+            assessment.Effect == ToolAuthorizationEffect.Ask
+            && ToolApprovalScope.Current?.Covers(owner) != true
+        )
+            throw new ToolApprovalRequiredException(assessment, resolved);
         if (!IsCurrentOwner(owner))
             throw new InvalidOperationException(
                 "Tool source is no longer the current Session owner."
@@ -348,7 +355,7 @@ internal sealed partial class SessionManager
             if (!decision.Allowed)
                 return decision;
         }
-        return new(true, null);
+        return new(ToolAuthorizationEffect.Allow, null);
     }
 
     private async Task AuthorizeCreateSessionTargetAsync(
@@ -372,6 +379,7 @@ internal sealed partial class SessionManager
         );
         var policies = EffectivePolicies(source.Agent, await authorization.LoadAsync(token));
         var indeterminate = false;
+        var ask = false;
         foreach (var policy in policies)
         {
             var decision = ToolAuthorizationEvaluation.EvaluateCreationTarget(policy, request);
@@ -380,11 +388,17 @@ internal sealed partial class SessionManager
                     $"Tool authorization rules deny creating a Session in Agent '{agent}'."
                 );
             indeterminate |= decision == CreationTargetDecision.Indeterminate;
+            ask |= decision == CreationTargetDecision.Ask;
         }
         if (indeterminate)
             throw new ToolAuthorizationDeniedException(
                 "Future Session parameters make create_session target authorization indeterminate at timer registration. "
                     + "Place a decisive creation-target rule before rules depending on future names or settings."
+            );
+        // A future unattended creation has no invocation a person could approve.
+        if (ask)
+            throw new ToolAuthorizationDeniedException(
+                $"Tool authorization rules require approval to create Sessions in Agent '{agent}'. A scheduled creation can't be approved in advance, so this timer was not registered."
             );
         // Only generic policy is shared. Legacy structural create_session denial must not
         // replace the timer's independent isolation and creator-target checks.

@@ -10,8 +10,61 @@ internal sealed class ToolAuthorizationUnavailableException()
     internal const string Code = "TOOL_AUTH_POLICY_UNAVAILABLE";
 }
 
-internal sealed class ToolAuthorizationDeniedException(string message)
-    : InvalidOperationException(message);
+internal class ToolAuthorizationDeniedException(string message) : InvalidOperationException(message)
+{
+    internal virtual string ErrorType => "tool_authorization_denied";
+
+    // Additional model-facing fields of the error object and of the result beside it.
+    internal virtual JsonObject? ErrorFields => null;
+    internal virtual JsonObject? ResultFields => null;
+
+    internal JsonObject ToolError()
+    {
+        var error = new JsonObject { ["type"] = ErrorType, ["message"] = Message };
+        foreach (var pair in ErrorFields ?? [])
+            error[pair.Key] = pair.Value?.DeepClone();
+        var result = new JsonObject { ["error"] = error };
+        foreach (var pair in ResultFields ?? [])
+            result[pair.Key] = pair.Value?.DeepClone();
+        return result;
+    }
+}
+
+// A matching ask rule that no approval covers. The interactive gate turns the primary call into
+// an approval request; anywhere else (an internal step of an allowed call, a recheck outside the
+// approved invocation) it is refused.
+internal sealed class ToolApprovalRequiredException(
+    AuthorizationAssessment assessment,
+    ResolvedTool resolved
+)
+    : ToolAuthorizationDeniedException(
+        $"This call needs approval for an internal step ({resolved.Source} `{resolved.Name}`, rule {RuleId(assessment)}), but approval can't be requested for internal steps. It was not executed."
+    )
+{
+    internal AuthorizationAssessment Assessment => assessment;
+    internal ResolvedTool Resolved => resolved;
+    internal override string ErrorType => "tool_approval_unavailable";
+
+    private static string RuleId(AuthorizationAssessment assessment) =>
+        assessment.Asking.FirstOrDefault() is { } layer
+            ? SessionWait.Text(layer.Decision.Rule?["id"]) ?? "defaultAction"
+            : "defaultAction";
+}
+
+// Final outcome of an approval request that did not approve the call.
+internal sealed class ToolApprovalOutcomeException(
+    string type,
+    string message,
+    string? approvalId = null,
+    string? note = null
+) : ToolAuthorizationDeniedException(message)
+{
+    internal override string ErrorType => type;
+    internal override JsonObject? ErrorFields =>
+        note is null ? null : new JsonObject { ["note"] = note };
+    internal override JsonObject? ResultFields =>
+        approvalId is null ? null : new JsonObject { ["approvalId"] = approvalId };
+}
 
 internal sealed class ToolAuthorizationAuthority(
     string dataRoot,

@@ -169,8 +169,8 @@ internal sealed partial class SessionManager
                 result[name] = await ExplainVariantAsync(target, resolved, files, policy, token);
             if (variants.Count == 2)
                 result["changed"] =
-                    result["active"]?["allowed"]?.GetValue<bool>()
-                    != result["candidate"]?["allowed"]?.GetValue<bool>();
+                    SessionWait.Text(result["active"]?["decision"])
+                    != SessionWait.Text(result["candidate"]?["decision"]);
         }
         catch (Exception error)
             when (error is InvalidDataException or InvalidOperationException
@@ -199,6 +199,7 @@ internal sealed partial class SessionManager
         {
             return new JsonObject
             {
+                ["decision"] = "deny",
                 ["allowed"] = false,
                 ["deniedBy"] = "precheck",
                 ["precheck"] = denied.Message,
@@ -222,20 +223,33 @@ internal sealed partial class SessionManager
         }
         var policyDenied = assessment.Denied is not null;
         var isolationDenied = isolationResult["allowed"]?.GetValue<bool>() == false;
-        return new JsonObject
+        // Deny and isolation are decided before anyone would be asked.
+        var asked =
+            !policyDenied && !isolationDenied && assessment.Effect == ToolAuthorizationEffect.Ask;
+        var result = new JsonObject
         {
-            ["allowed"] = !policyDenied && !isolationDenied,
+            ["decision"] =
+                policyDenied || isolationDenied ? "deny"
+                : asked ? "ask"
+                : "allow",
+            ["allowed"] = !policyDenied && !isolationDenied && !asked,
             ["deniedBy"] =
                 policyDenied ? "policy"
                 : isolationDenied ? "isolation"
                 : null,
-            ["layers"] = new JsonArray(
-                assessment
-                    .Layers.Select(layer => (JsonNode?)ToolAuthorizationExplain.Layer(layer))
-                    .ToArray()
-            ),
-            ["isolation"] = isolationResult,
-            ["facts"] = ToolAuthorizationExplain.Facts(assessment.Request),
         };
+        if (asked)
+        {
+            result["askedBy"] = "policy";
+            result["approval"] = assessment.Approval.ToJson();
+        }
+        result["layers"] = new JsonArray(
+            assessment
+                .Layers.Select(layer => (JsonNode?)ToolAuthorizationExplain.Layer(layer))
+                .ToArray()
+        );
+        result["isolation"] = isolationResult;
+        result["facts"] = ToolAuthorizationExplain.Facts(assessment.Request);
+        return result;
     }
 }

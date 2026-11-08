@@ -197,9 +197,7 @@ internal sealed partial class SessionToolExecutor(
         }
         catch (ToolAuthorizationDeniedException error)
         {
-            return new(
-                UnsupportedTurnToolExecutor.ToolError("tool_authorization_denied", error.Message)
-            );
+            return new(error.ToolError());
         }
         catch (Exception error)
             when (error
@@ -549,10 +547,7 @@ internal sealed partial class SessionToolExecutor(
         {
             if (Programmatic)
                 throw;
-            return UnsupportedTurnToolExecutor.ToolError(
-                "tool_authorization_denied",
-                error.Message
-            );
+            return error.ToolError();
         }
         catch (ArgumentException error)
         {

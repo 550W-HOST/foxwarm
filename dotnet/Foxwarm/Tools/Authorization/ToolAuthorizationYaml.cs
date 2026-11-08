@@ -25,6 +25,7 @@ internal static class ToolAuthorizationYaml
         Task,
         Node,
         Scalar,
+        Approval,
         ScalarList,
         ScalarOrList,
     }
@@ -113,6 +114,7 @@ internal static class ToolAuthorizationYaml
                     "match",
                     "action",
                     "reason",
+                    "approval",
                     "agent",
                     "session",
                     "externalId",
@@ -121,6 +123,7 @@ internal static class ToolAuthorizationYaml
                     "args",
                     "path",
                 ],
+                Shape.Approval => ["timeoutSeconds", "approvers"],
                 Shape.Match =>
                 [
                     "agent",
@@ -161,6 +164,8 @@ internal static class ToolAuthorizationYaml
                     Shape.Rule when pair.Key == "tool" => Shape.Tool,
                     Shape.Rule when pair.Key == "path" => Shape.Path,
                     Shape.Rule when pair.Key == "node" => Shape.Node,
+                    Shape.Rule when pair.Key == "approval" => Shape.Approval,
+                    Shape.Approval when pair.Key == "approvers" => Shape.ScalarList,
                     Shape.Rule when pair.Key == "session" => Shape.ScalarOrList,
                     Shape.Rule when pair.Key is "agent" or "externalId" => Shape.Matcher,
                     Shape.Node when pair.Key is "provider" or "exact" => Shape.ScalarOrList,
