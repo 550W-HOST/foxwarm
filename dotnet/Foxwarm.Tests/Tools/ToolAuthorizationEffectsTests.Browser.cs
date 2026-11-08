@@ -125,6 +125,31 @@ public sealed partial class ToolAuthorizationEffectsTests
         var caller = await manager.RequiredAsync("foreign");
         var execution = Executor(manager, caller, temp.Path);
         await using var mcp = execution.Mcp;
+        // Browser tools are registered only where the host bundle and node exist. Probes resolve
+        // through the manager's registry, so supply the two entries when this build has none.
+        foreach (var name in new[] { "browser_open", "browser_tabs" })
+            if (
+                !manager.ToolRegistry.Entries.Any(entry =>
+                    SessionWait.Text(entry.Definition["name"]) == name
+                )
+            )
+                manager.ToolRegistry.RegisterBrowser(
+                    new JsonObject
+                    {
+                        ["type"] = "function",
+                        ["name"] = name,
+                        ["description"] = "Browser tool.",
+                        ["parameters"] = new JsonObject
+                        {
+                            ["type"] = "object",
+                            ["properties"] = new JsonObject
+                            {
+                                ["url"] = new JsonObject { ["type"] = "string" },
+                            },
+                        },
+                    },
+                    () => true
+                );
         await Policy(
             manager,
             """
