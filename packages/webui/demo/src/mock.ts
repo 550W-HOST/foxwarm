@@ -150,6 +150,8 @@ export function createDemoServer(snapshot: DemoSnapshot) {
       if (row) return json(row)
     }
     if (path === '/history/search') return json({ error: 'History search is not available in the demo.', code: 'DEMO_UNAVAILABLE' }, 503)
+    // Recorded usage depends on the visitor's current day, so the demo leaves the status bar Total out.
+    if (path === '/usage') return json({ error: 'Usage is not available in the demo.', code: 'DEMO_UNAVAILABLE' }, 503)
     console.warn('[Foxwarm demo] No recorded answer for', `${path}${url.search}`)
     return json({ error: 'Not available in the demo.', code: 'DEMO_UNAVAILABLE' }, 404)
   }

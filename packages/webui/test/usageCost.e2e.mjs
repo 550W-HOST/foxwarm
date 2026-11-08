@@ -42,6 +42,14 @@ before(async () => {
       if (address.includes('/api/usage?')) {
         const boundaries = new URL(address, location.href).searchParams.get('boundaries').split(',').map(Number)
         window.usageReads.push(boundaries)
+        // Unavailable usage as seen from older servers, scoped access, network loss or bad bodies.
+        const mode = localStorage.getItem('usageMode')
+        if (mode === 'network') throw new TypeError('Failed to fetch')
+        if (mode === 'missing') return new Response('Not found',{status:404})
+        if (mode === 'forbidden') return new Response(JSON.stringify({error:'Forbidden'}),{status:403,headers:{'Content-Type':'application/json'}})
+        if (mode === 'empty') return new Response('{}',{status:200,headers:{'Content-Type':'application/json'}})
+        if (mode === 'partial') return new Response(JSON.stringify({boundaries:[0,1],total:{requests:1}}),{status:200,headers:{'Content-Type':'application/json'}})
+        if (mode === 'text') return new Response('<!doctype html>',{status:200,headers:{'Content-Type':'text/html'}})
         const total = {requests:3,...counts,unpricedRequests:1,cost:1.25}
         return new Response(JSON.stringify({boundaries,groupBy:null,agent:null,total,buckets:[total],coverage:{earliest:null,complete:true}}),{status:200,headers:{'Content-Type':'application/json'}})
       }
@@ -121,6 +129,31 @@ test('Workbench Total reads the installation ledger for today or this month and 
   assert.deepEqual(await page.evaluate(() => window.openedUsage), ['month'])
   await page.click('#status [aria-label="Current Session token usage"]')
   assert.match(await text('[data-workbench-status-popup]'), /\$0\.00 USD/)
+})
+
+test('An unavailable usage report leaves the status bar without a Total instead of failing it', async () => {
+  const errors = []
+  const listener = error => errors.push(error.message)
+  page.on('pageerror', listener)
+  try {
+    for (const mode of ['missing', 'forbidden', 'network', 'empty', 'partial', 'text']) {
+      await page.goto(url, { waitUntil: 'load' })
+      await page.evaluate(value => localStorage.setItem('usageMode', value), mode)
+      await mount()
+      await page.waitForSelector('#status [data-workbench-status-bar] [aria-label="Running sessions: 0"]')
+      await page.waitForFunction(() => window.usageReads.length > 0)
+      await page.waitForFunction(() => !document.querySelector('#status [aria-label="Total token usage"]'))
+      assert.ok(await page.$('#status [aria-label="Current Session token usage"]'), mode)
+    }
+    // A later successful report brings the Total back.
+    await page.evaluate(() => localStorage.removeItem('usageMode'))
+    await mount()
+    await page.waitForFunction(() => document.querySelector('#status [aria-label="Total token usage"]')?.textContent.endsWith('$1.25'))
+    assert.deepEqual(errors, [])
+  } finally {
+    page.off('pageerror', listener)
+    await page.evaluate(() => localStorage.removeItem('usageMode'))
+  }
 })
 
 test('System keeps global and loaded-window recorded estimates separate', async () => {

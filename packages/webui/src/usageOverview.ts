@@ -142,11 +142,34 @@ export function usageQuery(range: UsageRange, options: { groupBy?: UsageGrouping
   return `${API_BASE_PATH}/usage?${params}`
 }
 
+const count = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value)
+
+function isUsageTotals(value: unknown): value is UsageTotals {
+  return record(value) && count(value.requests) && count(value.cachedTokens) && count(value.inputTokens) && count(value.outputTokens) && count(value.unpricedRequests)
+    && (value.cost === undefined || (typeof value.cost === 'number' && Number.isFinite(value.cost) && value.cost >= 0))
+}
+
+const optionalText = (value: unknown) => value === undefined || typeof value === 'string'
+
+/** Whether a response body is a complete usage report; anything else is treated as unavailable. */
+export function isUsageReport(value: unknown): value is UsageReport {
+  if (!record(value) || !Array.isArray(value.boundaries) || value.boundaries.length < 2 || !value.boundaries.every(item => typeof item === 'number' && Number.isFinite(item))) return false
+  if (!isUsageTotals(value.total) || !Array.isArray(value.buckets) || value.buckets.length !== value.boundaries.length - 1 || !value.buckets.every(isUsageTotals)) return false
+  if (!record(value.coverage) || typeof value.coverage.complete !== 'boolean' || !(value.coverage.earliest === null || value.coverage.earliest === undefined || typeof value.coverage.earliest === 'number')) return false
+  if (value.groups === undefined) return true
+  return Array.isArray(value.groups) && value.groups.every(group => record(group) && (group.key === null || typeof group.key === 'string') && typeof group.kind === 'string'
+    && optionalText(group.label) && optionalText(group.agent) && isUsageTotals(group.usage)
+    && (group.buckets === undefined || (Array.isArray(group.buckets) && group.buckets.every(isUsageTotals))))
+}
+
+/** Loads a report; failed, unreachable or malformed responses reject with a short message. */
 export async function loadUsage(url: string, signal?: AbortSignal): Promise<UsageReport> {
   const response = await fetch(url, { signal })
-  const payload = await response.json().catch(() => ({}))
-  if (!response.ok) throw new Error(payload.error || `Usage request failed (${response.status})`)
-  return payload as UsageReport
+  const payload: unknown = await response.json().catch(() => null)
+  if (!response.ok) throw new Error(record(payload) && typeof payload.error === 'string' && payload.error ? payload.error : `Usage request failed (${response.status})`)
+  if (!isUsageReport(payload)) throw new Error('Usage is unavailable.')
+  return payload
 }
 
 export const usageTokens = (usage: UsageTotals) => usage.cachedTokens + usage.inputTokens + usage.outputTokens

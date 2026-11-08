@@ -8,7 +8,7 @@ globalThis.window = { location: { pathname: '/foxwarm/' } }
 
 const sourcePath = new URL('../src/usageOverview.ts', import.meta.url).pathname
 const bundle = await build({ entryPoints: [sourcePath], bundle: true, platform: 'node', format: 'esm', write: false, logLevel: 'silent' })
-const { usageRange, usageQuery, usageSeries, usageGroupLabel, usageGroupDetail, parseDateInput, msUntilNextDay } =
+const { usageRange, usageQuery, usageSeries, usageGroupLabel, usageGroupDetail, parseDateInput, msUntilNextDay, isUsageReport, loadUsage } =
   await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`)
 
 const local = (...parts) => new Date(...parts).getTime()
@@ -83,4 +83,30 @@ test('group labels name special groups and keep technical keys as detail', () =>
   assert.equal(usageGroupDetail({ key: 'main/x1', kind: 'tree', label: 'Release work', agent: 'main' }), 'main/x1')
   assert.equal(usageGroupLabel({ key: 'main/x1', kind: 'session', agent: 'main' }), 'main/x1')
   assert.equal(usageGroupDetail({ key: 'main/x1', kind: 'session', agent: 'main' }), 'main')
+})
+
+test('only complete usage reports load; failures and malformed bodies reject', async () => {
+  const total = totals(1, 0.5, 3)
+  const report = { boundaries: [0, 1, 2], groupBy: 'agent', agent: null, total, buckets: [total, totals(0)], coverage: { earliest: null, complete: true }, groups: [{ key: 'main', kind: 'agent', usage: total, buckets: [total, totals(0)] }], groupCount: 1 }
+  assert.equal(isUsageReport(report), true)
+  for (const broken of [null, {}, [], { ...report, boundaries: [0] }, { ...report, buckets: [total] }, { ...report, total: { requests: 1 } },
+    { ...report, total: { ...total, cost: 'x' } }, { ...report, coverage: undefined }, { ...report, groups: [{ key: 'main', kind: 'agent' }] }])
+    assert.equal(isUsageReport(broken), false)
+  const original = globalThis.fetch
+  try {
+    globalThis.fetch = async () => new Response(JSON.stringify(report), { status: 200 })
+    assert.deepEqual(await loadUsage('/usage'), report)
+    globalThis.fetch = async () => new Response('{}', { status: 200 })
+    await assert.rejects(loadUsage('/usage'), /Usage is unavailable/)
+    globalThis.fetch = async () => new Response('<!doctype html>', { status: 200 })
+    await assert.rejects(loadUsage('/usage'), /Usage is unavailable/)
+    globalThis.fetch = async () => new Response('Not found', { status: 404 })
+    await assert.rejects(loadUsage('/usage'), /Usage request failed \(404\)/)
+    globalThis.fetch = async () => new Response(JSON.stringify({ error: 'Forbidden' }), { status: 403 })
+    await assert.rejects(loadUsage('/usage'), /Forbidden/)
+    globalThis.fetch = async () => { throw new TypeError('Failed to fetch') }
+    await assert.rejects(loadUsage('/usage'), /Failed to fetch/)
+  } finally {
+    globalThis.fetch = original
+  }
 })

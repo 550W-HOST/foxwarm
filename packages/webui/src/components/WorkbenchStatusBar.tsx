@@ -22,15 +22,20 @@ const storedTotalPeriod = (): TotalPeriod => {
   try { return window.localStorage.getItem(TOTAL_PERIOD_KEY) === 'month' ? 'month' : 'today' } catch { return 'today' }
 }
 
-/** Installation-wide recorded usage for the status bar's chosen period, from the usage ledger. */
+/**
+ * Installation-wide recorded usage for the status bar's chosen period, from the usage ledger.
+ * `unavailable` is set when the report cannot be loaded (an older server, no access, a network
+ * failure or an unreadable response), so the status bar can leave the Total out.
+ */
 function useInstallationTotal(period: TotalPeriod) {
   const day = useLocalDay()
   const range = useMemo(() => {
     const buckets = usageRange(period, new Date())!
     return { unit: buckets.unit, boundaries: [buckets.boundaries[0], buckets.boundaries[buckets.boundaries.length - 1]] }
   }, [period, day])
-  const { report } = useUsageReport(usageQuery(range))
-  return report && report.boundaries.join() === range.boundaries.join() ? report.total : null
+  const { report, error } = useUsageReport(usageQuery(range))
+  const total = report && report.boundaries.join() === range.boundaries.join() ? report.total : null
+  return { total, unavailable: !total && !!error }
 }
 function validCount(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
@@ -58,9 +63,10 @@ export default function WorkbenchStatusBar({ running, sessions, nodes, currentSe
     setTotalPeriodState(period)
     try { window.localStorage.setItem(TOTAL_PERIOD_KEY, period) } catch {}
   }
-  const total = useInstallationTotal(totalPeriod)
+  const { total, unavailable: totalUnavailable } = useInstallationTotal(totalPeriod)
   const totalUsage: TokenUsage | undefined = total ? { cachedTokens: total.cachedTokens, inputTokens: total.inputTokens, outputTokens: total.outputTokens, ...(total.cost !== undefined ? { cost: total.cost } : {}) } : undefined
   const totalPeriodLabel = TOTAL_PERIODS.find(item => item.id === totalPeriod)!.label
+  useEffect(() => { if (totalUnavailable) setOpen(current => current === 'total-usage' ? null : current) }, [totalUnavailable])
 
   useEffect(() => {
     let controller: AbortController | null = null
@@ -178,7 +184,7 @@ export default function WorkbenchStatusBar({ running, sessions, nodes, currentSe
         {tasks && <button {...itemProps('tasks', `Tasks: ${tasks.active} active, ${tasks.open} open`)}><ClipboardList aria-hidden="true" /><span>Tasks</span><span data-status-task-counts>{tasks.active} active · {tasks.open} open</span></button>}
       </div>
       <div className="foxwarm-status-usage-group flex h-full items-center gap-0.5">
-        <button {...itemProps('total-usage', 'Total token usage')} title={`Total token usage · ${totalPeriodLabel.toLowerCase()}${totalUsage?.cost !== undefined ? ` · ${formatUsdCost(totalUsage.cost)}` : ''}`}><ChartPie aria-hidden="true" /><span data-status-usage-label>{totalPeriodLabel}</span><span>{totalUsage?.cost !== undefined ? formatUsdCostCompact(totalUsage.cost) : usageValue(totalUsage)}</span></button>
+        {!totalUnavailable && <button {...itemProps('total-usage', 'Total token usage')} title={`Total token usage · ${totalPeriodLabel.toLowerCase()}${totalUsage?.cost !== undefined ? ` · ${formatUsdCost(totalUsage.cost)}` : ''}`}><ChartPie aria-hidden="true" /><span data-status-usage-label>{totalPeriodLabel}</span><span>{totalUsage?.cost !== undefined ? formatUsdCostCompact(totalUsage.cost) : usageValue(totalUsage)}</span></button>}
         {currentSessionId && <button {...itemProps('session-usage', 'Current Session token usage')}><ChartPie aria-hidden="true" /><span>Session</span><span>{usageValue(currentSession?.tokenUsage)}</span></button>}
         <button {...itemProps('nodes', `Nodes: ${onlineNodes} online, ${nodes.length} total`)}><Server aria-hidden="true" /><span>Nodes</span><span>{onlineNodes}/{nodes.length}</span></button>
       </div>
