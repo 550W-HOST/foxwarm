@@ -66,6 +66,10 @@ internal static class ObservationToolDefinitions
                         "current-agent",
                         "all"
                     ),
+                    ["query"] = Field(
+                        "string",
+                        "Keyword for list. Keeps sessions whose ID, alias, display name, Agent, Node, working directory or model contains this text, ignoring case. Applied before start and count."
+                    ),
                     ["sessionId"] = Field(
                         "string",
                         "Target for status, update-display-name, or update-parent. Defaults to this session."

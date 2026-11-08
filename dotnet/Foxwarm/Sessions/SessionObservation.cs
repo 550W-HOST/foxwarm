@@ -232,7 +232,7 @@ internal sealed partial class SessionManager
         }
         Keys(
             args,
-            ["action", "start", "count", "scope", "sessionId", "name", "parentSessionId"],
+            ["action", "start", "count", "scope", "query", "sessionId", "name", "parentSessionId"],
             []
         );
         var action =
@@ -308,19 +308,23 @@ internal sealed partial class SessionManager
                 Math.Clamp(Math.Truncate(OptionalNumber(args, "start") ?? 0), 0, int.MaxValue);
             var count = (int)
                 Math.Clamp(Math.Truncate(OptionalNumber(args, "count") ?? 20), 0, 1000);
-            var (total, page) = CatalogMetadataOffset(start, count, agent);
+            var query = ListQuery(args);
+            var (total, page) = query is null
+                ? CatalogMetadataOffset(start, count, agent)
+                : SearchMetadata(query, start, count, agent);
             start = (int)Math.Min(start, total);
+            var matching = query is null ? "" : $" matching `{query}`";
             if (total == 0)
-                return Output("No sessions found.");
+                return Output($"No sessions found{matching}.");
             if (page.Length == 0)
                 return Output(
-                    $"No sessions found in the requested range. Total sessions: {total}."
+                    $"No sessions found in the requested range. Total sessions{matching}: {total}."
                 );
             var parent = source.Metadata().ParentSessionId;
             return Output(
                 $"Current session: `{source.Id}`\n"
                     + (parent is null ? "" : $"Parent session: `{parent}`\n")
-                    + $"\nFound {total} session(s). Showing {start + 1}-{start + page.Length}."
+                    + $"\nFound {total} session(s){matching}. Showing {start + 1}-{start + page.Length}."
                     + (
                         start + page.Length < total
                             ? $" Use `start: {start + page.Length}` to see the next page."
@@ -474,6 +478,37 @@ internal sealed partial class SessionManager
             )
             .ToArray();
         return (total, candidates.Skip(Math.Max(0, start - unchangedBefore)).Take(count).ToArray());
+    }
+
+    private static string? ListQuery(JsonObject args)
+    {
+        if (!args.ContainsKey("query"))
+            return null;
+        var query = SessionWait.Text(args["query"]) is string raw ? SessionCatalog.Trim(raw) : null;
+        if (query is null || query.Length is < 1 or > 256)
+            throw new InvalidDataException("session.query must contain 1 to 256 characters.");
+        return query;
+    }
+
+    // Keyword list uses the same metadata candidate scan as WebUI search, then applies the
+    // ordinary list order and offset to the matches.
+    private (long Total, JsonObject[] Page) SearchMetadata(
+        string query,
+        int start,
+        int count,
+        string? agent
+    )
+    {
+        var matches = ListPresentations()
+            .Where(row => agent is null || SessionCatalog.Text(row["agent"]) == agent)
+            .Where(SessionListQueries.MetadataMatcher(query))
+            .OrderByDescending(row => SessionWait.Number(row["lastMessageTime"]) ?? 0)
+            .ThenBy(
+                row => SessionWait.Text(row["id"])!,
+                Comparer<string>.Create(SessionListQueries.CompareIds)
+            )
+            .ToArray();
+        return (matches.Length, matches.Skip(start).Take(count).ToArray());
     }
 
     private static double? OptionalNumber(JsonObject args, string name)
