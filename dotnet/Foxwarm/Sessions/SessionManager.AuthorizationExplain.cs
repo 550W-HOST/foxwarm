@@ -114,7 +114,17 @@ internal sealed partial class SessionManager
         {
             if (string.IsNullOrWhiteSpace(requested))
                 throw new InvalidDataException("Each probe requires sessionId.");
-            var target = await GetExistingAsync(requested.Trim(), token);
+            var reference = requested.Trim();
+            var self = IsCurrentSessionReference(caller, reference);
+            SessionOwner? target;
+            try
+            {
+                target = await GetExistingAsync(reference, token);
+            }
+            catch (Exception error) when (!self && error is not OperationCanceledException)
+            {
+                target = null;
+            }
             if (target is not null && target.Id != caller.Id)
                 try
                 {
@@ -124,14 +134,16 @@ internal sealed partial class SessionManager
                             "view_session",
                             "builtin",
                             "view_session",
-                            new JsonObject { ["sessionId"] = requested.Trim() }
+                            new JsonObject { ["sessionId"] = reference }
                         ),
                         null,
                         token,
                         target
                     );
                 }
-                catch (ToolAuthorizationDeniedException)
+                catch (Exception error)
+                    when (error is not OperationCanceledException
+                        && error is not ToolAuthorizationUnavailableException)
                 {
                     target = null;
                 }

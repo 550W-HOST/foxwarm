@@ -170,6 +170,90 @@ public sealed partial class ToolAuthorizationEffectsTests
     }
 
     [Fact]
+    public async Task Explain_hides_unavailable_foreign_session_in_all_policy_modes()
+    {
+        using var temp = new TempDirectory();
+        await Seed(temp.Path);
+        await using var manager = Manager(temp.Path);
+        await manager.LoadAsync();
+        var caller = await manager.RequiredAsync("opaque");
+        _ = await manager.RequiredAsync("foreign");
+        var execution = Executor(manager, caller, temp.Path);
+        await using var mcp = execution.Mcp;
+        await Policy(
+            manager,
+            "version: 1\nrules: [{id: no-view, tool: {source: builtin, name: view_session}, action: deny}]"
+        );
+        await File.WriteAllTextAsync(
+            Path.Combine(temp.Path, "workspace", "agents", "alpha", "candidate.yaml"),
+            "version: 1\n"
+        );
+        manager.BeforeDeleteStage = (stage, id) =>
+            stage == "json-unlink" && id == "foreign"
+                ? throw new IOException("synthetic deletion failure")
+                : Task.CompletedTask;
+        await Assert.ThrowsAsync<SessionDeletionException>(() => manager.DeleteAsync("foreign"));
+
+        foreach (var mode in new[] { "active", "candidate", "compare" })
+        {
+            var args = Obj(
+                """{"probes":[{"sessionId":"foreign","toolId":"builtin:wait"},{"sessionId":"missing","toolId":"builtin:wait"}]}"""
+            );
+            if (mode != "active")
+                args["policyFilePath"] = "candidate.yaml";
+            if (mode == "compare")
+                args["compare"] = true;
+            var result = await Explain(execution.Tools, args);
+            var probes = result["probes"]!.AsArray();
+            Assert.Equal(
+                "Session not found or unavailable.",
+                probes[0]!["error"]!.GetValue<string>()
+            );
+            Assert.Equal(
+                probes[0]!["error"]!.GetValue<string>(),
+                probes[1]!["error"]!.GetValue<string>()
+            );
+            Assert.Null(probes[0]!["active"]);
+            Assert.Null(probes[0]!["candidate"]);
+        }
+    }
+
+    [Fact]
+    public async Task Explain_hides_cold_session_admission_failure()
+    {
+        using var temp = new TempDirectory();
+        await Seed(temp.Path);
+        await using var manager = Manager(temp.Path);
+        await manager.LoadAsync();
+        var caller = await manager.RequiredAsync("opaque");
+        var execution = Executor(manager, caller, temp.Path);
+        await using var mcp = execution.Mcp;
+        await Policy(
+            manager,
+            "version: 1\nrules: [{id: no-view, tool: {source: builtin, name: view_session}, action: deny}]"
+        );
+        manager.BeforeAdmissionRead = (id, _) =>
+            id == "foreign"
+                ? throw new InvalidDataException("synthetic admission detail")
+                : Task.CompletedTask;
+        var result = await Explain(
+            execution.Tools,
+            Obj(
+                """{"probes":[{"sessionId":"foreign","toolId":"builtin:wait"},{"sessionId":"missing","toolId":"builtin:wait"}]}"""
+            )
+        );
+        var probes = result["probes"]!.AsArray();
+        Assert.Equal(
+            "Session not found or unavailable.",
+            probes[0]!["error"]!.GetValue<string>()
+        );
+        Assert.Equal(
+            probes[0]!["error"]!.GetValue<string>(),
+            probes[1]!["error"]!.GetValue<string>()
+        );
+    }
+
+    [Fact]
     public async Task Explain_compare_evaluates_candidate_per_probe_and_diffs_rule_ids()
     {
         using var temp = new TempDirectory();
