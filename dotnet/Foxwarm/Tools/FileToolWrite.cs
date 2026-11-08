@@ -59,7 +59,7 @@ internal static class FileToolWrite
         );
     }
 
-    private static async Task<bool> WriteStreamAtomic(
+    internal static async Task<bool> WriteStreamAtomic(
         string destination,
         bool overwrite,
         Action validatePath,

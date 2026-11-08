@@ -80,15 +80,7 @@ internal sealed partial class SessionManager
         }
         else
         {
-            var file = await ReadNodeFileAsync(owner, node, raw, files, token);
-            await WaitForIdentityMutationAsync(owner.Id, token);
-            await AuthorizeToolAsync(
-                owner,
-                new("send_file", "builtin", "send_file", args, ExecutionNode: node),
-                IdentityWorkspace(owner),
-                token
-            );
-            CheckFileDestinations(owner, target, direct, bindings);
+            await using var file = await OpenNodeReadAsync(owner, node, raw, files, token);
             mimeType = file.MimeType;
             name = Foxwarm.Nodes.NodeConnectionHub.RemoteFileName(file.Name);
             if (string.IsNullOrWhiteSpace(name) || name is "." or "..")
@@ -101,7 +93,24 @@ internal sealed partial class SessionManager
             );
             Directory.CreateDirectory(directory);
             path = Path.Combine(directory, name);
-            await File.WriteAllBytesAsync(path, file.Bytes, token);
+            try
+            {
+                await using (var staging = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, FileOptions.Asynchronous))
+                    await Foxwarm.Nodes.TransferStream.CopyAsync(file.Stream, staging, file.Length, token);
+                await WaitForIdentityMutationAsync(owner.Id, token);
+                await AuthorizeToolAsync(
+                    owner,
+                    new("send_file", "builtin", "send_file", args, ExecutionNode: node),
+                    IdentityWorkspace(owner),
+                    token
+                );
+                CheckFileDestinations(owner, target, direct, bindings);
+            }
+            catch
+            {
+                Directory.Delete(directory, recursive: true);
+                throw;
+            }
         }
         var artifact = FileDeliveryArtifact.Create(
             target is null ? "channel" : "session",
@@ -504,14 +513,14 @@ internal sealed partial class SessionManager
     private static JsonObject? FindOwnedImage(IEnumerable<JsonObject> messages, string id)
     {
         foreach (var message in messages)
-        foreach (var part in (message["parts"] as JsonArray ?? []).OfType<JsonObject>())
-            if (
-                (
-                    SessionWait.Text(part["imageMeta"]?["imageId"])
-                    ?? SessionWait.Text(part["inlineDataRef"]?["imageId"])
-                ) == id
-            )
-                return part;
+            foreach (var part in (message["parts"] as JsonArray ?? []).OfType<JsonObject>())
+                if (
+                    (
+                        SessionWait.Text(part["imageMeta"]?["imageId"])
+                        ?? SessionWait.Text(part["inlineDataRef"]?["imageId"])
+                    ) == id
+                )
+                    return part;
         return null;
     }
 }
