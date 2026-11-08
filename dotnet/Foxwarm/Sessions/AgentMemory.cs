@@ -128,7 +128,6 @@ internal sealed partial class AgentMemory(
                     .Append("</source></skill>\n");
             blocks.Append("</available_skills>\n");
         }
-        AppendModelCatalog(blocks, concreteModelId);
         var directory = $"--- DIRECTORIES ---\n- agent_folder: {agents.AgentDirectory(agentName)}";
         var bodyText = blocks.ToString().Trim();
         if (externalRuntime)
@@ -144,39 +143,6 @@ internal sealed partial class AgentMemory(
             $"Memory warning: Agent={agentName} Session={sessionId} bytes={size.Bytes} estimatedTokens={size.EstimatedTokens} contextPercent={MemorySize.Percent(size.ContextFraction!.Value)} thresholdPercent={MemorySize.Percent(size.ThresholdFraction)}"
         );
         return snapshot + "\n\n" + size.Notice();
-    }
-
-    private void AppendModelCatalog(StringBuilder blocks, string concreteModelId)
-    {
-        var configured = models?.Capture();
-        if (configured is null || configured.Catalog.Count == 0)
-            return;
-        blocks.Append(
-            "\n\nThe user recommends these models for new Sessions. When a task fits one's description, pass its key in the `model` parameter of `create_child_session` or `create_session`:\n<available_models>\n"
-        );
-        foreach (var entry in configured.Catalog)
-        {
-            var current = configured
-                .ReachableLeaves(entry.Key)
-                .Any(leaf => leaf.Key == concreteModelId);
-            blocks.Append(current ? "  <model current=\"true\"><key>" : "  <model><key>");
-            blocks
-                .Append(Xml(entry.Key))
-                .Append("</key><description>")
-                .Append(Xml(entry.Description))
-                .Append("</description>");
-            if (configured.SharedPrice(entry.Key) is { } price)
-                blocks
-                    .Append("<price cached=\"")
-                    .Append(HostModels.FormatRate(price.Cached))
-                    .Append("\" input=\"")
-                    .Append(HostModels.FormatRate(price.Input))
-                    .Append("\" output=\"")
-                    .Append(HostModels.FormatRate(price.Output))
-                    .Append("\" unit=\"USD per 1M tokens\"/>");
-            blocks.Append("</model>\n");
-        }
-        blocks.Append("</available_models>\n");
     }
 
     private static string Xml(string value) =>

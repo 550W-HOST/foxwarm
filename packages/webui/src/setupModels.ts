@@ -1,5 +1,4 @@
 import { isAlias, isMap, isScalar, isSeq, parseDocument, visit } from 'yaml'
-import { readModelCatalog, type ModelCatalogRow } from './modelCatalog'
 
 /**
  * Structured first-provider model setup.
@@ -60,8 +59,6 @@ export type ModelSetupForm = {
   models: ModelSetupModel[]
   /** Model ID within this provider, without the provider prefix. */
   defaultModel: string
-  /** Advisory model recommendations, kept in step with the model list. */
-  catalog?: ModelCatalogRow[]
 }
 
 export type ModelSetupReading =
@@ -164,14 +161,10 @@ export function buildModelSetupYaml(form: ModelSetupForm): string {
       if (model.imageInput !== undefined) lines.push(`        imageInput: ${model.imageInput}`)
     }
   }
-  if (form.catalog && form.catalog.length > 0) {
-    lines.push('catalog:')
-    for (const row of form.catalog) lines.push(`  ${quote(row.key)}: ${quote(row.description)}`)
-  }
   return `${lines.join('\n')}\n`
 }
 
-const ROOT_KEYS = new Set(['default', 'providers', 'catalog'])
+const ROOT_KEYS = new Set(['default', 'providers'])
 const PROVIDER_KEYS = new Set(['providerType', 'baseUrl', 'apiKey', 'models'])
 const MODEL_KEYS = new Set(['id', 'contextLimit', 'maxOutput', 'imageInput'])
 
@@ -267,23 +260,9 @@ export function readModelSetupForm(text: string): ModelSetupReading {
     defaultModel = rawDefault.slice(providerId.length + 1)
   }
   if (hasPresentationData(doc)) return { ok: false, reason: 'unsupported' }
-  const catalog = readModelCatalog(text)
-  if (!catalog.ok) return { ok: false, reason: 'unsupported' }
-  const form: ModelSetupForm = {
-    providerId,
-    providerType: providerType as ModelProviderType,
-    baseUrl,
-    apiKey,
-    models: formModels as ModelSetupModel[],
-    defaultModel,
-    ...(catalog.rows.length > 0 ? { catalog: catalog.rows } : {}),
-  }
+  const form: ModelSetupForm = { providerId, providerType: providerType as ModelProviderType, baseUrl, apiKey, models: formModels as ModelSetupModel[], defaultModel }
   // Final guard: writing the form back must produce the same configuration values.
-  const expected = {
-    default: rawDefault,
-    providers: { [providerId]: { providerType, baseUrl, apiKey, models } },
-    ...(catalog.rows.length > 0 ? { catalog: Object.fromEntries(catalog.rows.map((row) => [row.key, row.description])) } : {}),
-  }
+  const expected = { default: rawDefault, providers: { [providerId]: { providerType, baseUrl, apiKey, models } } }
   if (!sameValue(parseDocument(buildModelSetupYaml(form)).toJS(), expected)) return { ok: false, reason: 'unsupported' }
   return { ok: true, form }
 }
@@ -312,21 +291,7 @@ export function addModel(form: ModelSetupForm, model: string, listed: readonly L
 
 export function removeModel(form: ModelSetupForm, model: string): ModelSetupForm {
   const models = form.models.filter((item) => item.id !== model)
-  const catalog = form.catalog?.filter((row) => row.key !== `${form.providerId}/${model}`)
-  return {
-    ...form,
-    models,
-    defaultModel: form.defaultModel === model ? models[0]?.id || '' : form.defaultModel,
-    ...(catalog && catalog.length > 0 ? { catalog } : { catalog: undefined }),
-  }
-}
-
-/** Keeps recommendations attached to their models when the provider is renamed. */
-export function renameCatalogProvider(rows: readonly ModelCatalogRow[] | undefined, from: string, to: string): ModelCatalogRow[] | undefined {
-  if (!rows || from === to) return rows ? [...rows] : undefined
-  return rows.map((row) => row.key === from ? { ...row, key: to }
-    : row.key.startsWith(`${from}/`) ? { ...row, key: `${to}/${row.key.slice(from.length + 1)}` }
-      : row)
+  return { ...form, models, defaultModel: form.defaultModel === model ? models[0]?.id || '' : form.defaultModel }
 }
 
 /** Reads `/setup/models/list` entries, keeping only well-formed declared metadata. */
@@ -387,12 +352,6 @@ export function validateModelSetupForm(form: ModelSetupForm): string | null {
   if (!form.apiKey.trim() && requiresApiKey(form.baseUrl)) return 'Enter your API key.'
   if (form.models.length === 0) return 'Add at least one model.'
   if (!modelIds(form).includes(form.defaultModel)) return 'Choose a default model.'
-  const available = new Set(form.models.map((model) => `${form.providerId}/${model.id}`))
-  if (form.models.length <= 1) available.add(form.providerId)
-  for (const row of form.catalog || []) {
-    if (!available.has(row.key)) return `The recommendation for ${row.key} refers to a model that is no longer configured. Remove it or choose another model.`
-    if (!row.description.trim()) return `Add a description for the ${row.key} recommendation.`
-  }
   return null
 }
 

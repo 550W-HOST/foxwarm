@@ -38,7 +38,7 @@ internal sealed partial class SessionManager
         {
             var id = SessionWait.Text(idNode);
             if (id is null || !models.Contains(id))
-                throw new InvalidDataException(UnknownSuggestedModelMessage());
+                throw new InvalidDataException("Unknown configured model key in model.");
             suggestedModel = id;
         }
         if (suggested?["effort"] is JsonNode effortNode)
@@ -82,16 +82,6 @@ internal sealed partial class SessionManager
             modelSource,
             effortSource
         );
-    }
-
-    private string UnknownSuggestedModelMessage()
-    {
-        var catalog = models.Capture().Catalog;
-        return catalog.Count == 0
-            ? "Unknown configured model key in model."
-            : "Unknown configured model key in model. Available models: "
-                + string.Join(", ", catalog.Select(entry => entry.Key))
-                + ".";
     }
 
     /// <summary>

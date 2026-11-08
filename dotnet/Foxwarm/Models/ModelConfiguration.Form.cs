@@ -168,57 +168,10 @@ internal sealed partial class ModelConfiguration
         );
         existing["default"] = selectedDefault.Length > 0 ? selectedDefault : fallback;
         existing[rootKey] = next;
-        ApplyCatalog(existing, input);
         // JSON is YAML 1.2; raw mode is never regenerated through this form writer.
         return existing.ToJsonString(
                 new System.Text.Json.JsonSerializerOptions { WriteIndented = true }
             ) + "\n";
-    }
-
-    /// <summary>
-    /// A structured save replaces the catalog when it submits one and otherwise keeps the stored
-    /// one. Either way, entries whose key no longer resolves in the saved providers (removed,
-    /// renamed or converted) are dropped, so the saved document never has dangling catalog keys,
-    /// as with the default model falling back when its provider is gone.
-    /// </summary>
-    private void ApplyCatalog(JsonObject document, JsonObject input)
-    {
-        JsonObject? source;
-        if (input.ContainsKey("catalog"))
-        {
-            source = new JsonObject();
-            var submitted = input["catalog"];
-            if (submitted is JsonArray rows)
-                foreach (var row in rows)
-                {
-                    var item =
-                        row as JsonObject
-                        ?? throw new InvalidDataException("Catalog rows must be objects.");
-                    var key = JsString(item["key"]).Trim();
-                    if (source.ContainsKey(key))
-                        throw new InvalidDataException("Catalog keys must be unique.");
-                    source[key] = item["description"]?.DeepClone();
-                }
-            else if (submitted is JsonObject map)
-                source = (JsonObject)map.DeepClone();
-            else if (submitted is not null)
-                throw new InvalidDataException(
-                    "Catalog must be a list of key and description rows."
-                );
-        }
-        else
-            source = document["catalog"] as JsonObject;
-        if (source is null)
-            return;
-        var selectable = HostModels.SelectableKeys(document, app);
-        var kept = new JsonObject();
-        foreach (var (key, value) in source)
-            if (selectable.Contains(key))
-                kept[key] = value?.DeepClone();
-        if (kept.Count == 0)
-            document.Remove("catalog");
-        else
-            document["catalog"] = kept;
     }
 
     private static JsonArray NormalizeProviderDrafts(JsonObject input)

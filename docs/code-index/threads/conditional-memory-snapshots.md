@@ -22,24 +22,9 @@ Tool catalogs remain independent of memory snapshots. The [canonical default dec
 
 - [src-conditional-memory](../units/src-conditional-memory.md) owns the pure conditional grammar and current-model header format.
 - [Session prompt state](../units/src-session-prompt.md) applies conditional filtering independently to each selected source body before adding provenance wrappers. The framework base (bundled template or retained edited replacement) and the installation addition remain raw-content sources, so frontmatter-looking bytes stay model-visible; ordinary inherited, current-agent, and configured custom memory files retain Session frontmatter parsing before conditional filtering.
-- Skill catalog text, the model catalog, generated directory/recall guidance, tool instructions, and chat history are not scanned for conditional blocks.
+- Skill catalog text, generated directory/recall guidance, tool instructions, and chat history are not scanned for conditional blocks.
 - Each body is also filtered for the Session runtime (`foxwarm` or `claude-code`); the [condition grammar](../units/conditional-memory.md#grammar) owns attribute and list semantics. Claude Code snapshots omit the model marker and use the CLI-reported model name.
 - A materialized snapshot always starts with the exact canonical concrete model identity. Snapshot construction does not select a virtual route.
-
-### D-memory-model-catalog
-
-[2026-11-08, directly selected] A nonempty [model catalog](../units/model-configuration.md#d-model-catalog) is rendered in the memory-backed snapshot at the same layer as the skills catalog (`AgentMemory.AppendModelCatalog`), after the skills catalog and before the directory guidance, and not at all when the catalog is empty. It is deliberately not in tool declarations: the snapshot is the stable request prefix, and tool declarations stay independent of configuration. Entries keep catalog order; key and description are XML-escaped as the skills catalog does. The block is:
-
-```
-The user recommends these models for new Sessions. When a task fits one's description, pass its key in the `model` parameter of `create_child_session` or `create_session`:
-<available_models>
-  <model><key>KEY</key><description>DESCRIPTION</description><price cached="C" input="I" output="O" unit="USD per 1M tokens"/></model>
-</available_models>
-```
-
-- `<price/>` appears only when every concrete leaf reachable from the key has identical, complete configured `pricing`; otherwise it is omitted rather than averaged or guessed. Rates are written with invariant-culture shortest round-trip formatting.
-- `current="true"` is added on `<model>` when the key's reachable concrete leaves include the snapshot's canonical concrete model identity, so a Session can see which recommendation it already runs on.
-- Catalog edits reach a Session at its next ordinary snapshot rebuild, like memory edits. Configuration publication does not rebuild all Sessions' snapshots, and no such rebuild was added; the lifecycle refreshes below are the only paths.
 
 ## Actual request boundary
 

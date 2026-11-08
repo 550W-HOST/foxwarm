@@ -11,7 +11,6 @@
     "test:markdown": "node --test test/markdownRenderer.test.mjs",
     "test:mermaid-policy": "node --test test/mermaidPolicy.test.mjs",
     "test:setup-models": "node --test test/setupModels.test.mjs",
-    "test:model-catalog": "node --test test/modelCatalog.test.mjs",
     "test:config-editor": "node --test test/configEditor.test.mjs",
     "test:model-options": "node --test test/modelOptionsLoader.test.mjs",
     "test:image-input": "node --test test/imageInputSupport.test.mjs",

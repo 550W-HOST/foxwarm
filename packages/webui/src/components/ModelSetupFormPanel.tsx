@@ -14,7 +14,6 @@ import {
   providerConnection,
   readListedModels,
   removeModel,
-  renameCatalogProvider,
   requiresApiKey,
   type ListedModel,
   type ModelProviderType,
@@ -92,11 +91,7 @@ export default function ModelSetupFormPanel({ form, onChange, focusRequest = 0 }
 
   const update = (patch: Partial<ModelSetupForm>) => {
     setTestFeedback(null)
-    onChange({
-      ...form,
-      ...patch,
-      ...(patch.providerId !== undefined && form.catalog ? { catalog: renameCatalogProvider(form.catalog, form.providerId, patch.providerId) } : {}),
-    })
+    onChange({ ...form, ...patch })
   }
 
   const loadModels = async () => {

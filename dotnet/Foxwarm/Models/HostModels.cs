@@ -348,7 +348,6 @@ internal sealed partial class HostModels
         var compatibility = ModelHistoryCompatibility.Build(models);
         foreach (var key in models.Keys.ToArray())
             models[key] = models[key] with { HistoryCompatibility = compatibility };
-        var catalogEntries = ParseCatalog(root, models);
         var ordered = source
             .SelectMany(provider => display.Where(key => models[key].ProviderKey == provider.Key))
             .ToArray();
@@ -361,7 +360,6 @@ internal sealed partial class HostModels
         {
             HandoffConfirmationEnabled = Foxwarm.Tools.HandoffConfirmation.Enabled(app),
             defaultRetryIntervals = ReadRetryIntervals(defaults),
-            catalogEntries = catalogEntries,
             PresentationContextLimit = PositiveSetting(
                 llm["contextLimit"],
                 200000,

@@ -16,7 +16,7 @@ public sealed class CreationModelParameterTests
             ),
         };
 
-    private static async Task ConfigureAsync(ExternalChannelFixture f, JsonObject? catalog)
+    private static async Task ConfigureAsync(ExternalChannelFixture f)
     {
         var root = new JsonObject
         {
@@ -38,8 +38,6 @@ public sealed class CreationModelParameterTests
                 },
             },
         };
-        if (catalog is not null)
-            root["catalog"] = catalog;
         await File.WriteAllTextAsync(
             Path.Combine(f.Data, "state", "models.yaml"),
             root.ToJsonString()
@@ -128,7 +126,7 @@ public sealed class CreationModelParameterTests
     {
         await using var f = await ExternalChannelFixture.CreateAsync();
         SessionCreationParityTests.RegisterAgentTools(f);
-        await ConfigureAsync(f, null);
+        await ConfigureAsync(f);
 
         // No child settings: model sits above the source's own selection.
         await SetSourceAsync(f, "strong/b", "low");
@@ -230,7 +228,7 @@ public sealed class CreationModelParameterTests
     {
         await using var f = await ExternalChannelFixture.CreateAsync();
         SessionCreationParityTests.RegisterAgentTools(f);
-        await ConfigureAsync(f, null);
+        await ConfigureAsync(f);
         await SetSourceAsync(f, "strong/b", "low");
 
         // An effort the selected model does not allow is rejected when the model applies...
@@ -259,40 +257,12 @@ public sealed class CreationModelParameterTests
         );
     }
 
-    [Theory]
-    [MemberData(nameof(Tools))]
-    public async Task Unknown_model_error_lists_catalog_keys_only_when_a_catalog_exists(string tool)
-    {
-        await using var f = await ExternalChannelFixture.CreateAsync();
-        SessionCreationParityTests.RegisterAgentTools(f);
-        await ConfigureAsync(f, null);
-        var bare = await Assert.ThrowsAsync<InvalidDataException>(() =>
-            CreateAsync(f, tool, new JsonObject { ["model"] = Model("missing/key") })
-        );
-        Assert.DoesNotContain("Available models", bare.Message);
-        await ConfigureAsync(
-            f,
-            new JsonObject { ["strong/a"] = "Deep work", ["fast"] = "Exploration" }
-        );
-        var listed = await Assert.ThrowsAsync<InvalidDataException>(() =>
-            CreateAsync(f, tool, new JsonObject { ["model"] = Model("missing/key") })
-        );
-        Assert.Contains("strong/a, fast", listed.Message);
-        // The catalog is advisory: uncataloged keys remain selectable.
-        var uncataloged = await CreateAsync(
-            f,
-            tool,
-            new JsonObject { ["model"] = Model("strong/b") }
-        );
-        Assert.Equal("strong/b", uncataloged.Model);
-    }
-
     [Fact]
     public async Task Claude_Code_Sessions_ignore_model_but_still_reject_unknown_keys()
     {
         await using var f = await ExternalChannelFixture.CreateAsync();
         SessionCreationParityTests.RegisterAgentTools(f);
-        await ConfigureAsync(f, null);
+        await ConfigureAsync(f);
         var response = await f.ToolAsync(
             "create_session",
             new JsonObject
