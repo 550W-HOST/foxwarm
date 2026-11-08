@@ -31,7 +31,7 @@ The redactor masks the store's current values and values retired within 90 days,
 - URL fields count only user info and query values under credential-like parameter names.
 - MCP `env` entries count only under credential-like variable names.
 - MCP `args` count only in credential-shaped forms: `Name: value` with a credential-like name, `--name=value`, or `--name value` where the option name is credential-like.
-- Access identity tokens, the instance token, the Node event capability secret, the Node pairing token and MCP OAuth tokens also feed the redactor without entering the store.
+- Access identity tokens (including webhook verification secrets), the instance token, the Node event capability secret, the Node pairing token and MCP OAuth tokens also feed the redactor without entering the store. Access identity tokens are inbound credentials, not sinks: a reference there is a validation error.
 
 Values shorter than 12 characters are neither masked nor treated as known anywhere, including the master `exec` environment drop.
 
@@ -42,7 +42,7 @@ Matches become `[[FW_SECRET:<label>]]`, where the label is the secret name or a 
 | Point | Owner | Coverage |
 | --- | --- | --- |
 | R1 tool results | `ToolRegistry.ExecuteAsync`, after dispatch and before programmatic/output-guard handling | Builtin, MCP, Node, Provider and ToolScript-nested results. |
-| R2 Session state | `SessionSaveLane`: queue admission (message, parts and open fields), question-record mutations, and `RedactStagedHistory` for every lane commit that stages new or replaced history rows | Canonical appends of every origin, the retry notice, compaction and pruning. Rows absent from the pre-operation history are masked once outside the state gate; the same masked rows are persisted, published to hot state, written to the Archive and announced. History writers do not mask individually. |
+| R2 Session state | `SessionSaveLane`: queue admission (message, parts and open fields; external input is framed and neutralized by its producer first, so masking always sees the neutralized text), question-record mutations, and `RedactStagedHistory` for every lane commit that stages new or replaced history rows | Canonical appends of every origin, the retry notice, compaction and pruning. Rows absent from the pre-operation history are masked once outside the state gate; the same masked rows are persisted, published to hot state, written to the Archive and announced. History writers do not mask individually. |
 | R3 model requests | `ModelRequestOwner`, stage S after request defaults and before the journal manifest and `PrepareRequest` | Instructions, tool definitions and history copies; the Claude runtime prompt file and stdin input; in-process embedding input. |
 | R4 logs | `MainLog` capture | Each write is masked before the console sees it, and each complete file line is masked again. |
 
@@ -51,7 +51,7 @@ Reasoning is never rewritten: thinking parts, provider reasoning metadata and le
 ## Model-facing restrictions
 
 - Writer tools (`write`, `edit`, `apply_patch`, `write_memory`, `edit_memory`, `apply_patch_memory`, `mcp_config`) and `set_config` candidates reject a marker whose label belongs to a currently masked value, because writing it back would replace the real value. Text that only mentions the marker format stays writable.
-- Until tool policy can grant secret use explicitly, `set_config` cannot change a provider, channel, `llm` or `asrService` entry that references a secret (before or after the change, including a provider that inherits a referenced legacy key). It also cannot change `llm.openaiBaseUrl` or `llm.anthropicBaseUrl` while a secret-using provider of that family has no own `baseUrl`, since its requests and secret would follow the new URL.
+- Until tool policy can grant secret use explicitly, `set_config` cannot change a provider, channel, `llm` or `asrService` entry that references a secret (before or after the change, including a provider that inherits a referenced legacy key). It also cannot change `llm.openaiBaseUrl` or `llm.anthropicBaseUrl` while a secret-using provider of that family has no own `baseUrl`, since its requests and secret would follow the new URL. These checks run on the candidate before the installer's independent webhook-identity check; either one refuses the whole candidate.
 - `mcp_config` cannot add references or change a referencing server beyond `enable`, `description` and `timeoutSeconds`. It still accepts literal credentials, which become redactor sources.
 - Master `exec` drops inherited environment variables whose value exactly equals a known value.
 - `node_bootstrap_info` writes the pairing token to a new owner-only file and returns `PAIRING_TOKEN` in its place.

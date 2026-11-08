@@ -11,6 +11,13 @@ internal sealed partial class ModelConfiguration
 
     private void RegisterSecretSources()
     {
+        // Identity tokens come from the published snapshot, which changes after the save that
+        // already invalidated the redactor; refresh again once it is live.
+        Access.Changed += _ =>
+        {
+            Secrets.Invalidate();
+            return Task.CompletedTask;
+        };
         Secrets.AddSource(
             "models",
             () =>

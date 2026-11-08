@@ -511,4 +511,75 @@ public sealed class SecretBoundaryTests
         );
         Assert.StartsWith("node_bootstrap_info filePath", error.Message);
     }
+
+    [Fact]
+    public async Task Webhook_secrets_are_masked_and_both_set_config_refusals_apply()
+    {
+        const string hookToken = "synthetic-hook-verification-0001";
+        await using var f = await ExternalChannelFixture.CreateAsync();
+        f.Configuration.Secrets.Store.Set("provider-key", ProviderKey);
+        var modelsPath = Path.Combine(f.Data, "state", "models.yaml");
+        var models = JsonNode.Parse(File.ReadAllText(modelsPath))!.AsObject();
+        models["providers"]!["inherits"] = Provider(null, "${secret:provider-key}");
+        File.WriteAllText(modelsPath, models.ToJsonString());
+        var baseRaw = f.Configuration.ReadCurrentAppRaw().TrimEnd();
+        string Config(string token, string extra = "") =>
+            baseRaw
+            + "\n"
+            + extra
+            + "access:\n  identities:\n    hook:\n      token: '"
+            + token
+            + "'\n      surfaces:\n        webhook: {session: main, verify: bearer}\n";
+        Assert.True(
+            SessionCatalog.Flag((await f.Configuration.SaveAppAsync(Config(hookToken)))["saved"])
+        );
+        // The verification secret is an access identity token: masked, never a reference.
+        Assert.Equal(
+            "got [[FW_SECRET:access.hook]]",
+            f.Configuration.Secrets.Redact("got " + hookToken, "test")
+        );
+        var saved = f.Configuration.ReadCurrentAppRaw();
+        await Assert.ThrowsAnyAsync<InvalidDataException>(() =>
+            f.Configuration.SaveAppAsync(Config("${secret:provider-key}"))
+        );
+        Assert.Equal(saved, f.Configuration.ReadCurrentAppRaw());
+
+        var candidate = Path.Combine(f.Work, "candidate.yaml");
+        async Task<string?> SetConfig(string raw)
+        {
+            await File.WriteAllTextAsync(candidate, raw);
+            var result = await f.ToolAsync(
+                "set_config",
+                new JsonObject { ["target"] = "config", ["filePath"] = candidate }
+            );
+            Assert.Equal(saved, f.Configuration.ReadCurrentAppRaw());
+            return SessionWait.Text(result?["error"]?["message"]);
+        }
+        // Each refusal applies on its own and neither lets the other's change through.
+        Assert.Contains(
+            "llm.openaiBaseUrl",
+            await SetConfig(
+                Config(hookToken, "llm:\n  openaiBaseUrl: https://collector.example.test/v1\n")
+            )
+        );
+        Assert.Equal(
+            ModelConfiguration.WebhooksLockedError,
+            await SetConfig(Config("synthetic-hook-rotated-0002"))
+        );
+        Assert.Contains(
+            "llm.openaiBaseUrl",
+            await SetConfig(
+                Config(
+                    "synthetic-hook-rotated-0002",
+                    "llm:\n  openaiBaseUrl: https://collector.example.test/v1\n"
+                )
+            )
+        );
+        Assert.Contains("secret marker", await SetConfig(Config("[[FW_SECRET:access.hook]]")));
+        // A reference in an identity token is invalid configuration, reported like any other.
+        Assert.StartsWith(
+            "Invalid config YAML candidate.",
+            await SetConfig(Config("${secret:provider-key}"))
+        );
+    }
 }
