@@ -2,7 +2,7 @@
 
 This package is for Linux x86-64 only. `Foxwarm.CliNode` includes the .NET code,
 static musl, ICU/full culture data, OpenSSL and the Linux PTY implementation.
-It does not need Node.js, the .NET SDK/runtime or adjacent PTY shared libraries.
+It does not need the .NET SDK/runtime or adjacent PTY shared libraries; Node.js is needed only for the optional browser tools (see Prerequisites).
 It is not Main, a service installer or an automatic updater.
 
 ## Prerequisites

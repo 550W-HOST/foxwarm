@@ -311,7 +311,7 @@ jobs:
       - name: Start and serve the sign-in page
         run: |
           mkdir -p "$RUNNER_TEMP/data"
-          docker run -d --name foxwarm -p 127.0.0.1:3001:3001 -v "$RUNNER_TEMP/data:/data" foxwarm:ci
+          docker run -d --name foxwarm -p 127.0.0.1:3001:3001 --security-opt seccomp=docker/seccomp-chromium.json -v "$RUNNER_TEMP/data:/data" foxwarm:ci
           for i in $(seq 120); do
             if curl -fsS -o /dev/null http://127.0.0.1:3001/login.html; then ready=1; break; fi
             sleep 1

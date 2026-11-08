@@ -147,9 +147,13 @@ http://localhost:3001/#token=...
 
 ```bash
 mkdir -p foxwarm-data
+curl -fsSLO https://raw.githubusercontent.com/550W-HOST/foxwarm/main/docker/seccomp-chromium.json
 docker run -d --name foxwarm --init -p 3001:3001 \
+  --security-opt seccomp=seccomp-chromium.json --shm-size 1g \
   -v "$PWD/foxwarm-data:/data" ghcr.io/550w-host/foxwarm:latest
 ```
+
+容器以非 root 的 `node` 用户（uid 1000）运行 Foxwarm，并提供免密 `sudo`，因此 Agent 仍可安装软件包。首次启动时，会把早期以 root 运行的镜像写入的数据目录改为该用户所有。seccomp 配置文件是 Docker 默认配置加上 Chromium 沙箱所需的命名空间调用，因此浏览器工具可在保持沙箱开启、无需额外权限的情况下工作。缺少该配置时，第一次调用浏览器工具会报沙箱错误。
 
 使用 `foxwarm-data/state/token` 中的 token 打开 `http://localhost:3001/`。镜像标签跟随版本，例如 `0.9.0`、`0.9` 和 `latest`；更新时拉取新镜像并重新创建容器。首次配置模型的方式与本地安装相同。
 

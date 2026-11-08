@@ -57,6 +57,8 @@ RUN apt-get update \
         ripgrep \
         tmux \
         unzip \
+        sudo \
+        util-linux \
         vim-tiny \
         xz-utils \
         zip \
@@ -78,10 +80,22 @@ WORKDIR /app
 # of Main's managed runtime. The retained public JS bins use this lockfile.
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
-RUN mkdir -p /data /app/packages/vscode-web/assets/vscode-web
+RUN mkdir -p /data /app/packages/vscode-web/assets/vscode-web \
+    && chown -R node:node /data /app/packages/vscode-web/assets
+
+# Foxwarm and everything it launches run as the image's fixed non-root `node` account (uid 1000),
+# which has passwordless sudo so Agents can still install packages.
+# The entry point starts as root only to fix ownership of data written by earlier root-run
+# images, then drops privileges with setpriv. Chromium's own sandbox is left on; it needs the
+# seccomp profile in docker/seccomp-chromium.json (see the install guide).
+RUN echo 'node ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/node \
+    && chmod 0440 /etc/sudoers.d/node \
+    && visudo -cf /etc/sudoers.d/node
+COPY --chmod=755 docker/entrypoint.sh /usr/local/bin/foxwarm-entrypoint
 
 ENV FOXWARM_DATA_DIR=/data
 EXPOSE 3001
+ENTRYPOINT ["/usr/local/bin/foxwarm-entrypoint"]
 CMD ["dotnet", "Foxwarm.dll"]
 
 # Published image: an extracted framework-dependent linux-x64 release package, e.g.

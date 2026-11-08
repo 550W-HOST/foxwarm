@@ -149,9 +149,13 @@ The image includes the ASP.NET Core runtime, Node.js and Chromium:
 
 ```bash
 mkdir -p foxwarm-data
+curl -fsSLO https://raw.githubusercontent.com/550W-HOST/foxwarm/main/docker/seccomp-chromium.json
 docker run -d --name foxwarm --init -p 3001:3001 \
+  --security-opt seccomp=seccomp-chromium.json --shm-size 1g \
   -v "$PWD/foxwarm-data:/data" ghcr.io/550w-host/foxwarm:latest
 ```
+
+The container runs Foxwarm as the non-root `node` user (uid 1000) with passwordless `sudo`, so Agents can still install packages. On first start it re-owns an existing data directory written by an earlier root-run image to that user. The seccomp profile is Docker's default plus the namespace calls Chromium's sandbox needs, so browser tools work with the sandbox on and without extra capabilities. Without it, the first browser call fails with a sandbox error.
 
 Open `http://localhost:3001/` using the token from `foxwarm-data/state/token`. Tags follow releases, such as `0.9.0`, `0.9` and `latest`; to update, pull the new image and recreate the container. First-run model setup works the same way as a local installation.
 

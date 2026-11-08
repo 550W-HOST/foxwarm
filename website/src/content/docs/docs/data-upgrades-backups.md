@@ -109,6 +109,6 @@ docker compose pull foxwarm
 docker compose up -d foxwarm
 ```
 
-For a container started with `docker run`, pull `ghcr.io/550w-host/foxwarm:latest`, remove the old container and start a new one with the same data mount. Check the container logs and the WebUI afterward. A new image does not require a new data directory.
+For a container started with `docker run`, pull `ghcr.io/550w-host/foxwarm:latest`, remove the old container and start a new one with the same data mount and options (including the seccomp profile). Check the container logs and the WebUI afterward. A new image does not require a new data directory.
 
 For archive storage details and external JSONL export, see [Archive Store](https://github.com/550W-HOST/foxwarm/blob/main/docs/archive-store.md).

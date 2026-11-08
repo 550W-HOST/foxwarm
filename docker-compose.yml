@@ -3,6 +3,7 @@
 #   docker compose up -d foxwarm
 # Then open http://localhost:3001 and finish WebUI OOBE.
 # To skip OOBE, create foxwarm-data/state/models.yaml before starting.
+# Data written by an earlier root-run image is re-owned to the container user on first start.
 # To run this checkout instead of the published release, build the image first:
 #   docker build -t ghcr.io/550w-host/foxwarm:latest .
 
@@ -14,6 +15,13 @@ services:
     container_name: foxwarm
     restart: unless-stopped
     init: true
+    # Foxwarm runs as the image's non-root user. Chromium keeps its own sandbox, which needs
+    # this profile (Docker's default plus the namespace calls Chromium uses); no extra
+    # capabilities are granted.
+    security_opt:
+      - seccomp=./docker/seccomp-chromium.json
+    # Chromium's shared memory; Docker's 64 MB default is too small for ordinary pages.
+    shm_size: 1gb
     environment:
       NODE_ENV: production
       FOXWARM_DATA_DIR: /data

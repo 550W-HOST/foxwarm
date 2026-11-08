@@ -6,6 +6,9 @@ services:
       context: ..
       dockerfile: Dockerfile
     container_name: foxwarm-test
+    security_opt:
+      - seccomp=../docker/seccomp-chromium.json
+    shm_size: 1gb
     environment:
       FOXWARM_DATA_DIR: /data
     ports:
