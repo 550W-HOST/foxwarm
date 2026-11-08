@@ -20,7 +20,7 @@ Close keeps the process and Main alive. Open Foxwarm and the application-reopen 
 
 ## Build and qualification boundary
 
-The project targets `net10.0-macos`, macOS 14, and the existing precompiled `osx-arm64` native dependency path. It references the full Main project. `PrepareMacBundleResources` maps inherited Main content beneath the Apple assembly/resource root while retaining Main's relative paths. It removes repeated source identities before Apple's native-library processing: the PTY library arrives through Main, BrowserSupport, and NodePrimitives, and duplicate processing races on the same temporary dylib.
+The project uses bundle identifier `net.foxwarm.desktop`, matching the canonical project domain. It targets `net10.0-macos`, macOS 15 under the existing .NET 10 support policy, and the existing precompiled `osx-arm64` native dependency path. It references the full Main project. `PrepareMacBundleResources` maps inherited Main content beneath the Apple assembly/resource root while retaining Main's relative paths. It removes repeated source identities before Apple's native-library processing: the PTY library arrives through Main, BrowserSupport, and NodePrimitives, and duplicate processing races on the same temporary dylib.
 
 Managed builds and `dotnet publish -p:PublishAot=true` use the Apple SDK directly. The latter remains subject to the complete application's trimming and NativeAOT constraints. The project does not change release jobs or provide a signing/notarization policy. The optional full Code workbench is not added here.
 

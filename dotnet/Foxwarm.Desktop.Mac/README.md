@@ -4,7 +4,7 @@ This AppKit application hosts the original WebUI in WKWebView and runs the compl
 
 ## Build
 
-Use a patched .NET 10 SDK and the `macos` workload compatible with the installed Xcode. The application targets macOS 14 or later. The product resource target is `osx-arm64`, matching the precompiled LanceDB assets supplied by the existing NuGet dependency. An Intel build does not establish Apple Silicon runtime qualification.
+Use a patched .NET 10 SDK and the `macos` workload compatible with the installed Xcode. The application targets macOS 15 or later, following the existing .NET 10 platform support policy. The product resource target is `osx-arm64`, matching the precompiled LanceDB assets supplied by the existing NuGet dependency. An Intel build does not establish Apple Silicon runtime qualification.
 
 Prepare the normal repository dependencies and shared resources, then build:
 
