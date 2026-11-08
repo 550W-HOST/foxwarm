@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { CirclePlay, ClipboardList, Clock3, Server, ChartPie, PanelBottom } from 'lucide-react'
 import { makeApiUrl } from '../config'
@@ -6,22 +6,44 @@ import type { WebUiNodeTarget } from '../nodeTargets'
 import type { Session } from './SessionListCore'
 import { NodeStatusBadge, StatusBadge, TaskStatusBadge } from './StatusBadge'
 import TokenUsageDetails, { formatUsageNumber, type TokenUsage } from './TokenUsageDetails'
+import { useLocalDay, useUsageReport } from '../useUsageReport'
+import { formatUsdCost } from '../usageCost'
+import { usageQuery, usageRange, type UsagePeriod } from '../usageOverview'
 import { getSessionRuntimeStateName, isSessionRuntimeActive } from '../sessionRuntimeState'
 
 export const TASK_COUNTS_EVENT = 'foxwarm-task-counts'
 type TaskCounts = { open: number; active: number }
 type StatusSection = 'running' | 'waiting' | 'tasks' | 'nodes' | 'total-usage' | 'session-usage'
 type TaskPreview = { id: string; title: string; status: string }
+type TotalPeriod = Extract<UsagePeriod, 'today' | 'month'>
+const TOTAL_PERIOD_KEY = 'foxwarm.statusUsage.period'
+const TOTAL_PERIODS: Array<{ id: TotalPeriod; label: string }> = [{ id: 'today', label: 'Today' }, { id: 'month', label: 'This month' }]
+const storedTotalPeriod = (): TotalPeriod => {
+  try { return window.localStorage.getItem(TOTAL_PERIOD_KEY) === 'month' ? 'month' : 'today' } catch { return 'today' }
+}
+
+/** Installation-wide recorded usage for the status bar's chosen period, from the usage ledger. */
+function useInstallationTotal(period: TotalPeriod) {
+  const day = useLocalDay()
+  const range = useMemo(() => {
+    const buckets = usageRange(period, new Date())!
+    return { unit: buckets.unit, boundaries: [buckets.boundaries[0], buckets.boundaries[buckets.boundaries.length - 1]] }
+  }, [period, day])
+  const { report } = useUsageReport(usageQuery(range))
+  return report && report.boundaries.join() === range.boundaries.join() ? report.total : null
+}
 function validCount(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
 }
 
-export default function WorkbenchStatusBar({ running, sessions, nodes, totalUsage, currentSession, currentSessionId, onOpenTasks, onOpenNodes, onOpenSessions, onToggleTerminal, terminalVisible = false }: {
+export default function WorkbenchStatusBar({ running, sessions, nodes, currentSession, currentSessionId, onOpenTasks, onOpenNodes, onOpenSessions, onOpenUsage, onToggleTerminal, terminalVisible = false }: {
   running: number; sessions: readonly Session[]; nodes: readonly WebUiNodeTarget[]
-  totalUsage?: TokenUsage; currentSession?: Session; currentSessionId?: string
+  currentSession?: Session; currentSessionId?: string
   onOpenTasks: () => void; onOpenNodes: () => void
   /** Opens System › Sessions filtered by this state. */
   onOpenSessions?: (status: 'active' | 'waiting') => void
+  /** Opens System › Usage for this period. */
+  onOpenUsage?: (period: UsagePeriod) => void
   onToggleTerminal?: () => void; terminalVisible?: boolean
 }) {
   const [tasks, setTasks] = useState<TaskCounts | null>(null)
@@ -31,6 +53,14 @@ export default function WorkbenchStatusBar({ running, sessions, nodes, totalUsag
   const [taskPreviewState, setTaskPreviewState] = useState<'loading' | 'ready' | 'error'>('loading')
   const triggerRef = useRef<HTMLButtonElement | null>(null)
   const popupRef = useRef<HTMLDivElement | null>(null)
+  const [totalPeriod, setTotalPeriodState] = useState<TotalPeriod>(storedTotalPeriod)
+  const setTotalPeriod = (period: TotalPeriod) => {
+    setTotalPeriodState(period)
+    try { window.localStorage.setItem(TOTAL_PERIOD_KEY, period) } catch {}
+  }
+  const total = useInstallationTotal(totalPeriod)
+  const totalUsage: TokenUsage | undefined = total ? { cachedTokens: total.cachedTokens, inputTokens: total.inputTokens, outputTokens: total.outputTokens, ...(total.cost !== undefined ? { cost: total.cost } : {}) } : undefined
+  const totalPeriodLabel = TOTAL_PERIODS.find(item => item.id === totalPeriod)!.label
 
   useEffect(() => {
     let controller: AbortController | null = null
@@ -148,14 +178,23 @@ export default function WorkbenchStatusBar({ running, sessions, nodes, totalUsag
         {tasks && <button {...itemProps('tasks', `Tasks: ${tasks.active} active, ${tasks.open} open`)}><ClipboardList aria-hidden="true" /><span>Tasks</span><span data-status-task-counts>{tasks.active} active · {tasks.open} open</span></button>}
       </div>
       <div className="foxwarm-status-usage-group flex h-full items-center gap-0.5">
-        <button {...itemProps('total-usage', 'Total token usage')}><ChartPie aria-hidden="true" /><span>Total</span><span>{usageValue(totalUsage)}</span></button>
+        <button {...itemProps('total-usage', 'Total token usage')} title={`Total token usage · ${totalPeriodLabel.toLowerCase()}${totalUsage?.cost !== undefined ? ` · ${formatUsdCost(totalUsage.cost)}` : ''}`}><ChartPie aria-hidden="true" /><span>Total</span><span>{usageValue(totalUsage)}</span></button>
         {currentSessionId && <button {...itemProps('session-usage', 'Current Session token usage')}><ChartPie aria-hidden="true" /><span>Session</span><span>{usageValue(currentSession?.tokenUsage)}</span></button>}
         <button {...itemProps('nodes', `Nodes: ${onlineNodes} online, ${nodes.length} total`)}><Server aria-hidden="true" /><span>Nodes</span><span>{onlineNodes}/{nodes.length}</span></button>
       </div>
     </footer>
     {open && createPortal(<div ref={popupRef} role="dialog" aria-label={label} tabIndex={-1} data-workbench-status-popup className={`foxwarm-status-popup${open === 'nodes' ? ' foxwarm-status-popup-node-directory' : ''}`} style={{ left: position?.left ?? 8, bottom: position?.bottom ?? 32, visibility: position ? 'visible' : 'hidden' }}>
       <h3 className="mb-1 shrink-0 text-sm font-medium text-fw-text-strong">{label}</h3>
-      {open === 'total-usage' && <TokenUsageDetails usage={totalUsage} detailed />}
+      {open === 'total-usage' && <>
+        <div className="mb-3 inline-flex rounded-md border border-fw-border p-0.5" role="group" aria-label="Usage period" data-status-usage-period={totalPeriod}>
+          {TOTAL_PERIODS.map(item => <button key={item.id} type="button" aria-pressed={totalPeriod === item.id} onClick={() => setTotalPeriod(item.id)} className={`rounded px-2 py-0.5 text-[11px] font-medium ${totalPeriod === item.id ? 'bg-fw-text-strong text-fw-surface' : 'text-fw-text-muted hover:bg-fw-hover'}`}>{item.label}</button>)}
+        </div>
+        <TokenUsageDetails usage={totalUsage} detailed />
+        {total ? <div className="foxwarm-status-popup-section">
+          {row('Model requests', total.requests)}
+          {total.unpricedRequests > 0 ? <div className="py-0.5 text-fw-text-muted">{total.unpricedRequests} without a price count tokens only</div> : null}
+        </div> : null}
+      </>}
       {open === 'session-usage' && <>
         <div className="mb-3 truncate text-xs text-fw-text-muted" title={currentSessionId}>{currentSession?.displayName || currentSessionId}</div>
         <TokenUsageDetails usage={currentSession?.tokenUsage} detailed />
@@ -178,14 +217,15 @@ export default function WorkbenchStatusBar({ running, sessions, nodes, totalUsag
           </div>)}
         </div>
       </>}
-      {(open === 'tasks' || open === 'nodes' || (onOpenSessions && (open === 'running' || open === 'waiting'))) && <div className="foxwarm-status-popup-section shrink-0">
+      {(open === 'tasks' || open === 'nodes' || (onOpenUsage && open === 'total-usage') || (onOpenSessions && (open === 'running' || open === 'waiting'))) && <div className="foxwarm-status-popup-section shrink-0">
         <button type="button" data-status-open className="w-full rounded-md px-2 py-1.5 text-left text-xs font-medium text-fw-accent hover:bg-fw-hover" onClick={() => {
           const section = open
           setOpen(null)
           if (section === 'tasks') onOpenTasks()
           else if (section === 'nodes') onOpenNodes()
+          else if (section === 'total-usage') onOpenUsage?.(totalPeriod)
           else onOpenSessions?.(section === 'running' ? 'active' : 'waiting')
-        }}>{open === 'tasks' ? 'Open Tasks' : open === 'nodes' ? 'Open in System › Nodes' : 'Open in System › Sessions'}</button>
+        }}>{open === 'tasks' ? 'Open Tasks' : open === 'nodes' ? 'Open in System › Nodes' : open === 'total-usage' ? 'Open in System › Usage' : 'Open in System › Sessions'}</button>
       </div>}
     </div>, document.body)}
   </>

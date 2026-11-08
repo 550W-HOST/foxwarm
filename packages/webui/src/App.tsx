@@ -22,6 +22,7 @@ import { useBoundedSessionList } from './boundedSessionList'
 import { useWorkbenchStore } from './workbench/store'
 import type { WorkbenchLayoutNode, WorkbenchTab } from './workbench/types'
 import type { SystemSection } from './components/SystemView'
+import type { UsagePeriod } from './usageOverview'
 import { createWorkbenchId, findPaneBelow, findPaneContainingTab, findPaneNode, getFlattenedTabIds, getPaneIds, getPaneNodes } from './workbench/utils'
 import { makeVscodeWebUrl, normalizeCodePath, readCodeOpenInNewWindowPreference, readCodeWorkspaceNodePreference, readCodeWorkspacePathPreference, resolveSessionCodeTarget, resolveToolCodeFileTarget, codeTabId, writeCodeOpenInNewWindowPreference, writeCodeWorkspaceNodePreference, writeCodeWorkspacePathPreference, type CodeCommitTarget, type CodeFileTarget, type CodeTarget, type CodeOpenRequest } from './vscodeWeb'
 import { buildAgentCreationBody, buildSessionCreationBody, type AgentSettingsChanges, type AgentSummary } from './agentCreation'
@@ -33,7 +34,7 @@ import { FoxPaneLoader } from './components/FoxLoaders'
 
 type AppView = 'session' | 'agents' | 'setup' | 'logs' | 'tasks'
 
-// systemSection carries a section route (#nodes, #timers, #webhooks) into the System tab's section.
+// systemSection carries a section route (#nodes, #timers, #webhooks, #usage) into the System tab's section.
 type RouteState = { view: 'tab'; tabId: string | null; systemSection?: SystemSection }
 
 type TerminalRegistryRecord = {
@@ -344,8 +345,8 @@ function readHashRoute(): RouteState {
     return { view: 'tab', tabId: NODES_TAB_ID }
   }
 
-  if (hash === 'timers') {
-    return { view: 'tab', tabId: AGENTS_TAB_ID, systemSection: 'timers' }
+  if (hash === 'timers' || hash === 'usage') {
+    return { view: 'tab', tabId: AGENTS_TAB_ID, systemSection: hash }
   }
 
   if (hash === 'webhooks') {
@@ -1097,6 +1098,12 @@ function App() {
     openSystemSection('sessions')
   }
 
+  const [usageRequest, setUsageRequest] = useState<{ period: UsagePeriod; nonce: number } | null>(null)
+  const openSystemUsage = (period: UsagePeriod) => {
+    setUsageRequest(current => ({ period, nonce: (current?.nonce || 0) + 1 }))
+    openSystemSection('usage')
+  }
+
   const openTasksTab = () => {
     upsertTab({ id: TASKS_TAB_ID, type: 'tasks', title: 'Tasks' }, { activate: true })
     navigateToTab(TASKS_TAB_ID)
@@ -1725,6 +1732,7 @@ function App() {
             onAgentsChanged={() => { void Promise.all([fetchAgents(), fetchSessions()]) }}
             agentRequest={agentSettingsRequest}
             sessionsRequest={sessionsFilterRequest}
+            usageRequest={usageRequest}
             onOpenAgentMemory={(memoryRoot: string, filePath?: string) => {
               const workspace = { nodeId: 'master', path: memoryRoot }
               if (filePath) openCodeFile({ kind: 'openFile', nodeId: 'master', path: filePath }, workspace)
@@ -2239,9 +2247,8 @@ function App() {
           />
         </div>
         <WorkbenchStatusBar running={busyCount} sessions={sessions} nodes={nodeTargets}
-          onOpenTasks={openTasksTab} onOpenNodes={openNodesTab} onOpenSessions={openSystemSessions}
+          onOpenTasks={openTasksTab} onOpenNodes={openNodesTab} onOpenSessions={openSystemSessions} onOpenUsage={openSystemUsage}
           onToggleTerminal={toggleTerminalPanel} terminalVisible={statusTerminalVisible}
-          totalUsage={boundedSessions.globalSummary?.tokenUsage}
           currentSessionId={focusedActiveTab?.type === 'chat' ? focusedActiveTab.sessionId : undefined}
           currentSession={focusedActiveTab?.type === 'chat' ? currentContextSessionRecord : undefined}
         />

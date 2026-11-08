@@ -138,6 +138,11 @@ async function openFixture({ freshBrowser = false, tabs = [system, chat('e2e-a')
       }
       if (pathname.endsWith('/api/session-list/descendant-activity')) return json({ results: [] })
       if (pathname.endsWith('/api/session-list/architecture')) return json({ version: 1, revision: 'r1', sessions: [], nextCursor: null, children: [], focus: [], pathContext: [], forcedChildren: {}, summary: { total: 3, busy: 0, queued: 0, managed: 0, cachedTokens: 3000000000, inputTokens: 200000000, outputTokens: 30000000 } })
+      if (pathname.endsWith('/api/usage')) {
+        const boundaries = url.searchParams.get('boundaries').split(',').map(Number)
+        const empty = { requests: 0, cachedTokens: 0, inputTokens: 0, outputTokens: 0, unpricedRequests: 0 }
+        return json({ boundaries, groupBy: null, agent: null, total: { requests: 12, cachedTokens: 3000000000, inputTokens: 200000000, outputTokens: 30000000, unpricedRequests: 12 }, buckets: boundaries.slice(1).map(() => empty), coverage: { earliest: null, complete: true } })
+      }
       if (pathname.includes('/api/session-list/')) return json({ sessions: [], results: [] })
       if (pathname.includes('/api/sessions/') && pathname.endsWith('/message')) {
         window.__sent.push({ path: pathname, body: options.body })
@@ -2215,7 +2220,7 @@ test('Tasks and Nodes popup entries close the preview and activate singleton pag
     await page.reload({ waitUntil: 'domcontentloaded' })
     await waitForWebUiReady(page)
     await page.waitForSelector('[data-node-surface]')
-    assert.deepEqual(await page.$$eval('.foxwarm-system-tab', buttons => buttons.map(button => button.textContent)), ['Agents', 'Sessions', 'Nodes', 'Timers'])
+    assert.deepEqual(await page.$$eval('.foxwarm-system-tab', buttons => buttons.map(button => button.textContent)), ['Agents', 'Sessions', 'Nodes', 'Timers', 'Webhooks', 'Usage'])
     await workbenchScreenshot(page, 'system-tabs.png')
     await page.click('[data-system-tab="agents"]')
     await page.waitForSelector('[data-system-summary="agents"]')
@@ -2334,7 +2339,7 @@ test('Status usage separates global totals from the focused Chat and follows foc
     assert.match(await page.$eval(current, element => element.textContent), /13.2K/)
     await clickReadyControl(page, total)
     await page.waitForSelector('[data-workbench-status-popup]', { visible: true })
-    assert.match(await page.$eval('[data-workbench-status-popup]', element => element.textContent), /Total usageTokens3.2B.*Cached3B92.9%.*Input200M6.2%.*Output30M0.9%/)
+    assert.match(await page.$eval('[data-workbench-status-popup]', element => element.textContent), /Total usageTodayThis monthTokens3.2B.*Cached3B92.9%.*Input200M6.2%.*Output30M0.9%.*Model requests12/)
     await page.keyboard.press('Escape')
     await clickReadyControl(page, current)
     assert.match(await page.$eval('[data-workbench-status-popup]', element => element.textContent), /e2e-a.*Cached12K90.9%/)

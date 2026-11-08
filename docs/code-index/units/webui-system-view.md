@@ -1,20 +1,21 @@
 # Unit: webui-system-view
 
-Files: packages/webui/src/components/SystemView.tsx, packages/webui/src/components/SystemSessions.tsx, packages/webui/src/components/SystemAgents.tsx, packages/webui/src/components/SystemShared.tsx, packages/webui/src/components/SystemTimers.tsx, packages/webui/src/components/SystemWebhooks.tsx, packages/webui/src/components/AgentSettingsFields.tsx, packages/webui/src/architectureOperations.ts, packages/webui/src/systemTimers.ts, packages/webui/src/systemWebhooks.ts, packages/webui/test/architectureOperations.test.mjs, packages/webui/test/systemTimers.test.mjs, packages/webui/test/systemWebhooks.test.mjs, packages/webui/test/mainHostSystem.e2e.mjs, packages/webui/test/mainHostSystemTimers.e2e.mjs, packages/webui/test/mainHostSystemWebhooks.e2e.mjs
+Files: packages/webui/src/components/SystemView.tsx, packages/webui/src/components/SystemSessions.tsx, packages/webui/src/components/SystemAgents.tsx, packages/webui/src/components/SystemShared.tsx, packages/webui/src/components/SystemTimers.tsx, packages/webui/src/components/SystemWebhooks.tsx, packages/webui/src/components/SystemUsage.tsx, packages/webui/src/components/AgentSettingsFields.tsx, packages/webui/src/architectureOperations.ts, packages/webui/src/systemTimers.ts, packages/webui/src/systemWebhooks.ts, packages/webui/src/usageOverview.ts, packages/webui/src/useUsageReport.ts, packages/webui/test/architectureOperations.test.mjs, packages/webui/test/systemTimers.test.mjs, packages/webui/test/systemWebhooks.test.mjs, packages/webui/test/usageOverview.test.mjs, packages/webui/test/mainHostSystem.e2e.mjs, packages/webui/test/mainHostSystemTimers.e2e.mjs, packages/webui/test/mainHostSystemWebhooks.e2e.mjs, packages/webui/test/mainHostSystemUsage.e2e.mjs
 Secondary files: packages/webui/src/components/SystemNodes.tsx, packages/webui/src/components/TokenUsageDetails.tsx, packages/webui/src/useNodeDirectory.ts, packages/webui/src/App.tsx, packages/webui/src/workbench/utils.ts, packages/webui/test/nodeOnboarding.e2e.mjs, packages/webui/test/boundedSessionReplay.test.mjs
 
 ## Purpose
 
-The **System** page explains how Foxwarm is organized and running, in five sections: **Agents** (persistent workspaces), **Sessions** (runtime state, placement, usage and the collaboration timeline), **Nodes** (execution environments and the Sessions on them) **Timers** (scheduled messages and scripts across all Sessions) and **Webhooks** (configured inbound webhooks and their recent deliveries). The Sidebar answers which Session to enter; System is diagnostic and administrative.
+The **System** page explains how Foxwarm is organized and running, in six sections: **Agents** (persistent workspaces), **Sessions** (runtime state, placement, usage and the collaboration timeline), **Nodes** (execution environments and the Sessions on them), **Timers** (scheduled messages and scripts across all Sessions), **Webhooks** (configured inbound webhooks and their recent deliveries) and **Usage** (model requests, tokens and recorded cost across the installation). The Sidebar answers which Session to enter; System is diagnostic and administrative.
 
 ## Key Exports
 
-- `SystemView` — owns the bounded Session catalog, Node directory, Agent registry, section switching and filters; renders the five sections. `SystemSection` / `SYSTEM_SECTIONS` name them.
+- `SystemView` — owns the bounded Session catalog, Node directory, Agent registry, section switching and filters; renders the six sections. `SystemSection` / `SYSTEM_SECTIONS` name them.
 - `SessionFilterBar`, `SessionOperationRow`, `SessionInspector` (`SystemSessions.tsx`) — Sessions list controls, rows and inspector.
 - `AgentRegistryCard`, `AgentRegistryInspector` (`SystemAgents.tsx`) — Agent registry.
 - `SystemNodes` ([webui-nodes](./webui-nodes.md)) — Nodes section.
 - `SystemTimers`, `SessionTimersSection` (`SystemTimers.tsx`) — Timers section and the Session inspector's Timers section; `systemTimers.ts` owns their pure list projection, filters, ordering and edit-request building.
 - `SystemWebhooks` (`SystemWebhooks.tsx`) — read-only Webhooks section; `systemWebhooks.ts` owns its labels, outcome tones, loopback-address check and ordering.
+- `SystemUsage` (`SystemUsage.tsx`) — Usage section; `usageOverview.ts` owns the `/api/usage` contract types, local-time period boundaries, group labels and chart series; `useUsageReport.ts` owns report loading, the `usage-changed` refresh and the local-midnight clock shared with the status bar Total.
 - `UsagePie` and formatting helpers (`SystemShared.tsx`).
 - `getArchitectureSessionNodeId(session)` — effective placement: an active tool's exact execution node, otherwise the Session's current node, otherwise `master`.
 - `getArchitectureSessionModel(session)` — model in use, otherwise the configured model.
@@ -25,9 +26,9 @@ The **System** page explains how Foxwarm is organized and running, in five secti
 
 ### Page and navigation
 
-- Header: title System, a per-section subtitle and the Agents | Sessions | Nodes | Timers | Webhooks switch. There is no global summary-card row; each section shows only its own summary (Agents: count; Sessions: active / waiting / queued, which also set the status filter; Nodes: Online / Total; Timers: timers / paused / failing; Webhooks: webhooks / need attention).
+- Header: title System, a per-section subtitle and the Agents | Sessions | Nodes | Timers | Webhooks | Usage switch. There is no global summary-card row; each section shows only its own summary (Agents: count; Sessions: active / waiting / queued, which also set the status filter; Nodes: Online / Total; Timers: timers / paused / failing; Webhooks: webhooks / need attention; Usage: cost, tokens and requests for the chosen period).
 - The Workbench tab keeps its persisted identity `system:agents` / type `agents` and stores the current `section`; App writes section changes back through `updateTab`, so reload restores the section. The tab title is System.
-- Entry points: the Sidebar and mobile Workspace tools "System" button; `#agents`, `#architecture`, `#system` (System tab, current section); `#nodes`, `#tab/system:nodes` and the status-bar Open Nodes action (System on Nodes); `#timers` (System on Timers); `#webhooks` (System on Webhooks); the Session inspector's "View in Timers" (Timers filtered to that Session). The former `system:nodes` route settles on `#tab/system:agents`.
+- Entry points: the Sidebar and mobile Workspace tools "System" button; `#agents`, `#architecture`, `#system` (System tab, current section); `#nodes`, `#tab/system:nodes` and the status-bar Open Nodes action (System on Nodes); `#timers` (System on Timers); `#webhooks` (System on Webhooks); `#usage` and the status-bar Total's "Open in System › Usage" (System on Usage, the latter with its period); the Session inspector's "View in Timers" (Timers filtered to that Session). The former `system:nodes` route settles on `#tab/system:agents`.
 - Saved layouts are normalized on read: a former `nodes` tab becomes the System tab with `section: 'nodes'` in the same pane position, or is dropped when a System tab already exists. No layout reset or storage version change.
 - Popup leaves: `agents` opens System, `nodes` opens System on Nodes. Moving the System tab to a new window uses the `nodes` leaf when it is on Nodes. Sections switch in place inside popup and embedded leaves.
 - The Sessions Timeline renders [the session sequence view](./webui-session-sequence.md), lazily loaded because it shares Chat rendering pieces; it does not use the bounded catalog window.
@@ -63,6 +64,15 @@ The **System** page explains how Foxwarm is organized and running, in five secti
 - The Session inspector's Timers section lists up to five of that Session's timers from `GET /api/timers?sessionId=` with a "View in Timers" link.
 - Narrow widths stack the inspector below the list without horizontal overflow.
 
+### Usage section
+
+- Reads installation-wide usage from `GET /api/usage` ([usage ledger](../threads/llm-request-journal.md#d-llm-request-journal-usage-ledger)): every recorded successful model request of every purpose, including deleted Sessions. It does not use the bounded Session catalog or Session stats, which count normal turns of current Sessions only.
+- Period: Today (hourly buckets), This week (Monday start), This month, or a Custom inclusive date range of up to 400 days (daily buckets). The browser computes the local-time boundaries, so day and week edges follow the viewer's time zone; daylight-saving repeats collapse to strictly increasing boundaries. The choice persists in `localStorage` and moves with the local date at midnight.
+- Group by Agent, Session tree, Session, Model, Provider or Purpose. Purpose rows use product labels (Conversation turns, Context compaction, Session titles, Side questions, ToolScript model calls, Setup checks, Command line, Other requests) with the recorded key as detail. Requests outside any Session form "Outside sessions"; Session requests whose Agent cannot be attributed form "Unattributed sessions"; deleted Sessions are pooled as "Deleted sessions" under their recorded Agent. Clicking an Agent row filters to that Agent and switches to Session trees; Session rows open their Session.
+- Summary cards: recorded estimated cost (with the count of requests that have no price), tokens with the shared [TokenUsageDetails](./webui-token-usage-details.md) breakdown, and model requests. A stacked bar chart shows cost (or tokens) per bucket for the largest groups plus Other; groups with nothing to draw stay out of the legend. The table lists up to 100 groups ordered by cost, then tokens. A group without any priced request shows "Tokens only"; a partly priced group marks its cost.
+- Requests recorded before pricing was configured stay tokens-only; no current price is applied to them ([D-model-usage-cost](../threads/model-request-and-streaming.md#d-model-usage-cost)). While the startup backfill is still adding older requests the section says so; when records start after the period's first day it shows when they begin.
+- Live updates: reloads (debounced) on the realtime `usage-changed` event and on socket reopen; no polling. The previous report stays visible, dimmed, until a new selection's report arrives.
+
 ### Agent registry
 
 - The Agents summary counts real workspace directories, including valid zero-session Agents that do not appear in Session-derived catalog summaries.
@@ -92,6 +102,10 @@ The **System** page explains how Foxwarm is organized and running, in five secti
 ### D-webui-system-webhooks
 
 [2026-11-08, user decision] Webhooks are configured only in the YAML access configuration; System gains a fifth, read-only Webhooks section for status rather than a structured editor. It shows where each webhook delivers, whether its target exists, the address to give the sending service and recent results, so a misconfigured source can be diagnosed without reading logs. Secrets never reach the page.
+
+### D-webui-system-usage
+
+[2026-11-09, user decision] Installation usage is a read-only System section, Usage, backed by the journal's derived [usage ledger](../threads/llm-request-journal.md#d-llm-request-journal-usage-ledger) rather than Session stats: all request purposes count and are labelled by purpose; grouping by Agent, Session tree, Session, model, provider and purpose with daily (hourly for today) buckets; periods today, this week, this month and a custom range. There are no budgets, limits or usage configuration. Recorded costs are shown as recorded; requests from before pricing show tokens only. The status bar Total uses the same ledger for a selectable period ([TokenUsageDetails](./webui-token-usage-details.md)); Session usage pies stay per-Session. The route is administrator-only.
 
 ### D-webui-system-timers
 

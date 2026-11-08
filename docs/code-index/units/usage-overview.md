@@ -5,14 +5,14 @@ Secondary files: `dotnet/Foxwarm/Models/LlmRequestJournal.Usage.cs`, `dotnet/Fox
 
 ## Purpose
 
-Answers how many model requests, tokens and recorded cost the installation used over a period, grouped by Agent, Session tree, Session, model, provider or request purpose. It reads the journal's [usage ledger](../threads/llm-request-journal.md#d-llm-request-journal-usage-ledger), so it covers every request purpose and deleted Sessions; Session stats and catalog summaries keep their own per-Session normal-turn scope. It is read-only reporting: no budgets, limits or configuration.
+Answers how many model requests, tokens and recorded cost the installation used over a period, grouped by Agent, Session tree, Session, model, provider or request purpose. It reads the journal's [usage ledger](../threads/llm-request-journal.md#d-llm-request-journal-usage-ledger), so it covers every request purpose and deleted Sessions; Session stats and catalog summaries keep their own per-Session normal-turn scope. It is read-only reporting: no budgets, limits or configuration ([D-webui-system-usage](./webui-system-view.md#d-webui-system-usage)).
 
 ## Stable methods and callers
 
 - `SessionManager.Usage` is created with the shared journal store. It supplies the journal's `SessionAgent` lookup from the catalog and is disposed before the journal.
 - `StartBackfill` runs the journal's [ledger backfill](./model-journal.md) in the background on the Main host after Session owners are registered. Cancellation at shutdown stops it between batches; the next start resumes from its checkpoints.
 - `ResolveAgents` maps recorded Session IDs (exact or alias) to Agents through the catalog, falling back to the Session's first Archive row for deleted Sessions. Unresolvable IDs stay unattributed.
-- `QueryAsync(boundaries, groupBy, agent, limit)` returns the report served by `GET /api/usage`.
+- `QueryAsync(boundaries, groupBy, agent, limit)` returns the report used by System › Usage and the status bar Total.
 - `Changed` fires after committed ledger rows, coalesced by `ChangeDelay` (one second); `WebUiRealtime` forwards it to administrator list subscribers as `usage-changed`.
 
 ## HTTP contract
@@ -29,4 +29,4 @@ Group rows have `key`, `kind`, `usage`, optional `label` and `agent`, and per-bu
 
 ## Tests
 
-`dotnet/Foxwarm.Tests/Sessions/UsageOverviewTests.cs` (real priced turns in parent, child and other-Agent Sessions; every grouping; limit and group count; deleted Sessions pooled under their Agent; Archive fallback; backfill coverage); `dotnet/Foxwarm.Tests/Channels/UsageHttpTests.cs` (administrator access, scoped denial, invalid queries).
+`dotnet/Foxwarm.Tests/Sessions/UsageOverviewTests.cs` (real priced turns in parent, child and other-Agent Sessions; every grouping; limit and group count; deleted Sessions pooled under their Agent; Archive fallback; backfill coverage); `dotnet/Foxwarm.Tests/Channels/UsageHttpTests.cs` (administrator access, scoped denial, invalid queries); `packages/webui/test/mainHostSystemUsage.e2e.mjs` (System › Usage and the status bar Total over a real Main host).
