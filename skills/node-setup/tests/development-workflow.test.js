@@ -67,6 +67,22 @@ test('ToolScript runs real evidence-only Git snapshot under Monty without neighb
   }
 });
 
+test('Monty provision and release use only the public node and session tools in order', async () => {
+  const calls = []
+  const tools = request => {
+    calls.push(request)
+    if (request.name === 'node' && request.args.action === 'destroy') return { nodeId: request.args.nodeId }
+    if (request.name === 'node') return { node: { id: request.args.nodeId, availability: 'ready', defaultCwd: '/workspace' } }
+    return { deleted: request.args.sessionId }
+  }
+  const provisioned = await run({ phase: 'provision', providerId: 'sandbox', nodeId: 'sandbox/task_1', parameters: { profile: 'offline' } }, tools)
+  assert.equal(provisioned.status, 'completed')
+  assert.equal(provisioned.defaultCwd, '/workspace')
+  const released = await run({ phase: 'release', nodeId: 'sandbox/task_1', workerSessionId: 'worker/task_1', confirmation: 'destroy node sandbox/task_1' }, tools)
+  assert.equal(released.status, 'completed')
+  assert.deepEqual(calls.map(request => [request.name, request.args.action]), [['node', 'ensure'], ['node', 'inspect'], ['delete_session', undefined], ['node', 'destroy']])
+});
+
 test('Monty assignment preserves caller handoff fields and verifies actual Task notification', async () => {
   const calls = [];
   const task = { id: 'task_fixture', title: 'Inspect parser', assignmentNotificationStatus: 'sent' };

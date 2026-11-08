@@ -26,6 +26,8 @@ class Tools:
         self.pending = False
         self.notification = "sent"
         self.task = None
+        self.availability = "ready"
+        self.fail_session_delete = False
 
     def __call__(self, request):
         self.calls.append(request)
@@ -57,6 +59,15 @@ class Tools:
                 return {"taskId": self.task["id"], "status": "open",
                         "ownerSessionId": None, "sentNotifications": 0}
             return {"task": self.task}
+        if name == "node":
+            if args["action"] in ("ensure", "inspect"):
+                return {"node": {"id": args["nodeId"], "availability": self.availability, "defaultCwd": "/workspace"}}
+            if args["action"] == "destroy":
+                return {"nodeId": args["nodeId"], "effect": "Removed."}
+        if name == "delete_session":
+            if self.fail_session_delete:
+                raise RuntimeError("fixture session busy")
+            return {"deleted": args["sessionId"]}
         if name == "create_child_session":
             if self.fail_child:
                 raise RuntimeError("fixture child creation failure")
@@ -221,6 +232,44 @@ class DevelopmentWorkflowTests(unittest.TestCase):
         self.assertTrue((self.artifacts / "commits.bundle").is_file())
         self.assertFalse((self.artifacts / "later.log").exists())
         self.assertEqual(self.git(self.source, "rev-parse", "HEAD"), self.base)
+
+    def test_provision_ensures_a_fresh_provider_node_and_reports_unready_environments(self):
+        result = self.main({"phase": "provision", "providerId": "sandbox", "nodeId": "sandbox/task_1",
+                            "parameters": {"profile": "offline"}})
+        self.assertEqual(result["status"], "completed", result)
+        self.assertEqual(result["defaultCwd"], "/workspace")
+        ensure = self.tools.calls[-1]
+        self.assertEqual(ensure["args"], {"action": "ensure", "providerId": "sandbox", "nodeId": "sandbox/task_1",
+                                          "parameters": {"profile": "offline"}})
+        self.tools.availability = "offline"
+        result = self.main({"phase": "provision", "providerId": "sandbox", "nodeId": "sandbox/task_2"})
+        self.assertEqual(result["status"], "needs-verification")
+        self.assertEqual(self.tools.calls[-1]["args"], {"action": "inspect", "nodeId": "sandbox/task_2"})
+        for node in ("other/task_3", "sandbox/", "sandbox"):
+            calls = len(self.tools.calls)
+            failed = self.main({"phase": "provision", "providerId": "sandbox", "nodeId": node})
+            self.assertEqual(failed["status"], "failed")
+            self.assertEqual(len(self.tools.calls), calls)
+
+    def test_release_requires_exact_confirmation_and_stops_before_destroy_on_failure(self):
+        calls = len(self.tools.calls)
+        refused = self.main({"phase": "release", "nodeId": "sandbox/task_1", "confirmation": "destroy node sandbox/other"})
+        self.assertEqual(refused["status"], "failed")
+        self.assertEqual(len(self.tools.calls), calls)
+        self.tools.fail_session_delete = True
+        failed = self.main({"phase": "release", "nodeId": "sandbox/task_1", "workerSessionId": "worker/task_1",
+                            "confirmation": "destroy node sandbox/task_1"})
+        self.assertEqual(failed["status"], "failed")
+        self.assertEqual(failed["stage"], "delete worker session")
+        self.assertNotIn("destroy", [call["args"].get("action") for call in self.tools.calls])
+        self.tools.fail_session_delete = False
+        released = self.main({"phase": "release", "nodeId": "sandbox/task_1", "workerSessionId": "worker/task_1",
+                              "confirmation": "destroy node sandbox/task_1"})
+        self.assertEqual(released["status"], "completed", released)
+        self.assertEqual([call["name"] for call in self.tools.calls[-3:]], ["node", "delete_session", "node"])
+        self.assertEqual(self.tools.calls[-1]["args"], {"action": "destroy", "nodeId": "sandbox/task_1",
+                                                         "confirmation": "destroy node sandbox/task_1"})
+        self.assertEqual(released["destroyReceipt"]["nodeId"], "sandbox/task_1")
 
     def test_installed_skill_needs_no_checkout_for_prepare_or_adapter_describe(self):
         installed = self.root / "installed-skill"

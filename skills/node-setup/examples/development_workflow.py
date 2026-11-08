@@ -1,4 +1,4 @@
-"""ToolScript: prepare/assign/snapshot/receive work on an existing POSIX Node.
+"""ToolScript: provision/prepare/assign/snapshot/receive/release work on a POSIX Node.
 
 Run with Foxwarm run_script, not the Python CLI. All host effects use tools.
 See ../references/development-workflow.md for prerequisites and phase inputs.
@@ -117,6 +117,42 @@ def main(args):
     phase = required(args, "phase")
     state = {"phase": phase, "status": "failed", "transfers": [], "stage": "inputs"}
     try:
+        if phase == "provision":
+            provider = required(args, "providerId")
+            node = required(args, "nodeId")
+            if not node.startswith(provider + "/") or len(node) == len(provider) + 1:
+                raise ValueError("nodeId must be a new ID under providerId, for example provider/task-id")
+            state.update({"providerId": provider, "nodeId": node})
+            state["stage"] = "ensure environment"
+            receipt = builtin("node", {"action": "ensure", "providerId": provider, "nodeId": node,
+                                       "parameters": args.get("parameters", {})})
+            state["ensureReceipt"] = receipt
+            descriptor = receipt.get("node") or {}
+            if descriptor.get("availability") != "ready":
+                state["stage"] = "inspect environment"
+                state["inspectReceipt"] = builtin("node", {"action": "inspect", "nodeId": node})
+                descriptor = state["inspectReceipt"].get("node") or {}
+            state["defaultCwd"] = descriptor.get("defaultCwd")
+            state["status"] = "completed" if descriptor.get("availability") == "ready" else "needs-verification"
+            return state
+
+        if phase == "release":
+            node = required(args, "nodeId")
+            confirmation = required(args, "confirmation")
+            if confirmation != "destroy node " + node:
+                raise ValueError("confirmation must be exactly: destroy node " + node)
+            state["nodeId"] = node
+            state["stage"] = "inspect environment"
+            state["inspectReceipt"] = builtin("node", {"action": "inspect", "nodeId": node})
+            if args.get("workerSessionId"):
+                state["stage"] = "delete worker session"
+                state["sessionReceipt"] = builtin("delete_session", {"sessionId": required(args, "workerSessionId")})
+            state["stage"] = "destroy environment"
+            state["destroyReceipt"] = builtin("node", {"action": "destroy", "nodeId": node,
+                                                       "confirmation": confirmation})
+            state["status"] = "completed"
+            return state
+
         if phase == "prepare":
             node = required(args, "nodeId")
             if node == "master":
