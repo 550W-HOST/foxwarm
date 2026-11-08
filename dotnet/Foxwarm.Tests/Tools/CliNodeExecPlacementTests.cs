@@ -6,11 +6,34 @@ namespace Foxwarm.Tests;
 
 public sealed class CliNodeExecPlacementTests
 {
+    private sealed class OwnedPaths : IDisposable
+    {
+        private readonly string? previous = Environment.GetEnvironmentVariable("FOXWARM_AGENT_DIR");
+        internal readonly TempDirectory Temp = new();
+        internal NodePaths Paths { get; }
+
+        internal OwnedPaths()
+        {
+            Environment.SetEnvironmentVariable(
+                "FOXWARM_AGENT_DIR",
+                Path.Combine(Temp.Path, "agent")
+            );
+            Paths = new NodePaths(Temp.Path);
+        }
+
+        public void Dispose()
+        {
+            Environment.SetEnvironmentVariable("FOXWARM_AGENT_DIR", previous);
+            Temp.Dispose();
+        }
+    }
+
     [Fact]
     public async Task Session_exec_and_default_cwd_use_the_agent_directory_while_external_keeps_startup()
     {
-        using var temp = new TempDirectory();
-        var paths = new NodePaths(temp.Path);
+        using var owned = new OwnedPaths();
+        var temp = owned.Temp;
+        var paths = owned.Paths;
         var agent = paths.AgentDirectory("main");
         Directory.CreateDirectory(Path.Combine(agent, "sub"));
         Directory.CreateDirectory(Path.Combine(temp.Path, "sub"));
@@ -52,8 +75,9 @@ public sealed class CliNodeExecPlacementTests
     {
         if (OperatingSystem.IsWindows())
             return;
-        using var temp = new TempDirectory();
-        var paths = new NodePaths(temp.Path);
+        using var owned = new OwnedPaths();
+        var temp = owned.Temp;
+        var paths = owned.Paths;
         var agent = paths.AgentDirectory("main");
         var final = Path.Combine(agent, "sub");
         Directory.CreateDirectory(final);
@@ -84,7 +108,6 @@ public sealed class CliNodeExecPlacementTests
         var frame = new JsonObject
         {
             ["sessionId"] = "main/owned",
-            ["backgroundExecId"] = "quiet-otter",
             ["args"] = new JsonObject { ["command"] = "cd sub" },
         };
         if (requested)
@@ -106,7 +129,7 @@ public sealed class CliNodeExecPlacementTests
         var placement = ExecPlacement.Parse(result[ExecPlacement.Field])!;
         Assert.Equal(agent, placement["cwd"]!.GetValue<string>());
         Assert.Equal("default", placement["cwdSource"]!.GetValue<string>());
-        Assert.Equal("quiet-otter", placement["execId"]!.GetValue<string>());
+        Assert.Equal(entry["id"]!.GetValue<string>(), placement["execId"]!.GetValue<string>());
         Assert.Equal(final, placement["finalCwd"]!.GetValue<string>());
         Assert.Equal(
             Path.Combine(temp.Path, "owned.log"),
