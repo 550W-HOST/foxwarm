@@ -330,7 +330,7 @@ internal static partial class SecretReferences
 internal static partial class SecretMarkerGuard
 {
     internal const string Message =
-        "This input contains a secret marker ([[FW_SECRET:…]]). Markers stand in for secret values hidden from you; writing one would replace the real value with marker text. Use a ${secret:NAME} reference in a configuration field that accepts it, or ask the user to make the change.";
+        "This input contains a secret marker ([[FW_SECRET:…]]), which stands in for a hidden value. Writing it would replace the real value with the marker text. Use a ${secret:NAME} reference in a configuration field that accepts one, or ask the user to make the change.";
 
     [GeneratedRegex(@"\[\[FW_SECRET:([A-Za-z0-9._:/-]+)\]\]", RegexOptions.CultureInvariant)]
     private static partial Regex Marker();
