@@ -130,7 +130,8 @@ test('approval decisions trim notes and outcomes name who settled them', () => {
 test('approval review text: tool identity, targets, deadline and shortened arguments', () => {
   assert.equal(approvals.approvalToolLabel({ source: 'mcp', server: 'tracker', name: 'close_issue' }), 'tracker · close_issue')
   assert.equal(approvals.approvalToolLabel({ source: 'node', name: 'exec' }), 'exec')
-  assert.deepEqual(approvals.approvalTargets({ facts: { paths: [{ raw: 'a.txt', resolved: '/w/a.txt', node: 'dev' }], nodeTargets: ['dev'], sessionTarget: { id: 'peer' } } }), ['dev:/w/a.txt', 'Node dev', 'Session peer'])
+  assert.deepEqual(approvals.approvalTargets({ tool: { name: 'copy_between_nodes' }, facts: { paths: [{ raw: 'a.txt', resolved: '/w/a.txt', node: 'dev' }], nodeTargets: ['dev'], sessionTarget: { id: 'peer' } } }), ['dev:/w/a.txt', 'Node dev', 'Session peer'])
+  assert.deepEqual(approvals.approvalTargets({ tool: { name: 'exec', executionNode: 'dev' }, facts: { nodeTargets: ['dev', 'other'] } }), ['Node other'])
   assert.equal(approvals.approvalTimeLeft(undefined), '')
   assert.equal(approvals.approvalTimeLeft(1_000 + 45_000, 1_000), '45s left')
   assert.equal(approvals.approvalTimeLeft(1_000 + 4 * 60_000, 1_000), '4m left')

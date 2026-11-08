@@ -98,8 +98,11 @@ export function approvalArgsText(record: Pick<ToolApprovalRecord, 'args' | 'args
   return JSON.stringify(record.args, null, 2)
 }
 
-/** Resolved targets the asking rules matched on: paths with their Node, Nodes and Sessions. */
-export function approvalTargets(record: Pick<ToolApprovalRecord, 'facts'>): string[] {
+/**
+ * Resolved targets the asking rules matched on: paths with their Node, other Nodes and Sessions.
+ * The execution Node is already shown with the tool.
+ */
+export function approvalTargets(record: Pick<ToolApprovalRecord, 'facts' | 'tool'>): string[] {
   const facts = record.facts
   if (!facts) return []
   const targets: string[] = []
@@ -107,7 +110,7 @@ export function approvalTargets(record: Pick<ToolApprovalRecord, 'facts'>): stri
     const value = path.resolved || path.raw
     if (value) targets.push(path.node ? `${path.node}:${value}` : value)
   }
-  for (const node of facts.nodeTargets || []) targets.push(`Node ${node}`)
+  for (const node of facts.nodeTargets || []) if (node !== record.tool?.executionNode) targets.push(`Node ${node}`)
   if (facts.sessionTarget?.id) targets.push(`Session ${facts.sessionTarget.id}`)
   return targets
 }
