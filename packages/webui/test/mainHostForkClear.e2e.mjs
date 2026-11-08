@@ -41,6 +41,10 @@ function dispatch(value) {
     if (holdPlan) held.set('plan', value); else value.valid()
     return
   }
+  // Synthetic child tasks do not require a report. Resolve their handoff when Main asks,
+  // rather than answering the reminder with the same task result indefinitely.
+  const latestUser = value.full.findLast(item => item.role === 'user')
+  if (textOf(latestUser?.content).includes('<foxwarm-system kind="child-reminder" event="missing-handoff"')) { value.complete(final('[NO_ACTION]')); return }
   if (scenario === 'retry-hidden' && !records.slice(0, -1).some(row => row.scenario === scenario)) { value.fail(); return }
   if (scenario === 'self-fork' && !value.full.some(item => item.type === 'function_call_output' && item.call_id === 'fork-child')) {
     value.complete([tool('fork-child', 'create_child_session', { suffix: 'worker', fork: true, message: 'CASE:child-task Complete the new task independently.' }),
@@ -100,6 +104,13 @@ async function send(id, scenario, extra = '') {
   await until(async () => { const live = await history(id); return !live.session.busy && live.messages.some(row => row.parts?.some(part => part.text === 'DONE-' + scenario)) }, 'completed ' + scenario)
   assert.deepEqual(errors, []); return records.slice(count).filter(row => row.scenario === scenario)
 }
+async function childSettled(id, scenario) {
+  await until(async () => (await authority(id)).childHandoffState?.resolved === true, scenario + ' handoff resolved')
+  const messages = (await history(id)).messages
+  assert(messages.some(row => row.parts?.some(part => part.text === 'DONE-' + scenario)))
+  assert(messages.some(row => row.parts?.some(part => part.text === '[NO_ACTION]')))
+  assert.equal(records.filter(row => row.scenario === scenario && !row.planning).length, 2, scenario + ' task and one reminder response')
+}
 async function seed(id, label, count = 7) { for (let index = 0; index < count; index++) await send(id, 'seed-' + label + '-' + index, ('ordered-' + label + '-' + index + '-').repeat(750)) }
 async function compact(id) {
   const before = fixture.sql('SELECT MAX(id) FROM archive_blocks WHERE session_id=?', [id])[0][0] || 0
@@ -129,7 +140,7 @@ try {
   await page.waitForSelector(`[data-workbench-content-tab=${JSON.stringify('chat:' + parent)}] .foxwarm-chat-root[data-chat-connection-state="connected"]`, { visible: true })
   await page.evaluate(() => window.foxwarmTest.sendMessage('CASE:self-fork'))
   await until(async () => (await readFile(join(fixture.work, 'fork-started'), 'utf8').catch(() => '')) === 'started', 'actual executing parent effect')
-  const child = parent + '_worker'; await until(async () => (await history(child)).messages?.some(row => row.parts?.some(part => part.text === 'DONE-child-task')), 'genuine tool-created fork task')
+  const child = parent + '_worker'; await childSettled(child, 'child-task')
   const parentCut = (await authority(parent)).history, childState = await authority(child), cap = branch(child)
   assert.deepEqual(childState.history.slice(0, parentCut.length), parentCut); assert.equal(childState.promptCacheKey, oldCache)
   assert.equal(childState.model, 'a'); assert.equal(childState.effort, 'low'); assert.equal(cap[1], (await authority(parent)).nextMessageSeq - 1); assert.equal(cap[2], 1)
@@ -224,9 +235,13 @@ try {
   assert.equal((await authority(parent)).nextBlockId, 1, 'fork resolves target/cap without correcting source counter')
   const forcedWire = await send(forced, 'force-fork-task'); assert(forcedWire.every(row => row.kind === 'http')); assert.equal(forcedWire.at(-1).body.cache, (await authority(parent)).promptCacheKey)
   assert(forcedWire.at(-1).body.instructions.includes('Changed file must not be read by fork snapshot copy.'))
-  await send(parent, 'selected-fork'); const selectedFork = parent + '_selected-fork', forkPrompt = (await authority(selectedFork)).persistentMemorySnapshot
+  await send(parent, 'selected-fork'); const selectedFork = parent + '_selected-fork'
+  await childSettled(selectedFork, 'selected-fork-task')
+  const forkPrompt = (await authority(selectedFork)).persistentMemorySnapshot
   assert.equal(forkPrompt, selected); assert.deepEqual((await authority(selectedFork)).systemPromptFiles, (await authority(parent)).systemPromptFiles)
-  await send(parent, 'selected-fresh'); const selectedFresh = parent + '_selected-fresh', freshPrompt = (await authority(selectedFresh)).persistentMemorySnapshot
+  await send(parent, 'selected-fresh'); const selectedFresh = parent + '_selected-fresh'
+  await childSettled(selectedFresh, 'selected-fresh-task')
+  const freshPrompt = (await authority(selectedFresh)).persistentMemorySnapshot
   assert(freshPrompt.includes('Changed file must not be read by fork snapshot copy.')); assert(freshPrompt.includes('Selected common regular memory.')); assert.notEqual((await authority(selectedFresh)).promptCacheKey, (await authority(parent)).promptCacheKey)
   assert.equal(branch(selectedFresh)[0], null, 'fresh graph child is an Archive root')
   assert.equal((await fixture.api('POST', route(parent) + '/refresh-memory', {})).status, 200); assert((await authority(parent)).persistentMemorySnapshot.includes('Changed file must not be read by fork snapshot copy.'))
@@ -234,10 +249,14 @@ try {
   const httpRequests = await send(parent, 'selected-http'); assert(httpRequests.every(row => row.kind === 'http')); assert(httpRequests.at(-1).body.instructions.includes('Changed file must not be read by fork snapshot copy.'))
   assert.equal(httpRequests.at(-1).body.cache, (await authority(parent)).promptCacheKey)
   await send(parent, 'create-agent'); await writeFile(join(fixture.data, 'agents', crossAgent, 'memory', 'MEMORY.md'), 'Separate Agent memory.'); await send(parent, 'cross-fresh')
-  const crossFresh = crossAgent + '/cross-fresh'; assert.equal((await authority(crossFresh)).systemPromptFiles, undefined); assert((await authority(crossFresh)).persistentMemorySnapshot.includes('Separate Agent memory.')); assert.equal(branch(crossFresh)[0], null)
+  const crossFresh = crossAgent + '/cross-fresh'; await childSettled(crossFresh, 'cross-fresh-task'); assert.equal((await authority(crossFresh)).systemPromptFiles, undefined); assert((await authority(crossFresh)).persistentMemorySnapshot.includes('Separate Agent memory.')); assert.equal(branch(crossFresh)[0], null)
   const crossCount = fixture.sql('SELECT COUNT(*) FROM archive_branches')[0][0]; await send(parent, 'cross-fork')
   assert.equal(fixture.sql('SELECT COUNT(*) FROM archive_branches')[0][0], crossCount); assert.equal((await fixture.api('GET', route(crossAgent + '/cross-fork') + '/history')).status, 404)
-  await seed(parent, 'selected-plan', 12); holdPlan = true; held.delete('plan'); const selectedCompact = command(parent, '/compact')
+  await seed(parent, 'selected-plan', 12); holdPlan = true; held.delete('plan'); const beforeCompactNotice = commandNotices.length
+  const selectedCompact = command(parent, '/compact')
+  assert.equal((await selectedCompact).status, 200)
+  await until(() => commandNotices.slice(beforeCompactNotice).some(row => row.sessionId === parent), 'selected-file compaction command reply')
+  assert.match(commandNotices.slice(beforeCompactNotice).find(row => row.sessionId === parent).text, /Compaction started/)
   await until(() => held.has('plan'), 'actual selected-file awaited HTTP planner')
   const selectedPlan = held.get('plan'); assert.equal(selectedPlan.kind, 'http'); assert(selectedPlan.body.instructions.includes('Changed file must not be read by fork snapshot copy.')); assert(selectedPlan.body.instructions.includes('Selected common regular memory.'))
   await writeFile(join(fixture.work, 'selected-prompt.md'), 'Selected live commit refresh uses the current file.')
@@ -247,6 +266,8 @@ try {
   assert.deepEqual(errors, []); await fixture.stop()
   console.log(JSON.stringify({ requests: records.length, planningRequests: records.filter(row => row.planning).length, plans: planCount, connections: connections.length, hostPids: fixture.hostPids, root: fixture.root, parent, child, nested }))
 } catch (error) {
+  const counts = Object.fromEntries([...new Set(records.map(row => `${row.kind}:${row.scenario}:${row.planning ? 'plan' : 'chat'}`))].map(key => [key, records.filter(row => `${row.kind}:${row.scenario}:${row.planning ? 'plan' : 'chat'}` === key).length]))
+  console.error('Synthetic peer requests:', JSON.stringify({ counts, held: [...held.keys()], errors, last: records.slice(-12).map(row => ({ kind: row.kind, scenario: row.scenario, planning: row.planning, inputTail: inputText(row.full).slice(-500) })) }))
   console.error(error.stack); console.error(fixture.output); throw error
 } finally {
   await writeFile(join(fixture.root, 'synthetic-peer-records.json'), JSON.stringify(records.map(({ body, full, kind, headers, scenario, planning }) => ({ body, full, kind, headers, scenario, planning })), null, 2))
