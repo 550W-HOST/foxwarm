@@ -312,6 +312,8 @@ internal sealed partial class NodeClient
                     case "tool_call":
                     case "file_read_request":
                     case "file_write_request":
+                    case "file_stream_read_request":
+                    case "file_stream_write_request":
                         // Effects outlive a lost reply, but can only reply on their originating connection.
                         ScheduleDispatch(connection, frame);
                         break;
@@ -399,6 +401,55 @@ internal sealed partial class NodeClient
                     ["callId"] = frame["callId"]?.DeepClone(),
                     ["result"] = result,
                 };
+            }
+            else if (type is "file_stream_read_request" or "file_stream_write_request")
+            {
+                if (nodeId is null || authToken is null)
+                    throw new InvalidOperationException("Node is not authenticated.");
+                var streaming = new NodeFileStream(paths, options.Host, nodeId, authToken);
+                var transferId = Text(frame, "transferId") ?? "";
+                var path = Text(frame, "filePath") ?? "";
+                var restrict = NodeFileTools.Flag(frame, "restrictToAgentDir");
+                if (type == "file_stream_read_request")
+                {
+                    var file = await streaming.Read(
+                        transferId,
+                        path,
+                        agent,
+                        restrict,
+                        connection.ApprovalStop.Token
+                    );
+                    if (file is null)
+                        return;
+                    response = new JsonObject
+                    {
+                        ["type"] = "file_read_response",
+                        ["transferId"] = transferId,
+                        ["file"] = file,
+                    };
+                }
+                else
+                {
+                    if (
+                        frame["sizeBytes"] is not JsonValue size
+                        || !size.TryGetValue<long>(out var length)
+                    )
+                        throw new InvalidDataException("Invalid file transfer size.");
+                    response = new JsonObject
+                    {
+                        ["type"] = "file_write_response",
+                        ["transferId"] = transferId,
+                        ["result"] = await streaming.Write(
+                            transferId,
+                            path,
+                            agent,
+                            restrict,
+                            NodeFileTools.Flag(frame, "overwrite"),
+                            length,
+                            connection.ApprovalStop.Token
+                        ),
+                    };
+                }
             }
             else if (type == "file_read_request")
                 response = new JsonObject

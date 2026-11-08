@@ -466,10 +466,10 @@ internal sealed partial class NodeProviderRegistry
             requireRegular: true
         );
         var name = NodeConnectionHub.RemoteFileName(path);
-        return new(bytes, path, name, PrimitiveTransferMime(name));
+        return new(bytes, path, name, TransferMime(name));
     }
 
-    private static string PrimitiveTransferMime(string name) =>
+    internal static string TransferMime(string name) =>
         Path.GetExtension(name).ToLowerInvariant() switch
         {
             ".png" => "image/png",

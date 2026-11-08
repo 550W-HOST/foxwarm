@@ -43,10 +43,15 @@ public sealed partial class NodeFileTransferTests
             App = builder.Build();
             App.UseWebSockets();
             App.Map("/node_ws", Manager.Nodes.HandleAsync);
+            Manager.Nodes.RegisterFileStreamRoutes(App);
             await App.StartAsync();
         }
 
-        internal async Task<ClientWebSocket> Connect(string id, JsonObject? credential = null)
+        internal async Task<ClientWebSocket> Connect(
+            string id,
+            JsonObject? credential = null,
+            bool streaming = false
+        )
         {
             credential ??= Manager.Nodes.Registry.Create(id);
             var socket = new ClientWebSocket();
@@ -73,6 +78,9 @@ public sealed partial class NodeFileTransferTests
                             new JsonObject { ["name"] = "read" },
                             new JsonObject { ["name"] = "write" }
                         ),
+                        ["features"] = streaming
+                            ? new JsonObject { ["fileStream"] = 1 }
+                            : new JsonObject(),
                     },
                     ["nodeProtocol"] = new JsonObject { ["min"] = 1, ["max"] = 3 },
                 }

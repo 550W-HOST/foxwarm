@@ -96,7 +96,7 @@ internal sealed class NodeFileTransfer(NodePaths paths)
         return Convert.FromBase64String(clean.ToString());
     }
 
-    private static (string Mime, bool Image) Mime(string path) =>
+    internal static (string Mime, bool Image) Mime(string path) =>
         Path.GetExtension(path).ToLowerInvariant() switch
         {
             ".png" => ("image/png", true),

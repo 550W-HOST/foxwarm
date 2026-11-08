@@ -70,7 +70,11 @@ internal sealed partial class SessionManager
         );
 
     internal async Task<TransferSource> OpenNodeReadAsync(
-        SessionOwner owner, string node, string raw, WorkspaceTools files, CancellationToken token
+        SessionOwner owner,
+        string node,
+        string raw,
+        WorkspaceTools files,
+        CancellationToken token
     )
     {
         if (node != "master")
@@ -78,9 +82,14 @@ internal sealed partial class SessionManager
         var path = files.Paths.FilePath(raw);
         if (!WorkspaceTools.RegularFile(path))
             throw new InvalidDataException("Not a regular file: " + raw);
-        var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
-            FileShare.ReadWrite | FileShare.Delete, 65536,
-            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        var stream = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete,
+            65536,
+            FileOptions.Asynchronous | FileOptions.SequentialScan
+        );
         if (!WorkspaceTools.RegularFileHandle(stream, path))
         {
             await stream.DisposeAsync();
@@ -90,24 +99,53 @@ internal sealed partial class SessionManager
     }
 
     internal async Task<(string Path, string Sha256)> WriteNodeStreamAsync(
-        SessionOwner owner, string node, string raw, Stream input, long length, bool overwrite,
-        WorkspaceTools files, CancellationToken token
+        SessionOwner owner,
+        string node,
+        string raw,
+        Stream input,
+        long length,
+        bool overwrite,
+        WorkspaceTools files,
+        CancellationToken token
     )
     {
         if (node != "master")
-            return await NodeProviders.WriteStreamAsync(node, raw, input, length, overwrite, owner, false, token);
+            return await NodeProviders.WriteStreamAsync(
+                node,
+                raw,
+                input,
+                length,
+                overwrite,
+                owner,
+                false,
+                token
+            );
         var path = files.Paths.FilePath(raw);
-        if (Directory.Exists(path) || !overwrite && (File.Exists(path) || new FileInfo(path).LinkTarget is not null))
-            throw new IOException("File already exists: " + raw + ". Use overwrite=true to overwrite.");
+        if (
+            Directory.Exists(path)
+            || !overwrite && (File.Exists(path) || new FileInfo(path).LinkTarget is not null)
+        )
+            throw new IOException(
+                "File already exists: " + raw + ". Use overwrite=true to overwrite."
+            );
         if (File.Exists(path) && !WorkspaceTools.RegularFile(path))
             throw new IOException("File target must be a regular file.");
         token.ThrowIfCancellationRequested();
         owner.Entry.RequireIdentityAuthority();
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         string? sha = null;
-        if (!await FileToolWrite.WriteStreamAtomic(path, overwrite, () => _ = files.Paths.FilePath(raw),
-            async output => sha = await TransferStream.CopyAsync(input, output, length, token), token))
-            throw new IOException("File already exists: " + raw + ". Use overwrite=true to overwrite.");
+        if (
+            !await FileToolWrite.WriteStreamAtomic(
+                path,
+                overwrite,
+                () => _ = files.Paths.FilePath(raw),
+                async output => sha = await TransferStream.CopyAsync(input, output, length, token),
+                token
+            )
+        )
+            throw new IOException(
+                "File already exists: " + raw + ". Use overwrite=true to overwrite."
+            );
         return (path, sha!);
     }
 
@@ -236,7 +274,14 @@ internal sealed partial class SessionManager
         );
         await using var file = await OpenNodeReadAsync(owner, source, sourcePath, files, token);
         var result = await WriteNodeStreamAsync(
-            owner, target, targetPath, file.Stream, file.Length, overwrite, files, token
+            owner,
+            target,
+            targetPath,
+            file.Stream,
+            file.Length,
+            overwrite,
+            files,
+            token
         );
         return new JsonObject
         {

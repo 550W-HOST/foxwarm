@@ -20,13 +20,19 @@ public sealed class TransferStreamTests
     public async Task Copy_rejects_source_length_changes(long supplied, long expected)
     {
         await using var input = new GeneratedStream(supplied);
-        await Assert.ThrowsAsync<IOException>(() => TransferStream.CopyAsync(input, Stream.Null, expected, default));
+        await Assert.ThrowsAsync<IOException>(() =>
+            TransferStream.CopyAsync(input, Stream.Null, expected, default)
+        );
     }
 
     private sealed class GeneratedStream(long size) : Stream
     {
         internal long Remaining { get; private set; } = size;
-        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+
+        public override ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default
+        )
         {
             cancellationToken.ThrowIfCancellationRequested();
             var count = (int)Math.Min(Remaining, buffer.Length);
@@ -34,15 +40,28 @@ public sealed class TransferStreamTests
             Remaining -= count;
             return ValueTask.FromResult(count);
         }
+
         public override bool CanRead => true;
         public override bool CanSeek => false;
         public override bool CanWrite => false;
         public override long Length { get; } = size;
-        public override long Position { get => Length - Remaining; set => throw new NotSupportedException(); }
-        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Position
+        {
+            get => Length - Remaining;
+            set => throw new NotSupportedException();
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) =>
+            throw new NotSupportedException();
+
         public override void Flush() { }
-        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override long Seek(long offset, SeekOrigin origin) =>
+            throw new NotSupportedException();
+
         public override void SetLength(long value) => throw new NotSupportedException();
-        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) =>
+            throw new NotSupportedException();
     }
 }

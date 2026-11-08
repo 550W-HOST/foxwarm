@@ -37,6 +37,7 @@ internal static class NodeRoutes
         bootstrap.Register(app);
         app.Map("/node_ws", hub.HandleAsync);
         hub.RegisterShellRoutes(app);
+        hub.RegisterFileStreamRoutes(app);
         app.MapGet(
             "/api/nodes/onboarding/pending",
             (HttpContext context) =>

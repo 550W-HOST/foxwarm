@@ -174,6 +174,7 @@ internal sealed class HttpServer
                     || context.Request.Path == "/mcp"
                     || context.Request.Path == "/node_ws"
                     || Foxwarm.Nodes.NodeConnectionHub.IsShellPath(context.Request.Path)
+                    || context.Request.Path.StartsWithSegments("/node/transfer")
                     || Foxwarm.Nodes.NodeBootstrap.IsPublicPath(context.Request.Path)
                     || McpOAuthRoutes.IsPublic(context.Request)
                     || code?.IsCapabilityRequest(context) == true

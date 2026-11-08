@@ -301,6 +301,7 @@
     }
   ],
   "features": {
+    "fileStream": 1,
     "programmaticToolData": true,
     "execWaitCancellation": true,
     "remoteExecBackgroundRegistration": true,

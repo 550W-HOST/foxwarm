@@ -33,7 +33,51 @@ internal sealed partial class NodeConnectionHub
         Action<long>? beforeMaterialize = null
     )
     {
+        var charged = false;
+        void Charge(long length)
+        {
+            beforeMaterialize?.Invoke(length);
+            charged = true;
+        }
+        await using var source = await OpenReadStreamAsync(
+            node,
+            path,
+            owner,
+            restrict,
+            token,
+            Charge
+        );
+        if (!charged)
+            Charge(source.Length);
+        if (source.Length > int.MaxValue)
+            throw new IOException("File exceeds the materialization limit.");
+        var bytes = new byte[(int)source.Length];
+        await source.Stream.ReadExactlyAsync(bytes, token);
+        var extra = new byte[1];
+        if (await source.Stream.ReadAsync(extra, token) != 0)
+            throw new IOException("Source changed or transfer was interrupted.");
+        return new(bytes, source.Path, source.Name, source.MimeType);
+    }
+
+    private async Task<TransferFile> ReadFileLegacyAsync(
+        string node,
+        string path,
+        SessionOwner owner,
+        bool restrict,
+        CancellationToken token,
+        Action<long>? beforeMaterialize = null
+    )
+    {
         var response = await TransferAsync(node, path, owner, restrict, null, false, token);
+        return DecodeReadResponse(response, path, beforeMaterialize);
+    }
+
+    private static TransferFile DecodeReadResponse(
+        JsonObject response,
+        string path,
+        Action<long>? beforeMaterialize = null
+    )
+    {
         var file =
             response["file"] as JsonObject
             ?? throw new InvalidDataException("Node file response is missing file data.");
@@ -70,6 +114,38 @@ internal sealed partial class NodeConnectionHub
     }
 
     internal async Task<JsonObject> WriteFileAsync(
+        string node,
+        string path,
+        byte[] bytes,
+        bool overwrite,
+        SessionOwner owner,
+        bool restrict,
+        CancellationToken token
+    )
+    {
+        if (bytes.Length < StreamThreshold || !StreamingAvailable(node))
+            return await WriteFileLegacyAsync(node, path, bytes, overwrite, owner, restrict, token);
+        using var source = new MemoryStream(bytes, writable: false);
+        var result = await WriteStreamAsync(
+            node,
+            path,
+            source,
+            bytes.LongLength,
+            overwrite,
+            owner,
+            restrict,
+            token
+        );
+        return new JsonObject
+        {
+            ["filePath"] = path,
+            ["absolutePath"] = result.Path,
+            ["sizeBytes"] = bytes.LongLength,
+            ["sha256"] = result.Sha256,
+        };
+    }
+
+    private async Task<JsonObject> WriteFileLegacyAsync(
         string node,
         string path,
         byte[] bytes,
@@ -193,6 +269,8 @@ internal sealed partial class NodeConnectionHub
 
     private void HandleFileReply(Connection connection, JsonObject message, string type)
     {
+        if (HandleStreamingFileReply(connection, message, type))
+            return;
         var id = SessionWait.Text(message["transferId"]);
         if (
             id is null
@@ -216,6 +294,7 @@ internal sealed partial class NodeConnectionHub
 
     private void FailTransfers(Connection connection, string reason)
     {
+        FailStreamingTransfers(connection, reason);
         foreach (var pair in transfers)
             if (
                 ReferenceEquals(pair.Value.Connection, connection)

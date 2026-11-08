@@ -95,8 +95,22 @@ internal sealed partial class SessionManager
             path = Path.Combine(directory, name);
             try
             {
-                await using (var staging = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, FileOptions.Asynchronous))
-                    await Foxwarm.Nodes.TransferStream.CopyAsync(file.Stream, staging, file.Length, token);
+                await using (
+                    var staging = new FileStream(
+                        path,
+                        FileMode.CreateNew,
+                        FileAccess.Write,
+                        FileShare.None,
+                        65536,
+                        FileOptions.Asynchronous
+                    )
+                )
+                    await Foxwarm.Nodes.TransferStream.CopyAsync(
+                        file.Stream,
+                        staging,
+                        file.Length,
+                        token
+                    );
                 await WaitForIdentityMutationAsync(owner.Id, token);
                 await AuthorizeToolAsync(
                     owner,
@@ -513,14 +527,14 @@ internal sealed partial class SessionManager
     private static JsonObject? FindOwnedImage(IEnumerable<JsonObject> messages, string id)
     {
         foreach (var message in messages)
-            foreach (var part in (message["parts"] as JsonArray ?? []).OfType<JsonObject>())
-                if (
-                    (
-                        SessionWait.Text(part["imageMeta"]?["imageId"])
-                        ?? SessionWait.Text(part["inlineDataRef"]?["imageId"])
-                    ) == id
-                )
-                    return part;
+        foreach (var part in (message["parts"] as JsonArray ?? []).OfType<JsonObject>())
+            if (
+                (
+                    SessionWait.Text(part["imageMeta"]?["imageId"])
+                    ?? SessionWait.Text(part["inlineDataRef"]?["imageId"])
+                ) == id
+            )
+                return part;
         return null;
     }
 }
