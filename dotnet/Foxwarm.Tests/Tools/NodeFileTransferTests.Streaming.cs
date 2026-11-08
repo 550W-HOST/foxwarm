@@ -10,6 +10,62 @@ namespace Foxwarm.Tests;
 public sealed partial class NodeFileTransferTests
 {
     [Fact]
+    public async Task Target_receives_headers_after_Main_claims_the_request_before_source_data()
+    {
+        await using var f = new Fixture();
+        await f.Start();
+        var credentials = f.Manager.Nodes.Registry.Create("waiting-target");
+        var socket = await f.Connect("waiting-target", credentials, streaming: true);
+        var bytes = new byte[128 * 1024];
+        await using var input = new InitiallyPausedStream(bytes);
+        var writing = f.Manager.Nodes.WriteStreamAsync(
+            "waiting-target",
+            "target.bin",
+            input,
+            bytes.Length,
+            false,
+            f.Owner,
+            false,
+            default
+        );
+        var request = await Fixture.Read(socket);
+        using var http = new HttpClient { BaseAddress = new Uri(f.App.Urls.Single()) };
+        http.DefaultRequestHeaders.Add("X-Foxwarm-Node", "waiting-target");
+        http.DefaultRequestHeaders.Authorization = new(
+            "Bearer",
+            credentials["authToken"]!.ToString()
+        );
+        using var response = await http.GetAsync(
+                "/node/transfer/" + request["transferId"]!.ToString(),
+                HttpCompletionOption.ResponseHeadersRead
+            )
+            .WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(bytes.Length, response.Content.Headers.ContentLength);
+        input.Release.TrySetResult();
+        var received = await response.Content.ReadAsByteArrayAsync();
+        Assert.Equal(bytes, received);
+        await Fixture.Send(socket, Fixture.Reply(request, received, write: true));
+        await writing.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    private sealed class InitiallyPausedStream(byte[] bytes) : MemoryStream(bytes, writable: false)
+    {
+        internal readonly TaskCompletionSource Release = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+
+        public override async ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken token = default
+        )
+        {
+            await Release.Task.WaitAsync(token);
+            return await base.ReadAsync(buffer, token);
+        }
+    }
+
+    [Fact]
     public async Task Large_copy_streams_through_real_TypeScript_and_CSharp_CLI_nodes()
     {
         var repository =

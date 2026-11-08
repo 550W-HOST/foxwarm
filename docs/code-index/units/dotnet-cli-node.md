@@ -104,7 +104,7 @@ Each runtime keeps twenty completed outputs in insertion order; replacing a reta
 
 The protocol registration fixture includes the six ordinary native capabilities and the five CLI-owned browser capabilities confirmed by the [browser adapter](./dotnet-cli-browser.md).
 
-`CliNodeFileTests` and the protocol/file process fixtures cover native paths, replacement/patch ownership, transfer publication, images/programmatic data, credentials/pairing/proxy/heartbeat and exact old-connection effects. Normal Source and C# Main fixtures exercise actual file/model/transfer/image callers and peer restarts.
+`CliNodeFileTests`, `CliNodeFileStreamTimeoutTests` and the protocol/file process fixtures cover native paths, replacement/patch ownership, transfer publication and deadlines, images/programmatic data, credentials/pairing/proxy/heartbeat and exact old-connection effects. Normal Source and C# Main fixtures exercise actual file/model/transfer/image callers and peer restarts.
 
 `CliNodeExecTests`, `CliNodeExternalLaunchUncertaintyTests` and the Session/external process fixtures cover prelaunch cancellation, uncertain persistence, output/status, current cwd, exact signed reservations, ACK rejection/retry, expiry, release and shutdown. Normal inbound-MCP and Main/model fixtures exercise real external/Session owners rather than a synthetic model service. Existing Source wrappers can finish under their original interpreter; recovery never replays their commands.
 

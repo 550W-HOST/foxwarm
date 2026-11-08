@@ -13,6 +13,17 @@ internal sealed class NodeFileStream(NodePaths paths, string host, string nodeId
 {
     private const int Threshold = 64 * 1024;
     private static readonly TimeSpan NoProgress = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan ResponseTimeout = TimeSpan.FromSeconds(30);
+
+    private static void RequireSuccess(HttpResponseMessage response)
+    {
+        if (!response.IsSuccessStatusCode)
+            throw new HttpRequestException(
+                $"File transfer endpoint returned HTTP {(int)response.StatusCode}.",
+                null,
+                response.StatusCode
+            );
+    }
 
     private (HttpClient Client, HttpRequestMessage Request) Request(
         string transferId,
@@ -70,13 +81,27 @@ internal sealed class NodeFileStream(NodePaths paths, string host, string nodeId
         using (var deadline = CancellationTokenSource.CreateLinkedTokenSource(token))
         {
             deadline.CancelAfter(NoProgress);
-            request.Content = new SourceContent(input, length, deadline);
-            using var response = await client.SendAsync(
-                request,
-                HttpCompletionOption.ResponseHeadersRead,
-                deadline.Token
-            );
-            response.EnsureSuccessStatusCode();
+            var content = new SourceContent(input, length, deadline);
+            request.Content = content;
+            try
+            {
+                using var response = await client.SendAsync(
+                    request,
+                    HttpCompletionOption.ResponseHeadersRead,
+                    deadline.Token
+                );
+                RequireSuccess(response);
+            }
+            catch (OperationCanceledException error)
+                when (!token.IsCancellationRequested && deadline.IsCancellationRequested)
+            {
+                throw new TimeoutException(
+                    content.Uploaded
+                        ? "File transfer endpoint did not respond within 30 seconds."
+                        : "File transfer made no progress for 60 seconds.",
+                    error
+                );
+            }
         }
         return null;
     }
@@ -172,13 +197,27 @@ internal sealed class NodeFileStream(NodePaths paths, string host, string nodeId
             using (request)
             using (var deadline = CancellationTokenSource.CreateLinkedTokenSource(token))
             {
+                deadline.CancelAfter(ResponseTimeout);
+                HttpResponseMessage received;
+                try
+                {
+                    received = await client.SendAsync(
+                        request,
+                        HttpCompletionOption.ResponseHeadersRead,
+                        deadline.Token
+                    );
+                }
+                catch (OperationCanceledException error)
+                    when (!token.IsCancellationRequested && deadline.IsCancellationRequested)
+                {
+                    throw new TimeoutException(
+                        "File transfer endpoint did not respond within 30 seconds.",
+                        error
+                    );
+                }
+                using var response = received;
+                RequireSuccess(response);
                 deadline.CancelAfter(NoProgress);
-                using var response = await client.SendAsync(
-                    request,
-                    HttpCompletionOption.ResponseHeadersRead,
-                    deadline.Token
-                );
-                response.EnsureSuccessStatusCode();
                 if (response.Content.Headers.ContentLength != length)
                     throw new InvalidDataException("File transfer size is invalid.");
                 await using var input = await response.Content.ReadAsStreamAsync(deadline.Token);
@@ -230,6 +269,9 @@ internal sealed class NodeFileStream(NodePaths paths, string host, string nodeId
     private sealed class SourceContent(Stream input, long length, CancellationTokenSource deadline)
         : HttpContent
     {
+        private int uploaded;
+        internal bool Uploaded => Volatile.Read(ref uploaded) != 0;
+
         protected override bool TryComputeLength(out long size)
         {
             size = length;
@@ -263,6 +305,8 @@ internal sealed class NodeFileStream(NodePaths paths, string host, string nodeId
                 remaining -= read;
                 deadline.CancelAfter(NoProgress);
             }
+            Volatile.Write(ref uploaded, 1);
+            deadline.CancelAfter(ResponseTimeout);
         }
     }
 }

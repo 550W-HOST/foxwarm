@@ -115,6 +115,24 @@ internal sealed partial class NodeConnectionHub
             ["restrictToAgentDir"] = restrict,
         };
 
+    private static async Task<object> WaitForTransferStartAsync(
+        StreamInvocation invocation,
+        CancellationToken token
+    )
+    {
+        try
+        {
+            return await invocation.Start.Task.WaitAsync(TimeSpan.FromSeconds(30), token);
+        }
+        catch (TimeoutException error)
+        {
+            throw new TimeoutException(
+                "The Node did not open the file transfer connection within 30 seconds. Check that /node/transfer/ reaches Main.",
+                error
+            );
+        }
+    }
+
     internal async Task<TransferSource> OpenReadStreamAsync(
         string node,
         string path,
@@ -151,7 +169,7 @@ internal sealed partial class NodeConnectionHub
                 token,
                 () => RequireCurrentFileConnection(node, invocation.Connection)
             );
-            var first = await invocation.Start.Task.WaitAsync(TimeSpan.FromSeconds(30), token);
+            var first = await WaitForTransferStartAsync(invocation, token);
             if (first is JsonObject inline)
             {
                 if (SessionWait.Number(inline["file"]?["sizeBytes"]) >= StreamThreshold)
@@ -232,7 +250,7 @@ internal sealed partial class NodeConnectionHub
                 token,
                 () => RequireCurrentFileConnection(node, invocation.Connection)
             );
-            await invocation.Start.Task.WaitAsync(TimeSpan.FromSeconds(30), token);
+            await WaitForTransferStartAsync(invocation, token);
             await invocation.Finished.Task.WaitAsync(token);
             var reply = await invocation.Reply.Task.WaitAsync(TimeSpan.FromSeconds(30), token);
             var result =
@@ -402,6 +420,8 @@ internal sealed partial class NodeConnectionHub
             {
                 context.Response.ContentLength = pending.Length;
                 pending.Stop.CancelAfter(TimeSpan.FromSeconds(60));
+                await context.Response.StartAsync(stopToken);
+                await context.Response.Body.FlushAsync(stopToken);
                 pending.Sha256 = await TransferStream.CopyAsync(
                     pending.Input!,
                     new ProgressWriteStream(context.Response.Body, pending.Stop),

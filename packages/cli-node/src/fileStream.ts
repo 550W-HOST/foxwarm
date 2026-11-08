@@ -12,6 +12,7 @@ import { createMasterWebSocketOptions } from './masterProxy';
 
 const STREAM_THRESHOLD = 64 * 1024;
 const NO_PROGRESS_MS = 60_000;
+const RESPONSE_MS = 30_000;
 
 type Connection = { host: string; nodeId: string; authToken: string; signal: AbortSignal };
 type FileRequest = { transferId: string; filePath: string; agentName: string; restrictToAgentDir: boolean };
@@ -31,6 +32,23 @@ function transferRequest(connection: Connection, transferId: string, method: 'GE
     signal: connection.signal,
   });
   request.setTimeout(NO_PROGRESS_MS, () => request.destroy(new Error('File transfer made no progress.')));
+  let timer = setTimeout(() => request.destroy(new Error(method === 'GET'
+    ? 'File transfer endpoint did not respond within 30 seconds.'
+    : 'File transfer connection made no progress for 60 seconds.')), method === 'GET' ? RESPONSE_MS : NO_PROGRESS_MS);
+  const clear = () => clearTimeout(timer);
+  let responded = false;
+  if (method === 'PUT') {
+    // setTimeout on a ClientRequest starts only after a socket connects.
+    request.once('socket', socket => {
+      if (socket.connecting) socket.once('connect', clear); else clear();
+    });
+    request.once('finish', () => {
+      clear();
+      if (!responded) timer = setTimeout(() => request.destroy(new Error('File transfer endpoint did not respond within 30 seconds.')), RESPONSE_MS);
+    });
+  }
+  request.once('response', () => { responded = true; clear(); });
+  request.once('close', clear);
   return request;
 }
 
@@ -59,7 +77,7 @@ function response(request: http.ClientRequest): Promise<http.IncomingMessage> {
 function ensureSuccess(reply: http.IncomingMessage): void {
   if (reply.statusCode !== 200) {
     reply.resume();
-    throw new Error(`File transfer request failed (HTTP ${reply.statusCode}).`);
+    throw new Error(`File transfer endpoint returned HTTP ${reply.statusCode}.`);
   }
 }
 
@@ -84,6 +102,13 @@ export async function streamReadFile(connection: Connection, input: FileRequest)
       return buildNodeTransferFilePayload(input.filePath, buffer);
     }
     const request = transferRequest(connection, input.transferId, 'PUT', length);
+    let statusError: Error | undefined;
+    request.once('response', reply => {
+      if (reply.statusCode !== 200) {
+        statusError = new Error(`File transfer endpoint returned HTTP ${reply.statusCode}.`);
+        request.destroy(statusError);
+      }
+    });
     const received = response(request);
     void received.catch(() => {});
     try {
@@ -94,7 +119,7 @@ export async function streamReadFile(connection: Connection, input: FileRequest)
     } catch (error) {
       request.destroy();
       await received.catch(() => {});
-      throw error;
+      throw statusError ?? error;
     }
   } finally {
     await file.close();

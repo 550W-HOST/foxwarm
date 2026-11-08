@@ -26,6 +26,88 @@ test('FIFO reads fail promptly without exhausting the filesystem thread pool', {
   }
 });
 
+test('streaming transfer reports endpoint HTTP errors in both directions', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cli-file-status-'));
+  const source = path.join(root, 'source');
+  await fs.writeFile(source, Buffer.alloc(128 * 1024));
+  const server = http.createServer((req, res) => {
+    req.resume();
+    res.writeHead(Number(req.url!.split('/').at(-1)));
+    res.end();
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const connection = { host: `http://127.0.0.1:${(server.address() as any).port}`, nodeId: 'test-node', authToken: 'token', signal: new AbortController().signal };
+  try {
+    for (const status of [404, 405, 413, 502]) {
+      const request = { transferId: String(status), filePath: source, agentName: 'main', restrictToAgentDir: false };
+      await assert.rejects(streamReadFile(connection, request), new RegExp(`File transfer endpoint returned HTTP ${status}`));
+      await assert.rejects(
+        streamWriteFile(connection, { ...request, filePath: path.join(root, `target-${status}`), overwrite: false, sizeBytes: 128 * 1024 }),
+        new RegExp(`File transfer endpoint returned HTTP ${status}`),
+      );
+    }
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    await fs.remove(root);
+  }
+});
+
+test('response deadlines do not impose a total upload deadline', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cli-file-timeout-'));
+  const source = path.join(root, 'source');
+  await fs.writeFile(source, Buffer.alloc(128 * 1024));
+  const large = path.join(root, 'large');
+  const file = await fs.open(large, 'w');
+  await fs.ftruncate(file, 64 * 1024 * 1024);
+  await fs.close(file);
+  const server = http.createServer((req, res) => {
+    if (req.url === '/node/transfer/healthy') {
+      req.pause();
+      setTimeout(() => req.resume(), 32_000);
+      req.on('end', () => res.end());
+    } else if (req.url === '/node/transfer/healthy-download') {
+      res.writeHead(200, { 'Content-Length': 128 * 1024 });
+      res.flushHeaders();
+      setTimeout(() => res.end(Buffer.alloc(128 * 1024)), 32_000);
+    } else if (req.url === '/node/transfer/stalled-download') {
+      res.writeHead(200, { 'Content-Length': 128 * 1024 });
+      res.flushHeaders();
+    } else req.resume();
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const controller = new AbortController();
+  const fallback = setTimeout(() => controller.abort(), 90_000);
+  const connection = { host: `http://127.0.0.1:${(server.address() as any).port}`, nodeId: 'test-node', authToken: 'token', signal: controller.signal };
+  try {
+    const read = { transferId: 'upload', filePath: source, agentName: 'main', restrictToAgentDir: false };
+    const started = Date.now();
+    await Promise.all([
+      assert.rejects(streamReadFile(connection, read), /endpoint did not respond within 30 seconds/),
+      assert.rejects(
+        streamWriteFile(connection, { ...read, transferId: 'download', filePath: path.join(root, 'target'), overwrite: false, sizeBytes: 128 * 1024 }),
+        /endpoint did not respond within 30 seconds/,
+      ),
+      streamReadFile(connection, { ...read, transferId: 'healthy', filePath: large }),
+      streamWriteFile(connection, {
+        ...read, transferId: 'healthy-download', filePath: path.join(root, 'healthy-target'), overwrite: false, sizeBytes: 128 * 1024,
+      }),
+      assert.rejects(
+        streamWriteFile(connection, { ...read, transferId: 'stalled-download', filePath: path.join(root, 'stalled-target'), overwrite: false, sizeBytes: 128 * 1024 }),
+        (error: Error) => error.name !== 'AbortError',
+      ),
+    ]);
+    assert(Date.now() - started >= 59_000);
+    assert.deepEqual((await fs.readdir(root)).sort(), ['healthy-target', 'large', 'source']);
+  } finally {
+    clearTimeout(fallback);
+    controller.abort();
+    server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    await fs.remove(root);
+  }
+});
+
 test('streaming file transfer uses authenticated HTTP, exact lengths and atomic publication', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cli-file-stream-'));
   const length = 101 * 1024 * 1024 + 17;

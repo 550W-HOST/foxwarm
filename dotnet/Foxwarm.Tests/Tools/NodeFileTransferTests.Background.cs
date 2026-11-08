@@ -418,6 +418,10 @@ public sealed partial class NodeFileTransferTests
             Assert.Contains("\"status\":\"failed\"", receiptEvent.Parts![0]["system"]!.ToString());
             var startEvent = await Event(startId);
             Assert.Contains("\"status\":\"failed\"", startEvent.Parts![0]["system"]!.ToString());
+            Assert.Contains(
+                "The Node did not open the file transfer connection within 30 seconds. Check that /node/transfer/ reaches Main.",
+                startEvent.Parts![0]["system"]!.ToString()
+            );
             var sourceEvent = await Event(sourceId);
             Assert.True(clock.Elapsed > TimeSpan.FromSeconds(55));
             Assert.Contains("\"status\":\"failed\"", sourceEvent.Parts![0]["system"]!.ToString());
