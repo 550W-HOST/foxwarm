@@ -7,6 +7,8 @@ description: "Create, inspect, update, and delete Foxwarm session timers, includ
 
 Use this skill when you need to schedule future work for a session, inspect existing timers, modify a timer without recreating it, or remove a timer.
 
+Before polling an external service, check whether it can push. When it can (GitHub, Cloudflare and many monitors send webhooks) and Foxwarm is reachable from it, an inbound webhook reacts when the event happens and can run the same kind of quiet handler script. Webhooks are access identities that the user adds in Setup › Config, described in [access-control identities](../access-control/references/identities.md); agents cannot create them, so propose the configuration instead. Keep polling timers for sources that cannot push, for instances the source cannot reach, and as an infrequent check for deliveries a webhook missed.
+
 Timer tools are intentionally **not injected into the default model-facing tool schema**. After loading this skill, use `search_tools` / `call_tool` with the builtin timer tool names below.
 
 ## Tools

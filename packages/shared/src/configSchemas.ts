@@ -503,6 +503,14 @@ export const APP_CONFIG_SCHEMA = {
                     type: 'object',
                     additionalProperties: false,
                     required: ['session', 'verify'],
+                    allOf: [
+                      { if: { not: { properties: { verify: { const: 'github' } } } }, then: { not: { required: ['events'] } } },
+                      {
+                        if: { required: ['action'], properties: { action: { const: 'toolscript' } } },
+                        then: { required: ['script'], not: { required: ['wake'] } },
+                        else: { not: { required: ['script'] } },
+                      },
+                    ],
                     properties: {
                       session: { type: 'string', minLength: 1, maxLength: 512, pattern: '^[^*]+$' },
                       verify: {
@@ -517,6 +525,20 @@ export const APP_CONFIG_SCHEMA = {
                         ],
                       },
                       events: { type: 'array', minItems: 1, maxItems: 64, uniqueItems: true, items: { type: 'string', pattern: '^[A-Za-z0-9_.:-]{1,128}$' } },
+                      action: { type: 'string', enum: ['message', 'toolscript'], default: 'message' },
+                      wake: { type: 'boolean', default: true },
+                      script: {
+                        type: 'object',
+                        additionalProperties: false,
+                        properties: {
+                          code: { type: 'string', minLength: 1 },
+                          filePath: { type: 'string', minLength: 1 },
+                          node: { type: 'string', minLength: 1 },
+                          args: { type: 'object', not: { required: ['webhook'] } },
+                          timeoutSecs: { type: 'number', exclusiveMinimum: 0 },
+                        },
+                        anyOf: [{ required: ['code'] }, { required: ['filePath'] }],
+                      },
                     },
                   },
                 },

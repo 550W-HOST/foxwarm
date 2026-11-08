@@ -90,6 +90,10 @@ Main-local script execution can run while its owner's model request is in flight
 
 Exact schedule grammar/time interpretation, normalization, rescheduling failure behavior, wait-timeout timers, and persisted records remain in [timers](../units/src-timers.md). Internal Session-wait timeouts are not public script timers or ordinary message-timer subscriptions.
 
+## React to an external event
+
+**User-approved alternative to polling (2026-11-08).** When a source can push (GitHub, Cloudflare, monitoring), an inbound webhook replaces a polling timer: the event arrives once, when it happens. A webhook either queues the payload as untrusted input for its fixed Session, optionally without waking it, or runs a configured owner-bound handler script through the same unattended dispatcher as ToolScript timers, so routine events can be filtered or acted on without a model turn. Handler runs for one webhook are serialized; acceptance means the run is queued, not that it succeeded. Polling timers remain the choice when the source cannot push or Foxwarm is not reachable from it. Contract: [D-host-inbound-webhooks](../units/host-runtime.md#d-host-inbound-webhooks).
+
 ## Change and test entry points
 
 - `src/tools/unifiedSearch.ts`, `src/tools/resolvedTools.ts`, and `src/toolscript.ts` connect discovery, native nested dispatch, execution projection, and saved continuation. `src/tools/unifiedTools.test.ts` covers ordinary/programmatic discovery; `src/toolscript.test.ts` covers native values, lean outer results, cumulative inspection, continuation deltas, real provider serialization and image promotion.

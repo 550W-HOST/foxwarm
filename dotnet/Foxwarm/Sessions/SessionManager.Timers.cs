@@ -8,6 +8,9 @@ internal sealed partial class SessionManager
 {
     private readonly MainTimers timers;
     internal MainTimers Timers => timers;
+
+    /// <summary>In-memory webhook delivery history and handler state shown in System › Webhooks.</summary>
+    internal WebhookActivity Webhooks { get; } = new();
     internal Func<string, string>? TimerSessionName { get; set; }
 
     private static string TimerOwner(SessionOwner source, JsonObject args) =>
@@ -312,31 +315,11 @@ internal sealed partial class SessionManager
             var owner =
                 await GetExistingAsync(SessionWait.Text(timer["sessionId"])!, acceptedTimer: true)
                 ?? throw new InvalidDataException("Timer owner Session not found.");
-            using (BeginOwnerMutation(owner, acceptedTimer: true))
-            {
-                await WaitForIdentityMutationAsync(owner.Id);
-                owner.Entry.RequireIdentityAuthority();
-                if (!IsCurrentOwner(owner))
-                    throw new InvalidOperationException("Timer owner lifetime is unavailable.");
-            }
-            // Admission fences the exact owner, not the script's nested mutations. The scheduler
-            // drains the accepted slice; retaining this lease would block surviving-child deletion.
-            // A separate dispatcher has no foreground batch, wait control or abort slot.
-            var dispatcher = new SessionToolExecutor(
-                new WorkspaceTools(
-                    agents.AgentDirectory(owner.Agent),
-                    pendingWrites,
-                    owner.Id,
-                    owner.Agent
-                ),
+            var outcome = await RunOwnerScriptAsync(
                 owner,
-                this,
-                tools,
-                unattended: true
-            );
-            var outcome = await dispatcher.ExecuteAsync(
-                new JsonObject { ["name"] = "run_script", ["args"] = timer["script"]!.DeepClone() },
-                CancellationToken.None
+                (JsonObject)timer["script"]!,
+                acceptedTimer: true,
+                "Timer owner lifetime is unavailable."
             );
             if (outcome is JsonObject result && result["error"] is not null)
                 Console.Error.WriteLine(
@@ -345,7 +328,7 @@ internal sealed partial class SessionManager
                         + " "
                         + result.ToJsonString()
                 );
-            return outcome as JsonObject;
+            return outcome;
         }
         SessionOwner target;
         if (MainTimers.Flag(timer["newSession"]))
@@ -365,6 +348,54 @@ internal sealed partial class SessionManager
             )
         );
         return null;
+    }
+
+    /// <summary>
+    /// Runs a verified webhook delivery's handler in its fixed target Session. Ordinary owner
+    /// admission applies, so a handler cannot start once shutdown has begun.
+    /// </summary>
+    internal async Task<JsonObject?> RunWebhookScriptAsync(string sessionId, JsonObject script) =>
+        await RunOwnerScriptAsync(
+            await RequiredAsync(sessionId),
+            script,
+            acceptedTimer: false,
+            "Webhook target lifetime is unavailable."
+        );
+
+    // Unattended ToolScript owned by one Session, shared by ToolScript timers and webhook handlers.
+    private async Task<JsonObject?> RunOwnerScriptAsync(
+        SessionOwner owner,
+        JsonObject script,
+        bool acceptedTimer,
+        string unavailable
+    )
+    {
+        using (BeginOwnerMutation(owner, acceptedTimer))
+        {
+            await WaitForIdentityMutationAsync(owner.Id);
+            owner.Entry.RequireIdentityAuthority();
+            if (!IsCurrentOwner(owner))
+                throw new InvalidOperationException(unavailable);
+        }
+        // Admission fences the exact owner, not the script's nested mutations. The caller
+        // drains the accepted slice; retaining this lease would block surviving-child deletion.
+        // A separate dispatcher has no foreground batch, wait control or abort slot.
+        var dispatcher = new SessionToolExecutor(
+            new WorkspaceTools(
+                agents.AgentDirectory(owner.Agent),
+                pendingWrites,
+                owner.Id,
+                owner.Agent
+            ),
+            owner,
+            this,
+            tools,
+            unattended: true
+        );
+        return await dispatcher.ExecuteAsync(
+                new JsonObject { ["name"] = "run_script", ["args"] = script.DeepClone() },
+                CancellationToken.None
+            ) as JsonObject;
     }
 
     private async Task<SessionOwner> CreateTimerSessionAsync(JsonObject timer)

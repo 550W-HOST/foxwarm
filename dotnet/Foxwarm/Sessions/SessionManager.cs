@@ -717,6 +717,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
             )
         );
         await timers.DisposeAsync();
+        // Webhook handlers are ToolScript runs too; settle them before ToolScript closes.
+        await Webhooks.DrainAsync();
         await DrainPublicationsAsync();
         lock (lifecycle)
             current = sessions.Values.ToArray();

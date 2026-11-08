@@ -38,7 +38,7 @@ public sealed class WebhookHttpTests
             mcp: {}
         """;
 
-    private static JsonObject Access(string identities) =>
+    internal static JsonObject Access(string identities) =>
         ConfigurationYaml.Parse(
             "identities:\n" + string.Join('\n', identities.Split('\n').Select(line => "  " + line)),
             "access"
@@ -144,7 +144,12 @@ public sealed class WebhookHttpTests
         bool bypass
     ) => Assert.Equal(bypass, WebhookHttp.IsRequest(path));
 
-    private static async Task<string> WriteDataAsync(TempDirectory temp, Uri provider, string bot)
+    internal static async Task<string> WriteDataAsync(
+        TempDirectory temp,
+        Uri provider,
+        string bot,
+        string identities = Identities
+    )
     {
         var data = Path.Combine(temp.Path, "data");
         Directory.CreateDirectory(Path.Combine(data, "state"));
@@ -152,7 +157,7 @@ public sealed class WebhookHttpTests
             Path.Combine(data, "state", "config.yaml"),
             bot
                 + "\naccess:\n  identities:\n"
-                + string.Join('\n', Identities.Split('\n').Select(line => "    " + line))
+                + string.Join('\n', identities.Split('\n').Select(line => "    " + line))
                 + "\n"
         );
         await File.WriteAllTextAsync(
@@ -169,7 +174,7 @@ public sealed class WebhookHttpTests
         return data;
     }
 
-    private static async Task SeedMainAsync(string data, ModelConfiguration config, Uri provider)
+    internal static async Task SeedMainAsync(string data, ModelConfiguration config, Uri provider)
     {
         await using var seed = new SessionManager(
             data,
@@ -182,7 +187,7 @@ public sealed class WebhookHttpTests
         await seed.CreateNamedAsync("main", "main", null, null);
     }
 
-    private static HttpServerSettings Ephemeral(HttpServerSettings captured) =>
+    internal static HttpServerSettings Ephemeral(HttpServerSettings captured) =>
         captured with
         {
             Port = 0,
@@ -190,14 +195,14 @@ public sealed class WebhookHttpTests
             Address = new("http://127.0.0.1", "", "/", false),
         };
 
-    private static HttpClient Client(MainHost host) =>
+    internal static HttpClient Client(MainHost host) =>
         new(new HttpClientHandler { UseCookies = false })
         {
             BaseAddress = new Uri(host.App.Urls.Single()),
             Timeout = TimeSpan.FromSeconds(15),
         };
 
-    private static Task<HttpResponseMessage> Post(
+    internal static Task<HttpResponseMessage> Post(
         HttpClient client,
         string path,
         byte[] body,
@@ -216,7 +221,7 @@ public sealed class WebhookHttpTests
         return client.SendAsync(request);
     }
 
-    private static Task<HttpResponseMessage> GitHub(
+    internal static Task<HttpResponseMessage> GitHub(
         HttpClient client,
         string id,
         string secret,
@@ -243,7 +248,7 @@ public sealed class WebhookHttpTests
             ]
         );
 
-    private static async Task<JsonObject> Json(HttpResponseMessage response) =>
+    internal static async Task<JsonObject> Json(HttpResponseMessage response) =>
         (await response.Content.ReadFromJsonAsync<JsonObject>())!;
 
     [Fact]

@@ -155,9 +155,12 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
         // Administrator list subscribers refresh System › Timers on timer changes and
         // recorded firings. Scoped clients cannot subscribe to the list.
         void TimersChanged() => Deliver(new JsonObject { ["type"] = "timers-changed" });
+        // System › Webhooks refreshes on deliveries, handler progress and webhook config saves.
+        void WebhooksChanged() => Deliver(new JsonObject { ["type"] = "webhooks-changed" });
         runtime.Changed += Changed;
         runtime.TopologyChanged += Invalidated;
         runtime.Manager.Timers.Changed += TimersChanged;
+        runtime.Manager.Webhooks.Changed += WebhooksChanged;
         async Task Pump()
         {
             await foreach (var item in output.Reader.ReadAllAsync(lifetime.Token))
@@ -390,6 +393,7 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
             runtime.Changed -= Changed;
             runtime.TopologyChanged -= Invalidated;
             runtime.Manager.Timers.Changed -= TimersChanged;
+            runtime.Manager.Webhooks.Changed -= WebhooksChanged;
             lifetime.Cancel();
             lock (gate)
             {

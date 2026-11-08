@@ -165,7 +165,12 @@ internal sealed class SessionRuntime(SessionManager manager)
     /// Strictly admits one verified webhook delivery to an existing Session. Returns false when
     /// the same delivery receipt was already accepted; a missing target is never created.
     /// </summary>
-    internal async Task<bool> SubmitWebhookAsync(string id, QueueItem item, string? receipt)
+    internal async Task<bool> SubmitWebhookAsync(
+        string id,
+        QueueItem item,
+        string? receipt,
+        bool wake = true
+    )
     {
         var owner = await manager.RequiredAsync(id);
         await RequireExternalOwnerAsync(owner);
@@ -177,9 +182,22 @@ internal sealed class SessionRuntime(SessionManager manager)
             {
                 if (!manager.Accepting)
                     throw new InvalidOperationException("Host is shutting down.");
-            }
+            },
+            wake
         );
     }
+
+    /// <summary>Runs a webhook handler as an unattended ToolScript owned by the target Session.</summary>
+    internal Task<JsonObject?> RunWebhookScriptAsync(string id, JsonObject script) =>
+        manager.RunWebhookScriptAsync(id, script);
+
+    internal Task<JsonObject> ReadScriptRunAsync(
+        string runId,
+        string ownerId,
+        CancellationToken token
+    ) => manager.ToolScript.ReadOwnedRunAsync(runId, ownerId, token);
+
+    internal WebhookActivity Webhooks => manager.Webhooks;
 
     internal bool Accepting => manager.Accepting;
 

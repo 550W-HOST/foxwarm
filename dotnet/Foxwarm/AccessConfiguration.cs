@@ -21,19 +21,31 @@ internal enum WebhookVerification
     Bearer,
 }
 
+internal enum WebhookAction
+{
+    Message,
+    ToolScript,
+}
+
 // An entry capability only: a verified delivery reaches one fixed Session and grants no tool authority.
 internal sealed record WebhookSurface(
     string Session,
     WebhookVerification Verify,
     string? Header,
-    ImmutableArray<string> Events
+    ImmutableArray<string> Events,
+    WebhookAction Action = WebhookAction.Message,
+    JsonObject? Script = null,
+    bool Wake = true
 )
 {
     internal bool SameAs(WebhookSurface other) =>
         Session == other.Session
         && Verify == other.Verify
         && string.Equals(Header, other.Header, StringComparison.OrdinalIgnoreCase)
-        && Events.SequenceEqual(other.Events, StringComparer.Ordinal);
+        && Events.SequenceEqual(other.Events, StringComparer.Ordinal)
+        && Action == other.Action
+        && Wake == other.Wake
+        && JsonNode.DeepEquals(Script, other.Script);
 }
 
 internal sealed record AccessChange(
@@ -178,7 +190,16 @@ internal sealed class AccessConfiguration
             throw new InvalidDataException(
                 "access identity surfaces.webhook must be a YAML object."
             );
-        Keys(hook, "access identity surfaces.webhook", "session", "verify", "events");
+        Keys(
+            hook,
+            "access identity surfaces.webhook",
+            "session",
+            "verify",
+            "events",
+            "action",
+            "script",
+            "wake"
+        );
         var session = Text(hook["session"]);
         if (string.IsNullOrWhiteSpace(session) || session.Length > 512 || session.Contains('*'))
             throw new InvalidDataException(
@@ -239,7 +260,68 @@ internal sealed class AccessConfiguration
             }
             events = names.ToImmutableArray();
         }
-        return new(session, verify, header, events);
+        var action = Text(hook["action"]) switch
+        {
+            null when !hook.ContainsKey("action") => WebhookAction.Message,
+            "message" => WebhookAction.Message,
+            "toolscript" => WebhookAction.ToolScript,
+            _ => throw new InvalidDataException(
+                "access identity webhook.action must be message or toolscript."
+            ),
+        };
+        JsonObject? script = null;
+        if (action == WebhookAction.ToolScript)
+            script = WebhookScript(hook["script"]);
+        else if (hook.ContainsKey("script"))
+            throw new InvalidDataException(
+                "access identity webhook.script requires action: toolscript."
+            );
+        var wake = true;
+        if (hook.ContainsKey("wake"))
+        {
+            if (action != WebhookAction.Message)
+                throw new InvalidDataException(
+                    "access identity webhook.wake requires action: message."
+                );
+            if (hook["wake"] is not JsonValue flag || !flag.TryGetValue<bool>(out wake))
+                throw new InvalidDataException(
+                    "access identity webhook.wake must be true or false."
+                );
+        }
+        return new(session, verify, header, events, action, script, wake);
+    }
+
+    // The same specification as a ToolScript timer, always run in the foreground so one
+    // identity's handlers stay serialized. `args.webhook` carries the delivery.
+    private static JsonObject WebhookScript(JsonNode? value)
+    {
+        if (value is not JsonObject script)
+            throw new InvalidDataException(
+                "access identity webhook.script must be a ToolScript specification."
+            );
+        Keys(
+            script,
+            "access identity webhook.script",
+            "code",
+            "filePath",
+            "node",
+            "args",
+            "timeoutSecs"
+        );
+        if (script["args"] is JsonObject args && args.ContainsKey("webhook"))
+            throw new InvalidDataException(
+                "access identity webhook.script.args.webhook is reserved for the delivery."
+            );
+        try
+        {
+            return Foxwarm.ToolScript.MainToolScript.NormalizeStartArgs(
+                (JsonObject)script.DeepClone()
+            );
+        }
+        catch (InvalidDataException error)
+        {
+            throw new InvalidDataException("access identity webhook.script: " + error.Message);
+        }
     }
 
     internal static bool WebhookEventName(string name) =>

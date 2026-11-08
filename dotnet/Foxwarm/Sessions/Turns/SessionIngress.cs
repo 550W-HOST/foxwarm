@@ -42,31 +42,38 @@ public sealed class SessionIngress
             (entry, admitted) => entry.SaveLane.AdmitTimerAsync(admitted)
         );
 
-    /// <summary>Strict external admission. Returns false when the delivery receipt was already accepted.</summary>
+    /// <summary>
+    /// Strict external admission. Returns false when the delivery receipt was already accepted.
+    /// A non-waking delivery comes only from administrator configuration and waits for the
+    /// Session's next turn.
+    /// </summary>
     internal Task<bool> EnqueueWebhookAsync(
         string sessionId,
         QueueItem item,
         string? receipt,
-        Action beforeAdmission
+        Action beforeAdmission,
+        bool wake = true
     ) =>
         EnqueueCoreAsync(
             sessionId,
             item,
             (entry, admitted) =>
-                entry.SaveLane.AdmitWebhookAsync(admitted, receipt, beforeAdmission)
+                entry.SaveLane.AdmitWebhookAsync(admitted, receipt, beforeAdmission),
+            wake
         );
 
     private async Task<bool> EnqueueCoreAsync(
         string sessionId,
         QueueItem item,
-        Func<SessionEntry, QueueItem, Task<bool>> admit
+        Func<SessionEntry, QueueItem, Task<bool>> admit,
+        bool trigger = true
     )
     {
         EnsureSupported(item);
         // Model/channel callers cannot smuggle the trusted passive marker through ingress.
         item = item with
         {
-            Trigger = true,
+            Trigger = trigger,
         };
         var entry = registry.GetRequired(sessionId);
         var admitted = await admit(entry, item).ConfigureAwait(false);

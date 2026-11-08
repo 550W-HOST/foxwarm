@@ -47,7 +47,7 @@ The current access parser accepts only:
 - Each identity: `token` and `surfaces`, with at least one supported surface. Tokens must be distinct, non-empty bounded Bearer-token strings (up to 4,096 UTF-8 bytes).
 - `webui`: only `sessions`, a non-empty list of up to 256 distinct exact Session IDs or `<agent>/*` scopes. This is a limit on configured entries, not on the number of Sessions an Agent scope may select.
 - `mcp`: only `{}`.
-- `webhook`: the only surface of its identity, with `session` (one existing Session ID or alias, no pattern), `verify` (`github`, `bearer`, or `{header: <name>}`; `Authorization`, `Cookie`, `Host` and body-framing headers are reserved), and optional `events` (GitHub only, 1–64 distinct event names).
+- `webhook`: the only surface of its identity, with `session` (one existing Session ID or alias, no pattern), `verify` (`github`, `bearer`, or `{header: <name>}`; `Authorization`, `Cookie`, `Host` and body-framing headers are reserved), and optional `events` (GitHub only, 1–64 distinct event names). `action` is `message` (default; optional `wake: false` saves deliveries without starting a turn) or `toolscript` with a required `script` (`code` or `filePath`, optional `node`, `args`, `timeoutSecs`; no `mode`; `args.webhook` is reserved for the delivery) that runs as an unattended ToolScript of the target Session instead of delivering a message.
 
 Unknown fields are rejected. These tokens are explicit YAML values, not environment-variable substitutions. Do not reuse the instance superuser or Node pairing token; the app validation also rejects identity-token reuse of the instance superuser token. There is no token-issuance API or separate persisted guest-token store.
 

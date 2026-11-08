@@ -1,19 +1,20 @@
 # Unit: webui-system-view
 
-Files: packages/webui/src/components/SystemView.tsx, packages/webui/src/components/SystemSessions.tsx, packages/webui/src/components/SystemAgents.tsx, packages/webui/src/components/SystemShared.tsx, packages/webui/src/components/SystemTimers.tsx, packages/webui/src/components/AgentSettingsFields.tsx, packages/webui/src/architectureOperations.ts, packages/webui/src/systemTimers.ts, packages/webui/test/architectureOperations.test.mjs, packages/webui/test/systemTimers.test.mjs, packages/webui/test/mainHostSystem.e2e.mjs, packages/webui/test/mainHostSystemTimers.e2e.mjs
+Files: packages/webui/src/components/SystemView.tsx, packages/webui/src/components/SystemSessions.tsx, packages/webui/src/components/SystemAgents.tsx, packages/webui/src/components/SystemShared.tsx, packages/webui/src/components/SystemTimers.tsx, packages/webui/src/components/SystemWebhooks.tsx, packages/webui/src/components/AgentSettingsFields.tsx, packages/webui/src/architectureOperations.ts, packages/webui/src/systemTimers.ts, packages/webui/src/systemWebhooks.ts, packages/webui/test/architectureOperations.test.mjs, packages/webui/test/systemTimers.test.mjs, packages/webui/test/systemWebhooks.test.mjs, packages/webui/test/mainHostSystem.e2e.mjs, packages/webui/test/mainHostSystemTimers.e2e.mjs, packages/webui/test/mainHostSystemWebhooks.e2e.mjs
 Secondary files: packages/webui/src/components/SystemNodes.tsx, packages/webui/src/components/TokenUsageDetails.tsx, packages/webui/src/useNodeDirectory.ts, packages/webui/src/App.tsx, packages/webui/src/workbench/utils.ts, packages/webui/test/nodeOnboarding.e2e.mjs, packages/webui/test/boundedSessionReplay.test.mjs
 
 ## Purpose
 
-The **System** page explains how Foxwarm is organized and running, in four sections: **Agents** (persistent workspaces), **Sessions** (runtime state, placement, usage and the collaboration timeline), **Nodes** (execution environments and the Sessions on them) and **Timers** (scheduled messages and scripts across all Sessions). The Sidebar answers which Session to enter; System is diagnostic and administrative.
+The **System** page explains how Foxwarm is organized and running, in five sections: **Agents** (persistent workspaces), **Sessions** (runtime state, placement, usage and the collaboration timeline), **Nodes** (execution environments and the Sessions on them) **Timers** (scheduled messages and scripts across all Sessions) and **Webhooks** (configured inbound webhooks and their recent deliveries). The Sidebar answers which Session to enter; System is diagnostic and administrative.
 
 ## Key Exports
 
-- `SystemView` — owns the bounded Session catalog, Node directory, Agent registry, section switching and filters; renders the four sections. `SystemSection` / `SYSTEM_SECTIONS` name them.
+- `SystemView` — owns the bounded Session catalog, Node directory, Agent registry, section switching and filters; renders the five sections. `SystemSection` / `SYSTEM_SECTIONS` name them.
 - `SessionFilterBar`, `SessionOperationRow`, `SessionInspector` (`SystemSessions.tsx`) — Sessions list controls, rows and inspector.
 - `AgentRegistryCard`, `AgentRegistryInspector` (`SystemAgents.tsx`) — Agent registry.
 - `SystemNodes` ([webui-nodes](./webui-nodes.md)) — Nodes section.
 - `SystemTimers`, `SessionTimersSection` (`SystemTimers.tsx`) — Timers section and the Session inspector's Timers section; `systemTimers.ts` owns their pure list projection, filters, ordering and edit-request building.
+- `SystemWebhooks` (`SystemWebhooks.tsx`) — read-only Webhooks section; `systemWebhooks.ts` owns its labels, outcome tones, loopback-address check and ordering.
 - `UsagePie` and formatting helpers (`SystemShared.tsx`).
 - `getArchitectureSessionNodeId(session)` — effective placement: an active tool's exact execution node, otherwise the Session's current node, otherwise `master`.
 - `getArchitectureSessionModel(session)` — model in use, otherwise the configured model.
@@ -24,9 +25,9 @@ The **System** page explains how Foxwarm is organized and running, in four secti
 
 ### Page and navigation
 
-- Header: title System, a per-section subtitle and the Agents | Sessions | Nodes | Timers switch. There is no global summary-card row; each section shows only its own summary (Agents: count; Sessions: active / waiting / queued, which also set the status filter; Nodes: Online / Total; Timers: timers / paused / failing).
+- Header: title System, a per-section subtitle and the Agents | Sessions | Nodes | Timers | Webhooks switch. There is no global summary-card row; each section shows only its own summary (Agents: count; Sessions: active / waiting / queued, which also set the status filter; Nodes: Online / Total; Timers: timers / paused / failing; Webhooks: webhooks / need attention).
 - The Workbench tab keeps its persisted identity `system:agents` / type `agents` and stores the current `section`; App writes section changes back through `updateTab`, so reload restores the section. The tab title is System.
-- Entry points: the Sidebar and mobile Workspace tools "System" button; `#agents`, `#architecture`, `#system` (System tab, current section); `#nodes`, `#tab/system:nodes` and the status-bar Open Nodes action (System on Nodes); `#timers` (System on Timers); the Session inspector's "View in Timers" (Timers filtered to that Session). The former `system:nodes` route settles on `#tab/system:agents`.
+- Entry points: the Sidebar and mobile Workspace tools "System" button; `#agents`, `#architecture`, `#system` (System tab, current section); `#nodes`, `#tab/system:nodes` and the status-bar Open Nodes action (System on Nodes); `#timers` (System on Timers); `#webhooks` (System on Webhooks); the Session inspector's "View in Timers" (Timers filtered to that Session). The former `system:nodes` route settles on `#tab/system:agents`.
 - Saved layouts are normalized on read: a former `nodes` tab becomes the System tab with `section: 'nodes'` in the same pane position, or is dropped when a System tab already exists. No layout reset or storage version change.
 - Popup leaves: `agents` opens System, `nodes` opens System on Nodes. Moving the System tab to a new window uses the `nodes` leaf when it is on Nodes. Sections switch in place inside popup and embedded leaves.
 - The Sessions Timeline renders [the session sequence view](./webui-session-sequence.md), lazily loaded because it shares Chat rendering pieces; it does not use the bounded catalog window.
@@ -79,7 +80,18 @@ The **System** page explains how Foxwarm is organized and running, in four secti
 - `nodeTargets.ts` owns tolerant `/nodes` response normalization.
 - The Sidebar remains the canonical surface for compact navigation, pinning, drag ordering, and branch disclosure; System intentionally does not duplicate those controls.
 
+### Webhooks section
+
+- Lists every identity with a `webhook` surface from administrator `GET /api/webhooks` ([contract](./host-runtime.md#d-host-inbound-webhooks)): action icon, ID, verification, target Session and the latest delivery outcome. Webhooks whose target is unavailable or whose latest delivery failed come first, then by ID.
+- Inspector: copyable address with a hint to set `url` in Setup › Config when it is a loopback address; verification and GitHub events; target Session (opens its inspector, or explains that deliveries are refused while it is missing); action, and for handlers the script source, Node, timeout and waiting count; the count of refused deliveries; the newest deliveries with outcome, event/action, delivery ID, error and a handler run link that opens the run record in the JSON inspector.
+- Read-only: webhooks are added and changed in Setup › Config. History is process memory and empty after a restart.
+- Live updates: reloads (debounced) on the realtime `webhooks-changed` event and on socket reopen; no polling.
+
 ## Design Decisions
+
+### D-webui-system-webhooks
+
+[2026-11-08, user decision] Webhooks are configured only in the YAML access configuration; System gains a fifth, read-only Webhooks section for status rather than a structured editor. It shows where each webhook delivers, whether its target exists, the address to give the sending service and recent results, so a misconfigured source can be diagnosed without reading logs. Secrets never reach the page.
 
 ### D-webui-system-timers
 

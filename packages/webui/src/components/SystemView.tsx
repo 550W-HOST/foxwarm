@@ -6,6 +6,7 @@ import type { TokenUsage } from './TokenUsageDetails'
 import AgentCreationMenu from './AgentCreationMenu'
 import SystemNodes from './SystemNodes'
 import SystemTimers, { SessionTimersSection } from './SystemTimers'
+import SystemWebhooks from './SystemWebhooks'
 import { AgentRegistryCard, AgentRegistryInspector, type AgentMemoryFile, type AgentRegistryChanges, type AgentRegistryEntry } from './SystemAgents'
 import { SessionFilterBar, SessionInspector, SessionOperationRow } from './SystemSessions'
 import { addLoadedUsage, emptyLoadedUsage, renderMetaBadge, type LoadedUsage } from './SystemShared'
@@ -22,13 +23,14 @@ import { makeVscodeWebUrl } from '../vscodeWeb'
 // The Timeline shares Chat rendering pieces; load them only when it is opened.
 const SessionSequenceView = lazy(() => import('./SessionSequenceView'))
 
-export type SystemSection = 'agents' | 'sessions' | 'nodes' | 'timers'
+export type SystemSection = 'agents' | 'sessions' | 'nodes' | 'timers' | 'webhooks'
 
 export const SYSTEM_SECTIONS: Array<{ id: SystemSection; label: string }> = [
   { id: 'agents', label: 'Agents' },
   { id: 'sessions', label: 'Sessions' },
   { id: 'nodes', label: 'Nodes' },
   { id: 'timers', label: 'Timers' },
+  { id: 'webhooks', label: 'Webhooks' },
 ]
 
 const SECTION_SUBTITLES: Record<SystemSection, string> = {
@@ -36,6 +38,7 @@ const SECTION_SUBTITLES: Record<SystemSection, string> = {
   sessions: 'Session state, placement and usage, and how sessions work together.',
   nodes: 'Connected nodes, the sessions running on them, and new node setup.',
   timers: 'Scheduled messages and scripts, their next runs and recent results.',
+  webhooks: 'Events from outside services, where they go and what arrived recently.',
 }
 
 interface SystemViewProps {
@@ -567,6 +570,8 @@ export default function SystemView({
             </main>
             <AgentRegistryInspector agent={selectedRegistryAgent} allAgents={agentRegistry} nodes={displayNodes} installDefaultNode={agentDefaultNode} memoryFiles={agentMemoryFiles} memoryLoading={agentMemoryLoading} memoryError={agentMemoryError} onOpenMemory={openAgentMemory} onSave={saveRegistryAgent} onDelete={deleteRegistryAgent} />
           </div>
+        ) : section === 'webhooks' ? (
+          <SystemWebhooks onInspectSession={sessionId => sessionMap.has(sessionId) ? showSessionFromNode(sessionId) : onSelectSession(sessionId)} onOpenSession={onSelectSession} />
         ) : section === 'timers' ? (
           <SystemTimers sessionFilter={timersSessionFilter} onSessionFilterChange={setTimersSessionFilter} onInspectSession={sessionId => sessionMap.has(sessionId) ? showSessionFromNode(sessionId) : onSelectSession(sessionId)} onOpenSession={onSelectSession} />
         ) : (

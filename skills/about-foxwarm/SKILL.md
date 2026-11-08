@@ -101,7 +101,7 @@ ToolScript is an automation layer for orchestrating tool calls and managed sessi
 
 ### Access identity and MCP
 
-An **access identity** is a configured entry credential with explicitly declared WebUI and/or MCP surfaces. A WebUI identity can chat with bound existing Sessions without receiving administrator management access. Its browser scope does not grant tools or change those Sessions' Agent authority.
+An **access identity** is a configured entry credential with explicitly declared WebUI and/or MCP surfaces, or only a webhook surface. A WebUI identity can chat with bound existing Sessions without receiving administrator management access. Its browser scope does not grant tools or change those Sessions' Agent authority. A webhook identity lets one external service (GitHub, Cloudflare, monitoring) deliver verified events to one fixed Session, either as untrusted input or to a configured handler script; the user adds it in Setup, and agents cannot create one.
 
 Foxwarm can connect outward to MCP tool servers and accept permitted external clients at its own `/mcp` endpoint. An MCP identity must also have concrete tool grants. Two Foxwarm instances can exchange explicit text replies when the calling Session starts notifications and the receiving Session sends to a server-provided channel destination; ordinary assistant output is not automatically forwarded.
 
@@ -120,6 +120,7 @@ If models are configured and WebUI is open, the user can ask:
 - "Give a collaborator WebUI access to one existing Session."
 - "Allow an external MCP identity to send work to one Session."
 - "Receive an explicit reply from another Foxwarm instance."
+- "Notify a Session when a GitHub CI run fails."
 
 ## Choose the next skill
 
@@ -127,6 +128,8 @@ If models are configured and WebUI is open, the user can ask:
 | --- | --- |
 | Create or migrate Agents, manage memory/inheritance, or bind Node isolation | [agent-management](../agent-management/SKILL.md) |
 | Configure entry identities, restrict browser Session scope, or safely update internal/external tool rules | [access-control](../access-control/SKILL.md) |
+| Receive events from GitHub, Cloudflare or monitoring through a webhook identity | [access-control](../access-control/SKILL.md) |
+| Schedule a reminder or a recurring check | [timer-automation](../timer-automation/SKILL.md) |
 | Connect outbound/inbound MCP, discover/call tools, or set up explicit instance replies | [mcp-management](../mcp-management/SKILL.md) |
 | Pair/bootstrap a Node | [node-setup](../node-setup/SKILL.md) |
 | Coordinate dependent tool calls | [toolscript-automation](../toolscript-automation/SKILL.md) |

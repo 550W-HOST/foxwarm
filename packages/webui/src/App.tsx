@@ -33,7 +33,7 @@ import { FoxPaneLoader } from './components/FoxLoaders'
 
 type AppView = 'session' | 'agents' | 'setup' | 'logs' | 'tasks'
 
-// systemSection carries a section route (#nodes, #timers) into the System tab's section.
+// systemSection carries a section route (#nodes, #timers, #webhooks) into the System tab's section.
 type RouteState = { view: 'tab'; tabId: string | null; systemSection?: SystemSection }
 
 type TerminalRegistryRecord = {
@@ -346,6 +346,10 @@ function readHashRoute(): RouteState {
 
   if (hash === 'timers') {
     return { view: 'tab', tabId: AGENTS_TAB_ID, systemSection: 'timers' }
+  }
+
+  if (hash === 'webhooks') {
+    return { view: 'tab', tabId: AGENTS_TAB_ID, systemSection: 'webhooks' }
   }
 
   if (hash === SETUP_HASH || hash === 'oobe') {

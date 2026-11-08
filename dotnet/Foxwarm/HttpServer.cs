@@ -374,7 +374,7 @@ internal sealed class HttpServer
         );
         if (triggerEnabled)
             TriggerHttp.Register(app, new SessionRuntime(sessions));
-        new WebhookHttp(accessConfiguration, new SessionRuntime(sessions)).Register(app);
+        new WebhookHttp(accessConfiguration, new SessionRuntime(sessions)).Register(app, address);
         Foxwarm.Nodes.NodeRoutes.Register(app, sessions, address);
         McpOAuthRoutes.Register(app, sessions.OutboundMcp);
         InboundMcp.Register(app);
