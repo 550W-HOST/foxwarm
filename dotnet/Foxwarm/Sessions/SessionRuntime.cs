@@ -157,6 +157,34 @@ internal sealed class SessionRuntime(SessionManager manager)
         Action beforeAdmission
     )
     {
+        await RequireExternalOwnerAsync(owner);
+        await owner.Registry.Ingress.EnqueueExternalAsync(owner.Id, item, beforeAdmission);
+    }
+
+    /// <summary>
+    /// Strictly admits one verified webhook delivery to an existing Session. Returns false when
+    /// the same delivery receipt was already accepted; a missing target is never created.
+    /// </summary>
+    internal async Task<bool> SubmitWebhookAsync(string id, QueueItem item, string? receipt)
+    {
+        var owner = await manager.RequiredAsync(id);
+        await RequireExternalOwnerAsync(owner);
+        return await owner.Registry.Ingress.EnqueueWebhookAsync(
+            owner.Id,
+            item,
+            receipt,
+            () =>
+            {
+                if (!manager.Accepting)
+                    throw new InvalidOperationException("Host is shutting down.");
+            }
+        );
+    }
+
+    internal bool Accepting => manager.Accepting;
+
+    private async Task RequireExternalOwnerAsync(SessionOwner owner)
+    {
         await manager.WaitForIdentityMutationAsync(owner.Id);
         // Text-only external admission has no attachment/Node materialization dependency.
         owner.Entry.RequireIdentityAuthority();
@@ -164,7 +192,6 @@ internal sealed class SessionRuntime(SessionManager manager)
             throw new InvalidOperationException(
                 "External input Session owner is no longer current."
             );
-        await owner.Registry.Ingress.EnqueueExternalAsync(owner.Id, item, beforeAdmission);
     }
 
     public async Task<JsonObject> UpdateSettingsAsync(string id, JsonObject settings) =>

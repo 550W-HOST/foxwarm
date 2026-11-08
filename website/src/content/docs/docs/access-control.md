@@ -7,7 +7,7 @@ A new installation trusts its agents: they can use every tool on every Node you 
 
 | Question | Controlled by |
 | --- | --- |
-| Who can sign in or call in? | The WebUI token, [identities](#scoped-webui-access) and Channel [allow lists](/docs/channels/#who-can-talk-to-the-agent) |
+| Who can sign in or call in? | The WebUI token, [identities](#scoped-webui-access), [webhooks](/docs/webhooks/) and Channel [allow lists](/docs/channels/#who-can-talk-to-the-agent) |
 | Which tools may this Agent use, with which arguments, on which Node? | [Instance rules](#instance-wide-rules) and [rules for each Agent](#rules-for-each-agent) |
 | What can a permitted command actually reach? | The Node's operating-system user, files and network |
 
@@ -107,3 +107,7 @@ The Sessions still run with their own Agent's rules. If Alex should not see some
 ## External MCP clients
 
 Programs and other Foxwarm instances can call in through the inbound MCP endpoint with their own identity (`surfaces.mcp: {}`). They get no tools until instance rules allow them by `externalId`. See [Connect an external MCP client](/docs/mcp-inbound/).
+
+## Webhooks
+
+GitHub, Cloudflare and monitoring tools can notify one Session through a webhook identity (`surfaces.webhook`). A delivery is data for that Session and grants the sender no tools. See [Webhooks](/docs/webhooks/).

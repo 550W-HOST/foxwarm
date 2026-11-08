@@ -148,7 +148,7 @@ interface QueueItem {
 - `user`：来自用户或 channel 的普通消息
 - `intersession`：来自其他 session 的消息
 - `background`：后台恢复或异步任务
-- `trigger`：外部 `/trigger` 触发
+- `trigger`：外部事件触发，包括已验证的 webhook 投递（`/webhooks/<id>`）和已弃用的管理员 `/trigger`
 - `onboot`：为队列/历史兼容保留的旧版持久化启动事件类型
 
 ## 模型选择

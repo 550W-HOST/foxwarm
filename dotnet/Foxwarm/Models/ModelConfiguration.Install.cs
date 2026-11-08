@@ -138,6 +138,12 @@ internal sealed partial class ModelConfiguration
             notApplied.Add("access.surfaces.mcp");
             restart.Add("access.surfaces.mcp");
         }
+        var webhooks = access.Values.Any(identity => identity.Webhook is not null);
+        if (webhooks && !Access.WebhookRuntimeAvailable)
+        {
+            notApplied.Add("access.surfaces.webhook");
+            restart.Add("access.surfaces.webhook");
+        }
         if (ManagedChannels is not null && restart.Contains("channels.webui"))
             notApplied.Add("channels.webui");
         if (
@@ -156,6 +162,8 @@ internal sealed partial class ModelConfiguration
         var applied = Access.McpRuntimeAvailable
             ? new List<string> { "access.identities", "access.surfaces.mcp" }
             : new List<string> { "access.identities" };
+        if (webhooks && Access.WebhookRuntimeAvailable)
+            applied.Add("access.surfaces.webhook");
         var autoTitle = AppConfigurationRules.SessionAutoTitle(config);
         if (autoTitle != sessionAutoTitle)
             applied.Add("sessionAutoTitle");

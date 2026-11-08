@@ -151,6 +151,11 @@ test('new and persisted external-input headers are heavy system cards, not direc
       kind: 'external-input', source: 'foxwarm-system', previewPrefix: '',
     })
   }
+  const webhook = (header) => getSystemMessagePreviewDescriptor({ role: 'user', parts: [{ system: header }, { text: '{}' }, { system: '</foxwarm-system>' }] })
+  assert.equal(webhook('<foxwarm-system kind="external-input" webhook="github-ci" event="workflow_run" deliveryId="d-1">').previewPrefix, 'github-ci · workflow_run: ')
+  assert.equal(webhook('<foxwarm-system kind="external-input" webhook="alerts">').previewPrefix, 'alerts: ')
+  assert.equal(webhook('<foxwarm-system kind="external-input" webhook=" " event="push">').previewPrefix, '')
+  assert.equal(webhook('<foxwarm-system kind="external-input" externalId="peer" contextId="c">').previewPrefix, '')
   for (const kind of ['time', 'session', 'channel-mode', 'question-answer']) {
     assert.equal(isLightweightStructuredSystem(`<foxwarm-system kind="${kind}" />`), true)
   }

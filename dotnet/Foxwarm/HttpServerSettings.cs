@@ -52,7 +52,9 @@ internal sealed record HttpServerSettings(
         var http =
             enabled
             || trigger
-            || configuration.Access.Snapshot.Values.Any(identity => identity.Mcp);
+            || configuration.Access.Snapshot.Values.Any(identity =>
+                identity.Mcp || identity.Webhook is not null
+            );
         var token = http ? await LoadOrCreateTokenAsync(dataRoot) : "";
         if (http && string.IsNullOrWhiteSpace(token))
             throw new InvalidDataException("HTTP access token must not be blank.");

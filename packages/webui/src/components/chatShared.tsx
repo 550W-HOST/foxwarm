@@ -573,7 +573,9 @@ export const getSystemMessagePreviewDescriptor = (message: Message): SystemMessa
             ? getSystemMessagePreviewAttribute(tag.attrs.event)
             : kind === 'event'
               ? getSystemMessagePreviewAttribute(tag.attrs.type)
-              : ''
+              : kind === 'external-input' && getSystemMessagePreviewAttribute(tag.attrs.webhook)
+                ? [tag.attrs.webhook, tag.attrs.event].map(getSystemMessagePreviewAttribute).filter(Boolean).join(' · ')
+                : ''
           return { kind, source: 'foxwarm-system', previewPrefix: previewValue ? `${previewValue}: ` : '' }
         }
       }

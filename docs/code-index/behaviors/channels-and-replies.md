@@ -58,6 +58,10 @@ A reliable QQ mention is the native AT event or an ordinary group event with str
 
 Telegram ignores bot-originated messages and normalizes commands addressed to its own bot username; it has no equivalent generic QQ group-context buffer. Matrix ignores its own messages, historical/pagination events and events predating adapter startup, and deduplicates admitted timeline events. Weixin accepts its supported inbound polling messages; WeWork admits supported callbacks/WebSocket messages with its own duplicate handling. Native platform subscription/privacy rules can further limit which events reach any adapter. Do not add a Router-wide mention or batching rule by inference. Source owners are [Telegram/Matrix/Weixin](../units/src-channels-misc.md) and [WeWork](../units/src-channels-wework.md).
 
+### Webhooks are inbound events, not Channels
+
+A webhook identity (`access.identities.<id>.surfaces.webhook`) delivers verified third-party events into one fixed Session as untrusted `external-input`. It has no conversation binding, sender identity, reply destination or passive reply context, and its delivery grants no tool authority. Replies, alerts and follow-up work go through the receiving Session's ordinary tools and Channels. Route and admission contract: [D-host-inbound-webhooks](../units/host-runtime.md#d-host-inbound-webhooks).
+
 ## Where should the Agent's ordinary reply go?
 
 Ordinary assistant output uses the Session's eligible attachments; it is not addressed only to the current input's origin. [Queued inputs](messages-and-turns.md#what-happens-when-input-arrives-while-the-session-is-busy) from several instances/conversations can influence the same request. A Channel source wrapper records provenance, not an output target or a queue boundary. This source-blind contract also applies to intermediate text, errors, and generic lifecycle finals; implementation details are in [the message pipeline](../threads/message-processing-pipeline.md#d-pipeline-source-blind-turn-routing).

@@ -47,6 +47,7 @@ export default defineConfig({
           { label: 'Channels and group chats', translations: { 'zh-CN': '渠道与群聊' }, slug: 'docs/channels' },
           { label: 'Tools, Skills, and MCP', translations: { 'zh-CN': '工具、Skill 和 MCP' }, slug: 'docs/tools-skills-mcp' },
           { label: 'Timers', translations: { 'zh-CN': '定时任务' }, slug: 'docs/timers' },
+          { label: 'Webhooks', translations: { 'zh-CN': 'Webhook' }, slug: 'docs/webhooks' },
           { label: 'Using the WebUI', translations: { 'zh-CN': '使用 WebUI' }, slug: 'docs/webui' }
         ] },
         { label: 'Control and security', translations: { 'zh-CN': '权限与安全' }, items: [

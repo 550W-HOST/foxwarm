@@ -7,7 +7,29 @@ public sealed partial class SessionSaveLane
     internal Task<bool> AdmitTimerAsync(QueueItem item) =>
         AdmitWithReceiptAsync(item, null, SaveKind.BestEffort);
 
-    private readonly HashSet<string> uncertainExternalReceipts = new(StringComparer.Ordinal);
+    // Each durable receipt kind keeps its own bounded window, so a burst of one kind
+    // cannot evict receipts another protocol's retries depend on.
+    private sealed record ReceiptSlot(string Key, int Limit);
+
+    private static readonly ReceiptSlot ExternalEventReceipts = new("acceptedExternalEventIds", 32);
+    internal const string WebhookReceiptKey = "acceptedWebhookDeliveryIds";
+    private static readonly ReceiptSlot WebhookReceipts = new(WebhookReceiptKey, 64);
+
+    // Created eagerly and never resized, so concurrent admissions only read this map.
+    private readonly Dictionary<string, HashSet<string>> uncertainReceipts = new(
+        StringComparer.Ordinal
+    )
+    {
+        [ExternalEventReceipts.Key] = new(StringComparer.Ordinal),
+        [WebhookReceipts.Key] = new(StringComparer.Ordinal),
+    };
+
+    /// <summary>Strict external admission; a repeated delivery receipt returns false without queueing.</summary>
+    internal Task<bool> AdmitWebhookAsync(
+        QueueItem item,
+        string? receipt,
+        Action beforeAdmission
+    ) => AdmitWithReceiptAsync(item, receipt, SaveKind.Strict, beforeAdmission, WebhookReceipts);
 
     private async Task CommitWaitSnapshotAsync(SessionSnapshot staged, Action? beforeCommit = null)
     {
@@ -33,9 +55,12 @@ public sealed partial class SessionSaveLane
         QueueItem item,
         string? receipt,
         SaveKind kind = SaveKind.Strict,
-        Action? beforeAdmission = null
+        Action? beforeAdmission = null,
+        ReceiptSlot? receiptSlot = null
     )
     {
+        var slot = receiptSlot ?? ExternalEventReceipts;
+        var uncertainExternalReceipts = uncertainReceipts[slot.Key];
         using var accepted = entry.AdmitMutation();
         var admitted = false;
         await EnqueueOperationAsync(async () =>
@@ -73,16 +98,16 @@ public sealed partial class SessionSaveLane
                 var meta = (JsonObject)snapshot.Meta.DeepClone();
                 if (receipt is not null)
                 {
-                    var prior = SessionWait.Strings(meta["acceptedExternalEventIds"]);
+                    var prior = SessionWait.Strings(meta[slot.Key]);
                     if (prior.Contains(receipt, StringComparer.Ordinal))
                         return (
                             Snapshot: (SessionSnapshot?)null,
                             Items: (IReadOnlyList<QueueItem>)[]
                         );
-                    meta["acceptedExternalEventIds"] = new JsonArray(
+                    meta[slot.Key] = new JsonArray(
                         prior
                             .Append(receipt)
-                            .TakeLast(32)
+                            .TakeLast(slot.Limit)
                             .Select(value => (JsonNode?)JsonValue.Create(value))
                             .ToArray()
                     );
@@ -152,9 +177,7 @@ public sealed partial class SessionSaveLane
                     if (receipt is not null)
                     {
                         uncertainExternalReceipts.Add(receipt);
-                        var durableReceipts = SessionWait.Strings(
-                            prepared.Snapshot.Meta["acceptedExternalEventIds"]
-                        );
+                        var durableReceipts = SessionWait.Strings(prepared.Snapshot.Meta[slot.Key]);
                         uncertainExternalReceipts.RemoveWhere(value =>
                             !durableReceipts.Contains(value, StringComparer.Ordinal)
                         );
@@ -167,7 +190,7 @@ public sealed partial class SessionSaveLane
                 if (receipt is not null)
                     uncertainExternalReceipts.Remove(receipt);
             }
-            var retained = SessionWait.Strings(entry.Snapshot().Meta["acceptedExternalEventIds"]);
+            var retained = SessionWait.Strings(entry.Snapshot().Meta[slot.Key]);
             uncertainExternalReceipts.RemoveWhere(value =>
                 !retained.Contains(value, StringComparer.Ordinal)
             );
@@ -334,7 +357,9 @@ public sealed partial class SessionSaveLane
 
     private static void PublishMeta(JsonObject target, JsonObject source)
     {
-        foreach (var key in new[] { "wait", "acceptedExternalEventIds", "questions" })
+        foreach (
+            var key in new[] { "wait", ExternalEventReceipts.Key, WebhookReceipts.Key, "questions" }
+        )
         {
             if (source.TryGetPropertyValue(key, out var value))
                 target[key] = value?.DeepClone();

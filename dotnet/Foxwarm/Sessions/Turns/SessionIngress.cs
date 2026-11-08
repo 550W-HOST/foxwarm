@@ -13,23 +13,53 @@ public sealed class SessionIngress
     public SessionIngress(SessionRegistry registry) => this.registry = registry;
 
     public Task EnqueueAsync(string sessionId, QueueItem item) =>
-        EnqueueCoreAsync(sessionId, item, false);
+        EnqueueCoreAsync(
+            sessionId,
+            item,
+            (entry, admitted) => entry.SaveLane.AdmitAsync(admitted, SaveKind.BestEffort)
+        );
 
     internal Task EnqueueCheckedAsync(string sessionId, QueueItem item, Action beforeAdmission) =>
-        EnqueueCoreAsync(sessionId, item, false, beforeAdmission);
+        EnqueueCoreAsync(
+            sessionId,
+            item,
+            (entry, admitted) =>
+                entry.SaveLane.AdmitAsync(admitted, SaveKind.BestEffort, beforeAdmission)
+        );
 
     internal Task EnqueueExternalAsync(string sessionId, QueueItem item, Action beforeAdmission) =>
-        EnqueueCoreAsync(sessionId, item, false, beforeAdmission, SaveKind.Strict);
+        EnqueueCoreAsync(
+            sessionId,
+            item,
+            (entry, admitted) =>
+                entry.SaveLane.AdmitAsync(admitted, SaveKind.Strict, beforeAdmission)
+        );
 
     internal Task EnqueueTimerAsync(string sessionId, QueueItem item) =>
-        EnqueueCoreAsync(sessionId, item, true);
+        EnqueueCoreAsync(
+            sessionId,
+            item,
+            (entry, admitted) => entry.SaveLane.AdmitTimerAsync(admitted)
+        );
 
-    private async Task EnqueueCoreAsync(
+    /// <summary>Strict external admission. Returns false when the delivery receipt was already accepted.</summary>
+    internal Task<bool> EnqueueWebhookAsync(
         string sessionId,
         QueueItem item,
-        bool timer,
-        Action? beforeAdmission = null,
-        SaveKind kind = SaveKind.BestEffort
+        string? receipt,
+        Action beforeAdmission
+    ) =>
+        EnqueueCoreAsync(
+            sessionId,
+            item,
+            (entry, admitted) =>
+                entry.SaveLane.AdmitWebhookAsync(admitted, receipt, beforeAdmission)
+        );
+
+    private async Task<bool> EnqueueCoreAsync(
+        string sessionId,
+        QueueItem item,
+        Func<SessionEntry, QueueItem, Task<bool>> admit
     )
     {
         EnsureSupported(item);
@@ -39,15 +69,14 @@ public sealed class SessionIngress
             Trigger = true,
         };
         var entry = registry.GetRequired(sessionId);
-        var admitted = timer
-            ? await entry.SaveLane.AdmitTimerAsync(item).ConfigureAwait(false)
-            : await entry.SaveLane.AdmitAsync(item, kind, beforeAdmission).ConfigureAwait(false);
+        var admitted = await admit(entry, item).ConfigureAwait(false);
         if (
             admitted
             && !entry.WithState(state => state.Busy || state.Stopping)
             && registry.HasRunnableWork(entry)
         )
             registry.Trigger(sessionId);
+        return admitted;
     }
 
     internal static void EnsureSupportedForRunner(QueueItem item) => EnsureSupported(item);

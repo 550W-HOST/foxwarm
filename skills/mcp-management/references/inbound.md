@@ -9,7 +9,7 @@ Inbound MCP lets an external client use selected existing capabilities or queue 
 3. Apply the complete app candidate through WebUI Setup Config or `set_config` with `target: config`. A running Main HTTP listener can enable its first MCP identity immediately; without that listener, the result requires an approved restart. With no identity declaring `mcp`, authentication is refused. Identity deletion, token rotation, and MCP-surface removal close only the affected contexts and streams. The policy has its separate [safe update workflow](../../access-control/references/policy-updates.md).
 4. Use the receiving instance's `/mcp` URL on its existing HTTP port, retaining any reverse-proxy deployment prefix. Use HTTPS over an untrusted network. Send one `Authorization: Bearer <identity-token>` header on every request; WebUI cookies, the instance token, and Node pairing credentials do not authenticate MCP.
 
-A headless receiving instance can set `bot.enableWebUI: false` and `bot.enableTrigger: false`. An MCP identity still enables the shared HTTP server and Node connections.
+A headless receiving instance can set `bot.enableWebUI: false` and `bot.enableTrigger: false`. An MCP or webhook identity still enables the shared HTTP server and Node connections.
 
 ## Connect from a Foxwarm Session
 

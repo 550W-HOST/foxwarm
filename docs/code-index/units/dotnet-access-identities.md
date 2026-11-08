@@ -1,13 +1,15 @@
 # Unit: .NET shared access identities and scoped WebUI
 
 Files: `dotnet/Foxwarm/AccessConfiguration.cs`, `dotnet/Foxwarm/Channels/WebUi/WebUiAccess.cs`, `dotnet/Foxwarm/Channels/WebUi/WebUiSessionImages.cs`
-Secondary files: `dotnet/Foxwarm/HttpServer.cs`, `dotnet/Foxwarm/MainHost.cs`, `dotnet/Foxwarm/Models/AppConfigurationRules.cs`, `dotnet/Foxwarm/Models/ModelConfiguration.Install.cs`, `dotnet/Foxwarm/Channels/WebUi/WebUIChannel.cs`, `dotnet/Foxwarm/Channels/WebUi/WebUiRealtime.cs`
+Secondary files: `dotnet/Foxwarm/HttpServer.cs`, `dotnet/Foxwarm/WebhookHttp.cs`, `dotnet/Foxwarm/MainHost.cs`, `dotnet/Foxwarm/Models/AppConfigurationRules.cs`, `dotnet/Foxwarm/Models/ModelConfiguration.Install.cs`, `dotnet/Foxwarm/Channels/WebUi/WebUIChannel.cs`, `dotnet/Foxwarm/Channels/WebUi/WebUiRealtime.cs`
 
 ## Purpose and source contract
 
 Implements the shared [access identity decision](./src-access-config.md#d-config-shared-access-identities) and [Session scope contract](../modules/webui.md#d-webui-identity-session-scope) at the .NET Main boundary. A scoped browser identity is not an administrator or an internal Session principal. The built original React entry mounts `WebUiIdentityApp`, not an administrator workbench leaf.
 
 The empty MCP surface is validated and persisted by the same snapshot owner. Normal Main registers the [ordinary inbound MCP service](./dotnet-inbound-mcp.md), and successful live installation reports `access.surfaces.mcp` applied, including first/last identity activation without restart. When no HTTP runtime was started, a newly declared MCP surface is saved but reported not applied and requiring restart. Inbound MCP remains separate from browser/admin authority and outbound administrator OAuth routes.
+
+The `webhook` surface is exclusive: an identity declaring it declares no other surface, so a secret shared with a sending service never opens a browser or MCP session. `Authenticate` (WebUI) and `McpExternalPrincipal` match only their own surfaces, so a webhook secret is never a Bearer credential elsewhere. `WebhookHttp` reads the same live snapshot per request and rechecks the identity's token and surface before admission; saved additions, rotations and removals apply without restart while HTTP runs. Successful installation reports `access.surfaces.webhook` applied when the saved map contains a webhook identity, or not applied and restart-required when no HTTP listener registered the route. Route behavior: [D-host-inbound-webhooks](./host-runtime.md#d-host-inbound-webhooks).
 
 ## Producer and authority map
 
@@ -23,7 +25,7 @@ The empty MCP surface is validated and persisted by the same snapshot owner. Nor
 
 ## Validation and live installation
 
-`Normalize` validates the complete map: at most 64 bounded identity IDs; distinct bounded Bearer tokens; nonempty explicit surfaces; empty `mcp` object only; nonempty distinct WebUI Session bindings with only exact IDs or `<agent>/*` patterns. Unknown nested keys and invalid values yield secret-free errors. HTTP-enabled Main reserves the instance token before Session startup. Supported saves check both reserved active-token reuse and the current existing administrator token file before touching the active YAML, including headless hosts and token-file changes since startup. Save-time reads share the startup file reader and its UTF-8/trim semantics, but never create a missing token.
+`Normalize` validates the complete map: at most 64 bounded identity IDs; distinct bounded Bearer tokens; nonempty explicit surfaces; empty `mcp` object only; an exclusive `webhook` object with one non-pattern `session`, `verify` of `github`, `bearer` or a non-reserved `{header}` name, and optional distinct GitHub-only `events`; nonempty distinct WebUI Session bindings with only exact IDs or `<agent>/*` patterns. Unknown nested keys and invalid values yield secret-free errors. HTTP-enabled Main reserves the instance token before Session startup. Supported saves check both reserved active-token reuse and the current existing administrator token file before touching the active YAML, including headless hosts and token-file changes since startup. Save-time reads share the startup file reader and its UTF-8/trim semantics, but never create a missing token.
 
 `AccessConfiguration.ApplyAsync` publishes the normalized snapshot, synchronously invokes every listener and then awaits all cleanup. WebUI comparison uses token and WebUI bindings only. An MCP-only edit or another identity's change does not revoke unrelated browser work. Cleanup failure reports `access.identities` applied plus `access.connections` not applied; it does not claim rollback. Unrelated startup settings remain startup-owned and channel results retain their existing unsupported-runtime reporting.
 

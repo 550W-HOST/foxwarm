@@ -27,6 +27,7 @@ const requiredRoutes = [
   '/docs/channels/',
   '/docs/delegation/',
   '/docs/timers/',
+  '/docs/webhooks/',
   '/docs/webui/',
   '/docs/access-control/',
   '/docs/typescript-migration/',

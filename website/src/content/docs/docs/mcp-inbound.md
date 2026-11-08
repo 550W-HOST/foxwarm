@@ -190,7 +190,7 @@ bot:
   enableTrigger: false
 ```
 
-With an identity declaring the `mcp` surface, Foxwarm still starts its HTTP server and Node connections even when the WebUI is disabled. You can leave both settings enabled when MCP shares a normal WebUI installation. An identity that declares only `webui` cannot authenticate to `/mcp`.
+With an identity declaring the `mcp` or [`webhook`](/docs/webhooks/) surface, Foxwarm still starts its HTTP server and Node connections even when the WebUI is disabled. You can leave both settings enabled when MCP shares a normal WebUI installation. An identity that declares only `webui` cannot authenticate to `/mcp`.
 
 To pair a CLI Node, an administrator supplies the existing token from the instance's private `state/node_token` file to that Node. An authorized MCP operator can then discover and call `node_pair_list` and `node_pair_approve`. The MCP endpoint never returns the bootstrap token. See [Nodes](/docs/nodes/) for client setup.
 

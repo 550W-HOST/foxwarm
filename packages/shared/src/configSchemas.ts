@@ -487,6 +487,8 @@ export const APP_CONFIG_SCHEMA = {
                 type: 'object',
                 additionalProperties: false,
                 minProperties: 1,
+                if: { required: ['webhook'] },
+                then: { maxProperties: 1 },
                 properties: {
                   webui: {
                     type: 'object',
@@ -497,13 +499,33 @@ export const APP_CONFIG_SCHEMA = {
                     },
                   },
                   mcp: { type: 'object', additionalProperties: false, maxProperties: 0 },
+                  webhook: {
+                    type: 'object',
+                    additionalProperties: false,
+                    required: ['session', 'verify'],
+                    properties: {
+                      session: { type: 'string', minLength: 1, maxLength: 512, pattern: '^[^*]+$' },
+                      verify: {
+                        oneOf: [
+                          { type: 'string', enum: ['github', 'bearer'] },
+                          {
+                            type: 'object',
+                            additionalProperties: false,
+                            required: ['header'],
+                            properties: { header: { type: 'string', pattern: "^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,128}$" } },
+                          },
+                        ],
+                      },
+                      events: { type: 'array', minItems: 1, maxItems: 64, uniqueItems: true, items: { type: 'string', pattern: '^[A-Za-z0-9_.:-]{1,128}$' } },
+                    },
+                  },
                 },
               },
             },
           },
         },
       },
-      description: 'Startup-only shared WebUI and inbound MCP identities. Declare each surface explicitly and restart after changes.',
+      description: 'Shared WebUI, inbound MCP and webhook identities. Declare each surface explicitly; a webhook identity declares only the webhook surface. Saved identities apply while the HTTP server is running.',
     },
     agentTree: {
       type: 'object', additionalProperties: false,

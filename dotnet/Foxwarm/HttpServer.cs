@@ -181,6 +181,7 @@ internal sealed class HttpServer
                     || McpOAuthRoutes.IsPublic(context.Request)
                     || code?.IsCapabilityRequest(context) == true
                     || McpNodeFileDownload.IsRequest(context.Request)
+                    || WebhookHttp.IsRequest(context.Request.Path)
                 )
                 {
                     await next();
@@ -373,6 +374,7 @@ internal sealed class HttpServer
         );
         if (triggerEnabled)
             TriggerHttp.Register(app, new SessionRuntime(sessions));
+        new WebhookHttp(accessConfiguration, new SessionRuntime(sessions)).Register(app);
         Foxwarm.Nodes.NodeRoutes.Register(app, sessions, address);
         McpOAuthRoutes.Register(app, sessions.OutboundMcp);
         InboundMcp.Register(app);

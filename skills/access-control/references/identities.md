@@ -7,9 +7,10 @@
 | Instance token | Existing administrator WebUI/HTTP access | Authentication to inbound MCP |
 | Identity `surfaces.webui.sessions` | Chat, history, live events, and attachment uploads for selected Sessions | Setup, Code, terminal, management, or Agent/tool authority |
 | Identity `surfaces.mcp: {}` | Bearer authentication to the inbound MCP endpoint | Any concrete tool until policy allows it |
+| Identity `surfaces.webhook` | Verified event deliveries from one external service to one fixed Session at `/webhooks/<id>` | Sign-in, MCP, tools, replies, or choosing another Session |
 | Tool authorization policy | Allow/deny decisions for concrete calls | Entry credentials, new Agents/Sessions, or OS/network isolation |
 
-One configured identity may declare both surfaces with the same token. Surface declarations are capabilities to enter, not permission tiers. The identity ID is the `externalId` used for inbound MCP policy matching. Browser messages do not cause a Session's subsequent tool calls to inherit that external identity: those calls use the Session's internal Agent/Session authority.
+One configured identity may declare both `webui` and `mcp` with the same token. A `webhook` identity declares no other surface, because its secret is shared with the sending service. Surface declarations are capabilities to enter, not permission tiers. The identity ID is the `externalId` used for inbound MCP policy matching. Browser messages do not cause a Session's subsequent tool calls to inherit that external identity: those calls use the Session's internal Agent/Session authority.
 
 ## Configuration
 
@@ -46,6 +47,7 @@ The current access parser accepts only:
 - Each identity: `token` and `surfaces`, with at least one supported surface. Tokens must be distinct, non-empty bounded Bearer-token strings (up to 4,096 UTF-8 bytes).
 - `webui`: only `sessions`, a non-empty list of up to 256 distinct exact Session IDs or `<agent>/*` scopes. This is a limit on configured entries, not on the number of Sessions an Agent scope may select.
 - `mcp`: only `{}`.
+- `webhook`: the only surface of its identity, with `session` (one existing Session ID or alias, no pattern), `verify` (`github`, `bearer`, or `{header: <name>}`; `Authorization`, `Cookie`, `Host` and body-framing headers are reserved), and optional `events` (GitHub only, 1–64 distinct event names).
 
 Unknown fields are rejected. These tokens are explicit YAML values, not environment-variable substitutions. Do not reuse the instance superuser or Node pairing token; the app validation also rejects identity-token reuse of the instance superuser token. There is no token-issuance API or separate persisted guest-token store.
 
@@ -54,8 +56,10 @@ Unknown fields are rejected. These tokens are explicit YAML values, not environm
 1. Confirm authority to change entry access and the intended exact Session bindings, Agent scopes, and surfaces. An Agent scope also grants access to future Sessions in that Agent.
 2. Read the current app configuration without disclosing its secret values. Merge only the requested identity changes.
 3. Save the complete app YAML through WebUI Setup's Config tab, or prepare a private complete candidate on `master` and invoke `set_config` with `target: config` and its `filePath`. The current permissions must allow the setter and reading the candidate. Do not use `mcp_config`: that tool manages outbound connections only.
-4. Inspect the result. Supported saves update running identities and close affected connections on token rotation, deletion, surface removal, or WebUI scope changes. Unrelated identities and MCP contexts are preserved; a WebUI-only scope change does not reset that identity's MCP context. Other app settings remain startup-owned and are reported as requiring restart. If Main has no HTTP listener, adding MCP requires an approved restart; an already-running HTTP listener can enable its first MCP identity immediately. Direct file edits do not trigger a reload.
+4. Inspect the result. Supported saves update running identities and close affected connections on token rotation, deletion, surface removal, or WebUI scope changes. Unrelated identities and MCP contexts are preserved; a WebUI-only scope change does not reset that identity's MCP context. Other app settings remain startup-owned and are reported as requiring restart. If Main has no HTTP listener, adding MCP or a webhook requires an approved restart; an already-running HTTP listener can enable its first MCP or webhook identity immediately. Direct file edits do not trigger a reload.
 5. Check with the identity credential, not the administrator token, that the intended surface works and an unbound Session or undeclared surface is refused. Use a permitted read or another non-mutating operation when checking MCP tools.
+
+For webhook senders (GitHub, Cloudflare, scripts), verification choices and response codes, see the public Webhooks documentation page; send noisy or untrusted public events to a Session whose Agent has only the tools it needs.
 
 For inbound endpoint/client configuration, follow [mcp-management](../../mcp-management/SKILL.md) and its [inbound reference](../../mcp-management/references/inbound.md).
 
