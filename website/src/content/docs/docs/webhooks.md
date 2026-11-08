@@ -74,7 +74,7 @@ By default each delivery starts the agent in the target Session, or joins its cu
 
 ### Deliver without waking the agent
 
-Some events are worth knowing about but not worth a model turn each, such as pushes or new issues on a busy repository. With `wake: false`, deliveries are saved to the Session without starting the agent. It reads them, in order, the next time it works for another reason: your message, a timer or another webhook.
+Some events are worth knowing about but not worth a model turn each, such as pushes to a repository you work on. With `wake: false`, deliveries are saved to the Session without starting the agent. It reads them, in order, the next time it works for another reason: your message, a timer or another webhook.
 
 ```yaml
     github-activity:
@@ -83,9 +83,11 @@ Some events are worth knowing about but not worth a model turn each, such as pus
         webhook:
           session: ops/main
           verify: github
-          events: [push, issues]
+          events: [push]
           wake: false
 ```
+
+Unread deliveries are kept in full up to 32 per webhook or 256 KiB of payload. Beyond that, a delivery is saved with its event, delivery ID and time but without its payload, until the agent has read the backlog. At 1,000 unread deliveries further ones are refused with `429`. So use `wake: false` for sources whose volume you control. Events that outsiders can create, such as issues and comments on a public repository, are better handled by a script or by a webhook that wakes the agent, with a narrow `events` list.
 
 ### Handle deliveries with a script
 
@@ -137,7 +139,7 @@ In **Notifications → Destinations → Webhooks**, create a webhook with the we
 
 ## Check deliveries
 
-**System → Webhooks** lists every webhook with its address, the Session it delivers to and what arrived recently: delivered, ignored and duplicate deliveries, rejected requests, script results with a link to each run, and how many requests had a wrong secret or signature. It also warns when the target Session does not exist. To test a new GitHub webhook, save it in GitHub and look for its `ping`. The list covers deliveries since Foxwarm last started.
+**System → Webhooks** lists every webhook with its address, the Session it delivers to and what arrived recently: delivered, ignored and duplicate deliveries, rejected requests, script results with a link to each run, how many requests could not be verified, and how many deliveries were refused because too many were unread. It also warns when the target Session does not exist. To test a new GitHub webhook, save it in GitHub and look for its `ping`. The list covers deliveries since Foxwarm last started.
 
 ## Call it from your own tools
 
@@ -164,12 +166,15 @@ Treat delivered text like any text from the outside world. On a public repositor
 | --- | --- |
 | `202` | Accepted and saved to the Session, or queued for the webhook's script. |
 | `200` | Acknowledged without delivery: a GitHub `ping`, an event not listed in `events`, or a delivery already accepted. |
-| `401` | Unknown webhook or wrong secret or signature. |
+| `401` | Unknown webhook, wrong secret or signature, or a request that could not be verified. GitHub signs the whole body, so a GitHub delivery larger than 1 MiB or one whose body arrives too slowly is refused this way. |
+| `408` | The body did not arrive within 10 seconds. |
 | `413` | The body is larger than 1 MiB. |
 | `415` | The body is not JSON or UTF-8 text. |
-| `429` | Too many deliveries from this webhook (more than 60 at once, then 10 a minute), or 32 already waiting for its script. Retry after the time given in `Retry-After`. |
+| `429` | Too many deliveries from this webhook (more than 60 at once, then 10 a minute; pings and ignored events do not count), 32 already waiting for its script, or 1,000 unread deliveries waiting with `wake: false`. Retry after the time given in `Retry-After`. |
 | `503` | The target Session is unavailable or Foxwarm is shutting down. |
 
 ## Replacing `/trigger`
 
 The administrator-only `POST /trigger` endpoint is deprecated and will be removed in a later release. Responses from it carry a `Deprecation` header. To move a script off it, add a `bearer` webhook for the Session it used and send the message text as the body.
+
+The agent reads a webhook body as data from an outside service, not as an instruction from you, so a script that used `/trigger` to tell the agent what to do may get different results after the move. To give the agent instructions from a script, send a message through an [MCP identity](/docs/mcp-inbound/) instead.

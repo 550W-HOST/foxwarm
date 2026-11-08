@@ -25,11 +25,24 @@ public sealed partial class SessionSaveLane
     };
 
     /// <summary>Strict external admission; a repeated delivery receipt returns false without queueing.</summary>
+    /// <summary>
+    /// <paramref name="shape"/> sees the current queue under the admission gate and returns the
+    /// item to admit, a replacement, or null to admit nothing; it runs after the duplicate check.
+    /// </summary>
     internal Task<bool> AdmitWebhookAsync(
         QueueItem item,
         string? receipt,
-        Action beforeAdmission
-    ) => AdmitWithReceiptAsync(item, receipt, SaveKind.Strict, beforeAdmission, WebhookReceipts);
+        Action beforeAdmission,
+        Func<IReadOnlyList<QueueItem>, QueueItem, QueueItem?>? shape = null
+    ) =>
+        AdmitWithReceiptAsync(
+            item,
+            receipt,
+            SaveKind.Strict,
+            beforeAdmission,
+            WebhookReceipts,
+            shape
+        );
 
     private async Task CommitWaitSnapshotAsync(SessionSnapshot staged, Action? beforeCommit = null)
     {
@@ -56,13 +69,15 @@ public sealed partial class SessionSaveLane
         string? receipt,
         SaveKind kind = SaveKind.Strict,
         Action? beforeAdmission = null,
-        ReceiptSlot? receiptSlot = null
+        ReceiptSlot? receiptSlot = null,
+        Func<IReadOnlyList<QueueItem>, QueueItem, QueueItem?>? shape = null
     )
     {
         var slot = receiptSlot ?? ExternalEventReceipts;
         var uncertainExternalReceipts = uncertainReceipts[slot.Key];
         using var accepted = entry.AdmitMutation();
         var admitted = false;
+        var declined = false;
         await EnqueueOperationAsync(async () =>
         {
             using var admission = entry.AdmitMutation();
@@ -112,6 +127,18 @@ public sealed partial class SessionSaveLane
                             .ToArray()
                     );
                 }
+                if (shape is not null)
+                {
+                    if (shape(snapshot.Queue, item) is not { } shaped)
+                    {
+                        declined = true;
+                        return (
+                            Snapshot: (SessionSnapshot?)null,
+                            Items: (IReadOnlyList<QueueItem>)[]
+                        );
+                    }
+                    item = shaped;
+                }
                 // Question answers resolve in the same staged meta as the wait they release.
                 item = SessionQuestions.ApplyAdmission(meta, item);
                 var items = SessionWait.Apply(meta, item);
@@ -131,7 +158,7 @@ public sealed partial class SessionSaveLane
             if (prepared.Snapshot is null)
             {
                 // A prior committed-but-unsynced receipt needs strict durability, not a second queue insertion.
-                if (receipt is not null && uncertainExternalReceipts.Contains(receipt))
+                if (!declined && receipt is not null && uncertainExternalReceipts.Contains(receipt))
                 {
                     await CommitWaitSnapshotAsync(entry.SnapshotForPersistence());
                     uncertainExternalReceipts.Remove(receipt);

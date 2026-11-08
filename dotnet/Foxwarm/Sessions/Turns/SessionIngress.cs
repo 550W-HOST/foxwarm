@@ -52,13 +52,14 @@ public sealed class SessionIngress
         QueueItem item,
         string? receipt,
         Action beforeAdmission,
-        bool wake = true
+        bool wake = true,
+        Func<IReadOnlyList<QueueItem>, QueueItem, QueueItem?>? shape = null
     ) =>
         EnqueueCoreAsync(
             sessionId,
             item,
             (entry, admitted) =>
-                entry.SaveLane.AdmitWebhookAsync(admitted, receipt, beforeAdmission),
+                entry.SaveLane.AdmitWebhookAsync(admitted, receipt, beforeAdmission, shape),
             wake
         );
 

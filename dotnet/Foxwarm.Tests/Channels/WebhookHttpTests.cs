@@ -139,6 +139,12 @@ public sealed class WebhookHttpTests
     [InlineData("/webhooks/", false)]
     [InlineData("/webhooks/hook/extra", false)]
     [InlineData("/webhooksx/hook", false)]
+    // The route ignores letter case and one trailing slash, so the bypass does too.
+    [InlineData("/Webhooks/hook", true)]
+    [InlineData("/WEBHOOKS/hook/", true)]
+    [InlineData("/webhooks/hook/", true)]
+    [InlineData("/webhooks//", false)]
+    [InlineData("/webhooks/hook//", false)]
     public void Only_the_exact_route_shape_bypasses_administrator_authentication(
         string path,
         bool bypass
@@ -508,19 +514,27 @@ public sealed class WebhookHttpTests
                 ).StatusCode
             );
 
-            // Verified pings consume the fixed per-identity budget.
-            for (var index = 0; index < 60; index++)
+            // Ignored events do no admission work and leave the budget alone ...
+            for (var index = 0; index < 70; index++)
                 Assert.Equal(
                     HttpStatusCode.OK,
                     (
                         await GitHub(client, "burst", "synthetic-burst", "ping", "{}"u8.ToArray())
                     ).StatusCode
                 );
+            // ... while every other verified delivery spends the fixed per-identity budget.
+            for (var index = 0; index < 60; index++)
+                Assert.Equal(
+                    HttpStatusCode.BadRequest,
+                    (
+                        await GitHub(client, "burst", "synthetic-burst", "push", "{"u8.ToArray())
+                    ).StatusCode
+                );
             var limited = await GitHub(
                 client,
                 "burst",
                 "synthetic-burst",
-                "ping",
+                "push",
                 "{}"u8.ToArray()
             );
             Assert.Equal(HttpStatusCode.TooManyRequests, limited.StatusCode);

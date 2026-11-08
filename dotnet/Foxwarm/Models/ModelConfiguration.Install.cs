@@ -58,7 +58,8 @@ internal sealed partial class ModelConfiguration
         Func<CancellationToken, Task<byte[]>> candidate,
         ToolAuthorizationAuthority? authorization = null,
         Func<CancellationToken, Task>? authorize = null,
-        CancellationToken token = default
+        CancellationToken token = default,
+        bool webhooksLocked = false
     )
     {
         await mutation.WaitAsync(token);
@@ -68,7 +69,7 @@ internal sealed partial class ModelConfiguration
                 await authorize(token);
             token.ThrowIfCancellationRequested();
             if (target == "config")
-                return await InstallAppAsync(candidate, token);
+                return await InstallAppAsync(candidate, token, webhooksLocked);
             var bytes = await candidate(token);
             if (target == "tool-rules")
             {
@@ -118,10 +119,11 @@ internal sealed partial class ModelConfiguration
 
     private async Task<JsonObject> InstallAppAsync(
         Func<CancellationToken, Task<byte[]>> candidate,
-        CancellationToken token
+        CancellationToken token,
+        bool webhooksLocked = false
     )
     {
-        var (config, access) = await PersistAppAsync(candidate, token);
+        var (config, access) = await PersistAppAsync(candidate, token, webhooksLocked);
         var restart = app.Select(pair => pair.Key)
             .Concat(config.Select(pair => pair.Key))
             .Distinct(StringComparer.Ordinal)
@@ -250,7 +252,11 @@ internal sealed partial class ModelConfiguration
     private async Task<(
         JsonObject Config,
         System.Collections.Immutable.ImmutableDictionary<string, AccessIdentity> Access
-    )> PersistAppAsync(Func<CancellationToken, Task<byte[]>> candidate, CancellationToken token)
+    )> PersistAppAsync(
+        Func<CancellationToken, Task<byte[]>> candidate,
+        CancellationToken token,
+        bool webhooksLocked = false
+    )
     {
         // Only persistence is shared with direct command saves. Release before access/runtime
         // application, which may join a Weixin handler that is itself confirming a login.
@@ -260,12 +266,55 @@ internal sealed partial class ModelConfiguration
             var bytes = await candidate(token);
             var raw = new UTF8Encoding(false, true).GetString(bytes).TrimStart('\uFEFF');
             var validated = await ValidateAppCandidateAsync(raw);
+            if (webhooksLocked)
+                RequireUnchangedWebhooks(validated.Access);
             await ReplaceRawAsync(AppPath, bytes, token);
             return validated;
         }
         finally
         {
             appPersistence.Release();
+        }
+    }
+
+    // Model-facing error copy; the coordinator owns its wording.
+    internal const string WebhooksLockedError =
+        "set_config cannot add or change webhook identities. Ask the user to configure webhooks in Setup.";
+
+    /// <summary>
+    /// Model-reachable saves may keep or remove webhook identities but not add or change one:
+    /// a webhook is a public endpoint that can run unattended code, so only the user's Setup
+    /// save or a direct file edit creates it. Compared with the saved file, not the live snapshot.
+    /// </summary>
+    private void RequireUnchangedWebhooks(
+        System.Collections.Immutable.ImmutableDictionary<string, AccessIdentity> candidate
+    )
+    {
+        System.Collections.Immutable.ImmutableDictionary<string, AccessIdentity> current;
+        try
+        {
+            var saved = ConfigurationYaml.Parse(ReadCurrentAppRaw(), "app config");
+            current = AccessConfiguration.Normalize(saved["access"], saved.ContainsKey("access"));
+        }
+        catch (InvalidDataException)
+        {
+            current = System
+                .Collections
+                .Immutable
+                .ImmutableDictionary<string, AccessIdentity>
+                .Empty;
+        }
+        foreach (var (id, identity) in candidate)
+        {
+            if (identity.Webhook is not { } hook)
+                continue;
+            if (
+                !current.TryGetValue(id, out var existing)
+                || existing.Webhook is not { } existingHook
+                || !AccessConfiguration.Equal(existing.Token, identity.Token)
+                || !existingHook.SameAs(hook)
+            )
+                throw new InvalidOperationException(WebhooksLockedError);
         }
     }
 

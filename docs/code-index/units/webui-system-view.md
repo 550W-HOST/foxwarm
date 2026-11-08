@@ -83,7 +83,7 @@ The **System** page explains how Foxwarm is organized and running, in five secti
 ### Webhooks section
 
 - Lists every identity with a `webhook` surface from administrator `GET /api/webhooks` ([contract](./host-runtime.md#d-host-inbound-webhooks)): action icon, ID, verification, target Session and the latest delivery outcome. Webhooks whose target is unavailable or whose latest delivery failed come first, then by ID.
-- Inspector: copyable address with a hint to set `url` in Setup › Config when it is a loopback address; verification and GitHub events; target Session (opens its inspector, or explains that deliveries are refused while it is missing); action, and for handlers the script source, Node, timeout and waiting count; the count of refused deliveries; the newest deliveries with outcome, event/action, delivery ID, error and a handler run link that opens the run record in the JSON inspector.
+- Inspector: copyable address with a hint to set `url` in Setup › Config when it is a loopback address; verification and GitHub events; target Session (opens its inspector, or explains that deliveries are refused while it is missing); action, and for handlers the script source, Node, timeout and waiting count; passive deliveries refused because the unread backlog was full, and requests that could not be verified; the newest deliveries with outcome, event/action, delivery ID, a payload-omitted note, error and a handler run link that opens the run record in the JSON inspector.
 - Read-only: webhooks are added and changed in Setup › Config. History is process memory and empty after a restart.
 - Live updates: reloads (debounced) on the realtime `webhooks-changed` event and on socket reopen; no polling.
 

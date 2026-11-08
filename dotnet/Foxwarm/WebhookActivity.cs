@@ -26,8 +26,18 @@ internal sealed class WebhookActivity
     private readonly object gate = new();
     private readonly Dictionary<string, Lane> lanes = new(StringComparer.Ordinal);
     private bool closed;
+    private readonly TimeSpan notifyInterval;
+    private readonly object notifyGate = new();
+    private long lastNotify = long.MinValue / 2;
+    private bool notifyScheduled;
 
-    /// <summary>Raised after history, handler state or webhook configuration changes.</summary>
+    internal WebhookActivity(TimeSpan? notifyInterval = null) =>
+        this.notifyInterval = notifyInterval ?? TimeSpan.FromSeconds(1);
+
+    /// <summary>
+    /// Raised after history, handler state or webhook configuration changes, at most once per
+    /// interval; changes inside an interval are coalesced into one trailing notice.
+    /// </summary>
     internal event Action? Changed;
 
     private sealed class Lane
@@ -39,9 +49,40 @@ internal sealed class WebhookActivity
         internal Task? Worker;
         internal int Unauthorized;
         internal long LastUnauthorizedAt;
+        internal int Refused;
+        internal long LastRefusedAt;
     }
 
-    internal void Notify() => Changed?.Invoke();
+    internal void Notify()
+    {
+        lock (notifyGate)
+        {
+            if (notifyScheduled)
+                return;
+            var now = Environment.TickCount64;
+            var wait = lastNotify + (long)notifyInterval.TotalMilliseconds - now;
+            if (wait > 0)
+            {
+                notifyScheduled = true;
+                _ = Task.Delay(TimeSpan.FromMilliseconds(wait))
+                    .ContinueWith(
+                        _ =>
+                        {
+                            lock (notifyGate)
+                            {
+                                notifyScheduled = false;
+                                lastNotify = Environment.TickCount64;
+                            }
+                            Changed?.Invoke();
+                        },
+                        TaskScheduler.Default
+                    );
+                return;
+            }
+            lastNotify = now;
+        }
+        Changed?.Invoke();
+    }
 
     /// <summary>Records one verified delivery's result, newest first.</summary>
     internal void Record(
@@ -52,15 +93,25 @@ internal sealed class WebhookActivity
         string? action = null,
         string? delivery = null,
         string? sessionId = null,
-        string? error = null
+        string? error = null,
+        bool payloadOmitted = false
     )
     {
         lock (gate)
-            Add(LaneFor(id), Entry(outcome, status, eventName, action, delivery, sessionId, error));
+        {
+            var entry = Entry(outcome, status, eventName, action, delivery, sessionId, error);
+            if (payloadOmitted)
+                entry["payloadOmitted"] = true;
+            Add(LaneFor(id), entry);
+        }
         Notify();
     }
 
-    /// <summary>Failed verification is counted, not listed, so it cannot displace real deliveries.</summary>
+    /// <summary>
+    /// Requests that were not verified are counted, not listed, so they cannot displace real
+    /// deliveries. They raise no notice: unauthenticated traffic must not reach administrator
+    /// clients; the count appears with the next refresh.
+    /// </summary>
     internal void Unauthorized(string id)
     {
         lock (gate)
@@ -68,6 +119,17 @@ internal sealed class WebhookActivity
             var lane = LaneFor(id);
             lane.Unauthorized++;
             lane.LastUnauthorizedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        }
+    }
+
+    /// <summary>Counts a verified passive delivery refused because the Session's backlog is full.</summary>
+    internal void Refused(string id)
+    {
+        lock (gate)
+        {
+            var lane = LaneFor(id);
+            lane.Refused++;
+            lane.LastRefusedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         }
         Notify();
     }
@@ -208,18 +270,22 @@ internal sealed class WebhookActivity
                 {
                     ["pending"] = 0,
                     ["unauthorized"] = 0,
+                    ["refused"] = 0,
                     ["deliveries"] = new JsonArray(),
                 };
             var status = new JsonObject
             {
                 ["pending"] = lane.Pending.Count,
                 ["unauthorized"] = lane.Unauthorized,
+                ["refused"] = lane.Refused,
                 ["deliveries"] = new JsonArray(
                     lane.History.Select(entry => (JsonNode)entry.DeepClone()).ToArray()
                 ),
             };
             if (lane.Unauthorized > 0)
                 status["lastUnauthorizedAt"] = lane.LastUnauthorizedAt;
+            if (lane.Refused > 0)
+                status["lastRefusedAt"] = lane.LastRefusedAt;
             return status;
         }
     }

@@ -725,7 +725,8 @@ internal sealed partial class SessionManager
                     _ => Task.FromResult(bytes),
                     authorization,
                     Authorize,
-                    token
+                    token,
+                    webhooksLocked: true
                 );
             else if (target == "tool-rules")
             {

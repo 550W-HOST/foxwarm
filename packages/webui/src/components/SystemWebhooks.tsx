@@ -187,8 +187,13 @@ function WebhookInspector({ webhook, now, onInspectSession, onOpenSession }: {
             {webhook.script.code !== undefined ? <Field label="Code"><pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-md bg-fw-surface-sunken p-2 font-mono text-[11px]">{webhook.script.code}</pre></Field> : null}
             {webhook.pending ? <Field label="Waiting">{`${webhook.pending} ${webhook.pending === 1 ? 'delivery' : 'deliveries'}`}</Field> : null}
           </> : null}
+          {webhook.refused ? (
+            <Field label="Refused">
+              <span className="text-fw-warning" data-system-webhook-refused>{`${webhook.refused} because too many unread deliveries were waiting${webhook.lastRefusedAt ? `, last ${formatPast(webhook.lastRefusedAt, now)}` : ''}`}</span>
+            </Field>
+          ) : null}
           {webhook.unauthorized ? (
-            <Field label="Refused">{`${webhook.unauthorized} with a wrong secret or signature${webhook.lastUnauthorizedAt ? `, last ${formatPast(webhook.lastUnauthorizedAt, now)}` : ''}`}</Field>
+            <Field label="Not verified">{`${webhook.unauthorized} with a wrong secret or signature${webhook.lastUnauthorizedAt ? `, last ${formatPast(webhook.lastUnauthorizedAt, now)}` : ''}`}</Field>
           ) : null}
         </dl>
       </section>
@@ -210,6 +215,7 @@ function WebhookInspector({ webhook, now, onInspectSession, onOpenSession }: {
                     {delivery.runId ? <button type="button" onClick={() => { void openRun(delivery.runId!) }} className="ml-auto inline-flex shrink-0 items-center gap-0.5 text-fw-accent hover:underline" data-system-webhook-run={delivery.runId}>{delivery.runId}<ChevronRight className="h-3 w-3" /></button> : null}
                   </div>
                 ) : null}
+                {delivery.payloadOmitted ? <p className="mt-1 text-fw-text-muted" data-system-webhook-omitted>Payload omitted: earlier deliveries were still unread.</p> : null}
                 {delivery.error ? <p className="mt-1 break-words text-fw-danger">{delivery.error}</p> : null}
               </li>
             ))}

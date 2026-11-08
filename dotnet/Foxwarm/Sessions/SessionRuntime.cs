@@ -163,13 +163,15 @@ internal sealed class SessionRuntime(SessionManager manager)
 
     /// <summary>
     /// Strictly admits one verified webhook delivery to an existing Session. Returns false when
-    /// the same delivery receipt was already accepted; a missing target is never created.
+    /// the same delivery receipt was already accepted or <paramref name="shape"/> declined it;
+    /// a missing target is never created.
     /// </summary>
     internal async Task<bool> SubmitWebhookAsync(
         string id,
         QueueItem item,
         string? receipt,
-        bool wake = true
+        bool wake = true,
+        Func<IReadOnlyList<QueueItem>, QueueItem, QueueItem?>? shape = null
     )
     {
         var owner = await manager.RequiredAsync(id);
@@ -183,7 +185,8 @@ internal sealed class SessionRuntime(SessionManager manager)
                 if (!manager.Accepting)
                     throw new InvalidOperationException("Host is shutting down.");
             },
-            wake
+            wake,
+            shape
         );
     }
 

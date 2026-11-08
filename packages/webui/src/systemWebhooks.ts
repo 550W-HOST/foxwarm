@@ -14,6 +14,7 @@ export type WebhookDelivery = {
   sessionId?: string
   runId?: string
   error?: string
+  payloadOmitted?: boolean
 }
 
 export type WebhookRow = {
@@ -30,6 +31,9 @@ export type WebhookRow = {
   pending: number
   unauthorized: number
   lastUnauthorizedAt?: number
+  /** Passive deliveries refused because too many unread ones were waiting. */
+  refused?: number
+  lastRefusedAt?: number
   deliveries: WebhookDelivery[]
 }
 
