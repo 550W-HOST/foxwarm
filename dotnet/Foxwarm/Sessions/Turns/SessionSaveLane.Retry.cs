@@ -84,12 +84,20 @@ public sealed partial class SessionSaveLane
                     notice.Committed = (JsonObject)message.DeepClone();
                 }
                 return (
+                    Before: state.History.Snapshot(),
                     Staged: staged,
                     Message: message,
                     Append: index < 0,
                     Publish: (Action<SessionState>)Publish
                 );
             });
+            var (redacted, publish) = RedactStagedHistory(
+                prepared.Before,
+                prepared.Staged,
+                [prepared.Message],
+                prepared.Publish
+            );
+            prepared = prepared with { Staged = redacted, Publish = publish };
             void PublishCommitted()
             {
                 entry.WithState(prepared.Publish);

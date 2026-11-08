@@ -23,6 +23,9 @@ internal sealed class SecretExposures : IDisposable
     private readonly string path;
     private readonly TimeProvider clock;
     private readonly object gate = new();
+    private readonly object writeGate = new();
+    private long changes;
+    private long written;
     private readonly Dictionary<string, SecretExposure> entries = new(StringComparer.Ordinal);
     private ITimer? pending;
     private bool loaded;
@@ -56,6 +59,7 @@ internal sealed class SecretExposures : IDisposable
             }
             while (entries.Count > MaximumLabels)
                 entries.Remove(entries.Values.MinBy(entry => entry.LastSeenAt)!.Label);
+            changes++;
             pending ??= clock.CreateTimer(
                 _ => Flush(),
                 null,
@@ -79,21 +83,25 @@ internal sealed class SecretExposures : IDisposable
         lock (gate)
         {
             Load();
-            if (entries.Remove(label))
-                pending ??= clock.CreateTimer(
-                    _ => Flush(),
-                    null,
-                    TimeSpan.Zero,
-                    Timeout.InfiniteTimeSpan
-                );
+            if (!entries.Remove(label))
+                return;
+            changes++;
+            pending ??= clock.CreateTimer(
+                _ => Flush(),
+                null,
+                TimeSpan.Zero,
+                Timeout.InfiniteTimeSpan
+            );
         }
     }
 
     internal void Flush()
     {
         JsonObject payload;
+        long version;
         lock (gate)
         {
+            version = changes;
             pending?.Dispose();
             pending = null;
             if (!loaded)
@@ -110,21 +118,28 @@ internal sealed class SecretExposures : IDisposable
                 };
             payload = new JsonObject { ["version"] = 1, ["labels"] = items };
         }
-        try
+        // Writes are serialized and an older snapshot never replaces a newer one.
+        lock (writeGate)
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            new LinuxAtomicJsonFile(
-                Path.GetDirectoryName(path)!,
-                Path.GetFileName(path),
-                privateFile: true
-            ).WritePayload(payload);
-        }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
-        {
-            MainLog.Diagnostic(
-                "Secret exposure record failed: " + MainLog.SafeFailure(error),
-                failure: true
-            );
+            if (version <= written)
+                return;
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                new LinuxAtomicJsonFile(
+                    Path.GetDirectoryName(path)!,
+                    Path.GetFileName(path),
+                    privateFile: true
+                ).WritePayload(payload);
+                written = version;
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                MainLog.Diagnostic(
+                    "Secret exposure record failed: " + MainLog.SafeFailure(error),
+                    failure: true
+                );
+            }
         }
     }
 

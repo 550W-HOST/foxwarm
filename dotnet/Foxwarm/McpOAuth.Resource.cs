@@ -9,7 +9,7 @@ internal sealed partial class McpOAuthService
     private JsonObject RequireGrant(string name, JsonObject config)
     {
         var grant = Load()[name] as JsonObject;
-        if (!Matches(grant, config) || grant?["tokens"] is not JsonObject)
+        if (!Matches(name, grant, config) || grant?["tokens"] is not JsonObject)
             throw Error(
                 "needs-authorization",
                 "This MCP server needs administrator OAuth authorization."

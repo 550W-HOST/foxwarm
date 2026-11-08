@@ -277,6 +277,58 @@ internal sealed partial class SecretStore
 
     private JsonObject Entries() => Load()["entries"]!.AsObject();
 
+    // Throws SecretStoreLockedException when the store file cannot be used.
+    internal void Check()
+    {
+        lock (gate)
+            _ = Load();
+    }
+
+    // An unreadable, malformed or newer-version store is treated like a missing key: every
+    // consumer fails on its own and nothing overwrites the file. Reading is retried on the
+    // next use, so repairing or restoring the file needs no restart.
+    private JsonObject Read()
+    {
+        JsonObject loaded;
+        try
+        {
+            loaded =
+                JsonNode.Parse(File.ReadAllText(path, Encoding.UTF8)) as JsonObject
+                ?? throw new InvalidDataException();
+        }
+        catch (Exception error)
+            when (error
+                    is System.Text.Json.JsonException
+                        or InvalidDataException
+                        or IOException
+                        or UnauthorizedAccessException
+            )
+        {
+            throw new SecretStoreLockedException(
+                "The secret store is locked: its file cannot be read.",
+                error
+            );
+        }
+        if (SessionWait.Number(loaded["version"]) is not 1)
+            throw new SecretStoreLockedException(
+                SessionWait.Number(loaded["version"]) is > 1
+                    ? "The secret store is locked: it was written by a newer Foxwarm version."
+                    : "The secret store is locked: its file is malformed."
+            );
+        if (
+            loaded["entries"] is not JsonObject entries
+            || entries.Any(pair =>
+                !NamePattern().IsMatch(pair.Key)
+                || pair.Value is not JsonObject value
+                || value["versions"] is not JsonArray
+            )
+        )
+            throw new SecretStoreLockedException(
+                "The secret store is locked: its file is malformed."
+            );
+        return loaded;
+    }
+
     private long Now() => clock.GetUtcNow().ToUnixTimeMilliseconds();
 
     private JsonObject Load()
@@ -285,28 +337,7 @@ internal sealed partial class SecretStore
             return document;
         JsonObject loaded;
         if (File.Exists(path))
-        {
-            try
-            {
-                loaded =
-                    JsonNode.Parse(File.ReadAllText(path, Encoding.UTF8)) as JsonObject
-                    ?? throw new InvalidDataException("Secret store is malformed.");
-            }
-            catch (System.Text.Json.JsonException error)
-            {
-                throw new InvalidDataException("Secret store is malformed.", error);
-            }
-            if (SessionWait.Number(loaded["version"]) != 1)
-                throw new InvalidDataException("Secret store has an unsupported version.");
-            if (loaded["entries"] is not JsonObject entries)
-                throw new InvalidDataException("Secret store is malformed.");
-            foreach (var (name, entry) in entries)
-            {
-                ValidateName(name);
-                if (entry is not JsonObject value || value["versions"] is not JsonArray)
-                    throw new InvalidDataException("Secret store is malformed.");
-            }
-        }
+            loaded = Read();
         else
             loaded = new JsonObject { ["version"] = 1, ["entries"] = new JsonObject() };
         document = loaded;

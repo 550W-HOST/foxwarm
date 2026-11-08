@@ -433,4 +433,46 @@ public sealed class StartupDiagnosticsTests
             Environment.SetEnvironmentVariable("FOXWARM_SYNC_FILE_LOG", sync);
         }
     }
+
+    [Fact]
+    public void Captured_console_output_stays_immediate_and_known_values_are_masked()
+    {
+        const string value = "synthetic-log-secret-value-0001";
+        using var temp = new TempDirectory();
+        Directory.CreateDirectory(Path.Combine(temp.Path, "state"));
+        File.WriteAllText(Path.Combine(temp.Path, "state", "config.yaml"), "vector: false\n");
+        var configuration = new ModelConfiguration(temp.Path);
+        configuration.Secrets.Open();
+        configuration.Secrets.Store.Set("log-key", value);
+        _ = configuration.Secrets.Redactor;
+        var originalOut = Console.Out;
+        var originalError = Console.Error;
+        var sync = Environment.GetEnvironmentVariable("FOXWARM_SYNC_FILE_LOG");
+        using var output = new StringWriter();
+        try
+        {
+            Environment.SetEnvironmentVariable("FOXWARM_SYNC_FILE_LOG", null);
+            Console.SetOut(output);
+            using (new MainLog(configuration))
+            {
+                Console.Out.Write("progress ");
+                // A partial line reaches the console at once, as before masking existed.
+                Assert.Equal("progress ", output.ToString());
+                Console.Out.Write("key " + value + "\n");
+                Console.Out.Write("split " + value[..10]);
+                Console.Out.Write(value[10..] + "\n");
+            }
+            var console = output.ToString();
+            Assert.StartsWith("progress key [[FW_SECRET:log-key]]\n", console);
+            var file = File.ReadAllText(MainLog.Destination(configuration));
+            Assert.DoesNotContain(value, file);
+            Assert.Equal(2, Regex.Matches(file, Regex.Escape("[[FW_SECRET:log-key]]")).Count);
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+            Console.SetError(originalError);
+            Environment.SetEnvironmentVariable("FOXWARM_SYNC_FILE_LOG", sync);
+        }
+    }
 }

@@ -52,6 +52,8 @@ internal static class SecretConfigurationChanges
             return;
         }
         var app = target == "models" ? configuration.AppConfiguration : current;
+        if (target != "models")
+            RequireInheritedUrls(configuration, current, candidate);
         foreach (var (unit, before, after, inherited) in Units(target, current, candidate, app))
             if (
                 !JsonNode.DeepEquals(before, after)
@@ -118,16 +120,63 @@ internal static class SecretConfigurationChanges
     {
         if (provider is not JsonObject value || HostModels.Text(value, "apiKey") is not null)
             return false;
+        return Family(value) is { } family
+            && SecretReferences.Contains(SessionWait.Text(app["llm"]?[family + "ApiKey"]));
+    }
+
+    // A provider without its own baseUrl sends its requests, and therefore any stored
+    // secret it uses, to the llm base URL of its protocol family.
+    private static void RequireInheritedUrls(
+        ModelConfiguration configuration,
+        JsonObject current,
+        JsonObject candidate
+    )
+    {
+        JsonObject models;
+        try
+        {
+            models = File.Exists(configuration.ActivePath)
+                ? ConfigurationYaml.Parse(
+                    File.ReadAllText(configuration.ActivePath, Encoding.UTF8),
+                    "models config"
+                )
+                : new JsonObject();
+        }
+        catch (InvalidDataException)
+        {
+            return;
+        }
+        var providers = (models["providers"] ?? models["models"]) as JsonObject ?? new JsonObject();
+        foreach (var family in new[] { "openai", "anthropic" })
+        {
+            var field = family + "BaseUrl";
+            if (JsonNode.DeepEquals(current["llm"]?[field], candidate["llm"]?[field]))
+                continue;
+            if (
+                providers.Any(pair =>
+                    pair.Value is JsonObject provider
+                    && HostModels.Text(provider, "baseUrl") is null
+                    && Family(provider) == family
+                    && (
+                        SecretReferences.ReferencedNames(provider).Count > 0
+                        || UsesReferencedFallback(provider, current)
+                        || UsesReferencedFallback(provider, candidate)
+                    )
+                )
+            )
+                throw new InvalidDataException(string.Format(SetConfigDenied, "llm." + field));
+        }
+    }
+
+    private static string? Family(JsonObject provider)
+    {
         var type =
-            HostModels.Text(value, "providerType")
-            ?? HostModels.Text(value, "provider")
+            HostModels.Text(provider, "providerType")
+            ?? HostModels.Text(provider, "provider")
             ?? "openai-completions";
-        var family =
-            type == "anthropic" ? "anthropic"
+        return type == "anthropic" ? "anthropic"
             : type is "openai" or "openai-responses" or "openai-ws" or "openai-completions"
                 ? "openai"
             : null;
-        return family is not null
-            && SecretReferences.Contains(SessionWait.Text(app["llm"]?[family + "ApiKey"]));
     }
 }

@@ -18,6 +18,25 @@ internal sealed partial class McpClient
         return config;
     }
 
+    // The server with its secret references resolved, as connections use it. OAuth compares
+    // and uses resolved settings throughout; persisted grants keep only the configured URL.
+    internal JsonObject ResolvedAuthorizationServer(string name)
+    {
+        _ = AuthorizationServer(name);
+        try
+        {
+            return configuration.Get(name);
+        }
+        catch (Exception error)
+            when (error
+                    is Foxwarm.Secrets.SecretUnavailableException
+                        or Foxwarm.Secrets.SecretStoreLockedException
+            )
+        {
+            throw new McpOAuthException("configuration", error.Message);
+        }
+    }
+
     internal JsonObject Authorizations()
     {
         var payload = new JsonObject();

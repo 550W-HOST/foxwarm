@@ -27,7 +27,14 @@ internal static class SecretMessageRedaction
         var changed = false;
         foreach (var key in copy.Select(pair => pair.Key).ToArray())
         {
-            if (key is "__meta" or "providerMeta")
+            // Message metadata is not content, except the user's structured question answer.
+            if (key == "__meta")
+            {
+                if (copy[key] is JsonObject meta && meta.ContainsKey("questionAnswer"))
+                    changed |= Field(redactor, meta, "questionAnswer", findings);
+                continue;
+            }
+            if (key == "providerMeta")
                 continue;
             if (key == "parts" && copy[key] is JsonArray parts)
             {

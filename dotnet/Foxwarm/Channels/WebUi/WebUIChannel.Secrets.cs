@@ -111,20 +111,24 @@ internal sealed partial class WebUIChannel
     {
         var secrets = configuration.Secrets;
         var usages = configuration.SecretUsages(sessions.OutboundMcp.Configuration.Snapshot());
-        var listed = secrets.Store.List();
+        var lockError = secrets.LockError;
+        IReadOnlyList<SecretMetadata> listed;
+        try
+        {
+            listed = secrets.Store.List();
+        }
+        catch (SecretStoreLockedException error)
+        {
+            lockError ??= error;
+            listed = [];
+        }
         var defined = new HashSet<string>(
             listed.Where(item => item.IsSet).Select(item => item.Name)
         );
-        var locked = secrets.Locked;
         return new JsonObject
         {
-            ["locked"] = locked,
-            ["lockMessage"] = locked
-                ? MainLog.SafeFailure(
-                    secrets.KeyError
-                        ?? new SecretStoreLockedException("The secret store is locked.")
-                )
-                : null,
+            ["locked"] = lockError is not null,
+            ["lockMessage"] = lockError is null ? null : MainLog.SafeFailure(lockError),
             ["keyFile"] = secrets.KeyPath,
             ["minimumRedactableLength"] = SecretStore.MinimumRedactableLength,
             ["retiredRetentionDays"] = (int)SecretStore.RetiredRetention.TotalDays,

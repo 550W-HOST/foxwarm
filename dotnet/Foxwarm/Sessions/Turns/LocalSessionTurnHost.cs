@@ -664,7 +664,7 @@ public sealed partial class LocalSessionTurnHost
         var nextSeq = capturedNextSeq;
         foreach (var rawMessage in rawMessages)
         {
-            var message = (JsonObject)state.RedactForHistory(rawMessage, "history").DeepClone();
+            var message = (JsonObject)rawMessage.DeepClone();
             var meta = message["__meta"] switch
             {
                 null => new JsonObject(),

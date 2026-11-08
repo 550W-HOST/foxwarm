@@ -122,6 +122,8 @@ internal sealed partial class ModelConfiguration
     internal static IEnumerable<KnownSecret> AppLiterals(JsonObject app) =>
         InstanceSecrets.Literals(SecretSinks.App, app, path => "config." + path);
 
+    private bool resolvedWhileLocked;
+
     // Resolves sink references for one catalog generation. Missing names are recorded per
     // provider (including a legacy llm fallback key the provider would use), so only the
     // affected providers fail; the rest of the catalog stays usable.
@@ -140,6 +142,7 @@ internal sealed partial class ModelConfiguration
             }
             catch (SecretStoreLockedException)
             {
+                resolvedWhileLocked = true;
                 return null;
             }
         }

@@ -218,7 +218,13 @@ internal sealed class ToolRegistry(
             KnownSecretLabel is { } known
             && resolved
                 is { Source: "node", Name: "write" or "edit" or "apply_patch" }
-                    or { Source: "builtin", Name: "mcp_config" }
+                    or {
+                        Source: "builtin",
+                        Name: "mcp_config"
+                            or "write_memory"
+                            or "edit_memory"
+                            or "apply_patch_memory"
+                    }
         )
             Foxwarm.Secrets.SecretMarkerGuard.Require(resolved.Args, known);
         var result =

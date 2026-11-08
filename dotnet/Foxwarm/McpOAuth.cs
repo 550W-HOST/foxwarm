@@ -13,6 +13,7 @@ internal sealed partial class McpOAuthService
     private readonly LinuxAtomicJsonFile store;
     private readonly string? publicBaseUrl;
     private readonly Func<string, JsonObject> getServer;
+    private readonly Func<string, JsonObject?> getConfiguredServer;
     private readonly Action<string> closeConnections;
     private readonly CancellationToken shutdown;
     private JsonObject? grants;
@@ -45,6 +46,7 @@ internal sealed partial class McpOAuthService
         string root,
         string? publicBaseUrl,
         Func<string, JsonObject> getServer,
+        Func<string, JsonObject?> getConfiguredServer,
         Action<string> closeConnections,
         CancellationToken shutdown,
         Action<AtomicJsonWriteStage>? writeStage = null
@@ -53,6 +55,7 @@ internal sealed partial class McpOAuthService
         store = new(root, "state/mcp-oauth.json", writeStage, privateFile: true);
         this.publicBaseUrl = publicBaseUrl;
         this.getServer = getServer;
+        this.getConfiguredServer = getConfiguredServer;
         this.closeConnections = closeConnections;
         this.shutdown = shutdown;
     }
@@ -178,10 +181,15 @@ internal sealed partial class McpOAuthService
         return settings;
     }
 
-    private bool Matches(JsonObject? grant, JsonObject config) =>
+    // Grants record the configured URL, which may contain a secret reference; the resolved
+    // URL is used only for requests and is never persisted.
+    private string? ConfiguredUrl(string name, JsonObject config) =>
+        Text(getConfiguredServer(name)?["url"]) ?? Text(config["url"]);
+
+    private bool Matches(string name, JsonObject? grant, JsonObject config) =>
         grant is not null
         && config["oauth"] is JsonObject
-        && Text(grant["serverUrl"]) == Text(config["url"])
+        && Text(grant["serverUrl"]) == ConfiguredUrl(name, config)
         && Text(grant["publicBaseUrl"]) == publicBaseUrl
         && JsonNode.DeepEquals(grant["settings"], Settings(config));
 
@@ -233,7 +241,7 @@ internal sealed partial class McpOAuthService
         {
             Prune();
             var candidate = Load()[name] as JsonObject;
-            var grant = Matches(candidate, config) ? candidate : null;
+            var grant = Matches(name, candidate, config) ? candidate : null;
             var pending = flows.Values.Any(flow => flow.Server == name);
             var state =
                 pending ? "authorizing"

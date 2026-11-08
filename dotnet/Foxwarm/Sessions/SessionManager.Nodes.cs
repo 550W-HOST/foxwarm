@@ -219,7 +219,10 @@ internal sealed partial class SessionManager
         var bootstrap =
             Bootstrap
             ?? throw new InvalidOperationException("Node bootstrap is unavailable on this host.");
-        var path = WorkspaceTools.PrivateNodeTokenPath(ToolRegistry.Text(args, "filePath") ?? "");
+        var path = WorkspaceTools.PrivateNodeTokenPath(
+            ToolRegistry.Text(args, "filePath") ?? "",
+            "node_bootstrap_info"
+        );
         var info = bootstrap.Info();
         var pairing = SessionWait.Text(info["pairingToken"]) ?? "";
         info.Remove("pairingToken");

@@ -14,6 +14,10 @@ internal sealed partial class ModelConfiguration
     private HostModels? catalog;
     private string? cachedRaw;
     private long cachedSecretGeneration;
+
+    // Set when the cached catalog was resolved while the store was locked; restoring the
+    // key or store file then refreshes the catalog without a configuration change.
+    private bool cachedWhileLocked;
     internal HostPaths Paths { get; }
     public string ActivePath { get; }
     public string TemplatePath { get; }
@@ -207,12 +211,19 @@ internal sealed partial class ModelConfiguration
                 throw new InvalidDataException("Models configuration is missing.");
             var raw = File.ReadAllText(read, Encoding.UTF8);
             var generation = Secrets.Store.Generation;
-            if (catalog is not null && raw == cachedRaw && generation == cachedSecretGeneration)
+            if (
+                catalog is not null
+                && raw == cachedRaw
+                && generation == cachedSecretGeneration
+                && !(cachedWhileLocked && !Secrets.Locked)
+            )
                 return catalog;
+            resolvedWhileLocked = false;
             var next = Validate(raw);
             catalog = next;
             cachedRaw = raw;
             cachedSecretGeneration = generation;
+            cachedWhileLocked = resolvedWhileLocked;
             return next;
         }
     }

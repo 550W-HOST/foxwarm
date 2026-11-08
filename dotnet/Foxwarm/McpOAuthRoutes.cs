@@ -108,7 +108,7 @@ internal static class McpOAuthRoutes
                 try
                 {
                     _ = await BodyAsync(context.Request, service);
-                    var config = client.AuthorizationServer(server);
+                    var config = client.ResolvedAuthorizationServer(server);
                     var url = await service.BeginAsync(server, config, context.RequestAborted);
                     return Results.Ok(new JsonObject { ["authorizationUrl"] = url });
                 }

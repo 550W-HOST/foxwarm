@@ -100,7 +100,8 @@ internal sealed class MainLog : IDisposable
         Volatile.Write(ref active, this);
     }
 
-    // Known secret values are masked in complete lines before the file or console sees them.
+    // Known secret values are masked in each write before the console sees it and again in
+    // each complete file line.
     private string Redact(string line) => secrets?.LastBuilt.Redact(line) ?? line;
 
     private void Record(string line, bool isError)
@@ -171,26 +172,41 @@ internal sealed class MainLog : IDisposable
         {
             lock (owner.gate)
             {
-                if (value == '\n')
-                {
-                    var raw = pending.ToString();
-                    var line = owner.Redact(raw.TrimEnd('\r'));
-                    console?.Write(line + raw[raw.TrimEnd('\r').Length..] + "\n");
-                    owner.Record(line, isError);
-                    pending.Clear();
-                }
-                else
-                    pending.Append(value);
+                console?.Write(value);
+                Append(value);
             }
         }
 
+        // Each write is masked as a whole before the console sees it, so console output
+        // keeps its timing and a multi-line value written at once is still masked. The
+        // file receives complete lines, masked again for values split across writes.
         public override void Write(string? value)
         {
-            if (value is null)
+            if (string.IsNullOrEmpty(value))
                 return;
             lock (owner.gate)
-                foreach (var character in value)
-                    Write(character);
+            {
+                var masked = owner.Redact(value);
+                console?.Write(masked);
+                foreach (var character in masked)
+                    Append(character);
+            }
+        }
+
+        public override void Write(char[] buffer, int index, int count) =>
+            Write(new string(buffer, index, count));
+
+        public override void Write(ReadOnlySpan<char> buffer) => Write(new string(buffer));
+
+        private void Append(char value)
+        {
+            if (value == '\n')
+            {
+                owner.Record(owner.Redact(pending.ToString().TrimEnd('\r')), isError);
+                pending.Clear();
+            }
+            else
+                pending.Append(value);
         }
 
         public override void Flush()
@@ -203,9 +219,7 @@ internal sealed class MainLog : IDisposable
         {
             if (pending.Length > 0)
             {
-                var line = owner.Redact(pending.ToString());
-                console?.Write(line);
-                owner.Record(line, isError);
+                owner.Record(owner.Redact(pending.ToString()), isError);
                 pending.Clear();
             }
             console?.Flush();

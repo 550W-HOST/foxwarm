@@ -73,6 +73,7 @@ public sealed partial class McpOAuthTests
             f.Data,
             PublicBase,
             f.Mcp.AuthorizationServer,
+            f.Mcp.AuthorizationServer,
             _ => closes++,
             CancellationToken.None,
             stage =>

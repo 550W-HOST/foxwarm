@@ -128,8 +128,8 @@ internal sealed partial class McpOAuthService
             {
                 ["client_id"] = config["oauth"]!["clientId"]!.DeepClone(),
             };
-            if (config["oauth"]?["clientSecret"] is not null)
-                client["client_secret"] = config["oauth"]!["clientSecret"]!.DeepClone();
+            // A configured client secret is read from the configuration at each token
+            // request and is not copied into the grant file.
             return client;
         }
         if (retained is not null)
@@ -216,7 +216,7 @@ internal sealed partial class McpOAuthService
                 Current(name, config, epoch);
                 var previous = Load()[name] as JsonObject;
                 reuse =
-                    Matches(previous, config)
+                    Matches(name, previous, config)
                     && Text(previous?["discovery"]?["authorizationServerUrl"])
                         == Text(discovery["authorizationServerUrl"])
                     && Text(previous?["discovery"]?["resourceMetadata"]?["resource"])
@@ -233,7 +233,7 @@ internal sealed partial class McpOAuthService
             var verifier = Base64Url(RandomNumberGenerator.GetBytes(32));
             var grant = new JsonObject
             {
-                ["serverUrl"] = config["url"]!.DeepClone(),
+                ["serverUrl"] = ConfiguredUrl(name, config),
                 ["publicBaseUrl"] = publicBaseUrl,
                 ["settings"] = Settings(config),
                 ["discovery"] = discovery,

@@ -22,7 +22,14 @@ internal sealed partial class McpClient : IAsyncDisposable
     internal McpClient(string root, string? publicBaseUrl = null, string? configPath = null)
     {
         configuration = new(root, configPath);
-        OAuth = new(root, publicBaseUrl, configuration.Get, FenceServer, shutdown.Token);
+        OAuth = new(
+            root,
+            publicBaseUrl,
+            configuration.Get,
+            name => configuration.Snapshot()[name] as JsonObject,
+            FenceServer,
+            shutdown.Token
+        );
     }
 
     internal McpConfiguration Configuration => configuration;

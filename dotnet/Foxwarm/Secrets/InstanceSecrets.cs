@@ -56,18 +56,23 @@ internal sealed partial class InstanceSecrets : IDisposable
         }
     }
 
-    internal bool Locked
+    internal bool Locked => LockError is not null;
+
+    // Why stored values are unavailable: a missing or unreadable key, or a store file that
+    // cannot be read. Null when the store is usable.
+    internal Exception? LockError
     {
         get
         {
             try
             {
                 _ = OpenKeys();
-                return false;
+                Store.Check();
+                return null;
             }
-            catch (Exception)
+            catch (Exception error)
             {
-                return true;
+                return error;
             }
         }
     }
@@ -258,10 +263,14 @@ internal sealed partial class InstanceSecrets : IDisposable
         Func<string, string> label
     )
     {
+        string? flag = null;
         foreach (var field in sinks.Fields(document))
         {
+            var pendingFlag = flag;
+            flag = null;
             if (SecretReferences.Contains(field.Value))
                 continue;
+            var name = field.Path[(field.Path.LastIndexOf('.') + 1)..];
             switch (field.Kind)
             {
                 case SecretSinkKind.Credential:
@@ -271,12 +280,81 @@ internal sealed partial class InstanceSecrets : IDisposable
                     foreach (var part in UrlSecretParts(field.Value))
                         yield return new KnownSecret(label(field.Path), part);
                     break;
-                case SecretSinkKind.Environment
-                    when CredentialName().IsMatch(field.Path[(field.Path.LastIndexOf('.') + 1)..]):
+                case SecretSinkKind.Environment when CredentialName().IsMatch(name):
                     yield return new KnownSecret(label(field.Path), field.Value);
+                    break;
+                case SecretSinkKind.Header when CredentialHeader(name):
+                    foreach (var value in HeaderCredential(field.Value))
+                        yield return new KnownSecret(label(field.Path), value);
+                    break;
+                case SecretSinkKind.Argument:
+                    foreach (var value in ArgumentCredential(field.Value, pendingFlag, out flag))
+                        yield return new KnownSecret(label(field.Path), value);
                     break;
             }
         }
+    }
+
+    // Header and option names that carry credentials (ASCII case-insensitive).
+    internal static bool CredentialHeader(string name)
+    {
+        var lower = name.ToLowerInvariant();
+        return lower is "authorization" or "proxy-authorization" or "cookie"
+            || lower.Contains("key", StringComparison.Ordinal)
+            || lower.Contains("token", StringComparison.Ordinal)
+            || lower.Contains("secret", StringComparison.Ordinal)
+            || lower.Contains("auth", StringComparison.Ordinal)
+            || lower.Contains("password", StringComparison.Ordinal)
+            || lower.Contains("signature", StringComparison.Ordinal);
+    }
+
+    // The whole header value, plus the credential after an authorization scheme
+    // (`Bearer <token>`), so the bare token is also masked.
+    private static IEnumerable<string> HeaderCredential(string value)
+    {
+        var trimmed = value.Trim();
+        if (trimmed.Length == 0)
+            yield break;
+        yield return trimmed;
+        var space = trimmed.IndexOf(' ');
+        if (space > 0 && trimmed.IndexOf(' ', space + 1) < 0)
+            yield return trimmed[(space + 1)..];
+    }
+
+    // Credential-shaped command arguments: `Name: value` with a credential-like name,
+    // `--name=value`, or `--name` followed by the value in the next argument.
+    private static IEnumerable<string> ArgumentCredential(
+        string argument,
+        string? pendingFlag,
+        out string? flag
+    )
+    {
+        flag = null;
+        if (pendingFlag is not null && !argument.StartsWith('-'))
+            return HeaderCredential(argument);
+        if (argument.StartsWith('-'))
+        {
+            var option = argument.TrimStart('-');
+            var equals = option.IndexOf('=');
+            if (equals < 0)
+            {
+                if (option.Length > 0 && CredentialHeader(option))
+                    flag = option;
+                return [];
+            }
+            return CredentialHeader(option[..equals])
+                ? HeaderCredential(option[(equals + 1)..])
+                : [];
+        }
+        var colon = argument.IndexOf(':');
+        if (
+            colon > 0
+            && argument[..colon]
+                .All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_')
+            && CredentialHeader(argument[..colon])
+        )
+            return HeaderCredential(argument[(colon + 1)..]);
+        return [];
     }
 
     // Environment names whose underscore- or dash-separated words name a credential.
@@ -286,11 +364,12 @@ internal sealed partial class InstanceSecrets : IDisposable
     )]
     private static partial Regex CredentialName();
 
-    // User info, query values and fragment: the URL parts that commonly carry credentials.
+    // User info and query values under credential-like parameter names: the URL parts
+    // that carry credentials. Other query values (`format=json`) are ordinary text.
     internal static IEnumerable<string> UrlSecretParts(string url)
     {
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
-            return [url];
+            return [];
         var parts = new List<string>();
         if (uri.UserInfo.Length > 0)
         {
@@ -304,10 +383,9 @@ internal sealed partial class InstanceSecrets : IDisposable
         )
         {
             var equals = item.IndexOf('=');
-            parts.Add(Uri.UnescapeDataString(equals >= 0 ? item[(equals + 1)..] : item));
+            if (equals > 0 && CredentialHeader(Uri.UnescapeDataString(item[..equals])))
+                parts.Add(Uri.UnescapeDataString(item[(equals + 1)..]));
         }
-        if (uri.Fragment.Length > 1)
-            parts.Add(Uri.UnescapeDataString(uri.Fragment[1..]));
         return parts.Where(part => part.Length > 0).Distinct(StringComparer.Ordinal);
     }
 }

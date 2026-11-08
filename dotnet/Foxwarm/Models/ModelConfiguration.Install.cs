@@ -88,7 +88,14 @@ internal sealed partial class ModelConfiguration
             {
                 var firstRun = !File.Exists(ActivePath);
                 var generation = Secrets.Store.Generation;
-                var next = Validate(raw);
+                bool whileLocked;
+                HostModels next;
+                lock (gate)
+                {
+                    resolvedWhileLocked = false;
+                    next = Validate(raw);
+                    whileLocked = resolvedWhileLocked;
+                }
                 // First-run Setup ends with this save, so it must not install an unfinished key.
                 if (!File.Exists(ActivePath))
                     ModelApiKeys.EnsureUsableForFirstRun(next);
@@ -103,6 +110,7 @@ internal sealed partial class ModelConfiguration
                             catalog = next;
                             cachedRaw = raw;
                             cachedSecretGeneration = generation;
+                            cachedWhileLocked = whileLocked;
                         }
                         Secrets.Invalidate();
                     }

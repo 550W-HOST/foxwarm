@@ -250,9 +250,17 @@ public sealed partial class SessionSaveLane
                     .Select(part => (JsonObject)part.DeepClone())
                     .ToArray();
         }
-        if (ReferenceEquals(message, item.Message) && ReferenceEquals(parts, item.Parts))
+        // Open fields carry structured question answers into the question record.
+        var fields = item.OpenFields is null
+            ? null
+            : entry.State.RedactForHistory(item.OpenFields, "input");
+        if (
+            ReferenceEquals(message, item.Message)
+            && ReferenceEquals(parts, item.Parts)
+            && ReferenceEquals(fields, item.OpenFields)
+        )
             return item;
-        return item with { Message = message, Parts = parts };
+        return item with { Message = message, Parts = parts, OpenFields = fields };
     }
 
     internal Task<bool> CommitRemoteExecCompletionAsync(
@@ -361,11 +369,13 @@ public sealed partial class SessionSaveLane
         );
 
     // Question records share the strict wait/queue lane so ask, answer and close stay ordered.
+    // Records hold model-written questions and notes, so they are masked like history.
     internal Task<string?> MutateQuestionsAsync(Func<JsonObject, string?> mutate) =>
-        MutateWaitAsync((meta, _, _) => mutate(meta));
+        MutateWaitAsync((meta, _, _) => mutate(meta), maskQuestions: true);
 
     private async Task<string?> MutateWaitAsync(
-        Func<JsonObject, List<QueueItem>, bool, string?> mutate
+        Func<JsonObject, List<QueueItem>, bool, string?> mutate,
+        bool maskQuestions = false
     )
     {
         string? result = null;
@@ -389,6 +399,16 @@ public sealed partial class SessionSaveLane
             if (result is null)
                 return;
             var staged = prepared.Snapshot;
+            if (maskQuestions && staged.Meta["questions"] is JsonObject questions)
+            {
+                var masked = entry.State.RedactForHistory(questions, "history");
+                if (!ReferenceEquals(masked, questions))
+                {
+                    var meta = (JsonObject)staged.Meta.DeepClone();
+                    meta["questions"] = masked.DeepClone();
+                    staged = staged with { Meta = meta };
+                }
+            }
             void Publish(SessionState state)
             {
                 PublishMeta(state.Meta, staged.Meta);

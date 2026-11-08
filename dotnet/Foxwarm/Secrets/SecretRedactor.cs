@@ -34,10 +34,10 @@ internal sealed class SecretRedactor
         var patterns = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var secret in secrets)
         {
-            if (secret.Value.Length > 0)
-                exactValues.Add(secret.Value);
+            // Values below the minimum length are neither masked nor treated as known.
             if (secret.Value.Length < SecretStore.MinimumRedactableLength)
                 continue;
+            exactValues.Add(secret.Value);
             var label = Label(secret.Label);
             labels.Add(label);
             foreach (var form in Forms(secret.Value))

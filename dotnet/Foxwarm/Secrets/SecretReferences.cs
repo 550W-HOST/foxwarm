@@ -16,7 +16,11 @@ internal enum SecretSinkKind
     // A process environment value: a credential only under a credential-like name.
     Environment,
 
-    // A command argument: references resolve, literals are not treated as credentials.
+    // An HTTP header value: a credential only under a credential-like header name.
+    Header,
+
+    // A command argument: a literal is a credential only in a credential-shaped form
+    // (`Name: value` with a credential-like name, `--token=value`, `--api-key value`).
     Argument,
 }
 
@@ -36,11 +40,11 @@ internal sealed class SecretSinks
     internal static SecretSinks Models { get; } =
         new(
             ("providers.*.apiKey", SecretSinkKind.Credential),
-            ("providers.*.extraHeaders.*", SecretSinkKind.Credential),
-            ("providers.*.models.[].extraHeaders.*", SecretSinkKind.Credential),
+            ("providers.*.extraHeaders.*", SecretSinkKind.Header),
+            ("providers.*.models.[].extraHeaders.*", SecretSinkKind.Header),
             ("models.*.apiKey", SecretSinkKind.Credential),
-            ("models.*.extraHeaders.*", SecretSinkKind.Credential),
-            ("models.*.models.[].extraHeaders.*", SecretSinkKind.Credential)
+            ("models.*.extraHeaders.*", SecretSinkKind.Header),
+            ("models.*.models.[].extraHeaders.*", SecretSinkKind.Header)
         );
 
     // config.yaml credential fields consumed by Main-owned clients.
@@ -62,7 +66,7 @@ internal sealed class SecretSinks
     internal static SecretSinks McpServer { get; } =
         new(
             ("token", SecretSinkKind.Credential),
-            ("headers.*", SecretSinkKind.Credential),
+            ("headers.*", SecretSinkKind.Header),
             ("env.*", SecretSinkKind.Environment),
             ("args.[]", SecretSinkKind.Argument),
             ("url", SecretSinkKind.Url),

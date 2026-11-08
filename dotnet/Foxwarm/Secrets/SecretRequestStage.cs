@@ -37,6 +37,9 @@ internal static class SecretRequestStage
             // A changed row no longer has the stored record's content or identity.
             rows[index] = new RequestHistory.Row(masked);
         }
+        // Reasoning reaches a request only from committed history, whose canonical append
+        // already recorded it; recording it again would count every later request.
+        findings.Reasoning.Clear();
         secrets.Record(findings, "model-request", sessionId);
         return new(
             maskedInstructions,

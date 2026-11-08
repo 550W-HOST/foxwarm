@@ -52,6 +52,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
     internal TaskService Tasks { get; }
     private readonly ResponsesWsTransport websockets = new();
     private readonly ToolRegistry tools;
+    internal ToolRegistry ToolRegistry => tools;
     internal Foxwarm.ToolScript.MainToolScript ToolScript { get; }
     private readonly SessionWaitTimeouts waitTimeouts;
     private readonly WaitLiveness waitLiveness;
@@ -683,12 +684,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
             // Canonical append runs under the Session state gate: use the last built
             // matcher there. Queue admission (outside the gate) refreshes it.
             registry.HistoryRedaction = (sessionId, message, source) =>
-                owner.RedactMessage(
-                    source == "history" ? owner.LastBuilt : owner.Redactor,
-                    message,
-                    source,
-                    sessionId
-                );
+                owner.RedactMessage(owner.Redactor, message, source, sessionId);
         hosted.Registry = registry;
         hosted.Compactor = new SessionCompactor(
             hosted,

@@ -124,7 +124,8 @@ public sealed class SecretStoreTests
         Assert.False(metadata.Redactable);
         Assert.Equal("short-pin", secrets.Lookup("pin"));
         Assert.Equal("short-pin", secrets.Redactor.Redact("short-pin"));
-        Assert.True(secrets.Redactor.IsKnownValue("short-pin"));
+        // Short values are not known values either, so exec keeps such environment values.
+        Assert.False(secrets.Redactor.IsKnownValue("short-pin"));
         Assert.Throws<InvalidDataException>(() => secrets.Store.Set("Upper", Value));
         Assert.Throws<InvalidDataException>(() => secrets.Store.Set("a b", Value));
         Assert.Throws<InvalidDataException>(() =>
