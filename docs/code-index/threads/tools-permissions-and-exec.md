@@ -41,6 +41,10 @@ The [outbound MCP client](../units/mcp.md) receives an actual trusted Session ow
 
 `TurnToolReceipt` remains a separately typed trusted executor result. Untrusted MCP result fields do not create send/task/wait receipts, mutate caller identity, supply local resolved paths, or trigger a control operation. Provider output formatting is a history projection; it does not replace the source value or perform MCP normalization.
 
+## Known secret values
+
+Before the output guard, `ToolRegistry.ExecuteAsync` masks known secret values in every dispatched result, and writer tools reject markers of masked values. Master `exec` drops inherited variables equal to a known value. [Secret references and redaction](./secret-references-and-redaction.md) owns these rules.
+
 ## Structured output guard
 
 The governing [two-stage output policy](../modules/tools-and-permissions.md#d-tools-structured-output-guard) preserves structured siblings when an oversized `output` field can be shortened on its own. `ToolRegistry.ExecuteAsync` bypasses model projection for native programmatic consumers and sends ordinary results through `ToolOutputGuard.GuardAsync`. Stage A measures the structured value of top-level `output`, saves that complete value when it exceeds 40,000 characters, and replaces only that field plus guard locator metadata. Stage B measures the resulting complete presentation; if it still exceeds 40,000 characters, it saves the original unshortened formatted response and returns a summary with the established small-metadata projection. Recognized image carriers remain outside both text stages and saved text. Outer ToolScript uses its trusted literal-section presentation; native nested values retain their source data.

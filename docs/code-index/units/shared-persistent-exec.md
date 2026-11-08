@@ -48,6 +48,8 @@ Generated Windows scripts use UTF-8 with BOM for PowerShell 5.1. The wrapper exp
 
 Independent commands and newly created terminals omit the hosting process's `TMUX` and `TMUX_PANE` environment values. The parent environment, `TMUX_TMPDIR`, ordinary environment values and explicit command assignments remain unchanged. Explicit tmux socket selection (`-S` or `-L`) continues to work. This removes an implicit hosting-pane association; it is not process isolation, and bare tmux can still select a default socket.
 
+Master `exec` also drops inherited variables whose value equals a known secret; see [secret references and redaction](../threads/secret-references-and-redaction.md#model-facing-restrictions). CLI and Provider launches are unaffected.
+
 The shared .NET `ExecNative.Launcher` and `TerminalNative.Handle.Spawn` own this boundary for Main and CLI. TypeScript native exec and the supported CLI PTY use `independentProcessEnvironment`; retained TypeScript Main exec shares that native backend. Provider-owned execution environments remain the Provider's responsibility.
 
 ### D-persistent-exec-logical-cwd

@@ -17,6 +17,7 @@ Lets an Agent ask the user one to four questions, optionally with choices, and e
 - **Reminder.** While questions are open, each normal provider request receives request-only `question-reminder` context listing them (ID, short text, waited-on or not), after the Task reminder, so the Agent can close stale asynchronous questions. It is not persisted history.
 - **Projection.** The catalog row carries `questions: { open, revision, waiting? }`; the partial index `idx_session_catalog_question_presence` serves the `questionSessions` rows of the first Sidebar page without hydrating Sessions. Session state and `session-state` events carry the same projection.
 - **External channels.** Asking broadcasts a plain-text rendering (numbered questions, numbered options with descriptions and a recommended marker, "Reply to answer.") to the Session's attached normal-mode channels, excluding the WebUI. Closing sends nothing. A reply is an ordinary message; with a waited question it is the answer.
+- **Known secrets.** Question records are masked on each ask or close, a structured answer's open fields at admission, and `__meta.questionAnswer` as history content, through the Session's [history masking point](../threads/secret-references-and-redaction.md#redaction-points).
 - **No defaults.** There is no automatic default answer or timeout choice.
 
 ## WebUI

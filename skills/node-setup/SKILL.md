@@ -64,6 +64,12 @@ There is also a structured builtin tool for agent workflows:
 - `node_bootstrap_info`
 
 Use that tool when you want LLM-friendly bootstrap info instead of re-parsing prose help text.
+It requires `filePath`: an absolute path on master for a new owner-only file that receives
+the pairing token. The returned commands contain the placeholder `PAIRING_TOKEN` (for example
+`--pairing='PAIRING_TOKEN'`) instead of the token. The token isn't returned to you:
+the user, or a command run where that file is readable, substitutes the file's contents when
+running the command on the new Node. Choose a new path each time; an existing file is not
+replaced.
 The pairing and agent-management helpers are not all injected into the default
 tool schema. Discover them with `search_tools`, then invoke them with
 `call_tool`.
@@ -161,6 +167,7 @@ Tool note:
 
 - the `node_bootstrap_info` tool is intentionally **not** an API-style “tell me the exact external URL” interface
 - it returns complete configured addresses when available; otherwise replace `YOUR_MASTER` in the command you copy
+- it writes the pairing token to its `filePath` and shows `PAIRING_TOKEN` in the commands; substitute the file's contents
 - commands are independently copyable; check that the address is reachable from the new Node
 - a configured public URL is not a guarantee that every node can reach it
 

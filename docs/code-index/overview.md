@@ -145,6 +145,7 @@ Optional remote and compatibility components:
 | [Images and attachments](./threads/images-and-attachments.md) | Ingress, canonical blobs, provider forms, transport conversion, and delivery. |
 | [Tasks, timers, and waits](./threads/tasks-timers-and-waits.md) | Task service, timer scheduler, Session waits, and UI/API exposure. |
 | [Session sequence view](./threads/session-sequence-view.md) | `deliverySeq` delivery correlation, the on-demand sequence projection and the System Sessions Timeline surface. |
+| [Secret references and redaction](./threads/secret-references-and-redaction.md) | Stored secrets, Main-side resolution, masking points, failure rules and model-facing restrictions. |
 | [Remote Node compatibility](./threads/remote-node-compatibility.md) | Remaining TypeScript Node protocols and the current .NET integration boundary. |
 
 ## Current gaps and open questions

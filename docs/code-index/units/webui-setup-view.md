@@ -27,6 +27,8 @@ All requests append to `API_BASE_PATH` and use normal authenticated WebUI routes
 | `POST /setup/weixin/login/start` | Start or replace a QR login session |
 | `POST /setup/weixin/login/wait` | Check one login session; on success update channel config and reload |
 
+The Secrets tab (`SecretsPanel.tsx`) uses the `/setup/secrets` routes owned by the [secrets unit](./dotnet-secrets.md#setup); they never return stored values.
+
 The form saves through the same raw `{ yaml }` request as the YAML editor. The server's older structured `/setup/models` request shape remains a backend compatibility boundary that this view does not use.
 
 ## Behavior

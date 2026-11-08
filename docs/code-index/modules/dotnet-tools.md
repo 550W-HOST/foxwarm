@@ -15,7 +15,7 @@ This module documents current .NET source behavior. Cross-module contracts belon
 - [Tool authorization and isolation compatibility](../units/tool-authorization.md)
 - [External Node trust and ordinary tools](../units/external-nodes.md)
 - [Outbound MCP client](../units/mcp.md)
-- [Tool-output secret masking and writer guard](../units/dotnet-secrets.md#redaction-points)
+- [Tool-output secret masking and writer guard](../threads/secret-references-and-redaction.md#redaction-points)
 - [Session notifications and explicit text channels](../units/dotnet-mcp-notifications.md)
 
 ## Tests and callers
