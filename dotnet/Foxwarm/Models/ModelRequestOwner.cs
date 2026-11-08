@@ -419,10 +419,7 @@ internal sealed class ModelRequestOwner(
                                     currentJournalAttempt,
                                     JournalResult(result),
                                     cancellationToken,
-                                    new LlmUsageAttribution(
-                                        sessionId.Length == 0 ? null : sessionId,
-                                        leaf.ProviderKey
-                                    )
+                                    new LlmUsageAttribution(leaf.ProviderKey)
                                 )
                                 .ConfigureAwait(false);
                         }

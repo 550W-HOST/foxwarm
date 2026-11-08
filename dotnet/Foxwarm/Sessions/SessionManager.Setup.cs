@@ -172,7 +172,7 @@ internal sealed partial class SessionManager
                     1,
                     result with { Usage = ModelUsageCost.Complete(model, result) },
                     timeout.Token,
-                    new LlmUsageAttribution(null, model.ProviderKey)
+                    new LlmUsageAttribution(model.ProviderKey)
                 );
             }
             catch (Exception journalError)

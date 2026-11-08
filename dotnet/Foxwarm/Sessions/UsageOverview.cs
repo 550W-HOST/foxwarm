@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json.Nodes;
 using Foxwarm.Models;
 using Microsoft.Data.Sqlite;
@@ -5,9 +6,10 @@ using Microsoft.Data.Sqlite;
 namespace Foxwarm.Sessions;
 
 /// <summary>
-/// Installation-wide usage from the journal's derived ledger: Agent attribution for new and
-/// historical rows, the startup backfill and grouped period queries for System › Usage and the
-/// status bar. Read-only presentation; it never changes Session accounting or prices.
+/// Installation-wide usage from the journal's derived ledger: the background ledger backfill
+/// and grouped period queries for System › Usage and the status bar. Spend is attributed when
+/// read, to the Agent that currently owns each Session, so it follows a Session that moves.
+/// Read-only presentation; it never changes Session accounting or prices.
 /// </summary>
 internal sealed class UsageOverview : IAsyncDisposable
 {
@@ -27,15 +29,24 @@ internal sealed class UsageOverview : IAsyncDisposable
 
     private readonly SessionManager manager;
     private readonly LlmRequestJournalStore journal;
+    private readonly object gate = new();
     private Task backfill = Task.CompletedTask;
+    private CancellationToken stop = CancellationToken.None;
+    private bool started;
+    private bool rerun;
     private int changePending;
+
+    // Archive history never changes once written, so a found start or Agent stays valid.
+    private readonly ConcurrentDictionary<string, (long? Start, string? Agent)> archive = new(
+        StringComparer.Ordinal
+    );
 
     internal UsageOverview(SessionManager manager, LlmRequestJournalStore journal)
     {
         this.manager = manager;
         this.journal = journal;
-        journal.SessionAgent = LiveAgent;
         journal.UsageRecorded += Recorded;
+        journal.UsageLedgerFailed += Repair;
     }
 
     /// <summary>Coalesced (at most about once a second) notice that ledger totals changed.</summary>
@@ -65,109 +76,165 @@ internal sealed class UsageOverview : IAsyncDisposable
             );
     }
 
-    private string? LiveAgent(string sessionId) =>
-        SessionCatalog.Text(manager.Catalog.Get(sessionId)?["agent"]);
-
     /// <summary>
-    /// Current catalog ownership (including committed aliases), then the retained Archive for
-    /// deleted Sessions. Unresolvable Sessions stay unattributed rather than guessed from IDs.
+    /// Starts the ledger backfill in the background after startup. It also prepares the ledger
+    /// table, so the first live journal command does no ledger work beyond its own row.
     /// </summary>
-    internal IReadOnlyDictionary<string, string?> ResolveAgents(IReadOnlyCollection<string> ids)
-    {
-        var result = new Dictionary<string, string?>(StringComparer.Ordinal);
-        var live = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var (id, canonical) in Canonical(ids))
-        {
-            result[id] = null;
-            if (canonical is not null)
-                live[id] = canonical;
-        }
-        foreach (var chunk in live.Values.Distinct(StringComparer.Ordinal).Chunk(200))
-        {
-            var agents = manager
-                .Catalog.GetMany(chunk)
-                .ToDictionary(
-                    row => SessionCatalog.Text(row["id"])!,
-                    row => SessionCatalog.Text(row["agent"]),
-                    StringComparer.Ordinal
-                );
-            foreach (var (id, canonical) in live)
-                if (agents.TryGetValue(canonical, out var agent))
-                    result[id] = agent;
-        }
-        var missing = result.Where(pair => pair.Value is null).Select(pair => pair.Key).ToArray();
-        if (missing.Length > 0 && File.Exists(manager.ArchiveDatabase))
-        {
-            using var db = new SqliteConnection(
-                new SqliteConnectionStringBuilder
-                {
-                    DataSource = manager.ArchiveDatabase,
-                    Mode = SqliteOpenMode.ReadOnly,
-                    Pooling = false,
-                }.ToString()
-            );
-            db.Open();
-            using var command = db.CreateCommand();
-            command.CommandText =
-                "SELECT agent FROM archive_messages WHERE session_id=$id ORDER BY seq LIMIT 1";
-            var parameter = command.Parameters.Add("$id", SqliteType.Text);
-            foreach (var id in missing)
-            {
-                try
-                {
-                    parameter.Value = SqliteArchiveMessageStore.ResolveReadOnly(db, id);
-                    if (command.ExecuteScalar() is string agent && agent.Length > 0)
-                        result[id] = agent;
-                }
-                catch (InvalidDataException)
-                {
-                    // An unreadable identity mapping leaves this Session unattributed.
-                }
-            }
-        }
-        return result;
-    }
-
-    /// <summary>Maps recorded Session IDs to their current canonical ID, or null when gone.</summary>
-    private Dictionary<string, string?> Canonical(IEnumerable<string> ids)
-    {
-        var result = new Dictionary<string, string?>(StringComparer.Ordinal);
-        foreach (var chunk in ids.Distinct(StringComparer.Ordinal).Chunk(200))
-            foreach (var (id, resolution) in manager.Catalog.ResolveMany(chunk))
-                result[id] = SessionCatalog.Text(resolution["kind"]) is "exact" or "alias"
-                    ? SessionCatalog.Text(resolution["sessionId"])
-                    : null;
-        return result;
-    }
-
     internal void StartBackfill(CancellationToken stop)
     {
-        backfill = Task.Run(
-            async () =>
-            {
-                try
-                {
-                    await journal.BackfillUsageAsync(ResolveAgents, stop).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException) when (stop.IsCancellationRequested) { }
-                catch (Exception error)
-                {
-                    Console.Error.WriteLine(
-                        "Usage ledger backfill stopped; it resumes at the next start: "
-                            + MainLog.SafeFailure(error)
-                    );
-                }
-            },
-            CancellationToken.None
-        );
+        lock (gate)
+        {
+            this.stop = stop;
+            started = true;
+        }
+        Repair();
     }
 
-    internal Task BackfillTask => backfill;
+    /// <summary>Runs (or reruns after the current pass) the backfill, which also repairs the ledger.</summary>
+    private void Repair()
+    {
+        lock (gate)
+        {
+            if (!started || stop.IsCancellationRequested)
+                return;
+            if (!backfill.IsCompleted)
+            {
+                rerun = true;
+                return;
+            }
+            backfill = Task.Run(RunBackfillAsync, CancellationToken.None);
+        }
+    }
+
+    private async Task RunBackfillAsync()
+    {
+        while (true)
+        {
+            try
+            {
+                await journal.BackfillUsageAsync(stop).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (stop.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception error)
+            {
+                Console.Error.WriteLine(
+                    "Usage ledger backfill stopped; it resumes at the next start: "
+                        + MainLog.SafeFailure(error)
+                );
+                return;
+            }
+            lock (gate)
+            {
+                if (!rerun || stop.IsCancellationRequested)
+                    return;
+                rerun = false;
+            }
+        }
+    }
+
+    internal Task BackfillTask
+    {
+        get
+        {
+            lock (gate)
+                return backfill;
+        }
+    }
 
     public async ValueTask DisposeAsync()
     {
         journal.UsageRecorded -= Recorded;
-        await backfill.ConfigureAwait(false);
+        journal.UsageLedgerFailed -= Repair;
+        await BackfillTask.ConfigureAwait(false);
+    }
+
+    /// <summary>Who a recorded Session's usage belongs to now.</summary>
+    internal sealed record SessionOwnerInfo(string? CurrentId, string? Agent, long? Start, string? FormerAgent);
+
+    /// <summary>
+    /// Resolves recorded Session IDs: the current Session (exact or through a committed alias)
+    /// with its Agent and the start of its Archive history, or, for deleted Sessions, the Agent
+    /// recorded in the retained Archive. Unresolvable Sessions stay unattributed rather than
+    /// guessed from IDs.
+    /// </summary>
+    internal IReadOnlyDictionary<string, SessionOwnerInfo> DescribeSessions(IReadOnlyCollection<string> ids)
+    {
+        var current = new Dictionary<string, string?>(StringComparer.Ordinal);
+        foreach (var chunk in ids.Distinct(StringComparer.Ordinal).Chunk(200))
+            foreach (var (id, resolution) in manager.Catalog.ResolveMany(chunk))
+                current[id] = SessionCatalog.Text(resolution["kind"]) is "exact" or "alias"
+                    ? SessionCatalog.Text(resolution["sessionId"])
+                    : null;
+        var agents = new Dictionary<string, string?>(StringComparer.Ordinal);
+        foreach (
+            var chunk in current.Values.OfType<string>().Distinct(StringComparer.Ordinal).Chunk(200)
+        )
+            foreach (var row in manager.Catalog.GetMany(chunk))
+                agents[SessionCatalog.Text(row["id"])!] = SessionCatalog.Text(row["agent"]);
+        using var db = OpenArchive();
+        var result = new Dictionary<string, SessionOwnerInfo>(StringComparer.Ordinal);
+        foreach (var id in ids)
+        {
+            var now = current.GetValueOrDefault(id);
+            if (now is not null && !agents.ContainsKey(now))
+                now = null;
+            // A live Session's history start separates an earlier, deleted Session that used
+            // the same ID; a deleted Session's Archive keeps the Agent that owned it.
+            var history = ArchiveHistory(db, now ?? id);
+            var former = now is null || now == id ? history.Agent : ArchiveHistory(db, id).Agent;
+            result[id] = new(now, now is null ? null : agents[now], now is null ? null : history.Start, former);
+        }
+        return result;
+    }
+
+    private SqliteConnection? OpenArchive()
+    {
+        if (!File.Exists(manager.ArchiveDatabase))
+            return null;
+        var db = new SqliteConnection(
+            new SqliteConnectionStringBuilder
+            {
+                DataSource = manager.ArchiveDatabase,
+                Mode = SqliteOpenMode.ReadOnly,
+                Pooling = false,
+            }.ToString()
+        );
+        db.Open();
+        return db;
+    }
+
+    private (long? Start, string? Agent) ArchiveHistory(SqliteConnection? db, string id)
+    {
+        if (db is null)
+            return (null, null);
+        string canonical;
+        try
+        {
+            canonical = SqliteArchiveMessageStore.ResolveReadOnly(db, id);
+        }
+        catch (InvalidDataException)
+        {
+            // An unreadable identity mapping leaves this Session without Archive facts.
+            return (null, null);
+        }
+        if (archive.TryGetValue(canonical, out var cached))
+            return cached;
+        using var command = db.CreateCommand();
+        command.CommandText =
+            "SELECT timestamp,agent FROM archive_messages WHERE session_id=$id ORDER BY seq LIMIT 1";
+        command.Parameters.AddWithValue("$id", canonical);
+        using var reader = command.ExecuteReader();
+        if (!reader.Read())
+            return (null, null);
+        var found = (
+            (long?)Math.Floor(reader.GetDouble(0)),
+            reader.IsDBNull(1) || reader.GetString(1).Length == 0 ? null : reader.GetString(1)
+        );
+        archive[canonical] = found;
+        return found;
     }
 
     private sealed class Totals
@@ -216,32 +283,59 @@ internal sealed class UsageOverview : IAsyncDisposable
         internal readonly Dictionary<int, Totals> Buckets = [];
     }
 
-    internal async Task<JsonObject> QueryAsync(
+    /// <summary>The owner of one cell's rows: a current Session, a deleted one, or none.</summary>
+    private sealed record Owner(string Kind, string? SessionId, string? Agent);
+
+    internal Task<JsonObject> QueryAsync(
         IReadOnlyList<long> boundaries,
         string? groupBy,
         string? agent,
         int limit,
         CancellationToken token = default
-    )
+    ) => Task.Run(() => Query(boundaries, groupBy, agent, limit), token);
+
+    private JsonObject Query(IReadOnlyList<long> boundaries, string? groupBy, string? agent, int limit)
     {
         var column = groupBy switch
         {
-            null => null,
-            "agent" => "agent",
-            "tree" or "session" => "session_id",
+            null or "agent" or "tree" or "session" => null,
             "model" => "model_key",
             "provider" => "provider_key",
             "purpose" => "purpose",
             _ => throw new ArgumentException("Unknown usage grouping."),
         };
-        var cells = await journal
-            .QueryUsageAsync(boundaries, column, agent, token)
-            .ConfigureAwait(false);
-        var coverage = await journal.UsageCoverageAsync(token).ConfigureAwait(false);
+        // Agent attribution, Agent filtering and Session groupings need the Session behind
+        // every row; other reports aggregate directly.
+        var bySession = agent is not null || groupBy is "agent" or "tree" or "session";
+        IReadOnlyDictionary<string, SessionOwnerInfo> sessions = new Dictionary<string, SessionOwnerInfo>();
+        IReadOnlyList<LlmUsageCell> cells;
+        if (bySession)
+        {
+            sessions = DescribeSessions(journal.UsageSessions(boundaries[0], boundaries[^1]));
+            var starts = sessions
+                .Where(pair => pair.Value.Start is not null)
+                .ToDictionary(pair => pair.Key, pair => pair.Value.Start!.Value, StringComparer.Ordinal);
+            cells = journal.QueryUsage(boundaries, column, bySession: true, starts);
+        }
+        else
+            cells = journal.QueryUsage(boundaries, column);
+        Owner OwnerOf(LlmUsageCell cell)
+        {
+            if (cell.SessionId is not { } id)
+                return new("none", null, null);
+            var info = sessions[id];
+            return info.CurrentId is not null && !cell.BeforeSessionStart
+                ? new("session", info.CurrentId, info.Agent)
+                : new("deleted", null, info.FormerAgent);
+        }
+        var owned = cells.Select(cell => (Cell: cell, Owner: bySession ? OwnerOf(cell) : null)).ToArray();
+        if (agent is not null)
+            owned = owned.Where(item => item.Owner!.Kind != "none" && item.Owner.Agent == agent).ToArray();
+        var coverage = journal.UsageCoverage();
         var bucketCount = boundaries.Count - 1;
         var total = new Totals();
         var buckets = Enumerable.Range(0, bucketCount).Select(_ => new Totals()).ToArray();
-        foreach (var cell in cells)
+        foreach (var (cell, _) in owned)
         {
             total.Add(cell);
             buckets[cell.Bucket].Add(cell);
@@ -264,7 +358,7 @@ internal sealed class UsageOverview : IAsyncDisposable
         };
         if (groupBy is null)
             return result;
-        var groups = Grouped(cells, groupBy);
+        var groups = Grouped(owned, groupBy, agent);
         var ordered = groups
             .Values.OrderByDescending(group => group.Total.Priced > 0 ? group.Total.Cost : -1)
             .ThenByDescending(group => group.Total.Tokens)
@@ -305,19 +399,25 @@ internal sealed class UsageOverview : IAsyncDisposable
         return result;
     }
 
-    private Dictionary<string, Group> Grouped(IReadOnlyList<LlmUsageCell> cells, string groupBy)
+    private Dictionary<string, Group> Grouped(
+        IReadOnlyList<(LlmUsageCell Cell, Owner? Owner)> owned,
+        string groupBy,
+        string? agent
+    )
     {
         var groups = new Dictionary<string, Group>(StringComparer.Ordinal);
-        Func<LlmUsageCell, Group> describe = groupBy switch
+        Func<LlmUsageCell, Owner?, Group> describe = groupBy switch
         {
-            "agent" => cell =>
-                new(cell.Key, cell.Key is null ? "none" : cell.Key.Length == 0 ? "unknown" : "agent"),
-            "tree" or "session" => SessionGroups(cells, groupBy == "tree"),
-            _ => cell => new(cell.Key, cell.Key is null ? "none" : groupBy),
+            "agent" => (_, owner) =>
+                owner!.Kind == "none" ? new(null, "none")
+                : owner.Agent is null ? new("", "unknown")
+                : new(owner.Agent, "agent"),
+            "tree" or "session" => SessionGroups(owned, groupBy == "tree", agent),
+            _ => (cell, _) => new(cell.Key, cell.Key is null ? "none" : groupBy),
         };
-        foreach (var cell in cells)
+        foreach (var (cell, owner) in owned)
         {
-            var group = describe(cell);
+            var group = describe(cell, owner);
             // Keys are prefixed with their kind so null and deleted keys stay distinct.
             var identity = group.Kind + "\u0000" + (group.Key ?? "");
             if (!groups.TryGetValue(identity, out var existing))
@@ -331,39 +431,64 @@ internal sealed class UsageOverview : IAsyncDisposable
     }
 
     /// <summary>
-    /// Live Sessions group under their current (or tree root) identity; deleted Sessions are
-    /// pooled per recorded Agent, since their individual IDs no longer lead anywhere.
+    /// Current Sessions group under themselves or their tree root; deleted Sessions are pooled
+    /// per Agent, since their individual IDs no longer lead anywhere. With an Agent selected, a
+    /// tree is that Agent's own part of it: its root is the highest ancestor reached through
+    /// Sessions of the same Agent, so another Agent's coordinator never stands in for it.
     /// </summary>
-    private Func<LlmUsageCell, Group> SessionGroups(IReadOnlyList<LlmUsageCell> cells, bool tree)
+    private Func<LlmUsageCell, Owner?, Group> SessionGroups(
+        IReadOnlyList<(LlmUsageCell Cell, Owner? Owner)> owned,
+        bool tree,
+        string? agent
+    )
     {
-        var recorded = cells.Select(cell => cell.Key).OfType<string>().ToArray();
-        var canonical = Canonical(recorded);
-        var target = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var (id, current) in canonical)
-            if (current is not null)
-                target[id] = current;
+        var live = owned
+            .Select(item => item.Owner!)
+            .Where(owner => owner.Kind == "session")
+            .Select(owner => owner.SessionId!)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var target = live.ToDictionary(id => id, id => id, StringComparer.Ordinal);
         if (tree)
         {
-            var roots = new Dictionary<string, string>(StringComparer.Ordinal);
-            foreach (var chunk in target.Values.Distinct(StringComparer.Ordinal).Chunk(100))
+            var paths = new Dictionary<string, string[]>(StringComparer.Ordinal);
+            foreach (var chunk in live.Chunk(100))
                 foreach (var (focus, path) in manager.Catalog.Paths(chunk))
                     if (path.Length > 0)
-                        roots[focus] = path[0];
-            foreach (var id in target.Keys.ToArray())
-                if (roots.TryGetValue(target[id], out var root))
-                    target[id] = root;
+                        paths[focus] = path;
+            var pathAgents = new Dictionary<string, string?>(StringComparer.Ordinal);
+            if (agent is not null)
+                foreach (
+                    var chunk in paths.Values.SelectMany(path => path).Distinct(StringComparer.Ordinal).Chunk(200)
+                )
+                    foreach (var row in manager.Catalog.GetMany(chunk))
+                        pathAgents[SessionCatalog.Text(row["id"])!] = SessionCatalog.Text(row["agent"]);
+            foreach (var (focus, path) in paths)
+            {
+                var root = path.Length - 1;
+                if (agent is null)
+                    root = 0;
+                else
+                    while (root > 0 && pathAgents.GetValueOrDefault(path[root - 1]) == agent)
+                        root--;
+                target[focus] = path[root];
+            }
         }
         var rows = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
         foreach (var chunk in target.Values.Distinct(StringComparer.Ordinal).Chunk(200))
             foreach (var row in manager.Catalog.GetMany(chunk))
                 rows[SessionCatalog.Text(row["id"])!] = row;
         var kind = tree ? "tree" : "session";
-        return cell =>
+        return (_, owner) =>
         {
-            if (cell.Key is not { } key)
+            if (owner!.Kind == "none")
                 return new(null, "none");
-            if (!target.TryGetValue(key, out var current) || !rows.TryGetValue(current, out var row))
-                return new(cell.Agent ?? "", "deleted") { Agent = cell.Agent };
+            if (
+                owner.Kind == "deleted"
+                || !target.TryGetValue(owner.SessionId!, out var current)
+                || !rows.TryGetValue(current, out var row)
+            )
+                return new(owner.Agent ?? "", "deleted") { Agent = owner.Agent };
             return new(current, kind)
             {
                 Label = SessionCatalog.Text(row["displayName"]),

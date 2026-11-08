@@ -342,19 +342,25 @@ public sealed partial class LlmRequestJournalStore : IDisposable, IAsyncDisposab
             .EnqueueAsync(
                 (connection, transaction) =>
                 {
-                    if (
-                        ReadScalar(
-                            connection,
-                            transaction,
-                            "SELECT 1 FROM llm_journal_attempt_starts WHERE request_id=$id AND attempt=$attempt ORDER BY rowid DESC LIMIT 1",
-                            ("$id", requestId),
-                            ("$attempt", attempt)
-                        )
-                        is null
-                    )
-                        throw new InvalidDataException(
-                            "LLM journal attempt is missing before its result."
+                    (string Model, string? Virtual, string Type) start;
+                    using (var lookup = connection.CreateCommand())
+                    {
+                        lookup.Transaction = transaction;
+                        lookup.CommandText =
+                            "SELECT concrete_model_id,virtual_model_key,provider_type FROM llm_journal_attempt_starts WHERE request_id=$id AND attempt=$attempt ORDER BY rowid DESC LIMIT 1";
+                        Add(lookup, "$id", requestId);
+                        Add(lookup, "$attempt", attempt);
+                        using var found = lookup.ExecuteReader();
+                        if (!found.Read())
+                            throw new InvalidDataException(
+                                "LLM journal attempt is missing before its result."
+                            );
+                        start = (
+                            found.GetString(0),
+                            found.IsDBNull(1) ? null : found.GetString(1),
+                            found.GetString(2)
                         );
+                    }
                     using var command = connection.CreateCommand();
                     command.Transaction = transaction;
                     command.CommandText =
@@ -368,9 +374,27 @@ public sealed partial class LlmRequestJournalStore : IDisposable, IAsyncDisposab
                     Add(command, "$result", resultJson);
                     Add(command, "$error", errorJson);
                     command.ExecuteNonQuery();
-                    if (ledger is not null)
-                        InsertUsageRow(connection, transaction, requestId, attempt, completedAt, ledger);
-                    return true;
+                    var rowid = Convert.ToInt64(
+                        ReadScalar(connection, transaction, "SELECT last_insert_rowid()"),
+                        System.Globalization.CultureInfo.InvariantCulture
+                    );
+                    // A success written without its ledger row stays outside the covered range
+                    // so the backfill adds it; anything else is covered as soon as it commits.
+                    var recorded =
+                        ledger is null
+                            ? outcome != "success"
+                            : TryRecordLiveUsage(
+                                connection,
+                                transaction,
+                                requestId,
+                                attempt,
+                                completedAt,
+                                start,
+                                ledger
+                            );
+                    if (recorded)
+                        AdvanceUsageHigh(connection, transaction, rowid);
+                    return ledger is null || recorded;
                 },
                 token
             )
@@ -379,7 +403,8 @@ public sealed partial class LlmRequestJournalStore : IDisposable, IAsyncDisposab
 
     /// <summary>
     /// Records a successful attempt and its usage ledger row in one journal command, so the
-    /// installation usage overview is exactly as durable as the result it projects.
+    /// installation usage overview is exactly as durable as the result it projects. A ledger
+    /// failure never fails the result; it is reported for the backfill to repair.
     /// </summary>
     internal async Task AppendChatResultAsync(
         string requestId,
@@ -400,8 +425,10 @@ public sealed partial class LlmRequestJournalStore : IDisposable, IAsyncDisposab
                 ledger
             )
             .ConfigureAwait(false);
-        await receipt.Completion.ConfigureAwait(false);
-        NotifyUsageRecorded();
+        if (await receipt.Completion.ConfigureAwait(false))
+            NotifyUsageRecorded();
+        else
+            NotifyUsageLedgerFailed();
     }
 
     public async Task<JsonObject> ReconstructAsync(
