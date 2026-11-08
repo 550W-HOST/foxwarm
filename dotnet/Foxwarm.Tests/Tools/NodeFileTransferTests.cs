@@ -24,7 +24,7 @@ public sealed partial class NodeFileTransferTests
         internal string Work => Path.Combine(Temp.Path, "work");
         internal string Data => Path.Combine(Temp.Path, "data");
 
-        internal async Task Start()
+        internal async Task Start(bool strictDataRate = false)
         {
             var options = new ResponsesClientOptions(
                 new Uri("http://127.0.0.1:1"),
@@ -41,8 +41,15 @@ public sealed partial class NodeFileTransferTests
             builder.Logging.ClearProviders();
             builder.WebHost.UseUrls("http://127.0.0.1:0");
             builder.WebHost.ConfigureKestrel(server =>
-                server.Limits.MaxRequestBodySize = 2 * 1024 * 1024
-            );
+            {
+                server.Limits.MaxRequestBodySize = 2 * 1024 * 1024;
+                if (strictDataRate)
+                    server.Limits.MinRequestBodyDataRate =
+                        new Microsoft.AspNetCore.Server.Kestrel.Core.MinDataRate(
+                            1024 * 1024,
+                            TimeSpan.FromSeconds(2)
+                        );
+            });
             App = builder.Build();
             App.UseWebSockets();
             App.Map("/node_ws", Manager.Nodes.HandleAsync);

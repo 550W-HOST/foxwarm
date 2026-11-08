@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
 using Microsoft.AspNetCore.Http.Features;
+using Microsoft.AspNetCore.Server.Kestrel.Core.Features;
 
 namespace Foxwarm.Nodes;
 
@@ -384,6 +385,10 @@ internal sealed partial class NodeConnectionHub
         }
         if (context.Features.Get<IHttpMaxRequestBodySizeFeature>() is { IsReadOnly: false } limit)
             limit.MaxRequestBodySize = null;
+        if (context.Features.Get<IHttpMinRequestBodyDataRateFeature>() is { } requestRate)
+            requestRate.MinDataRate = null;
+        if (context.Features.Get<IHttpMinResponseDataRateFeature>() is { } responseRate)
+            responseRate.MinDataRate = null;
         using var cancelled = context.RequestAborted.Register(() =>
             pending.Abort(new IOException("Node data connection closed."))
         );

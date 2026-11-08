@@ -27,6 +27,7 @@ The browser extension's short-name Node tools and shared Puppeteer `browse_*` to
 ## File transfer and backend services
 
 - CLI Nodes advertise `features.fileStream:1`. For files of at least 64 KiB, Main sends a WebSocket control request and the Node initiates one authenticated HTTP PUT or GET on `/node/transfer/{transferId}`. Smaller files use the existing JSON/base64 exchange; older Nodes keep that exchange for all sizes. The endpoint binds the single-use ID to the authenticated Node and direction. Streams enforce exact lengths and a 60-second no-progress deadline; writes use same-directory temporary publication and a SHA-256 receipt. A lost or invalid post-publication receipt has an uncertain destination outcome. Browser Node does not implement file transfer.
+- Deployment: the transfer route is designed for HTTP/1.1 clients and proxy upstreams; HTTP/2 upstreams retain Kestrel's server-wide minimum response rate.
 - Nodes may advertise fixed versioned backend services separately from model tools.
 - Code filesystem/Git use correlated `node_service_request` responses.
 - Optional remote PTY lifecycle uses requests; latency-sensitive input/resize/helper acknowledgements use `node_service_command`; output/exit/helper-open use `node_service_event`.

@@ -190,6 +190,43 @@ public sealed partial class NodeFileTransferTests
     }
 
     [Fact]
+    public async Task A_slow_upload_is_not_cut_off_by_the_servers_minimum_data_rate()
+    {
+        await using var f = new Fixture();
+        await f.Start(strictDataRate: true);
+        var credentials = f.Manager.Nodes.Registry.Create("slow-upload");
+        var socket = await f.Connect("slow-upload", credentials, streaming: true);
+        var copy = f.Manager.CopyBetweenNodesAsync(
+            f.Owner,
+            new JsonObject
+            {
+                ["sourceNode"] = "slow-upload",
+                ["sourcePath"] = "source.bin",
+                ["targetNode"] = "master",
+                ["targetPath"] = "destination.bin",
+                ["timeout"] = 10,
+            },
+            default
+        );
+        var request = await Fixture.Read(socket);
+        using var http = new HttpClient { BaseAddress = new Uri(f.App.Urls.Single()) };
+        http.DefaultRequestHeaders.Add("X-Foxwarm-Node", "slow-upload");
+        http.DefaultRequestHeaders.Authorization = new(
+            "Bearer",
+            credentials["authToken"]!.ToString()
+        );
+        using var content = new GatedContent();
+        var upload = http.PutAsync("/node/transfer/" + request["transferId"]!.ToString(), content);
+        await content.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await Task.Delay(TimeSpan.FromSeconds(4));
+        content.Release.TrySetResult();
+        using var response = await upload.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var result = await copy.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(128 * 1024, result["sizeBytes"]!.GetValue<long>());
+    }
+
+    [Fact]
     public async Task Cancel_before_the_body_finishes_removes_the_real_CLI_temporary_file()
     {
         await using var f = new Fixture();
