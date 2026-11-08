@@ -36,6 +36,12 @@
       Version="2.6.5"
       GeneratePathProperty="true"
     />
+    <!-- Base's common notices also cover the retained transitive components. -->
+    <PackageReference
+      Include="Microsoft.WindowsAppSDK.Base"
+      Version="2.6.5"
+      GeneratePathProperty="true"
+    />
     <Content
       Include="Foxwarm.ico"
       CopyToOutputDirectory="PreserveNewest"
@@ -60,7 +66,7 @@
       DestinationFiles="$(PublishDir)WindowsAppSDK-LICENSE.txt"
     />
     <Copy
-      SourceFiles="$(PkgMicrosoft_WindowsAppSDK_WinUI)/NOTICE.txt"
+      SourceFiles="$(PkgMicrosoft_WindowsAppSDK_Base)/NOTICE.txt"
       DestinationFiles="$(PublishDir)WindowsAppSDK-NOTICE.txt"
     />
     <Copy

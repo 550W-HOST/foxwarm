@@ -199,5 +199,7 @@ payload-copy targets in charge. The umbrella-only ML, AI, Search, Widgets and
 DWrite component packages are not selected; no post-publish DLL blacklist is used.
 The separate Runtime package supplies framework-package deployment, which this
 app-local self-contained host does not use. WinUI's license also covers the
-identical Foundation/InteractiveExperiences license terms; its supplied notice
-and the retained WebView2/Main dependency notices ship with the application.
+identical Foundation/InteractiveExperiences license terms. Base is explicitly
+referenced to retain its complete common notice, including the WinUI notice;
+this does not expand the component closure. WebView2 and Main dependency notices
+also ship with the application.
