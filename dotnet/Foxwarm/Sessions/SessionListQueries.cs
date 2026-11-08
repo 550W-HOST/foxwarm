@@ -20,6 +20,9 @@ internal sealed partial class SessionListQueries
     /// <summary>A Sidebar child window counts children active within this many milliseconds.</summary>
     internal const long RecentChildWindowMilliseconds = 24L * 60 * 60 * 1000;
 
+    /// <summary>The largest initial child window.</summary>
+    internal const int RecentChildWindowMax = 5;
+
     public SessionListQueries(SessionRuntime runtime, Func<long>? clock = null)
     {
         this.runtime = runtime;
@@ -338,14 +341,14 @@ internal sealed partial class SessionListQueries
             .Where((request, index) => reset || decoded[index] is null)
             .Select(request => request.Id)
             .ToHashSet(StringComparer.Ordinal);
-        // `limit` is the largest window. A flagged parent's first page holds as many children
-        // as were active within the window, between one and `limit`; continuations are sized
+        // A flagged parent's first page holds as many children as were active within the last
+        // 24 hours, between one and the smaller of `limit` and five; continuations are sized
         // by `limit` as usual.
         var limits = RecentWindows(
             recentWindow is null || agent is not null
                 ? []
                 : first.Where(recentWindow.Contains).ToArray(),
-            limit
+            Math.Min(limit, RecentChildWindowMax)
         );
         var baseRows = Catalog.Children(
             requests

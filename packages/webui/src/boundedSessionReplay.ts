@@ -73,9 +73,20 @@ export async function replayCursorWindow<T>(options: {
   throw new Error('Bounded cursor window kept resetting during replay.')
 }
 
+/**
+ * Branch target meaning "the server's initial window": the children active in the last 24 hours,
+ * between one and five. It is a default, not a count the user chose: the server sizes it on every
+ * replay, and any explicit count (for example after `Show N more`) replaces it.
+ */
+export const INITIAL_BRANCH_WINDOW = 0
+/** The largest initial window; a batch containing an initial branch asks for at least this many rows. */
+export const INITIAL_BRANCH_WINDOW_MAX = 5
+
 export interface BranchReplayRequest {
   parentSessionId: string
   cursor?: string
+  /** Asks the server to size this branch's first page as the initial window. */
+  window?: 'recent'
 }
 
 export interface BranchReplayGroup<T> {
@@ -98,7 +109,8 @@ export async function replayCursorBranches<T>(options: {
   const maxRestarts = options.maxRestarts ?? 3
   for (let attempt = 0; attempt <= maxRestarts; attempt++) {
     const states = new Map([...options.targets].map(([id, target]) => [id, {
-      target: Math.max(0, Math.floor(target)), items: [] as T[], cursor: null as string | null, total: 0, done: target <= 0,
+      target: Math.max(0, Math.floor(target)), items: [] as T[], cursor: null as string | null, total: 0,
+      initial: target === INITIAL_BRANCH_WINDOW, done: false,
     }]))
     let restart = false
     let revision = options.expectedRevision
@@ -106,9 +118,9 @@ export async function replayCursorBranches<T>(options: {
       const pending = [...states.entries()].filter(([, state]) => !state.done)
       for (let offset = 0; offset < pending.length; offset += batchCap) {
         const batch = pending.slice(offset, offset + batchCap)
-        const limit = Math.min(pageCap, Math.max(...batch.map(([, state]) => state.target - state.items.length)))
+        const limit = Math.min(pageCap, Math.max(...batch.map(([, state]) => state.initial ? INITIAL_BRANCH_WINDOW_MAX : state.target - state.items.length)))
         const response = await options.fetchBatch(batch.map(([parentSessionId, state]) => ({
-          parentSessionId, ...(state.cursor ? { cursor: state.cursor } : {}),
+          parentSessionId, ...(state.cursor ? { cursor: state.cursor } : {}), ...(state.initial ? { window: 'recent' as const } : {}),
         })), limit)
         if (response.revision !== undefined && revision !== undefined && response.revision !== revision) {
           throw new BoundedReplayRevisionMismatch()
@@ -122,6 +134,8 @@ export async function replayCursorBranches<T>(options: {
           state.items.push(...group.items)
           state.cursor = group.nextCursor
           state.total = Number(group.total ?? state.total)
+          // The server decided how many rows the initial window holds; that page is complete.
+          if (state.initial) { state.initial = false; state.target = group.items.length; state.done = true; continue }
           state.done = state.items.length >= state.target || !state.cursor || group.items.length === 0
         }
       }

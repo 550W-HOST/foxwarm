@@ -249,3 +249,67 @@ test('exact A miss preserves newer canonical S and its replacement alias B', () 
   replay.endHttpRowsRequest(state, exactStart); replay.mergeHttpRows(state, [{ id: 'S', aliases: ['A'], source: 'older search' }], searchStart)
   assert.deepEqual(state.rows.get('S')?.aliases, ['B']); replay.endHttpRowsRequest(state, searchStart)
 })
+
+// A stand-in for the server's initial child window: the count of children active in the
+// last 24 hours, clamped to one through five, for a request flagged `window: 'recent'`
+// without a cursor. Other requests page by the requested limit.
+function windowServer(children) {
+  const calls = []
+  const fetchBatch = async (parents, limit) => {
+    calls.push({ parents, limit })
+    return { revision: 'r1', groups: parents.map(parent => {
+      const rows = children.get(parent.parentSessionId) || []
+      const offset = parent.cursor ? Number(parent.cursor) : 0
+      const size = parent.window === 'recent' && !parent.cursor
+        ? Math.min(Math.max(rows.filter(row => row.recent).length, 1), Math.min(limit, 5)) : limit
+      const items = rows.slice(offset, offset + size).map(row => row.id)
+      return { parentSessionId: parent.parentSessionId, items, total: rows.length, nextCursor: offset + items.length < rows.length ? String(offset + items.length) : null }
+    }) }
+  }
+  return { calls, fetchBatch }
+}
+const childRows = (parent, recent, old = 4) => [
+  ...Array.from({ length: recent }, (_, index) => ({ id: `${parent}-recent-${index}`, recent: true })),
+  ...Array.from({ length: old }, (_, index) => ({ id: `${parent}-old-${index}`, recent: false })),
+]
+
+test('an initial branch window holds the recent children clamped to one through five', async () => {
+  for (const [recent, expected] of [[0, 1], [1, 1], [3, 3], [7, 5]]) {
+    const server = windowServer(new Map([['p', childRows('p', recent)]]))
+    const result = await replay.replayCursorBranches({ targets: new Map([['p', replay.INITIAL_BRANCH_WINDOW]]), pageCap: 20, parentBatchCap: 20, fetchBatch: server.fetchBatch })
+    const branch = result.get('p')
+    assert.equal(branch.items.length, expected, `${recent} recent children`)
+    assert.equal(branch.total, recent + 4)
+    assert.ok(branch.nextCursor, 'older children remain behind Show more')
+    assert.equal(server.calls.length, 1, 'the server sizes the window in one request')
+    assert.deepEqual(server.calls[0].parents, [{ parentSessionId: 'p', window: 'recent' }])
+    assert.ok(server.calls[0].limit >= 5)
+  }
+})
+
+test('initial and explicit branch targets share a batch without changing each other', async () => {
+  const server = windowServer(new Map([['recent', childRows('recent', 3)], ['grown', childRows('grown', 1, 30)]]))
+  const targets = new Map([['recent', replay.INITIAL_BRANCH_WINDOW], ['grown', 14]])
+  const result = await replay.replayCursorBranches({ targets, pageCap: 20, parentBatchCap: 20, fetchBatch: server.fetchBatch })
+  assert.equal(result.get('recent').items.length, 3)
+  assert.equal(result.get('grown').items.length, 14, 'an explicitly grown window is not resized by the rule')
+  assert.equal(server.calls.length, 1)
+  assert.equal(server.calls[0].parents.find(parent => parent.parentSessionId === 'grown').window, undefined)
+  // A replay of the grown count after the recent activity ages out keeps the same rows.
+  const aged = windowServer(new Map([['grown', childRows('grown', 0, 31)]]))
+  const again = await replay.replayCursorBranches({ targets: new Map([['grown', 14]]), pageCap: 20, parentBatchCap: 20, fetchBatch: aged.fetchBatch })
+  assert.equal(again.get('grown').items.length, 14)
+})
+
+test('a reset restarts an initial window from its first page', async () => {
+  const server = windowServer(new Map([['p', childRows('p', 3)], ['q', childRows('q', 7, 30)]]))
+  let resetOnce = true
+  const result = await replay.replayCursorBranches({ targets: new Map([['p', replay.INITIAL_BRANCH_WINDOW], ['q', 12]]), pageCap: 5, parentBatchCap: 20, fetchBatch: async (parents, limit) => {
+    const response = await server.fetchBatch(parents, limit)
+    if (parents.some(parent => parent.cursor) && resetOnce) { resetOnce = false; return { ...response, reset: true } }
+    return response
+  } })
+  assert.equal(result.get('p').items.length, 3)
+  assert.equal(result.get('q').items.length, 12)
+  assert.ok(server.calls.filter(call => call.parents.some(parent => parent.window === 'recent')).length >= 2, 'the initial window is requested again after the reset')
+})

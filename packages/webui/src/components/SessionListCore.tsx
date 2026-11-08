@@ -25,6 +25,8 @@ export interface Session {
   messageCount: number
   sequenceMessageCount?: number
   lastMessageTime: number
+  /** Newest message time among this Session and its descendants; only the server's tree ordering uses it. */
+  subtreeActivityTime?: number
   parentSessionId: string | null
   childSessions?: string[]
   childTotal?: number

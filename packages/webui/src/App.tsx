@@ -573,7 +573,7 @@ function App() {
     return selectVisibleSessionIds(activeSessionIds, !isMobile || !showSessionList)
   }, [isMobile, showSessionList, focusedPane, paneNodes, tabsById])
   const exactSessionIds = useMemo(() => allTabs.flatMap(tab => isChatTab(tab) ? [tab.sessionId] : []), [allTabs])
-  const boundedSessions = useBoundedSessionList({ focusIds: currentContextSessionId ? [currentContextSessionId] : [], exactIds: exactSessionIds, includeGlobalSummary: true, groupable: true })
+  const boundedSessions = useBoundedSessionList({ focusIds: currentContextSessionId ? [currentContextSessionId] : [], exactIds: exactSessionIds, includeGlobalSummary: true, groupable: true, childWindow: 'recent' })
   const sessions = boundedSessions.knownSessions
   const sidebarSessions = boundedSessions.sessions
   const notificationOpenSessionRef = useRef<((sessionId: string) => void) | null>(null)

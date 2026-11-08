@@ -75,7 +75,8 @@ public sealed partial class WebUiStartupTests
             }
         );
         var kids = first["groups"]![0]!;
-        Assert.Equal(["kids/main", "kids/k3"], Ids(kids["sessions"]));
+        // k1 is last by its own time but holds the newest descendant (visitor), so it leads.
+        Assert.Equal(["kids/main", "kids/k1"], Ids(kids["sessions"]));
         Assert.Equal(4, kids["total"]!.GetValue<int>());
         var rest = await Pages(
             new
@@ -89,7 +90,7 @@ public sealed partial class WebUiStartupTests
                 },
             }
         );
-        Assert.Equal(["kids/k2", "kids/k1"], Ids(rest["groups"]![0]!["sessions"]));
+        Assert.Equal(["kids/k3", "kids/k2"], Ids(rest["groups"]![0]!["sessions"]));
         Assert.Null(rest["groups"]![0]!["nextCursor"]);
         // A one-row first page holds the main alone and continues from the first other row.
         var single = await Pages(

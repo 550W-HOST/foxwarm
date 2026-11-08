@@ -288,16 +288,17 @@ focus paths, busy-descendant badges, search, Architecture, Tasks and lifecycle.
   the same child previews as root pages; `by-id` with `group`/`mode` returns
   `presentationGroups` for exact rows. An Agent group's main Session is the first
   row of its first page in every mode (when it is a member); continuations exclude it.
-- Order. Agent groups: `main` first, then by name. Node groups: `master` first,
+- Order. Members follow the mode's order ([D-sidebar-tree-activity](#d-sidebar-tree-activity) in tree modes). Agent groups: `main` first, then by name. Node groups: `master` first,
   then by display name; a Node missing from the directory is labelled with its ID
   and reported offline.
 - Storage. Agent counts reuse `catalog_parent_agent_count` (top-level) and
   `catalog_agent_count` (all); Node counts use the maintained
   `catalog_node_count` (all and top-level rows per Node). Both subtract the small
-  pinned partition at read time. Group pages are keyset reads through the
-  existing `idx_session_catalog_agent_root_time` and `idx_session_catalog_agent_time`
-  indexes and the additive partial `idx_session_catalog_agent_root_default` and
-  `idx_session_catalog_node_{root_default,root_time,time}` indexes.
+  pinned partition at read time. Tree-mode group pages are keyset reads through
+  the additive partial `idx_session_catalog_{agent,node}_root_activity[_default]`
+  indexes ([D-sidebar-tree-activity](#d-sidebar-tree-activity)); Flat group pages use
+  `idx_session_catalog_agent_time` and `idx_session_catalog_node_time`. The earlier
+  recency-ordered partial group indexes are dropped on open.
 - Compatibility. The catalog stays at schema version 3 (user decision,
   2026-11-01). The grouping objects are additive `IF NOT EXISTS` objects created on
   every open; `catalog_node_count` is filled once when created, and its triggers
@@ -305,3 +306,16 @@ focus paths, busy-descendant badges, search, Architecture, Tasks and lifecycle.
   the retired `catalog_sidebar_*` tables, their triggers and indexes; the unused
   `sidebar_parent` column stays and is neither read nor written. A Main from that
   earlier design recreates its own objects when it opens the catalog.
+
+### D-sidebar-tree-activity
+
+[2026-11-08] User decisions (Sidebar request; answers recorded in the requesting Session). A Session whose descendants are active must not sink in the Sidebar because it is quiet itself, and a branch opens showing the children that are active now.
+
+- Ordering. In Time mode, and in Default mode for rows without a saved `sidebarOrder` (a saved order still wins first), Sidebar roots, child windows, Agent/Node group members and the pinned section order by subtree activity: the newest `last_message_time` of the row and all of its descendants, by the real parent relation (a pinned or archived child still counts for its real parent; presentation elevation does not). Flat keeps each Session's own time. Architecture, wait liveness, recovery, question rows, offset pages and descendant previews keep `recent_rank`. The displayed own last-message time does not change; only the sort key and the cursor key do. The Sidebar DTO carries the value as `subtreeActivityTime` (the larger of the persisted value and the row's own overlaid time, so a running Session is current); cursors bind the same value and, like every cursor, a process-instance revision.
+- Storage. `session_catalog.subtree_time` is the maintained maximum; `subtree_rank` is its generated negation and is what indexes and `ORDER BY` use. It is not part of `metadata_json`. Three triggers keep it exact for every writer, including a Main that predates it: insert recomputes the row from its already-present children; an update of `last_message_time` or `parent_session_id` recomputes the row's ancestor chain and, after a reparent, the old parent's chain; delete recomputes the old parent's chain. Each recomputation is one statement over the chain, taking at each ancestor the running maximum of its own time and its children outside the chain, so decreases (a deleted or moved newest descendant) are as exact as increases and the cost is one indexed seek per ancestor. Children that lost a deleted parent become roots with their own values. A legacy cycle ends the walk and is not guaranteed exact.
+- Upgrade. The catalog stays at schema version 3 (additive, like [D-sidebar-groups](#d-sidebar-groups)). On open the column and `subtree_rank` are added when missing and every row is backfilled in the same transaction; indexes and triggers are `IF NOT EXISTS`. Reopen is a no-op. Additive indexes: `idx_session_catalog_parent_subtree` (maintenance and sibling maxima), `idx_session_catalog_{root,parent}_activity[_default]`, and the partial `idx_session_catalog_{agent,node}_root_activity[_default]`; Sidebar tree queries use no other index for their ordering. The base recency indexes stay for Flat, Architecture and the other readers.
+- Initial child window. Sidebar previews (`childWindow=recent` on `/api/session-list/sidebar` and `/group-pages`) and first child pages (`window: "recent"` on a `/api/session-list/children` parent without a cursor) hold as many children as are active within the last 24 hours, clamped to 1..`min(limit, 5)`. A child is active by the same subtree activity, and pinned and archived children are not counted. The count is one bounded indexed seek per parent that stops at the maximum. `total`, continuation cursors and `Show N more` (10 per step) are unchanged; a request with a cursor is never windowed. Without the flag, and for the collapsed rail and Architecture, `limit` applies as before.
+- Client. A branch target of `INITIAL_BRANCH_WINDOW` (0) means "the server's initial window". The server sizes it on every replay, so previews and default branches follow current activity; any explicit count (after `Show N more`) replaces it, replays with that count and is never shrunk by a refresh. Collapsing a branch discards its target.
+- Source oracle. The retained TypeScript catalog orders by each row's own time, and this ordering is an intentional behavioral extension. The oracle comparison is scoped rather than extended: its schema comparison excludes the additive objects and its comparison data keeps ancestors at least as new as descendants, while the new behavior has dedicated C# tests. This avoids backporting a feature into a compatibility source that no longer serves runtime traffic.
+
+Open questions: whether an initial window should be latched so it cannot shrink as activity ages out within a mounted Sidebar; whether archived children should count toward the window (they currently do not).
