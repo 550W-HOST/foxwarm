@@ -35,6 +35,7 @@ Cross-module contract: [Code integration](../threads/code-integration.md).
 ## `foxwarm-terminal`
 
 - Registers a browser `Pseudoterminal` profile over Foxwarm terminal REST/WebSocket routes.
+- Accepts the shared Core Node ID grammar (`isCoreNodeId`), so Provider-qualified Nodes (`provider/local`, URI authority `node+provider%2Flocal`) can create terminals like native Nodes.
 - Derives cwd from the first `foxwarm` workspace folder; an empty Node workspace retains its Node identity from the persistent workspace filename.
 - Restores backend terminals inside the current workspace after Code reload without POSTing duplicate PTYs.
 - User terminal close kills/deletes the backend. Extension/window reload and non-user exit only detach.

@@ -31,6 +31,7 @@ var extension_exports = {};
 __export(extension_exports, {
   activate: () => activate,
   deactivate: () => deactivate,
+  ensureSupportedTarget: () => ensureSupportedTarget,
   getWorkspaceTerminalTarget: () => getWorkspaceTerminalTarget,
   isTerminalInsideWorkspace: () => isTerminalInsideWorkspace,
   parseFoxwarmUri: () => parseFoxwarmUri,
@@ -340,7 +341,7 @@ function getActiveWorkspaceTarget() {
   return { nodeId: target.nodeId, realPath: target.realPath };
 }
 function ensureSupportedTarget(target) {
-  if (!/^[A-Za-z0-9._-]+$/.test(target.nodeId)) throw new Error(`Invalid Foxwarm terminal node id: ${target.nodeId}`);
+  if (!isCoreNodeId(target.nodeId)) throw new Error(`Invalid Foxwarm terminal node id: ${target.nodeId}`);
   return target;
 }
 function queuePty(pty) {
