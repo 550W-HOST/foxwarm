@@ -513,7 +513,7 @@ internal sealed class TaskStore : IDisposable
             var now = Now();
             using var cmd = db.CreateCommand();
             cmd.CommandText =
-                "INSERT INTO tasks(id,title,description,status,parentTaskId,createdByKind,createdBySessionId,ownerSessionId,createdAt,updatedAt,assignmentRevision,assignmentNotificationStatus,reminderLastSeq) VALUES($id,$title,$description,$status,$parent,$creatorKind,$creator,$owner,$now,$now,$revision,$notification,$anchor)";
+                "INSERT INTO tasks(id,title,description,status,parentTaskId,createdByKind,createdBySessionId,ownerSessionId,createdAt,updatedAt,assignmentRevision,assignmentNotificationStatus,reminderLastSeq,ownerAssignedAt) VALUES($id,$title,$description,$status,$parent,$creatorKind,$creator,$owner,$now,$now,$revision,$notification,$anchor,$assigned)";
             Add(cmd, "$id", id);
             Add(cmd, "$title", Text(args["title"])!);
             Add(cmd, "$description", Text(args["description"]));
@@ -522,6 +522,7 @@ internal sealed class TaskStore : IDisposable
             Add(cmd, "$creator", actorKind == "session" ? Canonical(actor!) : null);
             Add(cmd, "$owner", requestedOwner);
             Add(cmd, "$now", now);
+            Add(cmd, "$assigned", requestedOwner is null ? null : now);
             Add(cmd, "$status", requestedOwner is null ? "open" : "active");
             Add(cmd, "$revision", requestedOwner is null ? 0 : 1);
             Add(cmd, "$notification", notifyNew ? "pending" : null);
@@ -607,6 +608,8 @@ internal sealed class TaskStore : IDisposable
                     taskId,
                     "ownerSessionId",
                     actor,
+                    "ownerAssignedAt",
+                    now2,
                     "status",
                     "active",
                     "updatedAt",
@@ -684,6 +687,8 @@ internal sealed class TaskStore : IDisposable
                         "reminderMessageCount",
                         changed ? 0 : Int(task["reminderMessageCount"])
                     );
+                    if (changed)
+                        Update(db, taskId, "ownerAssignedAt", requested is null ? null : now2);
                     if (changed)
                         AddNote(
                             db,
@@ -810,6 +815,7 @@ internal sealed class TaskStore : IDisposable
                 "reminderLastSeq",
                 "reminderMessageCount",
                 "assignmentRevision",
+                "ownerAssignedAt",
             }
         )
             row.Remove(key);
@@ -818,6 +824,18 @@ internal sealed class TaskStore : IDisposable
         if (Text(row["result"]) is { Length: > 20000 } result)
             row["result"] = result[..19999] + "…";
         return CanonicalReferences(row);
+    }
+
+    /// <summary>When the current owner was assigned (epoch ms); null for tasks owned before the column existed.</summary>
+    internal long? OwnerAssignedAt(string taskId)
+    {
+        lock (gate)
+        {
+            var db = Open();
+            return Read(db, taskId) is { } row && row["ownerAssignedAt"] is JsonValue value
+                ? Long(value)
+                : null;
+        }
     }
 
     // Bounded title/status lookup for display surfaces that already reference these Tasks.
@@ -1055,6 +1073,18 @@ internal sealed class TaskStore : IDisposable
                 db.ExecuteNonQuery($"ALTER TABLE tasks ADD COLUMN {column.Item1} {column.Item2}");
         }
         MigrateActorColumns(db);
+        // Added after the actor migration, which rebuilds the table from its older column set.
+        using (var info = db.CreateCommand())
+        {
+            info.CommandText = "PRAGMA table_info(tasks)";
+            var found = false;
+            using (var reader = info.ExecuteReader())
+                while (reader.Read())
+                    if (reader.GetString(1) == "ownerAssignedAt")
+                        found = true;
+            if (!found)
+                db.ExecuteNonQuery("ALTER TABLE tasks ADD COLUMN ownerAssignedAt INTEGER");
+        }
         db.ExecuteNonQuery(
             "CREATE INDEX IF NOT EXISTS tasks_status ON tasks(status,updatedAt); "
                 + "CREATE INDEX IF NOT EXISTS tasks_parent ON tasks(parentTaskId,createdAt); "

@@ -41,6 +41,8 @@ internal sealed class TaskService : IDisposable
 
     internal string? OwnerSessionId(string taskId) => store.OwnerSessionId(taskId);
 
+    internal long? OwnerAssignedAt(string taskId) => store.OwnerAssignedAt(taskId);
+
     internal async Task<JsonObject> ExecuteAsUserAsync(JsonObject args)
     {
         var normalized = (JsonObject)args.DeepClone();
@@ -410,11 +412,12 @@ internal sealed class TaskService : IDisposable
             store.MarkNotification(taskId, "completionNotificationStatus", "skipped");
             return;
         }
+        var usage = await OwnerUsageLineAsync(task);
         await DeliverAsync(
             taskId,
             actor,
             creator,
-            $"Task completed: {Summary(task, includeResult: true)}",
+            $"Task completed: {Summary(task, includeResult: true)}{(usage is null ? "" : "\n" + usage)}",
             true,
             "completionNotificationStatus",
             null,
@@ -423,6 +426,29 @@ internal sealed class TaskService : IDisposable
             "completion",
             "completed"
         );
+    }
+
+    // Best effort: a usage lookup failure must not block the completion notification.
+    private async Task<string?> OwnerUsageLineAsync(JsonObject task)
+    {
+        try
+        {
+            var owner = Text(task["ownerSessionId"]);
+            var taskId = Text(task["id"]);
+            if (
+                owner is null
+                || taskId is null
+                || store.OwnerAssignedAt(taskId) is not long assignedAt
+                || task["completedAt"] is not JsonValue completed
+                || !completed.TryGetValue<long>(out var completedAt)
+            )
+                return null;
+            return await manager.TaskOwnerUsageLineAsync(owner, assignedAt, completedAt);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private async Task<bool> DeliverAsync(
