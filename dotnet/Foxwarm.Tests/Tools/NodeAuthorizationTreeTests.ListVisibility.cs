@@ -194,6 +194,34 @@ public sealed partial class NodeAuthorizationTreeTests
     }
 
     [Fact]
+    public async Task Provider_without_lifecycle_actions_is_not_listed_even_when_its_Nodes_are()
+    {
+        if (!OperatingSystem.IsLinux())
+            return;
+        await using var f = await Fixture.Create(provider: true);
+        // Existing machines, as with the public SSH adapter: no create, ensure, inspect or destroy.
+        Directory.CreateDirectory(f.Target);
+        await File.WriteAllTextAsync(
+            Path.Combine(f.Target, "description.json"),
+            """{"label": "Existing machines", "description": "Fixed targets.", "lifecycle": [], "dataRetention": "Targets remain."}"""
+        );
+        // No policy file: nothing is denied, so the Node is listed with its tools.
+        var data = await ListData(f);
+        Assert.Contains("fixture/target", Listed(data));
+        Assert.NotEmpty(Row(data, "fixture/target")["tools"]!.AsArray());
+        Assert.Equal(
+            new[] { "master", "authenticated-remote" },
+            data["providers"]!.AsArray().Select(p => SessionWait.Text(p?["id"]))
+        );
+        // Full inspection remains the Provider's discovery path.
+        var inspected = await f.Call(
+            "node",
+            Obj("""{"action":"inspect","providerId":"fixture"}""")
+        );
+        Assert.Empty(inspected!["provider"]!["lifecycle"]!.AsArray());
+    }
+
+    [Fact]
     public async Task Node_list_fails_closed_when_policy_is_unavailable_and_the_administrator_picker_only_adds_hints()
     {
         if (!OperatingSystem.IsLinux())

@@ -64,7 +64,8 @@ try {
   assert.equal(discovery.result[0].currentNode, 'master')
   assert.equal(discovery.result[0].providers.find(p => p.id === 'external').createParameters, undefined)
   assert.equal(discovery.result[1].provider.createParameters.type, 'object')
-  assert(discovery.result[0].providers.some(provider => provider.id === 'unicode'))
+  // Without lifecycle actions, the Provider is reached through inspection, not the model's list.
+  assert(!discovery.result[0].providers.some(provider => provider.id === 'unicode'))
   state = await turn('unicode', [call('unicode', 'node', { action: 'inspect', providerId: 'unicode' })])
   assert.equal(result(state, 'unicode').provider.createParameters, unicodeSchema)
   const properties = entries => Object.fromEntries(Array.from({ length: entries }, (_, index) => ['k' + index, 0]))

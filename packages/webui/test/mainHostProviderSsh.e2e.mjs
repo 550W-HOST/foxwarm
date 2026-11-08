@@ -64,7 +64,8 @@ try {
   const discovery = result(state, 'discovery')
   assert.equal(discovery.status, 'completed', JSON.stringify(discovery))
   assert.equal(discovery.result[0].nodes.find(row => row.id === node).availability, 'ready', connection.diagnostics)
-  assert.deepEqual(discovery.result[0].providers.find(row => row.id === 'external-ssh').lifecycle, [])
+  // The model's list shows a Provider only with lifecycle actions the caller might use; this one has none.
+  assert(!discovery.result[0].providers.some(row => row.id === 'external-ssh'))
   assert.deepEqual(discovery.result[1].provider.lifecycle, [])
   assert(discovery.result[1].provider.dataRetention)
   state = await turn('unsupported', [call('create-unsupported', 'node', { action: 'create', providerId: 'external-ssh' }), call('inspect-unsupported', 'node', { action: 'inspect', nodeId: node }), call('destroy-unsupported', 'node', { action: 'destroy', nodeId: node, confirmation: 'destroy node ' + node })])
