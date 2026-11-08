@@ -182,7 +182,14 @@ public sealed partial class McpNotificationTests
         var input = Queue(peer.Target).Last();
         Assert.Equal(QueueItemType.User, input.Type);
         Assert.Null(input.SourceSessionId);
-        Assert.Equal(original, input.Parts![1]["text"]!.GetValue<string>());
+        Assert.Equal(
+            SessionBoundary.NeutralizeFraming(original),
+            input.Parts![1]["text"]!.GetValue<string>()
+        );
+        Assert.StartsWith(
+            "  external\n\t&lt;foxwarm-message",
+            input.Parts[1]["text"]!.GetValue<string>()
+        );
         Assert.Contains(target, input.Parts[0]["system"]!.GetValue<string>());
         var disk = JsonNode.Parse(
             await File.ReadAllTextAsync(
@@ -190,7 +197,7 @@ public sealed partial class McpNotificationTests
             )
         )!;
         Assert.Contains(
-            original,
+            SessionBoundary.NeutralizeFraming(original),
             disk["queue"]!.AsArray().Select(item => item?["parts"]?[1]?["text"]?.GetValue<string>())
         );
         var replies = new[] { " direct reply \n", " unified reply \t", " native reply " };

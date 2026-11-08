@@ -154,7 +154,7 @@ The body can be JSON or plain UTF-8 text, up to 1 MiB.
 
 ## What the agent receives
 
-Unless the webhook runs a script, each delivery arrives in the Session as one input marked as coming from that webhook, with the event name for GitHub. The agent sees the body as it was sent, up to the first 64 KiB, with a note when the rest was cut off. If the Session is busy, deliveries wait and are read together when it is free.
+Unless the webhook runs a script, each delivery arrives in the Session as one input marked as coming from that webhook, with the event name for GitHub. The agent sees the body as it was sent, up to the first 64 KiB, with a note when the rest was cut off. The one change is that text imitating Foxwarm's own `<foxwarm-…>` tags has its `<` written as `&lt;`, so a body cannot pass itself off as a message from Foxwarm. If the Session is busy, deliveries wait and are read together when it is free.
 
 A delivery gives the sender no permissions in Foxwarm. Whatever the agent does in response, it does with its own Agent's tools and rules.
 

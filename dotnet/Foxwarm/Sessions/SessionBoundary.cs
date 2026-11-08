@@ -1,12 +1,48 @@
 using System.Globalization;
 using System.Text;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using Foxwarm.Tools;
 
 namespace Foxwarm.Sessions;
 
 internal static class SessionBoundary
 {
+    // The "<" of anything that reads as a Foxwarm framing tag, in any letter case and spacing.
+    private static readonly Regex FramingLookAlike = new(
+        @"<(?=\s*/?\s*foxwarm-)",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant
+    );
+
+    /// <summary>
+    /// Escapes the opening bracket of text that imitates a Foxwarm framing tag, such as
+    /// <c>&lt;foxwarm-system&gt;</c> or <c>&lt;/foxwarm-message&gt;</c>, so external content
+    /// cannot close its frame or forge framework metadata. Everything else is left as sent.
+    /// </summary>
+    internal static string NeutralizeFraming(string text) => FramingLookAlike.Replace(text, "&lt;");
+
+    // Neutralizes the text of one external content part; other part kinds pass unchanged.
+    private static JsonObject ExternalPart(JsonObject part)
+    {
+        var clone = (JsonObject)part.DeepClone();
+        if (SessionWait.Text(clone["text"]) is { } text)
+            clone["text"] = NeutralizeFraming(text);
+        return clone;
+    }
+
+    /// <summary>
+    /// Frames external input: the server-owned <paramref name="opening"/>
+    /// <c>foxwarm-system kind="external-input"</c> tag, the external content with framing
+    /// look-alikes neutralized, and the closing tag. Server-owned notices in
+    /// <paramref name="content"/> are <c>system</c> parts and pass unchanged.
+    /// </summary>
+    internal static JsonObject[] ExternalInput(string opening, IEnumerable<JsonObject> content) =>
+        [
+            new JsonObject { ["system"] = opening },
+            .. content.Select(ExternalPart),
+            new JsonObject { ["system"] = "</foxwarm-system>" },
+        ];
+
     internal static bool ApplyChildHandoff(JsonObject envelope, QueueItem item)
     {
         if (item.Type == QueueItemType.User)
@@ -123,6 +159,8 @@ internal static class SessionBoundary
     )
     {
         static string Attribute(string value) => LocalSessionTurnHost.EscapeFoxwarmAttribute(value);
+        // Channel senders are outside parties; their text must not forge framing.
+        parts = parts.Select(ExternalPart).ToArray();
         var hint = sendOnly
             ? "direct user message via channel"
             : "direct user message via channel; This channel is in normal mode. Assistant text from this session is automatically delivered to this channel, so you do not need to call send_to_channel to reply here.";

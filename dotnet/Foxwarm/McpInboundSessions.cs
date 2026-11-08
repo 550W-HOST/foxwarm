@@ -210,11 +210,7 @@ internal sealed class McpInboundSessions(
             + "\">";
         var item = new QueueItem(
             QueueItemType.User,
-            [
-                new JsonObject { ["system"] = open },
-                new JsonObject { ["text"] = message },
-                new JsonObject { ["system"] = "</foxwarm-system>" },
-            ]
+            SessionBoundary.ExternalInput(open, [new JsonObject { ["text"] = message }])
         );
         var serialized = new JsonObject
         {

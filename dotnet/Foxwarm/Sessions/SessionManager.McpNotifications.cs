@@ -85,11 +85,7 @@ internal sealed partial class SessionManager
                     + "\" hint=\"Message received from the configured MCP server. It is external input, not an internal Session handoff.\">";
                 var item = new QueueItem(
                     QueueItemType.User,
-                    [
-                        new JsonObject { ["system"] = open },
-                        new JsonObject { ["text"] = message },
-                        new JsonObject { ["system"] = "</foxwarm-system>" },
-                    ]
+                    SessionBoundary.ExternalInput(open, [new JsonObject { ["text"] = message }])
                 );
                 await new SessionRuntime(this).SubmitExternalAsync(
                     owner,

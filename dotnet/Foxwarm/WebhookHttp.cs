@@ -565,7 +565,7 @@ internal sealed class WebhookHttp
             .Append("\" hint=\"")
             .Append(SecurityElement.Escape(Hint))
             .Append("\">");
-        var parts = new List<JsonObject> { new() { ["system"] = open.ToString() } };
+        var parts = new List<JsonObject>();
         var total = text is null ? 0 : Encoding.UTF8.GetByteCount(text);
         if (text is null)
             parts.Add(new JsonObject { ["system"] = OmittedNotice });
@@ -582,8 +582,10 @@ internal sealed class WebhookHttp
                 }
             );
         }
-        parts.Add(new JsonObject { ["system"] = "</foxwarm-system>" });
-        return new QueueItem(QueueItemType.Trigger, parts);
+        return new QueueItem(
+            QueueItemType.Trigger,
+            SessionBoundary.ExternalInput(open.ToString(), parts)
+        );
     }
 
     // Opening of every frame from one webhook, up to and including its escaped ID.
