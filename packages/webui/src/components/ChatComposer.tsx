@@ -300,6 +300,7 @@ function ModelSelector({
 }) {
   const [open, setOpen] = useState(false)
   const [activeScope, setActiveScope] = useState<ModelSelectorScope>('current')
+  const [childColumnRequested, setChildColumnRequested] = useState(false)
   const [filterQuery, setFilterQuery] = useState('')
   const [childFilterQuery, setChildFilterQuery] = useState('')
   const [popupStyle, setPopupStyle] = useState<React.CSSProperties>({ position: 'fixed', visibility: 'hidden' })
@@ -315,6 +316,9 @@ function ModelSelector({
   const wasOpenRef = useRef(false)
   const currentIsDefault = !sessionModel
   const childFollows = !childModelDefault
+  // A child effort override is a configured child policy even while the model follows this session.
+  const childConfigured = !childFollows || !!childEffortDefault
+  const childColumnVisible = childConfigured || childColumnRequested
   const filteredOptions = useMemo(
     () => filterModelOptions(options, filterQuery, defaultModelKey),
     [defaultModelKey, filterQuery, options],
@@ -361,7 +365,7 @@ function ModelSelector({
   const updatePopupPosition = useCallback(() => {
     const rect = buttonRef.current?.getBoundingClientRect()
     if (!rect) return
-    const width = Math.min(childFollows || compact ? 360 : 720, Math.max(0, window.innerWidth - 16))
+    const width = Math.min(!childColumnVisible || compact ? 360 : 720, Math.max(0, window.innerWidth - 16))
     const left = Math.min(Math.max(8, rect.left), Math.max(8, window.innerWidth - width - 8))
     const preferredMaxHeight = Math.min((compact ?? window.innerWidth <= 640) ? 560 : 400, Math.max(220, window.innerHeight - 24))
     const spaceAbove = Math.max(0, rect.top - 12)
@@ -385,7 +389,7 @@ function ModelSelector({
         maxHeight,
       })
     }
-  }, [childFollows, compact])
+  }, [childColumnVisible, compact])
 
   const toggleOpen = useCallback(() => {
     if (open) {
@@ -396,6 +400,7 @@ function ModelSelector({
     setChildFilterQuery('')
     filterComposingRef.current = false
     setActiveScope('current')
+    setChildColumnRequested(false)
     updatePopupPosition()
     setOpen(true)
   }, [open, updatePopupPosition])
@@ -470,7 +475,7 @@ function ModelSelector({
     let focusFrame = 0
     if (open) {
       focusFrame = requestAnimationFrame(() => {
-        ;(activeScope === 'child' && !childFollows ? childFilterInputRef : filterInputRef).current?.focus({ preventScroll: true })
+        ;(activeScope === 'child' && childColumnVisible ? childFilterInputRef : filterInputRef).current?.focus({ preventScroll: true })
       })
     } else if (!open && wasOpenRef.current) {
       buttonRef.current?.focus({ preventScroll: true })
@@ -479,7 +484,7 @@ function ModelSelector({
     return () => {
       if (focusFrame) cancelAnimationFrame(focusFrame)
     }
-  }, [open, activeScope, childFollows])
+  }, [open, activeScope, childColumnVisible])
 
   const applyCurrentModel = useCallback((model: string | null) => {
     if (busy) return
@@ -509,6 +514,7 @@ function ModelSelector({
     selected: boolean
     title: string
     resolvedTarget?: string | null
+    childMode?: 'follow'
     onSelect: () => void
   }) => (
     <button
@@ -519,6 +525,7 @@ function ModelSelector({
       title={params.title}
       aria-pressed={params.selected}
       data-model-option-row="true"
+      data-model-child-mode={params.childMode}
       data-model-option-key={params.optionKey || '__default__'}
       data-model-option-selected={params.selected ? 'true' : 'false'}
       className={`flex w-full min-w-0 items-center gap-2 px-3 py-2 text-left text-xs transition-colors focus-visible:bg-fw-hover disabled:cursor-not-allowed disabled:opacity-60 ${params.selected ? 'bg-fw-accent-surface text-fw-accent dark:bg-fw-accent-surface-strong/30 dark:text-fw-accent' : 'text-fw-text-strong hover:bg-fw-hover dark:hover:bg-fw-hover'}`}
@@ -596,8 +603,8 @@ function ModelSelector({
         <span className="h-3.5 w-px shrink-0 bg-fw-border" aria-hidden="true" />
         <span className="shrink-0 text-fw-text-muted" data-model-trigger-effort="true">{triggerEffort}</span>
         {error && <span className="shrink-0 text-fw-danger" aria-hidden="true">!</span>}
-        {!childFollows && (
-          <span title={childModelDefault || undefined} data-model-trigger-child="true" className="foxwarm-model-child-trigger inline-flex min-w-0 items-center gap-1 text-xs text-fw-text-muted">
+        {childConfigured && (
+          <span title={`Children: ${childModelDefault || 'Follow this session'}${childEffortDefault ? ` · ${formatEffortLabel(childEffortDefault)}` : ''}`} data-model-trigger-child="true" className="foxwarm-model-child-trigger inline-flex min-w-0 items-center gap-1 text-xs text-fw-text-muted">
             <GitBranch aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
             <span className="truncate">{childResolvedTargetName}{childEffortDefault ? ` · ${formatEffortLabel(childEffortDefault)}` : ''}</span>
           </span>
@@ -621,23 +628,21 @@ function ModelSelector({
           data-model-layout={compact === undefined ? undefined : compact ? "compact" : "wide"}
           data-model-saving={busy ? "true" : undefined}
         >
-          <div className="foxwarm-model-columns min-h-0 flex-1" data-model-columns={childFollows ? '1' : '2'}>
-            {(['current', ...(!childFollows ? ['child'] : [])] as ModelSelectorScope[]).map(scope => {
+          <div className="foxwarm-model-columns min-h-0 flex-1" data-model-columns={childColumnVisible ? '2' : '1'}>
+            {(['current', ...(childColumnVisible ? ['child'] : [])] as ModelSelectorScope[]).map(scope => {
               const isCurrent = scope === 'current'
               const staleLabel = isCurrent ? currentStaleFullLabel : childStaleFullLabel
               return (
                 <section key={scope} className="foxwarm-model-column flex min-h-0 min-w-0 flex-col" data-model-column={scope} aria-label={isCurrent ? 'Current session' : 'Children'}>
                   <div className="flex h-10 shrink-0 items-center justify-between gap-2 border-b border-fw-border bg-fw-surface-sunken px-3">
                     <span className="text-xs font-semibold text-fw-text-strong">{isCurrent ? 'Current session' : 'Children'}</span>
-                    {isCurrent ? (
-                      childFollows && <button type="button" disabled={busy} data-model-child-mode="specific" onClick={() => {
+                    {isCurrent && !childColumnVisible && (
+                      <button type="button" data-model-child-mode="specific" onClick={() => {
                         setActiveScope('child')
-                        applyChildModel(effectiveChildModelKey || currentModelKey || defaultModelKey || options[0]?.key || null)
-                      }} className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-[11px] text-fw-text-muted hover:bg-fw-hover disabled:opacity-50">
-                        <GitBranch className="h-3 w-3" aria-hidden="true" />Set child model
+                        setChildColumnRequested(true)
+                      }} className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-[11px] text-fw-text-muted hover:bg-fw-hover">
+                        <GitBranch className="h-3 w-3" aria-hidden="true" />Child defaults
                       </button>
-                    ) : (
-                      <button type="button" disabled={busy} data-model-child-mode="follow" onClick={() => { setActiveScope('current'); applyChildModel(null) }} className="rounded px-1.5 py-1 text-[11px] text-fw-text-muted hover:bg-fw-hover disabled:opacity-50">Follow this session</button>
                     )}
                   </div>
                   <div className="shrink-0 border-b border-fw-border px-2 py-1.5" data-model-selector-search="true">
@@ -662,6 +667,15 @@ function ModelSelector({
                       title: `Global default (${currentDefaultTargetName})`,
                       resolvedTarget: currentDefaultTargetName,
                       onSelect: () => applyCurrentModel(null),
+                    })}
+                    {!isCurrent && renderOptionRow({
+                      optionKey: null,
+                      label: 'Follow this session',
+                      selected: childFollows,
+                      title: `Follow this session (${currentDisplayName})`,
+                      resolvedTarget: currentDisplayName,
+                      childMode: 'follow',
+                      onSelect: () => { if (!childFollows) applyChildModel(null) },
                     })}
                     {renderModelGroups(isCurrent ? (sessionModel || null) : (childModelDefault || null), isCurrent ? applyCurrentModel : applyChildModel, isCurrent ? filteredOptions : childFilteredOptions)}
                   </div>

@@ -186,6 +186,11 @@ try {
   await page.click('[data-model-child-mode="follow"]')
   await until(async () => (await history(hostPort, switchId)).session.childModelDefault === null, 'original follow clears model only')
   assert.equal((await history(hostPort, switchId)).session.childEffortDefault, 'high')
+  // The real projection keeps the explicit child effort while the child model follows this Session.
+  if (!(await page.$('[data-model-selector-popup="true"]'))) await page.click('.foxwarm-model-selector-trigger')
+  await page.waitForFunction(() => document.querySelector('[data-model-column="child"] [data-model-child-mode="follow"]')?.getAttribute('data-model-option-selected') === 'true'
+    && document.querySelector('input[aria-label="Child effort"]')?.getAttribute('aria-valuetext') === 'Child effort: high'
+    && document.querySelector('[data-model-trigger-child="true"]')?.title === 'Children: Follow this session · High')
   provider.releaseSwitch()
   await until(async () => (await history(hostPort, switchId)).messages.length === 2, 'alpha frozen request finish')
   const heldRequest = provider.requests.find(item => item.input.includes('hold-switch'))

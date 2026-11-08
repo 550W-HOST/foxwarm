@@ -2331,7 +2331,7 @@ test('embedded model filter selects one result and keeps the accessible Setup br
     const reopenedFilter = await chatFrame.waitForSelector('input[aria-label="Filter models"]')
     await chatFrame.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
     assert.equal(await reopenedFilter.evaluate((input) => input.value), '')
-    assert.equal(await chatFrame.$$eval('button[title="leaf/model-a"], button[title="leaf/model-b"], button[title="sticky"], button[title="route"]', (buttons) => buttons.length), 4)
+    assert.equal(await chatFrame.$$eval('[data-model-column="current"] :is(button[title="leaf/model-a"], button[title="leaf/model-b"], button[title="sticky"], button[title="route"])', (buttons) => buttons.length), 4)
     // Selection closes the menu before the canonical model response is published.
     const currentEffort = await chatFrame.waitForSelector('input[type="range"][aria-label="Current effort"][aria-valuetext*="unavailable"]')
     assert.equal(await currentEffort.evaluate(input => input.value), '0')
@@ -2346,13 +2346,15 @@ test('embedded model filter selects one result and keeps the accessible Setup br
       body: { effort: 'low' },
     })
 
-    await chatFrame.click('[data-model-child-mode="specific"]')
-    await chatFrame.waitForSelector('[data-model-child-mode="follow"]')
+    // The stale child effort is a configured child policy, so its column is visible while the model follows.
+    await chatFrame.waitForSelector('[data-model-column="child"] [data-model-child-mode="follow"][data-model-option-selected="true"]')
+    assert.equal(await chatFrame.$('[data-model-child-mode="specific"]'), null)
+    assert.ok(await chatFrame.$('[data-model-trigger-child="true"]'))
     assert.ok(await chatFrame.$('input[aria-label="Filter models"]'))
     assert.ok(await chatFrame.$('input[aria-label="Filter child models"]'))
     const childFilter = await chatFrame.$('input[aria-label="Filter child models"]')
     await childFilter.type('model-b')
-    await chatFrame.waitForFunction(() => document.querySelectorAll('[data-model-column="child"] [data-model-option-row]').length === 1)
+    await chatFrame.waitForFunction(() => document.querySelectorAll('[data-model-column="child"] [data-model-option-row]:not([data-model-child-mode="follow"])').length === 1)
     assert.equal(await chatFrame.$eval('input[aria-label="Filter models"]', input => input.value), '')
     assert.equal(await chatFrame.$$eval('[data-model-column="current"] [data-model-option-row]', nodes => nodes.length), 5)
     assert.ok(await chatFrame.$eval('[data-model-selector-popup="true"]', popup => {
@@ -2460,7 +2462,13 @@ test('model columns preserve child policy and commit effort only after dragging 
     assert.equal(await desktopPage.$$eval('input[type="range"][aria-label="Current effort"]', nodes => nodes.length), 1)
     assert.equal(await desktopPage.$$eval('input[type="range"][aria-label="Child effort"]', nodes => nodes.length), 1)
     assert.equal(await desktopPage.$eval('[data-model-selector-popup="true"]', el => el.getBoundingClientRect().height), popupHeight)
-    await desktopPage.keyboard.press('Escape')
+    const childUpdatesBeforePin = modelUpdateRequests.length
+    assert.equal(await desktopPage.$eval('[data-model-column="child"] [data-model-child-mode="follow"]', row => row.getAttribute('data-model-option-selected')), 'true')
+    await desktopPage.click('[data-model-column="child"] [data-model-option-key="leaf/model-a"]')
+    await desktopPage.waitForSelector('[data-model-trigger-child="true"]')
+    assert.deepEqual(modelUpdateRequests.slice(childUpdatesBeforePin).map(request => request.body), [{ model: 'leaf/model-a' }])
+    if (await desktopPage.$('[data-model-selector-popup="true"]')) await desktopPage.keyboard.press('Escape')
+    await desktopPage.waitForSelector('[data-model-selector-popup="true"]', { hidden: true })
     await desktopPage.click('[data-model-trigger-child="true"]')
     await desktopPage.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
     await desktopPage.click('input[aria-label="Filter child models"]')
@@ -2484,7 +2492,18 @@ test('model columns preserve child policy and commit effort only after dragging 
     assert.equal(modelUpdateRequests.length, beforeDrag + 1)
     await desktopPage.waitForSelector('[data-model-child-mode="follow"]:not(:disabled)')
     await desktopPage.click('[data-model-child-mode="follow"]')
+    // Following this session clears only the child model; the explicit child effort stays visible and editable.
+    await desktopPage.waitForFunction(() => document.querySelector('[data-model-column="child"] [data-model-child-mode="follow"]')?.getAttribute('data-model-option-selected') === 'true')
+    assert.deepEqual(modelUpdateRequests.at(-1).body, { clear: true })
+    await desktopPage.waitForFunction(() => document.querySelector('[data-model-trigger-child="true"]')?.title === 'Children: Follow this session · High')
+    await desktopPage.waitForFunction(() => {
+      const input = document.querySelector('input[type="range"][aria-label="Child effort"]')
+      return input && !input.disabled && input.getAttribute('aria-valuetext') === 'Child effort: high'
+    })
+    assert.equal(await desktopPage.$eval('[data-model-selector-popup="true"]', el => el.getBoundingClientRect().height), popupHeight)
+    await desktopPage.click('button[aria-label="Child: Follow this session"]')
     await desktopPage.waitForSelector('[data-model-column="child"]', { hidden: true })
+    assert.deepEqual(modelUpdateRequests.at(-1).body, { childEffortDefault: null })
     assert.equal(await desktopPage.$('[data-model-trigger-child="true"]'), null)
     assert.equal(await desktopPage.$eval('[data-model-selector-popup="true"]', el => el.getBoundingClientRect().height), popupHeight)
 
