@@ -156,7 +156,7 @@ internal sealed class VectorService : IAsyncDisposable
 
     private async Task StartChildAsync()
     {
-        var name = "foxwarm-vector-" + Guid.NewGuid().ToString("N");
+        var name = Guid.NewGuid().ToString("N");
         var transport = new NamedPipeServerStream(
             name,
             PipeDirection.InOut,
