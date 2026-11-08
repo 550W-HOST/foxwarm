@@ -69,6 +69,7 @@ internal sealed partial class SessionCatalog : IDisposable
             Execute(connection, WaitPresenceIndexSql);
             Execute(connection, QuestionPresenceIndexSql);
             EnsureGroupObjects(connection);
+            EnsureActivityObjects(connection);
             db = connection;
             Volatile.Write(
                 ref readerConnectionString,

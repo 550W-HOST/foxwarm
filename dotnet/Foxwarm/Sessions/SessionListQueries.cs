@@ -15,7 +15,16 @@ internal sealed partial class SessionListQueries
     private SessionCatalog Catalog => runtime.Catalog;
     public string Revision => runtime.PresentationRevision;
 
-    public SessionListQueries(SessionRuntime runtime) => this.runtime = runtime;
+    private readonly Func<long> clock;
+
+    /// <summary>A Sidebar child window counts children active within this many milliseconds.</summary>
+    internal const long RecentChildWindowMilliseconds = 24L * 60 * 60 * 1000;
+
+    public SessionListQueries(SessionRuntime runtime, Func<long>? clock = null)
+    {
+        this.runtime = runtime;
+        this.clock = clock ?? (() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+    }
 
     public static string Mode(string? value) =>
         value is null or "default" ? "default"
@@ -23,6 +32,15 @@ internal sealed partial class SessionListQueries
         : throw new SessionListQueryException(
             "SESSION_LIST_MODE_INVALID",
             "mode must be default, time, or flat-time."
+        );
+
+    /// <summary>Whether a request asks for the recent-activity initial child window.</summary>
+    public static bool ChildWindow(string? value) =>
+        value is null ? false
+        : value == "recent" ? true
+        : throw new SessionListQueryException(
+            "SESSION_LIST_CHILD_WINDOW_INVALID",
+            "childWindow must be recent."
         );
 
     public static int Limit(string? value, int fallback, int max)
@@ -87,7 +105,14 @@ internal sealed partial class SessionListQueries
 
     private static string Id(JsonObject row) => SessionCatalog.Text(row["id"])!;
 
-    private static JsonArray Key(JsonObject row, string mode, bool child = false)
+    // Tree-mode Sidebar rows rank by subtree activity (own time or any descendant's, whichever
+    // is newest); Flat and Architecture rank by the row's own last message time.
+    private static JsonArray Key(
+        JsonObject row,
+        string mode,
+        bool child = false,
+        bool activity = false
+    )
     {
         var key = new JsonArray();
         if (!child)
@@ -98,7 +123,14 @@ internal sealed partial class SessionListQueries
             key.Add(SessionCatalog.Number(row["sidebarOrder"]) is null ? 1 : 0);
             key.Add(SessionCatalog.Number(row["sidebarOrder"]) ?? 0);
         }
-        key.Add(-(SessionCatalog.Number(row["lastMessageTime"]) ?? 0));
+        var own = SessionCatalog.Number(row["lastMessageTime"]) ?? 0;
+        key.Add(
+            -(
+                activity
+                    ? Math.Max(own, SessionCatalog.Number(row["subtreeActivityTime"]) ?? 0)
+                    : own
+            )
+        );
         key.Add(Id(row));
         return key;
     }
@@ -207,7 +239,13 @@ internal sealed partial class SessionListQueries
         }
     }
 
-    private string Cursor(JsonObject last, string mode, string scope, bool child) =>
+    private string Cursor(
+        JsonObject last,
+        string mode,
+        string scope,
+        bool child,
+        bool activity = false
+    ) =>
         Encode(
             new JsonObject
             {
@@ -216,7 +254,7 @@ internal sealed partial class SessionListQueries
                 ["mode"] = mode,
                 ["scope"] = scope,
                 ["revision"] = Revision,
-                ["key"] = Key(last, mode, child),
+                ["key"] = Key(last, mode, child, activity),
             }
         );
 
@@ -235,6 +273,7 @@ internal sealed partial class SessionListQueries
             : roots && mode != "flat-time" ? "roots"
             : "flat";
         var decoded = Decode(cursor, mode, scope, false);
+        var activity = mode != "flat-time" && agent is null;
         (CatalogPage Page, JsonObject[] Candidates) Read(JsonArray? after)
         {
             var page = Catalog.Page(mode, limit, after, roots, agent, pinnedOnly);
@@ -249,8 +288,8 @@ internal sealed partial class SessionListQueries
                         ? SessionCatalog.Flag(row["pinned"])
                         : InScope(row, mode, roots, agent, scopes.GetValueOrDefault(Id(row)))
                 )
-                .Where(row => after is null || Compare(Key(row, mode), after) > 0)
-                .OrderBy(row => Key(row, mode), Comparer<JsonArray>.Create(Compare))
+                .Where(row => after is null || Compare(Key(row, mode, false, activity), after) > 0)
+                .OrderBy(row => Key(row, mode, false, activity), Comparer<JsonArray>.Create(Compare))
                 .ToArray();
             return (page, ordered);
         }
@@ -269,7 +308,7 @@ internal sealed partial class SessionListQueries
             ["reset"] = reset,
             ["nextCursor"] =
                 (result.Page.HasMore || result.Candidates.Length > limit) && selected.Length > 0
-                    ? Cursor(selected[^1], mode, scope, false)
+                    ? Cursor(selected[^1], mode, scope, false, activity)
                     : null,
         };
     }
@@ -279,7 +318,8 @@ internal sealed partial class SessionListQueries
         string mode,
         int limit,
         string? agent = null,
-        bool previews = false
+        bool previews = false,
+        IReadOnlySet<string>? recentWindow = null
     )
     {
         requests = requests
@@ -293,6 +333,20 @@ internal sealed partial class SessionListQueries
         var reset = decoded.Any(cursor =>
             cursor is not null && SessionCatalog.Text(cursor["revision"]) != Revision
         );
+        var activity = agent is null && mode != "flat-time";
+        var first = requests
+            .Where((request, index) => reset || decoded[index] is null)
+            .Select(request => request.Id)
+            .ToHashSet(StringComparer.Ordinal);
+        // `limit` is the largest window. A flagged parent's first page holds as many children
+        // as were active within the window, between one and `limit`; continuations are sized
+        // by `limit` as usual.
+        var limits = RecentWindows(
+            recentWindow is null || agent is not null
+                ? []
+                : first.Where(recentWindow.Contains).ToArray(),
+            limit
+        );
         var baseRows = Catalog.Children(
             requests
                 .Select(
@@ -302,7 +356,8 @@ internal sealed partial class SessionListQueries
                 .ToArray(),
             mode,
             limit,
-            agent
+            agent,
+            limits
         );
         var candidates = runtime.Projections(
             baseRows
@@ -316,6 +371,7 @@ internal sealed partial class SessionListQueries
                 (group, index) =>
                 {
                     var after = reset ? null : decoded[index]?["key"] as JsonArray;
+                    var take = limits.GetValueOrDefault(group.Parent, limit);
                     var all = candidates
                         .Where(row =>
                             SessionCatalog.Text(row["parentSessionId"]) == group.Parent
@@ -325,10 +381,15 @@ internal sealed partial class SessionListQueries
                                     : SessionCatalog.Text(row["agent"]) == agent
                             )
                         )
-                        .Where(row => after is null || Compare(Key(row, mode, true), after) > 0)
-                        .OrderBy(row => Key(row, mode, true), Comparer<JsonArray>.Create(Compare))
+                        .Where(row =>
+                            after is null || Compare(Key(row, mode, true, activity), after) > 0
+                        )
+                        .OrderBy(
+                            row => Key(row, mode, true, activity),
+                            Comparer<JsonArray>.Create(Compare)
+                        )
                         .ToArray();
-                    var selected = all.Take(limit).ToArray();
+                    var selected = all.Take(take).ToArray();
                     var total = previews ? Math.Max(group.Total, selected.Length) : group.Total;
                     return new JsonObject
                     {
@@ -340,15 +401,30 @@ internal sealed partial class SessionListQueries
                             (
                                 previews
                                     ? total > selected.Length
-                                    : group.HasMore || all.Length > limit
+                                    : group.HasMore || all.Length > take
                             )
                             && selected.Length > 0
-                                ? Cursor(selected[^1], mode, Scope(group.Parent), true)
+                                ? Cursor(selected[^1], mode, Scope(group.Parent), true, activity)
                                 : null,
                     };
                 }
             )
             .ToArray();
+    }
+
+    // Window sizes for parents showing their initial child page: the number of unpinned,
+    // unarchived children whose subtree activity is within the last 24 hours, clamped to
+    // 1..max. The count stops at max, so it stays one bounded index seek per parent.
+    private Dictionary<string, int> RecentWindows(string[] parents, int max)
+    {
+        var result = new Dictionary<string, int>(StringComparer.Ordinal);
+        var since = clock() - RecentChildWindowMilliseconds;
+        foreach (var chunk in parents.Chunk(100))
+        foreach (var pair in Catalog.RecentChildCounts(chunk, since, max))
+            result[pair.Key] = Math.Clamp(pair.Value, 1, max);
+        foreach (var parent in parents)
+            result.TryAdd(parent, 1);
+        return result;
     }
 
     public JsonArray Path(string id) =>

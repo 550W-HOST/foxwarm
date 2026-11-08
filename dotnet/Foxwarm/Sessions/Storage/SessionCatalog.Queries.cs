@@ -43,18 +43,15 @@ internal sealed partial class SessionCatalog
         }
     }
 
-    private static string[] OrderColumns(string mode, bool child = false) =>
-        child
+    // Tree-mode Sidebar queries rank by subtree activity; Flat, Architecture and every other
+    // reader keep ranking by the row's own last message time.
+    private static string[] OrderColumns(string mode, bool child = false, bool activity = false)
+    {
+        var rank = activity ? "subtree_rank" : "recent_rank";
+        return child
             ? mode == "default"
-                ?
-                [
-                    "archived",
-                    "sidebar_order_missing",
-                    "sidebar_order_value",
-                    "recent_rank",
-                    "session_id",
-                ]
-                : ["archived", "recent_rank", "session_id"]
+                ? ["archived", "sidebar_order_missing", "sidebar_order_value", rank, "session_id"]
+                : ["archived", rank, "session_id"]
             : mode == "default"
                 ?
                 [
@@ -62,10 +59,11 @@ internal sealed partial class SessionCatalog
                     "archived",
                     "sidebar_order_missing",
                     "sidebar_order_value",
-                    "recent_rank",
+                    rank,
                     "session_id",
                 ]
-                : ["pinned_rank", "archived", "recent_rank", "session_id"];
+                : ["pinned_rank", "archived", rank, "session_id"];
+    }
 
     private static object?[] CursorArgs(JsonArray key) =>
         key.Select((value, index) => index == key.Count - 1 ? (object?)Text(value) : Number(value))
@@ -138,7 +136,7 @@ internal sealed partial class SessionCatalog
     {
         lock (gate)
         {
-            var columns = OrderColumns(mode);
+            var columns = OrderColumns(mode, false, mode != "flat-time" && agent is null);
             var terms = new List<string>();
             var args = new List<object?>();
             string Param(object? value)
@@ -187,7 +185,8 @@ internal sealed partial class SessionCatalog
         IReadOnlyList<(string Id, JsonArray? After)> requests,
         string mode,
         int limit,
-        string? agent
+        string? agent,
+        IReadOnlyDictionary<string, int>? limits = null
     )
     {
         if (requests.Count == 0)
@@ -199,7 +198,8 @@ internal sealed partial class SessionCatalog
         lock (gate)
         {
             EnsureInitialized();
-            var columns = OrderColumns(mode, true);
+            var activity = agent is null && mode != "flat-time";
+            var columns = OrderColumns(mode, true, activity);
             var args = new List<object?>();
             var branches = new List<string>();
             string Param(object? value)
@@ -209,10 +209,15 @@ internal sealed partial class SessionCatalog
             }
             var index =
                 agent is not null ? "idx_session_catalog_parent_agent_architecture"
-                : mode == "default" ? "idx_session_catalog_parent_default"
-                : "idx_session_catalog_parent_time";
+                : !activity ? "idx_session_catalog_parent_time"
+                : mode == "default" ? "idx_session_catalog_parent_activity_default"
+                : "idx_session_catalog_parent_activity";
             foreach (var request in requests)
             {
+                // A per-parent limit sizes that parent's window; others use the shared limit.
+                var take = limits is not null && limits.TryGetValue(request.Id, out var own)
+                    ? own
+                    : limit;
                 var where =
                     "parent_session_id="
                     + Param(request.Id)
@@ -225,7 +230,7 @@ internal sealed partial class SessionCatalog
                         + string.Join(',', CursorArgs(request.After).Select(Param))
                         + ")";
                 branches.Add(
-                    $"SELECT * FROM (SELECT {Columns},parent_session_id FROM session_catalog INDEXED BY {index} WHERE {where} ORDER BY {string.Join(',', columns)} LIMIT {Param(limit + 1)})"
+                    $"SELECT * FROM (SELECT {Columns},parent_session_id FROM session_catalog INDEXED BY {index} WHERE {where} ORDER BY {string.Join(',', columns)} LIMIT {Param(take + 1)})"
                 );
             }
             var sql = string.Join(" UNION ALL ", branches);
@@ -251,11 +256,14 @@ internal sealed partial class SessionCatalog
                 .Select(request =>
                 {
                     var group = grouped.GetValueOrDefault(request.Id) ?? [];
+                    var take = limits is not null && limits.TryGetValue(request.Id, out var own)
+                        ? own
+                        : limit;
                     return new CatalogChildren(
                         request.Id,
-                        group.Take(limit).ToArray(),
+                        group.Take(take).ToArray(),
                         totals.GetValueOrDefault(request.Id),
-                        group.Count > limit
+                        group.Count > take
                     );
                 })
                 .ToArray();

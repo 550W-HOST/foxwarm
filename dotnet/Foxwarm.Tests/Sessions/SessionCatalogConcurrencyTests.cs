@@ -101,7 +101,7 @@ public sealed class SessionCatalogConcurrencyTests(ITestOutputHelper output)
         {
             if (
                 !sql.Contains(
-                    "INDEXED BY idx_session_catalog_parent_default",
+                    "INDEXED BY idx_session_catalog_parent_activity_default",
                     StringComparison.Ordinal
                 )
             )

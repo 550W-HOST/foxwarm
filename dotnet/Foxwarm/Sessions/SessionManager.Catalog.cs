@@ -315,8 +315,11 @@ internal sealed partial class SessionManager
         }
         var scopes = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
         var childCounts = new Dictionary<string, long>(StringComparer.Ordinal);
+        var subtreeTimes = new Dictionary<string, double>(StringComparer.Ordinal);
         foreach (var chunk in all.Keys.Chunk(200))
         {
+            foreach (var pair in Catalog.SubtreeTimes(chunk))
+                subtreeTimes[pair.Key] = pair.Value;
             foreach (var pair in Catalog.Scopes(chunk))
                 scopes[pair.Key] = pair.Value;
             foreach (var pair in Catalog.ChildCounts(chunk))
@@ -347,6 +350,12 @@ internal sealed partial class SessionManager
                     dto["agent"] = scope["agent"]?.DeepClone();
                 }
                 dto["childTotal"] = childCounts.GetValueOrDefault(id);
+                // Newest message among the row and its real descendants; Sidebar tree ordering
+                // only. A running local row can be newer than its persisted catalog value.
+                dto["subtreeActivityTime"] = Math.Max(
+                    subtreeTimes.GetValueOrDefault(id),
+                    SessionCatalog.Number(row["meta"]?["lastMessageTime"]) ?? 0
+                );
                 dto["sequenceMessageCount"] = sequences.GetValueOrDefault(id);
                 return dto;
             })
