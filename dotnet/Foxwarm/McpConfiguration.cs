@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
 using Foxwarm.Tools;
@@ -237,7 +238,11 @@ internal sealed class McpConfiguration(string root, string? configPath = null)
 
     internal string Redact(string message, params JsonObject[] captured)
     {
-        var configs = Snapshot().Select(pair => pair.Value).OfType<JsonObject>().Concat(captured);
+        var configs = Snapshot()
+            .Select(pair => pair.Value)
+            .OfType<JsonObject>()
+            .Concat(captured)
+            .ToArray();
         var secrets = configs
             .SelectMany(config =>
                 new[] { config["token"], config["oauth"]?["clientSecret"] }
@@ -249,12 +254,38 @@ internal sealed class McpConfiguration(string root, string? configPath = null)
                             : []
                     )
                     .Select(SessionWait.Text)
-                    .Concat(UrlSecrets(SessionWait.Text(config["url"])))
             )
             .Where(value => !string.IsNullOrEmpty(value));
+        var urlSecrets = configs.SelectMany(config => UrlSecrets(SessionWait.Text(config["url"])));
+        var normalizedMessage = NormalizeUrlEscapes(message);
         return secrets.Any(secret => message.Contains(secret!, StringComparison.Ordinal))
+            || urlSecrets.Any(secret =>
+                normalizedMessage.Contains(NormalizeUrlEscapes(secret), StringComparison.Ordinal)
+            )
             ? "MCP operation failed because the underlying error contained configured secret data."
             : message;
+    }
+
+    private static string NormalizeUrlEscapes(string value)
+    {
+        var normalized = new StringBuilder(value.Length);
+        for (var i = 0; i < value.Length; i++)
+        {
+            if (
+                value[i] == '%'
+                && i + 2 < value.Length
+                && Uri.IsHexDigit(value[i + 1])
+                && Uri.IsHexDigit(value[i + 2])
+            )
+            {
+                normalized.Append('%');
+                normalized.Append(char.ToUpperInvariant(value[++i]));
+                normalized.Append(char.ToUpperInvariant(value[++i]));
+            }
+            else
+                normalized.Append(value[i]);
+        }
+        return normalized.ToString();
     }
 
     // The URL parts that server summaries redact: user info, each query value (or
@@ -292,9 +323,10 @@ internal sealed class McpConfiguration(string root, string? configPath = null)
         {
             var separator = userInfo.IndexOf(':');
             yield return userInfo;
-            yield return separator < 0 ? userInfo : userInfo[..separator];
-            if (separator >= 0)
+            if (separator >= 0 && separator < userInfo.Length - 1)
                 yield return userInfo[(separator + 1)..];
+            else if (separator >= 0)
+                yield return userInfo[..separator];
         }
         var parts = query
             .Split('&', StringSplitOptions.RemoveEmptyEntries)
