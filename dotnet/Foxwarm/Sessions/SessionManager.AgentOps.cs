@@ -292,7 +292,10 @@ internal sealed partial class SessionManager
         SessionOwner Child,
         bool Delivered,
         bool CallVisible
-    );
+    )
+    {
+        internal CreationModelPlan? ModelPlan { get; init; }
+    }
 
     /// <summary>
     /// Creates a child. A Task-linked creation never delivers initialMessage itself; the Task
@@ -312,7 +315,8 @@ internal sealed partial class SessionManager
         string? initialNode = null,
         bool userInitiated = false,
         string runtime = "foxwarm",
-        string? creatorCallId = null
+        string? creatorCallId = null,
+        JsonObject? model = null
     )
     {
         var instructed = !string.IsNullOrEmpty(initialMessage);
@@ -351,10 +355,11 @@ internal sealed partial class SessionManager
         var gate = CreationKey(allocationBase);
         await gate.WaitAsync();
         SessionOwner child;
+        CreationModelPlan modelPlan;
         try
         {
             if (fork)
-                (child, callVisible) = await ForkLockedAsync(
+                (child, callVisible, modelPlan) = await ForkLockedAsync(
                     parent,
                     suffix,
                     true,
@@ -363,7 +368,8 @@ internal sealed partial class SessionManager
                     taskId,
                     initialNode: initialNode,
                     creatorCallId: creatorCallId,
-                    instructed: instructed
+                    instructed: instructed,
+                    suggestedModel: model
                 );
             else
             {
@@ -377,21 +383,19 @@ internal sealed partial class SessionManager
                 for (var serial = 2; await IdReservedAsync(candidate); serial++)
                     candidate = baseId + "_" + serial.ToString(CultureInfo.InvariantCulture);
                 var parentEnvelope = parent.Entry.Snapshot().AuthorityEnvelope;
-                var childRawModel =
-                    forceModel?["modelId"]?.GetValue<string>()
-                    ?? parentEnvelope["childModelDefault"]?.GetValue<string>()
-                    ?? parentEnvelope["model"]?.GetValue<string>();
-                var childRawEffort =
-                    forceModel?["effort"]?.GetValue<string>()
-                    ?? parentEnvelope["childEffortDefault"]?.GetValue<string>()
-                    ?? parentEnvelope["effort"]?.GetValue<string>();
+                modelPlan = PlanCreationModel(
+                    parentEnvelope,
+                    forceModel,
+                    model,
+                    ignoreSuggested: runtime == ClaudeRuntimeState.Kind
+                );
                 child = await CreateNamedLockedAsync(
                     targetAgent,
                     candidate[(candidate.IndexOf('/') + 1)..],
                     parentId,
                     displayName,
-                    (childRawModel, childRawEffort),
-                    forceModel,
+                    modelPlan.Inherited,
+                    modelPlan.Force,
                     candidate,
                     targetAgent == parent.Agent ? AgentMemory.Selection(parentEnvelope) : null,
                     // Only a same-Agent parent supplies its Node; the target's defaults follow.
@@ -450,11 +454,11 @@ internal sealed partial class SessionManager
             gate.Release();
         }
         if (taskId is not null || !instructed)
-            return new(child, false, callVisible);
+            return new(child, false, callVisible) { ModelPlan = modelPlan };
         if (callVisible)
         {
             StartForkedChild(child);
-            return new(child, true, true);
+            return new(child, true, true) { ModelPlan = modelPlan };
         }
         try
         {
@@ -472,7 +476,7 @@ internal sealed partial class SessionManager
                 committed
             );
         }
-        return new(child, true, false);
+        return new(child, true, false) { ModelPlan = modelPlan };
     }
 
     // Continues the child's copied turn: the creating call's result is already in its history.

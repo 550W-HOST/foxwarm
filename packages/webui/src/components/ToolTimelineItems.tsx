@@ -152,7 +152,7 @@ export const getToolCallSearchText = (call: FunctionCall): string => {
   }
   if (call.name === 'exec' || call.name === 'run_script') return executionArgumentsSearchText(call)
   if (call.name === 'send_to_session') return [args.sessionId, typeof args.message === 'string' ? args.message : formatCompactObjectPreview(args.message)].join('\u0000')
-  if (call.name === 'create_child_session') return [args.suffix, args.taskId, args.agentName, args.displayName, args.node, args.afterSend, typeof args.forceModel === 'object' ? formatCompactObjectPreview(args.forceModel) : args.forceModel, args.message].filter(value => typeof value === 'string').join('\u0000')
+  if (call.name === 'create_child_session') return [args.suffix, args.taskId, args.agentName, args.displayName, args.node, args.afterSend, typeof args.model === 'object' ? formatCompactObjectPreview(args.model) : args.model, typeof args.forceModel === 'object' ? formatCompactObjectPreview(args.forceModel) : args.forceModel, args.message].filter(value => typeof value === 'string').join('\u0000')
   return formatCompactObjectPreview(call.name === 'session' ? call.args || { action: 'status' } : call.args)
 }
 
@@ -618,6 +618,7 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
       ['Agent', call.args.agentName],
       ['Display name', call.args.displayName],
       ['Node', call.args.node],
+      ['Model', call.args.model],
       ['Force model', call.args.forceModel],
       ['After send', call.args.afterSend],
     ] as Array<[string, unknown]>).filter(([, value]) => value !== undefined && value !== null && value !== '')

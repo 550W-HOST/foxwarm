@@ -14,7 +14,20 @@ internal static class AgentToolDefinitions
         };
 
     private const string ForceModelDescription =
-        "Only use when the user explicitly requests a model or effort override for this task or session. Otherwise omit this parameter to use the normal inherited defaults; an empty object also leaves them unchanged.";
+        "Only use when the user explicitly requests a model or effort for this task or session. Takes precedence over `model` and this Session's child settings. Same fields as `model`.";
+
+    private const string ModelDescription =
+        "Model or effort suited to this task. This Session's child settings, which the user may have chosen, take precedence. Choose from the available models in your instructions by their descriptions; omit to use the normal defaults.";
+
+    private static readonly string[] EffortLevels =
+    [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+    ];
 
     private static JsonObject String(string description) =>
         new() { ["type"] = "string", ["description"] = description };
@@ -39,20 +52,34 @@ internal static class AgentToolDefinitions
             ["description"] = ForceModelDescription,
             ["properties"] = new JsonObject
             {
-                ["modelId"] = String("Configured model key to use."),
+                ["modelId"] = new JsonObject { ["type"] = "string" },
+                ["effort"] = new JsonObject { ["type"] = "string", ["enum"] = EffortEnum() },
+            },
+            ["required"] = new JsonArray(),
+            ["additionalProperties"] = false,
+        };
+
+    private static JsonObject ModelRequest() =>
+        new()
+        {
+            ["type"] = "object",
+            ["description"] = ModelDescription,
+            ["properties"] = new JsonObject
+            {
+                ["modelId"] = String(
+                    "Model key, normally one of the available models in your instructions."
+                ),
                 ["effort"] = Choice(
-                    "Effort override. Can be set without modelId to use the otherwise selected model.",
-                    "none",
-                    "low",
-                    "medium",
-                    "high",
-                    "xhigh",
-                    "max"
+                    "Effort level. Can be set without modelId to apply to the otherwise selected model.",
+                    EffortLevels
                 ),
             },
             ["required"] = new JsonArray(),
             ["additionalProperties"] = false,
         };
+
+    private static JsonArray EffortEnum() =>
+        new(EffortLevels.Select(value => (JsonNode?)JsonValue.Create(value)).ToArray());
 
     private static JsonObject Parameters(JsonObject properties, params string[] required) =>
         new()
@@ -351,6 +378,7 @@ internal static class AgentToolDefinitions
                                 "File path. Relative paths use the agent directory; absolute paths and ~/ paths are accepted."
                             ),
                         },
+                        ["model"] = ModelRequest(),
                         ["forceModel"] = ForceModel(),
                     },
                     "agentName",
@@ -400,6 +428,7 @@ internal static class AgentToolDefinitions
                         ["node"] = String(
                             "Node for the new child Session. If omitted, a child in this Session's Agent uses this Session's current Node; a child in another Agent uses that Agent's default Node, then the installation default, then master. An isolated target Agent uses its bound Node."
                         ),
+                        ["model"] = ModelRequest(),
                         ["forceModel"] = ForceModel(),
                         ["handoffConfirmation"] = String(HandoffConfirmation.Description),
                     },

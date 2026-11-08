@@ -127,7 +127,7 @@ Persisted prompt-cache keys follow the model-facing prefix, not session identity
 
 ### D-lifecycle-model-effort-inheritance
 
-The observable prospective-pair/default contract and rationale are owned by [Sessions and Agents](../behaviors/sessions-and-agents.md#prospective-model-and-effort-are-a-pair). `resolveSpawnedSessionModelEffort` and prospective-setting normalization preserve raw unset versus explicit values. Timer firing passes one current models-config snapshot through normalization and creation validation, so those steps cannot observe different configurations; the snapshot is not persisted. Model-setting edits preserve compatible effort or clear incompatible effort without introducing a timer effort argument.
+The observable prospective-pair/default contract and rationale, including the `model` suggestion that ranks between the source's future-child defaults and its current selection, are owned by [Sessions and Agents](../behaviors/sessions-and-agents.md#prospective-model-and-effort-are-a-pair). `resolveSpawnedSessionModelEffort` and prospective-setting normalization preserve raw unset versus explicit values. Timer firing passes one current models-config snapshot through normalization and creation validation, so those steps cannot observe different configurations; the snapshot is not persisted. Model-setting edits preserve compatible effort or clear incompatible effort without introducing a timer effort argument.
 
 ### D-lifecycle-manual-fork-event
 

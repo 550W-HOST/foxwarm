@@ -88,7 +88,11 @@ internal sealed partial class SessionManager
     /// creating tool call in the copied tail; when that call is present the child receives its
     /// own result for it and can read the call's instruction directly (CallVisible).
     /// </summary>
-    private async Task<(SessionOwner Owner, bool CallVisible)> ForkLockedAsync(
+    private async Task<(
+        SessionOwner Owner,
+        bool CallVisible,
+        CreationModelPlan ModelPlan
+    )> ForkLockedAsync(
         SessionOwner parent,
         string suffix,
         bool childMode,
@@ -98,7 +102,8 @@ internal sealed partial class SessionManager
         bool userInitiated = false,
         string? initialNode = null,
         string? creatorCallId = null,
-        bool instructed = false
+        bool instructed = false,
+        JsonObject? suggestedModel = null
     )
     {
         ClaudeRuntimeState.RequireFoxwarm(parent, "Fork");
@@ -130,17 +135,17 @@ internal sealed partial class SessionManager
                 ? Array.FindIndex(tailCalls, call => SessionWait.Text(call["id"]) == creatorCallId)
                 : -1;
         var callVisible = creator >= 0;
+        CreationModelPlan? modelPlan = null;
         var created = await WithCreationIdentityAsync(
             id,
             async () =>
             {
-                var inherited = (
-                    SessionWait.Text(original.AuthorityEnvelope["childModelDefault"])
-                        ?? SessionWait.Text(original.AuthorityEnvelope["model"]),
-                    SessionWait.Text(original.AuthorityEnvelope["childEffortDefault"])
-                        ?? SessionWait.Text(original.AuthorityEnvelope["effort"])
+                modelPlan = PlanCreationModel(
+                    original.AuthorityEnvelope,
+                    forceModel,
+                    suggestedModel
                 );
-                var settings = ValidateModelSettings(inherited, forceModel);
+                var settings = ValidateModelSettings(modelPlan.Inherited, modelPlan.Force);
                 var envelope = new JsonObject
                 {
                     ["agent"] = parent.Agent,
@@ -316,7 +321,7 @@ internal sealed partial class SessionManager
                 }
             }
         );
-        return (created, callVisible);
+        return (created, callVisible, modelPlan!);
     }
 
     private async Task CompensateCreatedBranchAsync(

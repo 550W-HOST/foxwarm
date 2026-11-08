@@ -72,7 +72,7 @@ public sealed partial class SessionCreationParityTests
             ),
         };
 
-    private static void RegisterAgentTools(ExternalChannelFixture f)
+    internal static void RegisterAgentTools(ExternalChannelFixture f)
     {
         var definitions = WorkspaceTools.Definitions();
         foreach (

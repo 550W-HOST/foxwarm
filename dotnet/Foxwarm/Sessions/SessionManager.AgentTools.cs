@@ -301,11 +301,13 @@ internal sealed partial class SessionManager
                             "node",
                             "runtime",
                             "forceModel",
+                            "model",
                             "systemPromptFiles",
                         ],
                         ["agentName", "sessionName"]
                     );
-                    var forceModel = OptionalForceModel(args);
+                    var forceModel = OptionalModelRequest(args, "forceModel");
+                    var suggestedModel = OptionalModelRequest(args, "model");
                     if (
                         args.ContainsKey("systemPromptFiles")
                         && args["systemPromptFiles"] is not JsonArray
@@ -325,29 +327,31 @@ internal sealed partial class SessionManager
                         );
                     RequireCreationParent(source.Agent, OptionalString(args, "parentSessionId"));
                     var settings = source.Entry.Snapshot().AuthorityEnvelope;
+                    var runtime = ClaudeRuntimeState.ValidateSelection(
+                        args["runtime"],
+                        args.ContainsKey("runtime")
+                    );
+                    var modelPlan = PlanCreationModel(
+                        settings,
+                        forceModel,
+                        suggestedModel,
+                        ignoreSuggested: runtime == ClaudeRuntimeState.Kind
+                    );
                     var created = await CreateNamedAsync(
                         agentName,
                         RequiredString(args, "sessionName"),
                         OptionalString(args, "displayName"),
-                        forceModel,
+                        modelPlan.Force,
                         initialNode: CreationNode(args),
-                        inherited: (
-                            SessionWait.Text(settings["childModelDefault"])
-                                ?? SessionWait.Text(settings["model"]),
-                            SessionWait.Text(settings["childEffortDefault"])
-                                ?? SessionWait.Text(settings["effort"])
-                        ),
+                        inherited: modelPlan.Inherited,
                         selectedFiles: selection,
                         parentSessionId: OptionalString(args, "parentSessionId"),
-                        runtime: ClaudeRuntimeState.ValidateSelection(
-                            args["runtime"],
-                            args.ContainsKey("runtime")
-                        )
+                        runtime: runtime
                     );
-                    return (
-                        Output($"Created Session {created.Id} under Agent {created.Agent}."),
-                        false
-                    );
+                    var createdText = $"Created Session {created.Id} under Agent {created.Agent}.";
+                    if (DescribeCreationModel(modelPlan, created) is { } modelText)
+                        createdText += " " + modelText;
+                    return (Output(createdText), false);
                 }
                 case "create_child_session":
                 {
@@ -362,6 +366,7 @@ internal sealed partial class SessionManager
                             "afterSend",
                             "runtime",
                             "forceModel",
+                            "model",
                             "node",
                             "fork",
                             "taskId",
@@ -369,7 +374,9 @@ internal sealed partial class SessionManager
                         ],
                         ["suffix"]
                     );
-                    var forceModel = OptionalForceModel(args);
+                    var forceModel = OptionalModelRequest(args, "forceModel");
+                    var suggestedModel = OptionalModelRequest(args, "model");
+                    CreationModelPlan? modelPlan = null;
                     var after = AfterSend(args);
                     var taskId = OptionalString(args, "taskId");
                     if (
@@ -403,11 +410,13 @@ internal sealed partial class SessionManager
                                 args["runtime"],
                                 args.ContainsKey("runtime")
                             ),
-                            creatorCallId: modelCallId
+                            creatorCallId: modelCallId,
+                            model: suggestedModel
                         );
                     if (taskId is null)
                     {
                         var created = await CreateAsync();
+                        modelPlan = created.ModelPlan;
                         child = created.Child;
                         delivered = created.Delivered;
                         callVisible = created.CallVisible;
@@ -421,6 +430,7 @@ internal sealed partial class SessionManager
                             async () =>
                             {
                                 var created = await CreateAsync();
+                                modelPlan = created.ModelPlan;
                                 callVisible = created.CallVisible;
                                 return created.Child;
                             },
@@ -444,6 +454,15 @@ internal sealed partial class SessionManager
                         childOutput += ". Initial message sent.";
                     else if (fork)
                         childOutput += ". It stays idle until it receives a message.";
+                    if (
+                        modelPlan is not null
+                        && DescribeCreationModel(modelPlan, child) is { } childModelText
+                    )
+                    {
+                        if (!childOutput.EndsWith('.'))
+                            childOutput += ".";
+                        childOutput += " " + childModelText;
+                    }
                     var childResult = Output(
                         childOutput,
                         delivered && after == "wait" ? child.Id : null
@@ -609,12 +628,12 @@ internal sealed partial class SessionManager
         return value;
     }
 
-    private static JsonObject? OptionalForceModel(JsonObject args)
+    private static JsonObject? OptionalModelRequest(JsonObject args, string name)
     {
-        if (!args.ContainsKey("forceModel"))
+        if (!args.ContainsKey(name))
             return null;
-        if (args["forceModel"] is not JsonObject force)
-            throw new InvalidDataException("forceModel must be an object.");
+        if (args[name] is not JsonObject force)
+            throw new InvalidDataException($"{name} must be an object.");
         Keys(force, ["modelId", "effort"], []);
         if (force.ContainsKey("modelId"))
             _ = RequiredString(force, "modelId");
