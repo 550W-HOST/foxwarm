@@ -340,7 +340,7 @@ internal static class AgentToolDefinitions
                             "Existing session to record as the new session's parent."
                         ),
                         ["node"] = String(
-                            "Node for the new Session. If omitted, use the target Agent's default Node, then the installation default, then master. An isolated target Agent uses its bound Node."
+                            "Node for the new Session. If omitted, use the target Agent's default Node, then the installation default, then master; a recorded parent does not affect placement. An isolated target Agent uses its bound Node."
                         ),
                         ["systemPromptFiles"] = new JsonObject
                         {
