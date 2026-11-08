@@ -209,7 +209,16 @@ try {
   assert.equal((await send(child, 'hash-reordered', 'DONE-hash-reordered-' + expectedHash))[0].label, expectedHash)
   await page.evaluate(id => window.foxwarmTest.switchToSession(id), child); await page.waitForSelector(`[data-workbench-content-tab=${JSON.stringify('chat:' + child)}] .foxwarm-chat-root[data-chat-connection-state="connected"]`, { visible: true }); await page.locator('.foxwarm-model-selector-trigger').click()
   await page.waitForSelector('[data-model-column="current"] [data-model-option-key="pool"]')
-  assert((await page.evaluate(() => document.body.innerText)).toLowerCase().includes('model'))
+  // The child's picker shows its inherited virtual model and effort, with child defaults still reachable.
+  const childPicker = await page.evaluate(() => ({
+    name: document.querySelector('[data-model-trigger-name="true"]')?.textContent?.trim(),
+    effort: document.querySelector('[data-model-trigger-effort="true"]')?.textContent?.trim(),
+    selected: [...document.querySelectorAll('[data-model-column="current"] [data-model-option-selected="true"]')].map(row => row.getAttribute('data-model-option-key')),
+    poolRoute: document.querySelector('[data-model-column="current"] [data-model-option-key="pool"] [data-model-option-target="true"]')?.textContent?.trim(),
+    childDefaults: !!document.querySelector('[data-model-child-mode="specific"]'),
+  }))
+  assert.equal(childPicker.name, 'pool', JSON.stringify(childPicker)); assert.equal(childPicker.effort, 'Max', JSON.stringify(childPicker))
+  assert.deepEqual(childPicker.selected, ['pool']); assert.match(childPicker.poolRoute || '', /^session-hash: /); assert.equal(childPicker.childDefaults, true)
 
   await select(main, 'messages');
   for (let index = 0; index < 15; index++) await send(main, 'seed-' + index + ' ' + ('retained-routing-context-' + index + '-').repeat(100), 'DONE-seed-' + index + '-c')
