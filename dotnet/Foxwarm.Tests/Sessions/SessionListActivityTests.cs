@@ -145,11 +145,11 @@ public sealed class SessionListActivityTests
     }
 
     [Theory]
-    [InlineData(0, 1)]
-    [InlineData(1, 1)]
+    [InlineData(0, 3)]
+    [InlineData(1, 3)]
     [InlineData(3, 3)]
     [InlineData(7, 5)]
-    public async Task The_initial_child_window_is_the_recent_child_count_clamped_to_one_through_five(
+    public async Task The_initial_child_window_is_the_recent_child_count_clamped_to_three_through_five(
         int recent,
         int expected
     )
@@ -202,8 +202,8 @@ public sealed class SessionListActivityTests
         await using var _ = manager;
         var window = new HashSet<string>(StringComparer.Ordinal) { "p" };
         var page = view.ChildPages([("p", null)], "time", 5, previews: true, recentWindow: window)[0];
-        Assert.Equal(["p/quiet", "p/edge-in"], Ids(page).Take(2));
-        Assert.Equal(2, Ids(page).Length);
+        // Two children are recent; the window still holds its minimum of three.
+        Assert.Equal(["p/quiet", "p/edge-in", "p/edge-out"], Ids(page));
     }
 
     [Fact]

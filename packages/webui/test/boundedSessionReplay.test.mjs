@@ -251,7 +251,7 @@ test('exact A miss preserves newer canonical S and its replacement alias B', () 
 })
 
 // A stand-in for the server's initial child window: the count of children active in the
-// last 24 hours, clamped to one through five, for a request flagged `window: 'recent'`
+// last 24 hours, clamped to three through five, for a request flagged `window: 'recent'`
 // without a cursor. Other requests page by the requested limit.
 function windowServer(children) {
   const calls = []
@@ -261,7 +261,7 @@ function windowServer(children) {
       const rows = children.get(parent.parentSessionId) || []
       const offset = parent.cursor ? Number(parent.cursor) : 0
       const size = parent.window === 'recent' && !parent.cursor
-        ? Math.min(Math.max(rows.filter(row => row.recent).length, 1), Math.min(limit, 5)) : limit
+        ? Math.min(Math.max(rows.filter(row => row.recent).length, 3), Math.min(limit, 5)) : limit
       const items = rows.slice(offset, offset + size).map(row => row.id)
       return { parentSessionId: parent.parentSessionId, items, total: rows.length, nextCursor: offset + items.length < rows.length ? String(offset + items.length) : null }
     }) }
@@ -273,8 +273,8 @@ const childRows = (parent, recent, old = 4) => [
   ...Array.from({ length: old }, (_, index) => ({ id: `${parent}-old-${index}`, recent: false })),
 ]
 
-test('an initial branch window holds the recent children clamped to one through five', async () => {
-  for (const [recent, expected] of [[0, 1], [1, 1], [3, 3], [7, 5]]) {
+test('an initial branch window holds the recent children clamped to three through five', async () => {
+  for (const [recent, expected] of [[0, 3], [1, 3], [3, 3], [7, 5]]) {
     const server = windowServer(new Map([['p', childRows('p', recent)]]))
     const result = await replay.replayCursorBranches({ targets: new Map([['p', replay.INITIAL_BRANCH_WINDOW]]), pageCap: 20, parentBatchCap: 20, fetchBatch: server.fetchBatch })
     const branch = result.get('p')

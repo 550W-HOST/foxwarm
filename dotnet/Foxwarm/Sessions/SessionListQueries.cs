@@ -23,6 +23,9 @@ internal sealed partial class SessionListQueries
     /// <summary>The largest initial child window.</summary>
     internal const int RecentChildWindowMax = 5;
 
+    /// <summary>The smallest initial child window, when that many children exist.</summary>
+    internal const int RecentChildWindowMin = 3;
+
     public SessionListQueries(SessionRuntime runtime, Func<long>? clock = null)
     {
         this.runtime = runtime;
@@ -342,7 +345,7 @@ internal sealed partial class SessionListQueries
             .Select(request => request.Id)
             .ToHashSet(StringComparer.Ordinal);
         // A flagged parent's first page holds as many children as were active within the last
-        // 24 hours, between one and the smaller of `limit` and five; continuations are sized
+        // 24 hours, between three and the smaller of `limit` and five; continuations are sized
         // by `limit` as usual.
         var limits = RecentWindows(
             recentWindow is null || agent is not null
@@ -417,16 +420,16 @@ internal sealed partial class SessionListQueries
 
     // Window sizes for parents showing their initial child page: the number of unpinned,
     // unarchived children whose subtree activity is within the last 24 hours, clamped to
-    // 1..max. The count stops at max, so it stays one bounded index seek per parent.
+    // 3..max. The count stops at max, so it stays one bounded index seek per parent.
     private Dictionary<string, int> RecentWindows(string[] parents, int max)
     {
         var result = new Dictionary<string, int>(StringComparer.Ordinal);
         var since = clock() - RecentChildWindowMilliseconds;
         foreach (var chunk in parents.Chunk(100))
         foreach (var pair in Catalog.RecentChildCounts(chunk, since, max))
-            result[pair.Key] = Math.Clamp(pair.Value, 1, max);
+            result[pair.Key] = Math.Clamp(pair.Value, Math.Min(RecentChildWindowMin, max), max);
         foreach (var parent in parents)
-            result.TryAdd(parent, 1);
+            result.TryAdd(parent, Math.Min(RecentChildWindowMin, max));
         return result;
     }
 

@@ -75,7 +75,7 @@ export async function replayCursorWindow<T>(options: {
 
 /**
  * Branch target meaning "the server's initial window": the children active in the last 24 hours,
- * between one and five. It is a default, not a count the user chose: the server sizes it on every
+ * between three and five. It is a default, not a count the user chose: the server sizes it on every
  * replay, and any explicit count (for example after `Show N more`) replaces it.
  */
 export const INITIAL_BRANCH_WINDOW = 0
