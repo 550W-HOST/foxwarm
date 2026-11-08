@@ -165,7 +165,7 @@ with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as archive
         for name in sorted(files):
             full = os.path.join(directory, name)
             archive.write(full, os.path.relpath(full, base))
-`, path.dirname(staging), top, file])
+`, path.toNamespacedPath(path.dirname(staging)), top, path.toNamespacedPath(file)])
   } else {
     tarArchive(path.dirname(staging), [top], file)
   }

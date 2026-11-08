@@ -18,6 +18,22 @@ function executable(file, content) {
   fs.writeFileSync(file, '#!/bin/bash\nset -eu\n' + content + '\n', { mode: 0o755 })
 }
 
+test('Windows ZIP archives preserve deeply nested Code resource paths', { skip: process.platform !== 'win32' }, t => {
+  const work = scratch(t), payload = path.join(work, 'payload'), output = path.join(work, 'out')
+  const relative = Array(12).fill('nested-code-resource').join('/') + '/asset.txt'
+  const resource = path.join(payload, relative)
+  assert(resource.length > 260)
+  fs.mkdirSync(path.dirname(resource), { recursive: true })
+  fs.mkdirSync(output)
+  fs.writeFileSync(resource, 'deep Code resource')
+  const file = archive('desktop-win-x64', payload, output)
+  const read = spawnSync('python3', ['-c',
+    'import sys,zipfile; print(zipfile.ZipFile(sys.argv[1]).read(sys.argv[2]).decode())',
+    file, 'payload/' + relative], { encoding: 'utf8' })
+  assert.equal(read.status, 0, read.stderr)
+  assert.equal(read.stdout.trim(), 'deep Code resource')
+})
+
 test('portable tar archives normalize timestamps and ownership and preserve executable files and symlinks', unix, t => {
   const work = scratch(t), payload = path.join(work, 'payload'), output = path.join(work, 'out')
   fs.mkdirSync(payload); fs.mkdirSync(output)
