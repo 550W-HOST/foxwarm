@@ -103,6 +103,73 @@ public sealed partial class ToolAuthorizationEffectsTests
     }
 
     [Fact]
+    public async Task Explain_requires_view_authority_for_other_sessions_without_disclosing_existence()
+    {
+        using var temp = new TempDirectory();
+        await Seed(temp.Path);
+        var catalogPath = Path.Combine(temp.Path, "data", "state", "agents.json");
+        var catalog = JsonNode.Parse(await File.ReadAllTextAsync(catalogPath))!.AsObject();
+        catalog["metadata"]!["beta"] = Obj(
+            """{"rules":[{"id":"private-beta","tool":{"source":"node","name":"read"},"action":"deny","reason":"private-beta-reason"}]}"""
+        );
+        await File.WriteAllTextAsync(catalogPath, catalog.ToJsonString());
+        await using var manager = Manager(temp.Path);
+        await manager.LoadAsync();
+        var caller = await manager.RequiredAsync("opaque");
+        var execution = Executor(manager, caller, temp.Path);
+        await using var mcp = execution.Mcp;
+        await Policy(
+            manager,
+            """
+            version: 1
+            rules:
+              - id: allow-child-view
+                action: allow
+                tool: {source: builtin, name: view_session}
+                args: {sessionId: {session: {sameAgent: true, relation: child}}}
+              - id: deny-other-view
+                action: deny
+                tool: {source: builtin, name: view_session}
+            """
+        );
+        Assert.Equal(
+            "tool_authorization_denied",
+            Error(await Call(execution.Tools, "view_session", Obj("""{"sessionId":"outside"}""")))
+        );
+        Assert.Null(
+            Error(await Call(execution.Tools, "view_session", Obj("""{"sessionId":"kid"}""")))
+        );
+        Assert.Equal(
+            "tool_authorization_denied",
+            Error(await Call(execution.Tools, "view_session", Obj("""{"sessionId":"self"}""")))
+        );
+        var result = await Explain(
+            execution.Tools,
+            Obj(
+                """
+                {"probes":[
+                  {"sessionId":"outside","toolId":"node:master/read","args":{"filePath":"notes.txt"}},
+                  {"sessionId":"missing","toolId":"node:master/read","args":{"filePath":"notes.txt"}},
+                  {"sessionId":"kid","toolId":"builtin:wait"},
+                  {"sessionId":"self","toolId":"builtin:wait"}
+                ]}
+                """
+            )
+        );
+        var probes = result["probes"]!.AsArray();
+        Assert.Equal(
+            probes[1]!["error"]!.GetValue<string>(),
+            probes[0]!["error"]!.GetValue<string>()
+        );
+        Assert.DoesNotContain("private-beta", result.ToJsonString());
+        Assert.Null(probes[0]!["active"]);
+        Assert.Equal("direct", probes[2]!["sessionId"]!.GetValue<string>());
+        Assert.NotNull(probes[2]!["active"]);
+        Assert.Equal("opaque", probes[3]!["sessionId"]!.GetValue<string>());
+        Assert.NotNull(probes[3]!["active"]);
+    }
+
+    [Fact]
     public async Task Explain_compare_evaluates_candidate_per_probe_and_diffs_rule_ids()
     {
         using var temp = new TempDirectory();

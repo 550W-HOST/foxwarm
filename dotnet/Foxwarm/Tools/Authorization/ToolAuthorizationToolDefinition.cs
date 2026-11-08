@@ -45,7 +45,7 @@ internal static class ToolAuthorizationToolDefinition
                 {
                   "type": "function",
                   "name": "explain_tool_authorization",
-                  "description": "Explain, without running it, how tool authorization would decide a call made by an existing Session. Each probe names the caller Session and the concrete tool like call_tool. The result reports pre-policy Node/path boundary checks, the decision and matching rule of the global policy and each Agent rule layer, legacy isolation, and the facts used. Handler-local validation is not evaluated. With policyFilePath, a candidate replaces the global policy; add compare to evaluate active and candidate side by side and list rule id changes. Your permissions must allow reading the active policy file and any candidate on master.",
+                  "description": "Explain how tool authorization would decide a call by an existing Session, without running it. Each probe names the caller Session and the tool, as for call_tool. The result shows Node and path boundary checks, the decision and matching rule of the global policy and of each Agent rule layer, Agent isolation, and the facts used. Checks made inside the tool itself are not included. With policyFilePath, a candidate file replaces the global policy; set compare to evaluate both and list changed rule ids. Requires permission to read the active policy file and any candidate on master; probing another Session also requires permission to view it.",
                   "parameters": {
                     "type": "object",
                     "additionalProperties": false,

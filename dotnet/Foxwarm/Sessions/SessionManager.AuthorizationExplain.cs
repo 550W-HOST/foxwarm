@@ -87,7 +87,7 @@ internal sealed partial class SessionManager
 
         var results = new JsonArray();
         foreach (var probe in probes.OfType<JsonObject>())
-            results.Add(await ExplainProbeAsync(probe, variants, token));
+            results.Add(await ExplainProbeAsync(caller, probe, variants, token));
         var output = new JsonObject
         {
             ["policy"] =
@@ -102,6 +102,7 @@ internal sealed partial class SessionManager
     }
 
     private async Task<JsonObject> ExplainProbeAsync(
+        SessionOwner caller,
         JsonObject probe,
         IReadOnlyList<(string Name, ToolAuthorizationPolicy Policy)> variants,
         CancellationToken token
@@ -113,9 +114,29 @@ internal sealed partial class SessionManager
         {
             if (string.IsNullOrWhiteSpace(requested))
                 throw new InvalidDataException("Each probe requires sessionId.");
-            var target =
-                await GetExistingAsync(requested.Trim(), token)
-                ?? throw new InvalidDataException($"Session `{requested}` not found.");
+            var target = await GetExistingAsync(requested.Trim(), token);
+            if (target is not null && target.Id != caller.Id)
+                try
+                {
+                    await AuthorizeToolAsync(
+                        caller,
+                        new(
+                            "view_session",
+                            "builtin",
+                            "view_session",
+                            new JsonObject { ["sessionId"] = requested.Trim() }
+                        ),
+                        null,
+                        token,
+                        target
+                    );
+                }
+                catch (ToolAuthorizationDeniedException)
+                {
+                    target = null;
+                }
+            if (target is null)
+                throw new InvalidDataException("Session not found or unavailable.");
             result["sessionId"] = target.Id;
             // Resolve exactly as call_tool would for this caller's current Node.
             var call = (JsonObject)probe.DeepClone();
