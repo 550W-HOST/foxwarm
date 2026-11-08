@@ -60,6 +60,28 @@ public sealed class McpServerSummaryTests
     }
 
     [Fact]
+    public async Task Outbound_MCP_error_redacts_password_from_URL_userinfo()
+    {
+        using var temp = new TempDirectory();
+        await using var peer = await OutboundSdkPeer.StartAsync(temp.Path);
+        await using var fixture = await OutboundMcpFixture.CreateAsync();
+        var url = new UriBuilder(peer.Url + "/mcp")
+        {
+            UserName = "test-user",
+            Password = "test-password",
+        }.Uri.ToString();
+        await fixture.ConfigureAsync(url);
+        var result = await fixture.CallAsync(
+            fixture.First,
+            "fail",
+            new JsonObject { ["errorMessage"] = "authentication failed: test-password" }
+        );
+        var text = result!.ToJsonString();
+        Assert.DoesNotContain("test-password", text);
+        Assert.Contains("configured secret data", text);
+    }
+
+    [Fact]
     public async Task Error_redaction_covers_URL_query_user_info_and_fragment()
     {
         using var temp = new TempDirectory();
@@ -69,7 +91,7 @@ public sealed class McpServerSummaryTests
                 {
                     ["name"] = "query",
                     ["url"] =
-                        "https://user:url-password@mcp.example.com/mcp?apikey=url%2Dsecret&bare-secret#frag-secret",
+                        "https://user%2Dname:url%2Dpassword@mcp.example.com/mcp?apikey=url%2Dsecret&bare-secret#frag-secret",
                 },
                 default
             );
@@ -80,7 +102,12 @@ public sealed class McpServerSummaryTests
                 "GET https://mcp.example.com/mcp?apikey=url%2Dsecret failed",
                 "invalid apikey url-secret",
                 "bad item bare-secret",
-                "user:url-password rejected",
+                "user%2Dname:url%2Dpassword rejected",
+                "user-name:url-password rejected",
+                "invalid username user%2Dname",
+                "invalid username user-name",
+                "invalid password url%2Dpassword",
+                "invalid password url-password",
                 "anchor frag-secret",
             }
         )

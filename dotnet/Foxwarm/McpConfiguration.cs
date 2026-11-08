@@ -271,10 +271,36 @@ internal sealed class McpConfiguration(string root, string? configPath = null)
         var beforeFragment = hash >= 0 ? url[..hash] : url;
         var mark = beforeFragment.IndexOf('?');
         var query = mark >= 0 ? beforeFragment[(mark + 1)..] : "";
+        // Uri.UserInfo normalizes escapes for unreserved characters, so also retain
+        // the original authority spelling for diagnostics that quote the input URL.
+        var start = url.IndexOf("://", StringComparison.Ordinal);
+        var rawUserInfo = "";
+        if (start >= 0)
+        {
+            start += 3;
+            var end = url.IndexOfAny(['/', '\\', '?', '#'], start);
+            if (end < 0)
+                end = url.Length;
+            if (end > start)
+            {
+                var at = url.LastIndexOf('@', end - 1, end - start);
+                if (at >= start)
+                    rawUserInfo = url[start..at];
+            }
+        }
+        static IEnumerable<string> UserInfoParts(string userInfo)
+        {
+            var separator = userInfo.IndexOf(':');
+            yield return userInfo;
+            yield return separator < 0 ? userInfo : userInfo[..separator];
+            if (separator >= 0)
+                yield return userInfo[(separator + 1)..];
+        }
         var parts = query
             .Split('&', StringSplitOptions.RemoveEmptyEntries)
             .Select(part => part.IndexOf('=') is var equals and > 0 ? part[(equals + 1)..] : part)
-            .Append(uri.UserInfo)
+            .Concat(UserInfoParts(rawUserInfo))
+            .Concat(UserInfoParts(uri.UserInfo))
             .Append(fragment)
             .Where(part => part.Length > 0)
             .ToArray();

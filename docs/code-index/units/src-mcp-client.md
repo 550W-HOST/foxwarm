@@ -90,7 +90,7 @@ Normalize internal results immediately after MCP invocation: remove plain JSON d
 
 Model/admin summaries expose configuration shape, names, and counts, never token/header/env values or command argument content.
 
-[2026-11-06] The maintained C# `list_mcp_servers` summary keeps the URL scheme, host, port and path but drops user info and fragment and replaces each query value (or bare query item) with `REDACTED`; an unparseable URL becomes `REDACTED`. Retained TypeScript returned the URL verbatim. Path-embedded credentials are not detected. The administrator OAuth status API keeps the configured URL. Error redaction (`McpConfiguration.Redact`) treats the same URL parts (user info, query values or bare items, fragment; raw and unescaped) as configured secrets.
+[2026-11-06] The maintained C# `list_mcp_servers` summary keeps the URL scheme, host, port and path but drops user info and fragment and replaces each query value (or bare query item) with `REDACTED`; an unparseable URL becomes `REDACTED`. Retained TypeScript returned the URL verbatim. Path-embedded credentials are not detected. The administrator OAuth status API keeps the configured URL. Error redaction (`McpConfiguration.Redact`) treats the same URL parts (full user info, separate username and password, query values or bare items, fragment; original and unescaped spellings) as configured secrets.
 
 ### D-mcp-unified-tools
 
