@@ -361,7 +361,12 @@ internal sealed partial class McpClient
         {
             return configuration.Get(server);
         }
-        catch (InvalidDataException)
+        catch (Exception error)
+            when (error
+                    is InvalidDataException
+                        or Foxwarm.Secrets.SecretUnavailableException
+                        or Foxwarm.Secrets.SecretStoreLockedException
+            )
         {
             return null;
         }

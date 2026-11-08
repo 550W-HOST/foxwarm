@@ -9,6 +9,9 @@ namespace Foxwarm.Tools;
 
 internal sealed partial class LocalExecManager
 {
+    // True for a value that equals a known secret; set by the host when a store exists.
+    internal Func<string, bool>? InheritedSecret { get; set; }
+
     private async Task<ExecRecord> StartNativeAsync(
         string session,
         string agent,
@@ -57,6 +60,12 @@ internal sealed partial class LocalExecManager
                 UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
             );
         var launch = ExecNative.Launcher(script, cwd, self);
+        // Main's own environment may carry configured credentials: a master command
+        // inherits everything else, but not a variable whose value is a known secret.
+        if (InheritedSecret is { } known)
+            foreach (var key in launch.Environment.Keys.ToArray())
+                if (launch.Environment[key] is { Length: > 0 } value && known(value))
+                    launch.Environment.Remove(key);
         foreach (var key in launch.Environment.Keys.ToArray())
             if ((windows ? key.ToLowerInvariant() : key) is "fw_agentdir" or "fw_tmp")
                 launch.Environment.Remove(key);

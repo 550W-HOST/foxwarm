@@ -32,6 +32,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
     private readonly CommittedArchiveIdentity archiveIdentities;
     private readonly HttpClient http = ProviderHttpRequest.CreateClient();
     private readonly Foxwarm.McpClient mcp;
+    private readonly Foxwarm.Secrets.InstanceSecrets? secrets;
+    internal Foxwarm.Secrets.InstanceSecrets? Secrets => secrets;
     internal Foxwarm.McpClient OutboundMcp => mcp;
     internal SessionRuntimeCredentialStore RuntimeCredentials { get; } = new();
     internal Uri? RuntimeMcpEndpoint { get; set; }
@@ -280,6 +282,21 @@ internal sealed partial class SessionManager : IAsyncDisposable
             Nodes,
             NodeProviders
         );
+        secrets = models.ConfigurationOwner?.Secrets;
+        if (secrets is { } owned)
+        {
+            mcp.Configuration.SecretLookup = owned.Lookup;
+            owned.AddSource("mcp", () => McpSecretLiterals(mcp));
+            tools.Redaction = (result, sessionId) => owned.Redact(result, "tool-output", sessionId);
+            executor.InheritedSecret = value => owned.Redactor.IsKnownValue(value);
+            owned.AddSource(
+                "nodes",
+                () =>
+                    Nodes.Registry.PairingToken is { Length: > 0 } pairing
+                        ? [new Foxwarm.Secrets.KnownSecret("node-pairing-token", pairing)]
+                        : []
+            );
+        }
         clientOptions = options with { Tools = tools.ModelDefinitions() };
         this.models = models;
         timers = Foxwarm.Timers.MainTimers.Reporting(this.root, DeliverTimerAsync);
@@ -293,8 +310,27 @@ internal sealed partial class SessionManager : IAsyncDisposable
             Foxwarm.Vector.VectorConfiguration.Capture(models.ConfigurationOwner?.AppConfiguration),
             admissionStop.Token
         );
+        if (secrets is { } embeddingSecrets)
+            Vector.EmbeddingRedaction = text => embeddingSecrets.Redact(text, "embedding");
         Vector.Diagnostic = (code, id) =>
             Console.Error.WriteLine("Vector " + code + (id.Length == 0 ? "" : " session=" + id));
+    }
+
+    private static IEnumerable<Foxwarm.Secrets.KnownSecret> McpSecretLiterals(Foxwarm.McpClient client)
+    {
+        var values = new List<Foxwarm.Secrets.KnownSecret>();
+        foreach (var (name, server) in client.Configuration.Snapshot())
+            values.AddRange(
+                Foxwarm.Secrets.InstanceSecrets.Literals(
+                    Foxwarm.Secrets.SecretSinks.McpServer,
+                    server,
+                    path => "mcp." + name + "." + path
+                )
+            );
+        values.AddRange(
+            client.OAuth.Credentials().Select(value => new Foxwarm.Secrets.KnownSecret("mcp-oauth", value))
+        );
+        return values;
     }
 
     internal string? ResolveTaskSessionId(string requested)
@@ -606,7 +642,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
             images: Images,
             journal: Journal,
             diagnostics: diagnostics,
-            retryIntervals: models.GetRetryIntervals
+            retryIntervals: models.GetRetryIntervals,
+            secrets: secrets
         );
         var chat = new SessionChatService(
             requests,
@@ -637,6 +674,16 @@ internal sealed partial class SessionManager : IAsyncDisposable
             migrateGoal: MigrateGoalSnapshotAsync,
             parentSessionResolver: _ => hosted.Metadata().ParentSessionId
         );
+        if (secrets is { } owner)
+            // Canonical append runs under the Session state gate: use the last built
+            // matcher there. Queue admission (outside the gate) refreshes it.
+            registry.HistoryRedaction = (sessionId, message, source) =>
+                owner.RedactMessage(
+                    source == "history" ? owner.LastBuilt : owner.Redactor,
+                    message,
+                    source,
+                    sessionId
+                );
         hosted.Registry = registry;
         hosted.Compactor = new SessionCompactor(
             hosted,

@@ -245,6 +245,7 @@ internal sealed partial class SessionManager
             || resolved.Source == "builtin"
                 && resolved.Name
                     is "node_create_auth_token"
+                        or "node_bootstrap_info"
                         or "set_config"
                         or "send_file"
                         or "image_write_to_file"
@@ -733,6 +734,12 @@ internal sealed partial class SessionManager
         }
         await Authorize(token);
         var bytes = await files.CaptureConfigCandidateAsync(path, target == "tool-rules", token);
+        if (target is "config" or "models" && models.ConfigurationOwner is { } current)
+            Foxwarm.Secrets.SecretConfigurationChanges.RequireModelWritable(
+                current,
+                target,
+                new UTF8Encoding(false).GetString(bytes).TrimStart('\uFEFF')
+            );
         JsonObject installed;
         try
         {

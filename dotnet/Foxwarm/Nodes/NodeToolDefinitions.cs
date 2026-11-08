@@ -40,8 +40,10 @@ internal static class NodeToolDefinitions
                   },
                   {
                     "type": "function", "name": "node_bootstrap_info",
-                    "description": "Get Node setup instructions, bootstrap endpoints, and the pairing token. Commands use config.url when set; otherwise replace the example address with one reachable from the new Node. Treat the pairing token as a secret.",
-                    "parameters": { "type": "object", "properties": {} }
+                    "description": "Get Node setup instructions and bootstrap endpoints. The pairing token is written to filePath, a new owner-only file on master; the returned commands show PAIRING_TOKEN in its place. Commands use config.url when set; otherwise replace the example address with one reachable from the new Node.",
+                    "parameters": { "type": "object", "properties": {
+                      "filePath": { "type": "string", "description": "Absolute path on master for a new file that receives the pairing token. The file must not already exist." }
+                    }, "required": ["filePath"], "additionalProperties": false }
                   },
                   {
                     "type": "function", "name": "node_pair_approve",

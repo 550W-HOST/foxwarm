@@ -13,6 +13,7 @@ internal sealed partial class ModelConfiguration
     private readonly JsonObject app;
     private HostModels? catalog;
     private string? cachedRaw;
+    private long cachedSecretGeneration;
     internal HostPaths Paths { get; }
     public string ActivePath { get; }
     public string TemplatePath { get; }
@@ -168,6 +169,8 @@ internal sealed partial class ModelConfiguration
         AppConfigurationRules.Validate(app);
         Paths = paths.WithConfiguration(app);
         Access = new(app);
+        Secrets = new Foxwarm.Secrets.InstanceSecrets(Paths.DataRoot);
+        RegisterSecretSources();
         HandoffConfirmationEnabled = Foxwarm.Tools.HandoffConfirmation.Enabled(app);
         sessionAutoTitle = AppConfigurationRules.SessionAutoTitle(app);
         agentDefaultNode = AppConfigurationRules.AgentDefaultNode(app);
@@ -203,17 +206,26 @@ internal sealed partial class ModelConfiguration
             if (!File.Exists(read))
                 throw new InvalidDataException("Models configuration is missing.");
             var raw = File.ReadAllText(read, Encoding.UTF8);
-            if (catalog is not null && raw == cachedRaw)
+            var generation = Secrets.Store.Generation;
+            if (catalog is not null && raw == cachedRaw && generation == cachedSecretGeneration)
                 return catalog;
             var next = Validate(raw);
             catalog = next;
             cachedRaw = raw;
+            cachedSecretGeneration = generation;
             return next;
         }
     }
 
-    private HostModels Validate(string raw) =>
-        HostModels.Parse(ConfigurationYaml.Parse(raw, "models config"), app);
+    private HostModels Validate(string raw)
+    {
+        var (root, resolvedApp, missing) = ResolveModelSecrets(
+            ConfigurationYaml.Parse(raw, "models config")
+        );
+        var next = HostModels.Parse(root, resolvedApp);
+        next.MissingSecrets = missing;
+        return next;
+    }
 
     private static object? JsonNodeToObject(JsonNode? node)
     {

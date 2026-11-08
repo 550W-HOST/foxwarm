@@ -168,9 +168,11 @@ public sealed class SessionRegistry
 
     internal ISessionAuthorityStore Store { get; }
 
+    internal Func<string, JsonObject, string, JsonObject>? HistoryRedaction { get; set; }
+
     public SessionEntry Add(string sessionId, SessionSnapshot? snapshot = null)
     {
-        var state = new SessionState(sessionId);
+        var state = new SessionState(sessionId) { HistoryRedaction = HistoryRedaction };
         if (snapshot is not null)
             Restore(state, snapshot);
         var entry = new SessionEntry(state, Store, migrateGoal);

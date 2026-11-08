@@ -21,6 +21,7 @@ internal sealed partial class VectorRuntime : IAsyncDisposable
     private readonly string databaseRoot;
     private readonly VectorConfiguration config;
     private readonly HttpClient embeddings = new() { Timeout = TimeSpan.FromSeconds(60) };
+    internal Func<string, string>? EmbeddingRedaction { get; init; }
     private readonly VectorOperationGate operations = new();
     private readonly object scheduling = new();
     private readonly Dictionary<string, Batch> batches = new(StringComparer.Ordinal);
@@ -144,6 +145,8 @@ internal sealed partial class VectorRuntime : IAsyncDisposable
     {
         var uri = new UriBuilder(config.BaseUrl!);
         uri.Path = uri.Path.TrimEnd('/') + "/embeddings";
+        if (EmbeddingRedaction is { } redact)
+            text = redact(text);
         var input = WellFormed(Truncate((query ? QueryPrefix : "") + text));
         using var response = await embeddings.PostAsJsonAsync(
             uri.Uri,

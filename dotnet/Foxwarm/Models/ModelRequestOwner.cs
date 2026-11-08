@@ -13,7 +13,8 @@ internal sealed class ModelRequestOwner(
     Foxwarm.Images.ImageBlobStore? images = null,
     LlmRequestJournalStore? journal = null,
     ModelInteractionDiagnostics? diagnostics = null,
-    Func<string, IReadOnlyList<int>>? retryIntervals = null
+    Func<string, IReadOnlyList<int>>? retryIntervals = null,
+    Foxwarm.Secrets.InstanceSecrets? secrets = null
 )
 {
     internal const int DefaultMaxAttempts = 6;
@@ -213,6 +214,7 @@ internal sealed class ModelRequestOwner(
                     );
                 if (leaf.IsVirtual)
                     throw new ModelPreparationException("Virtual targets must be concrete models.");
+                catalog.RequireSecrets(leaf);
                 var effort =
                     rawEffort is not null && leaf.AllowedEfforts.Contains(rawEffort)
                         ? rawEffort
@@ -252,6 +254,21 @@ internal sealed class ModelRequestOwner(
                     {
                         Tools = definitions(),
                     };
+                if (secrets is not null)
+                {
+                    // Stage S runs before the journal manifest, text redaction and serialization.
+                    var masked = Foxwarm.Secrets.SecretRequestStage.Apply(
+                        secrets,
+                        instructions,
+                        requestDefaults.Tools,
+                        history,
+                        sessionId.Length == 0 ? null : sessionId
+                    );
+                    instructions = masked.Instructions;
+                    history = masked.History;
+                    if (!ReferenceEquals(masked.Tools, requestDefaults.Tools))
+                        requestDefaults = requestDefaults with { Tools = masked.Tools };
+                }
                 var options = ConfiguredModelRequests.Plan(
                     leaf,
                     requestDefaults,

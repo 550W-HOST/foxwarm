@@ -216,9 +216,15 @@ internal sealed class ClaudeSessionDriver(
                     ["permissions"] = new JsonObject { ["defaultMode"] = "dontAsk" },
                 }.ToJsonString()
             );
+            // The external runtime is a model-facing request: apply the same secret stage.
             await PrivateFileAsync(
                 promptFile,
-                SessionWait.Text(snapshot.AuthorityEnvelope["persistentMemorySnapshot"]) ?? ""
+                Foxwarm.Secrets.SecretRequestStage.Text(
+                    manager.Secrets,
+                    SessionWait.Text(snapshot.AuthorityEnvelope["persistentMemorySnapshot"]) ?? "",
+                    "model-request",
+                    owner.Id
+                )
             );
             var start = Command(
                 config.Executable,
@@ -252,7 +258,8 @@ internal sealed class ClaudeSessionDriver(
             checkpoint["submittedThroughSeq"] = snapshot.NextMessageSeq - 1;
             await host.AppendHistoryMessageStrictAsync(null, externalRuntime: checkpoint);
             inputMayBeAccepted = true;
-            await process.StandardInput.WriteLineAsync(input.ToJsonString());
+            var submitted = manager.Secrets?.Redact(input, "model-request", owner.Id) ?? input;
+            await process.StandardInput.WriteLineAsync(submitted.ToJsonString());
             await process.StandardInput.FlushAsync();
             process.StandardInput.Close();
             var resultSeen = false;

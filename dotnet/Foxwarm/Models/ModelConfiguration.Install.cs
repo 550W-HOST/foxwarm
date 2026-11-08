@@ -87,6 +87,7 @@ internal sealed partial class ModelConfiguration
             if (target == "models")
             {
                 var firstRun = !File.Exists(ActivePath);
+                var generation = Secrets.Store.Generation;
                 var next = Validate(raw);
                 // First-run Setup ends with this save, so it must not install an unfinished key.
                 if (!File.Exists(ActivePath))
@@ -101,7 +102,9 @@ internal sealed partial class ModelConfiguration
                         {
                             catalog = next;
                             cachedRaw = raw;
+                            cachedSecretGeneration = generation;
                         }
+                        Secrets.Invalidate();
                     }
                 );
                 // The seed is a separate first-run effect; the models receipt keeps its shape.
@@ -269,6 +272,7 @@ internal sealed partial class ModelConfiguration
             if (webhooksLocked)
                 RequireUnchangedWebhooks(validated.Access);
             await ReplaceRawAsync(AppPath, bytes, token);
+            Secrets.Invalidate();
             return validated;
         }
         finally

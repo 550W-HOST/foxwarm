@@ -235,6 +235,7 @@ internal static class IsolatedToolCompatibility
             || request.Source == "builtin"
                 && request.Name
                     is "node_create_auth_token"
+                        or "node_bootstrap_info"
                         or "set_config"
                         or "send_file"
                         or "image_write_to_file"

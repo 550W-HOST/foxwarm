@@ -64,7 +64,8 @@ internal sealed partial class SessionManager
             provider,
             models.ConfigurationOwner?.AppConfiguration ?? new JsonObject(),
             "provider-model-list",
-            "__provider_model_list__"
+            "__provider_model_list__",
+            secrets
         );
         return await SetupProviderRequests.ListAsync(http, model, cancellationToken);
     }
@@ -102,7 +103,8 @@ internal sealed partial class SessionManager
             provider,
             models.ConfigurationOwner?.AppConfiguration ?? new JsonObject(),
             providerKey,
-            testModel
+            testModel,
+            secrets
         );
         var options = ConfiguredModelRequests.Plan(
             model,

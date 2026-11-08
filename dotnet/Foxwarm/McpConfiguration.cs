@@ -12,6 +12,10 @@ internal sealed class McpConfiguration(string root, string? configPath = null)
     private JsonObject? live;
     private bool closed;
 
+    // Resolves `${secret:NAME}` in credential fields of definitions handed to connections.
+    // Snapshot and summaries keep the reference text.
+    internal Func<string, string?>? SecretLookup { get; set; }
+
     private JsonObject Load()
     {
         lock (gate)
@@ -55,7 +59,28 @@ internal sealed class McpConfiguration(string root, string? configPath = null)
             && !flag
         )
             throw new InvalidDataException($"MCP server \"{name}\" is disabled.");
-        return config;
+        return ResolveSecrets(name, config);
+    }
+
+    // Only connection owners call Get; the resolved copy never reaches summaries or tools.
+    private JsonObject ResolveSecrets(string name, JsonObject config)
+    {
+        var names = Foxwarm.Secrets.SecretReferences.ReferencedNames(config);
+        if (names.Count == 0)
+            return config;
+        if (SecretLookup is not { } lookup)
+            throw Foxwarm.Secrets.SecretUnavailableException.For("MCP server " + name, names);
+        var missing = new List<string>();
+        var resolved = Foxwarm.Secrets.SecretReferences.Resolve(
+            config,
+            Foxwarm.Secrets.SecretSinks.McpServer,
+            "MCP server " + name,
+            lookup,
+            missing
+        );
+        if (missing.Count > 0)
+            throw Foxwarm.Secrets.SecretUnavailableException.For("MCP server " + name, missing);
+        return resolved;
     }
 
     internal async Task UpdateAsync(
@@ -118,6 +143,11 @@ internal sealed class McpConfiguration(string root, string? configPath = null)
     internal static JsonObject Normalize(JsonObject raw, bool managed)
     {
         var config = (JsonObject)raw.DeepClone();
+        Foxwarm.Secrets.SecretReferences.Validate(
+            config,
+            Foxwarm.Secrets.SecretSinks.McpServer,
+            "MCP server"
+        );
         foreach (
             var key in new[]
             {

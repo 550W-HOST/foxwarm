@@ -97,6 +97,13 @@ public sealed class SessionState
 
     public SessionState(string id) => Id = id;
 
+    // Main's known-secret masking for content entering this Session (queue admission and
+    // canonical history). Not persisted; null when the host has no secret store.
+    internal Func<string, JsonObject, string, JsonObject>? HistoryRedaction { get; set; }
+
+    internal JsonObject RedactForHistory(JsonObject message, string source) =>
+        HistoryRedaction is { } redact ? redact(Id, message, source) : message;
+
     // Invoked only after the staged Archive→JSON rewrite has committed, while
     // SessionEntry owns the short publication gate. Queue/Stop/model metadata
     // are deliberately not replaced by the older compaction snapshot.

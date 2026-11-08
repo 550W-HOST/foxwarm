@@ -33,6 +33,10 @@ internal sealed class ToolRegistry(
     internal Foxwarm.Nodes.NodeProviderRegistry? Providers => providers;
     internal IEnumerable<RegisteredTool> Entries => entries.Values;
 
+    // Central known-secret masking for every dispatched result (builtin, MCP, Node,
+    // Provider and ToolScript-nested), before the output guard saves or returns it.
+    internal Func<JsonNode?, string, JsonNode?>? Redaction { get; set; }
+
     internal void Register(
         JsonObject definition,
         string source,
@@ -207,6 +211,12 @@ internal sealed class ToolRegistry(
         var generation = owner.Hosted.McpGeneration;
         await owner.AuthorizeAsync(resolved, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
+        if (
+            resolved
+            is { Source: "node", Name: "write" or "edit" or "apply_patch" }
+                or { Source: "builtin", Name: "mcp_config" }
+        )
+            Foxwarm.Secrets.SecretMarkerGuard.Require(resolved.Args);
         var result =
             resolved.Source == "mcp"
                 ? await mcp.CallAsync(
@@ -242,6 +252,8 @@ internal sealed class ToolRegistry(
             && providers?.IsProviderNode(resolved.ExecutionNode) != true
         )
             owner.SettleRemoteExec(resolved);
+        if (Redaction is { } redact)
+            result = redact(result, owner.Hosted.Id);
         if (owner.Programmatic)
         {
             owner.ScriptBudget!.JsonValue(result);

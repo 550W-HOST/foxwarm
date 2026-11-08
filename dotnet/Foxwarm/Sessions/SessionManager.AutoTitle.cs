@@ -74,7 +74,8 @@ internal sealed partial class SessionManager
                 websockets: websockets,
                 journal: Journal,
                 diagnostics: diagnostics,
-                retryIntervals: models.GetRetryIntervals
+                retryIntervals: models.GetRetryIntervals,
+                secrets: secrets
             );
             var captured = requests.Capture(
                 catalog,

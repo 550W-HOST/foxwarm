@@ -44,6 +44,22 @@ internal sealed partial class AsrProxy : IDisposable
                 return;
             var url = Text(block["url"]);
             key = Text(block["key"])?.Trim();
+            if (Foxwarm.Secrets.SecretReferences.Contains(key))
+            {
+                var missing = new List<string>();
+                key = Foxwarm.Secrets.SecretReferences.Resolve(
+                    key!,
+                    name => configuration!.Secrets.Lookup(name),
+                    missing
+                );
+                if (missing.Count > 0)
+                {
+                    configurationError = Foxwarm
+                        .Secrets.SecretUnavailableException.For("Speech input", missing)
+                        .Message;
+                    return;
+                }
+            }
             if (string.IsNullOrWhiteSpace(url))
                 return;
             if (
@@ -61,6 +77,10 @@ internal sealed partial class AsrProxy : IDisposable
                 _ = new AuthenticationHeaderValue("Bearer", key);
             }
             service = parsed;
+        }
+        catch (Foxwarm.Secrets.SecretStoreLockedException error)
+        {
+            configurationError = error.Message;
         }
         catch (Exception error)
             when (error is FormatException or InvalidOperationException or ArgumentException)

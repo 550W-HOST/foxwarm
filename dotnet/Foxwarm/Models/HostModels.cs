@@ -50,6 +50,21 @@ internal sealed partial class HostModels
     internal double CompactThresholdFraction { get; private init; } = .85;
     internal double MemoryWarningThresholdFraction { get; private init; } = .15;
 
+    // Secret names referenced by a provider (or its legacy llm fallback key) that had no
+    // stored value when this catalog was resolved. Requests to those providers fail closed.
+    internal IReadOnlyDictionary<string, IReadOnlyList<string>> MissingSecrets { get; set; } =
+        new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
+
+    internal void RequireSecrets(ConcreteHostModel leaf)
+    {
+        if (MissingSecrets.TryGetValue(leaf.ProviderKey, out var names) && names.Count > 0)
+            throw new ModelPreparationException(
+                Foxwarm.Secrets.SecretUnavailableException
+                    .For("Model provider " + leaf.ProviderKey, names)
+                    .Message
+            );
+    }
+
     internal HostModels(ModelConfiguration owner)
     {
         this.owner = owner;
@@ -150,6 +165,11 @@ internal sealed partial class HostModels
 
     internal static HostModels Parse(JsonObject root, JsonObject app)
     {
+        Foxwarm.Secrets.SecretReferences.Validate(
+            root,
+            Foxwarm.Secrets.SecretSinks.Models,
+            "Models configuration"
+        );
         var providers = root["providers"] ?? root["models"];
         if (providers is not JsonObject source)
             throw new InvalidDataException(

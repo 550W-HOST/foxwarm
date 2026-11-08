@@ -81,6 +81,7 @@ public sealed partial class SessionSaveLane
         await EnqueueOperationAsync(async () =>
         {
             using var admission = entry.AdmitMutation();
+            item = RedactQueueItem(item);
             if (store is PersistentSessionAuthorityStore persistent)
             {
                 item = item.CloneItem();
@@ -224,6 +225,32 @@ public sealed partial class SessionSaveLane
             entry.InvokeQueuedCommitted(entry.Snapshot());
         });
         return admitted;
+    }
+
+    // Known secrets are masked before queued input reaches hot state or the Session file.
+    private QueueItem RedactQueueItem(QueueItem item)
+    {
+        if (entry.State.HistoryRedaction is null)
+            return item;
+        var message = item.Message is null ? null : entry.State.RedactForHistory(item.Message, "input");
+        IReadOnlyList<JsonObject>? parts = item.Parts;
+        if (parts is not null)
+        {
+            var wrapper = new JsonObject
+            {
+                ["parts"] = new JsonArray(parts.Select(part => part.DeepClone()).ToArray()),
+            };
+            var redacted = entry.State.RedactForHistory(wrapper, "input");
+            if (!ReferenceEquals(redacted, wrapper))
+                parts = redacted["parts"]!
+                    .AsArray()
+                    .OfType<JsonObject>()
+                    .Select(part => (JsonObject)part.DeepClone())
+                    .ToArray();
+        }
+        if (ReferenceEquals(message, item.Message) && ReferenceEquals(parts, item.Parts))
+            return item;
+        return item with { Message = message, Parts = parts };
     }
 
     internal Task<bool> CommitRemoteExecCompletionAsync(

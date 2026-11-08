@@ -12,6 +12,8 @@ internal sealed class ChannelFailure(string stage, Exception error) : IOExceptio
                 $"QQ Bot API request failed (HTTP {qq.Status?.ToString() ?? "unknown"}, code {qq.Code?.ToString() ?? "none"}).",
             QQBotGatewayException gateway =>
                 $"QQ Bot gateway {gateway.Event} ({gateway.Code?.ToString() ?? "no close code"}).",
+            Foxwarm.Secrets.SecretUnavailableException
+            or Foxwarm.Secrets.SecretStoreLockedException => error.Message,
             _ => MainLog.SafeFailure(error),
         };
 }

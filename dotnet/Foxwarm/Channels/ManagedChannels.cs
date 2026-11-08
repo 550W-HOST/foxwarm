@@ -301,6 +301,7 @@ internal sealed class ManagedChannels(
         if (initial && (config is null || !Eligible(id, config)))
             return false;
         config ??= Config(id);
+        config = ResolveSecrets(id, config);
         IManagedChannel channel = Type(id, config) switch
         {
             "telegram" => new TelegramChannel(
@@ -416,6 +417,60 @@ internal sealed class ManagedChannels(
         lock (gate)
             running.Remove(id);
         return true;
+    }
+
+    // Credentials resolve only here, at transport construction; statuses and Setup keep
+    // the reference text.
+    private JsonObject ResolveSecrets(string id, JsonObject config)
+    {
+        if (!Foxwarm.Secrets.SecretReferences.ReferencedNames(config).Any())
+            return config;
+        var missing = new List<string>();
+        var wrapped = new JsonObject
+        {
+            ["channels"] = new JsonObject { [id] = config.DeepClone() },
+        };
+        var resolved = configuration.Secrets.Resolve(
+            wrapped,
+            Foxwarm.Secrets.SecretSinks.App,
+            "Configuration",
+            missing
+        );
+        if (missing.Count > 0)
+            throw Foxwarm.Secrets.SecretUnavailableException.For("Channel " + id, missing);
+        return resolved["channels"]![id]!.AsObject();
+    }
+
+    // Running channels that use a changed secret restart with the new value.
+    // A secret changed: restart running channels that reference it, and retry enabled
+    // channels that reference it but are not running (for example after a missing value).
+    internal async Task<IReadOnlyList<string>> RestartReferencingAsync(string name)
+    {
+        var channels = configuration.CurrentChannels();
+        var restarted = new List<string>();
+        foreach (var (id, node) in channels.ToArray())
+        {
+            if (
+                node is not JsonObject config
+                || !Foxwarm.Secrets.SecretReferences.ReferencedNames(config).Contains(name)
+            )
+                continue;
+            bool active;
+            lock (gate)
+                active = running.ContainsKey(id);
+            if (!active && !Eligible(id, config))
+                continue;
+            try
+            {
+                await ChangeAsync(active ? "restart" : "start", id);
+                restarted.Add(id);
+            }
+            catch (Exception)
+            {
+                // ChangeAsync records the safe failure for the channel status list.
+            }
+        }
+        return restarted;
     }
 
     private void RecordError(string id, Exception error)

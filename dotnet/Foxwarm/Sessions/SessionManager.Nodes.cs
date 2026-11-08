@@ -211,20 +211,38 @@ internal sealed partial class SessionManager
         return result;
     }
 
-    internal JsonObject NodeBootstrapInfo(JsonObject args)
+    // The pairing token is written to a new owner-only file on master; the model sees
+    // the instructions with PAIRING_TOKEN in its place.
+    internal async Task<JsonObject> NodeBootstrapInfoAsync(JsonObject args, CancellationToken token)
     {
-        ToolRegistry.Keys(args, []);
-        return new()
+        ToolRegistry.Keys(args, ["filePath"]);
+        var bootstrap =
+            Bootstrap
+            ?? throw new InvalidOperationException("Node bootstrap is unavailable on this host.");
+        var path = WorkspaceTools.PrivateNodeTokenPath(ToolRegistry.Text(args, "filePath") ?? "");
+        var info = bootstrap.Info();
+        var pairing = SessionWait.Text(info["pairingToken"]) ?? "";
+        info.Remove("pairingToken");
+        var options = new FileStreamOptions
         {
-            ["output"] = (
-                Bootstrap
-                ?? throw new InvalidOperationException(
-                    "Node bootstrap is unavailable on this host."
-                )
-            )
-                .Info()
-                .ToJsonString(),
+            Mode = FileMode.CreateNew,
+            Access = FileAccess.Write,
+            Share = FileShare.None,
+            Options = FileOptions.Asynchronous,
         };
+        if (!OperatingSystem.IsWindows())
+            options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+        await using (var file = new FileStream(path, options))
+        {
+            await file.WriteAsync(System.Text.Encoding.UTF8.GetBytes(pairing + "\n"), token);
+            await file.FlushAsync(token);
+        }
+        var text = info.ToJsonString();
+        if (pairing.Length > 0)
+            text = text.Replace(pairing, "PAIRING_TOKEN", StringComparison.Ordinal);
+        var result = JsonNode.Parse(text)!.AsObject();
+        result["pairingTokenFile"] = path;
+        return new() { ["output"] = result.ToJsonString() };
     }
 
     internal JsonObject NodePairList(JsonObject args)

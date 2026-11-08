@@ -25,6 +25,8 @@ internal sealed partial class McpClient : IAsyncDisposable
         OAuth = new(root, publicBaseUrl, configuration.Get, FenceServer, shutdown.Token);
     }
 
+    internal McpConfiguration Configuration => configuration;
+
     private Task<T> RunAsync<T>(
         Func<CancellationToken, Task<T>> operation,
         CancellationToken caller
@@ -136,6 +138,11 @@ internal sealed partial class McpClient : IAsyncDisposable
                         patch[key] = map;
                 }
                 token.ThrowIfCancellationRequested();
+                Foxwarm.Secrets.SecretConfigurationChanges.RequireMcpWritable(
+                    name,
+                    configuration.Snapshot()[name] as JsonObject,
+                    patch
+                );
                 try
                 {
                     await UpdateConfigurationAsync(

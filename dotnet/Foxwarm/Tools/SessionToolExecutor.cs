@@ -1275,8 +1275,8 @@ internal sealed partial class SessionToolExecutor(
             owner.Manager.CreateNodeAuthTokenAsync(owner.Hosted, args, token);
         handlers["node_remove"] = (owner, args, token) =>
             owner.Manager.RemoveNodeAsync(owner.Hosted, args, token);
-        handlers["node_bootstrap_info"] = (owner, args, _) =>
-            Task.FromResult(owner.Manager.NodeBootstrapInfo(args));
+        handlers["node_bootstrap_info"] = (owner, args, token) =>
+            owner.Manager.NodeBootstrapInfoAsync(args, token);
         handlers["node_pair_list"] = (owner, args, _) =>
             Task.FromResult(owner.Manager.NodePairList(args));
         handlers["node_pair_approve"] = (owner, args, _) =>

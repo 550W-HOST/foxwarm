@@ -64,6 +64,7 @@ internal sealed class AccessConfiguration
     internal event Func<AccessChange, Task>? Changed;
     internal bool McpRuntimeAvailable { get; set; }
     internal bool WebhookRuntimeAvailable { get; set; }
+    internal string ReservedInstanceToken => Volatile.Read(ref reservedToken);
 
     internal AccessConfiguration(JsonObject app) =>
         snapshot = Normalize(app["access"], app.ContainsKey("access"));
