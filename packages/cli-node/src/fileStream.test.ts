@@ -6,7 +6,25 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { streamReadFile, streamWriteFile } from './fileStream';
+
+test('FIFO reads fail promptly without exhausting the filesystem thread pool', { skip: process.platform === 'win32' }, async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cli-file-fifo-'));
+  try {
+    const fifo = path.join(root, 'source');
+    execFileSync('mkfifo', [fifo]);
+    const connection = { host: 'http://127.0.0.1:1', nodeId: 'test-node', authToken: 'test-token', signal: new AbortController().signal };
+    const request = { transferId: 'fifo', filePath: fifo, agentName: 'main', restrictToAgentDir: false };
+    const reads = Array.from({ length: 4 }, () => assert.rejects(streamReadFile(connection, request), /Not a file/));
+    await Promise.race([
+      Promise.all([...reads, fs.stat(root)]),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('FIFO read blocked filesystem work')), 3000).unref()),
+    ]);
+  } finally {
+    await fs.remove(root);
+  }
+});
 
 test('streaming file transfer uses authenticated HTTP, exact lengths and atomic publication', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cli-file-stream-'));

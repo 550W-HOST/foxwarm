@@ -6,6 +6,41 @@ namespace Foxwarm.Tests;
 
 public sealed class CliNodeFileTests
 {
+    [Fact]
+    public async Task Streaming_source_opens_FIFOs_without_blocking_and_checks_the_open_handle()
+    {
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
+            return;
+        using var temp = new TempDirectory();
+        var fifo = Path.Combine(temp.Path, "fifo");
+        using (
+            var process = System.Diagnostics.Process.Start(
+                new System.Diagnostics.ProcessStartInfo("mkfifo") { ArgumentList = { fifo } }
+            )!
+        )
+        {
+            await process.WaitForExitAsync();
+            Assert.Equal(0, process.ExitCode);
+        }
+        var link = Path.Combine(temp.Path, "link");
+        File.CreateSymbolicLink(link, fifo);
+        var attempts = Enumerable
+            .Range(0, 4)
+            .Select(_ =>
+                Task.Run(() =>
+                    Assert.Throws<IOException>(() => NodeFileStream.OpenSource(link, link))
+                )
+            );
+        await Task.WhenAll(attempts).WaitAsync(TimeSpan.FromSeconds(3));
+        var regular = Path.Combine(temp.Path, "regular");
+        await File.WriteAllTextAsync(regular, "content");
+        File.Delete(link);
+        File.CreateSymbolicLink(link, regular);
+        await using var stream = NodeFileStream.OpenSource(link, link);
+        using var reader = new StreamReader(stream);
+        Assert.Equal("content", await reader.ReadToEndAsync());
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

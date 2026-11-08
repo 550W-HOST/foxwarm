@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import fs from 'fs-extra';
+import { constants } from 'fs';
 import { open } from 'fs/promises';
 import http from 'http';
 import https from 'https';
@@ -65,7 +66,7 @@ function ensureSuccess(reply: http.IncomingMessage): void {
 export async function streamReadFile(connection: Connection, input: FileRequest): Promise<NodeTransferFilePayload | undefined> {
   connection.signal.throwIfAborted();
   const fullPath = resolveNodeTransferPath(input.filePath, input.agentName, input.restrictToAgentDir);
-  const file = await open(fullPath, 'r');
+  const file = await open(fullPath, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
   try {
     const stats = await file.stat();
     if (!stats.isFile()) throw new Error(`Not a file: ${input.filePath}`);

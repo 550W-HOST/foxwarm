@@ -123,6 +123,125 @@ public sealed partial class NodeFileTransferTests
     }
 
     [Fact]
+    public async Task Only_the_latest_32_completed_copy_summaries_are_retained_per_Session()
+    {
+        await using var f = new Fixture();
+        await f.Start();
+        var credentials = f.Manager.Nodes.Registry.Create("receipt-cache");
+        var socket = await f.Connect("receipt-cache", credentials, streaming: true);
+        var bytes = new byte[128 * 1024];
+        await File.WriteAllBytesAsync(Path.Combine(f.Work, "source.bin"), bytes);
+        f.Owner.Entry.WithState(state => state.Busy = true);
+        var copies = Enumerable
+            .Range(0, 33)
+            .Select(index =>
+            {
+                var args = CopyArgs("receipt-cache");
+                args["targetPath"] = "target-" + index;
+                return f.Manager.CopyBetweenNodesAsync(f.Owner, args, default);
+            })
+            .ToArray();
+        var requests = new JsonObject[33];
+        using var http = new HttpClient { BaseAddress = new Uri(f.App.Urls.Single()) };
+        http.DefaultRequestHeaders.Add("X-Foxwarm-Node", "receipt-cache");
+        http.DefaultRequestHeaders.Authorization = new(
+            "Bearer",
+            credentials["authToken"]!.ToString()
+        );
+        for (var i = 0; i < requests.Length; i++)
+        {
+            var request = await Fixture.Read(socket);
+            var index = int.Parse(request["filePath"]!.ToString()["target-".Length..]);
+            requests[index] = request;
+            using var response = await http.GetAsync(
+                "/node/transfer/" + request["transferId"]!.ToString()
+            );
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            _ = await response.Content.ReadAsByteArrayAsync();
+        }
+        var receipts = await Task.WhenAll(copies);
+        for (var i = 0; i < requests.Length; i++)
+        {
+            var id = receipts[i]["transferId"]!.ToString();
+            await Fixture.Send(socket, Fixture.Reply(requests[i], bytes, write: true));
+            _ = await Completion(f.Owner, id);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            while (true)
+            {
+                var completed = await f.Manager.CancelCopyTransferAsync(
+                    f.Owner,
+                    new JsonObject { ["transferId"] = id },
+                    default
+                );
+                if (SessionWait.Text(completed["status"]) == "completed")
+                    break;
+                await Task.Delay(10, timeout.Token);
+            }
+        }
+        await f.Manager.MoveIdentityAsync(f.Owner, new JsonObject { ["newSessionId"] = "renamed" });
+        var first = receipts[0]["transferId"]!.ToString();
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            f.Manager.CancelCopyTransferAsync(
+                f.Owner,
+                new JsonObject { ["transferId"] = first },
+                default
+            )
+        );
+        for (var i = 1; i < receipts.Length; i++)
+        {
+            var id = receipts[i]["transferId"]!.ToString();
+            var completed = await f.Manager.CancelCopyTransferAsync(
+                f.Owner,
+                new JsonObject { ["transferId"] = id },
+                default
+            );
+            Assert.Equal("completed", SessionWait.Text(completed["status"]));
+            Assert.Equal(bytes.Length, completed["sizeBytes"]!.GetValue<long>());
+        }
+        f.Owner.Entry.WithState(state => state.Busy = false);
+    }
+
+    [Fact]
+    public async Task Failed_copy_keeps_only_a_small_status_summary()
+    {
+        await using var f = new Fixture();
+        await f.Start();
+        var socket = await f.Connect("failure-node", streaming: true);
+        await File.WriteAllBytesAsync(Path.Combine(f.Work, "source.bin"), new byte[128 * 1024]);
+        f.Owner.Entry.WithState(state => state.Busy = true);
+        var copying = f.Manager.CopyBetweenNodesAsync(f.Owner, CopyArgs("failure-node"), default);
+        var request = await Fixture.Read(socket);
+        var id = (await copying)["transferId"]!.ToString();
+        await Fixture.Send(
+            socket,
+            new JsonObject
+            {
+                ["type"] = "file_transfer_error",
+                ["transferId"] = request["transferId"]!.DeepClone(),
+                ["error"] = "The private source path failed.",
+            }
+        );
+        _ = await Completion(f.Owner, id);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (true)
+        {
+            var completed = await f.Manager.CancelCopyTransferAsync(
+                f.Owner,
+                new JsonObject { ["transferId"] = id },
+                default
+            );
+            if (SessionWait.Text(completed["output"]) == "Copy failed.")
+            {
+                Assert.Equal("failed", SessionWait.Text(completed["status"]));
+                Assert.DoesNotContain("private source path", completed.ToJsonString());
+                break;
+            }
+            await Task.Delay(10, timeout.Token);
+        }
+        f.Owner.Entry.WithState(state => state.Busy = false);
+    }
+
+    [Fact]
     public async Task Stop_hands_off_the_copy_and_cancel_reports_uncertain_target_effect()
     {
         await using var f = new Fixture();
@@ -186,6 +305,24 @@ public sealed partial class NodeFileTransferTests
         var text = completion.Parts![0]["system"]!.ToString();
         Assert.Contains("\"status\":\"cancelled\"", text);
         Assert.Contains("may already have been published", text);
+        using (var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5)))
+        {
+            while (true)
+            {
+                var completed = await f.Manager.CancelCopyTransferAsync(
+                    f.Owner,
+                    new JsonObject { ["transferId"] = id },
+                    default
+                );
+                if (SessionWait.Text(completed["output"]) == "Copy was cancelled.")
+                {
+                    Assert.Equal("cancelled", SessionWait.Text(completed["status"]));
+                    Assert.DoesNotContain("source.bin", completed.ToJsonString());
+                    break;
+                }
+                await Task.Delay(10, timeout.Token);
+            }
+        }
         f.Owner.Entry.WithState(state => state.Busy = false);
     }
 

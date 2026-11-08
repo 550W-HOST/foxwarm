@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Text.Json.Nodes;
 using Foxwarm.Nodes;
 using Foxwarm.Tools;
@@ -40,9 +41,11 @@ internal sealed partial class SessionManager
         internal bool HandedOff;
     }
 
+    private sealed record CompletedCopy(string Id, string Status, long? Size, string? Sha256);
+
     private readonly object copyGate = new();
     private readonly Dictionary<string, CopyTransfer> copies = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, CopyTransfer> recentCopies = new(StringComparer.Ordinal);
+    private readonly ConditionalWeakTable<SessionOwner, Queue<CompletedCopy>> recentCopies = new();
 
     internal async Task<JsonObject> CopyBetweenNodesAsync(
         SessionOwner owner,
@@ -250,7 +253,22 @@ internal sealed partial class SessionManager
             copies.Remove(transfer.Id);
             if (background && Accepting && !transfer.Owner.Entry.Retired)
             {
-                recentCopies[transfer.Id] = transfer;
+                var recent = recentCopies.GetOrCreateValue(transfer.Owner);
+                var status =
+                    failure is null ? "completed"
+                    : transfer.Stop.IsCancellationRequested ? "cancelled"
+                    : "failed";
+                var size = Interlocked.Read(ref transfer.Size);
+                recent.Enqueue(
+                    new CompletedCopy(
+                        transfer.Id,
+                        status,
+                        size < 0 ? null : size,
+                        SessionWait.Text(result?["sha256"])
+                    )
+                );
+                if (recent.Count > 32)
+                    recent.Dequeue();
             }
         }
         transfer.Stop.Dispose();
@@ -276,10 +294,28 @@ internal sealed partial class SessionManager
         CopyTransfer? transfer;
         lock (copyGate)
         {
-            transfer = copies.GetValueOrDefault(id) ?? recentCopies.GetValueOrDefault(id);
+            transfer = copies.GetValueOrDefault(id);
+            if (transfer is null && recentCopies.TryGetValue(owner, out var recent))
+            {
+                var completed = recent.FirstOrDefault(item => item.Id == id);
+                if (completed is not null)
+                    return new JsonObject
+                    {
+                        ["transferId"] = completed.Id,
+                        ["status"] = completed.Status,
+                        ["sizeBytes"] = completed.Size,
+                        ["sha256"] = completed.Sha256,
+                        ["output"] = completed.Status switch
+                        {
+                            "completed" => "Copy completed.",
+                            "cancelled" => "Copy was cancelled.",
+                            _ => "Copy failed.",
+                        },
+                    };
+            }
             if (transfer is null || !ReferenceEquals(transfer.Owner, owner) || !transfer.HandedOff)
                 throw new InvalidDataException(
-                    "No background copy with that transfer ID belongs to this Session."
+                    "No background copy with that transfer ID belongs to this Session, or it has already finished."
                 );
         }
         if (transfer.Work.IsCompleted)
@@ -334,13 +370,7 @@ internal sealed partial class SessionManager
         }
         await Task.WhenAll(active.Select(item => item.Observer));
         lock (copyGate)
-            foreach (
-                var id in recentCopies
-                    .Where(pair => ReferenceEquals(pair.Value.Owner, owner))
-                    .Select(pair => pair.Key)
-                    .ToArray()
-            )
-                recentCopies.Remove(id);
+            recentCopies.Remove(owner);
     }
 
     private async Task DrainCopyTransfersAsync()

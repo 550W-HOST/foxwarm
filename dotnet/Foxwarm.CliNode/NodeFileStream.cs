@@ -1,8 +1,11 @@
+using System.ComponentModel;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json.Nodes;
 using Foxwarm.Tools;
+using Microsoft.Win32.SafeHandles;
 
 namespace Foxwarm.CliNode;
 
@@ -39,16 +42,7 @@ internal sealed class NodeFileStream(NodePaths paths, string host, string nodeId
     )
     {
         var path = paths.Transfer(raw, agent, restrict);
-        if (NativeFileKind.Read(path) != "file")
-            throw new InvalidDataException("Not a file: " + raw);
-        await using var input = new FileStream(
-            path,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.ReadWrite | FileShare.Delete,
-            65536,
-            FileOptions.Asynchronous | FileOptions.SequentialScan
-        );
+        await using var input = OpenSource(path, raw);
         var length = input.Length;
         if (length < Threshold)
         {
@@ -86,6 +80,64 @@ internal sealed class NodeFileStream(NodePaths paths, string host, string nodeId
         }
         return null;
     }
+
+    internal static FileStream OpenSource(string path, string raw)
+    {
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
+        {
+            if (NativeFileKind.Read(path) != "file")
+                throw new InvalidDataException("Not a file: " + raw);
+            var input = new FileStream(
+                path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete,
+                65536,
+                FileOptions.Asynchronous | FileOptions.SequentialScan
+            );
+            try
+            {
+                if (OperatingSystem.IsWindows())
+                    _ = OpenFileMetadata.Read(input.SafeFileHandle, "Not a file: " + raw);
+                return input;
+            }
+            catch
+            {
+                input.Dispose();
+                throw;
+            }
+        }
+        // A path may become a FIFO between a path stat and open. Nonblocking open lets us
+        // inspect the opened object without tying up a worker when no FIFO writer exists.
+        const int LinuxNonblockingCloseOnExec = 0x800 | 0x80000;
+        const int DarwinNonblockingCloseOnExec = 0x4 | 0x1000000;
+        var flags = OperatingSystem.IsLinux()
+            ? LinuxNonblockingCloseOnExec
+            : DarwinNonblockingCloseOnExec;
+        var descriptor = Open(path, flags);
+        if (descriptor < 0)
+        {
+            var error = Marshal.GetLastPInvokeError();
+            throw new IOException(
+                new Win32Exception(error).Message + ": " + raw,
+                unchecked((int)0x80070000) | error
+            );
+        }
+        var handle = new SafeFileHandle((IntPtr)descriptor, ownsHandle: true);
+        try
+        {
+            _ = OpenFileMetadata.Read(handle, "Not a file: " + raw);
+            return new FileStream(handle, FileAccess.Read, 65536, isAsync: false);
+        }
+        catch
+        {
+            handle.Dispose();
+            throw;
+        }
+    }
+
+    [DllImport("libc", EntryPoint = "open", SetLastError = true)]
+    private static extern int Open(string path, int flags);
 
     internal async Task<JsonObject> Write(
         string id,
