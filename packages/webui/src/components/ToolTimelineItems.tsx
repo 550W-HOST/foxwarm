@@ -49,6 +49,7 @@ import { ToolApprovalNotice } from './ApprovalCard'
 import { useSessionQuestionsContext } from '../sessionQuestionsState'
 import { isAskUserCall } from '../sessionQuestions'
 import type { ReasoningBadgeInfo } from './reasoningParts'
+import { SentVersionButton, sentVersionTargets } from './SentVersionDialog'
 
 const formatToolResponseText = (resp: FunctionResponse): string => resp.__meta?.toolScriptSubCalls !== undefined
   ? formatToolScriptExecutionResponse(resp.response)
@@ -777,6 +778,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
   responses,
   imageParts,
   modelMessage,
+  responseMessage,
   runningTool = false,
   onOpenCodeFile,
   toolIndex,
@@ -791,6 +793,8 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
   responses: FunctionResponse[]
   imageParts: MessagePart[]
   modelMessage?: Message
+  /** The tool message holding `responses`, for the sent version. */
+  responseMessage?: Message
   runningTool?: boolean
   onOpenCodeFile?: OpenCodeFileHandler
   toolIndex: number
@@ -902,6 +906,10 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
   const viewButtons = (
     <div className={`foxwarm-tool-action-buttons ${actionButtonsToneClass} absolute right-0 top-1/2 -translate-y-1/2 flex gap-0.5 opacity-0 transition-opacity`}>
       <IconToggleButton onClick={(e) => { e.stopPropagation(); setJsonSnapshot(JSON.stringify({ modelMessage, call, responses, imageParts }, null, 2)) }} active={jsonSnapshot !== null} title="JSON"><FileJson size={14} /></IconToggleButton>
+      <SentVersionButton targets={sentVersionTargets([
+        call?.id ? { meta: modelMessage?.__meta, callId: call.id } : undefined,
+        responseMessage && (call?.id || responses[0]?.tool_use_id) ? { meta: responseMessage.__meta, callId: call?.id || responses[0]?.tool_use_id } : undefined,
+      ])} size={13} />
     </div>
   )
 
@@ -1009,6 +1017,7 @@ interface ToolTimelineEntry {
   responses: FunctionResponse[]
   imageParts: MessagePart[]
   modelMessage?: Message
+  responseMessage?: Message
 }
 
 export const getGroupedToolEntries = (msg: Message, nextMsg: Message, messageKeyPrefix: string): ToolTimelineEntry[] => {
@@ -1051,12 +1060,14 @@ export const getGroupedToolEntries = (msg: Message, nextMsg: Message, messageKey
         responses: toolId ? (responseEntriesById.get(toolId) || []) : [],
         imageParts: toolId ? (imageEntriesById.get(toolId) || []) : [],
         modelMessage: msg,
+        responseMessage: nextMsg,
       }
     }),
     ...orphanToolIds.map((toolId) => ({
       key: `${messageKeyPrefix}-orphan-tool-${toolId}`,
       responses: responseEntriesById.get(toolId) || [],
       imageParts: imageEntriesById.get(toolId) || [],
+      responseMessage: nextMsg,
     })),
     ...unmatchedResponses.map((resp, idx) => ({
       key: `${messageKeyPrefix}-orphan-resp-${idx}`,
@@ -1104,6 +1115,7 @@ export const InterleavedToolGroup = memo(function InterleavedToolGroup({ msg, ne
           responses={entry.responses}
           imageParts={entry.imageParts}
           modelMessage={entry.modelMessage}
+          responseMessage={entry.responseMessage}
           runningTool={runningTool}
           onOpenCodeFile={onOpenCodeFile}
         />
@@ -1158,6 +1170,7 @@ export const ToolResponsesBlock = memo(function ToolResponsesBlock({ msg, search
           toolIndex={respIdx}
           searchTarget={searchTarget}
           responses={[resp]}
+          responseMessage={msg}
           imageParts={[]}
         />
       ))}

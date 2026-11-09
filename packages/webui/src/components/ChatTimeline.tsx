@@ -67,6 +67,8 @@ import {
   summarizeDurationSamples,
   type DurationSample,
 } from '../usageTiming'
+import { summarizeTextRedaction, textRedactionRows } from '../textRedaction'
+import { SentVersionButton, sentVersionTargets, useSentVersionAvailable } from './SentVersionDialog'
 import {
   buildTimelineRows,
   getGroupContentPartIndex,
@@ -232,6 +234,7 @@ const ModelUsageBadge = memo(function ModelUsageBadge({ usage, isMobile, callCou
 
   const stopUsageBadgeEvent = (event: { stopPropagation: () => void }) => event.stopPropagation()
   const apiDurationMs = summarizeDurationSamples(attribution.apiDurationsMs).totalMs
+  const redaction = useMemo(() => summarizeTextRedaction(attribution.textRedaction), [attribution.textRedaction])
 
   return (
     <div
@@ -261,6 +264,7 @@ const ModelUsageBadge = memo(function ModelUsageBadge({ usage, isMobile, callCou
           <ModelUsageRow label="Output" value={usage.outputTokens} tone={usage.outputTokens > 3000 ? 'warning' : 'normal'} />
           {usage.cost !== undefined ? <ModelUsageTextRow label="Estimated cost" value={formatUsdCost(usage.cost)} /> : null}
           <ModelUsageTextRow label="API" value={formatDurationSummary(attribution.apiDurationsMs)} />
+          {redaction ? textRedactionRows(redaction).map(([label, value]) => <ModelUsageTextRow key={label} label={label} value={value} />) : null}
           <ModelUsageTextRow label="Time" value={formatUsageTimes(attribution.timestamps)} />
           <ModelUsageTextRow label="Model" value={formatUsageModels(attribution.models)} />
         </> : <>
@@ -866,6 +870,7 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message, sessi
       <IconToggleButton onClick={handleCopy} active={copied} title={copied ? 'Copied' : 'Copy Raw Text'}>
         {copied ? <Check size={12} /> : <Copy size={12} />}
       </IconToggleButton>
+      <SentVersionButton targets={sentVersionTargets([{ meta: message.__meta }])} />
     </div>
   )
 
@@ -967,6 +972,7 @@ const MessageRow = memo(function MessageRow({
   } = row
   const llmError = useMemo(() => getLlmErrorMessageDetails(msg), [msg])
   const sessionNotice = useMemo(() => getSessionNotice(msg), [msg])
+  const sentVersionAvailable = useSentVersionAvailable()
   const toolDisclosure = {
     hideCollapsedContent: conversationDetails,
     neutralSuccess: conversationDetails || neutralToolSuccess,
@@ -1076,6 +1082,9 @@ const MessageRow = memo(function MessageRow({
               </div>
             ))}
           </div>}
+          {hasUserBody && sentVersionAvailable && !msg.__meta?.queuedPreview ? <div data-search-exclude className="foxwarm-user-action-buttons mt-0.5 flex justify-end opacity-0 transition-opacity">
+            <SentVersionButton targets={sentVersionTargets([{ meta: msg.__meta }])} />
+          </div> : null}
           </>
         ) : (
           <div className={`flex min-w-0 max-w-full flex-col ${usageAnchorRelative ? 'relative' : ''}`}>
@@ -1195,6 +1204,7 @@ const ConversationUsage = memo(function ConversationUsage({ badge, pendingReques
   const attribution = badge?.attribution
   const input = usage ? usage.cachedTokens + usage.inputTokens : 0
   const seq = attribution ? formatUsageMessageSeq(attribution.messageSeqs) : null
+  const redaction = useMemo(() => attribution ? summarizeTextRedaction(attribution.textRedaction) : null, [attribution])
   const rows = usage && attribution ? [
     ['Requests', `${(badge.callCount || 0) + missingRequests + pendingRequests}${pendingRequests ? ` · ${pendingRequests} pending` : ''}${missingRequests ? ` · ${missingRequests} unavailable` : ''}`],
     ['Cached', usage.cachedTokens.toLocaleString()],
@@ -1203,6 +1213,7 @@ const ConversationUsage = memo(function ConversationUsage({ badge, pendingReques
     ...(usage.cost !== undefined ? [['Estimated cost', formatUsdCost(usage.cost)]] : []),
     ['Cache share', input ? `${(usage.cachedTokens / input * 100).toFixed(1)}%` : 'unavailable'],
     ['API time', formatDurationSummary(attribution.apiDurationsMs)],
+    ...(redaction ? textRedactionRows(redaction) : []),
     ['Time range', formatUsageTimes(attribution.timestamps)],
     ['Model', formatUsageModels(attribution.models)],
   ] : []

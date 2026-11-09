@@ -1046,8 +1046,15 @@ html[data-foxwarm-component-treatment="console"] .foxwarm-tool-header[data-tool-
 /* A nested card may share its ancestor's hover, but only its own controls
  * should react. Keep the card's direct control/rail ownership explicit. */
 .foxwarm-assistant-message-card:is(:hover, :focus-within) > .foxwarm-assistant-action-buttons,
-.foxwarm-tool-card:is(:hover, :focus-within) > .foxwarm-tool-action-buttons {
+.foxwarm-tool-card:is(:hover, :focus-within) > .foxwarm-tool-action-buttons,
+[data-search-row]:is(:hover, :focus-within) .foxwarm-user-action-buttons {
   opacity: 1;
+}
+
+@media (hover: none) {
+  .foxwarm-user-action-buttons {
+    opacity: 1;
+  }
 }
 
 :is(.foxwarm-tool-card, .foxwarm-context-block-card, [data-model-thread-card], .foxwarm-system-message-card):hover > .foxwarm-thread-line-button > .foxwarm-thread-line-stroke,

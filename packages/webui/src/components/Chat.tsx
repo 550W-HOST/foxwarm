@@ -21,6 +21,7 @@ import { isRuntimeStateInactiveName, isSessionRuntimeActive } from '../sessionRu
 import SessionDebugModal from './SessionDebugModal'
 import { ToolCallActivityContext } from './ToolCallActivityContext'
 import { ToolScriptProgressContext } from './ToolScriptProgressContext'
+import { SentVersionContext } from './SentVersionDialog'
 import { OpenModelSettingsContext } from './SystemEventCard'
 import { ThreadCardHeightContext } from './useThreadCardHeightTransition'
 import { isSessionTurnIncomplete } from '../../../shared/src/sessionContinuation'
@@ -235,6 +236,8 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
   const searchHistoryDraftRef = useRef('')
   const searchHighlightName = `foxwarm-chat-search-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`
   const sessionHeaderSubtitle = formatSessionHeaderSubtitle(sessionId, sessionRecord?.cwd)
+  const sentVersionEnabled = sessionRecord?.textRedaction === true
+  const sentVersion = useMemo(() => ({ sessionId, enabled: sentVersionEnabled }), [sessionId, sentVersionEnabled])
   const chatMessageContainerId = `foxwarm-chat-messages-${useId()}`
 
   const messagesContainerRef = useRef<HTMLDivElement>(null)
@@ -1728,7 +1731,9 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
                 <OpenModelSettingsContext.Provider value={webUiIdentityMode ? null : onOpenModelSettings ?? null}>
                 <ToolCallActivityContext.Provider value={!displayingLatest ? NO_RUNNING_TOOL_CALLS : toolCallActivity?.runningCallIds ?? (sessionRecord?.runtimeState?.perCallToolActivity ? NO_RUNNING_TOOL_CALLS : undefined)}>
                 <ToolScriptProgressContext.Provider value={toolScriptProgress}>
+                <SentVersionContext.Provider value={sentVersion}>
                   <ChatTimeline sessionId={sessionId} historyMessages={messages} currentHistoryMessages={activeMessages} runtimeState={displayingLatest ? sessionRecord?.runtimeState : undefined} busyStartedAt={displayingLatest ? sessionRecord?.busyStartedAt : undefined} isRunningTool={displayingLatest && sessionRecord?.runtimeState?.state === 'running-tool'} messages={timelineMessages} isMobile={isMobile} timelineView={timelineView} showInterAgentMessages={showInterAgentMessages} showCommentary={showCommentary} showUsageBadge={showUsageBadge} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} searchTarget={searchOpen && selectedSearchMatch?.id === searchMatchId ? selectedSearchMatch : null} renderMessageFooter={displayingLatest && sessionQueueLength > 0 && queuedMessages.length === 0 ? renderQueuedFooter : undefined} />
+                </SentVersionContext.Provider>
                 </ToolScriptProgressContext.Provider>
                 </ToolCallActivityContext.Provider>
                 </OpenModelSettingsContext.Provider>

@@ -3,6 +3,7 @@ import { ExternalLink, ListFilter, X } from 'lucide-react'
 import { useLocalDay, useUsageReport } from '../useUsageReport'
 import { formatUsdCost } from '../usageCost'
 import TokenUsageDetails, { formatUsageNumber } from './TokenUsageDetails'
+import SystemUsageRedaction from './SystemUsageRedaction'
 import {
   MAX_USAGE_DAYS, USAGE_GROUPINGS, USAGE_PERIODS, toDateInput, usageBucketLabel, usageGroupDetail,
   usageGroupLabel, usageMetricValue, usageQuery, usageRange, usageRecordsBegin, usageSeries, usageTokens,
@@ -236,6 +237,7 @@ export default function SystemUsage({ request, onOpenSession }: SystemUsageProps
             <div className="border-t border-fw-border-muted px-4 py-2 text-xs text-fw-text-muted"><span className="text-fw-warning">*</span> Includes requests without a price.</div>
           ) : null}
         </section>
+        <SystemUsageRedaction report={shown.report} groupingLabel={groupingLabel} />
       </div> : !error && range ? <div className="p-6 text-sm text-fw-text-muted">{loading ? 'Loading usage…' : ''}</div> : null}
     </div>
   )

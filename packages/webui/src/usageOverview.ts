@@ -1,4 +1,5 @@
 import { API_BASE_PATH } from './config'
+import { isUsageRedaction, type UsageRedaction } from './textRedaction'
 
 /** Installation usage from GET /api/usage: recorded estimates only, never repriced. */
 export type UsageTotals = {
@@ -10,6 +11,8 @@ export type UsageTotals = {
   unpricedRequests: number
   /** Present only when at least one included request was priced. */
   cost?: number
+  /** Text redaction statistics, on totals and group rows that used it. */
+  redaction?: UsageRedaction
 }
 
 export type UsageGrouping = 'agent' | 'tree' | 'session' | 'model' | 'provider' | 'purpose'
@@ -148,6 +151,7 @@ const record = (value: unknown): value is Record<string, unknown> => !!value && 
 function isUsageTotals(value: unknown): value is UsageTotals {
   return record(value) && count(value.requests) && count(value.cachedTokens) && count(value.inputTokens) && count(value.outputTokens) && count(value.unpricedRequests)
     && (value.cost === undefined || (typeof value.cost === 'number' && Number.isFinite(value.cost) && value.cost >= 0))
+    && (value.redaction === undefined || isUsageRedaction(value.redaction))
 }
 
 const optionalText = (value: unknown) => value === undefined || typeof value === 'string'

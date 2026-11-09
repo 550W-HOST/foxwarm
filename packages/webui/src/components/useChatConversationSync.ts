@@ -67,6 +67,8 @@ type ChatSessionRecord = {
   childModelEffortDefault?: string | null
   isolated?: boolean
   questions?: SessionQuestionsProjection
+  /** Requests on the current model replace private text before sending. */
+  textRedaction?: boolean
 }
 
 export type MemorySize = {

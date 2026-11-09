@@ -13,6 +13,7 @@ import {
   type ToolTagItem,
 } from './chatShared'
 import { readPersistedRequestTiming, deriveRequestTimings, type DerivedRequestTiming, type DurationSample } from '../usageTiming'
+import { readTextRedaction, sameTextRedaction, type TextRedactionTurn } from '../textRedaction'
 import { getContextScrollbarAnchorKey, getMessageStableKey, getMessageViewportAnchorKey } from '../chatViewportState'
 import { parsePastedTextSegments } from '../pastedText'
 import { deriveTimelineTimeMarkers, selectTimelineTimeMarker, type TimelineTimeMarker } from './timelineTime'
@@ -58,6 +59,8 @@ export type UsageAttribution = {
   apiDurationsMs: DurationSample[]
   /** One persisted model-message sequence per usage-bearing model message, in source order. */
   messageSeqs: Array<number | null>
+  /** Text redaction summary per usage-bearing model message; null when that request did not redact. */
+  textRedaction: Array<TextRedactionTurn | null>
 }
 
 /** Shared per-group view: every row of one tool-call group carries the same object. */
@@ -214,6 +217,7 @@ const getMessageUsageAttribution = (msg: Message, timing: DerivedRequestTiming):
   timestamps: [getUsageTimestamp(msg)],
   apiDurationsMs: [timing.apiDurationMs],
   messageSeqs: [getValidMessageSeq(msg)],
+  textRedaction: [readTextRedaction(msg.__meta?.textRedaction)],
 })
 
 /** Whole event/reminder wrappers and metadata-classified display-only LLM retry notices may join a tool run; quoted content does not. */
@@ -441,7 +445,7 @@ const deriveGroup = (messages: Message[], scan: GroupScan, requestTimings: Deriv
 
   const items: ToolTagItem[] = []
   const total: NormalizedTokenUsage = { cachedTokens: 0, inputTokens: 0, outputTokens: 0 }
-  const attribution: UsageAttribution = { models: [], timestamps: [], apiDurationsMs: [], messageSeqs: [] }
+  const attribution: UsageAttribution = { models: [], timestamps: [], apiDurationsMs: [], messageSeqs: [], textRedaction: [] }
   let callCount = 0
 
   for (let index = start; index < end; index++) {
@@ -487,6 +491,7 @@ const deriveGroup = (messages: Message[], scan: GroupScan, requestTimings: Deriv
     attribution.timestamps.push(...messageAttribution.timestamps)
     attribution.apiDurationsMs.push(...messageAttribution.apiDurationsMs)
     attribution.messageSeqs.push(...messageAttribution.messageSeqs)
+    attribution.textRedaction.push(...messageAttribution.textRedaction)
   }
 
   // The message whose ordinary output ends this group keeps its own group for everything after that
@@ -546,6 +551,8 @@ const sameAttribution = (a: UsageAttribution, b: UsageAttribution): boolean => (
     && sameSampleList(a.timestamps, b.timestamps)
     && sameSampleList(a.apiDurationsMs, b.apiDurationsMs)
     && sameMessageSeqs(a.messageSeqs, b.messageSeqs)
+    && a.textRedaction.length === b.textRedaction.length
+    && a.textRedaction.every((item, index) => sameTextRedaction(item, b.textRedaction[index]))
   )
 )
 
@@ -944,7 +951,7 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
         if (!row.activity) continue
         const owned = [...requestOwners].filter(([, key]) => key === row.key).map(([request]) => request)
         const total: NormalizedTokenUsage = { cachedTokens: 0, inputTokens: 0, outputTokens: 0 }
-        const attribution: UsageAttribution = { models: [], timestamps: [], apiDurationsMs: [], messageSeqs: [] }
+        const attribution: UsageAttribution = { models: [], timestamps: [], apiDurationsMs: [], messageSeqs: [], textRedaction: [] }
         let callCount = 0
         let pendingRequests = 0
         let missingRequests = 0
@@ -964,6 +971,7 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
           attribution.timestamps.push(...details.timestamps)
           attribution.apiDurationsMs.push(...details.apiDurationsMs)
           attribution.messageSeqs.push(...details.messageSeqs)
+          attribution.textRedaction.push(...details.textRedaction)
         }
         const usage = callCount ? { usage: total, callCount, attribution } : null
         const old = previous?.rows.get(row.key)?.activity
