@@ -545,8 +545,27 @@ var modelEffortConfig = {
     }
   }
 };
+var textRedaction = {
+  description: "Replace detected private text before sending it to the model and restore known placeholders in ordinary output. Defaults to disabled; options inherit field by field from defaults to provider to model.",
+  anyOf: [
+    { type: "boolean" },
+    {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        enabled: { type: "boolean", default: false },
+        endpoint: { type: "string", pattern: "^https?://", description: "Full URL of the text classification endpoint. Required when enabled." },
+        apiKey: { type: "string", description: "Optional Bearer credential for the detection service." },
+        threshold: { type: "number", minimum: 0, maximum: 1, default: 0.5 },
+        timeoutMs: { type: "integer", minimum: 1, maximum: 2147483647, default: 3e4 },
+        excludeLabels: { type: "array", items: { type: "string", pattern: "\\S" }, default: ["private_date", "private_url"], description: "Detection labels to leave unchanged. A list replaces the inherited one; an empty list redacts every label." }
+      }
+    }
+  ]
+};
 var modelDefaultProperties = {
   retryIntervalsMs: { type: "array", minItems: 1, items: { type: "integer", minimum: 0, maximum: 2147483647 }, default: [2e3, 5e3, 1e4, 2e4, 4e4, 6e4], description: "Delays in milliseconds for successive LLM retries; later retries reuse the last entry. Model overrides provider, then defaults. Virtual providers use only their own value or defaults. Saves apply to the next retry wait; an active wait keeps its deadline." },
+  textRedaction,
   contextLimit: { ...positiveInteger, description: "Context limit in tokens." },
   maxOutput: { ...positiveInteger, description: "Maximum output tokens requested from the provider. Provider-specific extraFields may override this value." },
   providerImageOutputFormat: { enum: ["webp", "jpeg"], description: "Format used for optimized input images: webp, or jpeg with PNG for transparent images." },
@@ -646,7 +665,7 @@ var providerObjectEntry = {
       then: {
         required: ["targets"],
         properties: { targets: { minItems: 1 } },
-        not: { anyOf: ["models", "model", "baseUrl", "apiKey", "requestCompression", "extraFields", "extraHeaders", "webSearch", "imageGeneration", "contextLimit", "maxOutput", "providerImageOutputFormat", "imageInput", "pricing", "streamContentInactivityTimeoutMs", "effort", "historyReasoningField", "asyncCompact", "disallowEmptyResponse", "keepReasoningOnError", "sameProviderAs", "failureThreshold", "cooldownMs"].map((field) => ({ required: [field] })) }
+        not: { anyOf: ["models", "model", "baseUrl", "apiKey", "requestCompression", "extraFields", "extraHeaders", "webSearch", "imageGeneration", "contextLimit", "maxOutput", "providerImageOutputFormat", "imageInput", "textRedaction", "pricing", "streamContentInactivityTimeoutMs", "effort", "historyReasoningField", "asyncCompact", "disallowEmptyResponse", "keepReasoningOnError", "sameProviderAs", "failureThreshold", "cooldownMs"].map((field) => ({ required: [field] })) }
       }
     },
     {
@@ -654,7 +673,7 @@ var providerObjectEntry = {
       then: {
         required: ["targets"],
         properties: { targets: { minItems: 2 } },
-        not: { anyOf: ["models", "model", "baseUrl", "apiKey", "requestCompression", "extraFields", "extraHeaders", "webSearch", "imageGeneration", "contextLimit", "maxOutput", "providerImageOutputFormat", "imageInput", "pricing", "streamContentInactivityTimeoutMs", "effort", "historyReasoningField", "asyncCompact", "disallowEmptyResponse", "keepReasoningOnError", "sameProviderAs"].map((field) => ({ required: [field] })) }
+        not: { anyOf: ["models", "model", "baseUrl", "apiKey", "requestCompression", "extraFields", "extraHeaders", "webSearch", "imageGeneration", "contextLimit", "maxOutput", "providerImageOutputFormat", "imageInput", "textRedaction", "pricing", "streamContentInactivityTimeoutMs", "effort", "historyReasoningField", "asyncCompact", "disallowEmptyResponse", "keepReasoningOnError", "sameProviderAs"].map((field) => ({ required: [field] })) }
       }
     },
     {
