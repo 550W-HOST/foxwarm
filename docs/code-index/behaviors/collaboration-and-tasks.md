@@ -25,7 +25,7 @@ The Session's actual `parentSessionId` owns its direct reporting/topology relati
 
 Reparenting changes the relation, not Agent membership, inherited memory, historical text, or Task creator/owner. A Task's immutable `parentTaskId` is another relation: it groups records, does not make Session parents, join child results, cascade completion, or schedule dependent work. [Session relations](../units/src-session-misc.md) and [Tasks](../units/src-tasks.md) locate these owners.
 
-Tool authorization still applies to each action. When either Session is isolated, communication is limited to self/direct parent/child relations; sibling, unrelated, or same-Agent status is not enough. A direct relation does not grant filesystem, Node, or tool permissions. The canonical exception is [isolated Session relations](../modules/session-core.md#d-session-core-isolated-relations).
+Tool authorization still applies to each action. A Session of an isolated Agent may send to, or wait on, only itself and its direct parent/child; sibling, unrelated, or same-Agent status is not enough. Isolation no longer restricts the incoming direction: whether others may contact an isolated Agent's Sessions is their own policy's decision. A direct relation does not grant filesystem, Node, or tool permissions. The canonical exception is [isolated Session relations](../modules/session-core.md#d-session-core-isolated-relations).
 
 ## Who is acting on a Task?
 

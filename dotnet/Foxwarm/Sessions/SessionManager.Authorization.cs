@@ -26,6 +26,24 @@ internal sealed partial class SessionManager
         return SessionCatalog.Text(Catalog.Resolve(raw)["sessionId"]) ?? raw;
     }
 
+    // Legacy isolation, outgoing direction only: an isolated Agent's Session may address itself
+    // and its direct parent or child. Who may contact an isolated Agent is the sender's policy.
+    internal void RequireIsolatedSessionRelation(
+        SessionOwner source,
+        string targetId,
+        string message
+    )
+    {
+        if (!AgentIsolated(source.Agent) || targetId == source.Id)
+            return;
+        if (
+            AuthorizationParent(Catalog.Get(source.Id)) == targetId
+            || AuthorizationParent(Catalog.Get(targetId)) == source.Id
+        )
+            return;
+        throw new ToolAuthorizationDeniedException(message);
+    }
+
     internal AuthorizationTarget? AuthorizationTarget(string requested)
     {
         var id = SessionCatalog.Text(Catalog.Resolve(requested)["sessionId"]);

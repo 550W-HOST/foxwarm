@@ -67,7 +67,7 @@ The durable JSON implementation and backup semantics are canonical in [src-utils
 - Per-session JSON is authoritative for semantic state. Catalog-only presentation fields are not inferred from authority files when the catalog is missing.
 - Lazy hydration is tracked by explicit catalog-placeholder identity, not by history content. A hydrated Session with empty history remains a live owner and ordinary reads cannot replace its semantic fields from an older authority snapshot.
 - A managed session has at most one live lease. Input addressed to an actively managed target enters its managed inbox.
-- When either side is isolated, inter-session delivery requires the same session or an explicit direct parent/child relation; unrelated and sibling sessions are denied.
+- An isolated sender's inter-session delivery and wait dependencies require the same session or an explicit direct parent/child relation; unrelated and sibling sessions are denied. The incoming direction (a target in an isolated Agent) is not restricted by isolation; see [D-session-core-isolated-relations](#d-session-core-isolated-relations).
 - Fork lineage never exposes parent content created after the fork point.
 - Atomic in-process creation skips live/archived exact internal IDs, explicit creation rejects archive-only reuse, and per-channel first-message resolution converges on one attached lifetime while persisted live sessions still hydrate. Canonical contract: [archived ID reservation](../threads/session-lifecycle.md#d-lifecycle-archived-id-reservation).
 - Channel mutations are persisted after the in-memory map changes.
@@ -97,7 +97,9 @@ Active provider/tool phases are transient. Wait state persists. Legacy busy fiel
 
 ### D-session-core-isolated-relations
 
-Explicit direct parent/child relations are the only cross-agent inter-session exception when either side is isolated. This exception does not grant tool, filesystem, or node permissions.
+Explicit direct parent/child relations are the only inter-session targets of an isolated sender, including within its own Agent. This exception does not grant tool, filesystem, or node permissions.
+
+[2026-11-09] User decision: only the outgoing direction remains a legacy isolation boundary. Delivery and wait dependencies from an isolated Agent's Session are limited to itself and its direct parent or child; the maintained C# Main enforces this in `SessionManager.SendAsync` (every sender path, including Task notifications) and `ValidateWait`. The incoming guard is retired: whether another Session may message, wait on, or view an isolated Agent's Sessions is decided by that caller's own policy. The retained TypeScript reference still enforces both directions. Removal of the outgoing check follows the [legacy isolation migration](./tools-and-permissions.md#d-tools-legacy-isolation-deprecation).
 
 ### D-session-core-child-identity
 

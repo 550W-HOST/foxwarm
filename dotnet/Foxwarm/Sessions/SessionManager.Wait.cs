@@ -85,6 +85,12 @@ internal sealed partial class SessionManager
                 .ToArray();
             if (targets.Contains(source.Id, StringComparer.Ordinal))
                 throw new InvalidDataException("A Session cannot wait for itself.");
+            foreach (var target in targets)
+                RequireIsolatedSessionRelation(
+                    source,
+                    target,
+                    "Isolated sessions can declare only direct parent/child Session dependencies."
+                );
             return targets;
         }
         all = ResolveTargets(all);

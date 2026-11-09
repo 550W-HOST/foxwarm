@@ -523,6 +523,11 @@ internal sealed partial class SessionManager
                 semanticCaller.Value ?? CancellationToken.None,
                 target
             );
+        RequireIsolatedSessionRelation(
+            source,
+            target.Id,
+            "Isolated sessions can only communicate with themselves or their direct parent/child sessions."
+        );
         var selfSend = source.Id == target.Id;
         if (selfSend && string.IsNullOrEmpty(toolScriptRunId))
             throw new InvalidDataException("A Session cannot send to itself.");
