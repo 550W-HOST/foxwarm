@@ -13,6 +13,7 @@ Leading instruction composition follows [conditional memory and request prefixes
 - [Shared SQLite writer mechanics](../units/dotnet-sqlite-writers.md)
 
 - [Reversible model text redaction](../units/model-text-redaction.md)
+- [Text redaction observability](../units/model-text-redaction-observability.md)
 - [Model configuration and routing](../units/model-configuration.md)
 - [Provider-neutral request history and OpenAI wire helpers](../units/model-common-wire.md)
 - [Anthropic and Chat Completions adapters](../units/model-anthropic-completions.md)

@@ -94,6 +94,8 @@ Conversation activities retain their mounted identity through overlapping techni
 
 - [2026-11-03] A Session without a saved viewport position whose loaded timeline is a single assistant message (the first-run welcome) opens through the ordinary anchor restore at the start of that message (`getOpeningChatViewportState`) instead of at its end. While that opening position is untouched it supersedes resize corrections captured for the empty timeline and is kept as content grows, and the first later row rejoins bottom follow; user scrolling cancels it like any restore. Every other Session keeps the latest-message default.
 
+When the Session's model redacts text, message actions include `Sent version` (`SentVersionDialog`), which shows the replaced ranges from memory ([observability](./model-text-redaction-observability.md)).
+
 ## Design Decisions
 
 ### D-webui-assistant-markdown-tables

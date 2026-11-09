@@ -26,6 +26,8 @@ The detector contract signals that a text is too large with HTTP 413. A slot the
 
 Enabled detection fails closed. Transient detection errors consume the existing request retry budget without provider-health failures, failover, provider attempt-start publication or a claim that an LLM request was sent. Configuration/authentication/invalid-response errors are terminal; Stop does not retry. Other preparation failures keep their existing behavior.
 
+Statistics and the memory-only sent-version view: [observability](./model-text-redaction-observability.md).
+
 ## Configuration and external service
 
 `textRedaction` accepts a boolean or an options object. Fields inherit independently from models `defaults`, concrete provider, then model. Booleans set only `enabled`; an object does not implicitly enable redaction. Explicit lower-level `false` overrides an inherited enablement. Virtual providers cannot configure it; the selected concrete leaf supplies the captured settings. All supplied scopes validate even when masked. Raw YAML editing uses the shared Models schema; structured saves retain existing provider/model overrides and remove the concrete-only setting on virtual conversion.
