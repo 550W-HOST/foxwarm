@@ -68,6 +68,15 @@ test('ask_user questions are answered from the card, the dock and an ordinary me
     await page.click('[data-question-dock] > button')
     await page.waitForSelector(`[data-question-dock][data-question-dock-expanded="${expanded}"]`)
   }
+  // Keys an input method is still composing: the DOM flag (Chromium) and a CDP key with keyCode 229 (Safari's commit Enter).
+  const composingKey = (page, selector, key, init = {}) => page.$eval(selector, (node, key, init) => {
+    node.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, isComposing: true, ...init }))
+  }, key, init)
+  const processKey = async (page, modifiers = 0) => {
+    const cdp = await page.createCDPSession()
+    for (const type of ['rawKeyDown', 'keyUp']) await cdp.send('Input.dispatchKeyEvent', { type, key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 229, modifiers })
+    await cdp.detach()
+  }
   const screenshot = async (page, name) => { if (shots) { await mkdir(shots, { recursive: true }); await page.screenshot({ path: join(shots, name + '.png') }) } }
   try {
     await fixture.start()
@@ -107,6 +116,9 @@ test('ask_user questions are answered from the card, the dock and an ordinary me
     // Keyboard flow in the dock, which the card focused: 1 selects the first option, Enter advances, Enter submits.
     const form = `[data-question-dock] [data-question-form="${questionId}"]`
     await page.waitForFunction(selector => document.activeElement === document.querySelector(selector), {}, form)
+    // A number key that belongs to an input method composition does not select an option.
+    await composingKey(page, form, '1')
+    assert.equal(await page.$eval(`${form} [data-question-option="PostgreSQL"]`, node => node.getAttribute('aria-checked')), 'false')
     await page.keyboard.press('1')
     assert.equal(await page.$eval(`${form} [data-question-option="PostgreSQL"]`, node => node.getAttribute('aria-checked')), 'true')
     await page.keyboard.press('Enter')
@@ -131,13 +143,26 @@ test('ask_user questions are answered from the card, the dock and an ordinary me
     await page.evaluate(() => [...document.querySelectorAll('[data-question-dock] button')].find(button => button.textContent === 'Next').click())
     await page.$eval(`${form} textarea`, node => { node.focus(); node.setSelectionRange(node.value.length, node.value.length) })
     await page.keyboard.type('data')
+    // Default send key (Ctrl/Cmd+Enter): plain Enter in a text field is a newline, and composing keys never submit.
+    assert.equal(await page.$eval(`${form} button[aria-keyshortcuts]`, node => node.title), 'Ctrl+Enter')
     await page.keyboard.press('Enter')
+    assert.equal(await page.$eval(`${form} textarea`, node => node.value), 'svc-data\n')
+    await page.keyboard.press('Backspace')
+    await composingKey(page, `${form} textarea`, 'Enter', { ctrlKey: true })
+    await processKey(page, 2)
+    await sleep(300)
+    assert.equal((await view(blocking)).questions[0].status, 'open')
+    assert.equal(await page.$eval(`${form} textarea`, node => node.value), 'svc-data')
+    await page.keyboard.down('Control')
+    await page.keyboard.press('Enter')
+    await page.keyboard.up('Control')
     await until(async () => (await view(blocking)).questions[0].status === 'answered', 'card answer recorded')
     await until(async () => (inputs.get('block') || []).length >= 2, 'answer reached the model')
     const answerInput = inputs.get('block')[1]
     assert.match(answerInput, new RegExp('Answer to question ' + questionId))
     assert.match(answerInput, /PostgreSQL/)
     assert.match(answerInput, /svc-data/)
+    assert.equal((await view(blocking)).questions[0].answer.answers[1].text, 'svc-data')
     await page.waitForSelector(`[data-ask-user-card="${questionId}"][data-question-status="answered"]`)
     await page.waitForSelector('[data-question-dock]', { hidden: true })
     assert.equal(await storedDraft(page, questionId), false, 'a submitted answer leaves no draft')
@@ -170,14 +195,30 @@ test('ask_user questions are answered from the card, the dock and an ordinary me
     await screenshot(page, 'desktop-message-answer')
 
     // The asynchronous question is answered from the dock; it starts a turn on the idle Session.
+    // With Enter as the Chat send key, Shift+Enter is a newline, a composing Enter is ignored and Enter submits.
+    await page.evaluate(() => localStorage.setItem('foxwarm_send_key_mode_v1', 'enter'))
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    await page.waitForFunction(() => !!window.foxwarmTest?.switchToSession)
+    await waitForWebUiReady(page)
     await page.evaluate(id => window.foxwarmTest.switchToSession(id), asyncId)
     await page.waitForSelector('[data-question-dock][data-question-dock-expanded="false"]')
     await page.click('[data-question-dock] > button')
-    await page.type('[data-question-dock] textarea', 'Yes, include it.')
+    assert.equal(await page.$eval('[data-question-dock] button[aria-keyshortcuts]', node => node.title), 'Enter')
+    await page.type('[data-question-dock] textarea', 'Yes,')
+    await page.keyboard.down('Shift')
+    await page.keyboard.press('Enter')
+    await page.keyboard.up('Shift')
+    await page.keyboard.type('include it.')
+    await composingKey(page, '[data-question-dock] textarea', 'Enter')
+    await processKey(page)
+    await sleep(300)
+    assert.equal((await view(asyncId)).questions[0].status, 'open')
+    assert.equal(await page.$eval('[data-question-dock] textarea', node => node.value), 'Yes,\ninclude it.')
     await screenshot(page, 'desktop-async-dock')
-    await page.evaluate(() => [...document.querySelectorAll('[data-question-dock] button')].find(button => button.textContent === 'Submit').click())
+    await page.keyboard.press('Enter')
     await until(async () => (await view(asyncId)).questions[0].status === 'answered', 'dock answer recorded')
-    await until(async () => (inputs.get('async') || []).some(text => text.includes('Yes, include it.')), 'asynchronous answer started a turn')
+    assert.equal((await view(asyncId)).questions[0].answer.answers[0].text, 'Yes,\ninclude it.')
+    await until(async () => (inputs.get('async') || []).some(text => text.includes('include it.')), 'asynchronous answer started a turn')
     await page.waitForSelector('[data-session-section="questions"]', { hidden: true })
 
     // Skipping from the dock records a skipped answer, shown as such in the user bubble.

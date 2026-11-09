@@ -23,6 +23,7 @@ import InlineComposerEditor, { type InlineComposerEditorHandle } from './InlineC
 import NodePicker from './NodePicker'
 import ComposerAttachmentGrid from './ComposerAttachmentGrid'
 import { IMAGE_INPUT_UNSUPPORTED_HINT, shouldShowImageInputHint } from '../imageInputSupport'
+import { isImeComposing, isSendKey } from '../sendKey'
 import {
   clearComposerDraft,
   getPlainComposerDraftText,
@@ -1106,7 +1107,7 @@ const ChatComposer = memo(function ChatComposer({
   }, [attachmentSegments.length, availableAttachments, hasMissingAttachments, loading, onSend, sessionId, sessionMissing])
 
   const handleCommandKeyDown = useCallback((e: KeyboardEvent): boolean => {
-    if (e.isComposing || e.keyCode === 229) {
+    if (isImeComposing(e)) {
       return false
     }
 
@@ -1146,7 +1147,7 @@ const ChatComposer = memo(function ChatComposer({
       return false
     }
 
-    if (e.ctrlKey || e.metaKey || (sendKeyMode === 'enter' && !e.shiftKey)) {
+    if (isSendKey(e, sendKeyMode)) {
       e.preventDefault()
       void handleSubmit()
       return true

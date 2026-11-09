@@ -1833,7 +1833,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
         onHeightChange={handleComposerHeightChange}
         onSend={handleSend}
         onCreateStreamingTranscriber={handleCreateStreamingTranscriber}
-        aboveInput={<QuestionDock isMobile={isMobile} />}
+        aboveInput={<QuestionDock isMobile={isMobile} sendKeyMode={sendKeyMode} />}
         answersQuestion={waitingOnQuestion}
       />
 

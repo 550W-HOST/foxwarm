@@ -23,20 +23,25 @@ import QuestionContent from './QuestionContent'
 import type { FunctionCall, FunctionResponse } from './chatShared'
 import { ApprovalDecisionForm } from './ApprovalCard'
 import { approvalToolLabel, type ToolApprovalRecord } from '../sessionApprovals'
+import type { SendKeyMode } from '../chatPreferences'
+import { isImeComposing, isSendKey, sendShortcutLabel } from '../sendKey'
 
 const isTextEntry = (target: EventTarget | null) => target instanceof HTMLElement && (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT' && (target as HTMLInputElement).type === 'text')
 
 /**
  * Answer form for one open question set: step through the questions, then submit together.
  * The unsent answer is the Session's shared draft for this question, so it survives remounts.
+ * In text fields the Chat send key advances or submits and other Enter presses insert a newline;
+ * elsewhere in the form plain Enter advances too. Ctrl/Cmd+Enter advances from anywhere.
  */
-export function QuestionAnswerForm({ sessionId, record, onSubmit, focusToken = 0, compact = false }: {
+export function QuestionAnswerForm({ sessionId, record, onSubmit, focusToken = 0, compact = false, sendKeyMode = 'modEnter' }: {
   sessionId: string
   record: QuestionRecord
   onSubmit: (body: QuestionAnswerBody) => Promise<void>
   /** Changing a nonzero value moves keyboard focus into the form. */
   focusToken?: number
   compact?: boolean
+  sendKeyMode?: SendKeyMode
 }) {
   const [{ entries: draft, step, note, noteOpen }, updateDraft] = useQuestionAnswerDraft(sessionId, record)
   const setStep = (change: (value: number) => number) => updateDraft(current => ({ ...current, step: change(current.step) }))
@@ -66,15 +71,22 @@ export function QuestionAnswerForm({ sessionId, record, onSubmit, focusToken = 0
   }
   const submit = () => { if (canSubmitQuestionDraft(draft) && !pending) void send(buildQuestionAnswerBody(draft, note)) }
   const advance = () => { if (last) submit(); else setStep(value => value + 1) }
+  const shortcut = sendShortcutLabel(sendKeyMode)
+  const ariaShortcut = sendKeyMode === 'enter' ? 'Enter Control+Enter Meta+Enter' : 'Control+Enter Meta+Enter'
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
-    if (pending || event.altKey || event.ctrlKey || event.metaKey) return
-    if (event.key === 'Enter' && !event.shiftKey) {
-      if (event.target instanceof HTMLButtonElement) return
+    // Keys handled by an input method belong to the composition, including the Enter that commits it.
+    if (pending || isImeComposing(event.nativeEvent)) return
+    if (event.key === 'Enter') {
+      if (isTextEntry(event.target)) {
+        if (!isSendKey(event.nativeEvent, sendKeyMode)) return
+      } else if (!event.ctrlKey && !event.metaKey && (event.shiftKey || event.altKey || event.target instanceof HTMLButtonElement)) {
+        return
+      }
       event.preventDefault()
       advance()
       return
     }
-    if (isTextEntry(event.target)) return
+    if (event.altKey || event.ctrlKey || event.metaKey || isTextEntry(event.target)) return
     const number = Number(event.key)
     const options = question.options || []
     if (Number.isInteger(number) && number >= 1 && number <= options.length) {
@@ -113,11 +125,11 @@ export function QuestionAnswerForm({ sessionId, record, onSubmit, focusToken = 0
         <button type="button" disabled={pending} onClick={() => void send(buildQuestionSkipBody(note))} className="rounded-md px-2.5 py-1.5 text-sm text-fw-text-muted hover:bg-fw-hover hover:text-fw-text disabled:opacity-50">Skip</button>
         <span className="flex-1" />
         {last ? (
-          <button type="button" disabled={pending || !canSubmitQuestionDraft(draft)} onClick={submit} className="rounded-md bg-fw-accent px-3 py-1.5 text-sm font-medium text-fw-accent-text hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50">
+          <button type="button" disabled={pending || !canSubmitQuestionDraft(draft)} onClick={submit} title={shortcut} aria-keyshortcuts={ariaShortcut} className="rounded-md bg-fw-accent px-3 py-1.5 text-sm font-medium text-fw-accent-text hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50">
             {pending ? 'Sending…' : 'Submit'}
           </button>
         ) : (
-          <button type="button" disabled={pending} onClick={advance} className="rounded-md bg-fw-accent px-3 py-1.5 text-sm font-medium text-fw-accent-text hover:opacity-90 disabled:opacity-50">Next</button>
+          <button type="button" disabled={pending} onClick={advance} title={shortcut} aria-keyshortcuts={ariaShortcut} className="rounded-md bg-fw-accent px-3 py-1.5 text-sm font-medium text-fw-accent-text hover:opacity-90 disabled:opacity-50">Next</button>
         )}
       </div>
     </div>
@@ -174,7 +186,7 @@ function QuestionBody({ question, entry, onChange, otherId, compact, disabled }:
         rows={options.length ? 1 : 2}
         onChange={event => onChange({ ...entry, text: event.target.value })}
         placeholder={options.length ? 'Write a different answer' : 'Write your answer'}
-        className="mt-1 block w-full resize-y rounded-md border border-fw-border bg-fw-surface px-2 py-1.5 text-sm text-fw-text-strong outline-none placeholder:text-fw-text-muted focus:border-fw-accent-border focus:ring-1 focus:ring-fw-focus-ring"
+        className={`mt-1 block max-h-40 w-full resize-y rounded-md border border-fw-border bg-fw-surface px-2 py-1.5 text-sm text-fw-text-strong outline-none [field-sizing:content] placeholder:text-fw-text-muted focus:border-fw-accent-border focus:ring-1 focus:ring-fw-focus-ring ${options.length ? '' : 'min-h-[3.375rem]'}`}
       />
     </fieldset>
   )
@@ -311,7 +323,7 @@ function dockHeading(approvals: number, questions: number): string {
  * Pinned dock above the composer, driven by Session state: pending tool approvals, which the
  * agent always waits on, then open questions answerable in place.
  */
-export function QuestionDock({ isMobile = false }: { isMobile?: boolean }) {
+export function QuestionDock({ isMobile = false, sendKeyMode = 'modEnter' }: { isMobile?: boolean; sendKeyMode?: SendKeyMode }) {
   const questions = useSessionQuestionsContext()
   const open = questions?.open || []
   const approvals = questions?.approvals || []
@@ -367,7 +379,7 @@ export function QuestionDock({ isMobile = false }: { isMobile?: boolean }) {
           ) : (
             <>
               {!isWaiting(current) && <div className="mb-1 text-xs text-fw-text-muted">The agent keeps working while this is open.</div>}
-              <QuestionAnswerForm key={current.id} sessionId={questions.sessionId} record={current.record} compact={isMobile} focusToken={current.id === request?.questionId ? focusToken : 0} onSubmit={body => questions.submit(current.id, body)} />
+              <QuestionAnswerForm key={current.id} sessionId={questions.sessionId} record={current.record} compact={isMobile} sendKeyMode={sendKeyMode} focusToken={current.id === request?.questionId ? focusToken : 0} onSubmit={body => questions.submit(current.id, body)} />
             </>
           )}
         </div>

@@ -3,6 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Code2, Menu, MoreVertical, Search, SquareTerminal } from 'lucide-react'
 import { CONTEXT_SCROLLBAR_SETTINGS_EVENT, readContextScrollbarSettings, writeContextScrollbarSettings } from '../contextScrollbarSettings'
 import { MENU_VIEWPORT_GUTTER, clampAnchoredMenuHorizontally, readHorizontalViewportBounds } from './menuPositioning'
+import { modifierKeyLabel } from '../sendKey'
 
 type SendKeyMode = 'modEnter' | 'enter'
 
@@ -55,7 +56,7 @@ export default function SessionUiSettingsMenu({
   const [menuPositioned, setMenuPositioned] = useState(false)
   const rootRef = useRef<HTMLDivElement | null>(null)
   const menuRef = useRef<HTMLDivElement | null>(null)
-  const modifierLabel = /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent) ? 'Cmd' : 'Ctrl'
+  const modifierLabel = modifierKeyLabel()
   const toggleRowClass = 'flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-xs text-fw-text hover:bg-fw-hover dark:text-fw-text dark:hover:bg-fw-hover'
 
   useEffect(() => {
