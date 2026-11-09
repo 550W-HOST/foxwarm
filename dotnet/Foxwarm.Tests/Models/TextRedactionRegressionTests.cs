@@ -3,7 +3,10 @@ using System.Text.Json.Nodes;
 using Foxwarm.Models;
 using Foxwarm.Secrets;
 using Foxwarm.Sessions;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Logging;
 
 namespace Foxwarm.Tests;
 
@@ -490,21 +493,52 @@ public sealed class TextRedactionRegressionTests
         ) => Task.FromResult(ChatResult.Text("ok"));
     }
 
+    // A provider that fails every request with HTTP 500.
+    private sealed class FailingProvider : IAsyncDisposable
+    {
+        private readonly WebApplication app;
+        private int requests;
+
+        private FailingProvider(WebApplication app) => this.app = app;
+
+        internal Uri BaseUri => new(app.Urls.Single() + "/v1");
+        internal int RequestCount => Volatile.Read(ref requests);
+
+        internal static async Task<FailingProvider> StartAsync()
+        {
+            var builder = WebApplication.CreateBuilder();
+            builder.Logging.ClearProviders();
+            builder.WebHost.UseUrls("http://127.0.0.1:0");
+            var app = builder.Build();
+            FailingProvider? provider = null;
+            app.MapPost(
+                "/{**path}",
+                async context =>
+                {
+                    Interlocked.Increment(ref provider!.requests);
+                    context.Response.StatusCode = 500;
+                    await context.Response.WriteAsync("""{"error":{"message":"down"}}""");
+                }
+            );
+            await app.StartAsync();
+            return provider = new(app);
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            await app.StopAsync();
+            await app.DisposeAsync();
+        }
+    }
+
     // F8: failover never moves a request that started on a redacting model to one without
-    // redaction; it passes over such targets and refuses when none other remains.
+    // redaction. Such targets are passed over; when every redacting target is cooling, the
+    // last of them is retried within the normal retry budget.
     [Fact]
-    public async Task Failover_skips_or_refuses_targets_without_redaction()
+    public async Task Failover_skips_targets_without_redaction_and_retries_redacting_ones()
     {
         await using var detector = await TextDetectionPeer.StartAsync();
-        await using var failing = new LoopbackResponsesServer(
-            (connection, _) =>
-                LoopbackResponsesServer.WriteResponseAsync(
-                    connection,
-                    500,
-                    "application/json",
-                    Encoding.UTF8.GetBytes("""{"error":{"message":"down"}}""")
-                )
-        );
+        await using var failing = await FailingProvider.StartAsync();
         await using var plain = new LoopbackResponsesServer(
             (connection, _) => AnswerAsync(connection, "unexpected")
         );
@@ -534,18 +568,17 @@ public sealed class TextRedactionRegressionTests
             );
         using var http = ProviderHttpRequest.CreateClient();
         using var keys = new TextRedactionKeys();
-        Task<ChatResult> Request(HostModels catalog) =>
-            new ModelRequestOwner(
-                http,
-                new(failing.BaseUri, "m", "p", "", "", 100),
-                new(),
-                (_, _) => Task.CompletedTask,
-                secrets: keys.Secrets
-            ).RequestAsync(
+        var owner = new ModelRequestOwner(
+            http,
+            new(failing.BaseUri, "m", "p", "", "", 100),
+            new(),
+            (_, _) => Task.CompletedTask,
+            secrets: keys.Secrets
+        );
+        var error = await Assert.ThrowsAsync<ModelRequestException>(() =>
+            owner.RequestAsync(
                 "s",
-                catalog,
-                "route",
-                null,
+                owner.Capture(Catalog("p", "q"), "route", null),
                 "cache",
                 "turn",
                 [ChatResult.Text("input").AssistantMessage!],
@@ -554,15 +587,15 @@ public sealed class TextRedactionRegressionTests
                 null,
                 null,
                 null,
-                default
-            );
-        var refused = await Assert.ThrowsAsync<ModelPreparationException>(() =>
-            Request(Catalog("p", "q"))
+                default,
+                maxAttempts: 3
+            )
         );
-        Assert.Equal(
-            string.Format(ModelRequestOwner.RedactionFailoverRefused, "q/m"),
-            refused.Message
-        );
+        // Ends with p's ordinary provider failure after the whole budget, never on q.
+        Assert.Equal(3, error.Final.Attempt);
+        Assert.Equal("p/m", error.Final.ModelId);
+        Assert.NotEqual("text-redaction", error.Final.Kind);
+        Assert.Equal(3, failing.RequestCount);
         Assert.Equal(0, plain.RequestCount);
 
         var routing = new ModelRouting();
@@ -570,6 +603,13 @@ public sealed class TextRedactionRegressionTests
         routing.Failed(request, routing.Select(request, "k"), exhausted: true);
         Assert.Equal("r/m", routing.Select(request, "k", target => target != "q/m").TargetKey);
         Assert.Equal("q/m", routing.Select(request, "k").TargetKey);
+        // With r cooling too, the last eligible target is kept, cooling or not.
+        routing.Failed(request, routing.Select(request, "k", target => target != "q/m"), true);
+        var fallback = routing.Select(request, "k", target => target == "p/m");
+        Assert.Equal(("p/m", false), (fallback.TargetKey, fallback.IsLast));
+        // Only a route without any eligible target yields an ineligible one, which the
+        // owner refuses.
+        Assert.Equal("r/m", routing.Select(request, "k", _ => false).TargetKey);
     }
 
     // F10: a slot the detection service rejects as too large fails an ordinary request with

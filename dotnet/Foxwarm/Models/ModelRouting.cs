@@ -104,8 +104,9 @@ internal sealed class ModelRouting(Func<long>? clock = null)
     }
 
     /// <param name="eligible">
-    /// Failover targets this request may use. Ineligible targets are passed over like cooled
-    /// ones; when the walk would end on one, it is still returned so the caller can refuse it.
+    /// Failover targets this request may use. Ineligible targets are passed over like cooling
+    /// ones, including in the all-cooling fallback; only a route without any eligible target
+    /// returns an ineligible one, for the caller to refuse.
     /// </param>
     internal Selection Select(
         Request request,
@@ -131,13 +132,20 @@ internal sealed class ModelRouting(Func<long>? clock = null)
                     continue;
                 return new Selection(target, index, index == request.Targets.Length - 1);
             }
-            // Every usable target is cooling: keep the existing last-target fallback, unless
-            // that target is ineligible. Then return the first ineligible target to refuse.
-            var last = request.Targets.Length - 1;
-            if (eligible?.Invoke(request.Targets[last]) != false)
-                return new Selection(request.Targets[last], last, true);
-            var refused = Array.FindIndex(request.Targets, target => !eligible!(target));
-            return new Selection(request.Targets[refused], refused, true);
+            // No ready target: keep the existing fallback to the last target even while it
+            // cools, counting only eligible targets. A route without any eligible target
+            // returns its last target, which the caller refuses.
+            var fallback = Array.FindLastIndex(
+                request.Targets,
+                target => eligible?.Invoke(target) != false
+            );
+            if (fallback < 0)
+                fallback = request.Targets.Length - 1;
+            return new Selection(
+                request.Targets[fallback],
+                fallback,
+                fallback == request.Targets.Length - 1
+            );
         }
     }
 
