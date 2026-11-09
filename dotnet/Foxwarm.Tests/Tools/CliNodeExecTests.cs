@@ -147,9 +147,11 @@ public sealed class CliNodeExecTests
                 return Environment.ProcessId;
             },
         };
-        await Assert.ThrowsAnyAsync<IOException>(() =>
+        // Replacing a directory is IOException on Unix and UnauthorizedAccessException on Windows.
+        var failure = await Assert.ThrowsAnyAsync<Exception>(() =>
             manager.Start(Frame(), "main", "owned", CancellationToken.None, () => started++)
         );
+        Assert.True(failure is IOException or UnauthorizedAccessException, failure.ToString());
         Assert.Equal(1, launches);
         Assert.Equal(1, started);
         Assert.Single(manager.Tracked);
@@ -269,6 +271,77 @@ public sealed class CliNodeExecTests
         await manager.Reconcile();
         Assert.Empty(manager.Tracked);
         Assert.Equal(2, attempts);
+        Assert.Empty(
+            JsonNode.Parse(await File.ReadAllTextAsync(owned.Registry))!["execs"]!.AsArray()
+        );
+    }
+
+    [Fact]
+    public async Task A_failed_registry_save_after_delivery_is_written_by_the_next_reconciliation()
+    {
+        using var owned = new OwnedPaths();
+        var record = Record(owned, "quiet-otter", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        await Seed(owned, record);
+        var delivered = 0;
+        await using var manager = new NodeExecManager(
+            owned.Paths,
+            owned.Registry,
+            (_, _, _) =>
+            {
+                delivered++;
+                return Task.CompletedTask;
+            }
+        );
+        await manager.Initialize();
+        Assert.Single(manager.Tracked);
+        await File.WriteAllTextAsync(
+            record["statusPath"]!.GetValue<string>(),
+            "{\"exitCode\":0,\"finishedAt\":\"2026-10-20T00:00:00.000Z\"}"
+        );
+        // Owned deterministic stand-in for a registry that cannot be replaced at that moment.
+        File.Delete(owned.Registry);
+        Directory.CreateDirectory(owned.Registry);
+        await manager.Reconcile();
+        Assert.Equal(1, delivered);
+        Assert.Empty(manager.Tracked);
+        Directory.Delete(owned.Registry);
+        await manager.Reconcile();
+        Assert.Equal(1, delivered);
+        Assert.Empty(
+            JsonNode.Parse(await File.ReadAllTextAsync(owned.Registry))!["execs"]!.AsArray()
+        );
+    }
+
+    [Fact]
+    public async Task A_reader_holding_the_registry_does_not_leave_a_completed_entry_on_Windows()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+        using var owned = new OwnedPaths();
+        var record = Record(owned, "quiet-otter", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        await Seed(owned, record);
+        await using var manager = new NodeExecManager(
+            owned.Paths,
+            owned.Registry,
+            (_, _, _) => Task.CompletedTask
+        );
+        await manager.Initialize();
+        await File.WriteAllTextAsync(
+            record["statusPath"]!.GetValue<string>(),
+            "{\"exitCode\":0,\"finishedAt\":\"2026-10-20T00:00:00.000Z\"}"
+        );
+        // The sharing an ordinary reader such as Node's fs.readFile uses.
+        using (
+            new FileStream(
+                owned.Registry,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete
+            )
+        )
+            await manager.Reconcile();
+        Assert.Empty(manager.Tracked);
+        await manager.Reconcile();
         Assert.Empty(
             JsonNode.Parse(await File.ReadAllTextAsync(owned.Registry))!["execs"]!.AsArray()
         );

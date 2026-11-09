@@ -159,13 +159,21 @@ internal sealed partial class NodeExecManager(
         }
     }
 
+    // Set while an applied change has not reached the registry file. A save can fail after the
+    // in-memory change, for example on Windows while another process has the registry open, which
+    // blocks replacing it. Reconciliation writes it again, so the file does not keep a completed
+    // entry (and repeat its completion after a restart) until some unrelated later change.
+    private bool savePending;
+
     private async Task Mutate(Action action)
     {
         await mutation.WaitAsync();
         try
         {
             action();
+            savePending = true;
             await Save();
+            savePending = false;
         }
         finally
         {
@@ -470,6 +478,15 @@ internal sealed partial class NodeExecManager(
 
     internal async Task Reconcile()
     {
+        if (savePending)
+            try
+            {
+                await Mutate(() => { });
+            }
+            catch (Exception error)
+            {
+                Console.Error.WriteLine("[exec_registry_save] " + error.GetType().Name);
+            }
         await Task.WhenAll(
             entries.Values.Select(async entry =>
             {
