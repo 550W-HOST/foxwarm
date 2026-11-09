@@ -7,7 +7,6 @@ import {
   buildQuestionSkipBody,
   canSubmitQuestionDraft,
   describeQuestionAnswer,
-  emptyQuestionDraft,
   isQuestionDraftEntryAnswered,
   QuestionAnswerError,
   questionOutcomeLabel,
@@ -18,6 +17,7 @@ import {
   type QuestionRecord,
 } from '../sessionQuestions'
 import { useSessionQuestionsContext } from '../sessionQuestionsState'
+import { useQuestionAnswerDraft } from '../questionAnswerDrafts'
 import { questionContentSummary } from '../questionContent'
 import QuestionContent from './QuestionContent'
 import type { FunctionCall, FunctionResponse } from './chatShared'
@@ -26,18 +26,20 @@ import { approvalToolLabel, type ToolApprovalRecord } from '../sessionApprovals'
 
 const isTextEntry = (target: EventTarget | null) => target instanceof HTMLElement && (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT' && (target as HTMLInputElement).type === 'text')
 
-/** Answer form for one open question set: step through the questions, then submit together. */
-export function QuestionAnswerForm({ record, onSubmit, focusToken = 0, compact = false }: {
+/**
+ * Answer form for one open question set: step through the questions, then submit together.
+ * The unsent answer is the Session's shared draft for this question, so it survives remounts.
+ */
+export function QuestionAnswerForm({ sessionId, record, onSubmit, focusToken = 0, compact = false }: {
+  sessionId: string
   record: QuestionRecord
   onSubmit: (body: QuestionAnswerBody) => Promise<void>
   /** Changing a nonzero value moves keyboard focus into the form. */
   focusToken?: number
   compact?: boolean
 }) {
-  const [draft, setDraft] = useState<QuestionDraftEntry[]>(() => emptyQuestionDraft(record))
-  const [step, setStep] = useState(0)
-  const [note, setNote] = useState('')
-  const [noteOpen, setNoteOpen] = useState(false)
+  const [{ entries: draft, step, note, noteOpen }, updateDraft] = useQuestionAnswerDraft(sessionId, record)
+  const setStep = (change: (value: number) => number) => updateDraft(current => ({ ...current, step: change(current.step) }))
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -46,14 +48,14 @@ export function QuestionAnswerForm({ record, onSubmit, focusToken = 0, compact =
   const question = record.questions[step]
   const entry = draft[step]
   const last = step === total - 1
-  useEffect(() => { setDraft(emptyQuestionDraft(record)); setStep(0); setNote(''); setError(null) }, [record.id])
+  useEffect(() => { setError(null) }, [sessionId, record.id])
   useEffect(() => {
     if (!focusToken) return
     rootRef.current?.scrollIntoView({ block: 'nearest' })
     rootRef.current?.focus({ preventScroll: true })
   }, [focusToken])
 
-  const update = (next: QuestionDraftEntry) => setDraft(current => current.map((item, index) => index === step ? next : item))
+  const update = (next: QuestionDraftEntry) => updateDraft(current => ({ ...current, entries: current.entries.map((item, index) => index === current.step ? next : item) }))
   const send = async (body: QuestionAnswerBody) => {
     setPending(true)
     setError(null)
@@ -95,11 +97,11 @@ export function QuestionAnswerForm({ record, onSubmit, focusToken = 0, compact =
       {noteOpen ? (
         <label className="mt-2 block text-xs text-fw-text-muted">
           Note
-          <textarea value={note} onChange={event => setNote(event.target.value)} rows={2} disabled={pending} placeholder="Add context for your answer"
+          <textarea value={note} onChange={event => { const value = event.target.value; updateDraft(current => ({ ...current, note: value })) }} rows={2} disabled={pending} placeholder="Add context for your answer"
             className="mt-1 block w-full resize-y rounded-md border border-fw-border bg-fw-surface px-2 py-1.5 text-sm text-fw-text-strong outline-none placeholder:text-fw-text-muted focus:border-fw-accent-border focus:ring-1 focus:ring-fw-focus-ring" />
         </label>
       ) : (
-        <button type="button" onClick={() => setNoteOpen(true)} className="mt-2 text-xs text-fw-text-muted hover:text-fw-text hover:underline">Add a note</button>
+        <button type="button" onClick={() => updateDraft(current => ({ ...current, noteOpen: true }))} className="mt-2 text-xs text-fw-text-muted hover:text-fw-text hover:underline">Add a note</button>
       )}
       {error && <div role="alert" className="mt-2 text-xs text-fw-danger">{error}</div>}
       <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -365,7 +367,7 @@ export function QuestionDock({ isMobile = false }: { isMobile?: boolean }) {
           ) : (
             <>
               {!isWaiting(current) && <div className="mb-1 text-xs text-fw-text-muted">The agent keeps working while this is open.</div>}
-              <QuestionAnswerForm key={current.id} record={current.record} compact={isMobile} focusToken={current.id === request?.questionId ? focusToken : 0} onSubmit={body => questions.submit(current.id, body)} />
+              <QuestionAnswerForm key={current.id} sessionId={questions.sessionId} record={current.record} compact={isMobile} focusToken={current.id === request?.questionId ? focusToken : 0} onSubmit={body => questions.submit(current.id, body)} />
             </>
           )}
         </div>

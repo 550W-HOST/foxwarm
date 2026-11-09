@@ -7,6 +7,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createRequire } from 'node:module'
 import { createHostFixture, until, sleep } from './mainHostFixture.mjs'
+import { waitForWebUiReady } from './webuiReadiness.mjs'
 
 const require = createRequire(import.meta.url)
 const { initializeTestEnvironment } = require('../../../scripts/test/test-process-env.cjs')
@@ -62,6 +63,11 @@ test('ask_user questions are answered from the card, the dock and an ordinary me
     const accepted = await fixture.api('POST', route(id) + '/message', { text: 'ASKUSER:' + key })
     assert([200, 202].includes(accepted.status), JSON.stringify(accepted))
   }
+  const storedDraft = (page, id) => page.evaluate(questionId => (localStorage.getItem('foxwarm_question_drafts_v1') || '').includes(questionId), id)
+  const toggleDock = async (page, expanded) => {
+    await page.click('[data-question-dock] > button')
+    await page.waitForSelector(`[data-question-dock][data-question-dock-expanded="${expanded}"]`)
+  }
   const screenshot = async (page, name) => { if (shots) { await mkdir(shots, { recursive: true }); await page.screenshot({ path: join(shots, name + '.png') }) } }
   try {
     await fixture.start()
@@ -105,7 +111,26 @@ test('ask_user questions are answered from the card, the dock and an ordinary me
     assert.equal(await page.$eval(`${form} [data-question-option="PostgreSQL"]`, node => node.getAttribute('aria-checked')), 'true')
     await page.keyboard.press('Enter')
     await page.waitForFunction(selector => document.querySelector(selector)?.textContent.includes('Any naming preference'), {}, form)
-    await page.type(`${form} textarea`, 'svc-data')
+    // The unsent answer, including its step, survives collapsing the dock and reloading the page.
+    await page.type(`${form} textarea`, 'svc-')
+    await until(() => storedDraft(page, questionId), 'draft stored')
+    await toggleDock(page, false)
+    await toggleDock(page, true)
+    await page.waitForFunction(selector => document.querySelector(selector + ' textarea')?.value === 'svc-', {}, form)
+    assert.match(await page.$eval(form, node => node.textContent), /Question 2 of 2/)
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    await page.waitForFunction(() => !!window.foxwarmTest?.switchToSession)
+    await waitForWebUiReady(page)
+    await page.evaluate(id => window.foxwarmTest.switchToSession(id), blocking)
+    await page.waitForSelector('[data-question-dock][data-question-dock-expanded="true"]')
+    await page.waitForFunction(selector => document.querySelector(selector + ' textarea')?.value === 'svc-', {}, form)
+    assert.match(await page.$eval(form, node => node.textContent), /Question 2 of 2/)
+    await screenshot(page, 'desktop-restored-draft')
+    await page.evaluate(() => [...document.querySelectorAll('[data-question-dock] button')].find(button => button.textContent === 'Back').click())
+    await page.waitForFunction(selector => document.querySelector(selector + ' [data-question-option="PostgreSQL"]')?.getAttribute('aria-checked') === 'true', {}, form)
+    await page.evaluate(() => [...document.querySelectorAll('[data-question-dock] button')].find(button => button.textContent === 'Next').click())
+    await page.$eval(`${form} textarea`, node => { node.focus(); node.setSelectionRange(node.value.length, node.value.length) })
+    await page.keyboard.type('data')
     await page.keyboard.press('Enter')
     await until(async () => (await view(blocking)).questions[0].status === 'answered', 'card answer recorded')
     await until(async () => (inputs.get('block') || []).length >= 2, 'answer reached the model')
@@ -115,6 +140,7 @@ test('ask_user questions are answered from the card, the dock and an ordinary me
     assert.match(answerInput, /svc-data/)
     await page.waitForSelector(`[data-ask-user-card="${questionId}"][data-question-status="answered"]`)
     await page.waitForSelector('[data-question-dock]', { hidden: true })
+    assert.equal(await storedDraft(page, questionId), false, 'a submitted answer leaves no draft')
     // The answering message shows question/answer pairs, not the model-facing protocol text.
     const bubble = await page.waitForSelector('[data-question-answer-bubble="answered"]')
     const bubbleText = await bubble.evaluate(node => node.textContent)
@@ -164,6 +190,18 @@ test('ask_user questions are answered from the card, the dock and an ordinary me
     const skipped = await page.waitForSelector('[data-question-answer-bubble="skipped"]')
     assert.match(await skipped.evaluate(node => node.textContent), /Skipped the question.*Add charts to the report\?/)
 
+    // A draft is dropped once its question is answered elsewhere.
+    await send(asyncId, 'elsewhere', [[call('ask-6', 'ask_user', { questions: [{ question: 'Email the report too?' }], afterAsk: 'continue' })]])
+    const elsewhere = (await until(async () => (await view(asyncId)).questions.find(item => item.status === 'open'), 'question to answer elsewhere')).id
+    await page.waitForSelector('[data-question-dock]')
+    if (await page.$('[data-question-dock][data-question-dock-expanded="false"]')) await toggleDock(page, true)
+    await page.type(`[data-question-dock] [data-question-form="${elsewhere}"] textarea`, 'Only to the team')
+    await until(() => storedDraft(page, elsewhere), 'draft stored before the answer elsewhere')
+    const answeredElsewhere = await fixture.api('POST', route(asyncId) + '/questions/' + elsewhere + '/answer', { answers: [{ text: 'Yes' }] })
+    assert.equal(answeredElsewhere.status, 202, JSON.stringify(answeredElsewhere))
+    await page.waitForSelector('[data-question-dock]', { hidden: true })
+    await until(async () => !(await storedDraft(page, elsewhere)), 'draft dropped after the answer elsewhere')
+
     // Question notifications follow the browser-local Setup choice; the Session is not visible.
     const notified = () => page.evaluate(() => window.__notifications.filter(item => item.title === 'Question for you').map(item => item.body))
     const askReply = async key => {
@@ -209,6 +247,9 @@ test('ask_user questions are answered from the card, the dock and an ordinary me
     assert.ok(dock.left >= 0 && dock.right <= dock.width + 1, JSON.stringify(dock))
     await page.click('[data-question-dock] [data-question-option="Europe"]')
     await page.click('[data-question-dock] [data-question-option="Asia"]')
+    await toggleDock(page, false)
+    await toggleDock(page, true)
+    assert.deepEqual(await page.$$eval('[data-question-dock] [data-question-option][aria-checked="true"]', nodes => nodes.map(node => node.getAttribute('data-question-option'))), ['Europe', 'Asia'])
     await screenshot(page, 'mobile-dock')
     await page.evaluate(() => [...document.querySelectorAll('[data-question-dock] button')].find(button => button.textContent === 'Submit').click())
     await until(async () => (await view(blocking)).questions.find(item => item.status === 'answered' && item.answer?.answers?.[0]?.selected?.length === 2), 'multi-select answer recorded')

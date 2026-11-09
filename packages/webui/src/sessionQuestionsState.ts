@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { fetchSessionQuestions, submitQuestionAnswer, type QuestionAnswerBody, type QuestionRecord, type SessionQuestionsProjection, type SessionQuestionsView } from './sessionQuestions'
 import { submitApprovalDecision, type ApprovalDecisionBody, type ToolApprovalRecord } from './sessionApprovals'
+import { clearQuestionAnswerDraft, pruneQuestionAnswerDrafts } from './questionAnswerDrafts'
 
 export interface SessionQuestionsState {
   sessionId: string
@@ -40,15 +41,22 @@ export function useSessionQuestions(sessionId: string, projection: SessionQuesti
     if (!hasState) { setView(null); return }
     const controller = new AbortController()
     fetchSessionQuestions(sessionId, controller.signal)
-      .then(next => { if (!controller.signal.aborted) setView(next) })
+      .then(next => {
+        if (controller.signal.aborted) return
+        setView(next)
+        // Unsent answers are kept only while their question is open.
+        pruneQuestionAnswerDrafts(sessionId, (next.questions || []).filter(record => record.status === 'open').map(record => record.id))
+      })
       .catch(error => { if (!controller.signal.aborted) console.error('Failed to load Session questions', error) })
     return () => controller.abort()
   }, [sessionId, revision, hasState, reloadToken])
   const reload = useCallback(() => setReloadToken(value => value + 1), [])
   const requestDock = useCallback((questionId: string) => setDockRequest(current => ({ questionId, nonce: (current?.nonce ?? 0) + 1 })), [])
   const submit = useCallback(async (questionId: string, body: QuestionAnswerBody) => {
-    try { await submitQuestionAnswer(sessionId, questionId, body) }
-    finally { reload() }
+    try {
+      await submitQuestionAnswer(sessionId, questionId, body)
+      clearQuestionAnswerDraft(sessionId, questionId)
+    } finally { reload() }
   }, [sessionId, reload])
   const decide = useCallback(async (approvalId: string, body: ApprovalDecisionBody) => {
     try { await submitApprovalDecision(sessionId, approvalId, body) }
