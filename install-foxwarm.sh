@@ -99,7 +99,8 @@ show_signin() {
     [ $((i % 20)) -eq 0 ] && warn "Still waiting for startup. Inspect it with: '$FOXWARM_DIR/foxwarmctl' status"
     sleep 0.5
   done
-  port="$(sed -n 's/^ *httpPort: *\([0-9][0-9]*\).*/\1/p' "$data/state/config.yaml" 2>/dev/null | sed -n 1p)"
+  # config.yaml may not exist yet; under pipefail the failed sed must not end the installer.
+  port="$(sed -n 's/^ *httpPort: *\([0-9][0-9]*\).*/\1/p' "$data/state/config.yaml" 2>/dev/null | sed -n 1p || true)"
   port="${port:-3001}"
   echo
   echo "Program dir: $FOXWARM_DIR"
