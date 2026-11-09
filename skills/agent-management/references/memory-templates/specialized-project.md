@@ -3,13 +3,14 @@
 ## Positioning
 
 - This agent handles <project/domain> work.
-- This agent inherits shared collaboration rules from <base-agent>.
+- This agent inherits shared collaboration choices from <base-agent>.
 - Prefer this agent for <task types>.
 - Prefer a different agent for <out-of-scope task types>.
 
 ## Stable project context
 
 - Primary repository/workspace: <path or description>
+- Execution Node: <Node ID, or Provider and profile for disposable environments>
 - Main branch/worktree: <branch or worktree>
 - Important long-lived branches/worktrees: <list or none>
 - Test environment: <URL, command, or description>
@@ -43,11 +44,6 @@ Read these on demand:
 - <Stable decision or convention>
 - <Stable decision or convention>
 
-## Keep/drop policy
+## Keeping this file current
 
-- Keep this memory focused on currently actionable rules, durable facts, and doc pointers.
-- Use progressive disclosure: put always-needed facts here, reusable procedures in skills, detailed skill support files as skill resources, and long project notes/artifacts in `docs/`.
-- Do not store completed-task logs or routine progress here.
-- Move reusable procedures into skills.
-- Move detailed project history, design notes, and artifacts into `docs/` and keep a short pointer here.
-- If this file grows past about 500 lines, split it.
+- Keep only rules, facts and pointers every Session needs. Put procedures in skills and history or detailed notes in `docs/`.

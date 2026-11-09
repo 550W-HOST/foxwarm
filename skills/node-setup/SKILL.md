@@ -1,6 +1,6 @@
 ---
 name: node-setup
-description: "Set up and troubleshoot Foxwarm Nodes, configure optional Providers, or assign development work to an existing Node with Task and Git delivery examples."
+description: "Set up and troubleshoot Foxwarm Nodes, configure optional Providers including disposable containers, or run delegated development work on a Node with Task and Git delivery examples."
 ---
 
 # node-setup
@@ -9,9 +9,10 @@ Use this skill to explain, bootstrap, troubleshoot, or coordinate development wo
 
 ## Choose a workflow
 
-- **Existing-Node development:** read [the portable workflow](references/development-workflow.md) and its runnable [ToolScript example](examples/development_workflow.py) for source/material transfer, Task assignment, committed or evidence-only delivery, review and deliberate cleanup.
-- **Optional SSH Provider:** read [the Linux SSH adapter guide](examples/linux-ssh/README.md). It includes opt-in registration for existing hosts; it is neither a default backend nor an OS/network sandbox. Python 3 and OpenSSH are administrator prerequisites.
-- **Pairing, bootstrap and legacy isolated-Agent binding:** use the sections below. Policy syntax belongs to `access-control`; Agent lifecycle belongs to `agent-management`.
+- **Delegated development work:** read [the development workflow](references/development-workflow.md) and its runnable [ToolScript example](examples/development_workflow.py): provisioning a fresh Node, source/material transfer, Task assignment, committed or evidence-only delivery, review and explicit release.
+- **Disposable environments:** read [the container Provider guide](examples/container/README.md). It creates one Docker or Podman container per Node from administrator-defined profiles, without network access. Registration is administrator opt-in.
+- **Existing Linux machines:** read [the Linux SSH adapter guide](examples/linux-ssh/README.md). It includes opt-in registration for existing hosts; it is neither a default backend nor an OS/network sandbox. Python 3 and OpenSSH are administrator prerequisites.
+- **Pairing and bootstrap:** use the sections below. Policy syntax belongs to `access-control`; Agent lifecycle, local rules and restricted-worker templates belong to `agent-management`.
 
 ## First: tools vs commands
 
@@ -40,8 +41,6 @@ Examples in this area include:
 - `/node create <node-id>`
 - `/node reject ...`
 - `/node pair-help`
-- `/agent create ... --isolated ...`
-- `/agent isolated ...`
 
 Do **not** assume you should execute those user commands yourself as an agent.
 
@@ -56,8 +55,7 @@ This is the main skill for:
 - what a node is
 - how pairing / approval works
 - how to start a node on Linux / Docker / Windows
-- how isolated agents bind to nodes
-- how sandbox/test nodes relate to ordinary nodes
+- where delegated and risky work should run
 
 There is also a structured builtin tool for agent workflows:
 
@@ -90,54 +88,25 @@ It does **not** use the removed unauthenticated direct-registration flow. `/node
 
 ## Mental model
 
-A **node** is a remote Foxwarm execution worker.
+A **Node** is an execution environment that tools can target: `master` (where Main runs), a paired CLI Node, an exec-only Shell Node, or a Node supplied by a configured **Provider**. Providers either list existing machines (such as the SSH adapter) or create Nodes on request (such as the container adapter, through `node` `create`/`ensure`/`destroy`).
 
-After pairing/approval, a node can:
+After pairing and approval, a CLI or Shell Node receives tool calls from Main, keeps its own credentials and reconnects with them.
 
-- receive tool calls from the master
-- persist its own credentials/state locally
-- reconnect automatically with stored per-node credentials
+Keep three controls apart:
 
-A **sandbox node** is still just a node.
+- **Placement** chooses where tools run: a Session's current Node, set at creation with `create_child_session({node})` or `create_session({node})`, by `node({action:"select"})`, or by an Agent's `defaultNode`. It grants nothing.
+- **Authorization** decides which tools a Session may use on which Nodes: the global tool policy plus Agent-local rule layers (`access-control`, `agent-management`).
+- **Containment** comes from the environment itself: a container, VM or separate machine and its account, network and resource limits. Foxwarm does not turn a Node into a sandbox by selecting it or by restricting an Agent.
 
-The difference is usually deployment context / intended use:
+## Where risky work should run
 
-- runs in a sandbox or Docker test environment
-- often used for isolated agents
-- may need test-environment-specific data-root settings
+Run untrusted or risky work, such as code from an unreviewed repository or an Agent answering a public chat, in an environment whose damage stays contained, not on `master`:
 
-So the relationship is:
+- for delegated tasks, a fresh Node per assignment from a Provider that creates environments, such as the [container Provider](examples/container/README.md), released after review;
+- for a long-lived assistant, one reserved Node (an `ensure`d container, VM or dedicated machine) set as its Agent's `defaultNode`;
+- in both cases, an Agent-local allowlist that keeps the Agent's tools on its current Node. `agent-management` has restricted-worker and channel-assistant templates.
 
-- **normal node** = general remote worker
-- **sandbox node** = a node deployed in a sandbox/test environment
-- **isolated agent** = an agent bound to a non-master node so its sessions inherit restricted execution
-
-Do not confuse these three controls:
-
-- `create_child_session({ suffix: "worker", node: "node-id", handoffRecall: "<briefly consider what to say and which existing rules apply>", handoffConfirmation: "<briefly and honestly check whether this handoff should proceed>\nI confirm this handoff should proceed." })` changes a session's `currentNode` for
-  ordinary remote execution; it does **not** isolate that session. Keep handoffRecall before message and handoffConfirmation last. Briefly recall the relevant rules and what to say, then honestly check the handoff. End the confirmation with “I confirm this handoff should proceed.” only if it should proceed; otherwise omit or cancel the call.
-- `isolatedNode` is agent-level metadata; every session in that agent inherits
-  the same isolation boundary and bound node
-- a separate VM/container is an operator-provided environment boundary; Foxwarm
-  does not create that compute resource merely by binding an agent
-
-## What isolated agents are mainly for
-
-Use an isolated agent when you want to put work onto a separate node to reduce risk to `master`.
-
-In ordinary language, this is mainly for cases like:
-
-- potentially risky tasks you do not want running directly on `master`
-- agents attached to external group chats / channels that may contain untrusted content
-- situations where prompt injection or other hostile content is a realistic concern
-
-The idea is not that an isolated agent becomes magically safe.
-The idea is that you give it a narrower execution boundary:
-
-- full runtime/tool use on its bound isolated node
-- only limited file/memory operations on `master`
-
-So isolated agents are a practical containment tool for higher-risk workflows.
+Agents bound with legacy isolation (`isolatedNode`) keep working, but new setups should use the pattern above.
 
 ## Base URL principle
 
@@ -232,7 +201,7 @@ The Node startup log includes the exact `/node approve <pending-id>` command; th
 
 ### Agent-facing approval
 
-A non-isolated coordinator can discover and use the pairing tools:
+A coordinator allowed to use the pairing tools can discover and call them:
 
 1. `search_tools({ query: "pair node", sources: ["builtin"] })`
 2. `call_tool({ toolId: "builtin:node_pair_list", args: {} })`
@@ -483,92 +452,9 @@ Inside `<dir>/data/`, the most important persisted files are:
 - `<dir>/data/agents/` — node-side agent workspace/data
 - `<dir>/data/logs/` — node-side logs/artifacts
 
-## Bind isolated agents to a node
+## Legacy isolated Agents
 
-These `/agent ...` examples below are **user-facing commands**.
-If you have a suitable tool surface, the corresponding agent-facing operations are usually:
-
-- `create_agent` with `isolatedNode`
-- `set_agent_isolated`
-
-### Create a new isolated agent bound to a node
-
-```text
-/agent create <agent-name> --isolated <node-id>
-```
-
-Example:
-
-```text
-/agent create sandbox-agent --isolated sandbox-docker
-```
-
-### Change an existing agent to isolated mode
-
-```text
-/agent isolated <agent-name> <node-id>
-```
-
-### Disable isolation again
-
-```text
-/agent isolated <agent-name> off
-```
-
-Important behavior:
-
-- isolated agents must bind to a **non-master** node
-- isolation is agent-level, not session-level
-- isolated sessions inherit isolation automatically from the agent
-- isolated agents may still use `master` for limited in-agent host-side operations
-- on `master`, the practical writable/readable boundary is their own agent area:
-  - their own `memory/` via memory tools
-  - files inside their own agent directory (`agents/<agent>/...`) via the allowed file tools
-- they do **not** get ordinary freedom to roam across other agents' files on `master`
-- they do **not** get ordinary freedom to switch to or operate unrelated nodes
-
-### Node/permission boundary
-
-For an isolated agent, the boundary is:
-
-- **allowed:** the bound isolated node and its tool surface
-- **allowed:** limited host-side operations on `master`, but only for the isolated agent's own memory and agent-directory files
-- **not allowed:** switching to another node
-- **not allowed:** using unrelated nodes
-- **not allowed:** reading/writing other agents' directories on `master`
-
-An isolated agent cannot switch itself to another node.
-If a workflow really needs another node, the user should change the agent's isolation binding deliberately instead of the isolated agent using other nodes directly.
-
-Binding does not reserve a node. Multiple sessions or agents can target the same
-node unless the operator provides distinct nodes and maintains that assignment.
-
-For the repeatable “one temporary isolated agent/session” workflow, load
-**`isolated-worker`**. Its bundled ToolScript can bind an already-online Node or
-compose one configured provider `ensure` plus read-only inspect for an exact
-existing worktree before `create_agent`, `create_session`, and
-`send_to_session`. It does not create Git worktrees, add leases, or automatically
-tear down Nodes/containers.
-
-## Sandbox/test-environment note
-
-A sandbox node is often used for isolated agents in testing.
-
-The most important testing pitfall is the data root.
-
-For the main Foxwarm testing environment, the sandbox node must use:
-
-```text
-FOXWARM_DATA_DIR=/app/test
-```
-
-Why this matters:
-
-- the testing runtime stores data under `/app/test/state` and `/app/test/agents`
-- if the sandbox node uses `/app` instead, it will read/write the wrong state tree
-- then `/node`, node online state, file behavior, and test results become misleading
-
-So when sandbox behavior looks wrong, check the data root before debugging pairing/permissions.
+Agents bound to a Node with `isolatedNode`, `set_agent_isolated` or `/agent isolated` still work, but isolation is deprecated. See [agent-management: Legacy isolated Agents](../agent-management/references/OPERATIONS.md#legacy-isolated-agents) for what it enforces and how to migrate to local rules and `defaultNode`.
 
 ## Verification checklist
 
@@ -576,9 +462,8 @@ After startup and approval:
 
 1. use `node({ action: "list" })` to confirm the node is online, or tell the user to run `/node` when approved/offline detail is needed
 2. if approval is pending, use the reviewed `node_pair_list` / `node_pair_approve` tool path or the user-facing `/node approve` path
-3. if using isolated agents, confirm the agent is actually bound to that node
-4. confirm tool execution is happening on the expected node, not accidentally on `master`
-5. confirm restricted cross-agent/cross-node behavior when isolation is expected
+3. confirm tool execution happens on the expected Node, not accidentally on `master`
+4. for restricted Agents, check representative allowed and denied calls with `explain_tool_authorization`
 
 ## Common troubleshooting
 
@@ -605,21 +490,13 @@ rm -f /opt/foxwarm-node/data/state/node_credentials.json
 
 Then restart and re-approve.
 
-### Sandbox node acts like it sees the wrong files/state
+### A containerized Node sees the wrong files or state
 
-First suspect `FOXWARM_DATA_DIR` mismatch.
-For testing, it must point at `/app/test`, not `/app`.
+Check the `FOXWARM_DATA_DIR` its compose file or environment sets. A Node started with a different data directory reads and writes a different state tree.
 
-## Related skill
+## Related skills
 
-Use **`agent-management`** when the task is mainly about:
-
-- why agent rename/delete behave the way they do
-- safe agent migration / cleanup
-- snapshot refresh after editing another agent's memory
-
-Use **`isolated-worker`** when a coordinator should create a temporary isolated
-agent/session on an already-online Node.
+Use **`agent-management`** for Agent creation, local rules, the restricted-worker and channel-assistant templates, migration, cleanup and snapshot refresh. Use **`access-control`** for policy syntax and identities.
 
 ## WebUI onboarding
 

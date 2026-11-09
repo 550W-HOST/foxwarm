@@ -48,6 +48,8 @@ The requested Agent rules tree adds ordered local v1 rule arrays to the global p
 
 Default injection and `search_tools` use the same conservative per-layer visibility projection. Notification reception reuses the effective internal policy and current facts on each reception check; ordinary inbound MCP principals remain Agent-less and global-policy-only. Legacy isolation and handler-local guards continue after effective generic authorization. See [creator metadata and lifecycle](./session-domain.md#agent-creator-metadata-and-admission) for persistence and management authority.
 
+The agent-management `restricted-worker` and `channel-assistant` templates ship complete local layers; `AgentRulesTreeTests.Templates.cs` checks them against these semantics, including the node-selector scope and master-first ordering they depend on.
+
 Existing global caller `agent: A` selectors continue matching the actual initiator only; they do not begin matching creator descendants. Migration must deliberately move subtree restrictions into A's local layer rather than rewriting global first-match order automatically. The existing isolated-rule generator produces a review candidate, not parity or an automatic installation: exact grants, stored timer targets, incoming relationships, attachment placement and default Node routing require separate inventory. New/old checks coexist; no installation migration or isolation retirement is implicit. Older Main versions that ignore Agent layers are unsafe readers of an installation using them; deployment or downgrade requires an explicit compatible-version/state decision.
 
 ## Renamed Session observation policy identity

@@ -23,7 +23,6 @@ Foxwarm 当前把 **agent** 与 **session** 明确分开：
 /session unarchive [session-id]
 /session parent <parent-session-id> [child-session-id]
 /session unparent [child-session-id]
-/session isolated [on|off] [node]
 /session index
 ```
 
@@ -84,7 +83,6 @@ interface Session {
   displayName?: string;
   archived?: boolean;
   currentNode?: string;
-  isolated?: boolean;
   model?: string;
   vectorIndexPosition?: number;
   historyVersion?: number;
@@ -99,7 +97,6 @@ interface Session {
 - `persistentMemorySnapshot`：当前 prompt snapshot
 - `systemPromptFiles`：可选文件列表；设置后，仅替换 snapshot 中的 memory 文件来源，其他系统注入（如 skills catalog）仍保留。相对路径按 agent 工作目录解析；文件可用 session-specific frontmatter 继续筛选。
 - `currentNode`：当前工具执行 node，默认 `master`
-- `isolated`：是否限制为当前 node / 相关会话树使用
 - `model`：session 层覆盖的模型 key
 - `parentSessionId`：child session 的父会话
 
@@ -108,14 +105,14 @@ interface Session {
 Foxwarm 会把当前 session 可见的长期记忆预组装成 `persistentMemorySnapshot`。
 其来源通常是：
 
-1. `agents/00_SYSTEM.md` 这一层框架级系统提示（如果不存在，则兼容 fallback 到 legacy `agents/main/memory/00_SYSTEM.md`）
+1. 框架级系统提示：内置的 `templates/agents/00_SYSTEM.md`，加上可选的安装级追加文件 `agents/00_SYSTEM.local.md`
 2. inherited agent memory
 3. 当前 agent 自身 memory
 4. visible skills catalog（技能目录摘要，不是完整技能文档）
 
 补充说明：
 
-- `agents/00_SYSTEM.md` 是特殊文件，会作为框架层系统提示注入所有 agent；`agents/main/memory/00_SYSTEM.md` 仅作为过渡兼容 fallback
+- 安装级的通用指令写在 `agents/00_SYSTEM.local.md`。旧版遗留且被修改过的 `agents/00_SYSTEM.md` 会替换内置框架提示，导致不再获得框架更新；未修改的旧副本会在启动时自动删除
 - 默认的 per-agent memory 加载会跳过各 agent 自己目录下的 `00_SYSTEM.md`
 - 因此普通 agent 自己的长期记忆应放在 `MEMORY.md` / `SOUL.md` / `USER.md` 或其他普通 `.md` 文件里，而不是依赖自定义 `00_SYSTEM.md`
 - 普通 memory `.md` 可以在文件开头使用 YAML frontmatter：`include-session` / `exclude-session`（string 或 string[]）。glob 按 canonical session id 整串匹配，`exclude-session` 优先；省略 `include-session` 表示默认注入。frontmatter 解析失败会 warn，但仍注入正文；缺少 closing delimiter 时按普通 markdown 注入。
@@ -156,15 +153,10 @@ interface QueueItem {
 - 如果 `session.model` 为空，则使用 `state/models.yaml` 中的默认模型
 - `/model` 可以查看可用模型或切换当前 session 模型
 
-## Node 与隔离
+## Node 与权限
 
 - `/node` 查看或切换当前执行 node
-- `/session isolated on [node]` 可把当前 session 固定在某个 node 范围内
-- isolated 主要用于限制跨 session / 跨 node 操作
-
-补充说明（agent 级隔离的实际边界）：
-
-- isolated agent 通常用于把高风险任务或可能接触不可信内容（例如外部群聊/channel）的 agent 绑定到非 master node 上
-- isolated agent 的运行时工具执行主要发生在其绑定 node 上
-- isolated agent 不能把“切去别的 node”当成默认能力
-- 在 `master` 上，它仍可做有限的本地操作，但范围应理解为自己的 memory 和自己 agent 目录内的文件
+- Agent 的 `defaultNode` / `defaultCwd` 决定新 session 的初始 node 与工作目录；这只是放置位置，不授予任何权限
+- 工具权限由全局 `state/tool-authorization.yaml` 与 agent 本地规则层（`create_agent` 的 `rules`、`set_agent_rules`）共同决定；本地规则作用于该 agent 以及由它创建的 agent，只能进一步收紧
+- 真正的隔离来自 node 所在的环境（容器、虚拟机或独立机器）；`node-setup` 技能提供一次性容器 Provider 的参考实现
+- 旧的 agent 级隔离（`/agent isolated <agent> <node-id|off>`、`isolatedNode`）已弃用：现有 isolated agent 仍按原规则执行，新 agent 不应再使用。迁移方法见 `agent-management` 技能

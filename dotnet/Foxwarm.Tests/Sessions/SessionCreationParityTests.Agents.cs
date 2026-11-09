@@ -167,7 +167,7 @@ public sealed partial class SessionCreationParityTests
     }
 
     [Fact]
-    public async Task One_time_memory_copy_and_shipped_isolated_worker_creation_use_existing_isolation_and_rule_owners()
+    public async Task One_time_memory_copy_and_legacy_isolated_creation_use_existing_isolation_and_rule_owners()
     {
         await using var f = await ExternalChannelFixture.CreateAsync();
         RegisterAgentTools(f);
@@ -182,7 +182,7 @@ public sealed partial class SessionCreationParityTests
                 ["effect"] = "deny",
             }
         );
-        // Same creation shape as skills/isolated-worker/create_isolated_worker.py, plus supported copy/rule inputs.
+        // Legacy isolated-Agent creation (isolatedNode without a main Session), plus supported copy/rule inputs.
         Successful(
             await f.ToolAsync(
                 "call_tool",

@@ -1,506 +1,186 @@
-# agent-management
+# Agent operations
 
-Use this skill when the task is about **agent lifecycle / maintenance**, not just one session.
+Reference for the workflows listed in [the skill entry](../SKILL.md). Read the section you need; this is not a reading sequence.
 
-Typical cases:
+## Tools and commands
 
-- understanding what an agent is vs what a session is
-- creating a new agent cleanly
-- deciding where to put long-term instructions or project memory
-- bootstrapping collaboration rules and starter memory for agents that use child sessions
-- editing an agent's memory and choosing when a snapshot refresh is worth its cache cost
-- binding or unbinding an agent to an isolated node
-- moving work from one agent/session layout to another
-- cleaning up an old agent safely
-- explaining why direct agent rename is not exposed as a trivial operation
+Agents use tools. If a tool is not in your tool list, look for it with `search_tools`; it may be available on request or denied by policy.
 
-## First: tools vs commands
+| Tool | Use |
+| --- | --- |
+| `create_agent` | Create an Agent, optionally with initial local rules and placement defaults |
+| `set_agent_rules` | Replace the local rules of an Agent created from yours |
+| `set_agent_inherit` | Set or clear memory inheritance |
+| `create_session` | Create a Session under an existing Agent |
+| `create_child_session` | Create a child Session, also in another Agent, optionally assigned a Task (`taskId`) and placed on a Node (`node`) |
+| `move_session` | Rename a Session or move it to another Agent; the old ID remains an alias |
+| `delete_session` | Delete another Session's live record; its archive is kept |
+| `list_agents`, `session` | Inspect Agents and Sessions |
+| `refresh_session_snapshot` | Rebuild one Session's system prompt now |
+| `read_memory`, `write_memory`, `edit_memory`, `apply_patch_memory`, `delete_memory` | The current Agent's memory |
+| `task`, `node` | Assignments and execution environments |
+| `set_agent_isolated` | Legacy isolation only; see [Legacy isolated Agents](#legacy-isolated-agents) |
 
-This distinction matters.
+Users have commands: `/agent list|create|delete|isolated|inherit`, `/session ...` (including `move`, `parent`, `unparent`, `delete` and `refresh-snapshot`) and `/node ...`. When a step needs a command, tell the user exactly what to run. Do not simulate a user request to run a command yourself.
 
-### Tools are agent-facing
+## What an Agent's Sessions see
 
-These are the things an agent can normally use directly when they are in the tool surface, for example:
+A Session works from a prompt snapshot assembled from:
 
-- `create_agent`
-- `create_session`
-- `move_session`
-- `set_agent_inherit`
-- `set_agent_isolated`
-- `refresh_session_snapshot`
-- `list_agents`
-- `session` (status by default, list with `action: "list"`)
-- `read_memory` / `write_memory` / `edit_memory` / `apply_patch_memory` for the **current** agent
-- ordinary file tools for other paths, if your current permissions allow that access
+1. the framework prompt;
+2. memory of inherited Agents, then the Agent's own top-level `memory/*.md` files;
+3. a catalog of available skills (name and description only);
+4. runtime context such as the Agent directory.
 
-### Commands are user-facing
+`skill({action:"load"})` returns a skill's entry document and lists its resources; resources are read only when needed. Snapshots are cached per Session, so a changed memory file does not change an open Session's prompt until that snapshot is rebuilt.
 
-Commands like these are primarily for the **user** to run in chat/WebUI:
+## Where knowledge belongs
 
-- `/agent ...`
-- `/session ...`
-- `/node ...`
+1. **Framework prompt:** rules for every Agent. Keep it small and generic.
+2. **Agent memory:** what every Session of the Agent needs: stable rules, user preferences, environment facts, confirmed decisions and short pointers.
+3. **Agent docs:** analysis, runbooks, history and deliverables, read when needed.
+4. **Skills:** reusable procedures. Only the catalog entry is visible until the skill is loaded.
+5. **Skill resources:** references, scripts and examples inside a skill directory, read only when the skill or task needs them.
 
-Do **not** assume you can or should execute those commands yourself as an agent.
+Judge by relevance and reading cost, not line count. Session history, its summaries and `recall` already preserve progress, so memory is not a progress log. A directory containing `SKILL.md` is one skill; nested `SKILL.md` files inside its resources are not separate catalog entries.
 
-Default rule:
+### Framework prompt files
 
-- if there is a suitable **tool**, prefer the tool
-- if a workflow depends on a **user command surface**, tell the user the exact command to run
-- do **not** treat "simulate a WebUI request so I can send `/agent ...` myself" as the normal path
+- The bundled `templates/agents/00_SYSTEM.md` is the base and changes with Foxwarm updates. Do not edit it for one installation.
+- `agents/00_SYSTEM.local.md` is appended for all Agents of the installation. Put installation-wide instructions there.
+- An edited legacy `agents/00_SYSTEM.md` (or `agents/main/memory/00_SYSTEM.md`) replaces the bundled base, so the installation stops receiving framework prompt updates. Unedited copies are removed at startup. To migrate, move the installation-specific parts to `00_SYSTEM.local.md` and delete the legacy file.
 
-That kind of command simulation is possible in principle through awkward indirect routes, but it is **not recommended** for ordinary agent workflows.
+A `memory/00_SYSTEM.md` inside an ordinary Agent has no special effect. Use `MEMORY.md`, `SOUL.md`, `USER.md` or other clearly named files.
 
-## What an ordinary agent normally sees
+## Create an Agent
 
-An agent session normally works from a prompt snapshot assembled from:
+`create_agent` fields:
 
-1. framework-level shared system memory
-2. inherited agent memory, if the agent inherits from another agent
-3. the current agent's own memory files
-4. a visible skills catalog
+| Field | Meaning |
+| --- | --- |
+| `agentName` | Letters, digits, `-` and `_` |
+| `createMainSession` | Also create `<agent>/main`; default true. Use false for worker Agents whose Sessions are created per assignment |
+| `inherit` | Ongoing memory inheritance from another Agent |
+| `inheritMemory` | One-time copy of the source Agent's memory files |
+| `sourceSessionId` | Session whose model settings provide defaults; defaults to the caller. It transfers no history unless `convertSession` is set |
+| `convertSession` | Turn the source Session into the new Agent's main Session |
+| `rules` | Initial [local rule layer](#restrict-an-agent) |
+| `defaultNode`, `defaultCwd` | [Placement](#placement) defaults for new Sessions |
+| `isolatedNode`, `toolRules` | Legacy isolation; do not use for new Agents |
 
-Important details from current implementation:
+Session names use ASCII letters, digits, `_` and `-`. Display names are separate.
 
-- the skills catalog injected into the snapshot is only a **catalog/summary**
-- full skill documents are loaded on demand with `skill({ action: "load", skillName: ... })`
-- `skill({ action: "load", ... })` returns the skill entry and may list supporting resource paths; those resources are not read until needed
-- session snapshots are cached per session, so editing memory on disk does not always change an already-open session immediately
-- the prompt snapshot also includes runtime hints such as the current agent folder and context-recall guidance
+**Creator authority.** An Agent created by a model records the calling Session's Agent as its creator; one created by an administrator is top-level. The creator chain is fixed and independent of memory inheritance and Session parents. It has these consequences:
 
-## Progressive disclosure: where knowledge belongs
+- Only a model in an Agent strictly above it on the chain can replace its rules with `set_agent_rules`, and that caller's own authority is rechecked. No Agent can change its own or an ancestor's rules. Administrators can change any layer (`PUT /api/agents/<agent>` with `rules`).
+- It may inherit memory only from Agents above it on the chain.
+- Models in an Agent that has a creator may create Sessions, timers and parent links only in their own Agent or Agents created from it. They may convert only such Sessions; `inheritMemory` may also copy from ancestors.
+- `agentTree.maxDepth` (default 16) and `agentTree.maxChildren` (default 128 direct children) limit the tree. Lowering a limit does not disable existing Agents.
+- An Agent cannot be deleted while Agents created from it exist.
 
-Use progressive disclosure so future sessions see the right amount of knowledge at the right time:
+There is no tool to write another Agent's memory. After creating an Agent, write its memory files with ordinary file tools under `agents/<agent>/memory/` if your permissions allow, or ask the user.
 
-1. **Framework/system prompt** — universal rules every agent must know. Keep tiny and generic.
-2. **Agent memory** — always-needed stable behavior, repeated user preferences, durable environment facts, confirmed decisions, and short pointers. This is injected into prompt snapshots.
-3. **Agent docs** — detailed analysis, runbooks, historical notes, design writeups, and artifacts. These are available on disk but not injected by default.
-4. **Skills** — reusable workflows or capability packages. Only name + description are shown in the catalog until `skill({ action: "load", ... })` is called.
-5. **Skill resources** — references, scripts, assets, examples, evals, or other supporting files listed or linked by the skill entry. Read these only when needed.
+## Restrict an Agent
 
-When deciding where to put information, ask:
+Restriction has two independent parts:
 
-- Should every session under this agent behave differently because of this fact? Put a short durable version in memory.
-- Is it reusable across tasks or agents as a procedure/capability? Make or update a skill.
-- Is it detailed evidence, historical context, a long runbook, or an artifact? Put it in docs and link from memory or a skill.
-- Is it a helper file for one skill? Put it under that skill as a resource and link or list it from `SKILL.md`.
+1. **A local rule layer** decides which tools the Agent's Sessions can use. The global policy decides first, then every layer from the top of the creator chain down to the Agent's own must pass. A call that matches no rule passes a layer, so a layer that ends with `{"action":"deny"}` is an allowlist. Syntax and evaluation: [access-control Agent-local layers](../../access-control/references/tool-policy.md#agent-local-layers).
+2. **A Node** decides where its file and exec tools run. Containment, network access and resource limits come from that environment, for example a container from the [container Provider](../../node-setup/examples/container/README.md), a VM or a dedicated machine.
 
-If a directory contains `SKILL.md`, treat it as a skill boundary. Files and subdirectories inside it are supporting resources for that skill; do not expect nested `SKILL.md` files inside references, examples, scripts, docs, or assets to appear as separate catalog entries.
-
-## Framework prompt files
-
-The framework prompt is the first block of every Agent's default system prompt:
-
-- Foxwarm's bundled `templates/agents/00_SYSTEM.md` is the base. It is part of the program and changes with Foxwarm updates; do not edit it for one installation.
-- `agents/00_SYSTEM.local.md`, when present, is appended after the base for **all Agents** of the installation. Put installation-wide instructions there.
-- A legacy `agents/00_SYSTEM.md` (or older `agents/main/memory/00_SYSTEM.md`) that was edited after an earlier release copied it **replaces** the bundled base, so that installation does not receive framework prompt updates. Unedited copies are removed automatically at startup. To migrate an edited copy, move only the installation-specific parts to `agents/00_SYSTEM.local.md` and delete the legacy file.
-
-Per-Agent memory loading skips `00_SYSTEM.md`, so a `memory/00_SYSTEM.md` inside an ordinary Agent has no special effect. For Agent-specific instructions, use normal memory files such as `MEMORY.md`, `SOUL.md`, `USER.md` or other clearly named `.md` files.
-
-## Mental model: agent vs session
-
-Foxwarm keeps **agent** and **session** separate:
-
-- **agent** = long-lived workspace + memory container
-- **session** = runtime conversation thread bound to an agent
-
-That means:
-
-- renaming or moving a **session** is comparatively lightweight
-- changing an **agent** is heavier because agent identity is tied to workspace paths, memory location, metadata, and all sessions under it
-
-Node selection and isolation are also separate:
-
-- a session's `currentNode` selects where ordinary runtime tools execute
-- `create_child_session({ suffix: "worker", node: "node-id", handoffRecall: "<briefly consider what to say and which existing rules apply>", handoffConfirmation: "<briefly and honestly check whether this handoff should proceed>\nI confirm this handoff should proceed." })` sets `currentNode` but does not make the child isolated. Keep handoffRecall before message and handoffConfirmation last. Briefly recall the relevant rules and what to say, then honestly check the handoff. End the confirmation with “I confirm this handoff should proceed.” only if it should proceed; otherwise omit or cancel the call.
-- isolation is agent-level; an isolated agent binds all of its sessions to one non-master node and narrows their permissions
-
-If different workers need different real isolation boundaries, use different
-temporary agents, not several sessions under one agent. Load `isolated-worker`
-for the reusable parent-linked workflow.
-
-## Collaboration and memory bootstrapping
-
-If you are creating or configuring an agent that may use child sessions, do not improvise its collaboration rules from scratch.
-
-Read the reference docs next to this skill first:
-
-- `COLLABORATION-PATTERNS.md` — organizer/executor defaults, role detection, fork/non-fork/reuse guidance, handoff checklists, tunable preferences, and memory hygiene.
-- `memory-templates/` — copyable starter memory files for shared base agents and specialized agents.
-
-These reference files are intentionally not part of the normal `skill({ action: "load", ... })` payload. Keep this `SKILL.md` as the short entry point; read references explicitly when configuring agent memory.
-
-Recommended default: use an **Organizer / Executor** pattern inside each agent. The main/direct session coordinates scope, ownership, parallelism, and user-facing decisions; child sessions execute bounded tasks and report back through the required reply path.
-
-For multi-agent setups, put generic Organizer / Executor rules in a shared/base agent and let specialized agents inherit them. Each specialized agent should keep only domain-specific durable memory in its own memory files.
-
-Keep agent memory focused on stable rules, safety boundaries, and facts needed across tasks. Put detailed procedures in docs or skills and keep useful entry-point summaries in memory. Judge by relevance and reading cost, not a line-count threshold; a concise helper contract may prevent repeated investigation. Session history and recall already preserve ordinary progress.
-
-## What isolated agents are for
-
-An isolated agent is mainly a **risk-containment** setup.
-
-Use it when you want an agent's runtime work to happen on a separate non-master node instead of freely on `master`.
-
-Typical cases:
-
-- the agent will handle tasks that may be risky
-- the agent is attached to an external group chat or channel that may contain untrusted content
-- prompt-injection exposure is plausible and you want a narrower execution boundary
-
-The point is not "perfect safety".
-The point is to reduce blast radius by moving runtime execution onto a bound node and narrowing what the agent can still do on `master`.
-
-## Isolated-agent boundary
-
-If an agent is isolated, the boundary is:
-
-- it can use the tools available on its **bound isolated node**
-- it can still do limited host-side work on `master`
-- on `master`, that limited work is mainly its own `memory/` plus files inside its own agent directory
-- it cannot switch to other nodes
-- it cannot operate on unrelated nodes
-- it cannot read or edit other agents' directories on `master`
-
-So for an isolated agent, the mental model is:
-
-- runtime work: bound node
-- durable local files on `master`: own agent area only
-- other nodes / other agent directories: not allowed
-
-Isolation does not create or reserve a VM/container. The operator supplies that
-environment, and binding does not prevent another agent/session from sharing the
-same node.
-
-Coordinator communication is intentionally narrow: the supported isolated
-worker pattern uses an explicit parent/child session relation. Builds that
-support parent-linked cross-agent isolation allow messaging only across that
-direct link; unrelated cross-agent access remains denied. Older builds with a
-blanket cross-agent isolated deny cannot complete that workflow and will reject
-the initial `send_to_session` call.
-
-## Common workflow: create a new agent
-
-### If you are using tools
-
-Prefer the agent-facing tool path when available:
-
-- `create_agent`
-
-Useful fields in current implementation include:
-
-- `agentName`
-- `inherit` — shared-memory parent agent
-- `isolatedNode` — bind the agent to a non-master node immediately
-- `createMainSession`
-
-If you also need a separate extra session afterward, use:
-
-- `create_session`
-
-New Session names must contain only ASCII letters, digits, underscores, and hyphens. A display name is separate and can use ordinary descriptive text.
-
-For an isolated worker controlled by the current session, do not create an
-unrelated isolated agent main session and assume it can report back. The intended
-shape is:
-
-1. `create_agent` with `isolatedNode` and `createMainSession:false`
-2. `create_session` under that agent with `parentSessionId` set to the coordinator
-3. `send_to_session` to deliver the task
-
-The bundled `isolated-worker` skill packages this sequence in a ToolScript with
-read-only validation mode and partial-failure recovery reporting. It can also
-optionally compose a configured provider `ensure` plus exact read-only inspect
-for one existing worktree before creating the agent/session.
-
-### If you are guiding the user
-
-Tell the user to run a command such as:
+Create a restricted Agent with its rules in one call, so no Session runs without them:
 
 ```text
-/agent create <name>
-/agent create <name> --isolated <node-id>
+create_agent({agentName:"worker", createMainSession:false, rules:<contents of restricted-worker.rules.json>})
 ```
 
-Remember: those `/agent ...` examples are **user-facing commands**, not your default execution path as an agent.
+Then write the matching memory template to `agents/worker/memory/MEMORY.md`. The rules in the templates were reviewed for these hazards; keep them when adapting:
 
-## Common workflow: write memory for an agent
+- **Scope environment allowances with `tool: {source: node}`.** A top-level `node` selector also matches the `node` tool's select, inspect and destroy targets and file-transfer endpoints. Without the tool scope, a worker could inspect or destroy its own environment.
+- **Deny `master` first.** `node: {current: true}` matches `master` for a Session placed there.
+- **Never reuse Node IDs.** `current` compares IDs, so a finished Session that still selects a reused ID would reach the next environment. Use a fresh ID per assignment and delete finished worker Sessions.
+- **Deny memory writes.** All Sessions of an Agent share its memory, so one compromised Session could change every later Session's instructions.
+- **No `ask_user` and no MCP for workers.** Workers ask their parent through a parent-owned Task. MCP servers run on `master`.
+- **The global policy must let the intended calls through.** A local allow only passes its own layer.
+- **Copying out goes through the coordinator.** A worker's copy with a `master` endpoint is denied, so the coordinator collects results.
 
-### For your current agent
+Check a candidate with `explain_tool_authorization` (find it with `search_tools`) for a real Session of the Agent before relying on it.
 
-Use the dedicated memory tools:
+### Restricted workers
 
-- `read_memory`
-- `write_memory`
-- `edit_memory`
-- `apply_patch_memory`
-- `delete_memory`
+Use one long-lived worker Agent for all assignments of a kind instead of one Agent per worker: rules apply to every Session of the Agent, while Agents cannot be deleted by models. Each assignment gets:
 
-These are the safest/default path for the current agent's memory.
+- a fresh Node, for example `node({action:"ensure", providerId:"sandbox", nodeId:"sandbox/<assignment>", parameters:{profile:"offline"}})`;
+- a Task and a child Session on that Node: `create_child_session({agentName:"worker", node:"sandbox/<assignment>", taskId:"<task>"})`. Task completion notifies the coordinator;
+- an explicit release after review: `delete_session` for the worker, then `node({action:"destroy", ...})` with its exact confirmation.
 
-### For another agent
+The [node-setup development workflow](../../node-setup/references/development-workflow.md) runs these steps with source transfer and delivery.
 
-There is no dedicated "write some other agent's memory" helper tool.
+### Channel assistants
 
-So if you truly need to edit another agent's memory, the realistic options are:
+For an Agent that answers a chat channel, reserve one long-lived Node for it (an `ensure`d container or a paired machine), then create the Agent with `defaultNode` set to that Node and the rules from `channel-assistant.rules.json`. Channel Sessions start on the default Node. The template allows tools on the current Node, file delivery to the same conversation, its own history and skills.
 
-- use ordinary file tools against that agent's memory path **if your permissions allow it**
-- or ask the user to do the change
+## Placement
 
-Typical target location would be:
+A new Session's Node is, in order: a legacy isolation binding; the explicit `node` given at creation; the current Node of a parent Session in the same Agent; the Agent's `defaultNode`; the installation's `agentDefaultNode`; then `master`. `defaultCwd` applies only when the Session starts on that default Node.
 
-- `agents/<agent-name>/memory/*.md`
+Set defaults with `create_agent` or in the WebUI's Agent settings. Changing them does not move existing Sessions, and a default Node need not be online. Placement grants nothing: what a Session can do on a Node is decided by policy.
 
-Be careful not to over-assume permissions. Some isolated or restricted contexts may not allow this.
+## Memory edits and snapshot refresh
 
-## Common workflow: memory edits and snapshot refresh
+Do not refresh a snapshot automatically after editing memory. Each Session keeps a composed system-prompt snapshot; replacing it loses prompt-cache reuse and makes the next request more expensive.
 
-Do not automatically refresh a snapshot after editing memory. Foxwarm keeps a composed system-prompt snapshot per Session; changing that prefix can lose prompt-cache reuse and make the next request substantially more expensive.
+- **Edits made in this Session:** the change is already in this conversation. Continue with that context. Refresh only when the user asks or when testing snapshot assembly itself.
+- **Another Session needs the change now:** send it a short `send_to_session` message with the file, the new rule and any action it should take. Only if it must use the complete rebuilt prompt immediately, refresh that exact Session: `refresh_session_snapshot({sessionId:"agent/session"})`. Omitting `sessionId` refreshes the caller. Users can run `/session refresh-snapshot <session-id>`.
 
-### Changes made in this Session
+New Sessions, and existing ones after their normal refresh, pick up saved memory automatically. Do not broadcast refreshes because a shared file changed.
 
-The edit and its explanation are already in this conversation. Use that context to continue; normally leave the current snapshot alone. An explicit refresh is appropriate when the user requests it or when testing snapshot assembly/filtering itself, not as routine cleanup after an edit. New or normally refreshed snapshots will incorporate the saved file.
+## Inheritance
 
-### Changes another Session needs immediately
+`set_agent_inherit` (or `/agent inherit <agent> <parent-agent|none>`) changes which Agent's memory appears in this Agent's prompts. By default it changes only metadata; existing snapshots keep their prompt. `refreshSnapshots:true` also refreshes affected Sessions active within the last hour; older ones refresh on their next turn. Inheritance does not copy files, grant authority or make one Agent report to another.
 
-Prefer sending that Session a concise change summary with `send_to_session`, including the affected file, the new rule, and any action it needs to take. This adds the information to its conversation without replacing the cached system-prompt prefix. Notify only relevant Sessions and preserve ordinary messaging permissions.
+## Moves and migration
 
-If the target must immediately use the complete rebuilt snapshot or updated skill catalog, refresh that exact Session explicitly:
+**Sessions.** `move_session` renames a Session or moves it to another Agent, optionally creating that Agent. The old ID remains an alias. Its parent link is kept and direct children are updated; pass `parentSessionId` only to assign a different existing parent. Users can run `/session move <new-id>|<agent>/<new-id> [--parent <parent-id>]`, and `/session unparent` detaches a Session. There is no recursive tree move. New names follow the Session name rule; legacy IDs remain readable and can be moved to a valid name.
 
-```text
-refresh_session_snapshot({ sessionId: "target-agent/target-session" })
-```
+**Agents.** There is no direct Agent rename: the name is part of paths, Session IDs, metadata and creator records. To replace an Agent:
 
-Do not omit `sessionId` when intending to refresh another Session: omission targets the caller. A message communicates the change; it does not itself rebuild the snapshot or alter runtime authorization.
+1. create the new Agent with the intended settings and rules;
+2. copy or rewrite the memory files you want;
+3. move or recreate the Sessions you still need;
+4. set inheritance and placement on the new Agent;
+5. tell affected Sessions what changed; refresh only those that need it immediately;
+6. only then consider deleting the old Agent.
 
-The equivalent user-facing command is:
+Do not rename Agent directories or edit state files by hand.
 
-```text
-/session refresh-snapshot target-agent/target-session
-```
+## Deletion
 
-Inheritance changes leave existing Session snapshots unchanged by default. Isolation changes still update affected Sessions. Check the operation result before adding another refresh, and do not broadcast refreshes merely because a shared memory file changed.
+**Sessions.** `delete_session` deletes another Session's live record and keeps its archive. Surviving children are detached. A busy Session receives a stop request; retry once it is idle. A Session cannot delete itself. Users can run `/session delete <session-id>`.
 
-## Common workflow: set or clear agent inheritance
-
-### Agent-facing path
-
-Use:
-
-- `set_agent_inherit`
-
-By default this changes only Agent metadata, so existing Session snapshots keep their current cached prefix. `refreshSnapshots:true` immediately refreshes affected Sessions that have not been inactive for more than one hour; older Sessions are skipped because their next ordinary turn performs the existing automatic refresh. To refresh one exact Session immediately regardless of inactivity, use `refresh_session_snapshot`. New Sessions and later normal refreshes use the new inheritance automatically.
-
-### User-facing path
-
-Tell the user to run:
-
-```text
-/agent inherit <agent> <parent-agent|none>
-```
-
-Use this when you want shared memory from one agent to appear in another agent's default prompt snapshot.
-
-## Common workflow: bind or unbind an agent to a node
-
-### Agent-facing path
-
-Use:
-
-- `set_agent_isolated`
-
-### User-facing path
-
-Tell the user to run:
-
-```text
-/agent isolated <agent> <node-id>
-/agent isolated <agent> off
-```
-
-Important behavior:
-
-- isolation is **agent-level**
-- the agent's sessions inherit that isolation automatically
-- changing isolation updates affected sessions accordingly
-- an isolated session cannot switch itself to some other arbitrary node for normal work
-- if a different node is really required, the right model is usually to change the agent's isolation binding deliberately, not to let the isolated agent use other nodes directly
-- binding currently does not guarantee that the node is online or exclusively assigned; verify with `node({ action: "list" })` before starting work
-
-## Common workflow: move work between agents/sessions
-
-Be precise about whether you are moving a **session** or replacing an **agent**.
-
-### Session move/rename
-
-If the goal is to move or rename a session thread, use the session-level capability.
-
-The destination Session name follows the same ASCII letters/digits/underscore/hyphen rule as creation. Existing legacy IDs remain readable and can be moved to a valid new name; do not rewrite stored history or aliases to enforce the naming rule. Fork/child suffixes and the resulting new Session name must also be valid, so a nonconforming legacy parent may need to be renamed before creating an append-style child.
-
-Agent-facing path:
-
-- `move_session`
-
-User-facing path:
-
-```text
-/session move <new-session-id> [--parent <parent-session-id>]
-/session move <existing-agent>/<new-session-id> [--parent <parent-session-id>]
-```
-
-Identity moves preserve the session's existing incoming parent relation by
-default and rewrite direct child references to the moved ID. A batch may move
-the sessions in an existing tree individually without reconstructing those
-relations. Use `parentSessionId` on the agent-facing `move_session` tool, or
-`--parent` on `/session move`, only when the moved session should intentionally
-receive a different existing parent. Keep `/session unparent` as the explicit
-detach operation; there is no recursive tree-move API.
-
-### Agent migration
-
-If the real goal is “this agent should really have been named/configured differently”, do **not** treat that as a session move.
-
-Preferred migration flow:
-
-1. create the correctly named/newly configured agent
-2. copy or rewrite the important memory files
-3. move/recreate the sessions you still want
-4. set inherit/isolation on the replacement agent as needed
-5. notify relevant surviving sessions; refresh specific snapshots only when the rebuilt prefix is needed immediately
-6. only then consider deleting the old agent
-
-## Why there is no simple direct agent rename
-
-A direct agent rename is intentionally not treated as a trivial cosmetic action.
-
-Reasons include:
-
-- agent paths are part of the persistent structure
-- sessions under that agent are tied to that identity
-- memory files, session metadata, and tool-visible workspace layout all depend on it
-- a bad "just rename the folder" approach is easy to get wrong and can leave confusing partial state
-
-So the safe recommendation is usually:
-
-- create the correctly named agent
-- move/recreate the needed sessions
-- copy/adjust memory deliberately
-- refresh snapshots where needed
-- only then clean up the old agent
-
-## Delete / cleanup
-
-### Current capability boundary
-
-There is a user-facing delete command:
+**Agents.** There is no model tool. Explain the effect and checks, then give the user the command:
 
 ```text
 /agent delete <name> --confirm
 ```
 
-But there is **not** a normal agent-facing `delete_agent` tool in the current tool surface.
+It deletes all of the Agent's Sessions, its directory and memory. It is refused while Agents created from it exist. Before suggesting it:
 
-So as an agent, your normal behavior should be:
+1. migrate the memory and Sessions you still need;
+2. confirm that no Agent created from it remains, and that no other Agent inherits its memory or relies on files in its directory;
+3. tell surviving Sessions about the change.
 
-- explain what deletion will do
-- verify the migration/cleanup preconditions
-- then tell the user the exact delete command to run if deletion is still wanted
+A multi-step setup that fails partway is not rolled back. Report exactly which Agents, Sessions and Nodes exist, and clean up with the commands above rather than by removing directories.
 
-This also means a multi-step create-agent/create-session workflow cannot promise
-transactional rollback. Validate first, report exactly which resources survived
-a failure, and use user-confirmed deletion for cleanup rather than manually
-removing directories.
+## Legacy isolated Agents
 
-### What delete does
+An isolated Agent is bound to one non-master Node. All its Sessions run there; on `master` they may use only their own Agent directory and memory; optional exact `toolRules` apply; and messages cross Agents only along direct parent/child links. These checks still run after the generic policy. Existing isolated Agents keep working, but do not create new ones.
 
-Current command behavior deletes:
+The replacement is the pattern above: an Agent-local rule layer plus a Node, with `defaultNode` for placement. To migrate an isolated Agent:
 
-- all sessions for that agent
-- the agent directory and memory
+1. Inventory what it uses: its bound Node, timers, channel attachments, Sessions that message it, and files it keeps in its Agent directory.
+2. Write a local layer, starting from the closest template, and set `defaultNode` to the bound Node. The [offline generator](../../access-control/references/isolated-rules.md) produces a conservative global-policy baseline instead; its documented differences apply to both approaches.
+3. Apply the rules. A model can only do this for an Agent created from its own Agent; top-level Agents need an administrator.
+4. Test with `explain_tool_authorization` while isolation is still on, using a non-isolated test Agent with the same rules where isolation would hide gaps.
+5. With approval, clear isolation: `set_agent_isolated({agentName, nodeId:""})` or `/agent isolated <agent> off`.
 
-So it is intentionally explicit and confirmation-gated.
-
-## Things you generally should NOT do manually
-
-Avoid ad-hoc manual mutation such as:
-
-- renaming agent directories by hand
-- creating per-agent `00_SYSTEM.md` and assuming it will be loaded by default
-- editing the bundled framework template for one installation instead of `agents/00_SYSTEM.local.md`
-- deleting agent folders without going through the intended flow
-- editing persistent state files blindly to "fake" a rename
-- assuming another Session knows about a file edit without a change message or a snapshot refresh
-- treating user-facing `/agent` or `/node` commands as if you can casually execute them yourself
-
-## Quick scenario checklist for ordinary agent work
-
-### Scenario A: "I need a new helper agent for a project"
-
-Covered path:
-
-- create agent
-- optionally set inherit/isolation
-- add memory files
-- create/open sessions
-
-### Scenario B: "I edited another agent's MEMORY.md; why does its open session still act old?"
-
-Covered path:
-
-- distinguish changed files from the target Session's existing snapshot
-- prefer a concise change message to that Session
-- use an explicitly targeted snapshot refresh only when the rebuilt prefix is needed immediately
-
-### Scenario C: "The agent name was bad; should I rename it?"
-
-Covered path:
-
-- no direct simple rename
-- recommended migration flow instead
-
-### Scenario D: "I want this agent restricted to a sandbox node"
-
-Covered path:
-
-- agent-level isolation
-- tool path vs user command path
-- handoff to `node-setup` for node-side details
-
-### Scenario E: "Create one temporary isolated worker on an existing node"
-
-Covered path:
-
-- load `isolated-worker`
-- dry-run its bundled ToolScript
-- create a parent-linked isolated agent/session and send the task
-- report partial resources honestly if a later step fails
-
-### Scenario F: "Can I delete the old agent now?"
-
-Covered path:
-
-- no default delete tool
-- user-facing delete command only
-- cleanup checklist before deletion
-
-## Safe cleanup checklist
-
-Before telling the user to delete an old agent:
-
-1. confirm the needed memory files were migrated
-2. confirm any wanted sessions were moved/recreated
-3. confirm isolation/inherit settings on the replacement agent are correct
-4. notify important surviving sessions of the change, or explicitly refresh their snapshots if needed immediately
-5. only then suggest `/agent delete <name> --confirm`
-
-## Related skill
-
-Use **`node-setup`** when the task is primarily about:
-
-- node bootstrap
-- pairing / approval
-- sandbox node setup
-- isolated-agent binding as part of node deployment
-
-Use **`isolated-worker`** when the task is to create one parent-linked temporary
-isolated worker on an already-online Node.
+Clearing isolation also removes its incoming-message and own-directory guards, and legacy isolation allowed own-memory writes that the templates deny. Review those differences explicitly; do not clear isolation to work around a denied call.

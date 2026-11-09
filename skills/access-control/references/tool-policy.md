@@ -194,7 +194,7 @@ rules:
     action: deny
 ```
 
-The `session` matcher supports `self: true`, `sameAgent: true`, and `relation: parent | child | [parent, child]`. Present fields are AND; parent/child are direct canonical links and can cross Agents. Self does not include siblings or descendants. This is supported only for exact registered builtin families: `send_to_session`, `send_file`, timer CRUD, `recall`, archive reads, and `view_session`. Names combined in one selector must share one registered target resolver. It is not available for arbitrary MCP/Node arguments or external callers. Missing-argument/alias behavior follows each tool, not a universal “missing means self” rule; channel-target file delivery has no Session target. Nonexistent or invalid targets do not match.
+The `session` matcher supports `self: true`, `sameAgent: true`, and `relation: parent | child | [parent, child]`. Present fields are AND; parent/child are direct canonical links and can cross Agents. Self does not include siblings or descendants. This is supported only for exact registered builtin families: `send_to_session`, `send_file`, timer CRUD, `recall`, archive reads, `view_session`, `stop_session`, and the `task` assignment target. Names combined in one selector must share one registered target resolver. It is not available for arbitrary MCP/Node arguments or external callers. Missing-argument/alias behavior follows each tool, not a universal “missing means self” rule; channel-target file delivery has no Session target. Nonexistent or invalid targets do not match.
 
 | Registered family | Target/default behavior |
 | --- | --- |
@@ -204,6 +204,8 @@ The `session` matcher supports `self: true`, `sameAgent: true`, and `relation: p
 | `get_archived_messages`, `get_archived_blocks` | `sessionId` defaults to self. |
 | `recall` | Exact recall defaults to self. Vector search without `sessionId` has a self target only with `scope: current-session`; broader/default search has no single Session target. |
 | `view_session` | Required `sessionId`; no universal default. |
+| `stop_session` | Required `sessionId`; no universal default. |
+| `task` | `ownerSessionId`, the Session a Task is assigned to; absent means no match. `<parent>` and `<main>` are not resolved here, so callers must pass the real Session ID. Use the owned-Task matcher on `taskId` for the caller's own Tasks. |
 
 Each table row is a separate resolver family; combine names only within the same row when a rule uses the Session matcher. The parser's family registry is in `src/toolAuthorization.ts`, and target/default resolution is in `src/toolAuthorizationSessionTargets.ts`; see the [canonical policy contract](../../../docs/code-index/units/src-tool-authorization.md#policy-contract).
 
@@ -236,6 +238,30 @@ Discovery and default tool injection conservatively project the ordered policy w
 Path facts are derived for supported file/memory tools, patch headers, file delivery/image saves, policy candidates, copy legs, and `exec.cwd`; an unrelated MCP tool named `read` gains no filesystem facts. Master paths canonicalize existing symlinks and the nearest existing ancestor for prospective paths. Remote paths remain Node-owned/opaque: they cannot satisfy host `allWithin` rules and count as outside for `anyNotWithin`. Use trusted Node/environment boundaries rather than pretending a Main path base restricts remote files.
 
 Even a permitted `exec` with a matched cwd can execute commands that access other paths or the network. Path containment is not an OS sandbox and does not promise protection against concurrent symlink replacement between authorization and the filesystem effect.
+
+## Agent-local layers
+
+An Agent can also carry its own ordered rule list. Set it with `create_agent({rules})` or replace it with `set_agent_rules`. The list uses the version-1 rule syntax above, written as a JSON array, but without caller selectors (`agent`, `session`, `externalId`): a layer always applies to calls made by Sessions of its own Agent **and of every Agent created from it**, directly or indirectly.
+
+```json
+[
+  {"id": "no-master", "node": {"exact": "master"}, "action": "deny"},
+  {"id": "current-node", "tool": {"source": "node"}, "node": {"current": true}, "action": "allow"},
+  {"id": "report", "tool": {"source": "builtin", "name": "send_to_session"},
+   "args": {"sessionId": {"session": {"relation": "parent"}}}, "action": "allow"},
+  {"action": "deny"}
+]
+```
+
+- **Evaluation.** The global policy decides first. Then every local layer on the creator chain, from the top-level Agent down to the caller's own Agent, must pass. Within a layer the first enabled matching rule decides; a call that matches no rule passes that layer. End a layer with `{"action": "deny"}` to make it an allowlist.
+- **Layers only narrow.** A local allow passes only its own layer. It cannot override a deny or ask from the global policy or another layer, including a global `defaultAction: deny`, so the global policy must also let the intended calls through. Local rules may use `ask` with the same `approval` options; layers combine as described in [Require approval](#require-approval).
+- **Same facts.** Local rules see the same Node, path, Session-target and owned-Task facts as global rules, including `node: {current: true}` for the caller's selected Node.
+- **Who can change a layer.** A model may replace the rules of Agents created by its own Agent, directly or indirectly, but never its own or an ancestor's. Administrators can replace any layer. An empty list removes the layer's rules. Changes apply to the next call; no snapshot refresh is involved.
+- **Global `agent:` rules are unchanged.** A global `agent: A` selector still matches only Sessions of A itself, not Agents created from A. Put rules meant for a whole subtree in A's local layer.
+- **Scope.** Layers apply to internal Sessions only. Inbound MCP callers have no Agent and remain governed by the global policy alone.
+- **Compatibility.** Older Main versions do not enforce Agent-local layers. Do not run an installation that relies on them with such a version.
+
+Two node-selector details matter for allowlists. A top-level `node` selector also matches the `node` tool's select, inspect and destroy targets and the endpoints of file transfers, so scope an environment allowance with `tool: {source: node}` unless those are intended. `node: {current: true}` also matches `master` when a Session is placed there, so put an explicit master deny first. The [agent-management templates](../../agent-management/references/memory-templates/) include complete reviewed layers for a restricted worker and a channel assistant.
 
 ## Generic policy versus legacy isolation
 

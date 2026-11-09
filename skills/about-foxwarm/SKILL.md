@@ -23,7 +23,7 @@ An agent stores durable instructions and notes under:
 agents/<agent>/memory/
 ```
 
-Use agents when different long-term roles, projects, memories, or isolation boundaries should stay separate.
+Use agents when different long-term roles, projects, memories, or tool restrictions should stay separate.
 
 ### Session
 
@@ -43,9 +43,9 @@ Child sessions should explicitly report back to the parent when they finish.
 
 A **tool** is an action the assistant can call, such as reading files, editing files, running shell commands, searching memory, sending files, managing sessions, or interacting with nodes.
 
-Tool availability depends on the current session, agent isolation, and node.
+Tool availability depends on the current session, its agent's rules, the instance tool policy, and the node.
 
-Generic tool policy can restrict internal Agents/Sessions and external MCP identities. It checks the concrete tool and target, not just a calling wrapper. Loading a skill or selecting a Node does not grant permission.
+Generic tool policy can restrict internal Agents/Sessions and external MCP identities, and each Agent can add its own local rules. It checks the concrete tool and target, not just a calling wrapper. Loading a skill or selecting a Node does not grant permission.
 
 ### Node
 
@@ -126,12 +126,12 @@ If models are configured and WebUI is open, the user can ask:
 
 | Goal | Skill |
 | --- | --- |
-| Create or migrate Agents, manage memory/inheritance, or bind Node isolation | [agent-management](../agent-management/SKILL.md) |
+| Create or migrate Agents, manage memory/inheritance, or restrict an Agent with local rules | [agent-management](../agent-management/SKILL.md) |
 | Configure entry identities, restrict browser Session scope, or safely update internal/external tool rules | [access-control](../access-control/SKILL.md) |
 | Receive events from GitHub, Cloudflare or monitoring through a webhook identity | [access-control](../access-control/SKILL.md) |
 | Schedule a reminder or a recurring check | [timer-automation](../timer-automation/SKILL.md) |
 | Connect outbound/inbound MCP, discover/call tools, or set up explicit instance replies | [mcp-management](../mcp-management/SKILL.md) |
-| Pair/bootstrap a Node | [node-setup](../node-setup/SKILL.md) |
+| Pair/bootstrap a Node, add disposable container Nodes, or run delegated development work on a Node | [node-setup](../node-setup/SKILL.md) |
 | Coordinate dependent tool calls | [toolscript-automation](../toolscript-automation/SKILL.md) |
 
 These skills own different workflows; their cross-links provide navigation rather than another copy of the same rules. Ask the agent to load the named skill, or use `skill({ action: "load", skillName: "access-control" })` through the tool interface.

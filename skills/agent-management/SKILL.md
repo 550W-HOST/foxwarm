@@ -1,50 +1,58 @@
 ---
 name: agent-management
-description: "Configure Foxwarm agents, inheritance, isolation, and memory layout; plan migration or cleanup. Use for snapshot or lifecycle guidance, not routine edits to a known memory file."
+description: "Configure Foxwarm Agents: creation, local tool rules, inheritance, placement, memory layout and templates for restricted workers or channel assistants; plan migration or cleanup. Use for Agent lifecycle, not routine edits to a known memory file."
 ---
 
 # Agent management
 
-Use this entry to choose the relevant operation. Read only the linked section needed for that task; routine edits with known tools and ownership do not require the full lifecycle guide.
+Use this entry to choose an operation, then read only the linked section. Routine memory edits with known tools need nothing beyond this page.
 
 ## Essential boundaries
 
-- An **agent** owns a long-lived workspace, memory, inheritance, and optional isolation. A **session** is a conversation/runtime thread. Inheritance does not establish a reporting relationship.
-- Use current tool schemas for agent-facing operations. Slash commands are user-facing; do not send command-shaped text as a substitute for a management tool.
-- Memory is stable operating context, not a progress log. Put task-specific procedures and detailed references in docs or skills, with short pointers from memory where needed.
-- Shared inheritance does not move files or private documents. Give another agent an accessible reference rather than assuming it has the source agent's files.
-- Agent isolation and Session Node selection are different operations. A routing choice does not create a security boundary or authorize another environment.
-- Legacy Agent `isolated` authorization is [deprecated and planned for removal](../../docs/code-index/modules/tools-and-permissions.md#d-tools-legacy-isolation-deprecation). Before an approved migration, explicitly decide how to handle its separate guards and persisted automation. [Access-control's offline rules generator](../access-control/references/isolated-rules.md) is a conservative migration baseline, not incoming protection or a requirement to preserve every legacy restriction.
-- This skill owns Agent lifecycle, memory, inheritance, isolation, and Node binding. Entry identities, restricted WebUI Session scope, and generic MCP/internal tool policy belong to [access-control](../access-control/SKILL.md); access grants do not create or migrate Agents.
-- Destructive cleanup needs an explicit target and authority. Check dependencies and the current delete contract before deleting an agent or its data.
+- An **Agent** owns long-lived memory, an Agent directory, memory inheritance, local tool rules and placement defaults. A **Session** is one conversation of an Agent. A **Node** is where tools run; a **Provider** is the driver that lists or creates Nodes.
+- Memory inheritance shares instructions only. It grants no authority and creates no reporting relationship.
+- An Agent created by a model records its creator Agent. Only Agents above it on that creator chain, or an administrator, can change its local rules; it can inherit memory only from that chain; and its creator cannot be deleted while it exists. See [creation](references/OPERATIONS.md#create-an-agent).
+- What a Session may do is decided by the global tool policy plus every Agent-local rule layer on its Agent's creator chain. Placement (`defaultNode`, a Session's `node`) chooses where tools run and grants nothing.
+- Containment comes from the environment a Node runs in: a container, VM or separate machine. Tool rules decide which tools reach that environment; they are not an OS or network sandbox.
+- Legacy Agent isolation (`isolatedNode`, `set_agent_isolated`, `/agent isolated`) is [deprecated](../../docs/code-index/modules/tools-and-permissions.md#d-tools-legacy-isolation-deprecation). Do not use it for new Agents; use local rules and a Node instead. Existing isolated Agents keep working until they are [migrated](references/OPERATIONS.md#legacy-isolated-agents).
+- Tools are for agents; `/agent`, `/session` and `/node` commands are for users. Do not send command-shaped text instead of calling a tool.
+- Deleting an Agent is a user command with confirmation. Check what depends on the Agent first.
 
 ## Choose a workflow
 
 | Task | Read when needed |
 | --- | --- |
-| Understand what an agent sees | [Prompt and memory model](references/OPERATIONS.md#what-an-ordinary-agent-normally-sees) |
-| Create an agent | [Creation workflow](references/OPERATIONS.md#common-workflow-create-a-new-agent) |
-| Choose memory structure | [Knowledge placement](references/OPERATIONS.md#progressive-disclosure-where-knowledge-belongs) |
-| Edit another agent's memory | [Memory tools and ownership](references/OPERATIONS.md#common-workflow-write-memory-for-an-agent) |
-| Refresh an existing snapshot | [Refresh behavior](references/OPERATIONS.md#common-workflow-memory-edits-and-snapshot-refresh) |
-| Change inheritance | [Inheritance workflow](references/OPERATIONS.md#common-workflow-set-or-clear-agent-inheritance) |
-| Bind isolation to a Node | [Binding workflow](references/OPERATIONS.md#common-workflow-bind-or-unbind-an-agent-to-a-node) |
-| Migrate agents or move sessions | [Migration boundaries](references/OPERATIONS.md#common-workflow-move-work-between-agentssessions) |
-| Remove an agent | [Delete behavior](references/OPERATIONS.md#delete--cleanup) and [cleanup checks](references/OPERATIONS.md#safe-cleanup-checklist) |
-| Design collaboration rules | [Collaboration patterns](references/COLLABORATION-PATTERNS.md) and the relevant [memory template](references/memory-templates/) |
+| Create an Agent | [Create an Agent](references/OPERATIONS.md#create-an-agent) |
+| Restrict an Agent, for example a delegated worker or a chat-facing assistant | [Restrict an Agent](references/OPERATIONS.md#restrict-an-agent) and its [templates](#templates) |
+| Run delegated work in a disposable environment | `node-setup`: the container Provider and the development workflow |
+| Choose where an Agent's Sessions run | [Placement](references/OPERATIONS.md#placement) |
+| Decide where knowledge belongs | [Where knowledge belongs](references/OPERATIONS.md#where-knowledge-belongs) |
+| Edit memory, or make another Session use a change | [Memory edits and snapshot refresh](references/OPERATIONS.md#memory-edits-and-snapshot-refresh) |
+| Change inheritance | [Inheritance](references/OPERATIONS.md#inheritance) |
+| Rename or move Sessions, or replace an Agent | [Moves and migration](references/OPERATIONS.md#moves-and-migration) |
+| Remove a Session or an Agent | [Deletion](references/OPERATIONS.md#deletion) |
+| Handle an existing isolated Agent | [Legacy isolated Agents](references/OPERATIONS.md#legacy-isolated-agents) |
+| Set up collaboration rules for Agents that delegate | [Collaboration patterns](references/COLLABORATION-PATTERNS.md) |
 
-The detailed [operations reference](references/OPERATIONS.md) also covers tool discovery, framework memory, isolation, and scenario examples. It is a reference, not a mandatory reading sequence.
+## Templates
+
+Starter files live in [`references/memory-templates/`](references/memory-templates/). Memory templates are written as the target `MEMORY.md`; replace the `<...>` placeholders. A `.rules.json` file is the complete `rules` array for `create_agent`.
+
+| Template | Use for |
+| --- | --- |
+| `coordination-base.md` | A shared base Agent that other Agents inherit: the delegation choices that differ per installation |
+| `specialized-project.md`, `research.md`, `operations.md` | Domain Agents |
+| `restricted-worker.md` + `restricted-worker.rules.json` | One shared worker Agent; each assignment gets its own Node, Session and Task |
+| `channel-assistant.md` + `channel-assistant.rules.json` | An Agent that answers a chat channel from a Node reserved for it |
 
 ## Routine memory edits
 
-Use the memory tools for the current agent. For another agent, use the appropriate authorized management or filesystem operation.
+Use the memory tools for the current Agent. For another Agent, use ordinary file tools on its `memory/` directory if your permissions allow, or ask the user.
 
-An edit made in the current conversation normally needs no snapshot refresh: its content is already available here. If another Session needs a change immediately, send the necessary delta. Refresh that exact Session only when it needs a rebuilt snapshot or the user explicitly requests one; do not broadcast refreshes by default. Inheritance and isolation changes have their own effects, so inspect the operation result before adding a refresh.
+An edit made in this conversation normally needs no snapshot refresh: its content is already here. If another Session needs the change now, send it a short message with the delta. Refresh an exact Session only when it must rebuild its prompt immediately or the user asks; do not broadcast refreshes.
 
-## Related workflows
+## Related skills
 
-- Use [access-control](../access-control/SKILL.md) for `access.identities`, scoped WebUI access, concrete tool rules, and safe policy updates. Generic policy currently applies alongside legacy Agent isolation; neither a browser binding nor a policy allow automatically disables the remaining guards.
-- Use [mcp-management](../mcp-management/SKILL.md) for outbound/inbound MCP connections and explicit replies between instances.
-- Use `isolated-worker` for a temporary isolated worker on an existing Node or a configured provider-backed worktree Node.
-- Use `node-setup` for connection, pairing, approval, and bootstrap work.
-- Use `agent-skill-creator` when a reusable procedure belongs in a skill rather than always-loaded memory.
+- `access-control`: rule syntax, the global policy, Agent-local layers in detail, entry identities and inbound MCP.
+- `node-setup`: pairing and bootstrapping Nodes, Providers including disposable containers, and the development workflow for delegated work.
+- `agent-skill-creator`: when a reusable procedure belongs in a skill rather than in memory.

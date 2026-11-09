@@ -82,7 +82,7 @@ create_child_session(agentName="worker", node="sandbox/task-1234", taskId="task_
 node(action="destroy", nodeId="sandbox/task-1234", confirmation="destroy node sandbox/task-1234")
 ```
 
-Create and ensure don't select the Node or assign work. Give each assignment a fresh Node ID, for example derived from its Task ID, and never reuse one: authorization rules that follow a Session's current Node compare IDs, so a reused ID would reach the new container from an old Session. The [agent-management](../../../agent-management/SKILL.md) restricted-worker template shows the rules for a worker Agent.
+Create and ensure don't select the Node or assign work. Give each assignment a fresh Node ID, for example one named after the assignment, and never reuse one: authorization rules that follow a Session's current Node compare IDs, so a reused ID would reach the new container from an old Session. The [agent-management](../../../agent-management/SKILL.md) restricted-worker template shows the rules for a worker Agent.
 
 Node IDs use letters, digits, dots, underscores and hyphens. `ensure` needs an explicit ID; `create` generates one when it is omitted. `ensure` starts a stopped container but never changes its profile.
 

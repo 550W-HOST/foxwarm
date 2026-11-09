@@ -15,7 +15,8 @@ test('global ToolScript skills are visible and loadable', async () => {
 
   assert.ok(names.includes('toolscript-automation'));
   assert.ok(names.includes('toolscript-managed-controller'));
-  assert.ok(names.includes('isolated-worker'));
+  assert.ok(!names.includes('isolated-worker'));
+  assert.ok(names.includes('node-setup'));
   assert.ok(names.includes('agent-skill-creator'));
   assert.ok(names.includes('web-search'));
   assert.ok(names.includes('mcp-management'));
@@ -63,12 +64,10 @@ test('global ToolScript skills are visible and loadable', async () => {
   assert.match(managedText, /wait_for_managed_event/);
   assert.match(managedText, /session_step/);
 
-  const isolatedWorker = await loadSkillDocuments('isolated-worker', { agentName: 'main' });
-  assert.match(isolatedWorker.documents[0].content, /create_isolated_worker\.py/);
-  assert.match(isolatedWorker.documents[0].content, /createMainSession:\s*false/);
-  assert.match(isolatedWorker.documents[0].content, /not transactional/);
-  assert.ok(isolatedWorker.info.resourceFiles.includes('create_isolated_worker.py'));
-  assert.ok(isolatedWorker.info.resourceFiles.includes('tests/test_create_isolated_worker.py'));
+  const nodeSetup = await loadSkillDocuments('node-setup', { agentName: 'main' });
+  assert.ok(nodeSetup.info.resourceFiles.includes('examples/development_workflow.py'));
+  assert.ok(nodeSetup.info.resourceFiles.includes('examples/container/provider.py'));
+  assert.ok(nodeSetup.info.resourceFiles.includes('examples/linux-ssh/target.py'));
 
   const creator = await loadSkillDocuments('agent-skill-creator', { agentName: 'main' });
   assert.deepEqual(creator.info.documentFiles, ['SKILL.md']);
