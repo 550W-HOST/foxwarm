@@ -140,4 +140,59 @@ public sealed class SecretSetupRouteTests
         Assert.Equal("draft-model", model.ModelId);
         Assert.Equal(apiKey, provider["apiKey"]!.GetValue<string>());
     }
+
+    [Fact]
+    public async Task Locked_store_status_reports_only_the_locked_store_message()
+    {
+        using var temp = new TempDirectory();
+        Directory.CreateDirectory(Path.Combine(temp.Path, "state"));
+        File.WriteAllText(Path.Combine(temp.Path, "state", "config.yaml"), "vector: false\n");
+        var seeded = new Foxwarm.Secrets.InstanceSecrets(temp.Path);
+        seeded.Store.Set("provider-key", Value);
+        File.Delete(seeded.KeyPath);
+
+        var configuration = new ModelConfiguration(
+            HostPaths.ForDataRoot(temp.Path, environment: _ => null)
+        );
+        var settings = (await HttpServerSettings.CaptureAsync(configuration, temp.Path)) with
+        {
+            Port = 0,
+            BindAddress = "127.0.0.1",
+            Address = new("http://127.0.0.1", "", "/", false),
+        };
+        await using var host = await MainHost.CreateAsync([], configuration, settings);
+        await host.StartAsync();
+        using var client = new HttpClient
+        {
+            BaseAddress = new Uri(host.App.Urls.Single()),
+            Timeout = TimeSpan.FromSeconds(20),
+        };
+        client.DefaultRequestHeaders.Authorization = new("Bearer", settings.Token);
+
+        var status = (await client.GetFromJsonAsync<JsonObject>("/api/setup/secrets"))!;
+        Assert.True(status["locked"]!.GetValue<bool>());
+        Assert.Equal(
+            "The secret store is locked: the instance key file is missing.",
+            status["lockMessage"]!.GetValue<string>()
+        );
+        Assert.Equal(
+            "provider-key",
+            Assert.Single(status["secrets"]!.AsArray())!["name"]!.GetValue<string>()
+        );
+    }
+
+    [Fact]
+    public void Lock_errors_of_other_types_use_the_fixed_locked_store_messages()
+    {
+        using var temp = new TempDirectory();
+        var secrets = new Foxwarm.Secrets.InstanceSecrets(temp.Path);
+        secrets.Store.Set("provider-key", Value);
+
+        // A malformed key file fails inside key loading, not as a locked-store exception.
+        File.WriteAllText(secrets.KeyPath, "not a key");
+        var badKey = new Foxwarm.Secrets.InstanceSecrets(temp.Path).LockError;
+        Assert.NotNull(badKey);
+        Assert.Equal(Foxwarm.Secrets.SecretStore.KeyUnavailableMessage, badKey.Message);
+        Assert.IsType<InvalidDataException>(badKey.InnerException);
+    }
 }

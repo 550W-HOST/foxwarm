@@ -128,7 +128,7 @@ internal sealed partial class WebUIChannel
         return new JsonObject
         {
             ["locked"] = lockError is not null,
-            ["lockMessage"] = lockError is null ? null : MainLog.SafeFailure(lockError),
+            ["lockMessage"] = lockError?.Message,
             ["keyFile"] = secrets.KeyPath,
             ["minimumRedactableLength"] = SecretStore.MinimumRedactableLength,
             ["retiredRetentionDays"] = (int)SecretStore.RetiredRetention.TotalDays,

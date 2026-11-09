@@ -63,20 +63,36 @@ internal sealed partial class InstanceSecrets : IDisposable
     internal bool Locked => LockError is not null;
 
     // Why stored values are unavailable: a missing or unreadable key, or a store file that
-    // cannot be read. Null when the store is usable.
-    internal Exception? LockError
+    // cannot be read. Null when the store is usable. Its Message is the user-facing locked-store
+    // text; failures of other types are reported under the matching fixed message.
+    internal SecretStoreLockedException? LockError
     {
         get
         {
             try
             {
                 _ = OpenKeys();
-                Store.Check();
-                return null;
+            }
+            catch (SecretStoreLockedException error)
+            {
+                return error;
             }
             catch (Exception error)
             {
+                return new SecretStoreLockedException(SecretStore.KeyUnavailableMessage, error);
+            }
+            try
+            {
+                Store.Check();
+                return null;
+            }
+            catch (SecretStoreLockedException error)
+            {
                 return error;
+            }
+            catch (Exception error)
+            {
+                return new SecretStoreLockedException(SecretStore.UnreadableMessage, error);
             }
         }
     }

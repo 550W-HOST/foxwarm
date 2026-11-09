@@ -26,6 +26,10 @@ internal sealed class SecretStoreLockedException(string message, Exception? inne
 internal sealed partial class SecretStore
 {
     internal const int MinimumRedactableLength = 12;
+    internal const string KeyUnavailableMessage =
+        "The secret store is locked: the instance key is unavailable.";
+    internal const string UnreadableMessage =
+        "The secret store is locked: its file cannot be read.";
     internal const int MaximumValueBytes = 64 * 1024;
     internal static readonly TimeSpan RetiredRetention = TimeSpan.FromDays(90);
 
@@ -304,10 +308,7 @@ internal sealed partial class SecretStore
                         or UnauthorizedAccessException
             )
         {
-            throw new SecretStoreLockedException(
-                "The secret store is locked: its file cannot be read.",
-                error
-            );
+            throw new SecretStoreLockedException(UnreadableMessage, error);
         }
         if (SessionWait.Number(loaded["version"]) is not 1)
             throw new SecretStoreLockedException(
@@ -420,10 +421,7 @@ internal sealed partial class SecretStore
         catch (Exception error)
             when (error is IOException or UnauthorizedAccessException or InvalidDataException)
         {
-            throw new SecretStoreLockedException(
-                "The secret store is locked: the instance key is unavailable.",
-                error
-            );
+            throw new SecretStoreLockedException(KeyUnavailableMessage, error);
         }
         var stored = SessionWait.Text(Load()["keyId"]);
         if (stored is not null && stored != opened.KeyId)
