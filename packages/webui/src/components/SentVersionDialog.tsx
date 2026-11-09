@@ -52,7 +52,7 @@ function SlotText({ slot }: { slot: SentVersionSlot }) {
       {sentVersionSegments(slot.text, slot.ranges).map((segment, index) => {
         if (!segment.range) return <span key={index}>{segment.text}</span>
         const label = formatRedactionLabel(segment.range.label)
-        const description = segment.range.source === 'literal' ? `${label} · matched an earlier find` : `${label} · detected`
+        const description = segment.range.source === 'literal' ? `${label} · known value` : `${label} · detected`
         return (
           <mark key={index} title={description} data-sent-version-range={segment.range.source} data-sent-version-label={segment.range.label}
             className={`rounded-sm px-0.5 text-inherit ${segment.range.source === 'literal' ? 'bg-fw-special/20 outline outline-1 outline-dashed outline-fw-special/60' : 'bg-fw-warning/25'}`}>
@@ -119,7 +119,7 @@ export function SentVersionDialog({ sessionId, targets, onClose }: { sessionId: 
             {status === 'loading' ? 'Loading…'
               : status === 'error' ? 'The sent version could not be loaded.'
                 : status === 'empty' ? 'This message has no text to redact.'
-                  : status === 'unavailable' ? 'The sent version is no longer available, for example after a restart or a settings change.'
+                  : status === 'unavailable' ? 'The sent version is no longer available.'
                     : replaced === 0 ? 'Sent unchanged.'
                       : `${replaced.toLocaleString('en')} ${replaced === 1 ? 'range was' : 'ranges were'} replaced before sending.`}
             {status === 'partial' ? ' Some parts are no longer available.' : ''}
@@ -127,7 +127,7 @@ export function SentVersionDialog({ sessionId, targets, onClose }: { sessionId: 
           {known.length && replaced ? (
             <div className="flex flex-wrap items-center gap-3 text-[11px] text-fw-text-muted" aria-hidden="true">
               <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-4 rounded-sm bg-fw-warning/25" />Detected</span>
-              <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-4 rounded-sm bg-fw-special/20 outline outline-1 outline-dashed outline-fw-special/60" />Matched an earlier find</span>
+              <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-4 rounded-sm bg-fw-special/20 outline outline-1 outline-dashed outline-fw-special/60" />Known value</span>
             </div>
           ) : null}
           {known.map((slot, index) => (

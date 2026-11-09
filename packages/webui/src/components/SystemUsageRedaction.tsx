@@ -48,7 +48,7 @@ export default function SystemUsageRedaction({ report, groupingLabel }: { report
         <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
           <Stat data="requests" label="Redacted requests" value={redaction.attempts.toLocaleString('en')} />
           <Stat data="replacements" label="Replacements" value={redaction.replacements.toLocaleString('en')}
-            detail={redaction.literal ? `${redaction.literal.toLocaleString('en')} matched ${redaction.literal === 1 ? 'an earlier find' : 'earlier finds'}` : undefined} />
+            detail={redaction.literal ? `${redaction.literal.toLocaleString('en')} from known values` : undefined} />
           <Stat data="detection" label="Detection time" value={redaction.attempts ? formatDetectionTime(averageDetection(redaction)) : '—'}
             detail={redaction.attempts ? `Per request · ${cacheShare(redaction)} cached` : undefined} />
           <Stat data="failures" label="Detection failures" value={failures.toLocaleString('en')}

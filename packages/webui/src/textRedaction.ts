@@ -117,7 +117,7 @@ export const REDACTION_FAILURE_LABELS: Record<string, string> = {
   connection: 'Connection failed',
   'too-large': 'Text too long',
   'invalid-response': 'Invalid response',
-  config: 'Setup or key',
+  config: 'Configuration',
   'service-error': 'Service error',
   other: 'Other',
 }
