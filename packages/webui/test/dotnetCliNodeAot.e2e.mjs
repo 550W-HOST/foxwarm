@@ -242,7 +242,6 @@ async function optionalServices(client) {
     await waitForWindowsProcessExit(terminal.pid, 'PTY')
     evidence.ptyShellDimensionsUnicodeAndCodeHelper = true
   }
-  const registration = frames.find(row => row.socket === client.socket && row.value.type === 'node_register').value
   const advertised = registration.capabilities.tools.map(row => row.name).filter(name => name.startsWith('browser_'))
   if (process.env.PUPPETEER_EXECUTABLE_PATH) {
     assert(advertised.includes('browser_open') && advertised.includes('browser_read'), 'browser tools are advertised when node and Chromium exist: ' + advertised)
