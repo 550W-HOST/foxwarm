@@ -250,31 +250,13 @@ internal sealed partial class SessionManager
             // The cap applies to listed Nodes, so hidden ones cannot crowd them out.
             if (result.Count == 100)
                 break;
+            // Names only: descriptions and schemas come from Node inspection or search_tools.
             var visible = new JsonArray();
             foreach (var definition in definitions)
             {
                 var name = SessionWait.Text(definition["name"])!;
-                if (!facets.Tools.Contains(name))
-                    continue;
-                var tool = new JsonObject { ["name"] = name };
-                if (SessionWait.Text(definition["description"]) is string description)
-                    tool["description"] = description[..Math.Min(2000, description.Length)];
-                if (definition["parameters"] is JsonNode schema)
-                {
-                    try
-                    {
-                        ExecutableNodeProvider.BoundedJson(
-                            schema,
-                            16 * 1024,
-                            12,
-                            int.MaxValue,
-                            true
-                        );
-                        tool["parameters"] = schema.DeepClone();
-                    }
-                    catch (NodeProviderException) { }
-                }
-                visible.Add(tool);
+                if (facets.Tools.Contains(name))
+                    visible.Add((JsonNode?)name);
             }
             var node = new JsonObject
             {

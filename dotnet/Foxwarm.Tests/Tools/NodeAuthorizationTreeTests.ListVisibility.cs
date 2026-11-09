@@ -250,4 +250,50 @@ public sealed partial class NodeAuthorizationTreeTests
         f.Manager.Authorization.Invalidate();
         await Assert.ThrowsAsync<ToolAuthorizationUnavailableException>(() => ListData(f));
     }
+
+    [Fact]
+    public async Task Node_list_rows_carry_tool_names_only_and_full_definitions_stay_in_discovery_and_inspection()
+    {
+        if (!OperatingSystem.IsLinux())
+            return;
+        await using var f = await Fixture.Create(provider: true);
+        var data = await ListData(f);
+        foreach (var id in new[] { "master", "fixture/target", "fixture/readonly" })
+        {
+            var row = Row(data, id);
+            var listed = row["tools"]!.AsArray();
+            Assert.NotEmpty(listed);
+            Assert.All(listed, tool => Assert.IsAssignableFrom<JsonValue>(tool));
+            Assert.DoesNotContain("\"parameters\"", row.ToJsonString());
+            Assert.DoesNotContain("\"description\"", row.ToJsonString());
+            // The fixture's call registry is not the one that lists master's tools.
+            if (id == "master")
+                continue;
+            var found = await f.Call(
+                "search_tools",
+                Obj($$"""{"sources":["node"],"nodeId":"{{id}}","limit":200}""")
+            );
+            Success(found);
+            var output = found!["output"]!.GetValue<string>();
+            Assert.All(
+                listed,
+                tool =>
+                    Assert.Contains(
+                        $"name: \"{SessionWait.Text(tool)}\", nodeId: \"{id}\"",
+                        output
+                    )
+            );
+            Assert.Contains("args: {", output);
+        }
+        var inspected = await f.Call(
+            "node",
+            Obj("""{"action":"inspect","nodeId":"fixture/target"}""")
+        );
+        Success(inspected);
+        Assert.All(
+            inspected!["node"]!["tools"]!.AsArray(),
+            tool => Assert.NotNull(tool!["parameters"])
+        );
+        Assert.DoesNotContain("parameters", data["output"]!.GetValue<string>());
+    }
 }
