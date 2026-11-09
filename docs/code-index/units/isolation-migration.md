@@ -119,4 +119,4 @@ A catalog write raises the marker to the level its metadata requires before writ
 - the per-level reader marker;
 - the resumable backfill.
 
-`IsolationMigrationHttpTests` covers the administrator routes.
+`IsolationMigrationHttpTests` covers the administrator routes. `mainHostIsolationMigration.e2e.mjs` applies the migration on a real host and checks the recorded placement after restart; it is part of the native smoke.

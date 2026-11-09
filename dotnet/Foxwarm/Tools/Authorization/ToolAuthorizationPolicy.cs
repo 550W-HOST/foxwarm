@@ -367,7 +367,7 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
                 )
                     throw new InvalidDataException("Policy approver must be an identity ID.");
                 if (seen.Add(identity))
-                    approvers.Add(identity);
+                    approvers.Add((JsonNode?)identity);
             }
             result["approvers"] = approvers;
         }

@@ -426,7 +426,7 @@ internal sealed partial class SessionManager
                 _ => false,
             };
             if (visible)
-                result.Add(action);
+                result.Add((JsonNode?)action);
         }
         return result;
     }

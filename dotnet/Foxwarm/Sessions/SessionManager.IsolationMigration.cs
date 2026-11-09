@@ -355,7 +355,7 @@ internal sealed partial class SessionManager
                     var owner = await RequiredAsync(id);
                     var current = await MaterializeCurrentNodeAsync(owner, node, token);
                     if (current is null)
-                        materialized.Add(id);
+                        materialized.Add((JsonNode?)id);
                     else if (current != node)
                         review.Add(
                             new JsonObject { ["sessionId"] = id, ["currentNode"] = current }
