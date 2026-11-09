@@ -263,6 +263,60 @@ public sealed partial class HandoffConfirmationTests
     }
 
     [Fact]
+    public async Task Old_order_afterSend_call_gets_the_rename_instead_of_an_ordering_error()
+    {
+        // The former required order: everything, then handoffConfirmation, then afterSend.
+        JsonObject OldCall()
+        {
+            var args = Args(Review());
+            args["afterSend"] = "finish";
+            return args;
+        }
+        var planned = ToolCallControls.Plan(
+            [
+                new JsonObject
+                {
+                    ["id"] = "old-order",
+                    ["name"] = "send_to_session",
+                    ["args"] = OldCall(),
+                },
+            ],
+            true
+        )[0];
+        var message = planned.Preset!["error"]!["message"]!.GetValue<string>();
+        Assert.Contains("afterSend was renamed to currentSessionTurnAction", message);
+        Assert.DoesNotContain("must follow every argument", message);
+        Assert.DoesNotContain("Resend in this order", message);
+
+        using var temp = new TempDirectory();
+        var work = Path.Combine(temp.Path, "work");
+        Directory.CreateDirectory(work);
+        var models = HostModels.Parse(
+            Obj(
+                """{"default":"a","providers":{"a":{"providerType":"openai-responses","baseUrl":"http://127.0.0.1:1","models":["wire"]}}}"""
+            ),
+            new JsonObject { ["handoffConfirmation"] = true }
+        );
+        await using var manager = new SessionManager(
+            Path.Combine(temp.Path, "data"),
+            work,
+            new ResponsesClientOptions(new Uri("http://127.0.0.1:1"), "wire", "a", "", "", 713),
+            models
+        );
+        await manager.LoadAsync();
+        var parent = await manager.CreateNamedAsync("main", "parent", null, null);
+        var target = await manager.CreateNamedAsync("main", "target", null, null);
+        target.Registry.TriggerOverride = _ => Task.CompletedTask;
+        // Unified and ToolScript calls skip the model preflight and reach the handler's checks.
+        var handled = await manager.ExecuteAgentToolAsync(parent, "send_to_session", OldCall());
+        var error = handled.Response["error"]!.ToJsonString();
+        Assert.Contains("afterSend was renamed to currentSessionTurnAction", error);
+        Assert.DoesNotContain("must follow every argument", error);
+        Assert.False(handled.Finish);
+        Assert.Empty(target.Entry.Snapshot().Queue);
+    }
+
+    [Fact]
     public async Task Concrete_handler_checks_no_message_child_and_default_mode_accepts_old_and_ignored_confirmation_calls()
     {
         foreach (var enabled in new[] { false, true })

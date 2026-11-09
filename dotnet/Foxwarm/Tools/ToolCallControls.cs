@@ -66,19 +66,34 @@ internal static class ToolCallControls
                         && HandoffConfirmation.Handoff(SessionWait.Text(copy["name"]))
                     )
                     {
+                        var handoffArgs = copy["args"] as JsonObject ?? new JsonObject();
                         try
                         {
-                            HandoffConfirmation.Validate(
-                                copy["args"] as JsonObject ?? new JsonObject()
+                            HandoffConfirmation.RejectRenamedTurnAction(
+                                SessionWait.Text(copy["name"]),
+                                handoffArgs
                             );
                         }
                         catch (InvalidDataException error)
                         {
+                            // Same rejection the handler gives when the checkpoint is off.
                             preset = UnsupportedTurnToolExecutor.ToolError(
-                                HandoffConfirmation.ErrorCode,
+                                "agent_tool_error",
                                 error.Message
                             );
                         }
+                        if (preset is null)
+                            try
+                            {
+                                HandoffConfirmation.Validate(handoffArgs);
+                            }
+                            catch (InvalidDataException error)
+                            {
+                                preset = UnsupportedTurnToolExecutor.ToolError(
+                                    HandoffConfirmation.ErrorCode,
+                                    error.Message
+                                );
+                            }
                     }
                 }
                 return (Call: copy, Preset: preset);

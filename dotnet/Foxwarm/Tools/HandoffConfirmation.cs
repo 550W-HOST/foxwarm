@@ -27,6 +27,16 @@ internal static class HandoffConfirmation
             : throw new InvalidDataException("app config `handoffConfirmation` must be a boolean.");
     }
 
+    // Old calls put afterSend after handoffConfirmation, as the former order required. Reject
+    // them with the rename before any ordering check would point at the wrong problem.
+    internal static void RejectRenamedTurnAction(string? name, JsonObject args)
+    {
+        if (Handoff(name) && args.ContainsKey("afterSend"))
+            throw new InvalidDataException(
+                "afterSend was renamed to currentSessionTurnAction. Use continue, end_turn (formerly finish), or wait."
+            );
+    }
+
     internal static bool Handoff(string? name) =>
         name is "send_to_session" or "create_child_session";
 

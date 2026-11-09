@@ -60,6 +60,7 @@ internal sealed partial class SessionManager
                 null,
                 semanticCaller.Value ?? CancellationToken.None
             );
+            HandoffConfirmation.RejectRenamedTurnAction(name, args);
             HandoffConfirmation.Validate(name, args, HandoffConfirmationEnabled);
             switch (name)
             {

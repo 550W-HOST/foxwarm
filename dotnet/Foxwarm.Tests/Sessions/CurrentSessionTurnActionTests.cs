@@ -101,6 +101,11 @@ public sealed class CurrentSessionTurnActionTests
             var rejected = await f.Manager.ExecuteAgentToolAsync(f.Owner, "send_to_session", args);
             Assert.NotNull(rejected.Response["error"]);
             Assert.False(rejected.Finish);
+            if (args.ContainsKey("afterSend"))
+                Assert.Contains(
+                    "renamed to currentSessionTurnAction",
+                    rejected.Response.ToJsonString()
+                );
         }
         Assert.Empty(target.Entry.Snapshot().Queue);
 
