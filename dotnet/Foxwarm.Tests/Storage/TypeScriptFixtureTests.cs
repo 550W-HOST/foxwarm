@@ -86,16 +86,29 @@ public sealed class TypeScriptFixtureTests
         Assert.Equal(4, archive.WriteMessages(records).Count);
         new LinuxAtomicJsonFile(temp.Path, "state/sessions/c1/fixture.json").Write(document);
 
+        // The retained TypeScript tables, plus the derived activity-index tables that the
+        // TypeScript reader does not know about and must leave alone.
+        var archivePath = Path.Combine(temp.Path, "state", "archive-store.sqlite");
+        string[] activityTables =
+        [
+            "archive_direct_effects",
+            "archive_effects_metadata",
+            "archive_tool_effects",
+        ];
         Assert.Equal(
             [
                 "archive_blocks",
                 "archive_branches",
                 "archive_checkpoints",
+                "archive_direct_effects",
+                "archive_effects_metadata",
                 "archive_messages",
                 "archive_session_id_reservations",
+                "archive_tool_effects",
             ],
-            UserTableNames(Path.Combine(temp.Path, "state", "archive-store.sqlite"))
+            UserTableNames(archivePath)
         );
+        var activitySchemaBefore = TableSchemas(archivePath, activityTables);
         var replayPath = Path.Combine(temp.Path, "ts-replay-result.json");
         TypeScriptOracle.Run("replay-ts", temp.Path, replayPath);
         Assert.Equal(
@@ -107,10 +120,25 @@ public sealed class TypeScriptFixtureTests
         var result = JsonNode.Parse(File.ReadAllText(resultPath))!.AsObject();
         Assert.True(JsonNode.DeepEquals(root, result["authority"]));
         Assert.Equal(records.Select(record => record.MessageJson), RawMessageJson(result));
-        Assert.Contains(
-            "archive_branches",
-            UserTableNames(Path.Combine(temp.Path, "state", "archive-store.sqlite"))
+        Assert.Contains("archive_branches", UserTableNames(archivePath));
+        // The TypeScript readers add only their own bookkeeping tables and leave the activity
+        // tables as C# wrote them.
+        Assert.Equal(
+            [
+                "archive_blocks",
+                "archive_branches",
+                "archive_checkpoints",
+                "archive_direct_effects",
+                "archive_effects_metadata",
+                "archive_import_state",
+                "archive_messages",
+                "archive_session_id_reservations",
+                "archive_store_metadata",
+                "archive_tool_effects",
+            ],
+            UserTableNames(archivePath)
         );
+        Assert.Equal(activitySchemaBefore, TableSchemas(archivePath, activityTables));
     }
 
     [Fact]
@@ -315,6 +343,27 @@ public sealed class TypeScriptFixtureTests
             .AsArray()
             .Select(row => row!["message_json"]!.GetValue<string>())
             .ToArray();
+
+    private static string[] TableSchemas(string databasePath, string[] tables)
+    {
+        using var connection = new SqliteConnection($"Data Source={databasePath};Mode=ReadOnly");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            "SELECT name || ':' || COALESCE(sql, '') FROM sqlite_master WHERE name = $name OR tbl_name = $name ORDER BY type, name";
+        var name = command.CreateParameter();
+        name.ParameterName = "$name";
+        command.Parameters.Add(name);
+        var result = new List<string>();
+        foreach (var table in tables)
+        {
+            name.Value = table;
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+                result.Add(reader.GetString(0));
+        }
+        return result.ToArray();
+    }
 
     private static string[] UserTableNames(string databasePath)
     {
