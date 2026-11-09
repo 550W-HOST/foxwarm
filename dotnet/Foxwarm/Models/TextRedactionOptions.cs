@@ -10,6 +10,24 @@ internal sealed record TextRedactionOptions(
     int TimeoutMs
 )
 {
+    // Dates and URLs are common in ordinary agent work (logs, versions, links).
+    internal static IReadOnlyList<string> DefaultExcludeLabels { get; } =
+    ["private_date", "private_url"];
+
+    // Detection labels left in place. Sorted and distinct, so equal settings share cache entries.
+    internal IReadOnlyList<string> ExcludeLabels { get; init; } = DefaultExcludeLabels;
+
+    public bool Equals(TextRedactionOptions? other) =>
+        other is not null
+        && Endpoint == other.Endpoint
+        && ApiKey == other.ApiKey
+        && Threshold.Equals(other.Threshold)
+        && TimeoutMs == other.TimeoutMs
+        && ExcludeLabels.SequenceEqual(other.ExcludeLabels, StringComparer.Ordinal);
+
+    public override int GetHashCode() =>
+        HashCode.Combine(Endpoint, ApiKey, Threshold, TimeoutMs, string.Join('\n', ExcludeLabels));
+
     internal static void Validate(JsonNode? value)
     {
         if (value is JsonValue flag && flag.TryGetValue<bool>(out _))
@@ -34,6 +52,10 @@ internal sealed record TextRedactionOptions(
                     && double.IsFinite(timeout)
                     && timeout is > 0 and <= int.MaxValue
                     && Math.Floor(timeout) == timeout,
+                "excludeLabels" => item is JsonArray labels
+                    && labels.All(label =>
+                        SessionWait.Text(label) is string text && text.Trim().Length > 0
+                    ),
                 _ => false,
             };
             if (!valid)
@@ -41,6 +63,7 @@ internal sealed record TextRedactionOptions(
         }
     }
 
+    // Fields inherit one by one; a lower-level list replaces the inherited list.
     internal static JsonObject Resolve(params JsonObject?[] scopes)
     {
         var result = new JsonObject { ["enabled"] = false };
@@ -73,6 +96,47 @@ internal sealed record TextRedactionOptions(
             SessionWait.Text(options["apiKey"]),
             SessionWait.Number(options["threshold"]) ?? 0.5,
             HostModels.Positive(options["timeoutMs"], 30000, "textRedaction.timeoutMs")
-        );
+        )
+        {
+            ExcludeLabels = options["excludeLabels"] is JsonArray labels
+                ? labels
+                    .Select(label => SessionWait.Text(label)!)
+                    .Distinct(StringComparer.Ordinal)
+                    .Order(StringComparer.Ordinal)
+                    .ToArray()
+                : DefaultExcludeLabels,
+        };
+    }
+
+    // Whether a leaf of this provider sends the detector key configured in models defaults.
+    // A missing referenced defaults key then fails only those providers.
+    internal static bool UsesDefaultApiKey(JsonObject? defaults, JsonObject provider)
+    {
+        if (
+            defaults?["textRedaction"] is not JsonObject inherited
+            || !inherited.ContainsKey("apiKey")
+        )
+            return false;
+        if (provider["textRedaction"] is JsonObject own && own.ContainsKey("apiKey"))
+            return false;
+        JsonObject?[] members =
+            provider["models"] is JsonArray list && list.Count > 0
+                ? list.Select(member => member as JsonObject).ToArray()
+                : [null];
+        foreach (var model in members)
+        {
+            if (model?["textRedaction"] is JsonObject leaf && leaf.ContainsKey("apiKey"))
+                continue;
+            try
+            {
+                if (FromResolved(Resolve(defaults, provider, model)) is not null)
+                    return true;
+            }
+            catch (InvalidDataException)
+            {
+                // Catalog parsing reports invalid settings.
+            }
+        }
+        return false;
     }
 }

@@ -14,16 +14,20 @@ internal sealed class TextRedactionException(string message, bool retryable) : E
     internal bool Retryable { get; } = retryable;
 }
 
-// One process-wide reverse map; neither keys nor detection results depend on Session identity.
+// One reverse map per placeholder key; neither keys nor detection results depend on Session
+// identity. The instance key makes placeholders stable across Sessions and restarts without
+// letting a model provider confirm guesses of short values by hashing them itself.
 internal sealed class TextRedactor
 {
-    internal static TextRedactor Shared { get; } = new();
-    private const string Prefix = "[[FW_PRIVATE_";
+    internal const string Prefix = "[[PRIVATE_";
+    internal const int DigestCharacters = 16;
     private static readonly UTF8Encoding Utf8 = new(false, true);
-    private static readonly Regex Placeholder = new(
-        @"\[\[FW_PRIVATE_[0-9a-f]{64}\]\]",
-        RegexOptions.CultureInvariant | RegexOptions.Compiled
+    private static readonly ConcurrentDictionary<string, TextRedactor> ByKey = new(
+        StringComparer.Ordinal
     );
+    private readonly byte[] key;
+    private readonly int digestCharacters;
+    private readonly Regex placeholder;
     private readonly ConcurrentDictionary<string, string> originals = new(StringComparer.Ordinal);
     private readonly object gate = new();
     private readonly Dictionary<CacheKey, LinkedListNode<CacheEntry>> cache = new();
@@ -38,11 +42,38 @@ internal sealed class TextRedactor
         internal int Size => Key.Text.Length + Redacted.Length;
     }
 
-    internal TextRedactor(int cacheCharacters = 4 * 1024 * 1024) =>
+    internal TextRedactor(
+        byte[] key,
+        int cacheCharacters = 4 * 1024 * 1024,
+        int digestCharacters = DigestCharacters
+    )
+    {
+        if (key.Length < 32)
+            throw new ArgumentException("Text redaction key must have at least 32 bytes.");
+        this.key = (byte[])key.Clone();
         this.cacheCharacters = cacheCharacters;
+        this.digestCharacters = digestCharacters;
+        placeholder = new Regex(
+            Regex.Escape(Prefix) + "[0-9a-f]{" + digestCharacters + @"}\]\]",
+            RegexOptions.CultureInvariant
+        );
+    }
+
+    // The process-wide redactor for one derived instance key, shared by every request.
+    internal static TextRedactor For(byte[] key) =>
+        ByKey.GetOrAdd(
+            Convert.ToHexStringLower(SHA256.HashData(key)),
+            static (_, value) => new TextRedactor(value),
+            key
+        );
+
+    internal string Placeholder(ReadOnlySpan<byte> original) =>
+        Prefix
+        + Convert.ToHexStringLower(HMACSHA256.HashData(key, original))[..digestCharacters]
+        + "]]";
 
     internal string Restore(string text) =>
-        Placeholder.Replace(
+        placeholder.Replace(
             text,
             match => originals.TryGetValue(match.Value, out var original) ? original : match.Value
         );
@@ -58,8 +89,11 @@ internal sealed class TextRedactor
             while (hex < suffix.Length && char.IsAsciiHexDigitLower(suffix[hex]))
                 hex++;
             if (
-                hex <= 64
-                && (hex == suffix.Length || hex == 64 && suffix[hex..].SequenceEqual("]"))
+                hex <= digestCharacters
+                && (
+                    hex == suffix.Length
+                    || hex == digestCharacters && suffix[hex..].SequenceEqual("]")
+                )
             )
                 text = text[..start];
         }
@@ -180,6 +214,8 @@ internal sealed class TextRedactor
                     || end.Value < input.Length && (input[end.Value] & 0xC0) == 0x80
                 )
                     throw InvalidResponse();
+                if (options.ExcludeLabels.Contains(SessionWait.Text(entity?["label"])!))
+                    continue;
                 spans.Add((start.Value, end.Value));
             }
             spans.Sort((left, right) => left.Start.CompareTo(right.Start));
@@ -193,17 +229,23 @@ internal sealed class TextRedactor
             }
             var output = new StringBuilder();
             var cursor = 0;
-            foreach (var (start, end) in merged)
+            foreach (var (start, end) in WithoutSecretMarkers(input, merged))
             {
                 output.Append(Utf8.GetString(input, cursor, start - cursor));
                 var original = Utf8.GetString(input, start, end - start);
-                var placeholder =
-                    Prefix
-                    + Convert
-                        .ToHexString(SHA256.HashData(input.AsSpan(start, end - start)))
-                        .ToLowerInvariant()
-                    + "]]";
-                originals.TryAdd(placeholder, original);
+                var placeholder = Placeholder(input.AsSpan(start, end - start));
+                // Restoration must never return a different value than the one replaced.
+                if (
+                    !string.Equals(
+                        originals.GetOrAdd(placeholder, original),
+                        original,
+                        StringComparison.Ordinal
+                    )
+                )
+                    throw new TextRedactionException(
+                        "Text redaction placeholder collision; no model request was sent.",
+                        false
+                    );
                 output.Append(placeholder);
                 cursor = end;
             }
@@ -241,6 +283,61 @@ internal sealed class TextRedactor
             throw InvalidResponse();
         }
     }
+
+    // Secret markers from the irreversible secret stage pass through unchanged: a detected
+    // range keeps only its parts outside markers, and parts that are only whitespace stay.
+    private static IEnumerable<(int Start, int End)> WithoutSecretMarkers(
+        byte[] input,
+        List<(int Start, int End)> spans
+    )
+    {
+        var prefix = Encoding.ASCII.GetBytes(Foxwarm.Secrets.SecretRedactor.MarkerPrefix);
+        var markers = new List<(int Start, int End)>();
+        for (
+            var start = input.AsSpan().IndexOf(prefix);
+            start >= 0;
+            start = NextIndex(input, prefix, start + 1)
+        )
+        {
+            var label = input.AsSpan(start + prefix.Length);
+            var close = label.IndexOf("]]"u8);
+            if (close < 0)
+                break;
+            // Labels are names or configuration paths; whitespace means this is not a marker.
+            if (close == 0 || label[..close].IndexOfAny(" \t\r\n"u8) >= 0)
+                continue;
+            // A path label may itself end in an index (`args[2]`), giving `]]]`.
+            var end = start + prefix.Length + close + 2;
+            while (end < input.Length && input[end] == (byte)']')
+                end++;
+            markers.Add((start, end));
+        }
+        foreach (var (spanStart, spanEnd) in spans)
+        {
+            var cursor = spanStart;
+            foreach (var (markerStart, markerEnd) in markers)
+            {
+                if (markerEnd <= cursor || markerStart >= spanEnd)
+                    continue;
+                if (markerStart > cursor && Meaningful(input, cursor, markerStart))
+                    yield return (cursor, markerStart);
+                cursor = Math.Max(cursor, markerEnd);
+            }
+            if (cursor < spanEnd && Meaningful(input, cursor, spanEnd))
+                yield return (cursor, spanEnd);
+        }
+    }
+
+    private static int NextIndex(byte[] input, byte[] value, int from)
+    {
+        if (from >= input.Length)
+            return -1;
+        var index = input.AsSpan(from).IndexOf(value);
+        return index < 0 ? -1 : from + index;
+    }
+
+    private static bool Meaningful(byte[] input, int start, int end) =>
+        !string.IsNullOrWhiteSpace(Utf8.GetString(input, start, end - start));
 
     private static int? Integer(JsonNode? node) =>
         SessionWait.Number(node) is double value

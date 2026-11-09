@@ -12,6 +12,13 @@ public sealed partial class TextRedactionTests
     internal static JsonObject Settings(Uri endpoint) =>
         new() { ["enabled"] = true, ["endpoint"] = endpoint.ToString() };
 
+    // Fixed test keys; production keys are derived from the instance key file.
+    internal static readonly byte[] Key = Enumerable.Range(1, 32).Select(i => (byte)i).ToArray();
+    internal static readonly byte[] OtherKey = Enumerable
+        .Range(101, 32)
+        .Select(i => (byte)i)
+        .ToArray();
+
     [Fact]
     public async Task Config_inherits_fields_disables_leaves_and_survives_structured_saves()
     {
@@ -124,7 +131,7 @@ public sealed partial class TextRedactionTests
             0.5,
             30000
         );
-        var redactor = new TextRedactor(cacheCharacters: 200000);
+        var redactor = new TextRedactor(Key, cacheCharacters: 200000);
         var text = "前🙂 " + secret + " " + new string('a', 60000);
         var first = await redactor.RedactAsync(http, settings, text, default);
         for (var i = 0; i < 8; i++)
@@ -133,17 +140,17 @@ public sealed partial class TextRedactionTests
         Assert.Equal("Bearer detector-credential", detector.Authorization);
         var key = await redactor.RedactAsync(http, settings, secret, default);
         Assert.Contains(key, first);
-        var another = new TextRedactor();
+        var another = new TextRedactor(Key);
         Assert.Equal(key, await another.RedactAsync(http, settings, secret, default));
         Assert.Equal(text, redactor.Restore(first));
         Assert.Equal(
-            "[[FW_PRIVATE_" + new string('0', 64) + "]]",
-            redactor.Restore("[[FW_PRIVATE_" + new string('0', 64) + "]]")
+            TextRedactor.Prefix + new string('0', 16) + "]]",
+            redactor.Restore(TextRedactor.Prefix + new string('0', 16) + "]]")
         );
         for (var i = 1; i < key.Length; i++)
             Assert.Equal("prefix ", redactor.RestoreProgress("prefix " + key[..i]));
         Assert.Equal("prefix " + secret, redactor.RestoreProgress("prefix " + key));
-        var tiny = new TextRedactor(cacheCharacters: 10);
+        var tiny = new TextRedactor(Key, cacheCharacters: 10);
         await tiny.RedactAsync(http, settings, text, default);
         await tiny.RedactAsync(http, settings, text, default);
         Assert.Equal(3, detector.Texts.Count(value => value == text));
@@ -161,7 +168,7 @@ public sealed partial class TextRedactionTests
             return value;
         };
         var failure = await Assert.ThrowsAsync<TextRedactionException>(() =>
-            new TextRedactor().RedactAsync(http, options, "😀", default)
+            new TextRedactor(Key).RedactAsync(http, options, "😀", default)
         );
         Assert.False(failure.Retryable);
         detector.Transform = value =>
@@ -169,7 +176,7 @@ public sealed partial class TextRedactionTests
             value["entities"]![0]!["label"] = "future_category";
             return value;
         };
-        var redactor = new TextRedactor();
+        var redactor = new TextRedactor(Key);
         var result = await redactor.RedactAsync(http, options, "😀", default);
         Assert.DoesNotContain("😀", result);
         Assert.Equal("😀", redactor.Restore(result));
@@ -198,13 +205,15 @@ public sealed partial class TextRedactionTests
         var routing = new ModelRouting();
         using var temp = new TempDirectory();
         using var journal = new LlmRequestJournalStore(temp.Path);
+        using var keys = new TextRedactionKeys();
         string? requestId = null;
         var owner = new ModelRequestOwner(
             http,
             new(new("http://127.0.0.1:1"), "m", "p/m", "", "", 100),
             routing,
             (_, _) => Task.CompletedTask,
-            journal: journal
+            journal: journal,
+            secrets: keys.Secrets
         );
         var notices = new List<ModelRetryEvent>();
         var sent = 0;
@@ -264,11 +273,13 @@ public sealed partial class TextRedactionTests
         using var http = ProviderHttpRequest.CreateClient();
         using var stop = new CancellationTokenSource();
         var catalog = Catalog(detector.Endpoint, new("http://127.0.0.1:1"));
+        using var keys = new TextRedactionKeys();
         var owner = new ModelRequestOwner(
             http,
             new(new("http://127.0.0.1:1"), "m", "p/m", "", "", 100),
             new(),
-            (_, _) => throw new Exception("Unexpected retry")
+            (_, _) => throw new Exception("Unexpected retry"),
+            secrets: keys.Secrets
         );
         var request = owner.RequestAsync(
             "s",

@@ -36,7 +36,7 @@ public sealed partial class ResponsesPrefixCommitTests
                             .Single(item => SessionWait.Text(item["role"]) == "user")["content"]!
                             .AsArray()
                             .Last()!["text"]!.GetValue<string>();
-                        Assert.StartsWith("[[FW_PRIVATE_", placeholder);
+                        Assert.StartsWith(TextRedactor.Prefix, placeholder);
                         Assert.Equal(untouched, context.Request["opaque"]!.GetValue<string>());
                         var text = "Sending to " + placeholder;
                         var originalReasoning = Reasoning(untouched);
@@ -54,9 +54,9 @@ public sealed partial class ResponsesPrefixCommitTests
                             var piece in new[]
                             {
                                 "Sending to ",
-                                placeholder[..9],
-                                placeholder[9..40],
-                                placeholder[40..],
+                                placeholder[..5],
+                                placeholder[5..17],
+                                placeholder[17..],
                             }
                         )
                             await context.Send(
@@ -156,7 +156,7 @@ public sealed partial class ResponsesPrefixCommitTests
             progress,
             update => update.Text.Contains("Sending to " + secret, StringComparison.Ordinal)
         );
-        Assert.All(progress, update => Assert.DoesNotContain("[[FW_PRIVATE_", update.Text));
+        Assert.All(progress, update => Assert.DoesNotContain(TextRedactor.Prefix, update.Text));
         Assert.DoesNotContain(untouched, detector.Texts);
         var disk = (await owner.Store.LoadAsync("s"))!.History.Materialize();
         Assert.Contains(

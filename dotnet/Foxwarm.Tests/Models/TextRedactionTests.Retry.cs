@@ -34,11 +34,13 @@ public sealed partial class TextRedactionTests
         );
         using var http = ProviderHttpRequest.CreateClient();
         var catalog = Catalog(detector.Endpoint, peer.BaseUri);
+        using var keys = new TextRedactionKeys();
         var owner = new ModelRequestOwner(
             http,
             new(peer.BaseUri, "m", "p/m", "", "", 100, new()),
             new(),
-            (_, _) => Task.CompletedTask
+            (_, _) => Task.CompletedTask,
+            secrets: keys.Secrets
         );
         var notices = new List<ModelRetryEvent>();
         var sent = 0;
@@ -86,11 +88,13 @@ public sealed partial class TextRedactionTests
         using var http = ProviderHttpRequest.CreateClient();
         var provider = new Uri("http://127.0.0.1:1");
         var catalog = Catalog(detector.Endpoint, provider);
+        using var keys = new TextRedactionKeys();
         var owner = new ModelRequestOwner(
             http,
             new(provider, "m", "p/m", "", "", 100) { HardTimeoutMs = 200 },
             new(),
-            (_, _) => throw new Exception("Unexpected extra retry")
+            (_, _) => throw new Exception("Unexpected extra retry"),
+            secrets: keys.Secrets
         );
         var error = await Assert.ThrowsAsync<ModelRequestException>(() =>
             owner.RequestAsync(

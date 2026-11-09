@@ -134,11 +134,13 @@ public sealed class TextRedactionImageTests
         };
         var original = new JsonArray(history.Select(row => row.DeepClone()).ToArray());
         using var http = ProviderHttpRequest.CreateClient();
+        using var keys = new TextRedactionKeys();
         var owner = new ModelRequestOwner(
             http,
             new(endpoint, "m", "p/m", "", "", 100, new()),
             new(),
-            images: images
+            images: images,
+            secrets: keys.Secrets
         );
         var result = await owner.RequestAsync(
             "s",
@@ -163,7 +165,7 @@ public sealed class TextRedactionImageTests
             )
         );
         var wire = captured.ToJsonString();
-        Assert.Contains("[[FW_PRIVATE_", wire);
+        Assert.Contains(TextRedactor.Prefix, wire);
         Assert.DoesNotContain(secret, wire);
         var objects = Objects(captured).ToArray();
         var binaries = objects

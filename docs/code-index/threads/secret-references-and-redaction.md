@@ -10,7 +10,7 @@ Masking is accident protection for known values and their common encodings. It d
 
 ## References and failure
 
-`SecretSinks` declares where references are allowed: provider `apiKey` and `extraHeaders` values (and the legacy `models.*` layout); `llm.*ApiKey`, `asrService.key` and channel credential fields; MCP `token`, `headers`, `env`, `args`, `url` and `oauth.clientSecret`. A reference anywhere else is a validation error.
+`SecretSinks` declares where references are allowed: provider `apiKey` and `extraHeaders` values (and the legacy `models.*` layout); `textRedaction.apiKey` in models `defaults`, providers and model entries, sent only as the text-detection service's Bearer credential; `llm.*ApiKey`, `asrService.key` and channel credential fields; MCP `token`, `headers`, `env`, `args`, `url` and `oauth.clientSecret`. A reference anywhere else is a validation error.
 
 A missing or unavailable value fails only the consumer that uses it:
 
@@ -43,7 +43,7 @@ Matches become `[[FW_SECRET:<label>]]`, where the label is the secret name or a 
 | --- | --- | --- |
 | R1 tool results | `ToolRegistry.ExecuteAsync`, after dispatch and before programmatic/output-guard handling | Builtin, MCP, Node, Provider and ToolScript-nested results. |
 | R2 Session state | `SessionSaveLane`: queue admission (message, parts and open fields; external input is framed and neutralized by its producer first, so masking always sees the neutralized text), question-record mutations (including tool approval records in `meta.questions.approvals`), and `RedactStagedHistory` for every lane commit that stages new or replaced history rows | Canonical appends of every origin, the retry notice, compaction and pruning. Rows absent from the pre-operation history are masked once outside the state gate; the same masked rows are persisted, published to hot state, written to the Archive and announced. History writers do not mask individually. |
-| R3 model requests | `ModelRequestOwner`, stage S after request defaults and before the journal manifest and `PrepareRequest` | Instructions, tool definitions and history copies; the Claude runtime prompt file and stdin input; in-process embedding input. |
+| R3 model requests | `ModelRequestOwner`, stage S after request defaults and before the journal manifest and `PrepareRequest` | Instructions, tool definitions and history copies; the Claude runtime prompt file and stdin input; in-process embedding input. Reversible [text redaction](../units/model-text-redaction.md) runs later, in `CreatePreparedService`, sees only masked text and leaves markers intact. |
 | R4 logs | `MainLog` capture | Each write is masked before the console sees it, and each complete file line is masked again. |
 
 Reasoning is never rewritten: thinking parts, provider reasoning metadata and legacy thinking blocks stay byte-identical so replay keeps working. A known value found there is recorded as an exposure when the row enters history; model requests do not record it again. Two kinds of message or part `__meta` are content and are masked: the user's structured question answer (`questionAnswer`) and the approval decision shown on a tool result (`approval`, which carries the approver's note).
@@ -51,7 +51,7 @@ Reasoning is never rewritten: thinking parts, provider reasoning metadata and le
 ## Model-facing restrictions
 
 - Writer tools (`write`, `edit`, `apply_patch`, `write_memory`, `edit_memory`, `apply_patch_memory`, `mcp_config`) and `set_config` candidates reject a marker whose label belongs to a currently masked value, because writing it back would replace the real value. Text that only mentions the marker format stays writable.
-- Until tool policy can grant secret use explicitly, `set_config` cannot change a provider, channel, `llm` or `asrService` entry that references a secret (before or after the change, including a provider that inherits a referenced legacy key). It also cannot change `llm.openaiBaseUrl` or `llm.anthropicBaseUrl` while a secret-using provider of that family has no own `baseUrl`, since its requests and secret would follow the new URL. These checks run on the candidate before the installer's independent webhook-identity check; either one refuses the whole candidate.
+- Until tool policy can grant secret use explicitly, `set_config` cannot change any `textRedaction` settings (defaults, provider or model) while any of them reference a secret, since an inherited endpoint decides where the detector key goes. It also cannot change a provider, channel, `llm` or `asrService` entry that references a secret (before or after the change, including a provider that inherits a referenced legacy key). It also cannot change `llm.openaiBaseUrl` or `llm.anthropicBaseUrl` while a secret-using provider of that family has no own `baseUrl`, since its requests and secret would follow the new URL. These checks run on the candidate before the installer's independent webhook-identity check; either one refuses the whole candidate.
 - `mcp_config` cannot add references or change a referencing server beyond `enable`, `description` and `timeoutSeconds`. It still accepts literal credentials, which become redactor sources.
 - Master `exec` drops inherited environment variables whose value exactly equals a known value.
 - `node_bootstrap_info` writes the pairing token to a new owner-only file and returns `PAIRING_TOKEN` in its place.
@@ -66,5 +66,4 @@ Reasoning is never rewritten: thinking parts, provider reasoning metadata and le
 
 - A Vector child process (`dbWorkers`) indexes text already masked in history, but its own embedding requests are not passed through the redactor.
 - Remote Node and Provider injection, the `secrets` policy facts and the Agent-owned exception, the read-only Archive scan and opt-in non-dumpable Main are later phases.
-- A reversible text-redaction stage, if added, runs after stage S, so it only sees masked text.
 - Provider responses are stored as received in the request journal and raw diagnostics; requests are masked.

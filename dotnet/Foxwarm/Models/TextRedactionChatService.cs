@@ -27,7 +27,22 @@ internal sealed class TextRedactionChatService(
             ? null
             : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
         var token = lifetime?.Token ?? cancellationToken;
-        var redactor = TextRedactor.Shared;
+        TextRedactor redactor;
+        try
+        {
+            redactor = TextRedactor.For(
+                options.TextRedactionKey?.Invoke()
+                    ?? throw new InvalidOperationException("No instance key source.")
+            );
+        }
+        catch (Exception)
+        {
+            // Without the instance key no placeholder can be formed; never send the original.
+            throw new TextRedactionException(
+                "Text redaction is unavailable because the instance key cannot be read; no model request was sent. Check Setup > Secrets.",
+                false
+            );
+        }
         Task<string> Redact(string text) => redactor.RedactAsync(http, settings, text, token);
         string instructions;
         JsonArray? tools;

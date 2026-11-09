@@ -27,6 +27,9 @@ public sealed record ResponsesClientOptions(
     internal ModelHistoryCompatibility HistoryCompatibility { get; init; } =
         ModelHistoryCompatibility.Exact;
     internal TextRedactionOptions? TextRedaction { get; init; }
+
+    // Supplies the instance placeholder key; enabled redaction fails without one.
+    internal Func<byte[]>? TextRedactionKey { get; init; }
     internal double? HardTimeoutMs { get; init; }
     internal TimeProvider? Clock { get; init; }
     internal bool KeepReasoningOnError { get; init; }

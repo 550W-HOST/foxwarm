@@ -36,7 +36,8 @@ internal sealed class SecretSinks
     private SecretSinks(params (string Pattern, SecretSinkKind Kind)[] patterns) =>
         this.patterns = patterns.Select(item => (item.Pattern.Split('.'), item.Kind)).ToArray();
 
-    // models.yaml. `models` is the legacy alias of the providers map.
+    // models.yaml. `models` is the legacy alias of the providers map. The text-redaction
+    // key is sent only to the configured detection endpoint, at every inheritance level.
     internal static SecretSinks Models { get; } =
         new(
             ("providers.*.apiKey", SecretSinkKind.Credential),
@@ -44,7 +45,12 @@ internal sealed class SecretSinks
             ("providers.*.models.[].extraHeaders.*", SecretSinkKind.Header),
             ("models.*.apiKey", SecretSinkKind.Credential),
             ("models.*.extraHeaders.*", SecretSinkKind.Header),
-            ("models.*.models.[].extraHeaders.*", SecretSinkKind.Header)
+            ("models.*.models.[].extraHeaders.*", SecretSinkKind.Header),
+            ("defaults.textRedaction.apiKey", SecretSinkKind.Credential),
+            ("providers.*.textRedaction.apiKey", SecretSinkKind.Credential),
+            ("providers.*.models.[].textRedaction.apiKey", SecretSinkKind.Credential),
+            ("models.*.textRedaction.apiKey", SecretSinkKind.Credential),
+            ("models.*.models.[].textRedaction.apiKey", SecretSinkKind.Credential)
         );
 
     // config.yaml credential fields consumed by Main-owned clients.

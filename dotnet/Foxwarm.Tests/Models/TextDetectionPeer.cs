@@ -16,6 +16,9 @@ internal sealed class TextDetectionPeer : IAsyncDisposable
     internal Func<HttpContext, string, Task<bool>>? Intercept { get; set; }
     internal Func<JsonObject, JsonObject>? Transform { get; set; }
     internal string? Authorization { get; private set; }
+
+    // Label returned for a detected value; others are reported as `secret`.
+    internal ConcurrentDictionary<string, string> Labels { get; } = new(StringComparer.Ordinal);
     private readonly string[] secrets;
 
     private TextDetectionPeer(WebApplication app, string[] secrets)
@@ -61,7 +64,7 @@ internal sealed class TextDetectionPeer : IAsyncDisposable
                         ["start"] = start,
                         ["end"] = start + Encoding.UTF8.GetByteCount(secret),
                         ["score"] = 0.99,
-                        ["label"] = "secret",
+                        ["label"] = Labels.GetValueOrDefault(secret, "secret"),
                     }
                 );
                 index += secret.Length;
@@ -81,5 +84,21 @@ internal sealed class TextDetectionPeer : IAsyncDisposable
     {
         await app.StopAsync();
         await app.DisposeAsync();
+    }
+}
+
+// An owned data root whose instance key supplies text-redaction placeholders.
+internal sealed class TextRedactionKeys : IDisposable
+{
+    private readonly TempDirectory temp = new();
+    internal Foxwarm.Secrets.InstanceSecrets Secrets { get; }
+    internal string DataRoot => temp.Path;
+
+    internal TextRedactionKeys() => Secrets = new(temp.Path);
+
+    public void Dispose()
+    {
+        Secrets.Dispose();
+        temp.Dispose();
     }
 }

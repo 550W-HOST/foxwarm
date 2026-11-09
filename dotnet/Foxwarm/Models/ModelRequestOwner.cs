@@ -281,6 +281,7 @@ internal sealed class ModelRequestOwner(
                 options = options with
                 {
                     Images = images,
+                    TextRedactionKey = secrets is null ? null : secrets.TextRedactionPlaceholderKey,
                     Diagnostics = interaction?.StartAttempt(
                         leaf,
                         options,

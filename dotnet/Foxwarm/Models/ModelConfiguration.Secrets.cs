@@ -91,6 +91,7 @@ internal sealed partial class ModelConfiguration
                 if ((root["providers"] ?? root["models"]) is JsonObject providers)
                     foreach (var (key, provider) in providers)
                         Add(provider, "provider", key);
+                Add(root["defaults"], "setting", "models.defaults.textRedaction.apiKey");
             }
         }
         catch (Exception error) when (error is IOException or InvalidDataException) { }
@@ -174,6 +175,18 @@ internal sealed partial class ModelConfiguration
                 }
         var missing = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
         var resolved = (JsonObject)root.DeepClone();
+        // Defaults feed every provider; a missing defaults key fails only the providers whose
+        // enabled text redaction sends it.
+        var rawDefaults = root["defaults"] as JsonObject;
+        var defaultsMissing = new List<string>();
+        if (rawDefaults is not null)
+            resolved["defaults"] = SecretReferences.Resolve(
+                new JsonObject { ["defaults"] = rawDefaults.DeepClone() },
+                SecretSinks.Models,
+                "Models configuration",
+                Lookup,
+                defaultsMissing
+            )["defaults"]!.DeepClone();
         var mapName = resolved["providers"] is not null ? "providers" : "models";
         if (resolved[mapName] is JsonObject providers)
             foreach (var key in providers.Select(pair => pair.Key).ToArray())
@@ -208,6 +221,11 @@ internal sealed partial class ModelConfiguration
                     && fallback.TryGetValue(family, out var inherited)
                 )
                     names.AddRange(inherited.Where(name => !names.Contains(name)));
+                if (
+                    defaultsMissing.Count > 0
+                    && TextRedactionOptions.UsesDefaultApiKey(rawDefaults, provider)
+                )
+                    names.AddRange(defaultsMissing.Where(name => !names.Contains(name)));
                 if (names.Count > 0)
                     missing[key] = names;
             }

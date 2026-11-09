@@ -101,6 +101,14 @@ internal static class SecretConfigurationChanges
                     UsesReferencedFallback(before[key], app)
                         || UsesReferencedFallback(after[key], app)
                 );
+            // Detector settings inherit field by field, so an endpoint at any level can
+            // redirect a referenced key from another level. Treat them as one unit.
+            yield return (
+                "textRedaction settings",
+                TextRedactionSettings(current),
+                TextRedactionSettings(candidate),
+                false
+            );
             yield break;
         }
         var channelsBefore = current["channels"] as JsonObject ?? new JsonObject();
@@ -113,6 +121,33 @@ internal static class SecretConfigurationChanges
             yield return ("channel " + id, channelsBefore[id], channelsAfter[id], false);
         yield return ("llm", current["llm"], candidate["llm"], false);
         yield return ("asrService", current["asrService"], candidate["asrService"], false);
+    }
+
+    private static JsonObject TextRedactionSettings(JsonObject document)
+    {
+        var settings = new JsonObject();
+        if (document["defaults"] is JsonObject defaults && defaults.ContainsKey("textRedaction"))
+            settings["defaults"] = defaults["textRedaction"]?.DeepClone();
+        if ((document["providers"] ?? document["models"]) is not JsonObject providers)
+            return settings;
+        foreach (var (key, value) in providers)
+        {
+            if (value is not JsonObject provider)
+                continue;
+            if (provider.ContainsKey("textRedaction"))
+                settings["providers." + key] = provider["textRedaction"]?.DeepClone();
+            if (provider["models"] is not JsonArray models)
+                continue;
+            for (var index = 0; index < models.Count; index++)
+                if (models[index] is JsonObject model && model.ContainsKey("textRedaction"))
+                    settings[
+                        "providers."
+                            + key
+                            + ".models."
+                            + (HostModels.Text(model, "id") ?? "[" + index + "]")
+                    ] = model["textRedaction"]?.DeepClone();
+        }
+        return settings;
     }
 
     // A provider without its own key uses the legacy llm key of its protocol family.

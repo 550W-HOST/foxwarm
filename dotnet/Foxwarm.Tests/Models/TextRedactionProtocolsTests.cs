@@ -33,7 +33,7 @@ public sealed class TextRedactionProtocolsTests
                         : protocol == "openai-completions" ? body["messages"]![0]!["content"]
                         : body["instructions"]
                     )!.GetValue<string>();
-                    Assert.StartsWith("[[FW_PRIVATE_", key);
+                    Assert.StartsWith(TextRedactor.Prefix, key);
                     Assert.Equal(opaque, body["opaque"]!.GetValue<string>());
                     Assert.Equal(opaque, request.Headers["X-Opaque"]);
                     var tools = body["tools"]!.AsArray();
@@ -226,10 +226,12 @@ public sealed class TextRedactionProtocolsTests
             }
         );
         using var http = ProviderHttpRequest.CreateClient();
+        using var keys = new TextRedactionKeys();
         var owner = new ModelRequestOwner(
             http,
             new(peer.BaseUri, "m", "p/m", "", "", 100, tools),
-            new()
+            new(),
+            secrets: keys.Secrets
         );
         var updates = new List<ResponsesStreamProgress>();
         var pending = owner.RequestAsync(

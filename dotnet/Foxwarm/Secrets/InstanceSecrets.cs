@@ -122,6 +122,11 @@ internal sealed partial class InstanceSecrets : IDisposable
         }
     }
 
+    // HMAC key for reversible model text-redaction placeholders. Throws while the instance
+    // key is missing or unreadable, so enabled redaction fails closed.
+    internal byte[] TextRedactionPlaceholderKey() =>
+        OpenKeys().Derive(InstanceKeys.TextRedactionPlaceholderPurpose);
+
     // Literal values from configuration that should also be masked. Each source is
     // re-read at most every few seconds, or immediately after Invalidate.
     internal void AddSource(string id, Func<IEnumerable<KnownSecret>> values)
