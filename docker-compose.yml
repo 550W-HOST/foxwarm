@@ -55,7 +55,17 @@ services:
       no_proxy: "localhost,127.0.0.1,foxwarm,host.docker.internal"
       WORKSPACE: "/workspace"
     volumes:
-      - ./foxwarm-data:/data:ro
+      # The Node reads only the pairing token (scripts/start-sandbox-node.sh); it keeps its own
+      # credentials inside the container. Main creates the file when it starts and never replaces
+      # it, so this single-file mount stays current. The data directory itself (models, secrets,
+      # keys, Sessions) is not exposed. `create_host_path: false` makes a missing file an error
+      # instead of Docker creating a directory there.
+      - type: bind
+        source: ./foxwarm-data/state/node_token
+        target: /data/state/node_token
+        read_only: true
+        bind:
+          create_host_path: false
       - ./sandbox-workspace:/workspace
     extra_hosts:
       - host.docker.internal:host-gateway

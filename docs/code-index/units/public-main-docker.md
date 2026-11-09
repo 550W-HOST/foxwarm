@@ -1,7 +1,7 @@
 # Unit: Public managed Main Docker delivery
 
 Files: Dockerfile, docker/entrypoint.sh, docker/seccomp-chromium.json, .dockerignore, docker-compose.yml, test/docker-compose.yml, test/docker-compose.code.yml, test/README.md
-Secondary files: dotnet/Foxwarm/Delivery.targets, Dockerfile.node, .github/workflows/tests.yml
+Secondary files: dotnet/Foxwarm/Delivery.targets, Dockerfile.node, scripts/start-sandbox-node.sh, scripts/test/compose-sandbox-node.test.mjs, .github/workflows/tests.yml
 
 ## Contract and rationale
 
@@ -13,7 +13,7 @@ After the dependency-install layer, the build stage explicitly copies `tsconfig.
 
 ## Consumers and side effects
 
-The default command is `dotnet Foxwarm.dll`, installation root `/app`, data root `/data`, port 3001. Root Compose runs the published image and retains its data mount, init process, healthcheck and separately paired optional sandbox Node.
+The default command is `dotnet Foxwarm.dll`, installation root `/app`, data root `/data`, port 3001. Root Compose runs the published image and retains its data mount, init process, healthcheck and separately paired optional sandbox Node. That Node's only mount from the data directory is the read-only `state/node_token` file, the one data-directory file `scripts/start-sandbox-node.sh` reads (the client stores its approved credentials inside the container, outside any data mount); Main creates that file in place and never replaces it, so a single-file mount stays current, and `create_host_path: false` turns a missing file into an error rather than a Docker-created directory. Models, secrets, keys and Sessions are not visible to it. `scripts/test/compose-sandbox-node.test.mjs` checks the mount list statically; no container engine runs in that test.
 
 Test Compose uses the same recipe as project/service `foxwarm-test` on host port 3002, with `test/state` at `/data/state` and `test/agents` as the canonical Agents root at `/data/agents`. Main lives beneath `main/` alongside other Agent directories and the global framework prompt. Its optional Code overlay mounts prepared `test/.temp/code-assets` read-only at the installed resource directory.
 
