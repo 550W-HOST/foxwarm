@@ -9,6 +9,7 @@ import path from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
+import { nativeMainSmoke } from './test-inventory.mjs'
 
 const execute = promisify(execFile)
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
@@ -107,7 +108,7 @@ if (${JSON.stringify(name)} === 'dotnet' && args[0] === 'test' && process.env.FI
   await execute('git', ['rm', '-q', '--cached', '-r', 'packages/shared/dist', 'packages/cli-node/dist'], { cwd: root })
   return {
     root, journal, write,
-    async run(target, managedFail = false, args = []) {
+    async run(target, managedFail = false, args = [], env = {}) {
       try {
         const result = await execute(process.execPath, ['scripts/test/run-tests.mjs', target, ...args], {
           cwd: root, timeout: 30_000, maxBuffer: 4 * 1024 * 1024,
@@ -117,7 +118,7 @@ if (${JSON.stringify(name)} === 'dotnet' && args[0] === 'test' && process.env.FI
             PATH: path.join(root, 'bin') + path.delimiter + process.env.PATH,
             HTTPS_PROXY: 'http://toolchain-proxy.invalid:8123',
             OPENAI_API_KEY: 'synthetic-caller-key', CONFIG_PATH: path.join(root, 'caller.yaml'),
-            FIXTURE_MANAGED_FAIL: managedFail ? '1' : '' },
+            FIXTURE_MANAGED_FAIL: managedFail ? '1' : '', ...env },
         })
         return { code: 0, ...result }
       } catch (error) { return error }
@@ -376,4 +377,23 @@ test('sharded browser preparation failure fences the entire worker pool', unix, 
   assert.equal(result.code, 1, result.stdout + result.stderr)
   assert.deepEqual(await f.calls(), ['browser-prepare', 'browser-stopped-with-zero'])
   assert.deepEqual((await f.summary()).map(step => step.step), ['prepare'])
+})
+
+test('native runs the application harness and the native smoke against the selected executable only', unix, async t => {
+  const f = await fixture(t)
+  // Untracked, so the ordinary browser inventory does not also select them.
+  for (const file of nativeMainSmoke) {
+    const line = JSON.stringify(JSON.stringify('native:' + path.basename(file)) + '\n')
+    await f.write(file, `import fs from 'node:fs'\nimport test from 'node:test'\ntest('native fixture', () => fs.appendFileSync(${JSON.stringify(f.journal)}, ${line}))\n`)
+  }
+  const missing = await f.run('native')
+  assert.equal(missing.code, 2, missing.stdout + missing.stderr)
+  assert.match(missing.stderr, /FOXWARM_TEST_MAIN_EXECUTABLE/)
+  await assert.rejects(fs.access(path.join(f.root, 'artifacts')))
+  const result = await f.run('native', false, [], { FOXWARM_TEST_MAIN_EXECUTABLE: path.join(f.root, 'chromium') })
+  assert.equal(result.code, 0, result.stdout + result.stderr)
+  const calls = await f.calls()
+  assert.equal(calls[0], 'app-browser')
+  assert.deepEqual(calls.slice(1).sort(), nativeMainSmoke.map(file => 'native:' + path.basename(file)).sort())
+  assert.equal(calls.some(call => /browser-prepare|webui-browser|dotnet:|npm:/.test(call)), false)
 })

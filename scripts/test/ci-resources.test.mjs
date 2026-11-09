@@ -130,3 +130,19 @@ test('Tests and Release reuse one cache-backed Code producer and consume its per
     assert.ok(!builtCode(job))
   }
 })
+
+test('native Main publishes once, checks its warnings and runs the smoke against that executable', () => {
+  const job = jobs['native-main']
+  const index = predicate => job.steps.findIndex(predicate)
+  const publishes = job.steps.filter(step => /dotnet publish/.test(step.run || ''))
+  assert.equal(publishes.length, 1)
+  assert.match(publishes[0].run, /-r linux-x64/)
+  assert.match(publishes[0].run, /-p:PublishAot=true/)
+  assert.match(publishes[0].run, /-o "\$RUNNER_TEMP\/native-main"/)
+  const publish = job.steps.indexOf(publishes[0])
+  const warnings = index(step => /native-main-warnings\.mjs/.test(step.run || ''))
+  const smoke = index(step => step.run === 'npm run test:native')
+  assert.ok(publish < warnings && warnings < smoke)
+  assert.equal(job.steps[smoke].env.FOXWARM_TEST_MAIN_EXECUTABLE, '${{ runner.temp }}/native-main/Foxwarm')
+  assert.ok(!job.steps.some(step => /npm run build(?:$|\s)|test:webui:e2e|test:app:e2e/.test(step.run || '')))
+})

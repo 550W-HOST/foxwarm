@@ -282,3 +282,81 @@ jobs:
           if-no-files-found: ignore
           include-hidden-files: false
           retention-days: 7
+
+  native-main:
+    name: Native Main smoke (Linux x64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.21.0
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            packages/webui/package-lock.json
+      - name: Set up .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+      - name: Install dependencies
+        run: |
+          npm ci
+          npm --prefix packages/webui ci
+      - name: Install Chrome for Testing
+        id: browser
+        shell: bash
+        run: |
+          set -euo pipefail
+          install_log="$RUNNER_TEMP/chrome-for-testing-install.log"
+          sudo "$(command -v node)" node_modules/@puppeteer/browsers/lib/cjs/main-cli.js \
+            install chrome@145.0.7632.77 \
+            --path "$RUNNER_TEMP/puppeteer-browsers" \
+            --install-deps \
+            --format '{{path}}' | tee "$install_log"
+          browser_path="$(tail -n 1 "$install_log")"
+          test -x "$browser_path"
+          "$browser_path" --version
+          echo "path=$browser_path" >> "$GITHUB_OUTPUT"
+      # The full-application harness seeds its Archive with the Source writer; the
+      # Main browser fixture also connects a managed CLI Node.
+      - name: Build delivery assets, Source reference and CLI Node fixture
+        run: |
+          npm run build:assets
+          npm run build:reference
+          dotnet build dotnet/Foxwarm.CliNode/Foxwarm.CliNode.csproj -c Debug
+      - name: Publish NativeAOT Main once
+        run: |
+          mkdir -p "$RUNNER_TEMP/foxwarm-test-artifacts"
+          dotnet publish dotnet/Foxwarm/Foxwarm.csproj -c Release -r linux-x64 \
+            -p:PublishAot=true -o "$RUNNER_TEMP/native-main" \
+            "-flp:LogFile=$RUNNER_TEMP/foxwarm-test-artifacts/native-main-publish.log;Verbosity=minimal"
+      - name: Check first-party NativeAOT warnings
+        run: node scripts/test/native-main-warnings.mjs "$RUNNER_TEMP/foxwarm-test-artifacts/native-main-publish.log"
+      - name: Run native Main smoke
+        env:
+          FOXWARM_TEST_MAIN_EXECUTABLE: ${{ runner.temp }}/native-main/Foxwarm
+          FOXWARM_E2E_CHROMIUM: ${{ steps.browser.outputs.path }}
+          FOXWARM_TEST_ARTIFACT_DIR: ${{ runner.temp }}/foxwarm-test-artifacts
+        run: npm run test:native
+      - name: Upload failure diagnostics
+        if: ${{ failure() || cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: diagnostics-native-main
+          path: |
+            ${{ runner.temp }}/foxwarm-test-artifacts/native-main-publish.log
+            ${{ runner.temp }}/foxwarm-test-artifacts/*/inventory.json
+            ${{ runner.temp }}/foxwarm-test-artifacts/*/summary.json
+            ${{ runner.temp }}/foxwarm-test-artifacts/*/logs/**/*.log
+            ${{ runner.temp }}/foxwarm-test-artifacts/*/screenshots/**/*
+            ${{ runner.temp }}/foxwarm-test-artifacts/*/app-e2e/*/logs/**/*.log
+            ${{ runner.temp }}/foxwarm-test-artifacts/*/app-e2e/*/screenshots/**/*
+          if-no-files-found: ignore
+          include-hidden-files: false
+          retention-days: 7

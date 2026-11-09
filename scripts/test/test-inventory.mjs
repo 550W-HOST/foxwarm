@@ -13,6 +13,28 @@ export const appRuntimeE2e = [
   'packages/webui/test/systemTabs.e2e.mjs',
 ]
 
+// Bounded `test:native` smoke against a published Main executable. These Main-host
+// fixtures also run in the ordinary Chromium shards; this list selects the
+// serialization-heavy routes and recent features for the native lane.
+export const nativeMainSmoke = [
+  'packages/webui/test/askUser.e2e.mjs',
+  'packages/webui/test/dotnetMainBrowser.e2e.mjs',
+  'packages/webui/test/mainHostChat.e2e.mjs',
+  'packages/webui/test/mainHostIsolationMigration.e2e.mjs',
+  'packages/webui/test/mainHostNodeFiles.e2e.mjs',
+  'packages/webui/test/mainHostProviderLifecycle.e2e.mjs',
+  'packages/webui/test/mainHostSecrets.e2e.mjs',
+  'packages/webui/test/mainHostSetupProviders.e2e.mjs',
+  'packages/webui/test/mainHostSse.e2e.mjs',
+  'packages/webui/test/mainHostSystemActivity.e2e.mjs',
+  'packages/webui/test/mainHostSystemTimers.e2e.mjs',
+  'packages/webui/test/mainHostSystemUsage.e2e.mjs',
+  'packages/webui/test/mainHostSystemWebhooks.e2e.mjs',
+  'packages/webui/test/mainHostTextRedaction.e2e.mjs',
+  'packages/webui/test/mainHostToolScript.e2e.mjs',
+  'packages/webui/test/toolApproval.e2e.mjs',
+]
+
 export const standaloneSelftests = [
   'lib/selftest/queueDrainSelfTest.js',
   'lib/selftest/toolLoopStallSelfTest.js',

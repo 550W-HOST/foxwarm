@@ -9,6 +9,7 @@ import {
   compiledPath,
   deferredGroups,
   loadTestInventory,
+  nativeMainSmoke,
   routineUnitGroups,
   referenceGroups,
   standaloneSelftests,
@@ -22,7 +23,7 @@ const repoRoot = path.resolve(scriptDir, '../..')
 // Keep this runner-local: retries do not apply to preparation, other groups, or shards.
 const BROWSER_FIXTURE_RETRY_COUNT = 8
 const target = process.argv[2] || 'unit'
-const validTargets = new Set(['inventory', 'unit', 'reference', 'managed', 'published', 'browser', 'app', 'all'])
+const validTargets = new Set(['inventory', 'unit', 'reference', 'managed', 'published', 'browser', 'app', 'native', 'all'])
 let shard = null
 let browserWorkers = 1
 const options = new Set()
@@ -51,6 +52,11 @@ for (const argument of process.argv.slice(3)) {
 }
 if (!validTargets.has(target)) {
   console.error(`Usage: node scripts/test/run-tests.mjs <${[...validTargets].join('|')}> [--shard=INDEX/TOTAL] [--workers=COUNT]`)
+  process.exit(2)
+}
+
+if (target === 'native' && !fs.statSync(process.env.FOXWARM_TEST_MAIN_EXECUTABLE || '', { throwIfNoEntry: false })?.isFile()) {
+  console.error('test:native requires FOXWARM_TEST_MAIN_EXECUTABLE to name a published Main executable.')
   process.exit(2)
 }
 
@@ -225,6 +231,7 @@ function browserGroup() {
     name: 'webui-browser',
     concurrency: browserWorkers,
     stepArtifacts: true,
+    retryBrowserFixtures: true,
     steps: [
       // Cold Code assets plus the serial managed builds take nearly ten minutes in CI.
       { ...directStep('prepare', process.execPath, ['scripts/test/prepare-browser.mjs'], 900_000), prepareDependencies: true },
@@ -258,6 +265,34 @@ function appGroup() {
       FOXWARM_TEST_KEEP_SYSTEM_TMP: '1',
     })],
   }
+}
+
+// The bounded smoke selection against a published Main executable, such as a
+// NativeAOT publication. The full-application harness and these fixtures launch
+// FOXWARM_TEST_MAIN_EXECUTABLE instead of managed Main; they need no managed
+// fixture preparation or Code workbench assets.
+function nativeGroups() {
+  const executable = process.env.FOXWARM_TEST_MAIN_EXECUTABLE
+  const chromium = findChromium()
+  const files = requireFiles(nativeMainSmoke, 'native Main fixtures')
+  console.log(`Native Main: ${executable}; ${files.length} browser fixture(s) after the full application`)
+  return [appGroup(), {
+    name: 'native-browser',
+    concurrency: 2,
+    stepArtifacts: true,
+    retryBrowserFixtures: true,
+    steps: files.map(file => ({
+      ...nodeTestStep(path.basename(file), [file], { concurrency: 1, timeoutMs: 240_000 }),
+      browserFixture: true,
+    })),
+    env: {
+      FOXWARM_E2E_BROWSER: 'chromium',
+      FOXWARM_E2E_CHROMIUM: chromium,
+      FOXWARM_CHROMIUM: chromium,
+      FOXWARM_E2E_SCREENSHOT_DIR: path.join(runBase, 'screenshots'),
+      FOXWARM_TEST_KEEP_SYSTEM_TMP: '1',
+    },
+  }]
 }
 
 function walkFiles(root) {
@@ -355,6 +390,7 @@ const groups = [
   ...(target === 'reference' ? referenceTestGroups() : []),
   ...(target === 'browser' || target === 'all' ? [browserGroup()] : []),
   ...(target === 'app' || target === 'all' ? [appGroup()] : []),
+  ...(target === 'native' ? nativeGroups() : []),
 ]
 const summary = []
 for (const group of groups) {
@@ -366,7 +402,7 @@ for (const group of groups) {
   const groupLog = group.stepArtifacts ? null : fs.createWriteStream(path.join(runBase, 'logs', `${group.name}.log`), { flags: 'w' })
   async function executeStep(order) {
     const original = group.steps[order]
-    const retryable = group.name === 'webui-browser' && original.browserFixture
+    const retryable = group.retryBrowserFixtures && original.browserFixture
     const attempts = retryable ? BROWSER_FIXTURE_RETRY_COUNT + 1 : 1
     let allRetriesPassed = true
     for (let attempt = 0; attempt < attempts && !interrupted; attempt++) {
