@@ -5,10 +5,13 @@ import { once } from 'node:events'
 import { execFileSync } from 'node:child_process'
 import { readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
+import { WebSocket } from 'ws'
 import { createHostFixture, until } from './mainHostFixture.mjs'
 
 const engine = process.env.FOXWARM_TEST_CONTAINER_ENGINE, image = process.env.FOXWARM_TEST_CONTAINER_IMAGE
-if (!engine || !image) throw new Error('Set FOXWARM_TEST_CONTAINER_ENGINE (docker or podman) and FOXWARM_TEST_CONTAINER_IMAGE (a local image built from the example Containerfile).')
+// Optional: an image built with `--target with-code` adds the Code/Terminal profile checks.
+const codeImage = process.env.FOXWARM_TEST_CONTAINER_CODE_IMAGE
+if (!engine || !image) throw new Error('Set FOXWARM_TEST_CONTAINER_ENGINE (docker or podman) and FOXWARM_TEST_CONTAINER_IMAGE (a local image built from the example Containerfile), and optionally FOXWARM_TEST_CONTAINER_CODE_IMAGE.')
 const providerId = 'container-e2e-' + process.pid
 const run = (...args) => execFileSync(engine, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
 const owned = () => run('ps', '-a', '-q', '--no-trunc', '--filter', `label=net.foxwarm.provider=${providerId}`).split(/\s+/).filter(Boolean)
@@ -34,7 +37,11 @@ async function turn(key, calls, timeout = 60000) {
 try {
   assert.deepEqual(owned(), [], 'no leftover containers for this Provider ID')
   const configPath = join(fixture.root, 'profiles.json')
-  await writeFile(configPath, JSON.stringify({ engine: [engine], maxNodes: 3, profiles: { e2e: { image, description: 'Qualification profile.', pids: 256 } } }))
+  const profiles = { e2e: { image, description: 'Qualification profile.', pids: 256 } }
+  if (codeImage) profiles['e2e-code'] = { image: codeImage, description: 'Qualification profile with Code and Terminal.', pids: 256, services: true }
+  // Core forwards only its environment allowlist, so rootless Podman gets its runtime directory from engineEnv, as in the example configuration.
+  const engineEnv = process.env.XDG_RUNTIME_DIR ? { XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR } : {}
+  await writeFile(configPath, JSON.stringify({ engine: [engine], engineEnv, maxNodes: 3, profiles }))
   // Use the packaged resources, outside the source tree and without importing Core.
   const adapter = resolve('dotnet/Foxwarm/bin/Debug/net10.0/skills/node-setup/examples/container/provider.py')
   await readFile(adapter); await readFile(join(adapter, '..', '..', 'linux-ssh', 'target.py'))
@@ -64,7 +71,7 @@ try {
   let state = await turn('discover', [call('discover', 'node', { action: 'inspect', providerId })])
   const provider = result(state, 'discover').provider
   assert.deepEqual(provider.lifecycle, ['create', 'ensure', 'inspect', 'destroy'])
-  assert.deepEqual(provider.createParameters.properties.profile.enum, ['e2e'])
+  assert.deepEqual(provider.createParameters.properties.profile.enum, Object.keys(profiles))
 
   state = await turn('create', [
     call('reject', 'node', { action: 'create', providerId, nodeId: providerId + '/rejected', parameters: { profile: 'e2e', image: 'other' } }),
@@ -93,12 +100,16 @@ try {
 
   state = await turn('commands', [
     exec('exit', "mkdir -p ' sub ' && cd ' sub ' && printf '  héllo\\n'; exit 7", 15),
-    exec('offline', "python3 -c \"import socket; socket.create_connection(('192.0.2.1', 80), 2)\"", 15),
+    // /proc/net/dev lists the interfaces of the command's network namespace.
+    exec('interfaces', "tail -n +3 /proc/net/dev | cut -d: -f1 | tr -d ' '", 15),
+    // With any network the runner can reach, this connect would succeed or time out instead.
+    exec('offline', "python3 -c \"import errno, socket\ntry: socket.create_connection(('1.1.1.1', 53), 5)\nexcept OSError as error: print(errno.errorcode.get(error.errno, error))\"", 15),
     exec('caps', 'grep CapEff /proc/self/status', 15),
   ])
   assert.equal(result(state, 'exit').result.exitCode, 7, JSON.stringify(result(state, 'exit')))
   assert.equal(result(state, 'exit').result.content, '  héllo\n')
-  assert.notEqual(result(state, 'offline').result.exitCode, 0, 'no network inside the container')
+  assert.equal(result(state, 'interfaces').result.content, 'lo\n', 'only loopback inside the container')
+  assert.equal(result(state, 'offline').result.content, 'ENETUNREACH\n', JSON.stringify(result(state, 'offline')))
   assert.match(result(state, 'caps').result.content, /CapEff:\s+0+\s*$/)
 
   state = await turn('restart', [exec('restart', 'sleep 8; printf x >> /workspace/restart-effect; printf recovered', 1)])
@@ -129,8 +140,35 @@ try {
   assert.deepEqual(owned(), [])
   state = await turn('gone', [call('gone', 'run_script', { code: "return call_tool('node', {'action':'list'})" })])
   assert(!result(state, 'gone').result.nodes.some(row => row.id === node))
+
+  if (codeImage) {
+    // Code and Terminal: Main opens the service channel through `connect`, which relays to `foxwarm-node --stdio` in the container.
+    const codeNode = providerId + '/w2'
+    state = await turn('code-create', [call('code-create', 'node', { action: 'create', providerId, nodeId: codeNode, parameters: { profile: 'e2e-code' } })], 120000)
+    assert.equal(result(state, 'code-create').node?.availability, 'ready', JSON.stringify(result(state, 'code-create')))
+    const listed = (await fixture.api('GET', '/api/nodes')).body.nodes.find(row => row.id === codeNode)
+    assert.deepEqual(listed?.services, { 'vscode-fs': 1, 'vscode-git': 2, 'vscode-pty': 1 }, JSON.stringify(listed))
+    const opened = await fixture.api('POST', '/api/terminals', { nodeId: codeNode, cwd: '/workspace', cols: 90, rows: 24 })
+    assert.equal(opened.status, 200, JSON.stringify(opened.body))
+    const terminalId = opened.body.terminal.id
+    const socket = new WebSocket(`ws://127.0.0.1:${fixture.port}/api/terminals/stream?terminalId=${encodeURIComponent(terminalId)}`, { headers: { authorization: 'Bearer ' + fixture.token } })
+    const events = []
+    socket.on('message', bytes => { try { events.push(JSON.parse(bytes.toString())) } catch {} })
+    await once(socket, 'open')
+    // Output arrives in arbitrary chunks; match against the whole transcript.
+    const shown = text => events.filter(item => item.type === 'ready' || item.type === 'output').map(item => String(item.data ?? item.backlog ?? '')).join('').includes(text)
+    await until(() => events.some(item => item.type === 'ready'), 'terminal ready in the container', 60000)
+    socket.send(JSON.stringify({ type: 'input', data: "printf 'TERMINAL-%s-%s-%s\\n' \"$(id -un)\" \"$(pwd)\" \"$(tail -n +3 /proc/net/dev | cut -d: -f1 | tr -d ' ' | paste -sd, -)\"; stty size\n" }))
+    await until(() => shown('TERMINAL-worker-/workspace-lo') && shown('24 90'), 'terminal output from the container', 30000)
+      .catch(error => { throw new Error(error.message + ' events=' + JSON.stringify(events).slice(-4000)) })
+    socket.close(); await once(socket, 'close')
+    assert.equal((await fixture.api('DELETE', '/api/terminals/' + encodeURIComponent(terminalId))).status, 200)
+    state = await turn('code-destroy', [call('code-destroy', 'node', { action: 'destroy', nodeId: codeNode, confirmation: 'destroy node ' + codeNode })], 120000)
+    assert.equal(result(state, 'code-destroy').nodeId, codeNode, JSON.stringify(result(state, 'code-destroy')))
+    assert.deepEqual(owned(), [])
+  }
   await fixture.stop()
-  console.log(JSON.stringify({ result: `Packaged container adapter with ${engine}: profile-only create, hardening, canonical files, binary round trip, commands without network or capabilities, exact-reference Main restart, stop/ensure loss reporting and destroy passed.`, modelRequests: requests.length }))
+  console.log(JSON.stringify({ result: `Packaged container adapter with ${engine}: profile-only create, hardening, canonical files, binary round trip, commands with only loopback and no capabilities, exact-reference Main restart, stop/ensure loss reporting${codeImage ? ', a Code profile terminal' : ''} and destroy passed.`, modelRequests: requests.length }))
 } finally {
   await fixture.cleanup()
   if (model) { model.closeAllConnections(); await new Promise(done => model.close(done)) }

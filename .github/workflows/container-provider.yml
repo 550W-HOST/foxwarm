@@ -1,0 +1,141 @@
+name: Container Provider
+
+# Opt-in qualification of the reference container Node provider
+# (skills/node-setup/examples/container) through a real C# Main server and a
+# real engine. It runs only when started manually.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  native-cli:
+    name: Build the static CLI Node for the Code image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build the static linux-x64 executable from this commit
+        run: |
+          docker build --platform=linux/amd64 --progress=plain \
+            -f scripts/native-aot/cli-linux-musl-x64.Dockerfile \
+            --target artifact --output type=local,dest=.temp/native-publish .
+      - name: Package it in the published archive layout
+        run: |
+          package=.temp/package/native-cli-node-linux-x64
+          mkdir -p "$package" .temp/archive
+          install -m 0755 .temp/native-publish/Foxwarm.CliNode "$package/Foxwarm.CliNode"
+          ready="$(echo | "$package/Foxwarm.CliNode" --stdio)"
+          grep -q '"type":"node_stdio_ready"' <<< "$ready"
+          tar --owner=0 --group=0 --numeric-owner -czf .temp/archive/native-cli-node-latest-v3.tar.gz \
+            -C .temp/package native-cli-node-linux-x64
+      - name: Upload the archive
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: container-provider-native-cli
+          path: .temp/archive/native-cli-node-latest-v3.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+  qualify:
+    name: Qualify with ${{ matrix.engine }}
+    needs: native-cli
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [docker, podman]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CI: 'true'
+      ENGINE: ${{ matrix.engine }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.21.0
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Set up .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+      - name: Install test dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Build Main with the packaged skills
+        run: |
+          dotnet build dotnet/Foxwarm/Foxwarm.csproj -c Debug -nologo
+          test -f dotnet/Foxwarm/bin/Debug/net10.0/skills/node-setup/examples/container/provider.py
+      - name: Set up rootless Podman
+        if: matrix.engine == 'podman'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends podman catatonit crun uidmap
+          user="$(id -un)"
+          grep -q "^$user:" /etc/subuid || sudo usermod --add-subuids 100000-165535 "$user"
+          grep -q "^$user:" /etc/subgid || sudo usermod --add-subgids 100000-165535 "$user"
+          # A lingering user manager provides the runtime directory and the
+          # delegated cgroup controllers that resource limits need.
+          sudo loginctl enable-linger "$user"
+          runtime="/run/user/$(id -u)"
+          for _ in $(seq 1 100); do [ -S "$runtime/bus" ] && break; sleep 0.1; done
+          test -S "$runtime/bus"
+          echo "XDG_RUNTIME_DIR=$runtime" >> "$GITHUB_ENV"
+          sysctl kernel.apparmor_restrict_unprivileged_userns || true
+          cat "/sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/cgroup.controllers"
+      - name: Show the engine
+        run: |
+          "$ENGINE" version
+          if [ "$ENGINE" = podman ]; then
+            podman info --format 'rootless={{.Host.Security.Rootless}} cgroups={{.Host.CgroupsVersion}} manager={{.Host.CgroupManager}} runtime={{.Host.OCIRuntime.Name}}'
+            test "$(podman info --format '{{.Host.Security.Rootless}}')" = true
+          else
+            docker info --format 'server={{.ServerVersion}} cgroups={{.CgroupVersion}} driver={{.CgroupDriver}} security={{.SecurityOptions}}'
+          fi
+      - name: Download the CLI Node archive into the image build context
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: container-provider-native-cli
+          path: ${{ runner.temp }}/image-context
+      - name: Build the example images
+        run: |
+          containerfile=skills/node-setup/examples/container/Containerfile
+          context="$RUNNER_TEMP/image-context"
+          "$ENGINE" build --target base -t foxwarm-sandbox:ci -f "$containerfile" "$context"
+          "$ENGINE" build --target with-code -t foxwarm-sandbox-code:ci -f "$containerfile" "$context"
+          # Profiles name the exact image IDs; the provider never pulls.
+          echo "FOXWARM_TEST_CONTAINER_IMAGE=$("$ENGINE" image inspect --format '{{.Id}}' foxwarm-sandbox:ci)" >> "$GITHUB_ENV"
+          echo "FOXWARM_TEST_CONTAINER_CODE_IMAGE=$("$ENGINE" image inspect --format '{{.Id}}' foxwarm-sandbox-code:ci)" >> "$GITHUB_ENV"
+      - name: Run the container Provider qualification
+        env:
+          FOXWARM_TEST_CONTAINER_ENGINE: ${{ matrix.engine }}
+          FOXWARM_KEEP_E2E_ROOT: '1'
+          TMPDIR: ${{ runner.temp }}/container-e2e
+        run: |
+          mkdir -p "$TMPDIR"
+          node packages/webui/test/mainHostProviderContainer.e2e.mjs 2>&1 | tee "$RUNNER_TEMP/container-e2e.log"
+      - name: Check that no qualification containers remain
+        run: test -z "$("$ENGINE" ps -a -q --filter label=net.foxwarm.provider)"
+      - name: Upload failure diagnostics
+        if: ${{ failure() || cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: container-provider-${{ matrix.engine }}
+          # The test output and the Main server log only, not the fixture's data root.
+          path: |
+            ${{ runner.temp }}/container-e2e.log
+            ${{ runner.temp }}/container-e2e/*/data/state/logs/**
+          if-no-files-found: ignore
+          retention-days: 7
