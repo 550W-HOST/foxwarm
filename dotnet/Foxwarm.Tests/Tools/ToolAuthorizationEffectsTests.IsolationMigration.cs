@@ -117,6 +117,53 @@ public sealed partial class ToolAuthorizationEffectsTests
                     ),
                 $"{label}: {call.Source}:{call.Name} {call.Args} on {call.Node} should be {(call.Allowed ? "allowed" : "denied")}."
             );
+
+        // Timers decide their new-Session target in the handler, against create_session policy.
+        var timers = TimerExecutor(manager, owner, root);
+        await using var timerMcp = timers.Mcp;
+        async Task<bool> Timer(string name, JsonObject args) =>
+            Error(await Call(timers.Tools, name, args)) is null;
+        Assert.True(await Timer("create_timer", FreshTimer("alpha")), $"{label}: own-Agent timer");
+        Assert.True(await Timer("create_timer", FreshTimer()), $"{label}: default-Agent timer");
+        Assert.False(
+            await Timer("create_timer", FreshTimer("beta")),
+            $"{label}: other-Agent timer"
+        );
+        var plain = await Call(
+            timers.Tools,
+            "create_timer",
+            Obj("""{"afterSeconds":3600,"message":"x"}""")
+        );
+        Assert.Null(Error(plain));
+        var id = SessionWait.Text(plain["timer"]!["id"])!;
+        Assert.True(
+            await Timer("update_timer", new JsonObject { ["timerId"] = id, ["message"] = "y" }),
+            $"{label}: plain update"
+        );
+        Assert.True(
+            await Timer(
+                "update_timer",
+                new JsonObject
+                {
+                    ["timerId"] = id,
+                    ["newSession"] = true,
+                    ["agentName"] = "alpha",
+                }
+            ),
+            $"{label}: update to an own-Agent new Session"
+        );
+        Assert.False(
+            await Timer(
+                "update_timer",
+                new JsonObject
+                {
+                    ["timerId"] = id,
+                    ["newSession"] = true,
+                    ["agentName"] = "beta",
+                }
+            ),
+            $"{label}: update to another Agent"
+        );
     }
 
     [Fact]
@@ -128,7 +175,9 @@ public sealed partial class ToolAuthorizationEffectsTests
         var rules = plan.Rules.OfType<JsonObject>().ToArray();
         Assert.Equal("isolation-exact-deny", rules[0]["id"]!.GetValue<string>());
         Assert.Equal("deny", rules[0]["action"]!.GetValue<string>());
-        Assert.Equal("isolation-structural", rules[1]["id"]!.GetValue<string>());
+        // Own-Agent creation targets (shared with new-Session timers) precede the structural deny.
+        Assert.Equal("isolation-own-agent-sessions", rules[1]["id"]!.GetValue<string>());
+        Assert.Equal("isolation-structural", rules[2]["id"]!.GetValue<string>());
         Assert.Equal("isolation-deny-other", rules[^1]["id"]!.GetValue<string>());
         Assert.Null(rules[^1]["match"]);
         Assert.Equal(
@@ -144,10 +193,15 @@ public sealed partial class ToolAuthorizationEffectsTests
                 && SessionWait.Text(rule["match"]?["tool"]?["name"]) == "exec"
         );
 
-        string Kind(string subject) => plan.Notes.Single(note => note.Subject == subject).Kind;
+        string Kind(string subject) =>
+            plan.Notes.First(note => note.Subject == subject && note.Kind != "widened").Kind;
         Assert.Equal("translated", Kind("builtin:image_crop"));
         Assert.Equal("translated", Kind("mcp:srv/tool1"));
         Assert.Equal("dropped", Kind("builtin:create_session"));
+        Assert.Contains(
+            plan.Notes,
+            note => note.Subject == "builtin:create_session" && note.Kind == "widened"
+        );
         Assert.Equal("dropped", Kind("builtin:send_to_channel"));
         Assert.Equal("dropped", Kind("node:master/exec"));
         Assert.Equal("dropped", Kind("node:elsewhere/read"));
@@ -255,10 +309,10 @@ public sealed partial class ToolAuthorizationEffectsTests
             // Dual enforcement is not narrower than legacy for authorization-time decisions.
             await AssertParity(manager, legacy.Path, "dual");
 
-            var again = await Assert.ThrowsAsync<InvalidDataException>(() =>
-                manager.ApplyIsolationMigrationAsync("alpha")
-            );
-            Assert.Contains("already migrated", again.Message);
+            // A repeated apply only reruns the placement backfill; nothing is left to do.
+            var again = await manager.ApplyIsolationMigrationAsync("alpha");
+            Assert.False(again["applied"]!.GetValue<bool>());
+            Assert.Empty(again["materializedSessions"]!.AsArray());
             var after = manager.IsolationMigrationInventory("alpha")["agents"]![0]!.AsObject();
             Assert.False(after["applicable"]!.GetValue<bool>());
             Assert.NotNull(after["migrated"]);
@@ -309,7 +363,9 @@ public sealed partial class ToolAuthorizationEffectsTests
         // Archives and status stay within the Agent and the caller.
         Assert.True(await Builtin(opaque, "get_archived_messages", """{"sessionId":"kid"}"""));
         Assert.False(await Builtin(opaque, "get_archived_messages", """{"sessionId":"outside"}"""));
-        Assert.False(
+        // The current-Session status selector waits for R2 so the layer stays readable by the
+        // previous release; meanwhile the retained legacy check limits status targets.
+        Assert.True(
             await Builtin(opaque, "session", """{"action":"status","sessionId":"outside"}""")
         );
         Assert.True(await Builtin(opaque, "session", """{"action":"status","sessionId":"self"}"""));

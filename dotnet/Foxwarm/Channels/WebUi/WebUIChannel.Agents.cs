@@ -288,13 +288,35 @@ internal sealed partial class WebUIChannel
         );
         app.MapPost(
             "/api/agents/{agentId}/isolation-migration",
-            async (string agentId, CancellationToken token) =>
+            async (string agentId, HttpRequest request, CancellationToken token) =>
             {
                 if (!sessions.Agents().Contains(agentId))
                     return Results.NotFound(new JsonObject { ["error"] = "Agent not found." });
                 try
                 {
-                    return Results.Ok(await sessions.ApplyIsolationMigrationAsync(agentId, token));
+                    // Optional body: { acknowledgeDescendants: boolean }.
+                    var acknowledge = false;
+                    if (request.ContentLength is > 0 || request.Headers.TransferEncoding.Count > 0)
+                    {
+                        var body =
+                            await JsonNode.ParseAsync(request.Body, cancellationToken: token)
+                                as JsonObject
+                            ?? throw new InvalidDataException("Migration options need an object.");
+                        if (body.Any(item => item.Key != "acknowledgeDescendants"))
+                            throw new InvalidDataException(
+                                "Only acknowledgeDescendants is accepted."
+                            );
+                        if (body["acknowledgeDescendants"] is JsonNode flag)
+                            acknowledge =
+                                flag is JsonValue value && value.TryGetValue<bool>(out var parsed)
+                                    ? parsed
+                                    : throw new InvalidDataException(
+                                        "acknowledgeDescendants must be a boolean."
+                                    );
+                    }
+                    return Results.Ok(
+                        await sessions.ApplyIsolationMigrationAsync(agentId, acknowledge, token)
+                    );
                 }
                 catch (Exception error)
                     when (error is InvalidDataException or IOException or InvalidOperationException)

@@ -25,10 +25,38 @@ internal sealed partial class SessionManager
         agent == "main"
         && Path.GetFullPath(agents.AgentDirectory(agent)) == Path.GetFullPath(toolWorkspace);
 
+    /// <summary>
+    /// Generated plan plus one note per creator descendant: local layers apply down the
+    /// creator chain, so the layer restricts those Agents' Sessions too.
+    /// </summary>
     internal IsolationMigrationPlan IsolationMigrationPlanFor(
         string agent,
         AgentIsolation isolation
-    ) => IsolationMigrationRules.Generate(agent, isolation, RetainedMainLayout(agent));
+    )
+    {
+        var plan = IsolationMigrationRules.Generate(agent, isolation, RetainedMainLayout(agent));
+        var descendants = CreatorDescendants(agent, agents.MetadataSnapshot());
+        if (descendants.Length == 0)
+            return plan;
+        return plan with
+        {
+            Notes =
+            [
+                .. plan.Notes,
+                .. descendants.Select(descendant => new IsolationMigrationNote(
+                    "narrowed",
+                    "agent:" + descendant,
+                    $"Created by {agent}, so the generated layer also restricts its Sessions."
+                )),
+            ],
+        };
+    }
+
+    private string[] CreatorDescendants(string agent, JsonObject snapshot) =>
+        Agents()
+            .Where(other => other != agent && CreatorChainContains(snapshot, other, agent))
+            .Order(StringComparer.Ordinal)
+            .ToArray();
 
     /// <summary>
     /// Read-only report of every isolated or migrated Agent (or one named Agent): its legacy
@@ -114,11 +142,9 @@ internal sealed partial class SessionManager
         report["defaultNode"] = row["defaultNode"]?.DeepClone();
         report["inheritable"] = AgentCatalog.Inheritable(row);
         report["inheritors"] = Strings(agents.Inheritors(name));
-        report["creatorDescendants"] = Strings(
-            Agents()
-                .Where(other => other != name && CreatorChainContains(snapshot, other, name))
-                .Order(StringComparer.Ordinal)
-        );
+        var descendants = CreatorDescendants(name, snapshot);
+        report["creatorDescendants"] = Strings(descendants);
+        report["acknowledgeDescendantsRequired"] = descendants.Length > 0;
         report["retainedMainLayout"] = RetainedMainLayout(name);
         if (row["legacyIsolation"] is JsonObject marker)
             report["migrated"] = marker.DeepClone();
@@ -204,6 +230,11 @@ internal sealed partial class SessionManager
             && existing != node
         )
             report["defaultNodeConflict"] = existing;
+        // Applying again to a migrated Agent reruns only the Session placement backfill. The
+        // catalog shows an unset Node as master, so this may include Sessions placed elsewhere.
+        if (row.ContainsKey("legacyIsolation"))
+            report["needsBackfill"] =
+                node is not null && report["placementReview"]!.AsArray().Count > 0;
         report["blockers"] = Strings(blockers);
         report["applicable"] = blockers.Count == 0;
         return report;
@@ -275,18 +306,38 @@ internal sealed partial class SessionManager
     /// <summary>
     /// Applies the generated migration to one isolated Agent, then records the bound Node
     /// as the current Node of its Sessions that have none. Legacy isolation stays enforced.
+    /// For an already migrated Agent only the idempotent backfill runs again, so an
+    /// interrupted or partly failed apply can be resumed. Creator descendants are restricted
+    /// by the layer too, so they must be acknowledged.
     /// </summary>
     internal async Task<JsonObject> ApplyIsolationMigrationAsync(
         string agent,
+        bool acknowledgeDescendants = false,
         CancellationToken token = default
     )
     {
+        if (!agents.Exists(agent))
+            throw new InvalidDataException("Agent not found.");
+        var migrated =
+            agents.MetadataSnapshot()[agent] is JsonObject agentRow
+            && agentRow.ContainsKey("legacyIsolation");
         IsolationMigrationPlan? applied = null;
-        var conflict = await agents.ApplyIsolationMigrationAsync(
-            agent,
-            isolation => applied = IsolationMigrationPlanFor(agent, isolation),
-            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-        );
+        string? conflict = null;
+        if (!migrated)
+            conflict = await agents.ApplyIsolationMigrationAsync(
+                agent,
+                isolation =>
+                {
+                    var plan = IsolationMigrationPlanFor(agent, isolation);
+                    var descendants = CreatorDescendants(agent, agents.MetadataSnapshot());
+                    if (descendants.Length > 0 && !acknowledgeDescendants)
+                        throw new InvalidDataException(
+                            $"The generated layer also restricts the Agents created by '{agent}' ({string.Join(", ", descendants)}). Pass acknowledgeDescendants to apply it."
+                        );
+                    return applied = plan;
+                },
+                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+            );
         var node = RecordedIsolationNode(agent);
         var materialized = new JsonArray();
         var review = new JsonArray();
@@ -324,16 +375,19 @@ internal sealed partial class SessionManager
         var result = new JsonObject
         {
             ["agent"] = agent,
-            ["applied"] = true,
-            ["ruleCount"] = applied!.Rules.Count,
-            ["rulesDigest"] = applied.Digest,
-            ["notes"] = new JsonArray(
-                applied.Notes.Select(note => (JsonNode?)note.ToJson()).ToArray()
-            ),
+            ["applied"] = applied is not null,
             ["materializedSessions"] = materialized,
             ["placementReview"] = review,
             ["failedSessions"] = failed,
         };
+        if (applied is not null)
+        {
+            result["ruleCount"] = applied.Rules.Count;
+            result["rulesDigest"] = applied.Digest;
+            result["notes"] = new JsonArray(
+                applied.Notes.Select(note => (JsonNode?)note.ToJson()).ToArray()
+            );
+        }
         if (conflict is not null)
             result["defaultNodeConflict"] = conflict;
         return result;

@@ -150,6 +150,10 @@ internal static class IsolationMigrationRules
                 "An isolated main Agent in the retained shared-workspace layout excludes nested Agent directories, which a local layer cannot express. Review it manually."
             );
         var node = isolation.RecordedNode;
+        if (node == "master")
+            blockers.Add(
+                "The recorded isolation Node is master, which no supported setter records. A Node rule for it would grant every master path; correct the binding first."
+            );
         var counters = new Dictionary<string, int>(StringComparer.Ordinal);
 
         void Add(string purpose, JsonObject? match, string action = "allow")
@@ -217,6 +221,14 @@ internal static class IsolationMigrationRules
         }
 
         // 2. Structural denials stay explicit so later reviewed allows cannot silently lift them.
+        // Timer creation targets reuse create_session policy, and a new-Session timer in the
+        // Agent's own Agent was allowed, so that one creation target stays open.
+        var ownSessions = Builtin("create_session");
+        ownSessions["args"] = new JsonObject
+        {
+            ["agentName"] = new JsonObject { ["agent"] = new JsonObject { ["sameAgent"] = true } },
+        };
+        Add("own-agent-sessions", ownSessions);
         Add("structural", Builtin(Names(StructuralBuiltins)), "deny");
         Add(
             "master-exec",
@@ -336,14 +348,12 @@ internal static class IsolationMigrationRules
             };
             Add("skill", skill);
         }
+        // Status only. The `session` target selector is newer than the previous release, so
+        // the current-Session limit stays with the retained legacy check until R2.
         foreach (var action in new JsonNode[] { Absent(), "status" })
         {
             var status = Builtin("session");
-            status["args"] = new JsonObject
-            {
-                ["action"] = action.DeepClone(),
-                ["sessionId"] = Self(),
-            };
+            status["args"] = new JsonObject { ["action"] = action.DeepClone() };
             Add("session-status", status);
         }
 
@@ -373,23 +383,30 @@ internal static class IsolationMigrationRules
             };
             Add("timer-create-new", create);
         }
-        var updateExisting = Builtin("update_timer");
-        updateExisting["args"] = new JsonObject
+        // An update may omit newSession to keep the stored mode; the creation target of a
+        // new-Session timer is checked separately against create_session policy.
+        foreach (var newSession in new JsonNode[] { Absent(), false })
         {
-            ["sessionId"] = Self(),
-            ["newSession"] = false,
-            ["agentName"] = Absent(),
-            ["sessionPrefix"] = Absent(),
-        };
-        Add("timer-update", updateExisting);
-        var updateNew = Builtin("update_timer");
-        updateNew["args"] = new JsonObject
+            var update = Builtin("update_timer");
+            update["args"] = new JsonObject
+            {
+                ["sessionId"] = Self(),
+                ["newSession"] = newSession.DeepClone(),
+                ["agentName"] = Absent(),
+            };
+            Add("timer-update", update);
+        }
+        foreach (var newSession in new JsonNode[] { Absent(), true })
         {
-            ["sessionId"] = Self(),
-            ["newSession"] = true,
-            ["agentName"] = agent,
-        };
-        Add("timer-update-new", updateNew);
+            var update = Builtin("update_timer");
+            update["args"] = new JsonObject
+            {
+                ["sessionId"] = Self(),
+                ["newSession"] = newSession.DeepClone(),
+                ["agentName"] = agent,
+            };
+            Add("timer-update-new", update);
+        }
         Add("local-tools", Builtin(Names(LocalTools)));
 
         // 4. Exact allows that add a capability beyond the baseline.
@@ -462,8 +479,31 @@ internal static class IsolationMigrationRules
                         "Isolated Agents could never use this capability, even with an exact allow."
                     )
                 );
+            else if (tool == "session")
+                notes.Add(
+                    new(
+                        "narrowed",
+                        subject,
+                        "Legacy isolation let an exact allow use every session action; the layer allows status only."
+                    )
+                );
             else if (BaselineBuiltins.Contains(tool))
                 notes.Add(new("covered", subject, "The baseline already allows it."));
+            else if (tool == "node")
+            {
+                // Lifecycle and selection stay denied; action matching is exact, so allow
+                // the read-only actions by name rather than relying on the deny alone.
+                var inspect = Builtin("node");
+                inspect["args"] = new JsonObject { ["action"] = Names(["list", "inspect"]) };
+                Add("exact-allow", inspect);
+                notes.Add(
+                    new(
+                        "narrowed",
+                        subject,
+                        "Exact allow kept for the list and inspect actions only."
+                    )
+                );
+            }
             else if (DeliveryBuiltins.Contains(tool))
             {
                 Delivery(tool, "master");
@@ -537,7 +577,14 @@ internal static class IsolationMigrationRules
             new(
                 "narrowed",
                 "session",
-                "Status of the current Session only; listing and other actions are denied."
+                "Status only; listing and other actions are denied. While legacy isolation applies, status is limited to the current Session by its retained check."
+            )
+        );
+        notes.Add(
+            new(
+                "widened",
+                "builtin:create_session",
+                "Sessions may be created in the Agent's own Agent, which new-Session timers already allowed; other Agents stay denied. Legacy isolation still denies direct creation while it applies."
             )
         );
         if (rules.Count > 256)

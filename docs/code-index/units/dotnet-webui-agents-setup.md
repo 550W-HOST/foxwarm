@@ -42,7 +42,7 @@ Why it lives here: the TypeScript server never created a default Session explici
 
 Agent creation and PUT updates accept existing `isolatedNode` metadata through the [external Node unit](./external-nodes.md). Binding changes use the established owner/save lane; they do not create a remote environment.
 
-PUT `/api/agents/{agentId}` also accepts a boolean `inheritable`; responses and the Agent list report `inheritable`, and the list reports `isolationMigrated`. The administrator-only `GET /api/agents/isolation-migration[?agent=]` returns the read-only [isolation migration inventory](./isolation-migration.md), and `POST /api/agents/{agentId}/isolation-migration` applies the migration to one Agent; both are absent from the scoped-browser allowlist. The WebUI has no control for them yet.
+PUT `/api/agents/{agentId}` also accepts a boolean `inheritable`; responses and the Agent list report `inheritable`, and the list reports `isolationMigrated`. The administrator-only `GET /api/agents/isolation-migration[?agent=]` returns the read-only [isolation migration inventory](./isolation-migration.md), and `POST /api/agents/{agentId}/isolation-migration` applies the migration to one Agent (optional body `{acknowledgeDescendants: boolean}`; repeating it reruns only the placement backfill); both are absent from the scoped-browser allowlist. The WebUI has no control for them yet.
 
 The real authenticated Weixin QR start/wait routes and confirmed-owner merge use the existing Setup/HTTP boundary; [Matrix/Weixin](./dotnet-matrix-weixin.md) owns their source files, wire contract and selected-command versus reload-all distinction.
 

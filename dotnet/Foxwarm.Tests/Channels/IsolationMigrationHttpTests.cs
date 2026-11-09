@@ -78,9 +78,22 @@ public sealed class IsolationMigrationHttpTests
             Assert.True(row["isolated"]!.GetValue<bool>());
             Assert.NotEmpty(row["rules"]!.AsArray());
             Assert.Equal("bound-node", row["defaultNode"]!.GetValue<string>());
+            // A repeated apply reruns only the placement backfill.
+            var repeated = await client.PostAsync("/api/agents/guarded/isolation-migration", null);
+            Assert.Equal(HttpStatusCode.OK, repeated.StatusCode);
+            Assert.False(
+                (await repeated.Content.ReadFromJsonAsync<JsonObject>())![
+                    "applied"
+                ]!.GetValue<bool>()
+            );
             Assert.Equal(
                 HttpStatusCode.BadRequest,
-                (await client.PostAsync("/api/agents/guarded/isolation-migration", null)).StatusCode
+                (
+                    await client.PostAsJsonAsync(
+                        "/api/agents/guarded/isolation-migration",
+                        new JsonObject { ["acknowledgeDescendants"] = "yes" }
+                    )
+                ).StatusCode
             );
             Assert.Equal(
                 HttpStatusCode.BadRequest,

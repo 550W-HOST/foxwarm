@@ -6,10 +6,9 @@ namespace Foxwarm.Sessions;
 internal sealed partial class AgentCatalog
 {
     /// <summary>
-    /// Installation reader level this binary understands. Level 1: Agent-local rule layers,
-    /// creator metadata, the <c>inheritable</c> flag and legacy-isolation migration markers
-    /// are enforced. Binaries that predate the marker ignore it, so it only protects
-    /// downgrades between binaries that read it.
+    /// Installation reader level this binary understands. Level 1 adds the
+    /// <c>inheritable: false</c> flag and legacy-isolation migration markers. Binaries that
+    /// predate the marker ignore it, so it only protects downgrades between binaries that read it.
     /// </summary>
     internal const int ReaderVersion = 1;
 
@@ -44,18 +43,16 @@ internal sealed partial class AgentCatalog
             );
     }
 
-    // Authority that older readers would ignore: local rule layers, creator links, the
-    // inheritable flag and migration markers.
-    private static bool RequiresReader(JsonObject metadata) =>
+    // The lowest reader level that understands every row. Each level counts only data its
+    // predecessors would ignore; creator links and local rules are enforced by earlier
+    // binaries and raise nothing.
+    internal static int RequiredReaderLevel(JsonObject metadata) =>
         metadata.Any(pair =>
             pair.Value is JsonObject row
-            && (
-                row["rules"] is JsonArray { Count: > 0 }
-                || row["createdBy"] is not null
-                || row.ContainsKey("inheritable")
-                || row.ContainsKey("legacyIsolation")
-            )
-        );
+            && (row.ContainsKey("legacyIsolation") || !Inheritable(row))
+        )
+            ? 1
+            : 0;
 
     /// <summary>
     /// Raises the installation marker before metadata that depends on this reader is
@@ -63,14 +60,15 @@ internal sealed partial class AgentCatalog
     /// </summary>
     private void EnsureReaderVersion(JsonObject next)
     {
-        if (!RequiresReader(next) || MinimumReaderVersion(InstallationPath) >= ReaderVersion)
+        var level = RequiredReaderLevel(next);
+        if (level == 0 || MinimumReaderVersion(InstallationPath) >= level)
             return;
         var path = InstallationPath;
         var document = File.Exists(path)
             ? JsonNode.Parse(File.ReadAllText(path)) as JsonObject
                 ?? throw new InvalidDataException("Installation metadata must be an object.")
             : new JsonObject();
-        document["minimumReaderVersion"] = ReaderVersion;
+        document["minimumReaderVersion"] = level;
         new LinuxAtomicJsonFile(
             Path.GetDirectoryName(path)!,
             InstallationFileName
