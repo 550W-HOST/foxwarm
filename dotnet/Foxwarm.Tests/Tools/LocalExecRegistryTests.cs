@@ -100,6 +100,82 @@ public sealed class LocalExecRegistryTests
         );
     }
 
+    private static async Task<(LocalExecManager Manager, Func<int> Notified)> RecoveredCompletion(
+        string root
+    )
+    {
+        var entry = Record(root);
+        await Seed(root, entry);
+        await File.WriteAllTextAsync(entry["logPath"]!.GetValue<string>(), "done\n");
+        var notified = 0;
+        var manager = new LocalExecManager(
+            root,
+            _ => root,
+            (_, _, _) =>
+            {
+                notified++;
+                return Task.CompletedTask;
+            }
+        );
+        await manager.RegisterRecordsAsync(_ => true);
+        Assert.Single(manager.Tracked);
+        await File.WriteAllTextAsync(
+            entry["statusPath"]!.GetValue<string>(),
+            "{\"exitCode\":0,\"finishedAt\":\"2026-10-20T12:00:00Z\"}"
+        );
+        return (manager, () => notified);
+    }
+
+    [Fact]
+    public async Task A_failed_registry_save_after_delivery_is_written_by_the_next_reconciliation()
+    {
+        using var temp = new TempDirectory();
+        var (manager, notified) = await RecoveredCompletion(temp.Path);
+        await using (manager)
+        {
+            // Owned deterministic stand-in for a registry that cannot be replaced at that moment.
+            File.Delete(Registry(temp.Path));
+            Directory.CreateDirectory(Registry(temp.Path));
+            await manager.ReconcileNowAsync();
+            Assert.Equal(1, notified());
+            Assert.Empty(manager.Tracked);
+            Directory.Delete(Registry(temp.Path));
+            await manager.ReconcileNowAsync();
+            Assert.Equal(1, notified());
+            Assert.Empty(
+                JsonNode.Parse(await File.ReadAllTextAsync(Registry(temp.Path)))!["execs"]!.AsArray()
+            );
+        }
+    }
+
+    [Fact]
+    public async Task A_reader_holding_the_registry_does_not_leave_a_completed_entry_on_Windows()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+        using var temp = new TempDirectory();
+        var (manager, notified) = await RecoveredCompletion(temp.Path);
+        await using (manager)
+        {
+            // The sharing an ordinary reader such as Node's fs.readFile uses.
+            using (
+                new FileStream(
+                    Registry(temp.Path),
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete
+                )
+            )
+                await manager.ReconcileNowAsync();
+            Assert.Empty(manager.Tracked);
+            await manager.ReconcileNowAsync();
+            Assert.Equal(1, notified());
+            Assert.Empty(
+                JsonNode.Parse(await File.ReadAllTextAsync(Registry(temp.Path)))!["execs"]!.AsArray()
+            );
+        }
+    }
+
     [Fact]
     public async Task Strictly_older_than_24_hours_expires_before_provider_resolution_without_killing_or_removing_artifacts()
     {

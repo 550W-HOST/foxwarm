@@ -272,13 +272,21 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
         );
     }
 
+    // Set while an applied change has not reached the registry file. A save can fail after the
+    // in-memory change, for example on Windows while another process has the registry open, which
+    // blocks replacing it. Reconciliation writes it again, so the file does not keep a completed
+    // entry (and repeat its completion after a restart) until some unrelated later change.
+    private bool savePending;
+
     private async Task MutateAsync(Action action)
     {
         await mutation.WaitAsync();
         try
         {
             action();
+            savePending = true;
             await SaveAsync();
+            savePending = false;
         }
         finally
         {

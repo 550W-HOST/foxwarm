@@ -95,6 +95,15 @@ internal sealed partial class LocalExecManager
         await reconciliation.WaitAsync();
         try
         {
+            if (!closing && savePending)
+                try
+                {
+                    await MutateAsync(() => { });
+                }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+                {
+                    // Still blocked; the next reconciliation writes it again.
+                }
             if (!closing)
                 await Task.WhenAll(
                     pending.Values.Where(record => record.Notify).Select(ReconcileRecordAsync)
