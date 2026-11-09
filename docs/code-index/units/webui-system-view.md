@@ -75,12 +75,12 @@ The **System** page explains how Foxwarm is organized and running, in six sectio
 
 ### Activity section
 
-- Reads `POST /api/activity` from the [activity index](./activity-index.md): tool calls of every Session, unattended timer and webhook scripts and external MCP clients, newest first, 100 per page with "Show earlier activity".
+- Reads `POST /api/activity` from the [activity index](./activity-index.md): calls from every Session, unattended timer/webhook scripts and external MCP clients, newest first, 100 per page with "Show earlier activity".
 - Defaults to the last 7 days and **Changes**, which hides reads, internal calls and script containers; the kind menu offers All calls, each kind, or Reads. Further filters: result (Not completed, Completed, Failed, Denied by a rule, Approval rejected, Approval expired, Cancelled), source (Session turns, Timer scripts, Webhook scripts, External MCP clients) and a debounced search over summaries and tool names.
-- Columns: time, Session (title, execution-time Agent and, when it differs, the current Agent; deleted Sessions are marked), Node, call (tool with MCP server and action, "in script" for ToolScript calls, argument summary), result with approval status, and who started the turn. Clicking a Session, Agent, Node or tool adds a removable filter chip. The open button opens the Session positioned at the call's row (`openSessionAtSeq`).
-- Expanding a row shows arguments, canonical tool, Node, working directory, files, execution ID, delivery targets, deciding rules by layer, approval decider, error type, both Agents, script run and duration.
+- Lists from 960 px show columns: time, Session (title, execution-time and current Agent, deleted mark), Node, call (tool with MCP server and action, "in script" for ToolScript calls, argument summary), result with approval status, and who started the turn. Narrower lists (down to 390 px) stack each call. Labels come from `activity.ts`. Clicking a Session, Agent, Node or tool adds a removable filter chip. Open jumps to the call's row in its Session (`openSessionAtSeq`).
+- Expanding a row shows the recorded detail: arguments, tool, Node, cwd, files, exec ID, deliveries, rules, approval, error, both Agents, script run, duration.
 - The Session inspector links to the selected Session tree's activity ("View activity"). `#activity` opens the section.
-- Live updates: reloads (debounced) on the realtime `activity-changed` event and on socket reopen; no polling. While the backfill is still adding older history the section says so.
+- Live updates: `activity-changed` and socket reopen (debounced) refetch the first page and merge it above loaded rows (`mergeActivity`), keeping earlier pages; a filter change starts over. No polling. It notes when older history is still being indexed.
 
 ### Agent registry
 

@@ -30,23 +30,19 @@ internal sealed record ToolEffectRow(
     string? Approver,
     string? Rules,
     string? Summary,
-    long? AnchorSeq,
     long? InputSeq,
     string? InitiatorKind,
     string? InitiatorId,
+    string? InitiatorFrom,
     string? RunId,
-    string? Principal,
     string? Refs
 );
 
-/// <summary>Who started the turn of a call, as far as the Archive records it.</summary>
-internal sealed record ToolEffectInitiator(long Seq, string Kind, string? Id);
-
 /// <summary>
 /// Derived index of tool effects recorded in Session Archive rows. The Archive row is the
-/// authority: index rows are written with it under their own savepoint, removed with an
-/// uncommitted row, and rebuilt by the activity backfill when missing. Nothing here may fail or
-/// delay an Archive write beyond its own small inserts.
+/// authority: index rows are written with it under their own savepoint from that row alone,
+/// removed with an uncommitted row, and rebuilt by the activity backfill when missing. Nothing
+/// here may fail or delay an Archive write or open beyond its own small statements.
 /// </summary>
 internal static class ArchiveToolEffects
 {
@@ -56,9 +52,14 @@ internal static class ArchiveToolEffects
     internal const string LowKey = "low";
     internal const string HighKey = "high";
     internal const string VersionKey = "version";
+    internal const string DirectVersionKey = "direct_version";
 
-    // A shape change bumps this; the backfill then rebuilds every derived row.
-    internal const long Version = 1;
+    // A shape or derivation change bumps this; the index is then dropped and rebuilt.
+    internal const long Version = 2;
+
+    // Direct records are not derivable. A shape change bumps this and migrates them; a table of
+    // an unknown shape or version is set aside, never dropped.
+    internal const long DirectVersion = 1;
 
     private const int MaxSummary = 200;
     private const int MaxAction = 40;
@@ -67,40 +68,169 @@ internal static class ArchiveToolEffects
     private const int MaxText = 200;
 
     internal const string Columns =
-        "agent,started_at,duration_ms,origin,tool,source,server,node,action,outcome,error_type,approval,approver,rules,summary,anchor_seq,input_seq,initiator_kind,initiator_id,run_id,principal,refs";
+        "agent,started_at,duration_ms,origin,tool,source,server,node,action,outcome,error_type,approval,approver,rules,summary,input_seq,initiator_kind,initiator_id,initiator_from,run_id,refs";
 
-    // Additive and cheap on any Archive size: the tables start empty, so their own indexes are
-    // the only work. Older readers ignore them.
-    internal const string SchemaSql = $"""
-        CREATE TABLE IF NOT EXISTS {Table}(
-          session_id TEXT NOT NULL,seq INTEGER NOT NULL,part INTEGER NOT NULL,sub INTEGER NOT NULL,
-          agent TEXT,started_at INTEGER NOT NULL,duration_ms REAL,origin TEXT NOT NULL,tool TEXT NOT NULL,
-          source TEXT,server TEXT,node TEXT,action TEXT,outcome TEXT NOT NULL,error_type TEXT,
-          approval TEXT,approver TEXT,rules TEXT,summary TEXT,anchor_seq INTEGER,input_seq INTEGER,
-          initiator_kind TEXT,initiator_id TEXT,run_id TEXT,principal TEXT,refs TEXT,
-          PRIMARY KEY(session_id,seq,part,sub));
-        CREATE INDEX IF NOT EXISTS idx_{Table}_time ON {Table}(started_at);
-        CREATE INDEX IF NOT EXISTS idx_{Table}_node ON {Table}(node,started_at);
-        CREATE INDEX IF NOT EXISTS idx_{Table}_tool ON {Table}(tool,started_at);
-        CREATE TABLE IF NOT EXISTS {DirectTable}(
-          id INTEGER PRIMARY KEY AUTOINCREMENT,session_id TEXT,
-          agent TEXT,started_at INTEGER NOT NULL,duration_ms REAL,origin TEXT NOT NULL,tool TEXT NOT NULL,
-          source TEXT,server TEXT,node TEXT,action TEXT,outcome TEXT NOT NULL,error_type TEXT,
-          approval TEXT,approver TEXT,rules TEXT,summary TEXT,anchor_seq INTEGER,input_seq INTEGER,
-          initiator_kind TEXT,initiator_id TEXT,run_id TEXT,principal TEXT,refs TEXT);
-        CREATE INDEX IF NOT EXISTS idx_{DirectTable}_time ON {DirectTable}(started_at);
-        CREATE TABLE IF NOT EXISTS {MetadataTable}(key TEXT PRIMARY KEY,value INTEGER NOT NULL);
+    private const string ColumnTypes = """
+        agent TEXT,started_at INTEGER NOT NULL,duration_ms REAL,origin TEXT NOT NULL,tool TEXT NOT NULL,
+        source TEXT,server TEXT,node TEXT,action TEXT,outcome TEXT NOT NULL,error_type TEXT,
+        approval TEXT,approver TEXT,rules TEXT,summary TEXT,input_seq INTEGER,
+        initiator_kind TEXT,initiator_id TEXT,initiator_from TEXT,run_id TEXT,refs TEXT
         """;
 
+    private const string IndexSql = $"""
+        CREATE TABLE {Table}(
+          session_id TEXT NOT NULL,seq INTEGER NOT NULL,part INTEGER NOT NULL,sub INTEGER NOT NULL,
+          {ColumnTypes},
+          PRIMARY KEY(session_id,seq,part,sub));
+        CREATE INDEX idx_{Table}_time ON {Table}(started_at);
+        CREATE INDEX idx_{Table}_node ON {Table}(node,started_at);
+        CREATE INDEX idx_{Table}_tool ON {Table}(tool,started_at);
+        """;
+
+    private const string DirectSql = $"""
+        CREATE TABLE {DirectTable}(
+          id INTEGER PRIMARY KEY AUTOINCREMENT,session_id TEXT,
+          {ColumnTypes});
+        CREATE INDEX idx_{DirectTable}_time ON {DirectTable}(started_at);
+        """;
+
+    private static readonly string[] IndexShape =
+    [
+        "session_id",
+        "seq",
+        "part",
+        "sub",
+        .. Columns.Split(','),
+    ];
+
+    private static readonly string[] DirectShape = ["id", "session_id", .. Columns.Split(',')];
+
+    private static readonly string[] MetadataShape = ["key", "value"];
+
+    /// <summary>
+    /// Brings the derived tables to this build's shape without ever failing the caller. Shapes
+    /// and versions are checked before any index statement runs: an unknown or older index is
+    /// dropped (the backfill rebuilds it), an unknown direct-record table is renamed aside and
+    /// reported, and unreadable checkpoints start over. Any other failure leaves the Archive
+    /// usable without activity; live indexing then fails softly and the backfill retries.
+    /// </summary>
     internal static void InitializeSchema(
         SqliteConnection connection,
         SqliteTransaction? transaction
     )
     {
+        void Execute(string sql)
+        {
+            using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = sql;
+            command.ExecuteNonQuery();
+        }
+        Execute("SAVEPOINT archive_effects_schema");
+        try
+        {
+            EnsureSchema(connection, transaction, Execute);
+            Execute("RELEASE archive_effects_schema");
+        }
+        catch (Exception error)
+        {
+            try
+            {
+                Execute("ROLLBACK TO archive_effects_schema");
+                Execute("RELEASE archive_effects_schema");
+            }
+            catch (Exception)
+            {
+                // The connection's own transaction handling reports anything lasting.
+            }
+            Console.Error.WriteLine(
+                "Activity index tables are unavailable; the Archive opens without them: "
+                    + MainLog.SafeFailure(error)
+            );
+        }
+    }
+
+    private static void EnsureSchema(
+        SqliteConnection connection,
+        SqliteTransaction? transaction,
+        Action<string> execute
+    )
+    {
+        var metadata = Shape(connection, transaction, MetadataTable);
+        if (metadata is not null && !metadata.SequenceEqual(MetadataShape))
+        {
+            execute($"DROP TABLE {MetadataTable}");
+            metadata = null;
+        }
+        if (metadata is null)
+            execute($"CREATE TABLE {MetadataTable}(key TEXT PRIMARY KEY,value INTEGER NOT NULL)");
+        void ResetCheckpoints() =>
+            execute(
+                $"DELETE FROM {MetadataTable} WHERE key IN ('{LowKey}','{HighKey}','{VersionKey}')"
+            );
+        var index = Shape(connection, transaction, Table);
+        if (
+            index is not null
+            && (
+                !index.SequenceEqual(IndexShape)
+                || ReadMetadata(connection, transaction, VersionKey) != Version
+            )
+        )
+        {
+            execute($"DROP TABLE {Table}");
+            index = null;
+        }
+        if (index is null)
+        {
+            ResetCheckpoints();
+            execute(IndexSql);
+            WriteMetadata(connection, transaction, VersionKey, Version);
+        }
+        var direct = Shape(connection, transaction, DirectTable);
+        var directVersion = ReadMetadata(connection, transaction, DirectVersionKey);
+        if (
+            direct is not null
+            && (
+                !direct.SequenceEqual(DirectShape)
+                || directVersion is not null && directVersion != DirectVersion
+            )
+        )
+        {
+            var aside =
+                DirectTable
+                + "_unknown_"
+                + DateTimeOffset
+                    .UtcNow.ToUnixTimeMilliseconds()
+                    .ToString(CultureInfo.InvariantCulture);
+            execute($"DROP INDEX IF EXISTS idx_{DirectTable}_time");
+            execute($"ALTER TABLE {DirectTable} RENAME TO {aside}");
+            Console.Error.WriteLine(
+                $"Activity records of an unknown format were kept as table {aside}; new records start in {DirectTable}."
+            );
+            direct = null;
+        }
+        if (direct is null)
+            execute(DirectSql);
+        if (direct is null || directVersion is null)
+            WriteMetadata(connection, transaction, DirectVersionKey, DirectVersion);
+    }
+
+    // Column names in order, or null when the table does not exist.
+    private static string[]? Shape(
+        SqliteConnection connection,
+        SqliteTransaction? transaction,
+        string table
+    )
+    {
         using var command = connection.CreateCommand();
         command.Transaction = transaction;
-        command.CommandText = SchemaSql;
-        command.ExecuteNonQuery();
+        command.CommandText = "SELECT name FROM pragma_table_info($table) ORDER BY cid";
+        command.Parameters.AddWithValue("$table", table);
+        using var reader = command.ExecuteReader();
+        var names = new List<string>();
+        while (reader.Read())
+            names.Add(reader.GetString(0));
+        return names.Count == 0 ? null : names.ToArray();
     }
 
     internal static bool TableExists(
@@ -238,16 +368,37 @@ internal static class ArchiveToolEffects
         ?? Text(exec?["nodeId"])
         ?? Text((meta?["resolvedPaths"] as JsonArray)?.FirstOrDefault()?["nodeId"]);
 
-    /// <summary>Tool rows of one Archive message, with the model row whose calls they answer.</summary>
+    /// <summary>
+    /// Whether every call of a tool row records what the index needs (its target with summary
+    /// and its initiator), so the row can be indexed on its own.
+    /// </summary>
+    internal static (bool Target, bool Initiator) SelfContained(JsonObject tool)
+    {
+        var target = true;
+        var initiator = true;
+        foreach (var part in (tool["parts"] as JsonArray ?? []).OfType<JsonObject>())
+            if (part["functionResponse"] is JsonObject response)
+            {
+                var meta = response["__meta"] as JsonObject;
+                target &= meta?["target"]?["summary"] is not null;
+                initiator &= meta?[TurnInitiator.Field] is JsonObject;
+            }
+        return (target, initiator);
+    }
+
+    /// <summary>
+    /// Index rows of one Archive tool message. Live writes pass the row alone: each call's
+    /// target and initiator are recorded on it. The backfill passes the model row whose calls
+    /// it answers and an inferred initiator for rows written before those records existed.
+    /// </summary>
     internal static IReadOnlyList<ToolEffectRow> FromToolMessage(
         string sessionId,
         string agent,
         long seq,
         double timestamp,
         JsonObject tool,
-        JsonObject? anchor,
-        long? anchorSeq,
-        ToolEffectInitiator? initiator,
+        JsonObject? anchor = null,
+        ToolEffectInitiator? inferred = null,
         string origin = "model"
     )
     {
@@ -274,6 +425,7 @@ internal static class ArchiveToolEffects
             var exec = meta?["exec"] as JsonObject;
             var approval = meta?["approval"] as JsonObject;
             var timing = response["executionTiming"] as JsonObject;
+            var initiator = ToolEffectInitiator.FromJson(meta?[TurnInitiator.Field]) ?? inferred;
             var wrapped = Wrapped(name, callArgs);
             var toolName = Text(target?["name"]) ?? wrapped.Name;
             var innerArgs =
@@ -294,23 +446,25 @@ internal static class ArchiveToolEffects
                     Text(target?["source"]) ?? wrapped.Source,
                     Text(target?["server"]) ?? wrapped.Server,
                     Node(target, exec, meta),
-                    Bounded(Text(innerArgs?["action"]), MaxAction),
+                    Bounded(Text(target?["action"]) ?? Text(innerArgs?["action"]), MaxAction),
                     Outcome(response["response"], approvalStatus),
                     Bounded(Text(response["response"]?["error"]?["type"]), MaxText),
                     approvalStatus,
                     Approver(approval?["decidedBy"]),
                     Compact(target?["rules"], MaxRules),
-                    innerArgs is null
-                        ? null
-                        : Bounded(
-                            SessionToolExecutor.ToolArgsPreview(toolName, innerArgs),
-                            MaxSummary
-                        ),
-                    anchorSeq,
+                    Bounded(
+                        Text(target?["summary"])
+                            ?? (
+                                innerArgs is null
+                                    ? null
+                                    : SessionToolExecutor.ToolArgsPreview(toolName, innerArgs)
+                            ),
+                        MaxSummary
+                    ),
                     initiator?.Seq,
                     initiator?.Kind,
                     Bounded(initiator?.Id, MaxText),
-                    null,
+                    Bounded(initiator?.From, MaxText),
                     null,
                     Refs(meta, null)
                 )
@@ -329,7 +483,6 @@ internal static class ArchiveToolEffects
                         agent,
                         startedAt,
                         origin,
-                        anchorSeq,
                         initiator,
                         null
                     )
@@ -348,7 +501,6 @@ internal static class ArchiveToolEffects
         string? agent,
         long fallback,
         string origin,
-        long? anchorSeq,
         ToolEffectInitiator? initiator,
         string? runId
     )
@@ -371,7 +523,7 @@ internal static class ArchiveToolEffects
             Text(target?["source"]),
             Text(target?["server"]),
             Node(target, exec, null),
-            null,
+            Bounded(Text(target?["action"]), MaxAction),
             denied ? "denied"
                 : status is "failed" ? "error"
                 : status is "running" ? "cancelled"
@@ -380,20 +532,19 @@ internal static class ArchiveToolEffects
             null,
             null,
             Compact(rules, MaxRules),
-            Bounded(Text(subcall["argsSummary"]), MaxSummary),
-            anchorSeq,
+            Bounded(Text(target?["summary"]) ?? Text(subcall["argsSummary"]), MaxSummary),
             initiator?.Seq,
             initiator?.Kind,
             Bounded(initiator?.Id, MaxText),
+            Bounded(initiator?.From, MaxText),
             runId,
-            null,
             Refs(null, subcall)
         );
     }
 
     /// <summary>
     /// A call without a Session tool row: an unattended ToolScript call or an inbound MCP call.
-    /// The summary must already be redacted by the caller.
+    /// The summary must already be masked by the caller.
     /// </summary>
     internal static ToolEffectRow FromDirectCall(
         string? sessionId,
@@ -407,7 +558,6 @@ internal static class ArchiveToolEffects
         string? summary,
         ToolEffectInitiator? initiator,
         string? runId,
-        string? principal,
         JsonObject? delivery = null,
         string? fallbackNode = null
     )
@@ -430,7 +580,7 @@ internal static class ArchiveToolEffects
             Text(target?["source"]),
             Text(target?["server"]),
             Node(target, exec, null) ?? fallbackNode,
-            null,
+            Bounded(Text(target?["action"]), MaxAction),
             Outcome(response, null),
             Bounded(Text(response?["error"]?["type"]), MaxText),
             null,
@@ -438,60 +588,12 @@ internal static class ArchiveToolEffects
             Compact(target?["rules"], MaxRules),
             Bounded(summary, MaxSummary),
             null,
-            null,
             initiator?.Kind,
             Bounded(initiator?.Id, MaxText),
+            Bounded(initiator?.From, MaxText),
             runId,
-            principal,
             Refs(null, subcall)
         );
-    }
-
-    /// <summary>
-    /// Classifies the input row that started a turn. Background notices are not initiators:
-    /// the caller keeps looking further back for the input they followed.
-    /// </summary>
-    internal static ToolEffectInitiator? Initiator(long seq, JsonObject message)
-    {
-        if (message["__meta"]?["sender"] is JsonObject sender)
-            return Text(sender["kind"]) == "identity"
-                ? new(seq, "identity", Text(sender["id"]))
-                : new(seq, "administrator", null);
-        var first = (message["parts"] as JsonArray)?.OfType<JsonObject>().FirstOrDefault();
-        var text = Text(first?["system"]) ?? Text(first?["text"]);
-        if (text is null)
-            return new(seq, "user", null);
-        var wrapper = SessionSequenceProjection.ParseWrapper(text);
-        if (wrapper is null)
-            return new(seq, "user", null);
-        var attributes = wrapper.Attributes;
-        string? Attribute(string name) => attributes.GetValueOrDefault(name);
-        if (wrapper.Tag == "foxwarm-message")
-            return Attribute("type") switch
-            {
-                "channel" when Attribute("channelInstanceId") is null => new(
-                    seq,
-                    "user",
-                    Attribute("channelType")
-                ),
-                "channel" => new(
-                    seq,
-                    "channel",
-                    Attribute("channelTargetId") ?? Attribute("channelInstanceId")
-                ),
-                "inter-agent" or "toolscript" => new(seq, "session", Attribute("sourceSessionId")),
-                "task" when Attribute("sourceKind") == "user" => new(
-                    seq,
-                    "user",
-                    Attribute("taskId")
-                ),
-                "task" => new(seq, "session", Attribute("sourceSessionId")),
-                "timer" => new(seq, "timer", Attribute("timerId")),
-                _ => null,
-            };
-        if (Attribute("kind") == "external-input" && Attribute("webhook") is { } webhook)
-            return new(seq, "webhook", webhook);
-        return null;
     }
 
     private const string InsertColumns = "session_id,seq,part,sub," + Columns;
@@ -523,17 +625,16 @@ internal static class ArchiveToolEffects
         Add("$approver", row.Approver);
         Add("$rules", row.Rules);
         Add("$summary", row.Summary);
-        Add("$anchor", row.AnchorSeq);
         Add("$input", row.InputSeq);
         Add("$initiatorKind", row.InitiatorKind);
         Add("$initiatorId", row.InitiatorId);
+        Add("$initiatorFrom", row.InitiatorFrom);
         Add("$run", row.RunId);
-        Add("$principal", row.Principal);
         Add("$refs", row.Refs);
     }
 
     private const string Values =
-        "$agent,$started,$duration,$origin,$tool,$source,$server,$node,$action,$outcome,$error,$approval,$approver,$rules,$summary,$anchor,$input,$initiatorKind,$initiatorId,$run,$principal,$refs";
+        "$agent,$started,$duration,$origin,$tool,$source,$server,$node,$action,$outcome,$error,$approval,$approver,$rules,$summary,$input,$initiatorKind,$initiatorId,$initiatorFrom,$run,$refs";
 
     internal static void Insert(
         SqliteConnection connection,
@@ -567,87 +668,10 @@ internal static class ArchiveToolEffects
     }
 
     /// <summary>
-    /// The nearest earlier model row of a Session and the turn's initiator. Reads only the
-    /// Session's own rows through the primary key; at most a bounded number of rows back.
-    /// </summary>
-    internal static (long? AnchorSeq, JsonObject? Anchor, ToolEffectInitiator? Initiator) Context(
-        SqliteConnection connection,
-        SqliteTransaction? transaction,
-        string sessionId,
-        long seq,
-        IReadOnlyDictionary<long, JsonObject>? pending = null
-    )
-    {
-        JsonObject? Load(long target)
-        {
-            if (pending is not null && pending.TryGetValue(target, out var message))
-                return message;
-            using var command = connection.CreateCommand();
-            command.Transaction = transaction;
-            command.CommandText =
-                "SELECT message_json FROM archive_messages WHERE session_id=$session AND seq=$seq";
-            command.Parameters.AddWithValue("$session", sessionId);
-            command.Parameters.AddWithValue("$seq", target);
-            return command.ExecuteScalar() is string json
-                ? JsonNode.Parse(json) as JsonObject
-                : null;
-        }
-        // Rows of the same uncommitted write come first (they are the newest); stored rows are
-        // read lazily through the primary key and only the rows actually needed are parsed.
-        IEnumerable<(long Seq, string Role)> Candidates()
-        {
-            var floor = long.MaxValue;
-            foreach (
-                var (pendingSeq, message) in (pending ?? new Dictionary<long, JsonObject>())
-                    .Where(pair => pair.Key < seq)
-                    .OrderByDescending(pair => pair.Key)
-            )
-                if (Text(message["role"]) is { } role)
-                {
-                    floor = pendingSeq;
-                    yield return (pendingSeq, role);
-                }
-            using var command = connection.CreateCommand();
-            command.Transaction = transaction;
-            command.CommandText =
-                "SELECT seq,role FROM archive_messages WHERE session_id=$session AND seq<$seq ORDER BY seq DESC LIMIT $limit";
-            command.Parameters.AddWithValue("$session", sessionId);
-            command.Parameters.AddWithValue("$seq", Math.Min(seq, floor));
-            command.Parameters.AddWithValue("$limit", ContextScan);
-            using var reader = command.ExecuteReader();
-            while (reader.Read())
-                yield return (reader.GetInt64(0), reader.GetString(1));
-        }
-        long? anchorSeq = null;
-        JsonObject? anchor = null;
-        ToolEffectInitiator? background = null;
-        foreach (var (candidate, role) in Candidates().Take(ContextScan))
-        {
-            if (anchorSeq is null)
-            {
-                if (role == "model")
-                {
-                    anchorSeq = candidate;
-                    anchor = Load(candidate);
-                }
-                continue;
-            }
-            if (role != "user" || Load(candidate) is not { } input)
-                continue;
-            if (Initiator(candidate, input) is { } initiator)
-                return (anchorSeq, anchor, initiator);
-            background ??= new(candidate, "event", null);
-        }
-        return (anchorSeq, anchor, background);
-    }
-
-    // How far back a tool row looks for its model row and the input that started its turn.
-    internal const int ContextScan = 200;
-
-    /// <summary>
     /// Indexes the tool rows of one Archive write inside its transaction, isolated by a
     /// savepoint: an index failure (such as a removed table) rolls back only index rows and
-    /// returns false, never failing the Archive rows. The covered range then advances over the
+    /// returns false, never failing the Archive rows. Each row is indexed from its own recorded
+    /// target and initiator; nothing else is read. The covered range then advances over the
     /// written rows when everything before them is already covered.
     /// </summary>
     internal static bool TryRecordLive(
@@ -668,46 +692,21 @@ internal static class ArchiveToolEffects
         Execute("SAVEPOINT archive_tool_effects_live");
         try
         {
-            if (inserted.Any(item => item.Record.Role == "tool"))
-            {
-                var pending = inserted
-                    .GroupBy(item => item.Record.SessionId)
-                    .ToDictionary(
-                        group => group.Key,
-                        group =>
-                            (IReadOnlyDictionary<long, JsonObject>)
-                                group.ToDictionary(
-                                    item => item.Record.Seq,
-                                    item => item.Record.Message
-                                )
-                    );
-                var rows = new List<ToolEffectRow>();
-                foreach (var (record, _) in inserted)
-                {
-                    if (record.Role != "tool")
-                        continue;
-                    var context = Context(
-                        connection,
-                        transaction,
-                        record.SessionId,
-                        record.Seq,
-                        pending[record.SessionId]
-                    );
-                    rows.AddRange(
+            Insert(
+                connection,
+                transaction,
+                inserted
+                    .Where(item => item.Record.Role == "tool")
+                    .SelectMany(item =>
                         FromToolMessage(
-                            record.SessionId,
-                            record.Agent,
-                            record.Seq,
-                            record.Timestamp,
-                            record.Message,
-                            context.Anchor,
-                            context.AnchorSeq,
-                            context.Initiator
+                            item.Record.SessionId,
+                            item.Record.Agent,
+                            item.Record.Seq,
+                            item.Record.Timestamp,
+                            item.Record.Message
                         )
-                    );
-                }
-                Insert(connection, transaction, rows);
-            }
+                    )
+            );
             var first = inserted.Min(item => item.RowId);
             var last = inserted.Max(item => item.RowId);
             using (var advance = connection.CreateCommand())

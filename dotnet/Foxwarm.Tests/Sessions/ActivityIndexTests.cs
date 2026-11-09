@@ -12,7 +12,7 @@ public sealed class ActivityIndexTests
     private static ResponsesClientOptions Options =>
         new(new Uri("http://127.0.0.1:1"), "wire", "a", "", "", 713);
 
-    private sealed class ScriptedChat(params JsonObject[][] turns) : IChatService
+    internal sealed class ScriptedChat(params JsonObject[][] turns) : IChatService
     {
         private int index;
 
@@ -39,7 +39,7 @@ public sealed class ActivityIndexTests
         }
     }
 
-    private static JsonObject Call(string id, string name, JsonObject args) =>
+    internal static JsonObject Call(string id, string name, JsonObject args) =>
         new()
         {
             ["id"] = id,
@@ -47,7 +47,7 @@ public sealed class ActivityIndexTests
             ["args"] = args,
         };
 
-    private sealed class Fixture : IAsyncDisposable
+    internal sealed class Fixture : IAsyncDisposable
     {
         internal required TempDirectory Temp { get; init; }
         internal required string Work { get; init; }
@@ -55,6 +55,10 @@ public sealed class ActivityIndexTests
         internal required SessionOwner Owner { get; init; }
         internal required ToolRegistry Registry { get; init; }
         internal required Foxwarm.McpClient Mcp { get; init; }
+
+        // Queues input the next turn commits before its model request.
+        internal Task InputAsync(QueueItem item) =>
+            Owner.Registry.Ingress.EnqueueAsync(Owner.Id, item);
 
         internal static async Task<Fixture> Create()
         {
@@ -99,6 +103,9 @@ public sealed class ActivityIndexTests
                 tools
             );
             Assert.True(await host.TryClaimBusyAsync());
+            var queued = Owner.Entry.WithState(state => state.Queue.ToArray());
+            if (queued.Length > 0)
+                await host.AppendQueuedInputsAsync(queued);
             await host.ChatAsync("turn");
             await host.ReleaseBusyAsync();
         }
@@ -141,7 +148,7 @@ public sealed class ActivityIndexTests
         }
     }
 
-    private static JsonObject[] Items(JsonObject page) =>
+    internal static JsonObject[] Items(JsonObject page) =>
         page["items"]!.AsArray().OfType<JsonObject>().ToArray();
 
     private static string? Text(JsonNode? value) => SessionWait.Text(value);
@@ -358,47 +365,87 @@ public sealed class ActivityIndexTests
     [Fact]
     public void Initiators_come_from_sender_records_and_trusted_wrappers()
     {
-        JsonObject Message(string? system, JsonObject? sender = null)
+        JsonObject Message(JsonObject? sender, params string[] parts)
         {
             var message = new JsonObject
             {
                 ["role"] = "user",
-                ["parts"] = new JsonArray(new JsonObject { ["system"] = system ?? "" }),
+                ["parts"] = new JsonArray(
+                    parts.Select(part => (JsonNode)new JsonObject { ["system"] = part }).ToArray()
+                ),
             };
             if (sender is not null)
                 message["__meta"] = new JsonObject { ["sender"] = sender };
             return message;
         }
-        var admin = ArchiveToolEffects.Initiator(1, Message(null, InputSender.Administrator()))!;
-        Assert.Equal(("administrator", null), (admin.Kind, admin.Id));
-        var alice = ArchiveToolEffects.Initiator(1, Message(null, InputSender.Identity("alice")))!;
-        Assert.Equal(("identity", "alice"), (alice.Kind, alice.Id));
-        var child = ArchiveToolEffects.Initiator(
-            2,
-            Message(
-                "<foxwarm-message type=\"inter-agent\" sourceSessionId=\"lead\" time=\"t\">\nhi\n</foxwarm-message>"
-            )
-        )!;
-        Assert.Equal(("session", "lead"), (child.Kind, child.Id));
-        var timer = ArchiveToolEffects.Initiator(
-            3,
-            Message(
-                "<foxwarm-message type=\"timer\" timerId=\"tmr_1\" mode=\"once\">\nx\n</foxwarm-message>"
-            )
-        )!;
-        Assert.Equal(("timer", "tmr_1"), (timer.Kind, timer.Id));
-        var hook = ArchiveToolEffects.Initiator(
-            4,
-            Message("<foxwarm-system kind=\"external-input\" webhook=\"deploy\" />")
-        )!;
-        Assert.Equal(("webhook", "deploy"), (hook.Kind, hook.Id));
-        // Background notices are not initiators.
-        Assert.Null(
-            ArchiveToolEffects.Initiator(
-                5,
-                Message("<foxwarm-system kind=\"event\" type=\"background-process-finished\" />")
+        (string, string?, string?)? Read(params string[] parts) =>
+            TurnInitiator.FromInput(1, Message(null, parts)) is { } found
+                ? (found.Kind, found.Id, found.From)
+                : null;
+        Assert.Equal(
+            "administrator",
+            TurnInitiator.FromInput(1, Message(InputSender.Administrator(), "x"))!.Kind
+        );
+        Assert.Equal(
+            ("identity", "alice"),
+            TurnInitiator.FromInput(1, Message(InputSender.Identity("alice"), "x")) is { } alice
+                ? (alice.Kind, alice.Id)
+                : default
+        );
+        const string tag = "<foxwarm-system kind=\"session\" currentSessionId=\"child\" />";
+        const string handoff =
+            "<foxwarm-message type=\"inter-agent\" sourceSessionId=\"lead\" time=\"t\">\nhi\n</foxwarm-message>";
+        Assert.Equal(("session", "lead", null), Read(handoff));
+        // A new Session's opening tags come first; the input after them decides.
+        Assert.Equal(("session", "lead", null), Read(tag, handoff));
+        Assert.Equal(
+            ("session", "lead", null),
+            Read(
+                tag,
+                "<foxwarm-system kind=\"session-boundary\" event=\"new-child\" parentSessionId=\"lead\" currentSessionId=\"child\" />",
+                handoff
             )
         );
+        Assert.Equal(
+            ("task", "task_1", "lead"),
+            Read(
+                tag,
+                "<foxwarm-message type=\"task\" taskId=\"task_1\" event=\"assigned\" sourceSessionId=\"lead\">\nx\n</foxwarm-message>"
+            )
+        );
+        Assert.Equal(
+            ("timer", "tmr_1", null),
+            Read(
+                "<foxwarm-message type=\"timer\" timerId=\"tmr_1\" mode=\"once\">\nx\n</foxwarm-message>"
+            )
+        );
+        Assert.Equal(
+            ("channel", "tg:1", "bob"),
+            Read(
+                "<foxwarm-system kind=\"channel-mode\" mode=\"send-only\" />",
+                "<foxwarm-message type=\"channel\" channelInstanceId=\"tg\" channelType=\"telegram\" channelTargetId=\"tg:1\" sender=\"bob\">"
+            )
+        );
+        Assert.Equal(
+            ("webhook", "deploy", null),
+            Read("<foxwarm-system kind=\"external-input\" webhook=\"deploy\">")
+        );
+        Assert.Equal(
+            ("mcp-client", "ci-bot", null),
+            Read("<foxwarm-system kind=\"external-input\" externalId=\"ci-bot\" contextId=\"c\">")
+        );
+        Assert.Equal(
+            ("mcp-server", "ci", null),
+            Read("<foxwarm-system kind=\"external-input\" server=\"ci\" endpoint=\"e\">")
+        );
+        Assert.Equal(
+            ("trigger", null, null),
+            Read("<foxwarm-message type=\"trigger\" eventType=\"trigger\">\nx\n</foxwarm-message>")
+        );
+        Assert.Equal(("user", null, null), Read("plain console text"));
+        // Background notices are not initiators.
+        Assert.Null(Read("<foxwarm-system kind=\"event\" type=\"background-process-finished\" />"));
+        Assert.Null(Read(tag));
     }
 
     [Fact]

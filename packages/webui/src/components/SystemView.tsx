@@ -46,7 +46,7 @@ const SECTION_SUBTITLES: Record<SystemSection, string> = {
   timers: 'Scheduled messages and scripts, their next runs and recent results.',
   webhooks: 'Events from outside services, where they go and what arrived recently.',
   usage: 'Model requests, tokens and estimated cost across the installation.',
-  activity: 'Who ran which tools, on which nodes, and what happened.',
+  activity: 'Who ran which tools, on which Nodes, and what happened.',
 }
 
 interface SystemViewProps {

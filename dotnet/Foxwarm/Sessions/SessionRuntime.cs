@@ -191,8 +191,11 @@ internal sealed class SessionRuntime(SessionManager manager)
     }
 
     /// <summary>Runs a webhook handler as an unattended ToolScript owned by the target Session.</summary>
-    internal Task<JsonObject?> RunWebhookScriptAsync(string id, JsonObject script) =>
-        manager.RunWebhookScriptAsync(id, script);
+    internal Task<JsonObject?> RunWebhookScriptAsync(
+        string id,
+        JsonObject script,
+        string? webhookId = null
+    ) => manager.RunWebhookScriptAsync(id, script, webhookId);
 
     internal Task<JsonObject> ReadScriptRunAsync(
         string runId,

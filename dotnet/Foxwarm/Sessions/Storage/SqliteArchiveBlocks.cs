@@ -527,13 +527,17 @@ public sealed partial class SqliteArchiveMessageStore
     {
         var preparedBlocks = blocks.Select(PrepareBlock).ToArray();
         var preparedMessages = messages.Select(ValidateRecord).ToArray();
-        return await EnqueueWriteAsync(
-                databasePath,
-                (connection, tx) =>
-                    (
-                        WriteBlocks(connection, tx, preparedBlocks),
-                        WriteMessages(connection, tx, preparedMessages)
-                    )
+        var notice = new ToolEffectsNotice();
+        return await AfterCommitAsync(
+                EnqueueWriteAsync(
+                    databasePath,
+                    (connection, tx) =>
+                        (
+                            WriteBlocks(connection, tx, preparedBlocks),
+                            WriteMessages(connection, tx, preparedMessages, notice)
+                        )
+                ),
+                notice
             )
             .ConfigureAwait(false);
     }

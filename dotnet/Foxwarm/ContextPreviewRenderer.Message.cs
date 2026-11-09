@@ -44,7 +44,9 @@ internal sealed partial class ContextPreviewRenderer
 
     private static string Response(JsonObject response)
     {
-        response = (JsonObject)Foxwarm.Images.ImageTransport.Project(response)!;
+        response = Foxwarm.Sessions.InputSender.Without(
+            (JsonObject)Foxwarm.Images.ImageTransport.Project(response)!
+        )!;
         if (response["response"] is not JsonObject value)
             return Unknown(response["response"]);
         if (value["error"] is not null)

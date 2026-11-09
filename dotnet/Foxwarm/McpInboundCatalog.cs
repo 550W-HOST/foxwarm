@@ -302,6 +302,12 @@ internal sealed class McpInboundCatalog
                 target["server"] = scope;
             if (source == "node" && scope is not null)
                 target["node"] = scope;
+            if (
+                callArgs["action"] is JsonValue actionValue
+                && actionValue.TryGetValue<string>(out var action)
+                && action is { Length: > 0 and <= 40 }
+            )
+                target["action"] = action;
             manager.Activity.RecordDirect(() =>
                 ArchiveToolEffects.FromDirectCall(
                     null,
@@ -317,13 +323,9 @@ internal sealed class McpInboundCatalog
                             ["error"] = new JsonObject { ["type"] = "external_call_failed" },
                         }
                         : new JsonObject(),
-                    manager.RedactActivity(
-                        SessionToolExecutor.ToolArgsPreview(tool, callArgs),
-                        null
-                    ),
-                    new(0, "external", context.ExternalId),
-                    null,
-                    "external:" + context.ExternalId
+                    SessionToolExecutor.ActivitySummary(manager, tool, callArgs, null),
+                    new(0, "mcp-client", context.ExternalId),
+                    null
                 )
             );
         }

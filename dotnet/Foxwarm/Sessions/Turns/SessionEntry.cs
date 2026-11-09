@@ -62,6 +62,9 @@ public sealed class SessionEntry
     internal bool HasProcessor => Volatile.Read(ref processorClaim) != 0;
     internal Action<JsonObject, bool>? ToolProgress { get; set; }
     internal Action<Foxwarm.Channels.ChannelTurnProgress>? StructuredProgress { get; set; }
+
+    /// <summary>Who started the current turn: the latest committed input that names a starter.</summary>
+    internal ToolEffectInitiator? ActivityInitiator { get; set; }
     internal Func<Task>? TurnStopped { get; set; }
     internal Func<JsonObject, Task>? AssistantCommitted { get; set; }
     internal Func<Foxwarm.Models.ModelRetryEvent, bool, bool, Task>? RetryPresented { get; set; }

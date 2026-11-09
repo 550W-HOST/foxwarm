@@ -48,7 +48,7 @@ Read preserves `sessionId/start/count/total/executionState/preview`, adds exclus
 
 False/omitted `allowReply` creates no reply destination; legacy `reply` remains read-compatible and conflicting booleans reject before effect. True uses the negotiated version-1 capability, real physical GET and temporary registered text channel supplied by [Session notifications/replies](./dotnet-mcp-notifications.md). The five ordinary wrappers and external policy identities are unchanged.
 
-Each `foxwarm_call` is recorded in the [activity index](./activity-index.md) as an `external-mcp` direct record with the external principal, the concrete tool ID, a masked argument summary and whether it failed. Recording is queued after the call and never changes its result.
+Each `foxwarm_call` is recorded in the [activity index](./activity-index.md) as an `external-mcp` direct record with the external principal as its `mcp-client` initiator, the concrete tool ID and action, a masked argument summary and whether it failed. Recording is queued after the call and never changes its result.
 
 ## CLI effects and bounded ownership
 

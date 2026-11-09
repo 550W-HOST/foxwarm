@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight, ExternalLink, ListFilter, Search, X } from 'lucide-react'
 import { webUiRealtime } from '../realtime'
 import {
-  ACTIVITY_KINDS, ACTIVITY_ORIGINS, ACTIVITY_OUTCOMES, OUTCOME_LABELS, activityInitiatorLabel, activityToolLabel, loadActivity,
+  ACTIVITY_KINDS, ACTIVITY_ORIGINS, ACTIVITY_OUTCOMES, INITIATOR_KINDS, OUTCOME_LABELS, activityApprovalLabel, activityApproverLabel,
+  activityErrorLabel, activityInitiatorLabel, activityRuleLabel, activitySourceLabel, activityToolLabel, loadActivity, mergeActivity,
   type ActivityFilters, type ActivityItem, type ActivityPage,
 } from '../activity'
 import { openSessionAtSeq } from '../chatViewportState'
@@ -25,11 +26,14 @@ const SCOPE_LABELS: Array<{ key: keyof Scope; label: (value: string, scope: Scop
   { key: 'executionAgent', label: value => `Ran in Agent ${value}` },
   { key: 'node', label: value => `Node ${value}` },
   { key: 'tool', label: value => `Tool ${value}` },
-  { key: 'initiator', label: value => `Started by ${value}` },
+  { key: 'initiator', label: value => `Started by ${INITIATOR_KINDS[value] || value}` },
 ]
 
 // Requests from elsewhere apply once, not again when the section remounts.
 let appliedRequest = 0
+
+// Below this list width the columns no longer fit; each call becomes a stacked entry.
+const STACKED_BELOW = 960
 
 const formatTime = (time: number) => {
   const date = new Date(time)
@@ -45,38 +49,45 @@ const formatDuration = (ms: number | null) => ms === null ? '' : ms < 1000 ? `${
 function OutcomeBadge({ item }: { item: ActivityItem }) {
   const ok = item.outcome === 'ok'
   const tone = ok ? 'text-fw-success' : item.outcome === 'denied' || item.outcome === 'error' ? 'text-fw-danger' : 'text-fw-warning'
+  const approval = item.approval && item.approval !== 'pending' ? activityApprovalLabel(item.approval) : null
+  const approver = activityApproverLabel(item.approver)
   return (
-    <span className={`inline-flex items-center gap-1 ${tone}`} data-activity-outcome={item.outcome}>
+    <span className={`inline-flex flex-wrap items-center gap-1 ${tone}`} data-activity-outcome={item.outcome}>
       {OUTCOME_LABELS[item.outcome] || item.outcome}
-      {item.approval && item.approval !== 'pending' ? <span className="rounded bg-fw-section px-1 text-[10px] text-fw-text-muted" title={item.approver ? `Decided by ${item.approver}` : undefined}>approval {item.approval}</span> : null}
+      {approval ? <span className="rounded bg-fw-section px-1 text-[10px] text-fw-text-muted" title={approver ? `${approval} by ${approver}` : undefined}>{approval}</span> : null}
     </span>
   )
 }
 
-function Detail({ item }: { item: ActivityItem }) {
-  const rows: Array<[string, string]> = []
-  if (item.summary) rows.push(['Arguments', item.summary])
-  if (item.source) rows.push(['Tool', `${item.source}${item.server ? `:${item.server}` : ''} / ${item.tool}`])
-  rows.push(['Node', item.node || 'Not recorded'])
-  if (item.refs?.cwd) rows.push(['Working directory', item.refs.cwd])
-  if (item.refs?.paths?.length) rows.push(['Files', item.refs.paths.join('\n')])
-  if (item.refs?.execId) rows.push(['Execution', item.refs.execId])
-  if (item.refs?.deliveries?.length) rows.push(['Delivered to', item.refs.deliveries.map(delivery => delivery.sessionId).join(', ')])
-  if (item.rules?.length) rows.push(['Rules', item.rules.map(rule => `${rule.layer === 'global' ? 'Global' : rule.layer.replace(/^agent:/, 'Agent ')} · ${rule.id} · ${rule.effect}`).join('\n')])
-  if (item.approval) rows.push(['Approval', `${item.approval}${item.approver ? ` by ${item.approver}` : ''}`])
-  if (item.errorType && item.outcome !== 'ok') rows.push(['Error', item.errorType])
-  if (item.agent) rows.push(['Agent when it ran', item.agent])
-  if (item.currentAgent && item.currentAgent !== item.agent) rows.push(['Agent now', item.currentAgent])
-  if (item.deleted && item.sessionId) rows.push(['Session', 'Deleted'])
-  if (item.runId) rows.push(['Script run', item.runId])
-  rows.push(['Started by', activityInitiatorLabel(item)])
-  if (item.durationMs !== null) rows.push(['Duration', formatDuration(item.durationMs)])
+function Detail({ item, stacked }: { item: ActivityItem; stacked: boolean }) {
+  // [label, value, shown as code]
+  const rows: Array<[string, string, boolean]> = []
+  if (item.summary) rows.push(['Arguments', item.summary, true])
+  const source = activitySourceLabel(item)
+  rows.push(['Tool', source ? `${item.tool} · ${source}` : item.tool, false])
+  rows.push(['Node', item.node || 'Not recorded', false])
+  if (item.refs?.cwd) rows.push(['Working directory', item.refs.cwd, true])
+  if (item.refs?.paths?.length) rows.push(['Files', item.refs.paths.join('\n'), true])
+  if (item.refs?.execId) rows.push(['Execution', item.refs.execId, true])
+  if (item.refs?.deliveries?.length) rows.push(['Delivered to', item.refs.deliveries.map(delivery => delivery.sessionId).join(', '), false])
+  if (item.rules?.length) rows.push(['Rules', item.rules.map(activityRuleLabel).join('\n'), false])
+  if (item.approval) {
+    const approver = activityApproverLabel(item.approver)
+    rows.push(['Approval', `${activityApprovalLabel(item.approval)}${approver ? ` by ${approver}` : ''}`, false])
+  }
+  if (item.errorType && item.outcome !== 'ok') rows.push(['Error', activityErrorLabel(item.errorType)!, false])
+  if (item.agent) rows.push(['Agent when it ran', item.agent, false])
+  if (item.currentAgent && item.currentAgent !== item.agent) rows.push(['Agent now', item.currentAgent, false])
+  if (item.deleted && item.sessionId) rows.push(['Session', 'Deleted', false])
+  if (item.runId) rows.push(['Script run', item.runId, true])
+  rows.push(['Started by', activityInitiatorLabel(item), false])
+  if (item.durationMs !== null) rows.push(['Duration', formatDuration(item.durationMs), false])
   return (
-    <dl className="grid grid-cols-[minmax(6rem,10rem)_1fr] gap-x-3 gap-y-1 px-4 pb-3 pl-10 text-[11px]" data-activity-detail>
-      {rows.map(([label, value]) => (
+    <dl className={`grid gap-x-3 text-[11px] ${stacked ? 'grid-cols-1 gap-y-0.5 px-3 pb-3' : 'grid-cols-[minmax(6rem,10rem)_1fr] gap-y-1 px-4 pb-3 pl-10'}`} data-activity-detail>
+      {rows.map(([label, value, code]) => (
         <div key={label} className="contents">
-          <dt className="text-fw-text-muted">{label}</dt>
-          <dd className="min-w-0 whitespace-pre-wrap break-words font-mono text-fw-text">{value}</dd>
+          <dt className={`text-fw-text-muted ${stacked ? 'pt-1.5' : ''}`}>{label}</dt>
+          <dd className={`min-w-0 whitespace-pre-wrap break-words text-fw-text ${code ? 'font-mono' : ''}`}>{value}</dd>
         </div>
       ))}
     </dl>
@@ -97,13 +108,26 @@ export default function SystemActivity({ request, onOpenSession }: SystemActivit
   const [text, setText] = useState('')
   const [search, setSearch] = useState('')
   const [scope, setScope] = useState<Scope>({})
-  const [page, setPage] = useState<ActivityPage | null>(null)
-  const [extra, setExtra] = useState<ActivityItem[]>([])
-  const [cursor, setCursor] = useState<ActivityPage['next']>(null)
+  const [list, setList] = useState<{ items: ActivityItem[]; next: ActivityPage['next'] } | null>(null)
+  const [coverage, setCoverage] = useState<ActivityPage['coverage'] | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [expanded, setExpanded] = useState<string | null>(null)
+  const [width, setWidth] = useState(0)
   const generation = useRef(0)
+  const listRef = useRef(list)
+  listRef.current = list
+  const container = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    const element = container.current
+    if (!element) return
+    setWidth(element.clientWidth)
+    const observer = new ResizeObserver(entries => setWidth(entries[0]?.contentRect.width ?? element.clientWidth))
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [])
+  const stacked = width > 0 && width < STACKED_BELOW
 
   useEffect(() => {
     if (!request || request.nonce <= appliedRequest) return
@@ -135,13 +159,14 @@ export default function SystemActivity({ request, onOpenSession }: SystemActivit
   }, [period, kind, outcome, origin, search, scope])
   const filtersKey = JSON.stringify({ ...filters, from: period })
 
+  // A filter change starts the list over.
   const reload = useCallback(async () => {
     const current = ++generation.current
     setLoading(true)
     try {
       const next = await loadActivity(filters)
       if (current !== generation.current) return
-      setPage(next); setExtra([]); setCursor(next.next); setError('')
+      setList({ items: next.items, next: next.next }); setCoverage(next.coverage); setError('')
     } catch (cause) {
       if (current === generation.current) setError(cause instanceof Error ? cause.message : String(cause))
     } finally {
@@ -149,17 +174,37 @@ export default function SystemActivity({ request, onOpenSession }: SystemActivit
     }
   }, [filtersKey])
 
+  // New activity goes on top; rows loaded with "Show earlier activity" stay.
+  const refresh = useCallback(async () => {
+    const current = generation.current
+    try {
+      const first = await loadActivity(filters)
+      if (current !== generation.current) return
+      let fresh = { items: first.items, next: first.next }
+      for (let pages = 0; pages < 5 && fresh.next && !mergeActivity(listRef.current ?? { items: [], next: null }, fresh); pages++) {
+        const more = await loadActivity(filters, fresh.next)
+        if (current !== generation.current) return
+        fresh = { items: [...fresh.items, ...more.items], next: more.next }
+      }
+      setList(loaded => mergeActivity(loaded ?? { items: [], next: null }, fresh) ?? fresh)
+      setCoverage(first.coverage); setError('')
+    } catch (cause) {
+      if (current === generation.current) setError(cause instanceof Error ? cause.message : String(cause))
+    }
+  }, [filtersKey])
+
   useEffect(() => {
     void reload()
     let pending: number | null = null
-    const schedule = () => { if (pending === null) pending = window.setTimeout(() => { pending = null; void reload() }, 1000) }
+    const schedule = () => { if (pending === null) pending = window.setTimeout(() => { pending = null; void refresh() }, 1000) }
     const unsubscribe = webUiRealtime.subscribeSessionList([], {
       onOpen: schedule,
       onMessage: message => { if (message.type === 'activity-changed') schedule() },
     })
     return () => { if (pending !== null) window.clearTimeout(pending); unsubscribe(); generation.current++ }
-  }, [reload])
+  }, [reload, refresh])
 
+  const cursor = list?.next ?? null
   const loadMore = async () => {
     if (!cursor) return
     const current = generation.current
@@ -167,7 +212,9 @@ export default function SystemActivity({ request, onOpenSession }: SystemActivit
     try {
       const next = await loadActivity(filters, cursor)
       if (current !== generation.current) return
-      setExtra(items => [...items, ...next.items]); setCursor(next.next)
+      setList(loaded => loaded && loaded.next === cursor
+        ? { items: [...loaded.items, ...next.items.filter(item => !loaded.items.some(existing => existing.key === item.key))], next: next.next }
+        : loaded)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
     } finally {
@@ -175,16 +222,15 @@ export default function SystemActivity({ request, onOpenSession }: SystemActivit
     }
   }
 
-  const items = page ? [...page.items, ...extra] : []
+  const items = list?.items ?? []
   const narrow = (patch: Scope) => setScope(value => ({ ...value, ...patch }))
   const chips = SCOPE_LABELS.filter(entry => typeof scope[entry.key] === 'string' && scope[entry.key])
-  const coverage = page?.coverage
   const segment = (active: boolean) => `rounded-md px-3 py-1 text-xs font-medium ${active ? 'bg-fw-text-strong text-fw-surface' : 'text-fw-text-muted hover:bg-fw-hover'}`
   const select = 'h-9 min-w-0 rounded-lg border border-transparent bg-transparent px-3 text-xs font-medium text-fw-text outline-none hover:bg-fw-hover focus:border-fw-accent-border'
   const cellLink = 'min-w-0 truncate text-left hover:text-fw-accent hover:underline'
 
   return (
-    <div className="space-y-4" data-system-activity data-activity-kind={kind}>
+    <div ref={container} className="min-w-0 space-y-4" data-system-activity data-activity-kind={kind} data-activity-layout={stacked ? 'stacked' : 'table'}>
       <div className="flex flex-wrap items-center justify-between gap-3 px-1">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           <div className="inline-flex rounded-lg border border-fw-border bg-fw-section p-0.5" role="group" aria-label="Activity period">
@@ -203,7 +249,7 @@ export default function SystemActivity({ request, onOpenSession }: SystemActivit
           </select>
           <label className="relative flex items-center">
             <Search className="pointer-events-none absolute left-2 h-3.5 w-3.5 text-fw-text-muted" />
-            <input type="search" aria-label="Search activity" placeholder="Search" value={text} onChange={event => setText(event.target.value)} className="h-9 w-44 rounded-lg border border-fw-border bg-fw-surface pl-7 pr-2 text-xs text-fw-text-strong outline-none focus:border-fw-accent-border" />
+            <input type="search" aria-label="Search activity" placeholder="Search" value={text} onChange={event => setText(event.target.value)} className="h-9 w-36 rounded-lg sm:w-44 border border-fw-border bg-fw-surface pl-7 pr-2 text-xs text-fw-text-strong outline-none focus:border-fw-accent-border" />
           </label>
         </div>
         {coverage && !coverage.complete ? <span className="text-xs text-fw-text-muted" data-activity-coverage>Adding earlier activity…</span> : null}
@@ -220,16 +266,56 @@ export default function SystemActivity({ request, onOpenSession }: SystemActivit
       ) : null}
       {error ? <div className="flex items-center justify-between gap-3 rounded-xl border border-fw-danger-border bg-fw-danger-section px-3 py-2 text-xs text-fw-danger"><span>{error}</span><button type="button" onClick={() => { void reload() }} className="font-medium underline">Retry</button></div> : null}
 
-      <section className={`overflow-hidden rounded-xl border border-fw-border bg-fw-surface transition-opacity ${loading && !page ? 'opacity-60' : ''}`} data-activity-list>
+      <section className={`overflow-hidden rounded-xl border border-fw-border bg-fw-surface transition-opacity ${loading && !list ? 'opacity-60' : ''}`} data-activity-list>
+        {stacked ? (
+          <ul>
+            {items.map(item => {
+              const open = expanded === item.key
+              const session = item.currentSessionId || item.sessionId
+              return (
+                <li key={item.key} className="border-t border-fw-border-muted first:border-0" data-activity-row={item.key} data-activity-row-kind={item.kind}>
+                  <div className="flex min-w-0 items-start gap-2 px-3 py-2 text-xs">
+                    <button type="button" aria-expanded={open} aria-label={open ? 'Hide details' : 'Show details'} onClick={() => setExpanded(open ? null : item.key)} className="mt-0.5 shrink-0 rounded p-0.5 text-fw-text-muted hover:bg-fw-hover hover:text-fw-text">
+                      {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                    </button>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex min-w-0 items-start justify-between gap-2">
+                        <button type="button" onClick={() => narrow({ tool: item.tool })} className={`${cellLink} font-medium text-fw-text-strong`}>{activityToolLabel(item)}{item.sub ? <span className="font-normal text-fw-text-muted"> · in script</span> : null}</button>
+                        <span className="shrink-0 text-right"><OutcomeBadge item={item} /></span>
+                      </div>
+                      {item.summary ? <div className="truncate font-mono text-[11px] text-fw-text-muted" title={item.summary}>{item.summary}</div> : null}
+                      <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] text-fw-text-muted">
+                        <span className="tabular-nums" title={new Date(item.startedAt).toLocaleString()}>{formatTime(item.startedAt)}</span>
+                        <span aria-hidden>·</span>
+                        {session ? (
+                          <span className="flex min-w-0 max-w-full items-center gap-1">
+                            <button type="button" onClick={() => narrow({ sessionId: session, tree: false })} title={`Show activity of ${session}`} className={`${cellLink} text-fw-text`}>{item.title || session}</button>
+                            {!item.deleted ? <button type="button" aria-label={`Open ${session} at this call`} title="Open in session" onClick={() => openSessionAtSeq(session, item.seq ?? undefined, onOpenSession)} className="shrink-0 rounded p-0.5 hover:bg-fw-hover hover:text-fw-accent" data-activity-open={session}><ExternalLink className="h-3 w-3" /></button> : null}
+                          </span>
+                        ) : <span>Outside sessions</span>}
+                        {item.node ? <><span aria-hidden>·</span><button type="button" onClick={() => narrow({ node: item.node! })} className={cellLink} title="Node">{item.node}</button></> : null}
+                        <span aria-hidden>·</span>
+                        <span className="min-w-0 truncate" title="Started by">{activityInitiatorLabel(item)}</span>
+                      </div>
+                    </div>
+                  </div>
+                  {open ? <div className="bg-fw-section/40 pt-1"><Detail item={item} stacked /></div> : null}
+                </li>
+              )
+            })}
+            {list && !items.length ? <li className="px-4 py-8 text-center text-sm text-fw-text-muted">{kind === 'changes' ? 'No changes match these filters.' : 'No activity matches these filters.'}</li> : null}
+            {!list && !error ? <li className="px-4 py-8 text-center text-sm text-fw-text-muted">{loading ? 'Loading activity…' : ''}</li> : null}
+          </ul>
+        ) : (
         <table className="w-full table-fixed text-xs">
           <thead className="border-b border-fw-border-muted text-left text-[10px] text-fw-text-muted">
             <tr>
               <th className="w-36 px-4 py-2 font-medium">Time</th>
-              <th className="w-48 px-2 py-2 font-medium">Session</th>
-              <th className="hidden w-32 px-2 py-2 font-medium md:table-cell">Node</th>
+              <th className="w-44 px-2 py-2 font-medium">Session</th>
+              <th className="w-28 px-2 py-2 font-medium">Node</th>
               <th className="px-2 py-2 font-medium">Call</th>
-              <th className="w-32 px-2 py-2 font-medium">Result</th>
-              <th className="hidden w-40 px-4 py-2 font-medium lg:table-cell">Started by</th>
+              <th className="w-28 px-2 py-2 font-medium">Result</th>
+              <th className="w-36 px-4 py-2 font-medium">Started by</th>
             </tr>
           </thead>
           <tbody>
@@ -253,28 +339,29 @@ export default function SystemActivity({ request, onOpenSession }: SystemActivit
                       </div>
                     ) : <span className="text-fw-text-muted">Outside sessions</span>}
                     {item.agent || item.currentAgent ? (
-                      <button type="button" onClick={() => narrow({ executionAgent: item.agent || undefined })} className={`${cellLink} block text-[11px] text-fw-text-muted`} title="Agent when it ran">
+                      <button type="button" onClick={() => narrow({ executionAgent: item.agent || undefined })} className={`${cellLink} block max-w-full text-[11px] text-fw-text-muted`} title="Agent when it ran">
                         {item.agent}{item.currentAgent && item.currentAgent !== item.agent ? ` → ${item.currentAgent}` : ''}{item.deleted ? ' · deleted' : ''}
                       </button>
                     ) : null}
                   </td>
-                  <td className="hidden px-2 py-2 md:table-cell">
-                    {item.node ? <button type="button" onClick={() => narrow({ node: item.node! })} className={`${cellLink} block text-fw-text`}>{item.node}</button> : <span className="text-fw-text-muted">—</span>}
+                  <td className="px-2 py-2">
+                    {item.node ? <button type="button" onClick={() => narrow({ node: item.node! })} className={`${cellLink} block max-w-full text-fw-text`}>{item.node}</button> : <span className="text-fw-text-muted">—</span>}
                   </td>
                   <td className="px-2 py-2">
-                    <button type="button" onClick={() => narrow({ tool: item.tool })} className={`${cellLink} block font-medium text-fw-text-strong`}>{activityToolLabel(item)}{item.sub ? <span className="font-normal text-fw-text-muted"> · in script</span> : null}</button>
+                    <button type="button" onClick={() => narrow({ tool: item.tool })} className={`${cellLink} block max-w-full font-medium text-fw-text-strong`}>{activityToolLabel(item)}{item.sub ? <span className="font-normal text-fw-text-muted"> · in script</span> : null}</button>
                     {item.summary ? <div className="truncate font-mono text-[11px] text-fw-text-muted" title={item.summary}>{item.summary}</div> : null}
                   </td>
                   <td className="px-2 py-2"><OutcomeBadge item={item} /></td>
-                  <td className="hidden truncate px-4 py-2 text-fw-text-muted lg:table-cell" title={activityInitiatorLabel(item)}>{activityInitiatorLabel(item)}</td>
+                  <td className="truncate px-4 py-2 text-fw-text-muted" title={activityInitiatorLabel(item)}>{activityInitiatorLabel(item)}</td>
                 </tr>,
-                open ? <tr key={`${item.key}:detail`} className="bg-fw-section/40"><td colSpan={6}><Detail item={item} /></td></tr> : null,
+                open ? <tr key={`${item.key}:detail`} className="bg-fw-section/40"><td colSpan={6}><Detail item={item} stacked={false} /></td></tr> : null,
               ]
             })}
-            {page && !items.length ? <tr><td colSpan={6} className="px-4 py-8 text-center text-sm text-fw-text-muted">{kind === 'changes' ? 'No changes match these filters.' : 'No activity matches these filters.'}</td></tr> : null}
-            {!page && !error ? <tr><td colSpan={6} className="px-4 py-8 text-center text-sm text-fw-text-muted">{loading ? 'Loading activity…' : ''}</td></tr> : null}
+            {list && !items.length ? <tr><td colSpan={6} className="px-4 py-8 text-center text-sm text-fw-text-muted">{kind === 'changes' ? 'No changes match these filters.' : 'No activity matches these filters.'}</td></tr> : null}
+            {!list && !error ? <tr><td colSpan={6} className="px-4 py-8 text-center text-sm text-fw-text-muted">{loading ? 'Loading activity…' : ''}</td></tr> : null}
           </tbody>
         </table>
+        )}
         {cursor ? (
           <div className="border-t border-fw-border-muted px-4 py-2">
             <button type="button" disabled={loading} onClick={() => { void loadMore() }} className="text-xs font-medium text-fw-accent hover:underline disabled:opacity-60" data-activity-more>{loading ? 'Loading…' : 'Show earlier activity'}</button>

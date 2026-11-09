@@ -10,7 +10,9 @@ internal sealed partial class SessionToolExecutor(
     ToolRegistry registry,
     bool unattended = false,
     // What started an unattended dispatcher, as approval requests name it: timer or webhook.
-    string unattendedOrigin = "timer"
+    string unattendedOrigin = "timer",
+    // The timer or webhook ID, for the activity record of an unattended run.
+    string? unattendedOriginId = null
 ) : ITurnToolExecutor, ITurnToolControl
 {
     private int finishPending;
@@ -114,7 +116,11 @@ internal sealed partial class SessionToolExecutor(
     private const int MaxApprovalRequests = 3;
 
     // Audit evidence of what a call resolved to. Display data, never routing or policy authority.
-    internal static JsonObject TargetRecord(ResolvedTool resolved)
+    // The action and argument summary let the activity index read a tool row on its own.
+    internal JsonObject TargetRecord(ResolvedTool resolved) =>
+        TargetRecord(resolved, ActivitySummary(sessions, resolved.Name, resolved.Args, hosted.Id));
+
+    internal static JsonObject TargetRecord(ResolvedTool resolved, string? summary)
     {
         var target = new JsonObject
         {
@@ -126,8 +132,23 @@ internal sealed partial class SessionToolExecutor(
             target["server"] = resolved.Server;
         if (resolved.InvocationName != resolved.Name)
             target["invocationName"] = resolved.InvocationName;
+        if (
+            SessionWait.Text(resolved.Args["action"]) is { Length: > 0 and <= 40 } action
+            && !action.Contains('\n')
+        )
+            target["action"] = action;
+        if (summary is not null)
+            target["summary"] = summary;
         return target;
     }
+
+    /// <summary>Argument preview for activity records, masked before it is shortened.</summary>
+    internal static string ActivitySummary(
+        SessionManager sessions,
+        string name,
+        JsonObject args,
+        string? sessionId
+    ) => ToolArgsPreview(name, sessions.RedactActivity(args, sessionId));
 
     // The deciding rule of each generic policy layer, named as approval records name them.
     internal static JsonArray RuleRecord(AuthorizationAssessment assessment) =>

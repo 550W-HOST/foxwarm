@@ -40,6 +40,8 @@ internal sealed partial class SessionManager
             ["name"] = name,
             ["response"] = value?.DeepClone(),
         };
+        // Script results reach the model; audit evidence in nested messages does not.
+        InputSender.Strip(response["response"]);
         var message = new JsonObject
         {
             ["role"] = "tool",

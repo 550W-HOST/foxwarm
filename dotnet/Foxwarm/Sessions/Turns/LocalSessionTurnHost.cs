@@ -99,6 +99,7 @@ public sealed partial class LocalSessionTurnHost
                 notifyMessages: false
             )
             .ConfigureAwait(false);
+        NoteInitiator(appended);
         entry.InvokeQueuedCommitted(entry.Snapshot(), appended);
     }
 
@@ -279,6 +280,7 @@ public sealed partial class LocalSessionTurnHost
                             ["time"] = ArchiveBlockRecord.LocalTimestamp(completedAt),
                             ["durationMs"] = duration,
                         };
+                    StampInitiator(toolParts);
                     var toolMessage = new JsonObject { ["role"] = "tool", ["parts"] = toolParts };
                     var canonicalTools = await AppendHistoryMessageStrictAsync(toolMessage)
                         .ConfigureAwait(false);
@@ -566,6 +568,7 @@ public sealed partial class LocalSessionTurnHost
                 notifyMessages: false
             )
             .ConfigureAwait(false);
+        NoteInitiator(appended);
         Interlocked.Increment(ref releaseCommits);
         releaseForeground?.Invoke();
         if (entry.TurnStopped is { } stopped)
@@ -827,6 +830,49 @@ public sealed partial class LocalSessionTurnHost
         if (value.TryGetValue<decimal>(out var decimalValue))
             return decimalValue == 0;
         return false;
+    }
+
+    // Audit record of who started the turn, kept on each of its tool rows.
+    private void NoteInitiator(IReadOnlyList<JsonObject> rows)
+    {
+        foreach (var row in rows)
+            if (Initiator(row) is { } initiator)
+                entry.ActivityInitiator = initiator;
+    }
+
+    private static ToolEffectInitiator? Initiator(JsonObject row) =>
+        SessionWait.Text(row["role"]) == "user"
+        && SessionWait.Number(row["__meta"]?["seq"]) is double seq
+            ? TurnInitiator.FromInput((long)seq, row)
+            : null;
+
+    private ToolEffectInitiator? CurrentInitiator()
+    {
+        if (entry.ActivityInitiator is { } known)
+            return known;
+        // A turn resumed after a restart finds its input in active history.
+        var history = entry.WithState(state => state.History.Snapshot());
+        for (var index = history.Count - 1; index >= 0; index--)
+            if (history[index].Role == "user" && Initiator(history[index].ToJson()) is { } found)
+                return entry.ActivityInitiator = found;
+        return null;
+    }
+
+    private void StampInitiator(JsonArray parts)
+    {
+        if (CurrentInitiator() is not { } initiator)
+            return;
+        foreach (
+            var response in parts
+                .OfType<JsonObject>()
+                .Select(part => part["functionResponse"])
+                .OfType<JsonObject>()
+        )
+        {
+            var meta = response["__meta"] as JsonObject ?? new JsonObject();
+            meta[TurnInitiator.Field] = initiator.ToJson();
+            response["__meta"] = meta;
+        }
     }
 
     private static JsonObject SessionTag(SessionState state) =>

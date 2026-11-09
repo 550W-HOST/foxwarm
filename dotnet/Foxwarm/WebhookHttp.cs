@@ -416,7 +416,7 @@ internal sealed class WebhookHttp
                 target,
                 () =>
                     Current(id, identity, hook)
-                        ? runtime.RunWebhookScriptAsync(target, script)
+                        ? runtime.RunWebhookScriptAsync(target, script, id)
                         : throw new InvalidOperationException(
                             "The webhook configuration changed before its handler ran."
                         )

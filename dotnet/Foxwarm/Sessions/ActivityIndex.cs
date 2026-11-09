@@ -40,6 +40,9 @@ internal sealed class ActivityIndex : IAsyncDisposable
     private Task backfill = Task.CompletedTask;
     private CancellationToken stop = CancellationToken.None;
     private bool started;
+
+    // Whether this process has checked the index for Sessions moved without it.
+    private bool verified;
     private bool rerun;
     private int changePending;
 
@@ -208,39 +211,18 @@ internal sealed class ActivityIndex : IAsyncDisposable
         value is null or DBNull ? 0 : Convert.ToInt64(value, CultureInfo.InvariantCulture);
 
     /// <summary>
-    /// Ensures the index and its checkpoints. A removed index, a shape version change, or an
-    /// index emptied while its checkpoints claim coverage starts over, so the backfill rebuilds
-    /// every derived row from the Archive. Only empty-table creation and small reads run on the
-    /// writer here, so this costs the same on any Archive size.
+    /// Ensures the index and its checkpoints. The schema step drops an index of another shape or
+    /// version; an index emptied while its checkpoints claim coverage also starts over, so the
+    /// backfill rebuilds every derived row from the Archive. Only empty-table creation and small
+    /// reads run on the writer here, so this costs the same on any Archive size.
     /// </summary>
     private Task<(long Low, long High)> PrepareAsync(CancellationToken token) =>
         WriteAsync(
             (connection, transaction) =>
             {
-                var exists = ArchiveToolEffects.TableExists(
-                    connection,
-                    transaction,
-                    ArchiveToolEffects.Table
-                );
-                var hasMetadata = ArchiveToolEffects.TableExists(
-                    connection,
-                    transaction,
-                    ArchiveToolEffects.MetadataTable
-                );
-                var version = hasMetadata
-                    ? ArchiveToolEffects.ReadMetadata(
-                        connection,
-                        transaction,
-                        ArchiveToolEffects.VersionKey
-                    )
-                    : null;
-                var reset = !exists || version != ArchiveToolEffects.Version;
-                if (exists && version is not null && version != ArchiveToolEffects.Version)
-                    Scalar(connection, transaction, $"DROP TABLE {ArchiveToolEffects.Table}");
                 ArchiveToolEffects.InitializeSchema(connection, transaction);
                 if (
-                    !reset
-                    && ArchiveToolEffects.ReadMetadata(
+                    ArchiveToolEffects.ReadMetadata(
                         connection,
                         transaction,
                         ArchiveToolEffects.HighKey
@@ -267,21 +249,11 @@ internal sealed class ActivityIndex : IAsyncDisposable
                     )
                         is not null
                 )
-                    reset = true;
-                if (reset)
-                {
                     Scalar(
                         connection,
                         transaction,
                         $"DELETE FROM {ArchiveToolEffects.MetadataTable} WHERE key IN ('{ArchiveToolEffects.LowKey}','{ArchiveToolEffects.HighKey}')"
                     );
-                    ArchiveToolEffects.WriteMetadata(
-                        connection,
-                        transaction,
-                        ArchiveToolEffects.VersionKey,
-                        ArchiveToolEffects.Version
-                    );
-                }
                 var top = Number(
                     Scalar(
                         connection,
@@ -318,6 +290,11 @@ internal sealed class ActivityIndex : IAsyncDisposable
             return;
         var (low, high) = await PrepareAsync(token).ConfigureAwait(false);
         using var source = OpenRead();
+        if (!Volatile.Read(ref verified))
+        {
+            await RepairMovedAsync(source, token, batchSize).ConfigureAwait(false);
+            Volatile.Write(ref verified, true);
+        }
         while (true)
         {
             token.ThrowIfCancellationRequested();
@@ -327,7 +304,14 @@ internal sealed class ActivityIndex : IAsyncDisposable
             if (top <= high)
                 break;
             var end = Math.Min(top, high + batchSize);
-            var batch = ReadRows(source, "rowid>$a AND rowid<=$b", "ASC", null, high, end);
+            var batch = ReadRows(
+                source,
+                "rowid>$a AND rowid<=$b",
+                "ASC",
+                null,
+                ("$a", high),
+                ("$b", end)
+            );
             token.ThrowIfCancellationRequested();
             high = await WriteBatchAsync(batch.Rows, ArchiveToolEffects.HighKey, end, token)
                 .ConfigureAwait(false);
@@ -335,7 +319,7 @@ internal sealed class ActivityIndex : IAsyncDisposable
         while (low > 1)
         {
             token.ThrowIfCancellationRequested();
-            var batch = ReadRows(source, "rowid<$a", "DESC", batchSize, low, 0);
+            var batch = ReadRows(source, "rowid<$a", "DESC", batchSize, ("$a", low));
             var next = batch.Scanned < batchSize ? 1 : batch.Lowest;
             token.ThrowIfCancellationRequested();
             await WriteBatchAsync(batch.Rows, ArchiveToolEffects.LowKey, next, token)
@@ -344,13 +328,12 @@ internal sealed class ActivityIndex : IAsyncDisposable
         }
     }
 
-    private static (List<ToolEffectRow> Rows, int Scanned, long Lowest) ReadRows(
+    private static (List<ToolEffectRow> Rows, int Scanned, long Lowest, long Highest) ReadRows(
         SqliteConnection connection,
         string range,
         string order,
         int? limit,
-        long a,
-        long b
+        params (string Name, object Value)[] parameters
     )
     {
         var records =
@@ -367,10 +350,10 @@ internal sealed class ActivityIndex : IAsyncDisposable
             command.CommandText =
                 $"SELECT rowid,session_id,agent,seq,timestamp,message_json FROM archive_messages WHERE {range} AND role='tool' ORDER BY rowid {order}"
                 + (limit is null ? "" : " LIMIT $limit");
-            command.Parameters.AddWithValue("$a", a);
-            command.Parameters.AddWithValue("$b", b);
-            if (limit is int value)
-                command.Parameters.AddWithValue("$limit", value);
+            foreach (var (name, value) in parameters)
+                command.Parameters.AddWithValue(name, value);
+            if (limit is int count)
+                command.Parameters.AddWithValue("$limit", count);
             using var reader = command.ExecuteReader();
             while (reader.Read())
                 records.Add(
@@ -384,6 +367,7 @@ internal sealed class ActivityIndex : IAsyncDisposable
                     )
                 );
         }
+        var inference = new InitiatorInference(connection);
         var rows = new List<ToolEffectRow>();
         foreach (var record in records)
         {
@@ -391,12 +375,7 @@ internal sealed class ActivityIndex : IAsyncDisposable
             {
                 if (JsonNode.Parse(record.Json) is not JsonObject message)
                     continue;
-                var context = ArchiveToolEffects.Context(
-                    connection,
-                    null,
-                    record.Session,
-                    record.Seq
-                );
+                var (hasTarget, hasInitiator) = ArchiveToolEffects.SelfContained(message);
                 rows.AddRange(
                     ArchiveToolEffects.FromToolMessage(
                         record.Session,
@@ -404,9 +383,8 @@ internal sealed class ActivityIndex : IAsyncDisposable
                         record.Seq,
                         record.Time,
                         message,
-                        context.Anchor,
-                        context.AnchorSeq,
-                        context.Initiator
+                        hasTarget ? null : inference.Anchor(record.Session, record.Seq),
+                        hasInitiator ? null : inference.Find(record.Session, record.Seq)
                     )
                 );
             }
@@ -420,7 +398,170 @@ internal sealed class ActivityIndex : IAsyncDisposable
                 // An unreadable historical row stays out of the index; the Archive keeps it.
             }
         }
-        return (rows, records.Count, records.Count == 0 ? a : records.Min(record => record.RowId));
+        return (
+            rows,
+            records.Count,
+            records.Count == 0 ? 0 : records.Min(record => record.RowId),
+            records.Count == 0 ? 0 : records.Max(record => record.RowId)
+        );
+    }
+
+    /// <summary>
+    /// Reads what tool rows written before calls recorded their target and initiator need:
+    /// the model row they answer and the input that started their turn. Runs on the backfill's
+    /// read connection, never in the Archive writer. Rows between a turn's input and a resolved
+    /// tool row cannot hold another input, so each resolved span answers later lookups inside it
+    /// and stops later scans that reach it. A batch reads each earlier row about once, and a long
+    /// turn keeps its initiator however far back its input is.
+    /// </summary>
+    private sealed class InitiatorInference(SqliteConnection connection)
+    {
+        private readonly Dictionary<
+            string,
+            List<(long Low, long High, ToolEffectInitiator? Initiator)>
+        > spans = new(StringComparer.Ordinal);
+
+        private JsonObject? Load(string sql, string session, long seq)
+        {
+            using var command = connection.CreateCommand();
+            command.CommandText = sql;
+            command.Parameters.AddWithValue("$session", session);
+            command.Parameters.AddWithValue("$seq", seq);
+            return command.ExecuteScalar() is string json
+                ? JsonNode.Parse(json) as JsonObject
+                : null;
+        }
+
+        internal JsonObject? Anchor(string session, long seq) =>
+            Load(
+                "SELECT message_json FROM archive_messages WHERE session_id=$session AND seq<$seq AND role='model' ORDER BY seq DESC LIMIT 1",
+                session,
+                seq
+            );
+
+        internal ToolEffectInitiator? Find(string session, long seq)
+        {
+            if (!spans.TryGetValue(session, out var known))
+                spans[session] = known = [];
+            int Covering(long target) =>
+                known.FindIndex(span => span.Low < target && target <= span.High);
+            if (Covering(seq) is var hit and >= 0)
+                return known[hit].Initiator;
+            using var command = connection.CreateCommand();
+            command.CommandText =
+                "SELECT seq,role FROM archive_messages WHERE session_id=$session AND seq<$seq ORDER BY seq DESC";
+            command.Parameters.AddWithValue("$session", session);
+            command.Parameters.AddWithValue("$seq", seq);
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                var candidate = reader.GetInt64(0);
+                if (Covering(candidate) is var span and >= 0)
+                {
+                    var (low, high, initiator) = known[span];
+                    known[span] = (low, Math.Max(high, seq), initiator);
+                    return initiator;
+                }
+                if (
+                    reader.GetString(1) == "user"
+                    && Load(
+                        "SELECT message_json FROM archive_messages WHERE session_id=$session AND seq=$seq",
+                        session,
+                        candidate
+                    )
+                        is { } input
+                    && TurnInitiator.FromInput(candidate, input) is { } found
+                )
+                {
+                    known.Add((candidate, seq, found));
+                    return found;
+                }
+            }
+            known.Add((0, seq, null));
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Re-indexes Sessions whose index rows still use an ID the Archive no longer has, as an
+    /// identity move by a build without this index leaves them. Each stale ID that the catalog
+    /// resolves to a current Session is replaced by that Session's rows; an unresolvable one is
+    /// left as it is. Coverage is incomplete until this pass has run.
+    /// </summary>
+    private async Task RepairMovedAsync(
+        SqliteConnection source,
+        CancellationToken token,
+        int batchSize
+    )
+    {
+        var stale = new List<string>();
+        using (var command = source.CreateCommand())
+        {
+            command.CommandText =
+                $"SELECT DISTINCT session_id FROM {ArchiveToolEffects.Table} e WHERE NOT EXISTS (SELECT 1 FROM archive_messages m WHERE m.session_id=e.session_id)";
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+                stale.Add(reader.GetString(0));
+        }
+        if (stale.Count == 0)
+            return;
+        var moves = new List<(string From, string To)>();
+        foreach (var chunk in stale.Chunk(200))
+        foreach (var (id, resolution) in manager.Catalog.ResolveMany(chunk))
+            if (
+                SessionCatalog.Text(resolution["kind"]) is "exact" or "alias"
+                && SessionCatalog.Text(resolution["sessionId"]) is { } current
+                && current != id
+                && Scalar(
+                    source,
+                    null,
+                    "SELECT 1 FROM archive_messages WHERE session_id=$session LIMIT 1",
+                    ("$session", current)
+                )
+                    is not null
+            )
+                moves.Add((id, current));
+        foreach (var (from, to) in moves)
+        {
+            token.ThrowIfCancellationRequested();
+            await WriteAsync(
+                    (connection, transaction) =>
+                        Scalar(
+                            connection,
+                            transaction,
+                            $"DELETE FROM {ArchiveToolEffects.Table} WHERE session_id IN ($from,$to)",
+                            ("$from", from),
+                            ("$to", to)
+                        ),
+                    token
+                )
+                .ConfigureAwait(false);
+            long after = 0;
+            while (true)
+            {
+                var batch = ReadRows(
+                    source,
+                    "session_id=$session AND rowid>$a",
+                    "ASC",
+                    batchSize,
+                    ("$session", to),
+                    ("$a", after)
+                );
+                if (batch.Scanned == 0)
+                    break;
+                await WriteAsync(
+                        (connection, transaction) =>
+                        {
+                            ArchiveToolEffects.Insert(connection, transaction, batch.Rows);
+                            return true;
+                        },
+                        token
+                    )
+                    .ConfigureAwait(false);
+                after = batch.Highest;
+            }
+        }
+        NotifyChanged();
     }
 
     /// <summary>
@@ -560,7 +701,11 @@ internal sealed class ActivityIndex : IAsyncDisposable
             : null;
         return new JsonObject
         {
-            ["complete"] = low is <= 1 && high is long covered && covered >= top,
+            ["complete"] =
+                Volatile.Read(ref verified)
+                && low is <= 1
+                && high is long covered
+                && covered >= top,
             ["earliest"] = earliest is null or DBNull ? null : Number(earliest),
         };
     }
@@ -750,17 +895,16 @@ internal sealed class ActivityIndex : IAsyncDisposable
                 ["approver"] = Text(Column("approver")),
                 ["rules"] = Text(Column("rules")) is { } rules ? JsonNode.Parse(rules) : null,
                 ["summary"] = Text(Column("summary")),
-                ["anchorSeq"] = Integer(Column("anchor_seq")),
                 ["initiator"] = Text(Column("initiator_kind")) is { } initiatorKind
                     ? new JsonObject
                     {
                         ["kind"] = initiatorKind,
                         ["id"] = Text(Column("initiator_id")),
+                        ["from"] = Text(Column("initiator_from")),
                         ["seq"] = Integer(Column("input_seq")),
                     }
                     : null,
                 ["runId"] = Text(Column("run_id")),
-                ["principal"] = Text(Column("principal")),
                 ["refs"] = Text(Column("refs")) is { } refs ? JsonNode.Parse(refs) : null,
             };
             result.Add((reader.GetInt64(Column("started_at")), Key(reader, direct), row));
@@ -795,19 +939,35 @@ internal sealed class ActivityIndex : IAsyncDisposable
             : $"idx_{ArchiveToolEffects.Table}_time";
     }
 
-    /// <summary>Session IDs currently owned by an Agent, or one Session and its descendants.</summary>
-    internal IReadOnlyCollection<string> AgentSessions(string agent) =>
-        manager
-            .Catalog.OffsetPage(MaxScopedSessions, 0, agent: agent)
+    /// <summary>
+    /// Session IDs currently owned by an Agent, or one Session and its descendants. A scope
+    /// larger than a filter can carry is refused rather than silently cut short.
+    /// </summary>
+    internal IReadOnlyCollection<string> AgentSessions(string agent)
+    {
+        var ids = manager
+            .Catalog.OffsetPage(MaxScopedSessions + 1, 0, agent: agent)
             .Select(row => SessionCatalog.Text(row["id"]))
             .OfType<string>()
             .ToArray();
+        if (ids.Length > MaxScopedSessions)
+            throw new ArgumentException(TooManySessions);
+        return ids;
+    }
 
-    internal IReadOnlyCollection<string> TreeSessions(string root) =>
-        manager
+    internal IReadOnlyCollection<string> TreeSessions(string root)
+    {
+        var ids = manager
             .Catalog.Descendants(root, MaxScopedSessions)
             .Rows.Select(row => SessionCatalog.Text(row["id"]))
             .OfType<string>()
             .Prepend(root)
             .ToArray();
+        if (ids.Length > MaxScopedSessions)
+            throw new ArgumentException(TooManySessions);
+        return ids;
+    }
+
+    internal const string TooManySessions =
+        "Too many Sessions to filter by. Narrow the filter, for example to one Session or to the Agent a call ran in.";
 }

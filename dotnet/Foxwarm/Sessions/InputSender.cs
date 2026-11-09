@@ -5,12 +5,15 @@ namespace Foxwarm.Sessions;
 /// <summary>
 /// Who sent WebUI input, kept on the committed user message as <c>__meta.sender</c>:
 /// <c>{kind:"administrator"}</c> or <c>{kind:"identity", id}</c>, the shape approval decisions
-/// use. It is administrator-only evidence: scoped WebUI projections remove it, and model
-/// requests never see <c>__meta</c>.
+/// use. It and the turn initiator on tool rows (<c>__meta.initiator</c>, which can repeat the
+/// sender) are administrator-only evidence: scoped WebUI projections and every model-facing
+/// copy of stored messages remove both, wherever the message is nested.
 /// </summary>
 internal static class InputSender
 {
     internal const string Field = "sender";
+
+    private static readonly string[] AuditFields = [Field, TurnInitiator.Field];
 
     internal static JsonObject Administrator() => new() { ["kind"] = "administrator" };
 
@@ -24,7 +27,7 @@ internal static class InputSender
     }
 
     /// <summary>
-    /// Returns the payload without any message <c>__meta.sender</c>. The input is never
+    /// Returns the payload without any <c>__meta.sender</c> or <c>__meta.initiator</c>. The input is never
     /// modified: event payloads and history nodes can be shared with other subscribers, so a
     /// payload that carries a sender is cloned first.
     /// </summary>
@@ -38,11 +41,20 @@ internal static class InputSender
         return copy;
     }
 
+    /// <summary>Removes the audit fields from a payload this caller owns.</summary>
+    internal static void Strip(JsonNode? payload)
+    {
+        if (payload is not null && Contains(payload))
+            Remove(payload);
+    }
+
     private static bool Contains(JsonNode node) =>
         node switch
         {
             JsonObject value => value.Any(pair =>
-                pair.Key == "__meta" && pair.Value is JsonObject meta && meta.ContainsKey(Field)
+                pair.Key == "__meta"
+                    && pair.Value is JsonObject meta
+                    && AuditFields.Any(meta.ContainsKey)
                 || pair.Value is not null && Contains(pair.Value)
             ),
             JsonArray items => items.Any(item => item is not null && Contains(item)),
@@ -55,7 +67,8 @@ internal static class InputSender
         {
             case JsonObject value:
                 if (value["__meta"] is JsonObject meta)
-                    meta.Remove(Field);
+                    foreach (var field in AuditFields)
+                        meta.Remove(field);
                 foreach (var pair in value.ToArray())
                     if (pair.Value is not null)
                         Remove(pair.Value);

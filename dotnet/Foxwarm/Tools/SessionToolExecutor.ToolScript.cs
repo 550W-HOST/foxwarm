@@ -91,13 +91,15 @@ internal sealed partial class SessionToolExecutor
                                 resolved.Name,
                                 execution.ExecPlacement,
                                 execution.Response,
-                                sessions.RedactActivity(
-                                    ToolArgsPreview(resolved.Name, resolved.Args),
-                                    hosted.Id
-                                ),
-                                new(0, unattendedOrigin, null),
+                                SessionWait.Text(execution.Target?["summary"])
+                                    ?? ActivitySummary(
+                                        sessions,
+                                        resolved.Name,
+                                        resolved.Args,
+                                        hosted.Id
+                                    ),
+                                new(0, unattendedOrigin, unattendedOriginId),
                                 context.ToolScriptRunId,
-                                null,
                                 execution.SessionMessages?.OfType<JsonObject>().FirstOrDefault()
                             )
                         );

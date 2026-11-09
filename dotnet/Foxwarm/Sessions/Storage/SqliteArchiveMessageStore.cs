@@ -290,16 +290,48 @@ public sealed partial class SqliteArchiveMessageStore
                     Task.FromResult<IReadOnlyList<ArchiveMessageRecord>>([])
                 )
             );
-        return EnqueueWriteAsync<IReadOnlyList<ArchiveMessageRecord>>(
-            databasePath,
-            (connection, transaction) => WriteMessages(connection, transaction, prepared)
+        var notice = new ToolEffectsNotice();
+        return AfterCommitAsync(
+            EnqueueWriteAsync<IReadOnlyList<ArchiveMessageRecord>>(
+                databasePath,
+                (connection, transaction) =>
+                    WriteMessages(connection, transaction, prepared, notice)
+            ),
+            notice
         );
+    }
+
+    // Activity notices follow the commit of the write that indexed (or failed to index) them.
+    private sealed class ToolEffectsNotice
+    {
+        internal bool Recorded;
+        internal bool Failed;
+    }
+
+    private async ValueTask<WriteReceipt<T>> AfterCommitAsync<T>(
+        ValueTask<WriteReceipt<T>> enqueued,
+        ToolEffectsNotice notice
+    )
+    {
+        var receipt = await enqueued.ConfigureAwait(false);
+        return new(Notify(receipt.Completion, notice));
+    }
+
+    private async Task<T> Notify<T>(Task<T> completion, ToolEffectsNotice notice)
+    {
+        var result = await completion.ConfigureAwait(false);
+        if (notice.Failed)
+            ToolEffectsFailed?.Invoke(databasePath);
+        else if (notice.Recorded)
+            ToolEffectsRecorded?.Invoke(databasePath);
+        return result;
     }
 
     private IReadOnlyList<ArchiveMessageRecord> WriteMessages(
         SqliteConnection connection,
         SqliteTransaction transaction,
-        IReadOnlyList<ArchiveMessageRecord> records
+        IReadOnlyList<ArchiveMessageRecord> records,
+        ToolEffectsNotice notice
     )
     {
         RequireWriteIdentity(connection, sessionId);
@@ -359,14 +391,14 @@ public sealed partial class SqliteArchiveMessageStore
         {
             // Derived activity rows: their failure never fails or reorders the Archive write.
             if (!ArchiveToolEffects.TryRecordLive(connection, transaction, indexed))
-                ToolEffectsFailed?.Invoke(databasePath);
+                notice.Failed = true;
             else if (indexed.Any(item => item.Item1.Role == "tool"))
-                ToolEffectsRecorded?.Invoke(databasePath);
+                notice.Recorded = true;
         }
         return inserted;
     }
 
-    /// <summary>Raised with the database path after a write indexed its tool rows.</summary>
+    /// <summary>Raised with the database path after a committed write indexed its tool rows.</summary>
     internal static event Action<string>? ToolEffectsRecorded;
 
     /// <summary>Raised with the database path after a write committed without its index rows.</summary>

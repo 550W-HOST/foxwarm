@@ -191,7 +191,15 @@ internal static class ArchiveRecallTool
             ["availableCount"] = records.Count,
             ["range"] = new JsonObject { ["startSeq"] = target.First, ["endSeq"] = target.Last },
             ["messages"] = new JsonArray(
-                records.Select(record => (JsonNode?)record.Message.DeepClone()).ToArray()
+                records
+                    .Select(record =>
+                    {
+                        // Exact reads reach the model; audit evidence stays administrator-only.
+                        var copy = record.Message.DeepClone();
+                        InputSender.Strip(copy);
+                        return (JsonNode?)copy;
+                    })
+                    .ToArray()
             ),
             ["availableRange"] = new JsonObject
             {

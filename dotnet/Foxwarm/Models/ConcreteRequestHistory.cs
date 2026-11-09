@@ -121,6 +121,8 @@ internal static class ConcreteRequestHistory
                         response["response"]
                     ),
                 };
+            // A result can carry stored messages (such as an exact recall from a script).
+            Foxwarm.Sessions.InputSender.Strip(response["response"]);
             response.Remove("__meta");
         }
     }

@@ -715,7 +715,7 @@ internal static class CompactCandidateBuilder
                 );
             if (part["functionResponse"] is JsonObject response)
             {
-                var source = response["response"];
+                var source = InputSender.Without(response["response"]);
                 var value = source as JsonObject;
                 var output =
                     value?["error"] is JsonNode error

@@ -105,9 +105,12 @@ internal sealed partial class WebUIChannel
             throw new ArgumentException("beforeTime and beforeKey go together.");
         IReadOnlyCollection<string>? scope = null;
         var sessionId = Text("sessionId");
-        var tree = body["tree"] is JsonValue flag && flag.TryGetValue<bool>(out var value) && value;
-        if (body["tree"] is not null && body["tree"] is not JsonValue)
-            throw new ArgumentException("tree must be a boolean.");
+        var tree = false;
+        if (body["tree"] is not null)
+        {
+            if (body["tree"] is not JsonValue flag || !flag.TryGetValue<bool>(out tree))
+                throw new ArgumentException("tree must be a boolean.");
+        }
         if (sessionId is not null)
             scope = tree ? activity.TreeSessions(sessionId) : [sessionId];
         if (Text("agent") is { } agent)
