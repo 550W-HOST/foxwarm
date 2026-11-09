@@ -27,7 +27,7 @@ try {
   // Sidebar entry is "System" and opens on Sessions.
   await page.click('button[title="Open System"]')
   await page.waitForSelector('h1::-p-text(System)')
-  assert.deepEqual(await page.$$eval('.foxwarm-system-tab', buttons => buttons.map(button => button.textContent)), ['Agents', 'Sessions', 'Nodes', 'Timers', 'Webhooks', 'Usage'])
+  assert.deepEqual(await page.$$eval('.foxwarm-system-tab', buttons => buttons.map(button => button.textContent)), ['Agents', 'Sessions', 'Nodes', 'Timers', 'Webhooks', 'Usage', 'Activity'])
   await page.waitForSelector('[data-system-section="sessions"] [data-architecture-session-id="worker"]')
   assert.deepEqual(await page.$$eval('[data-system-summary]', items => items.map(item => item.getAttribute('data-system-summary'))), ['sessions'])
   assert.match(await page.$eval('[data-system-summary="sessions"]', element => element.textContent), /0 active.*0 waiting.*0 queued/)

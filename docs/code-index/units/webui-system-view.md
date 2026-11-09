@@ -1,6 +1,6 @@
 # Unit: webui-system-view
 
-Files: packages/webui/src/components/SystemView.tsx, packages/webui/src/components/SystemSessions.tsx, packages/webui/src/components/SystemAgents.tsx, packages/webui/src/components/SystemShared.tsx, packages/webui/src/components/SystemTimers.tsx, packages/webui/src/components/SystemWebhooks.tsx, packages/webui/src/components/SystemUsage.tsx, packages/webui/src/components/AgentSettingsFields.tsx, packages/webui/src/architectureOperations.ts, packages/webui/src/systemTimers.ts, packages/webui/src/systemWebhooks.ts, packages/webui/src/usageOverview.ts, packages/webui/src/useUsageReport.ts, packages/webui/test/architectureOperations.test.mjs, packages/webui/test/systemTimers.test.mjs, packages/webui/test/systemWebhooks.test.mjs, packages/webui/test/usageOverview.test.mjs, packages/webui/test/mainHostSystem.e2e.mjs, packages/webui/test/mainHostSystemTimers.e2e.mjs, packages/webui/test/mainHostSystemWebhooks.e2e.mjs, packages/webui/test/mainHostSystemUsage.e2e.mjs
+Files: packages/webui/src/components/SystemView.tsx, packages/webui/src/components/SystemSessions.tsx, packages/webui/src/components/SystemAgents.tsx, packages/webui/src/components/SystemShared.tsx, packages/webui/src/components/SystemTimers.tsx, packages/webui/src/components/SystemWebhooks.tsx, packages/webui/src/components/SystemUsage.tsx, packages/webui/src/components/SystemActivity.tsx, packages/webui/src/activity.ts, packages/webui/src/components/AgentSettingsFields.tsx, packages/webui/src/architectureOperations.ts, packages/webui/src/systemTimers.ts, packages/webui/src/systemWebhooks.ts, packages/webui/src/usageOverview.ts, packages/webui/src/useUsageReport.ts, packages/webui/test/architectureOperations.test.mjs, packages/webui/test/systemTimers.test.mjs, packages/webui/test/systemWebhooks.test.mjs, packages/webui/test/usageOverview.test.mjs, packages/webui/test/activity.test.mjs, packages/webui/test/mainHostSystem.e2e.mjs, packages/webui/test/mainHostSystemTimers.e2e.mjs, packages/webui/test/mainHostSystemWebhooks.e2e.mjs, packages/webui/test/mainHostSystemUsage.e2e.mjs, packages/webui/test/mainHostSystemActivity.e2e.mjs
 Secondary files: packages/webui/src/components/SystemNodes.tsx, packages/webui/src/components/TokenUsageDetails.tsx, packages/webui/src/useNodeDirectory.ts, packages/webui/src/App.tsx, packages/webui/src/workbench/utils.ts, packages/webui/test/nodeOnboarding.e2e.mjs, packages/webui/test/boundedSessionReplay.test.mjs
 
 ## Purpose
@@ -73,6 +73,15 @@ The **System** page explains how Foxwarm is organized and running, in six sectio
 - Requests recorded before pricing was configured stay tokens-only; no current price is applied to them ([D-model-usage-cost](../threads/model-request-and-streaming.md#d-model-usage-cost)). While the startup backfill is still adding older requests the section says so; when records start after the period's first day it shows when they begin.
 - Live updates: reloads (debounced) on the realtime `usage-changed` event and on socket reopen; no polling. The previous report stays visible, dimmed, until a new selection's report arrives. A failed or malformed response shows an inline error with Retry.
 
+### Activity section
+
+- Reads `POST /api/activity` from the [activity index](./activity-index.md): tool calls of every Session, unattended timer and webhook scripts and external MCP clients, newest first, 100 per page with "Show earlier activity".
+- Defaults to the last 7 days and **Changes**, which hides reads, internal calls and script containers; the kind menu offers All calls, each kind, or Reads. Further filters: result (Not completed, Completed, Failed, Denied by a rule, Approval rejected, Approval expired, Cancelled), source (Session turns, Timer scripts, Webhook scripts, External MCP clients) and a debounced search over summaries and tool names.
+- Columns: time, Session (title, execution-time Agent and, when it differs, the current Agent; deleted Sessions are marked), Node, call (tool with MCP server and action, "in script" for ToolScript calls, argument summary), result with approval status, and who started the turn. Clicking a Session, Agent, Node or tool adds a removable filter chip. The open button opens the Session positioned at the call's row (`openSessionAtSeq`).
+- Expanding a row shows arguments, canonical tool, Node, working directory, files, execution ID, delivery targets, deciding rules by layer, approval decider, error type, both Agents, script run and duration.
+- The Session inspector links to the selected Session tree's activity ("View activity"). `#activity` opens the section.
+- Live updates: reloads (debounced) on the realtime `activity-changed` event and on socket reopen; no polling. While the backfill is still adding older history the section says so.
+
 ### Agent registry
 
 - The Agents summary counts real workspace directories, including valid zero-session Agents that do not appear in Session-derived catalog summaries.
@@ -102,6 +111,10 @@ The **System** page explains how Foxwarm is organized and running, in six sectio
 ### D-webui-system-webhooks
 
 [2026-11-08, user decision] Webhooks are configured only in the YAML access configuration; System gains a fifth, read-only Webhooks section for status rather than a structured editor. It shows where each webhook delivers, whether its target exists, the address to give the sending service and recent results, so a misconfigured source can be diagnosed without reading logs. Secrets never reach the page.
+
+### D-webui-system-activity
+
+[2026-11-09, user decision] Audit is a seventh, administrator-only System section, Activity, over the derived [activity index](./activity-index.md#d-activity-index). It defaults to changes, shows execution-time and current Agent, rule IDs and the WebUI sender, links each call to its Session, and has no cost, alerting or compliance features.
 
 ### D-webui-system-usage
 

@@ -243,7 +243,7 @@ export class WebUiRealtimeTransport {
       }
       return
     }
-    if (message.type === 'sessions-updated' || message.type === 'session-list-invalidated' || message.type === 'timers-changed' || message.type === 'webhooks-changed' || message.type === 'usage-changed') {
+    if (message.type === 'sessions-updated' || message.type === 'session-list-invalidated' || message.type === 'timers-changed' || message.type === 'webhooks-changed' || message.type === 'usage-changed' || message.type === 'activity-changed') {
       for (const subscription of this.listSubscriptions.values()) subscription.handlers.onMessage(message)
       return
     }

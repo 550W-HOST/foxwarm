@@ -2220,7 +2220,7 @@ test('Tasks and Nodes popup entries close the preview and activate singleton pag
     await page.reload({ waitUntil: 'domcontentloaded' })
     await waitForWebUiReady(page)
     await page.waitForSelector('[data-node-surface]')
-    assert.deepEqual(await page.$$eval('.foxwarm-system-tab', buttons => buttons.map(button => button.textContent)), ['Agents', 'Sessions', 'Nodes', 'Timers', 'Webhooks', 'Usage'])
+    assert.deepEqual(await page.$$eval('.foxwarm-system-tab', buttons => buttons.map(button => button.textContent)), ['Agents', 'Sessions', 'Nodes', 'Timers', 'Webhooks', 'Usage', 'Activity'])
     await workbenchScreenshot(page, 'system-tabs.png')
     await page.click('[data-system-tab="agents"]')
     await page.waitForSelector('[data-system-summary="agents"]')

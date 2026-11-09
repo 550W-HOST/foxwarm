@@ -5,7 +5,7 @@ Secondary files: `dotnet/Foxwarm/Sessions/Storage/SqliteArchiveMessageStore.cs`,
 
 ## Purpose
 
-Answers who ran which tool, on which Node, with which effect, across the installation, for the administrator-only [System › Activity](./webui-system-view.md) section ([D-activity-index](#d-activity-index)). It reads the per-call records each tool row already carries ([D-tool-effect-record](../threads/tools-permissions-and-exec.md#d-tool-effect-record)): it adds no tool behavior, policy or model-facing surface, and nothing reads it to reconstruct Sessions.
+Answers who ran which tool, on which Node, with which effect, across the installation, for the administrator-only [System › Activity](./webui-system-view.md#activity-section) section ([D-activity-index](#d-activity-index)). It reads the per-call records each tool row already carries ([D-tool-effect-record](../threads/tools-permissions-and-exec.md#d-tool-effect-record)): it adds no tool behavior, policy or model-facing surface, and nothing reads it to reconstruct Sessions.
 
 ## Contracts
 

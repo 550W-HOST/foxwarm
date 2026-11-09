@@ -8,6 +8,8 @@ import SystemNodes from './SystemNodes'
 import SystemTimers, { SessionTimersSection } from './SystemTimers'
 import SystemWebhooks from './SystemWebhooks'
 import SystemUsage from './SystemUsage'
+import SystemActivity from './SystemActivity'
+import type { ActivityFilters } from '../activity'
 import type { UsagePeriod } from '../usageOverview'
 import { AgentRegistryCard, AgentRegistryInspector, type AgentMemoryFile, type AgentRegistryChanges, type AgentRegistryEntry } from './SystemAgents'
 import { SessionFilterBar, SessionInspector, SessionOperationRow } from './SystemSessions'
@@ -25,7 +27,7 @@ import { makeVscodeWebUrl } from '../vscodeWeb'
 // The Timeline shares Chat rendering pieces; load them only when it is opened.
 const SessionSequenceView = lazy(() => import('./SessionSequenceView'))
 
-export type SystemSection = 'agents' | 'sessions' | 'nodes' | 'timers' | 'webhooks' | 'usage'
+export type SystemSection = 'agents' | 'sessions' | 'nodes' | 'timers' | 'webhooks' | 'usage' | 'activity'
 
 export const SYSTEM_SECTIONS: Array<{ id: SystemSection; label: string }> = [
   { id: 'agents', label: 'Agents' },
@@ -34,6 +36,7 @@ export const SYSTEM_SECTIONS: Array<{ id: SystemSection; label: string }> = [
   { id: 'timers', label: 'Timers' },
   { id: 'webhooks', label: 'Webhooks' },
   { id: 'usage', label: 'Usage' },
+  { id: 'activity', label: 'Activity' },
 ]
 
 const SECTION_SUBTITLES: Record<SystemSection, string> = {
@@ -43,6 +46,7 @@ const SECTION_SUBTITLES: Record<SystemSection, string> = {
   timers: 'Scheduled messages and scripts, their next runs and recent results.',
   webhooks: 'Events from outside services, where they go and what arrived recently.',
   usage: 'Model requests, tokens and estimated cost across the installation.',
+  activity: 'Who ran which tools, on which nodes, and what happened.',
 }
 
 interface SystemViewProps {
@@ -116,6 +120,11 @@ export default function SystemView({
     setStatusFilter(sessionsRequest.status)
   }, [sessionsRequest?.status, sessionsRequest?.nonce])
   const [timersSessionFilter, setTimersSessionFilter] = useState<string | null>(null)
+  const [activityRequest, setActivityRequest] = useState<{ filters: ActivityFilters; nonce: number } | null>(null)
+  const showActivity = useCallback((filters: ActivityFilters) => {
+    setActivityRequest(current => ({ filters, nonce: (current?.nonce || 0) + 1 }))
+    setSection('activity')
+  }, [setSection])
   const showSessionTimers = (sessionId: string) => {
     setTimersSessionFilter(sessionId)
     setSection('timers')
@@ -557,7 +566,13 @@ export default function SystemView({
                   onInspect={inspectSession}
                   onOpen={onSelectSession}
                   onLoadMoreChildren={(sessionId) => loadSessionRelationships(sessionId, 20)}
-                  extra={inspectedSession ? <SessionTimersSection key={inspectedSession.id} sessionId={inspectedSession.id} onShowTimers={showSessionTimers} /> : null}
+                  extra={inspectedSession ? <>
+                    <SessionTimersSection key={inspectedSession.id} sessionId={inspectedSession.id} onShowTimers={showSessionTimers} />
+                    <section className="mt-4 flex items-center justify-between gap-2 border-t border-fw-border-muted pt-4" data-session-activity={inspectedSession.id}>
+                      <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-fw-text-muted">Activity</h3>
+                      <button type="button" onClick={() => showActivity({ sessionId: inspectedSession.id, tree: true })} className="text-xs font-medium text-fw-accent hover:underline" data-session-activity-open>View activity</button>
+                    </section>
+                  </> : null}
                 />
               </div>
             </>}
@@ -581,6 +596,8 @@ export default function SystemView({
           <SystemWebhooks onInspectSession={sessionId => sessionMap.has(sessionId) ? showSessionFromNode(sessionId) : onSelectSession(sessionId)} onOpenSession={onSelectSession} />
         ) : section === 'usage' ? (
           <SystemUsage request={usageRequest} onOpenSession={onSelectSession} />
+        ) : section === 'activity' ? (
+          <SystemActivity request={activityRequest} onOpenSession={onSelectSession} />
         ) : section === 'timers' ? (
           <SystemTimers sessionFilter={timersSessionFilter} onSessionFilterChange={setTimersSessionFilter} onInspectSession={sessionId => sessionMap.has(sessionId) ? showSessionFromNode(sessionId) : onSelectSession(sessionId)} onOpenSession={onSelectSession} />
         ) : (

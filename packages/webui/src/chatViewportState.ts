@@ -164,3 +164,13 @@ export function storeChatViewportState(sessionId: string, state: ChatViewportSta
 export function clearStoredChatViewportStatesForTests(): void {
   viewportStateBySession.clear()
 }
+
+/** Opens a Session positioned at one of its messages. */
+export function openSessionAtSeq(sessionId: string, seq: number | undefined, open: (sessionId: string) => void) {
+  if (seq !== undefined && Number.isSafeInteger(seq) && seq > 0) {
+    const anchor = { kind: 'anchor' as const, messageKey: `seq-local-${seq}`, offsetPx: 48 }
+    storeChatViewportState(sessionId, anchor, 'continuous')
+    storeChatViewportState(sessionId, anchor, 'active')
+  }
+  open(sessionId)
+}
