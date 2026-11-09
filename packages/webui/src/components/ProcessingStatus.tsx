@@ -16,6 +16,8 @@ interface ProcessingStatusProps {
   sessionQueueLength: number
   turnIncomplete: boolean
   loading: boolean
+  /** A sent input is shown but its canonical history row has not arrived yet. */
+  pendingSend?: boolean
   isMobile: boolean
   timelineView?: TimelineView
   streamingAssistantDraft?: StreamingAssistantDraft | null
@@ -30,7 +32,7 @@ const controlButtonClass = 'inline-flex shrink-0 items-center rounded-md px-2 te
 const toneClasses = { accent: 'text-fw-accent', special: 'text-fw-special', warning: 'text-fw-warning', danger: 'text-fw-danger', muted: 'text-fw-text-muted' }
 const useBrowserLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect
 
-const ProcessingStatus = memo(function ProcessingStatus({ sessionBusy, runtimeState, sessionQueueLength, turnIncomplete, loading, isMobile, timelineView, streamingAssistantDraft, pendingControl, controlFeedback, failure, onContinue, onCancelCompaction }: ProcessingStatusProps) {
+const ProcessingStatus = memo(function ProcessingStatus({ sessionBusy, runtimeState, sessionQueueLength, turnIncomplete, loading, pendingSend = false, isMobile, timelineView, streamingAssistantDraft, pendingControl, controlFeedback, failure, onContinue, onCancelCompaction }: ProcessingStatusProps) {
   const [now, setNow] = useState(Date.now)
   const [open, setOpen] = useState(false)
   const [position, setPosition] = useState<{ left: number; bottom?: number; top?: number; width: number; maxHeight: number } | null>(null)
@@ -46,10 +48,16 @@ const ProcessingStatus = memo(function ProcessingStatus({ sessionBusy, runtimeSt
 
   let view: RuntimeStatusView | null = getRuntimeStatusView(runtimeState, sessionBusy, now)
   const state = runtimeState?.state || (sessionBusy ? 'requesting-model' : 'idle')
-  const continuable = isRuntimeStateInactiveName(state) && !runtimeState?.processing && turnIncomplete && !loading
+  const continuable = isRuntimeStateInactiveName(state) && !runtimeState?.processing && turnIncomplete && !loading && !pendingSend
   const interrupted = state === 'idle' && continuable
   if (interrupted) view = { kind: failure ? 'error' : 'interrupted', tone: failure ? 'danger' : 'warning', label: failure?.title || 'Interrupted', details: failure?.details ? [['Error', failure.details]] : [] }
-  if (loading && !view) view = { kind: 'request', tone: 'accent', label: 'Sending…', details: [] }
+  // One send phase owns the window until the runtime reports real work: the pending input row is
+  // visible, so the prior inactive state, a busy-but-unknown phase and the canonical handoff all read as sending.
+  const sendHandoff = useRef(false)
+  const sending = (pendingSend && (isRuntimeStateInactiveName(state) || state === 'waiting' || !view || view.kind === 'unknown'))
+    || (sendHandoff.current && view?.kind === 'unknown')
+  useBrowserLayoutEffect(() => { sendHandoff.current = sending })
+  if (sending || loading && !view) view = { kind: 'request', tone: 'accent', label: 'Sending…', details: [] }
   if (pendingControl && !(pendingControl === 'continue' && runtimeState && !isRuntimeStateInactiveName(runtimeState.state))) view = {
     kind: pendingControl === 'stop' || pendingControl === 'cancel-compaction' ? 'stopping' : pendingControl === 'compact' ? 'compact' : 'request',
     tone: pendingControl === 'stop' || pendingControl === 'cancel-compaction' ? 'warning' : 'accent',

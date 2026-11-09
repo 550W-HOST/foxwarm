@@ -753,9 +753,10 @@ public sealed class SessionTurnTests
         var chat = new ControlledChat();
         var registry = NewRegistry(store, chat, out var entry);
         var once = 0;
-        entry.Committed = _ =>
+        entry.Committed = snapshot =>
         {
-            if (Interlocked.Exchange(ref once, 1) == 0)
+            // The busy claim also notifies; fail the first notification that carries the appended input.
+            if (snapshot.History.Count > 0 && Interlocked.Exchange(ref once, 1) == 0)
                 throw new InvalidOperationException("observer failed");
         };
         entry.State.Queue.Add(QueueItem.UserText("committed"));
@@ -779,6 +780,38 @@ public sealed class SessionTurnTests
         Assert.False(stored.Busy);
         Assert.Equal(1, entry.PostCommitNotificationFailureCount);
         Assert.Equal("observer failed", entry.LastPostCommitNotificationFailure?.Message);
+    }
+
+    [Fact]
+    public async Task BusyClaimNotificationFailureIsObservedWithoutReleasingTheClaim()
+    {
+        var store = new InMemorySessionAuthorityStore();
+        var chat = new ControlledChat();
+        var registry = NewRegistry(store, chat, out var entry);
+        var once = 0;
+        entry.Committed = snapshot =>
+        {
+            if (
+                snapshot.Busy
+                && snapshot.History.Count == 0
+                && Interlocked.Exchange(ref once, 1) == 0
+            )
+                throw new InvalidOperationException("claim observer failed");
+        };
+        entry.State.Queue.Add(QueueItem.UserText("claimed"));
+
+        await registry.Runner.ProcessQueueAsync("s");
+
+        var hot = entry.Snapshot();
+        Assert.Equal(1, once);
+        Assert.Contains(
+            hot.History.Materialize(),
+            message => message.ToJsonString().Contains("claimed", StringComparison.Ordinal)
+        );
+        Assert.Empty(hot.Queue);
+        Assert.False(hot.Busy);
+        Assert.Equal(1, entry.PostCommitNotificationFailureCount);
+        Assert.Equal("claim observer failed", entry.LastPostCommitNotificationFailure?.Message);
     }
 
     [Fact]

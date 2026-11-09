@@ -75,7 +75,8 @@ export function getMessageStableKey(message: Message, fallbackIndex: number): st
       ? `llm-request-${String(meta.llmRequestId)}-output-${String(start)}`
       : `llm-request-${String(meta.llmRequestId)}`
   }
-  if (hasStableMetaValue(meta.synthetic)) return `synthetic-${String(meta.synthetic)}`
+  // A browser send keeps one row identity from its pending row through the queue preview into history.
+  if (hasStableMetaValue(meta.synthetic) && !(meta.queuedPreview && hasStableMetaValue(meta.clientMessageId))) return `synthetic-${String(meta.synthetic)}`
   if (hasStableMetaValue(meta.clientMessageId)) return `client-${String(meta.clientMessageId)}`
   if (hasStableMetaValue(meta.seq)) {
     return `seq-${String(meta.contextArchiveItem?.sourceSessionId || 'local')}-${String(meta.seq)}`

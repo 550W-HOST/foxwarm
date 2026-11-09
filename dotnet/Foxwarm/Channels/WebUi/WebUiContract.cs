@@ -231,6 +231,9 @@ internal static class WebUiContract
             meta["queuedPreview"] = true;
             meta["queueIndex"] = i;
             meta["queueType"] = type;
+            // The browser hands its pending send row to this preview, and then to history, by this identity.
+            if (!string.IsNullOrEmpty(item.ClientMessageId))
+                meta["clientMessageId"] = item.ClientMessageId;
             message["__meta"] = meta;
             preview.Add(message);
         }

@@ -25,6 +25,7 @@ import {
   hasStableHistoryIdentity,
   mergeHistoryMessages,
   mergeHistorySnapshot,
+  projectPendingSendQueue,
   reconcileHistoryMessage,
 } from '../chatHistoryState'
 
@@ -153,6 +154,10 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
   const [timelineState, dispatchTimeline] = useReducer(timelineReducer, { messages: prepared?.messages || [], queuedMessages: prepared?.queuedMessages || [], archiveMessages: preparedArchive ? mergeContinuousHistory([],preparedArchive.messages) : [], archivePendingMessages: [], archiveStatus: preparedArchive ? 'loaded' : 'idle' })
   const messages = timelineState.messages
   const queuedMessages = timelineState.queuedMessages
+  // Browser-owned rows for sends made while the Session is busy; same pending-ID records as optimistic rows.
+  const [localQueuedSends, setLocalQueuedSends] = useState<Message[]>([])
+  // Queue snapshot current when the server accepted each busy send; any newer snapshot is authoritative for it.
+  const acceptedLocalQueueRef = useRef(new Map<string, Message[]>())
   const blockExpansionCache = useMemo(() => new Map<number, Promise<Message[]>>(), [sessionId])
   const [resolvedContext, setResolvedContext] = useState({ cache: blockExpansionCache, blocks: new Map<number, ContinuousContextRange[]>(), key: '' })
   const rememberContextRanges = useCallback((context: typeof resolvedContext) => {
@@ -348,6 +353,8 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
     setToolScriptProgress({})
     setToolCallActivity(undefined)
     setQueuedMessages(prepared?.queuedMessages || [])
+    setLocalQueuedSends([])
+    acceptedLocalQueueRef.current.clear()
     setSessionRecord(prepared?.session || null)
     setSessionBusy(!!prepared?.session && isSessionRuntimeActive(prepared.session))
     setSessionQueueLength(prepared?.queueLength || 0)
@@ -393,6 +400,19 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
   useEffect(() => {
     queuedMessagesRef.current = queuedMessages
   }, [queuedMessages])
+
+  // The server preview or canonical history takes over a busy send's row by client identity. After
+  // acceptance, the next queue snapshot owns it even without identity (older servers, capped previews).
+  useEffect(() => {
+    if (!localQueuedSends.length) return
+    const owned = new Set([...queuedMessages, ...messages].filter(message => !message.__meta?.optimistic).map(getClientMessageId))
+    const accepted = acceptedLocalQueueRef.current
+    const superseded = new Set(localQueuedSends.map(getClientMessageId).filter((id): id is string =>
+      !!id && (owned.has(id) || accepted.has(id) && accepted.get(id) !== queuedMessages)))
+    if (!superseded.size) return
+    for (const id of superseded) accepted.delete(id)
+    setLocalQueuedSends(previous => previous.filter(message => !superseded.has(getClientMessageId(message)!)))
+  }, [localQueuedSends, messages, queuedMessages])
 
   useEffect(() => {
     if (!sessionBusy) {
@@ -1210,6 +1230,14 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
         parts: previewParts,
         timestamp: sendTimestamp,
       })])
+    } else if (!isSlashCommand) {
+      pendingSentMessageIdsRef.current.add(clientMessageId)
+      setLocalQueuedSends(prev => [...prev, buildOptimisticUserMessage({
+        clientMessageId,
+        parts: previewParts,
+        timestamp: sendTimestamp,
+        queued: true,
+      })])
     }
 
     try {
@@ -1219,12 +1247,15 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
           ...(!isSlashCommand ? { clientMessageId } : {}),
       })
       if (!appendOptimistic && !isSlashCommand) {
+        acceptedLocalQueueRef.current.set(clientMessageId, queuedMessagesRef.current)
         queueRefreshNeededRef.current = true
         scheduleHistoryRefresh()
       }
     } catch (e) {
       console.error('Failed to send message:', e)
       pendingSentMessageIdsRef.current.delete(clientMessageId)
+      acceptedLocalQueueRef.current.delete(clientMessageId)
+      setLocalQueuedSends(prev => prev.filter(message => getClientMessageId(message) !== clientMessageId))
       setMessages(prev => {
           const hasReconciledRow = prev.some(message => (
             !message.__meta?.optimistic
@@ -1283,6 +1314,9 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
       && (!getClientMessageId(message) || !canonicalClientIds.has(getClientMessageId(message))))]
   }, [blockExpansionCache, isFullHistoryLoaded, messages, resolvedContext, timelineState.archiveMessages])
 
+  const pendingSendQueue = useMemo(() => projectPendingSendQueue({ messages, serverQueue: queuedMessages, localQueue: localQueuedSends, queueLength: sessionQueueLength }),
+    [localQueuedSends, messages, queuedMessages, sessionQueueLength])
+
   return {
     continuousMessages,
     continuousHistoryReady: isFullHistoryLoaded && resolvedContext.cache === blockExpansionCache
@@ -1290,7 +1324,9 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
     archivePage,
     loadArchivePage,
     messages,
-    queuedMessages,
+    queuedMessages: pendingSendQueue.queuedMessages,
+    queueFooterCount: pendingSendQueue.footerCount,
+    pendingSend: pendingSendQueue.pendingSendIds.size > 0,
     sessionRecord,
     sessionMissing,
     sessionBusy,

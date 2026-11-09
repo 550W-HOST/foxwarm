@@ -370,6 +370,19 @@ public sealed class SessionEntry
 
     internal void InvokeCommitted(SessionSnapshot snapshot) => Committed?.Invoke(snapshot);
 
+    /// <summary>Notifies observers of an already durable change; an observer failure is recorded, never rolled back.</summary>
+    internal void InvokePostCommitNotification(SessionSnapshot snapshot)
+    {
+        try
+        {
+            Committed?.Invoke(snapshot);
+        }
+        catch (Exception error)
+        {
+            RecordPostCommitNotificationFailure(error);
+        }
+    }
+
     internal void InvokeQueuedCommitted(
         SessionSnapshot snapshot,
         IReadOnlyList<JsonObject>? appendedMessages = null

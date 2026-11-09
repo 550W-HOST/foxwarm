@@ -6,6 +6,7 @@ import { getStreamingCaptions, type StreamingAssistantDraft, type StreamingCapti
 
 interface CaptionState {
   request?: string
+  attempt?: number
   latest?: StreamingCaption
   shown?: StreamingCaption
   until: number
@@ -21,7 +22,10 @@ export function useProcessingCaption(view: RuntimeStatusView | null, runtime: Se
   const now = Date.now()
   let next = empty
   if (view?.playful || view?.kind === 'tool') {
-    const request = view.playful ? runtime?.active?.streamId || draft?.streamId : undefined
+    // The final commit clears the draft before the runtime leaves this model attempt; keep its caption until then.
+    const attempt = view.playful ? runtime?.since : undefined
+    const retained = view.playful && !draft && attempt !== undefined && previous.current.attempt === attempt ? previous.current.request : undefined
+    const request = view.playful ? runtime?.active?.streamId || draft?.streamId || retained : undefined
     const matchesRequest = !draft || draft.streamId === request
     let latest = matchesRequest && request && previous.current.request === request ? previous.current.latest : undefined
     if (view.playful && draft && request === draft.streamId) {
@@ -43,7 +47,7 @@ export function useProcessingCaption(view: RuntimeStatusView | null, runtime: Se
     const until = shown?.kind === 'tool'
       ? shown.key === previous.current.shown?.key ? previous.current.until : now + 3000
       : 0
-    next = { request, latest, shown, until }
+    next = { request, attempt, latest, shown, until }
   }
   useBrowserLayoutEffect(() => { previous.current = next })
   const deadline = next.until

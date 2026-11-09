@@ -576,9 +576,12 @@ public sealed class WebUiRealtimeRevisionTests
         {
             BeforeQueuedSend = async (frame, token) =>
             {
+                // Pause the busy frame whose counters already equal the final idle snapshot, so only
+                // revision ordering can reject it (the earlier busy-claim frame predates the append).
                 if (
                     frame["type"]?.GetValue<string>() != "session-state"
                     || frame["session"]?["busy"]?.GetValue<bool>() != true
+                    || frame["session"]?["messageCount"]?.GetValue<int>() != 1
                     || Interlocked.Exchange(ref pausedOnce, 1) != 0
                 )
                     return;

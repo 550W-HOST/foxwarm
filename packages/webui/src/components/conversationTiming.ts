@@ -92,6 +92,16 @@ export function applyConversationTiming(
   const timingEvidence = (message: Message) => committed(message) && !isCompactCompletionMaintenanceMessage(message)
   const sourceIndex = (message: Message) => indices.get(message) ?? (message.__meta ? history.findIndex(item => item.__meta === message.__meta) : -1)
   const firstIndex = rows.flatMap(row => [sourceIndex(row.msg), ...(row.activity?.messages.map(sourceIndex) || [])]).find(index => index >= 0) ?? 0
+  // Live work starts with the input that opened this busy period: the claim-to-append gap belongs to
+  // the new turn, never to the activity that this input closes.
+  const activeStart = timestamp(context.busyStartedAt) ?? timestamp(context.runtimeState?.since)
+  let openingInput: Message | undefined
+  for (let index = history.length - 1; activeStart !== undefined && index >= 0; index--) {
+    if (!committed(history[index])) continue
+    if ((timestamp(history[index].__meta?.timestamp) ?? -Infinity) < activeStart) break
+    openingInput = history[index]
+  }
+  const liveStart = openingInput?.role === 'user' ? Math.max(activeStart!, timestamp(openingInput.__meta?.timestamp)!) : activeStart
   let left: { time?: number; index: number } = { index: -1 }
   // The viewport does not own the left boundary. Preserve the preceding visible history boundary.
   for (let index = 0; index < firstIndex; index++) {
@@ -132,9 +142,8 @@ export function applyConversationTiming(
         }
       }
       const runtime = context.runtimeState
-      const activeStart = timestamp(context.busyStartedAt) ?? timestamp(runtime?.since)
-      const live = runtime?.busy && (runtime.state === 'requesting-model' || runtime.state === 'running-tool') && activeStart !== undefined && context.now !== undefined
-        ? { start: activeStart, end: context.now } : undefined
+      const live = runtime?.busy && (runtime.state === 'requesting-model' || runtime.state === 'running-tool') && liveStart !== undefined && context.now !== undefined
+        ? { start: liveStart, end: context.now } : undefined
       if (live) spans.push(live)
       const activeBatch = live && runtime?.state === 'running-tool' && runtime.tool?.id
         ? segment.filter(message => message.role === 'model' && message.parts.some(part => part.functionCall)).slice(-1)[0] : undefined
@@ -204,7 +213,9 @@ export function applyConversationTiming(
       continue
     }
     const messageIndex = sourceIndex(row.msg)
-    if (messageIndex < 0 || !committed(row.msg)) continue // Streaming text is not a permanent clock boundary.
+    // A pending sent input provisionally closes the preceding activity at its send time; its canonical row replaces it.
+    const pendingInput = row.msg.role === 'user' && row.msg.__meta?.optimistic === true && !row.msg.__meta?.queuedPreview
+    if (messageIndex < 0 || !committed(row.msg) && !pendingInput) continue // Streaming text is not a permanent clock boundary.
     const kind = boundary(row.msg, row.conversationPartIndex)
     const terminalError = getLlmErrorMessageDetails(row.msg) && row.msg.__meta?.retry?.final === true
     if (kind || terminalError) {

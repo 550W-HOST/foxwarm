@@ -58,6 +58,12 @@ public sealed class WebUiQueuePreviewTests
         Assert.StartsWith(wrapped[0]["system"]!.GetValue<string>()[..4000], preview);
         Assert.True(preview.Length < 4100);
         Assert.True(previews[0]!["__meta"]!["queuedPreview"]!.GetValue<bool>());
+        Assert.Equal(
+            "browser-input",
+            previews[0]!["__meta"]!["clientMessageId"]!.GetValue<string>()
+        );
+        Assert.Null(previews[1]!["__meta"]!["clientMessageId"]);
+        Assert.Null(previews[2]!["__meta"]!["clientMessageId"]);
         Assert.Equal("prebuilt system", previews[1]!["parts"]![0]!["system"]!.GetValue<string>());
         Assert.Equal("visible text", previews[1]!["parts"]![0]!["text"]!.GetValue<string>());
         Assert.True(previews[1]!["parts"]![0]!["thinking"]!.GetValue<string>().Length < 4100);

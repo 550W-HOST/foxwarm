@@ -130,7 +130,7 @@ The existing 56px minimum runtime slot, its above-status padding, Composer space
 
 ### D-chat-queued-preview
 
-Busy-time sends avoid a duplicate optimistic committed row; queue preview is reloaded separately from committed history.
+Pending sends own preview rows by [client identity](../threads/streaming-pipeline.md#d-streaming-optimistic-message-identity).
 
 ### D-chat-user-follow-intent
 

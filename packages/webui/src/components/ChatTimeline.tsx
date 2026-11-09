@@ -91,6 +91,8 @@ interface ChatTimelineProps {
   activityDetails?: boolean
   runtimeState?: import('../sessionRuntimeState').SessionRuntimeState
   busyStartedAt?: number | null
+  /** False while a sent input is pending: the live clock starts with its canonical row, not before. */
+  liveTiming?: boolean
   isMobile: boolean
   showInterAgentMessages?: boolean
   showCommentary?: boolean
@@ -1289,7 +1291,7 @@ const TimelineTimeSeparator = memo(function TimelineTimeSeparator({ marker }: { 
   )
 })
 
-const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, reasoningPresentation, isRunningTool = false, isMobile, timelineView, showInterAgentMessages = true, showCommentary = true, showUsageBadge, showTimeDividers = true, showUserMessageMetadata = false, onOpenCodeFile, onOpenCodeCommit, nestedDepth = 0, searchTarget, historyMessages, currentHistoryMessages, activityDetails, runtimeState, busyStartedAt, renderMessageFooter }: ChatTimelineProps) {
+const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, reasoningPresentation, isRunningTool = false, isMobile, timelineView, showInterAgentMessages = true, showCommentary = true, showUsageBadge, showTimeDividers = true, showUserMessageMetadata = false, onOpenCodeFile, onOpenCodeCommit, nestedDepth = 0, searchTarget, historyMessages, currentHistoryMessages, activityDetails, runtimeState, busyStartedAt, liveTiming = true, renderMessageFooter }: ChatTimelineProps) {
   const hideMetrics = useMobileChatViewport()
   const [expandedToolGroups, setExpandedToolGroups] = useState<Set<string>>(new Set())
   const [expandedTools, setExpandedTools] = useState<ExpandedTools>(new Map())
@@ -1320,7 +1322,7 @@ const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, rea
   ), [timelineView, showInterAgentMessages, showCommentary, historyMessages, messages, isMobile, onOpenCodeCommit, onOpenCodeFile, sessionId, showUsageBadge, showUserMessageMetadata])
 
   const rows = useMemo(() => {
-    const input = { messages, reasoningPresentation, isRunningTool, isMobile, timelineView, showInterAgentMessages, showCommentary, showUsageBadge: showUsageBadge && !hideMetrics, showTimeDividers, nestedDepth, activityDetails, historyMessages, currentHistoryMessages, timing: { runtimeState, busyStartedAt, now: historyMessages && nestedDepth === 0 ? Date.now() : undefined }, expandedGroupKeys: expandedToolGroups }
+    const input = { messages, reasoningPresentation, isRunningTool, isMobile, timelineView, showInterAgentMessages, showCommentary, showUsageBadge: showUsageBadge && !hideMetrics, showTimeDividers, nestedDepth, activityDetails, historyMessages, currentHistoryMessages, timing: { runtimeState, busyStartedAt, now: historyMessages && nestedDepth === 0 && liveTiming ? Date.now() : undefined }, expandedGroupKeys: expandedToolGroups }
     let result = buildTimelineRows(input, rowsCacheRef.current)
     // A search reveal is transient: include only its owning group without changing manual expansion state.
     if (searchTarget && timelineView === 'grouped' && nestedDepth === 0) {
@@ -1335,7 +1337,7 @@ const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, rea
     }
     rowsCacheRef.current = result.cache
     return result.rows
-  }, [expandedToolGroups, timelineView, showInterAgentMessages, showCommentary, isMobile, isRunningTool, messages, reasoningPresentation, nestedDepth, activityDetails, historyMessages, currentHistoryMessages, clockTick, runtimeState, busyStartedAt, searchTarget, showUsageBadge, showTimeDividers, hideMetrics])
+  }, [expandedToolGroups, timelineView, showInterAgentMessages, showCommentary, isMobile, isRunningTool, messages, reasoningPresentation, nestedDepth, activityDetails, historyMessages, currentHistoryMessages, clockTick, runtimeState, busyStartedAt, liveTiming, searchTarget, showUsageBadge, showTimeDividers, hideMetrics])
 
 
   // A loaded predecessor can change the projected first row without changing the process being read.

@@ -77,7 +77,6 @@ public sealed partial class LocalSessionTurnHost
         try
         {
             await entry.SaveLane.SaveStrictAsync().ConfigureAwait(false);
-            return true;
         }
         catch (Exception error)
         {
@@ -85,6 +84,9 @@ public sealed partial class LocalSessionTurnHost
                 entry.RollbackBusy(version, previousLlmFailed);
             throw;
         }
+        // Presentation learns the durable claim now; turn start can take a while before the first append.
+        entry.InvokePostCommitNotification(entry.Snapshot());
+        return true;
     }
 
     public async Task AppendQueuedInputsAsync(IReadOnlyList<QueueItem> items)

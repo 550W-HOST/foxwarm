@@ -199,7 +199,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
   const viewportSessionId = canonicalSessionId || sessionId
   const initialContinuousAnchorSeq = useMemo(() => getChatViewportAnchorSeq(getStoredChatViewportState(viewportSessionId, 'continuous')), [viewportSessionId])
   const {
-    messages: activeMessages, continuousMessages, continuousHistoryReady, archivePage, loadArchivePage, queuedMessages, sessionRecord, sessionMissing, sessionBusy, sessionQueueLength,
+    messages: activeMessages, continuousMessages, continuousHistoryReady, archivePage, loadArchivePage, queuedMessages, queueFooterCount, pendingSend, sessionRecord, sessionMissing, sessionBusy, sessionQueueLength,
     persistentMemorySnapshot, memorySize, streamingAssistantDraft, toolScriptProgress, toolCallActivity,
     historyLoaded, isFullHistoryLoaded, earlierHistoryError, connectionState, reconnectCountdown, stateUnavailableReason,
     pendingControl, controlFeedback, loading, retryEarlierHistory, sendMessage: handleSend, sendSessionCommand, mergeConfirmedSettings,
@@ -1544,7 +1544,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
   const waitingOnQuestion = sessionRecord?.runtimeState?.state === 'waiting' && sessionRecord.runtimeState.waiting?.waitingFor === 'question'
 
   const renderQueuedFooter = (alignment: 'left' | 'right') => <QueuedMessageStatus
-    count={sessionQueueLength}
+    count={queueFooterCount}
     disabled={!!pendingControl || !!sessionRecord?.runtimeState?.stopping}
     alignment={alignment}
     isMobile={isMobile}
@@ -1741,7 +1741,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
                 <ToolCallActivityContext.Provider value={!displayingLatest ? NO_RUNNING_TOOL_CALLS : toolCallActivity?.runningCallIds ?? (sessionRecord?.runtimeState?.perCallToolActivity ? NO_RUNNING_TOOL_CALLS : undefined)}>
                 <ToolScriptProgressContext.Provider value={toolScriptProgress}>
                 <SentVersionContext.Provider value={sentVersion}>
-                  <ChatTimeline sessionId={sessionId} historyMessages={messages} currentHistoryMessages={activeMessages} runtimeState={displayingLatest ? sessionRecord?.runtimeState : undefined} busyStartedAt={displayingLatest ? sessionRecord?.busyStartedAt : undefined} isRunningTool={displayingLatest && sessionRecord?.runtimeState?.state === 'running-tool'} messages={timelineMessages} isMobile={isMobile} timelineView={timelineView} showInterAgentMessages={showInterAgentMessages} showCommentary={showCommentary} showUsageBadge={showUsageBadge} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} searchTarget={searchOpen && selectedSearchMatch?.id === searchMatchId ? selectedSearchMatch : null} renderMessageFooter={displayingLatest && sessionQueueLength > 0 && queuedMessages.length === 0 ? renderQueuedFooter : undefined} />
+                  <ChatTimeline sessionId={sessionId} historyMessages={messages} currentHistoryMessages={activeMessages} runtimeState={displayingLatest ? sessionRecord?.runtimeState : undefined} busyStartedAt={displayingLatest ? sessionRecord?.busyStartedAt : undefined} isRunningTool={displayingLatest && sessionRecord?.runtimeState?.state === 'running-tool'} messages={timelineMessages} isMobile={isMobile} timelineView={timelineView} showInterAgentMessages={showInterAgentMessages} showCommentary={showCommentary} showUsageBadge={showUsageBadge} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} searchTarget={searchOpen && selectedSearchMatch?.id === searchMatchId ? selectedSearchMatch : null} renderMessageFooter={displayingLatest && queueFooterCount > 0 && queuedMessages.length === 0 ? renderQueuedFooter : undefined} liveTiming={!pendingSend} />
                 </SentVersionContext.Provider>
                 </ToolScriptProgressContext.Provider>
                 </ToolCallActivityContext.Provider>
@@ -1756,9 +1756,10 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
               streamingAssistantDraft={streamingAssistantDraft}
               sessionBusy={sessionBusy}
               runtimeState={sessionRecord?.runtimeState}
-              sessionQueueLength={sessionQueueLength}
+              sessionQueueLength={queueFooterCount}
               turnIncomplete={isRuntimeStateInactiveName(sessionRecord?.runtimeState?.state) && turnIncomplete}
               loading={loading}
+              pendingSend={pendingSend}
               pendingControl={pendingControl}
               controlFeedback={controlFeedback}
               failure={getLastSessionFailure(messages)}
@@ -1768,7 +1769,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
             />}
             {displayingLatest && queuedMessages.length > 0 && (
               <div className="foxwarm-queued-preview min-w-0 max-w-full" data-queued-preview="true" aria-label="Queued messages">
-                <ThreadCardHeightContext.Provider value={cardHeightContext}><ChatTimeline sessionId={sessionId} messages={queuedMessages} isMobile={isMobile} timelineView={timelineView} showInterAgentMessages={showInterAgentMessages} showCommentary={showCommentary} showUsageBadge={false} showTimeDividers={false} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} renderMessageFooter={sessionQueueLength > 0 ? renderQueuedFooter : undefined} /></ThreadCardHeightContext.Provider>
+                <ThreadCardHeightContext.Provider value={cardHeightContext}><ChatTimeline sessionId={sessionId} messages={queuedMessages} isMobile={isMobile} timelineView={timelineView} showInterAgentMessages={showInterAgentMessages} showCommentary={showCommentary} showUsageBadge={false} showTimeDividers={false} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} renderMessageFooter={queueFooterCount > 0 ? renderQueuedFooter : undefined} /></ThreadCardHeightContext.Provider>
               </div>
             )}
             <div aria-hidden="true" data-chat-composer-spacer style={{ height: 'calc(var(--chat-composer-offset, 224px) - 2.5rem)' }} />

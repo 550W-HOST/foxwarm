@@ -214,9 +214,17 @@ test('status visibility is stable and queue actions follow the final visible mes
   await page.type('.foxwarm-chat-composer-textarea', 'queued input')
   await page.click('button[type="submit"]')
   await page.waitForSelector('[data-composer-action="send"][disabled]')
+  // A busy send shows its input at once in the queue lane, below an unchanged runtime slot.
+  await page.waitForFunction(() => document.querySelector('[data-queued-preview]')?.textContent.includes('queued input'))
+  await page.waitForFunction(() => {
+    const scroll = document.querySelector('.foxwarm-chat-messages')
+    return scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight <= 1
+  }, { timeout: 3000 })
   const loading = await geometry()
-  assert.ok(Math.abs(loading.top - baseline.top) <= 1 && loading.scrollHeight === baseline.scrollHeight, JSON.stringify({ baseline, loading }))
+  assert.ok(loading.slot === baseline.slot && loading.composer === baseline.composer && loading.distance <= 1, JSON.stringify({ baseline, loading }))
+  assert.equal(await page.evaluate(() => document.querySelector('.foxwarm-chat-messages').innerText.split('queued input').length - 1), 1)
   await page.evaluate(() => window.fixture.releaseSend())
+  await page.waitForFunction(() => !document.querySelector('[data-queued-preview]'))
   await page.waitForSelector('[data-composer-action="stop"]:not([disabled])')
   await clickControl('Stop')
   assert.ok(await page.evaluate(() => window.commands.includes('/stop')))
