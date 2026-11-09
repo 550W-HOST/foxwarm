@@ -2,11 +2,11 @@ import { getSessionRuntimeTone } from '../sessionRuntimeState'
 import { useState, useRef, useEffect, useMemo, type ReactNode } from 'react'
 import { useDndContext, useDraggable, useDroppable } from '@dnd-kit/core'
 import { API_BASE_PATH } from '../config'
-import { SlidersHorizontal, MoreVertical, Plus, Settings, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X, CornerDownRight, ListTree, Clock3, Rows3, Pin, PinOff, Bell, BellRing, GitBranch, Server, Copy, SquarePlus, MessageCircleQuestion, ShieldAlert } from 'lucide-react'
+import { SlidersHorizontal, MoreVertical, Plus, Settings, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X, CornerDownRight, ListTree, Clock3, Rows3, Pin, PinOff, Bell, BellRing, GitBranch, Server, ChevronDown, ChevronUp, Copy, SquarePlus, MessageCircleQuestion, ShieldAlert } from 'lucide-react'
 import RuntimeBusySpinner from './RuntimeBusySpinner'
 import MobilePageHeader from './MobilePageHeader'
 import ContextMenu, { type ContextMenuAnchorRect, type ContextMenuEntry } from './ContextMenu'
-import SessionListSectionHeader, { sessionRowTitleX } from './SessionListSectionHeader'
+import SessionListSectionHeader, { SESSION_ROW_PADDING_PX } from './SessionListSectionHeader'
 import { copyTextToClipboard } from './chatShared'
 import { getSessionRuntimeSummary, getSessionRuntimeStateName, type SessionRuntimeState } from '../sessionRuntimeState'
 import { type SessionIdleNotificationMode } from '../sessionIdleNotifications'
@@ -1210,15 +1210,28 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   // groups; each group lists its members in the current mode's order (an Agent group starts with
   // the Agent's main Session).
   const disclosureColumn = compact && viewMode !== 'flat-time' && !isFiltering
-  const sectionTitleX = sessionRowTitleX(disclosureColumn)
+  // `Show N more` / `Show less`: the chevron sits in the disclosure column and the label on the
+  // title column of the rows it continues. `contentX` is those rows' content start.
+  const continuationRow = (props: { onClick: () => void; label: string; less?: boolean; contentX: number; attributes?: Record<string, string> }) => (
+    <button
+      type="button"
+      onClick={props.onClick}
+      {...props.attributes}
+      className="flex w-full items-center gap-1.5 py-2 pr-2 text-left text-xs text-fw-text-muted hover:text-fw-text dark:hover:text-fw-text-strong"
+      style={{ paddingLeft: `${props.contentX}px` }}
+    >
+      <span className="flex w-4 shrink-0 justify-center" aria-hidden="true">
+        {props.less ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+      </span>
+      {props.label}
+    </button>
+  )
   const renderPinnedSection = (pinnedRoots: Session[], showMore: boolean) => (
     <section aria-label="Pinned" data-session-section="pinned" className="mb-2">
       <SessionListSectionHeader label="Pinned" disclosureColumn={disclosureColumn} collapsed={pinnedCollapsed} onToggle={togglePinnedCollapsed} toggleLabel={`${pinnedCollapsed ? 'Expand' : 'Collapse'} pinned sessions`} count={pinnedCollapsed ? pinnedRoots.length : undefined} />
       {!pinnedCollapsed && pinnedRoots.map(session => renderSession(session))}
       {!pinnedCollapsed && showMore && hiddenRootCount > 0 && (
-        <button onClick={toggleShowMoreRoots} className="w-full p-2 text-left text-xs text-fw-text-muted hover:text-fw-text dark:hover:text-fw-text-strong" style={{ paddingLeft: sectionTitleX }}>
-          {`▼ Show ${Math.min(hiddenRootCount, MORE_VISIBLE_ROOTS_STEP)} more...`}
-        </button>
+        continuationRow({ onClick: toggleShowMoreRoots, label: `Show ${Math.min(hiddenRootCount, MORE_VISIBLE_ROOTS_STEP)} more`, contentX: SESSION_ROW_PADDING_PX })
       )}
     </section>
   )
@@ -1279,9 +1292,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
               />
               {!collapsed && members.map(session => renderSession(session))}
               {!collapsed && remaining > 0 && (
-                <button onClick={() => view.loadMoreGroup(group.key)} data-session-group-more={group.key} className="w-full p-2 text-left text-xs text-fw-text-muted hover:text-fw-text dark:hover:text-fw-text-strong" style={{ paddingLeft: sectionTitleX }}>
-                  {`▼ Show ${remaining} more...`}
-                </button>
+                continuationRow({ onClick: () => view.loadMoreGroup(group.key), label: `Show ${remaining} more`, contentX: SESSION_ROW_PADDING_PX, attributes: { 'data-session-group-more': group.key } })
               )}
             </section>
           )
@@ -1367,9 +1378,9 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
         aria-label={`Node: ${resolvedNodeId}`}
         title={`Node: ${resolvedNodeId}`}
         data-session-node={resolvedNodeId}
-        className="inline-flex shrink-0 items-center justify-center text-fw-accent"
+        className="inline-flex shrink-0 items-center justify-center text-fw-text-muted opacity-60"
       >
-        <Server className={compact ? 'h-3.5 w-3.5' : 'h-3.5 w-3.5'} strokeWidth={2} aria-hidden="true" />
+        <Server className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
       </span>
     )
 
@@ -1594,22 +1605,10 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
               </button>
             ))}
             {showMoreChildren && branchRow('more', (
-              <button
-                onClick={() => toggleShowMore(session.id)}
-                className="w-full text-left p-2 text-xs text-fw-text-muted hover:text-fw-text dark:hover:text-fw-text-strong"
-                style={{ paddingLeft: `${28 + (level + 1) * 16}px` }}
-              >
-                {`▼ Show ${Math.min(hiddenCount, MORE_VISIBLE_CHILDREN_STEP)} more...`}
-              </button>
+              continuationRow({ onClick: () => toggleShowMore(session.id), label: `Show ${Math.min(hiddenCount, MORE_VISIBLE_CHILDREN_STEP)} more`, contentX: SESSION_ROW_PADDING_PX + (level + 1) * 16 })
             ))}
             {!bounded && hiddenCount <= 0 && children.length > DEFAULT_VISIBLE_CHILDREN && branchRow('less', (
-              <button
-                onClick={() => toggleShowMore(session.id)}
-                className="w-full text-left p-2 text-xs text-fw-text-muted hover:text-fw-text dark:hover:text-fw-text-strong"
-                style={{ paddingLeft: `${28 + (level + 1) * 16}px` }}
-              >
-                ▲ Show less
-              </button>
+              continuationRow({ onClick: () => toggleShowMore(session.id), label: 'Show less', less: true, contentX: SESSION_ROW_PADDING_PX + (level + 1) * 16 })
             ))}
           </div>
         )}
@@ -1818,22 +1817,10 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                   ) : null
                 })}
                 {!groupedRoots && hiddenRootCount > 0 && (
-                  <button
-                    onClick={toggleShowMoreRoots}
-                    className="w-full text-left p-2 text-xs text-fw-text-muted hover:text-fw-text dark:hover:text-fw-text-strong"
-                    style={{ paddingLeft: sessionRowTitleX(disclosureColumn) }}
-                  >
-                    {`▼ Show ${Math.min(hiddenRootCount, MORE_VISIBLE_ROOTS_STEP)} more...`}
-                  </button>
+                  continuationRow({ onClick: toggleShowMoreRoots, label: `Show ${Math.min(hiddenRootCount, MORE_VISIBLE_ROOTS_STEP)} more`, contentX: SESSION_ROW_PADDING_PX })
                 )}
                 {!bounded && hiddenRootCount <= 0 && rootSessions.length > DEFAULT_VISIBLE_ROOTS && (
-                  <button
-                    onClick={toggleShowMoreRoots}
-                    className="w-full text-left p-2 text-xs text-fw-text-muted hover:text-fw-text dark:hover:text-fw-text-strong"
-                    style={{ paddingLeft: sessionRowTitleX(disclosureColumn) }}
-                  >
-                    ▲ Show less
-                  </button>
+                  continuationRow({ onClick: toggleShowMoreRoots, label: 'Show less', less: true, contentX: SESSION_ROW_PADDING_PX })
                 )}
               </>
             ) : (
