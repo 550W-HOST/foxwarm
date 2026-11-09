@@ -32,13 +32,7 @@ internal static class ToolAuthorizationExplain
                 detail["rule"] = null;
                 var exec = new JsonObject
                 {
-                    ["decision"] = fallback.Outcome switch
-                    {
-                        CreationTargetDecision.Allow => "allow",
-                        CreationTargetDecision.Ask => "ask",
-                        CreationTargetDecision.Deny => "deny",
-                        _ => "indeterminate",
-                    },
+                    ["decision"] = AuthorizationDecision.Name(fallback.Effect),
                 };
                 Matched(exec, layer.Policy, fallback.Rule);
                 detail["unrestrictedMasterExec"] = exec;

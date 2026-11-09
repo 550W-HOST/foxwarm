@@ -98,7 +98,7 @@ rules:
 
 - A rule with `secrets` decides only the secrets, never the call itself; the call still needs its own allow. Patterns use secret-name characters and `*`; a scalar is a one-item list.
 - An allow covers a call only if its patterns cover every named secret; a deny matches any of them. The first matching `secrets` rule decides.
-- Without a matching `secrets` rule, the secrets follow the caller's authorization for unrestricted `exec` on master, because such a caller can already read the secret store. With no rules this allows; an Agent-local layer ending in a selector-free deny, a deny or ask on master `exec`, or an `exec` allow scoped by arguments or paths denies (or asks). Legacy isolated Agents are always refused.
+- Without a matching `secrets` rule, the secrets follow the caller's authorization for unrestricted `exec` on master, because such a caller can already read the secret store. Rules on `exec` scoped by arguments or paths are skipped for this; the first other rule matching `exec` on master decides, else the default. With no rules this allows; a deny or ask on master `exec` that does not depend on the command, or an Agent-local layer ending in a selector-free deny, denies (or asks), even after a command allowlist. Legacy isolated Agents are always refused.
 - `secrets` is a top-level selector only and cannot be combined with `externalId`.
 
 ## Ordering and fallback

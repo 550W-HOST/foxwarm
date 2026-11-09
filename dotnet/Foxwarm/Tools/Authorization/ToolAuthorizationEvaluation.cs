@@ -171,18 +171,9 @@ internal sealed record SecretsDecision(
     UnrestrictedExecDecision? Fallback
 );
 
-// Every possible first-match outcome of `exec` on master with unknown arguments and cwd.
-// Rule is the rule that decided regardless of those unknowns, if one did.
-internal sealed record UnrestrictedExecDecision(CreationTargetDecision Outcome, JsonObject? Rule)
-{
-    internal ToolAuthorizationEffect Effect =>
-        Outcome switch
-        {
-            CreationTargetDecision.Allow => ToolAuthorizationEffect.Allow,
-            CreationTargetDecision.Ask => ToolAuthorizationEffect.Ask,
-            _ => ToolAuthorizationEffect.Deny,
-        };
-}
+// The caller's authorization for `exec` on master with any command and cwd. Rule is the rule
+// that decided it; null stands for the default.
+internal sealed record UnrestrictedExecDecision(ToolAuthorizationEffect Effect, JsonObject? Rule);
 
 internal static class ToolAuthorizationEvaluation
 {
@@ -420,52 +411,6 @@ internal static class ToolAuthorizationEvaluation
             || SessionWait.Text(request.Args["agentName"]) is not { Length: > 0 }
         )
             throw new InvalidDataException("Creation target authorization requires an Agent.");
-        return PossibleOutcome(
-            policy,
-            request,
-            key => key == "agentName" || key.StartsWith("agentName.", StringComparison.Ordinal),
-            unknownPaths: false
-        ).Outcome;
-    }
-
-    // Whether the caller may run any command in any directory on master: every possible first
-    // match of `exec` there, with its arguments and cwd unknown, allows. The request keeps the
-    // caller's identity facts, including its current Node.
-    internal static UnrestrictedExecDecision EvaluateUnrestrictedMasterExec(
-        ToolAuthorizationPolicy policy,
-        ToolAuthorizationRequest request
-    ) =>
-        PossibleOutcome(
-            policy,
-            request with
-            {
-                Source = "node",
-                Name = "exec",
-                Server = null,
-                Args = new JsonObject(),
-                Paths = [],
-                TargetNode = "master",
-                NodeTargets = ["master"],
-                NodeForest = null,
-                SourceParent = null,
-                SessionTarget = null,
-                TaskOwnerSession = null,
-                Secrets = null,
-            },
-            _ => false,
-            unknownPaths: true
-        );
-
-    // Every first-match outcome a call could reach while some of its facts are unknown. A rule
-    // whose unknown conditions might not hold records its outcome and evaluation continues; the
-    // first rule that matches whatever they are decides.
-    private static UnrestrictedExecDecision PossibleOutcome(
-        ToolAuthorizationPolicy policy,
-        ToolAuthorizationRequest request,
-        Func<string, bool> knownArgument,
-        bool unknownPaths
-    )
-    {
         var allow = false;
         var ask = false;
         var deny = false;
@@ -481,38 +426,75 @@ internal static class ToolAuthorizationEvaluation
                 !rule["enabled"]!.GetValue<bool>()
                 || !Ordinary(match)
                 || !Identity(match, request, deny: Restrictive(rule))
+                || !Paths(match["path"] as JsonObject, request)
             )
                 continue;
             var unknown = false;
-            if (match["path"] is JsonObject path)
-            {
-                if (unknownPaths)
-                    unknown = true;
-                else if (!Paths(path, request))
-                    continue;
-            }
             var matches = true;
             foreach (var pair in match["args"] as JsonObject ?? new())
             {
-                if (knownArgument(pair.Key))
+                if (
+                    pair.Key == "agentName"
+                    || pair.Key.StartsWith("agentName.", StringComparison.Ordinal)
+                )
                     matches &= ArgumentMatches(pair.Key, pair.Value, request);
                 else
                     unknown = true;
             }
             if (!matches)
                 continue;
-            var effect = RuleEffect(rule, request);
+            var effect = AuthorizationDecision.Parse(SessionWait.Text(rule["action"]));
             allow |= effect == ToolAuthorizationEffect.Allow;
             ask |= effect == ToolAuthorizationEffect.Ask;
             deny |= effect == ToolAuthorizationEffect.Deny;
             if (!unknown)
-                return new(Outcome(), rule);
+                return Outcome();
         }
         var fallback = Default(policy, request);
         allow |= fallback == ToolAuthorizationEffect.Allow;
         ask |= fallback == ToolAuthorizationEffect.Ask;
         deny |= fallback == ToolAuthorizationEffect.Deny;
-        return new(Outcome(), null);
+        return Outcome();
+    }
+
+    // Whether the caller may run any command in any directory on master. Rules that depend on
+    // the command arguments or cwd neither grant nor remove that: a command or cwd restriction
+    // leaves other commands available, and an argument-scoped allow is not unrestricted. The
+    // first rule that matches whatever the arguments are decides, else the default. The request
+    // keeps the caller's identity facts, including its current Node.
+    internal static UnrestrictedExecDecision EvaluateUnrestrictedMasterExec(
+        ToolAuthorizationPolicy policy,
+        ToolAuthorizationRequest request
+    )
+    {
+        var exec = request with
+        {
+            Source = "node",
+            Name = "exec",
+            Server = null,
+            Args = new JsonObject(),
+            Paths = [],
+            TargetNode = "master",
+            NodeTargets = ["master"],
+            NodeForest = null,
+            SourceParent = null,
+            SessionTarget = null,
+            TaskOwnerSession = null,
+            Secrets = null,
+        };
+        foreach (var rule in policy.Value["rules"]!.AsArray().OfType<JsonObject>())
+        {
+            var match = rule["match"]!.AsObject();
+            if (
+                rule["enabled"]!.GetValue<bool>()
+                && Ordinary(match)
+                && match["args"] is not JsonObject { Count: > 0 }
+                && match["path"] is not JsonObject { Count: > 0 }
+                && Identity(match, exec, deny: Restrictive(rule))
+            )
+                return new(RuleEffect(rule, exec), rule);
+        }
+        return new(Default(policy, exec), null);
     }
 
     // Rules with a `secrets` selector decide only the secret facts of a call; every other rule

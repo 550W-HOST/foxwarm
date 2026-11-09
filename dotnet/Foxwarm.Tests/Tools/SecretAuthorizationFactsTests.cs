@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json.Nodes;
+using Foxwarm.Sessions;
 using Foxwarm.Tools;
 
 namespace Foxwarm.Tests;
@@ -77,7 +78,7 @@ public sealed class SecretAuthorizationFactsTests
         var denied = ToolAuthorizationEvaluation.Evaluate(targeted, SetConfig("worker", facts));
         Assert.Equal(ToolAuthorizationEffect.Deny, denied.Effect);
         Assert.Equal(ToolAuthorizationEffect.Allow, denied.Call!.Effect);
-        Assert.Equal(CreationTargetDecision.Deny, denied.Secrets!.Fallback!.Outcome);
+        Assert.Equal(ToolAuthorizationEffect.Deny, denied.Secrets!.Fallback!.Effect);
         Assert.Equal("no-master-exec", denied.Rule!["id"]!.GetValue<string>());
         Assert.Equal(ToolAuthorizationEffect.Allow, Effect(targeted, SetConfig("other", facts)));
         // The same call without secret facts is unaffected.
@@ -98,7 +99,8 @@ public sealed class SecretAuthorizationFactsTests
         Assert.Equal(ToolAuthorizationEffect.Ask, ask.Effect);
         Assert.Equal([asking.Value["rules"]![0]!.AsObject()], ask.AskingRules.ToArray());
 
-        // Exec allowed only for some arguments or directories is not unrestricted.
+        // Rules that depend on the command or cwd neither grant nor remove unrestricted exec:
+        // the rule after them decides. Allowlists of commands or directories stay denied.
         foreach (
             var scoped in new[]
             {
@@ -121,7 +123,46 @@ public sealed class SecretAuthorizationFactsTests
                 """
                     version: 1
                     rules:
+                      - {tool: {source: node, name: exec}, args: {command: git status}, action: allow}
+                      - id: final-deny
+                        action: deny
+                    """,
+            }
+        )
+        {
+            var policy = Global(scoped);
+            var decision = ToolAuthorizationEvaluation.Evaluate(policy, SetConfig("worker", facts));
+            Assert.Equal(ToolAuthorizationEffect.Deny, decision.Secrets!.Effect);
+            Assert.Equal(ToolAuthorizationEffect.Deny, decision.Effect);
+            // The final rule, or the deny default when there is none.
+            var finalDeny = policy.Value["rules"]!
+                .AsArray()
+                .OfType<JsonObject>()
+                .FirstOrDefault(rule => SessionWait.Text(rule["id"]) == "final-deny");
+            Assert.Same(finalDeny, decision.Secrets.Fallback!.Rule);
+        }
+
+        // A command or cwd deny or ask still leaves other commands available, so it does not
+        // remove unrestricted exec under an allowing default.
+        foreach (
+            var scoped in new[]
+            {
+                """
+                    version: 1
+                    rules:
                       - {tool: {source: node, name: exec}, args: {command: rm -rf /}, action: deny}
+                    """,
+                """
+                    version: 1
+                    rules:
+                      - {tool: {source: node, name: exec}, args: {command: reboot}, action: ask}
+                    """,
+                """
+                    version: 1
+                    rules:
+                      - tool: {source: node, name: exec}
+                        path: {arg: cwd, allWithin: /etc}
+                        action: deny
                     """,
             }
         )
@@ -130,9 +171,9 @@ public sealed class SecretAuthorizationFactsTests
                 Global(scoped),
                 SetConfig("worker", facts)
             );
-            Assert.Equal(ToolAuthorizationEffect.Allow, decision.Call!.Effect);
-            Assert.Equal(CreationTargetDecision.Indeterminate, decision.Secrets!.Fallback!.Outcome);
-            Assert.Equal(ToolAuthorizationEffect.Deny, decision.Effect);
+            Assert.Equal(ToolAuthorizationEffect.Allow, decision.Effect);
+            Assert.Equal(ToolAuthorizationEffect.Allow, decision.Secrets!.Effect);
+            Assert.Null(decision.Secrets.Fallback!.Rule);
         }
 
         // Exec allowed on every Node but master, then a selector-free deny.
