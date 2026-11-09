@@ -117,7 +117,8 @@ internal sealed partial class TerminalRegistry
                     using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(1));
                     try
                     {
-                        if (socket.State == WebSocketState.Open)
+                        // CloseReceived still owes the browser its close response.
+                        if (socket.State is WebSocketState.Open or WebSocketState.CloseReceived)
                         {
                             if (failure is not null)
                                 await socket.SendAsync(
@@ -146,7 +147,11 @@ internal sealed partial class TerminalRegistry
                     {
                         socket.Abort();
                     }
-                    lifetime.Cancel();
+                    // Once the close frame is out, the receiver waits for the browser's answer;
+                    // cancelling it now would abort the socket. Every path that completes the
+                    // queue bounds or ends that wait (FinishAsync, receiver exit, failure, disposal).
+                    if (socket.State is not (WebSocketState.CloseSent or WebSocketState.Closed))
+                        lifetime.Cancel();
                 }
             }
 
@@ -246,6 +251,17 @@ internal sealed partial class TerminalRegistry
                         socket.Abort();
                         await sender;
                     }
+                }
+                // Cancelling the pending receive aborts the WebSocket, and an aborted HTTP
+                // connection can discard the final error/close frames before they reach the
+                // browser. Let the browser answer the close first, within the same short bound.
+                if (receiver is not null)
+                {
+                    try
+                    {
+                        await receiver.WaitAsync(TimeSpan.FromSeconds(1));
+                    }
+                    catch (TimeoutException) { }
                 }
                 CancelUnlessDisposed();
             }

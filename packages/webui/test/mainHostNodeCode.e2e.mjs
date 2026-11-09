@@ -39,18 +39,21 @@ proxyServer.listen(0, '127.0.0.1'); await once(proxyServer, 'listening')
 const nodeHost = `http://127.0.0.1:${proxyServer.address().port}`
 proxy.on('connection', (downstream, request) => {
   const upstream = new WebSocket(fixture.origin.replace(/^http/, 'ws') + request.url, { maxPayload: 75 * 1024 * 1024 }), waiting = []
-  const connection = { downstream, upstream }; connections.push(connection); nodeSockets.add(downstream); nodeSockets.add(upstream)
+  const connection = { downstream, upstream, closes: [] }; connections.push(connection); nodeSockets.add(downstream); nodeSockets.add(upstream)
   upstream.on('open', () => { for (const text of waiting) upstream.send(text) })
   downstream.on('message', bytes => {
-    const text = bytes.toString(), value = JSON.parse(text); wire.push({ direction: 'reply', ...value, result: value.result?.contentBase64 ? { bytes: value.result.contentBase64.length } : value.result })
+    const text = bytes.toString(), value = JSON.parse(text); wire.push({ direction: 'reply', at: Date.now(), ...value, result: value.result?.contentBase64 ? { bytes: value.result.contentBase64.length } : value.result })
     if (upstream.readyState === WebSocket.OPEN) upstream.send(text); else waiting.push(text)
   })
   upstream.on('message', bytes => {
-    const value = JSON.parse(bytes); wire.push({ direction: 'request', ...value, args: value.args?.contentBase64 ? { ...value.args, contentBase64: `[${value.args.contentBase64.length} bytes]` } : value.args })
+    const value = JSON.parse(bytes); wire.push({ direction: 'request', at: Date.now(), ...value, args: value.args?.contentBase64 ? { ...value.args, contentBase64: `[${value.args.contentBase64.length} bytes]` } : value.args })
     if (downstream.readyState === WebSocket.OPEN) downstream.send(bytes.toString())
   })
   for (const [source, target] of [[downstream, upstream], [upstream, downstream]]) {
-    source.on('close', () => { nodeSockets.delete(source); if (target.readyState === WebSocket.OPEN) target.close() })
+    source.on('close', (code, reason) => {
+      connection.closes.push({ side: source === upstream ? 'master' : 'cli', code, reason: reason.toString(), at: Date.now() })
+      nodeSockets.delete(source); if (target.readyState === WebSocket.OPEN) target.close()
+    })
     source.on('error', () => {})
   }
 })
@@ -92,8 +95,9 @@ async function attachBrowser(key, id, codeControl = false) {
   await page.evaluate(async ({ key, id, codeControl }) => {
     window.nodeCodeClients ||= {}
     const url = new URL('/api/terminals/stream', location.href); url.protocol = 'ws:'; url.searchParams.set('terminalId', id); if (codeControl) url.searchParams.set('control', 'code')
-    const state = { events: [], closed: false, socket: new WebSocket(url) }; window.nodeCodeClients[key] = state
-    state.socket.onmessage = event => state.events.push(JSON.parse(event.data)); state.socket.onclose = () => { state.closed = true }
+    const state = { events: [], received: [], closed: false, socket: new WebSocket(url) }; window.nodeCodeClients[key] = state
+    state.socket.onmessage = event => { const value = JSON.parse(event.data); state.events.push(value); state.received.push([Date.now(), value.type]) }
+    state.socket.onclose = event => { state.closed = true; state.close = { code: event.code, reason: event.reason, wasClean: event.wasClean, at: Date.now() } }
     await new Promise((resolve, reject) => { state.socket.onopen = resolve; state.socket.onerror = reject })
   }, { key, id, codeControl })
   await until(() => page.evaluate(key => window.nodeCodeClients[key].events.some(event => event.type === 'ready'), key), 'browser PTY ready ' + key)
@@ -192,7 +196,7 @@ try {
   await until(() => wire.filter(row => row.type === 'node_service_command' && row.operation === 'detach').length === detachBefore + 1, 'final detach sent without kill')
   assert.equal((await live(id)).body.terminal.pid, remote.pid)
   await attachBrowser('reconnect', id)
-  const active = connections.at(-1); active.upstream.close()
+  const active = connections.at(-1); active.disconnectRequestedAt = Date.now(); active.upstream.close()
   await until(() => page.evaluate(() => window.nodeCodeClients.reconnect.closed), 'Node disconnect closes browser stream')
   assert((await events('reconnect')).some(row => row.type === 'error')); assert(!(await events('reconnect')).some(row => row.type === 'exit'))
   await online(); assert.equal((await live(id)).body.terminal.pid, remote.pid)
@@ -261,7 +265,10 @@ try {
   console.log(JSON.stringify({ result: 'passed', cli: process.env.FOXWARM_CLI_EXECUTABLE ? 'configured-native-capable' : 'source', mainRuntime: normalRuntime || 'managed', originalWebUi: true, officialWorkbench: hasCode, masterWorkspaceWrite, realRemoteFs: true, fiftyMiB: true, readOnlyGitV2: true, twoBrowserAttachments: true, remotePtyPid: remote.pid, actualResize: '37x91', detachDoesNotKill: true, explicitCloseKills: true, connectionRediscovery: true, hostRestartRediscovery: true, wrongConnectionEventsRejected: true, helperSingleOwner: true, pendingHelperDetachRejected: true, helperOriginalExtension: hasCode, serviceRequests: wire.filter(row => row.type === 'node_service_request').length, serviceCommands: wire.filter(row => row.type === 'node_service_command').length, serviceEvents: wire.filter(row => row.type === 'node_service_event').length, limits: hasCode ? [] : ['Official Code assets not configured; API and original WebUI qualified.'] }))
 } catch (error) {
   if (page) { await page.screenshot({ path: join(fixture.root, 'failure.png') }).catch(() => {}); await writeFile(join(fixture.root, 'browser-state.json'), JSON.stringify(await Promise.all(page.frames().map(async frame => ({ url: frame.url(), text: await frame.evaluate(() => document.body.innerText).catch(() => '') }))), null, 2)).catch(() => {}) }
-  console.error(JSON.stringify({ errors, browser: wire.filter(row => row.browserRequest || row.browserError) })); console.error(cliOutput); console.error(fixture.output); throw error
+  // Failure-only timeline: browser stream close/receipt times, proxied Node connection closes and recent PTY service traffic.
+  const streams = page ? await page.evaluate(() => Object.fromEntries(Object.entries(window.nodeCodeClients || {}).map(([key, state]) => [key, { closed: state.closed, close: state.close, received: state.received }]))).catch(error => String(error)) : null
+  const ptyWire = wire.filter(row => row.service === 'vscode-pty').slice(-40).map(row => ({ at: row.at, direction: row.direction, type: row.type, operation: row.operation, terminalId: row.args?.terminalId ?? row.event?.terminalId, event: row.event?.type, error: row.error }))
+  console.error(JSON.stringify({ errors, browser: wire.filter(row => row.browserRequest || row.browserError), streams, nodeConnections: connections.map(({ disconnectRequestedAt, closes }) => ({ disconnectRequestedAt, closes })), ptyWire })); console.error(cliOutput); console.error(fixture.output); throw error
 } finally {
   for (const peer of peers) peer.terminate()
   for (const socket of nodeSockets) socket.terminate()
