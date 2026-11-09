@@ -267,6 +267,34 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
         return new JsonObject { ["provider"] = provider };
     }
 
+    // `secrets: {anyOf: [...]}` selects calls by the stored secrets they would send somewhere.
+    // Patterns use secret-name characters and `*`. The object form leaves room for other
+    // conditions; it is normalized to a list.
+    private static JsonObject SecretsMatcher(JsonNode? node)
+    {
+        if (node is not JsonObject map || !map.ContainsKey("anyOf"))
+            throw new InvalidDataException("Secrets matcher requires { anyOf: [names] }.");
+        Fields(map, "anyOf");
+        var values = map["anyOf"] is JsonArray list ? list.ToArray() : [map["anyOf"]];
+        if (values.Length is < 1 or > 64)
+            throw new InvalidDataException("Secrets matcher requires 1-64 names.");
+        var patterns = values.Select(value => String(value, 128)).ToArray();
+        if (
+            patterns.Any(value =>
+                !Regex.IsMatch(value, @"^[a-z0-9._*-]+$", RegexOptions.CultureInvariant)
+            )
+        )
+            throw new InvalidDataException(
+                "Secret name pattern supports secret name characters and '*' only."
+            );
+        return new JsonObject
+        {
+            ["anyOf"] = new JsonArray(
+                patterns.Select(value => (JsonNode?)JsonValue.Create(value)).ToArray()
+            ),
+        };
+    }
+
     private static JsonNode? Argument(JsonNode? node)
     {
         if (node is JsonObject agentWrapper && agentWrapper.ContainsKey("agent"))
@@ -409,6 +437,7 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
                 "externalId",
                 "tool",
                 "node",
+                "secrets",
                 "args",
                 "path"
             );
@@ -419,6 +448,7 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
                 "externalId",
                 "tool",
                 "node",
+                "secrets",
                 "args",
                 "path",
             };
@@ -457,7 +487,8 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
                     "targetNode",
                     "args",
                     "path",
-                    shorthand ? "node" : "targetNode"
+                    shorthand ? "node" : "targetNode",
+                    shorthand ? "secrets" : "targetNode"
                 );
                 foreach (var key in new[] { "agent", "externalId", "targetNode" })
                     if (source.ContainsKey(key))
@@ -468,6 +499,8 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
                         : Matcher(source["session"]);
                 if (shorthand && source.ContainsKey("node"))
                     match["node"] = NodeMatcher(source["node"]);
+                if (shorthand && source.ContainsKey("secrets"))
+                    match["secrets"] = SecretsMatcher(source["secrets"]);
                 if (source.ContainsKey("tool"))
                     match["tool"] = Tool(source["tool"]);
                 if (source.ContainsKey("path"))
@@ -564,6 +597,9 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
                 throw new InvalidDataException(
                     "Action ask cannot select external callers; they cannot wait for approval."
                 );
+            // External callers never send stored secrets, so such a rule could never match.
+            if (match.ContainsKey("secrets") && match.ContainsKey("externalId"))
+                throw new InvalidDataException("Secrets selectors cannot select external callers.");
             var normalized = new JsonObject
             {
                 ["id"] = id,

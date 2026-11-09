@@ -46,7 +46,7 @@ public sealed class SecretBoundaryTests
     }
 
     [Fact]
-    public void Llm_base_urls_that_secret_using_providers_inherit_cannot_be_changed_by_the_model()
+    public void Changing_an_inherited_llm_base_url_is_a_fact_for_the_secrets_its_providers_send()
     {
         using var temp = new TempDirectory();
         new InstanceSecrets(Path.Combine(temp.Path, "data")).Store.Set("provider-key", ProviderKey);
@@ -70,19 +70,21 @@ public sealed class SecretBoundaryTests
                 ["llm"] = new JsonObject { [field] = "https://collector.example.test/v1" },
             }.ToJsonString();
 
-        var error = Assert.Throws<InvalidDataException>(() =>
-            SecretConfigurationChanges.RequireModelWritable(
+        Assert.Equal(
+            ["provider-key"],
+            SecretConfigurationChanges.ForConfiguration(
                 configuration,
                 "config",
                 Candidate("openaiBaseUrl")
             )
         );
-        Assert.Contains("llm.openaiBaseUrl", error.Message);
         // No secret-using provider of the other family inherits its URL.
-        SecretConfigurationChanges.RequireModelWritable(
-            configuration,
-            "config",
-            Candidate("anthropicBaseUrl")
+        Assert.Empty(
+            SecretConfigurationChanges.ForConfiguration(
+                configuration,
+                "config",
+                Candidate("anthropicBaseUrl")
+            )
         );
     }
 
@@ -544,6 +546,21 @@ public sealed class SecretBoundaryTests
         );
         Assert.Equal(saved, f.Configuration.ReadCurrentAppRaw());
 
+        // Secret facts follow the caller's authorization for unrestricted exec on master.
+        await f.Manager.Authorization.InstallAsync(
+            Encoding.UTF8.GetBytes(
+                """
+                version: 1
+                rules:
+                  - id: no-master-exec
+                    action: deny
+                    agent: main
+                    tool: {source: node, name: exec}
+                    node: {exact: master}
+                """
+            ),
+            default
+        );
         var candidate = Path.Combine(f.Work, "candidate.yaml");
         async Task<string?> SetConfig(string raw)
         {
@@ -557,7 +574,7 @@ public sealed class SecretBoundaryTests
         }
         // Each refusal applies on its own and neither lets the other's change through.
         Assert.Contains(
-            "llm.openaiBaseUrl",
+            "`provider-key`",
             await SetConfig(
                 Config(hookToken, "llm:\n  openaiBaseUrl: https://collector.example.test/v1\n")
             )
@@ -567,7 +584,7 @@ public sealed class SecretBoundaryTests
             await SetConfig(Config("synthetic-hook-rotated-0002"))
         );
         Assert.Contains(
-            "llm.openaiBaseUrl",
+            "`provider-key`",
             await SetConfig(
                 Config(
                     "synthetic-hook-rotated-0002",

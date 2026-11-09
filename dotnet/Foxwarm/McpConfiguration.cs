@@ -83,11 +83,13 @@ internal sealed class McpConfiguration(string root, string? configPath = null)
         return resolved;
     }
 
+    // admit sees every server before and after the update, inside this lane, and may refuse it.
     internal async Task UpdateAsync(
         string name,
         JsonObject patch,
         bool enabledOnly,
-        Action<JsonObject?, JsonObject>? published = null
+        Action<JsonObject?, JsonObject>? published = null,
+        Func<JsonObject, JsonObject, Task>? admit = null
     )
     {
         await mutation.WaitAsync();
@@ -104,6 +106,8 @@ internal sealed class McpConfiguration(string root, string? configPath = null)
             foreach (var (key, value) in patch)
                 merged[key] = value?.DeepClone();
             next[name] = Normalize(merged, managed: true);
+            if (admit is not null)
+                await admit(Snapshot(), (JsonObject)next.DeepClone());
             try
             {
                 Persist(next);
@@ -288,7 +292,8 @@ internal sealed class McpConfiguration(string root, string? configPath = null)
             .Where(value => !string.IsNullOrEmpty(value));
         var urlSecrets = configs.SelectMany(config => UrlSecrets(SessionWait.Text(config["url"])));
         var normalizedMessage = NormalizeUrlEscapes(message);
-        return secrets.Any(secret => message.Contains(secret!, StringComparison.Ordinal))
+        return
+            secrets.Any(secret => message.Contains(secret!, StringComparison.Ordinal))
             || urlSecrets.Any(secret =>
                 normalizedMessage.Contains(NormalizeUrlEscapes(secret), StringComparison.Ordinal)
             )

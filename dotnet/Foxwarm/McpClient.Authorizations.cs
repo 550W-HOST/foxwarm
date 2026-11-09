@@ -118,7 +118,12 @@ internal sealed partial class McpClient
         return UpdateConfigurationAsync(name, patch, false);
     }
 
-    private async Task UpdateConfigurationAsync(string name, JsonObject patch, bool enabledOnly)
+    private async Task UpdateConfigurationAsync(
+        string name,
+        JsonObject patch,
+        bool enabledOnly,
+        Func<JsonObject, JsonObject, Task>? admit = null
+    )
     {
         void Published(JsonObject? previous, JsonObject next)
         {
@@ -141,6 +146,6 @@ internal sealed partial class McpClient
                 InvalidateServer(name);
             }
         }
-        await configuration.UpdateAsync(name, patch, enabledOnly, Published);
+        await configuration.UpdateAsync(name, patch, enabledOnly, Published, admit);
     }
 }

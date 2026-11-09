@@ -34,7 +34,7 @@ This complete example restricts internal calls from the `reviewer` Agent while p
 
 ## Concise Session and Node selectors
 
-A rule may put `agent`, `session`, `externalId`, `tool`, `node`, `args`, and `path` directly beside `action`. Do not mix these top-level selectors with `match`, even when `match` is empty. Legacy version-1 `match.session`, `match.targetNode` and argument strings retain their exact scalar semantics.
+A rule may put `agent`, `session`, `externalId`, `tool`, `node`, `secrets`, `args`, and `path` directly beside `action`. Do not mix these top-level selectors with `match`, even when `match` is empty. Legacy version-1 `match.session`, `match.targetNode` and argument strings retain their exact scalar semantics.
 
 ```yaml
 version: 1
@@ -81,6 +81,25 @@ Executable-provider Nodes use Core IDs such as `development/worker-one`. The exe
 `args.taskId: { task: { owned: true } }` is registered only for the exact builtin `task` selector. Main resolves the real task owner and canonical Session identity. Missing, unowned and another Session's tasks do not match; `ownerSessionId` is an assignment target, never proof of caller ownership. This matcher restricts the referenced task, not all tasks globally. Default shared description/note updates and get semantics are unchanged unless a policy restricts them.
 
 For list access, grant `args: { action: list, scope: owned }`. `owned` includes only tasks currently owned by the caller; the existing `current-session` scope still includes tasks created **or** owned by the caller. A creator is not necessarily the current owner.
+
+### Stored secrets
+
+A `set_config` or `mcp_config` change that would send a stored secret (`${secret:NAME}`) to a new destination carries those secret names: a new reference, or a changed provider base URL or protocol, inherited `llm` base URL, text-redaction endpoint, ASR URL, channel server, or MCP URL, transport, command, arguments, working directory or environment. Model lists, limits, descriptions, timeouts and enablement carry none.
+
+```yaml
+rules:
+  - agent: deploy-worker
+    secrets: { anyOf: ['staging-*'] }
+    action: allow
+  - secrets: { anyOf: ['prod-*'] }
+    action: deny
+    reason: Production credentials are changed by the user.
+```
+
+- A rule with `secrets` decides only the secrets, never the call itself; the call still needs its own allow. Patterns use secret-name characters and `*`; a scalar is a one-item list.
+- An allow covers a call only if its patterns cover every named secret; a deny matches any of them. The first matching `secrets` rule decides.
+- Without a matching `secrets` rule, the secrets follow the caller's authorization for unrestricted `exec` on master, because such a caller can already read the secret store. With no rules this allows; an Agent-local layer ending in a selector-free deny, a deny or ask on master `exec`, or an `exec` allow scoped by arguments or paths denies (or asks). Legacy isolated Agents are always refused.
+- `secrets` is a top-level selector only and cannot be combined with `externalId`.
 
 ## Ordering and fallback
 

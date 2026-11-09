@@ -23,6 +23,7 @@ export interface ToolApprovalRecord {
     paths?: Array<{ arg?: string; raw?: string; resolved?: string; node?: string }>
     nodeTargets?: string[]
     sessionTarget?: { id?: string; agent?: string; parent?: string }
+    secrets?: string[]
   }
   rules?: Array<{ layer: string; id: string; reason?: string }>
   approvers?: string[]
@@ -118,8 +119,9 @@ export function approvalArgsText(record: Pick<ToolApprovalRecord, 'args' | 'args
 }
 
 /**
- * Resolved targets the asking rules matched on: paths with their Node, other Nodes and Sessions.
- * The execution Node is already shown with the tool.
+ * Resolved targets the asking rules matched on: paths with their Node, other Nodes, Sessions and
+ * stored secrets the call would send to a new destination. The execution Node is already shown
+ * with the tool.
  */
 export function approvalTargets(record: Pick<ToolApprovalRecord, 'facts' | 'tool'>): string[] {
   const facts = record.facts
@@ -131,6 +133,7 @@ export function approvalTargets(record: Pick<ToolApprovalRecord, 'facts' | 'tool
   }
   for (const node of facts.nodeTargets || []) if (node !== record.tool?.executionNode) targets.push(`Node ${node}`)
   if (facts.sessionTarget?.id) targets.push(`Session ${facts.sessionTarget.id}`)
+  for (const name of facts.secrets || []) targets.push(`Secret ${name}`)
   return targets
 }
 

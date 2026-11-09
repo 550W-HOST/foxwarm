@@ -10,6 +10,8 @@ internal static class ToolAuthorizationExplain
     private static JsonArray Rules(ToolAuthorizationPolicy policy) =>
         policy.Value["rules"]!.AsArray();
 
+    // decision is the layer's outcome. rule (or default) is the call's own first match; with
+    // secret facts, secrets shows how they were decided and decision is the stricter of the two.
     internal static JsonObject Layer(AuthorizationLayerDecision layer)
     {
         var result = new JsonObject
@@ -18,27 +20,56 @@ internal static class ToolAuthorizationExplain
             ["decision"] = AuthorizationDecision.Name(layer.Decision.Effect),
             ["allowed"] = layer.Decision.Allowed,
         };
-        if (layer.Decision.Rule is { } rule)
+        Matched(result, layer.Policy, (layer.Decision.Call ?? layer.Decision).Rule);
+        if (layer.Decision.Secrets is { } secrets)
         {
-            var matched = new JsonObject
+            var detail = new JsonObject
             {
-                ["index"] = Rules(layer.Policy).IndexOf(rule) + 1,
-                ["id"] = rule["id"]?.DeepClone(),
-                ["action"] = rule["action"]?.DeepClone(),
+                ["decision"] = AuthorizationDecision.Name(secrets.Effect),
             };
-            if (rule["reason"] is { } reason)
-                matched["reason"] = reason.DeepClone();
-            if (rule["approval"] is { } approval)
-                matched["approval"] = approval.DeepClone();
-            matched["match"] = rule["match"]?.DeepClone();
-            result["rule"] = matched;
-        }
-        else
-        {
-            result["rule"] = null;
-            result["default"] = layer.Policy.Value["defaultAction"]?.DeepClone();
+            if (secrets.Fallback is { } fallback)
+            {
+                detail["rule"] = null;
+                var exec = new JsonObject
+                {
+                    ["decision"] = fallback.Outcome switch
+                    {
+                        CreationTargetDecision.Allow => "allow",
+                        CreationTargetDecision.Ask => "ask",
+                        CreationTargetDecision.Deny => "deny",
+                        _ => "indeterminate",
+                    },
+                };
+                Matched(exec, layer.Policy, fallback.Rule);
+                detail["unrestrictedMasterExec"] = exec;
+            }
+            else
+                Matched(detail, layer.Policy, secrets.Rule);
+            result["secrets"] = detail;
         }
         return result;
+    }
+
+    private static void Matched(JsonObject result, ToolAuthorizationPolicy policy, JsonObject? rule)
+    {
+        if (rule is null)
+        {
+            result["rule"] = null;
+            result["default"] = policy.Value["defaultAction"]?.DeepClone();
+            return;
+        }
+        var matched = new JsonObject
+        {
+            ["index"] = Rules(policy).IndexOf(rule) + 1,
+            ["id"] = rule["id"]?.DeepClone(),
+            ["action"] = rule["action"]?.DeepClone(),
+        };
+        if (rule["reason"] is { } reason)
+            matched["reason"] = reason.DeepClone();
+        if (rule["approval"] is { } approval)
+            matched["approval"] = approval.DeepClone();
+        matched["match"] = rule["match"]?.DeepClone();
+        result["rule"] = matched;
     }
 
     internal static JsonObject Facts(ToolAuthorizationRequest request)
@@ -78,6 +109,10 @@ internal static class ToolAuthorizationExplain
             };
         if (request.TaskOwnerSession is not null)
             facts["taskOwnerSession"] = request.TaskOwnerSession;
+        if (request.Secrets is { Count: > 0 } secrets)
+            facts["secrets"] = new JsonArray(
+                secrets.Select(name => (JsonNode?)JsonValue.Create(name)).ToArray()
+            );
         return facts;
     }
 

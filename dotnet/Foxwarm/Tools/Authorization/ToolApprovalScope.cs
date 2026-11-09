@@ -91,6 +91,10 @@ internal sealed class ToolApprovalScope(SessionOwner owner)
             ["sessionTarget"] = request.SessionTarget?.Id,
             ["taskOwner"] = request.TaskOwnerSession,
         };
+        if (request.Secrets is { Count: > 0 } secrets)
+            value["secrets"] = new JsonArray(
+                secrets.Select(name => (JsonNode?)JsonValue.Create(name)).ToArray()
+            );
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value.ToJsonString())));
     }
 

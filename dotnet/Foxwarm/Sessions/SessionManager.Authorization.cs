@@ -160,7 +160,8 @@ internal sealed partial class SessionManager
         SessionOwner? concreteTarget = null,
         bool toolScriptSourceRead = false,
         IReadOnlyList<string>? nodeEffects = null,
-        Action<AuthorizationAssessment>? observe = null
+        Action<AuthorizationAssessment>? observe = null,
+        IReadOnlyList<string>? secrets = null
     )
     {
         var assessment = await AssessToolAsync(
@@ -170,13 +171,23 @@ internal sealed partial class SessionManager
             token,
             concreteTarget,
             toolScriptSourceRead,
-            nodeEffects
+            nodeEffects,
+            secrets: secrets
         );
         observe?.Invoke(assessment);
         if (assessment.Denied is { } denied)
             throw new ToolAuthorizationDeniedException(
-                SessionWait.Text(denied.Decision.Rule?["reason"])
-                    ?? $"Tool authorization rule denies {resolved.Source} capability `{resolved.Name}`."
+                denied.Decision
+                    is {
+                        Secrets.Effect: ToolAuthorizationEffect.Deny,
+                        Call.Effect: not ToolAuthorizationEffect.Deny
+                    }
+                    ? SessionWait.Text(denied.Decision.Secrets.Rule?["reason"])
+                        ?? Foxwarm.Secrets.SecretConfigurationChanges.DeniedMessage(
+                            assessment.Request.Secrets!
+                        )
+                    : SessionWait.Text(denied.Decision.Rule?["reason"])
+                        ?? $"Tool authorization rule denies {resolved.Source} capability `{resolved.Name}`."
             );
         IsolatedToolCompatibility.Check(
             Isolation(owner.Agent),
@@ -198,6 +209,8 @@ internal sealed partial class SessionManager
 
     // Shared by enforcement and explanation: structural prechecks, fact construction and
     // every generic policy layer. A replacement global policy only substitutes that layer.
+    // Secret facts are computed from the current configuration unless the effect owner supplies
+    // those of the exact change it installs.
     internal async Task<AuthorizationAssessment> AssessToolAsync(
         SessionOwner owner,
         ResolvedTool resolved,
@@ -206,7 +219,8 @@ internal sealed partial class SessionManager
         SessionOwner? concreteTarget = null,
         bool toolScriptSourceRead = false,
         IReadOnlyList<string>? nodeEffects = null,
-        ToolAuthorizationPolicy? global = null
+        ToolAuthorizationPolicy? global = null,
+        IReadOnlyList<string>? secrets = null
     )
     {
         owner.Entry.RequireIdentityAuthority();
@@ -331,7 +345,11 @@ internal sealed partial class SessionManager
             {
                 NodeForest = await NodeProviders.PrepareAuthorizationForestAsync(endpoints, token),
             };
-        var layers = EffectiveLayers(owner.Agent, global ?? await authorization.LoadAsync(token));
+        var policy = global ?? await authorization.LoadAsync(token);
+        secrets ??= await SecretFactsAsync(owner, resolved, files, policy, token);
+        if (secrets is { Count: > 0 })
+            request = request with { Secrets = secrets };
+        var layers = EffectiveLayers(owner.Agent, policy);
         request = PopulateEffectiveTargets(
             request,
             owner,
@@ -348,6 +366,61 @@ internal sealed partial class SessionManager
                 ))
                 .ToArray()
         );
+    }
+
+    // Stored secrets a configuration call would send to a new destination, against the
+    // configuration as it is now. A set_config candidate is read only when the caller may read
+    // it, so a fact never reveals anything about a file the caller cannot read; the call then
+    // fails on that read anyway.
+    private async Task<IReadOnlyList<string>?> SecretFactsAsync(
+        SessionOwner owner,
+        ResolvedTool resolved,
+        WorkspaceTools? files,
+        ToolAuthorizationPolicy global,
+        CancellationToken token
+    )
+    {
+        if (resolved.Source != "builtin")
+            return null;
+        if (resolved.Name == "mcp_config")
+            return mcp.SecretFacts(resolved.Args);
+        if (
+            resolved.Name != "set_config"
+            || files is null
+            || SessionWait.Text(resolved.Args["target"]) is not ("config" or "models")
+            || SessionWait.Text(resolved.Args["filePath"]) is not { } path
+            || models.ConfigurationOwner is not { } configuration
+        )
+            return null;
+        try
+        {
+            var read = await AssessToolAsync(
+                owner,
+                new("set_config", "node", "read", new JsonObject { ["filePath"] = path }),
+                files,
+                token,
+                global: global,
+                secrets: []
+            );
+            if (read.Effect != ToolAuthorizationEffect.Allow)
+                return null;
+            IsolatedToolCompatibility.Check(
+                Isolation(owner.Agent),
+                read.Request,
+                AuthorizationTarget
+            );
+            var bytes = await files.CaptureConfigCandidateAsync(path, false, token);
+            return Foxwarm.Secrets.SecretConfigurationChanges.ForConfiguration(
+                configuration,
+                SessionWait.Text(resolved.Args["target"])!,
+                new UTF8Encoding(false).GetString(bytes).TrimStart('\uFEFF')
+            );
+        }
+        catch (Exception error) when (error is not OperationCanceledException)
+        {
+            // The handler reads the candidate itself and reports why it cannot.
+            return null;
+        }
     }
 
     private (string? Name, ToolAuthorizationPolicy Policy)[] EffectiveLayers(
@@ -665,13 +738,14 @@ internal sealed partial class SessionManager
             throw new InvalidDataException(
                 "set_config requires target (config, models, or tool-rules) and one nonempty filePath within 4096 UTF-8 bytes."
             );
-        async Task Authorize(CancellationToken current)
+        async Task Authorize(CancellationToken current, IReadOnlyList<string>? secrets = null)
         {
             await AuthorizeToolAsync(
                 owner,
                 new("set_config", "builtin", "set_config", args),
                 files,
-                current
+                current,
+                secrets: secrets
             );
             await AuthorizeToolAsync(
                 owner,
@@ -682,12 +756,9 @@ internal sealed partial class SessionManager
         }
         await Authorize(token);
         var bytes = await files.CaptureConfigCandidateAsync(path, target == "tool-rules", token);
+        var text = new UTF8Encoding(false).GetString(bytes).TrimStart('\uFEFF');
         if (target is "config" or "models" && models.ConfigurationOwner is { } current)
-            Foxwarm.Secrets.SecretConfigurationChanges.RequireModelWritable(
-                current,
-                target,
-                new UTF8Encoding(false).GetString(bytes).TrimStart('\uFEFF')
-            );
+            Foxwarm.Secrets.SecretMarkerGuard.Require(text, current.Secrets.Redactor.HasLabel);
         JsonObject installed;
         try
         {
@@ -696,7 +767,19 @@ internal sealed partial class SessionManager
                     target,
                     _ => Task.FromResult(bytes),
                     authorization,
-                    Authorize,
+                    // Inside the installer's lane: the secret facts of these exact bytes against
+                    // the files they replace.
+                    current =>
+                        Authorize(
+                            current,
+                            target == "tool-rules"
+                                ? []
+                                : Foxwarm.Secrets.SecretConfigurationChanges.ForConfiguration(
+                                    configuration,
+                                    target,
+                                    text
+                                )
+                        ),
                     token,
                     webhooksLocked: true
                 );

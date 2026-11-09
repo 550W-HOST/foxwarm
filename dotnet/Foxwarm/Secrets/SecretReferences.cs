@@ -273,6 +273,16 @@ internal static partial class SecretReferences
         return copy;
     }
 
+    // Well-formed reference names anywhere in text, for a document that cannot be parsed.
+    internal static IReadOnlyList<string> Scan(string text) =>
+        Reference()
+            .Matches(text)
+            .Select(match => match.Groups[1].Value)
+            .Where(name => SecretStore.NamePattern().IsMatch(name))
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
     internal static IReadOnlyList<string> ReferencedNames(JsonNode? document)
     {
         var names = new List<string>();

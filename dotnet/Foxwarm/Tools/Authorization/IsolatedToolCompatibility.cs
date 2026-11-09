@@ -293,5 +293,11 @@ internal static class IsolatedToolCompatibility
                     "Isolated Agent can only recall sessions under its own Agent."
                 );
         }
+        // Isolation has no rules that could grant secret facts, and their fallback, unrestricted
+        // exec on master, is structurally forbidden here.
+        if (request.Secrets is { Count: > 0 } secrets)
+            throw new ToolAuthorizationDeniedException(
+                Foxwarm.Secrets.SecretConfigurationChanges.DeniedMessage(secrets)
+            );
     }
 }

@@ -253,7 +253,7 @@ public sealed class TextRedactionRegressionTests
     }
 
     // R3 / F1: a provider key containing ".models.<id>" cannot hide a model-level endpoint
-    // change from the set_config guard.
+    // change from the set_config secret facts.
     [Fact]
     public async Task Dotted_provider_keys_cannot_hide_detector_endpoint_changes()
     {
@@ -282,24 +282,20 @@ public sealed class TextRedactionRegressionTests
                 baseUrl: http://127.0.0.1:2
                 textRedaction: {enabled: true}
             """;
-        var error = Assert.Throws<InvalidDataException>(() =>
-            SecretConfigurationChanges.RequireModelWritable(configuration, "models", disguised)
+        Assert.Equal(
+            ["det-key"],
+            SecretConfigurationChanges.ForConfiguration(configuration, "models", disguised)
         );
-        Assert.Contains("text redaction for model a/x", error.Message);
-        // A setting that does not decide where the key goes stays editable.
-        SecretConfigurationChanges.RequireModelWritable(
-            configuration,
-            "models",
-            installed.Replace(
-                "{enabled: true}",
-                "{enabled: true, threshold: 0.7}",
-                StringComparison.Ordinal
-            )
-        );
-        // Disabling or newly enabling a leaf that sends the referenced key is refused.
+        // Settings that do not decide where the key goes, and enabling or disabling a leaf that
+        // inherits an existing endpoint and key, send it nowhere new.
         foreach (
             var changed in new[]
             {
+                installed.Replace(
+                    "{enabled: true}",
+                    "{enabled: true, threshold: 0.7}",
+                    StringComparison.Ordinal
+                ),
                 installed.Replace("{enabled: true}", "{enabled: false}", StringComparison.Ordinal),
                 installed.Replace(
                     ", y]",
@@ -308,8 +304,8 @@ public sealed class TextRedactionRegressionTests
                 ),
             }
         )
-            Assert.Throws<InvalidDataException>(() =>
-                SecretConfigurationChanges.RequireModelWritable(configuration, "models", changed)
+            Assert.Empty(
+                SecretConfigurationChanges.ForConfiguration(configuration, "models", changed)
             );
     }
 
@@ -337,8 +333,9 @@ public sealed class TextRedactionRegressionTests
               a: {baseUrl: 'http://127.0.0.1:2', models: [x]}
               b: {baseUrl: 'http://127.0.0.1:2', model: [{id: m, textRedaction: {endpoint: 'http://collector.example/c'}}]}
             """;
-        Assert.Throws<InvalidDataException>(() =>
-            SecretConfigurationChanges.RequireModelWritable(configuration, "models", singular)
+        Assert.Equal(
+            ["det-key"],
+            SecretConfigurationChanges.ForConfiguration(configuration, "models", singular)
         );
 
         const string literal = "synthetic-literal-leaf-key-0004";

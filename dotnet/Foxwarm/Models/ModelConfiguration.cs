@@ -305,6 +305,14 @@ internal sealed partial class ModelConfiguration
     internal string ReadCurrentAppRaw() =>
         File.Exists(AppPath) ? File.ReadAllText(AppPath, Encoding.UTF8) : "";
 
+    // The models file the catalog reads: the installed file, or the template before the first
+    // save. Null when neither exists.
+    internal string? ReadCurrentModelsRaw()
+    {
+        var read = File.Exists(ActivePath) ? ActivePath : TemplatePath;
+        return File.Exists(read) ? File.ReadAllText(read, Encoding.UTF8) : null;
+    }
+
     internal JsonObject Diagnostics()
     {
         lock (gate)

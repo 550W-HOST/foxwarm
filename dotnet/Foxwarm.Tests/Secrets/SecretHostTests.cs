@@ -205,7 +205,7 @@ public sealed class SecretHostTests
     }
 
     [Fact]
-    public async Task Model_configuration_writes_cannot_redirect_stored_secrets()
+    public async Task Configuration_changes_report_the_secrets_they_send_somewhere_new()
     {
         using var temp = new TempDirectory();
         await using var peer = new ScriptedResponsesSequenceServer(
@@ -219,70 +219,121 @@ public sealed class SecretHostTests
         );
         var configuration = manager.Models.ConfigurationOwner!;
         var current = await File.ReadAllTextAsync(configuration.ActivePath);
-        var redirected = JsonNode.Parse(current)!.AsObject();
-        redirected["providers"]!["synthetic"]!["baseUrl"] = "https://collector.example.test/v1";
-        var error = Assert.Throws<InvalidDataException>(() =>
-            SecretConfigurationChanges.RequireModelWritable(
-                configuration,
-                "models",
-                redirected.ToJsonString()
-            )
-        );
-        Assert.Contains("provider synthetic", error.Message);
-
-        // Unrelated providers remain editable.
-        var added = JsonNode.Parse(current)!.AsObject();
-        added["providers"]!["other"] = new JsonObject
+        IReadOnlyList<string> Facts(Action<JsonObject> edit)
         {
-            ["providerType"] = "openai-responses",
-            ["baseUrl"] = "https://other.example.test/v1",
-            ["models"] = new JsonArray("m"),
-        };
-        SecretConfigurationChanges.RequireModelWritable(
-            configuration,
-            "models",
-            added.ToJsonString()
-        );
-        var referenced = JsonNode.Parse(added.ToJsonString())!.AsObject();
-        referenced["providers"]!["other"]!["apiKey"] = "${secret:provider-key}";
-        Assert.Throws<InvalidDataException>(() =>
-            SecretConfigurationChanges.RequireModelWritable(
+            var candidate = JsonNode.Parse(current)!.AsObject();
+            edit(candidate);
+            return SecretConfigurationChanges.ForConfiguration(
                 configuration,
                 "models",
-                referenced.ToJsonString()
+                candidate.ToJsonString()
+            );
+        }
+        JsonObject Synthetic(JsonObject root) => root["providers"]!["synthetic"]!.AsObject();
+
+        Assert.Equal(
+            ["provider-key"],
+            Facts(root => Synthetic(root)["baseUrl"] = "https://collector.example.test/v1")
+        );
+        Assert.Equal(
+            ["provider-key"],
+            Facts(root => Synthetic(root)["providerType"] = "anthropic")
+        );
+        // Model lists and limits live in the same provider entry but send the key nowhere new.
+        Assert.Empty(Facts(root => Synthetic(root)["models"] = new JsonArray("wire", "other")));
+        Assert.Empty(Facts(root => Synthetic(root)["contextLimit"] = 100000));
+        Assert.Empty(Facts(root => root["providers"]!.AsObject().Remove("synthetic")));
+        // Another provider using the same key at the same destination is not new either.
+        Assert.Empty(Facts(root => root["providers"]!["copy"] = Synthetic(root).DeepClone()));
+        Assert.Empty(
+            Facts(root =>
+                root["providers"]!["other"] = new JsonObject
+                {
+                    ["providerType"] = "openai-responses",
+                    ["baseUrl"] = "https://other.example.test/v1",
+                    ["models"] = new JsonArray("m"),
+                }
             )
         );
-        Assert.Throws<InvalidDataException>(() =>
-            SecretConfigurationChanges.RequireModelWritable(
-                configuration,
-                "models",
-                current.Replace("${secret:provider-key}", "[[FW_SECRET:provider-key]]")
+        Assert.Equal(
+            ["provider-key"],
+            Facts(root =>
+                root["providers"]!["other"] = new JsonObject
+                {
+                    ["providerType"] = "openai-responses",
+                    ["baseUrl"] = "https://other.example.test/v1",
+                    ["apiKey"] = "${secret:provider-key}",
+                    ["models"] = new JsonArray("m"),
+                }
+            )
+        );
+        Assert.Equal(
+            ["provider-key"],
+            Facts(root =>
+                Synthetic(root)["extraHeaders"] = new JsonObject
+                {
+                    ["X-Forward"] = "${secret:provider-key}",
+                }
             )
         );
 
-        Assert.Throws<InvalidDataException>(() =>
-            SecretConfigurationChanges.RequireMcpWritable(
-                "server",
-                null,
-                new JsonObject { ["token"] = "${secret:provider-key}" }
-            )
-        );
-        var existing = new JsonObject
+        var servers = new JsonObject
         {
-            ["url"] = "https://mcp.example.test",
-            ["token"] = "${secret:provider-key}",
+            ["server"] = new JsonObject
+            {
+                ["url"] = "https://mcp.example.test",
+                ["token"] = "${secret:provider-key}",
+            },
+            ["local"] = new JsonObject
+            {
+                ["transport"] = "stdio",
+                ["command"] = "server",
+                ["env"] = new JsonObject { ["API_TOKEN"] = "${secret:local-key}" },
+            },
         };
-        SecretConfigurationChanges.RequireMcpWritable(
-            "server",
-            existing,
-            new JsonObject { ["enable"] = false }
-        );
-        Assert.Throws<InvalidDataException>(() =>
-            SecretConfigurationChanges.RequireMcpWritable(
-                "server",
-                existing,
-                new JsonObject { ["url"] = "https://collector.example.test" }
+        IReadOnlyList<string> Mcp(string name, string patch) =>
+            SecretConfigurationChanges.ForMcpServer(
+                servers,
+                name,
+                JsonNode.Parse(patch)!.AsObject()
+            );
+        Assert.Equal(
+            ["provider-key"],
+            Mcp(
+                "added",
+                """{"url":"https://other.example.test","token":"${secret:provider-key}"}"""
             )
+        );
+        Assert.Equal(
+            ["provider-key"],
+            Mcp("server", """{"headers":{"X-Key":"${secret:provider-key}"}}""")
+        );
+        Assert.Equal(
+            ["provider-key"],
+            Mcp("server", """{"url":"https://collector.example.test"}""")
+        );
+        Assert.Equal(["provider-key"], Mcp("server", """{"transport":"sse"}"""));
+        Assert.Equal(["local-key"], Mcp("local", """{"command":"other"}"""));
+        Assert.Equal(["local-key"], Mcp("local", """{"args":["--forward"]}"""));
+        Assert.Equal(
+            ["local-key"],
+            Mcp("local", """{"env":{"API_TOKEN":"${secret:local-key}","HOME":"/x"}}""")
+        );
+        foreach (
+            var patch in new[]
+            {
+                """{"enable":false}""",
+                """{"description":"Renamed"}""",
+                """{"timeoutSeconds":30}""",
+                """{"token":"literal-token"}""",
+                """{"stderr":"ignore"}""",
+            }
+        )
+            Assert.Empty(Mcp(patch.Contains("stderr") ? "local" : "server", patch));
+        Assert.Empty(Mcp("added", """{"url":"https://other.example.test"}"""));
+        // A second server with the same URL and token sends it nowhere new.
+        Assert.Empty(
+            Mcp("copy", """{"url":"https://mcp.example.test","token":"${secret:provider-key}"}""")
         );
     }
 }

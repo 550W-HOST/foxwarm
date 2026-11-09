@@ -291,26 +291,20 @@ public sealed class TextRedactionDeltaRegressionTests(Xunit.Abstractions.ITestOu
         return configuration;
     }
 
-    private static string? Outcome(ModelConfiguration configuration, string candidate)
-    {
-        try
-        {
-            SecretConfigurationChanges.RequireModelWritable(configuration, "models", candidate);
-            return null;
-        }
-        catch (InvalidDataException error)
-        {
-            return error.Message;
-        }
-    }
+    private static IReadOnlyList<string> Facts(
+        ModelConfiguration configuration,
+        string candidate
+    ) => SecretConfigurationChanges.ForConfiguration(configuration, "models", candidate);
 
-    // D3 (P3): with a referenced detector key at defaults level, set_config may add, split
-    // and rename models whose endpoint and key come unchanged from existing layers. A new
-    // leaf that points the key at a new endpoint is still refused.
+    // D3 (P3): with a referenced detector key at defaults level, adding, splitting and
+    // renaming models whose endpoint and key come unchanged from existing layers sends the key
+    // nowhere new. A new leaf that points the key at a new endpoint does.
     [Theory]
     [InlineData("true")]
     [InlineData("false")]
-    public async Task New_leaves_inheriting_an_existing_detector_route_are_allowed(string enabled)
+    public async Task New_leaves_inheriting_an_existing_detector_route_are_not_secret_facts(
+        string enabled
+    )
     {
         using var temp = new TempDirectory();
         var installed = $$"""
@@ -339,7 +333,7 @@ public sealed class TextRedactionDeltaRegressionTests(Xunit.Abstractions.ITestOu
                 ),
             }
         )
-            Assert.Null(Outcome(configuration, candidate));
+            Assert.Empty(Facts(configuration, candidate));
         foreach (
             var candidate in new[]
             {
@@ -352,20 +346,13 @@ public sealed class TextRedactionDeltaRegressionTests(Xunit.Abstractions.ITestOu
                 ),
             }
         )
-            Assert.Equal(
-                string.Format(
-                    SecretConfigurationChanges.SetConfigDenied,
-                    candidate.Contains("b: {", StringComparison.Ordinal)
-                        ? "text redaction for model b/m"
-                        : "text redaction for model a/y"
-                ),
-                Outcome(configuration, candidate)
-            );
+            Assert.Equal(["det-key"], Facts(configuration, candidate));
     }
 
-    // P4: redirection variants stay refused; edits that cannot redirect the key stay allowed.
+    // P4: every redirection variant is a secret fact; edits that cannot redirect the key, or
+    // that stop sending it, are not.
     [Fact]
-    public async Task Detector_key_redirection_variants_stay_refused()
+    public async Task Detector_key_redirection_variants_are_secret_facts()
     {
         using var temp = new TempDirectory();
         const string installed = """
@@ -385,7 +372,7 @@ public sealed class TextRedactionDeltaRegressionTests(Xunit.Abstractions.ITestOu
             installed.Replace(from, to, StringComparison.Ordinal);
         const string collector = "endpoint: 'http://collector.example/c'";
         const string enabledOnly = "textRedaction: {enabled: true}";
-        var refused = new[]
+        var redirected = new[]
         {
             Edit("127.0.0.1:1/classify", "collector.example/c"),
             Edit(enabledOnly, "textRedaction: {enabled: true, " + collector + "}"),
@@ -407,18 +394,18 @@ public sealed class TextRedactionDeltaRegressionTests(Xunit.Abstractions.ITestOu
                 + "\n  a/x: {baseUrl: 'http://127.0.0.1:5', apiKey: x, textRedaction: {enabled: true, "
                 + collector
                 + "}}\n",
+            Edit("http://127.0.0.1:1/classify", "HTTP://127.0.0.1:1/classify"),
+        };
+        foreach (var candidate in redirected)
+            Assert.Equal(["det-key"], Facts(configuration, candidate));
+        var unchanged = new[]
+        {
             Edit(enabledOnly, "textRedaction: false"),
             Edit(enabledOnly, "textRedaction: {enabled: true, apiKey: ''}"),
             Edit(
                 "models: [z]}",
                 "models: [z], textRedaction: {apiKey: '', enabled: true, " + collector + "}}"
             ),
-            Edit("http://127.0.0.1:1/classify", "HTTP://127.0.0.1:1/classify"),
-        };
-        foreach (var candidate in refused)
-            Assert.NotNull(Outcome(configuration, candidate));
-        var allowed = new[]
-        {
             Edit("targets: [a/x, plain/z]", "targets: [plain/z, a/x]"),
             Edit(enabledOnly, "textRedaction: {enabled: true, threshold: 1}"),
             Edit(
@@ -426,8 +413,8 @@ public sealed class TextRedactionDeltaRegressionTests(Xunit.Abstractions.ITestOu
                 "textRedaction: {enabled: true, excludeLabels: [private_person, private_email, private_phone, private_address, account_number, secret]}"
             ),
         };
-        foreach (var candidate in allowed)
-            Assert.Null(Outcome(configuration, candidate));
+        foreach (var candidate in unchanged)
+            Assert.Empty(Facts(configuration, candidate));
     }
 
     // D6 (P5): the approved word-boundary rule, including its documented misses.

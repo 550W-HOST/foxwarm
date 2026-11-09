@@ -1400,7 +1400,19 @@ internal sealed partial class SessionToolExecutor(
             owner.Manager.ManageMcpNotificationsAsync(owner.Hosted, args, token);
         handlers["send_to_channel"] = (owner, args, token) =>
             owner.Manager.SendToChannelAsync(owner.Hosted, args, token);
-        handlers["mcp_config"] = (_, args, token) => mcp.ConfigureAsync(args, token);
+        handlers["mcp_config"] = (owner, args, token) =>
+            mcp.ConfigureAsync(
+                args,
+                token,
+                (secrets, current) =>
+                    owner.Manager.AuthorizeToolAsync(
+                        owner.Hosted,
+                        new("mcp_config", "builtin", "mcp_config", args),
+                        owner.Files,
+                        current,
+                        secrets: secrets
+                    )
+            );
         handlers["list_mcp_servers"] = (_, args, token) =>
         {
             ToolRegistry.Keys(args, []);

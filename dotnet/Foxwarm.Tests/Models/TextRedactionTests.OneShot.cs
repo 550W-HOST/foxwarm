@@ -198,7 +198,7 @@ public sealed partial class TextRedactionTests
             usage => SessionWait.Text(usage["id"]) == "models.defaults.textRedaction.apiKey"
         );
 
-        // References belong only in apiKey; model-initiated writes cannot redirect them.
+        // References belong only in apiKey; redirecting one is a secret fact of the change.
         Assert.Throws<InvalidDataException>(() =>
             HostModels.Parse(
                 JsonNode
@@ -217,16 +217,19 @@ public sealed partial class TextRedactionTests
         );
         Assert.NotEqual(installed, redirected);
         Assert.Contains("off: {baseUrl: 'http://127.0.0.1:2'}", installed);
-        Assert.Throws<InvalidDataException>(() =>
-            SecretConfigurationChanges.RequireModelWritable(configuration, "models", redirected)
+        Assert.Equal(
+            ["absent-key"],
+            SecretConfigurationChanges.ForConfiguration(configuration, "models", redirected)
         );
-        SecretConfigurationChanges.RequireModelWritable(
-            configuration,
-            "models",
-            installed.Replace(
-                "off: {baseUrl: 'http://127.0.0.1:2'}",
-                "off: {baseUrl: 'http://127.0.0.1:3'}",
-                StringComparison.Ordinal
+        Assert.Empty(
+            SecretConfigurationChanges.ForConfiguration(
+                configuration,
+                "models",
+                installed.Replace(
+                    "off: {baseUrl: 'http://127.0.0.1:2'}",
+                    "off: {baseUrl: 'http://127.0.0.1:3'}",
+                    StringComparison.Ordinal
+                )
             )
         );
     }
