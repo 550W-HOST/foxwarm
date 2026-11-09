@@ -201,7 +201,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
   const {
     messages: activeMessages, continuousMessages, continuousHistoryReady, archivePage, loadArchivePage, queuedMessages, sessionRecord, sessionMissing, sessionBusy, sessionQueueLength,
     persistentMemorySnapshot, memorySize, streamingAssistantDraft, toolScriptProgress, toolCallActivity,
-    historyLoaded, isFullHistoryLoaded, earlierHistoryError, connectionState, reconnectCountdown,
+    historyLoaded, isFullHistoryLoaded, earlierHistoryError, connectionState, reconnectCountdown, stateUnavailableReason,
     pendingControl, controlFeedback, loading, retryEarlierHistory, sendMessage: handleSend, sendSessionCommand, mergeConfirmedSettings,
   } = useChatConversationSync(sessionId, webUiIdentityMode, historyMode, initialContinuousAnchorSeq)
   const messages = historyMode === 'continuous' ? continuousMessages : activeMessages
@@ -1660,9 +1660,18 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
           connectionState === 'reconnecting' ? 'bg-fw-warning-surface dark:bg-fw-warning-surface-strong/20 text-fw-warning dark:text-fw-warning' :
           'bg-fw-danger-surface dark:bg-fw-danger-surface-strong/20 text-fw-danger dark:text-fw-danger'
         }`}>
-          {connectionState === 'connecting' && 'Connecting...'}
-          {connectionState === 'reconnecting' && 'Reconnecting...'}
-          {connectionState === 'disconnected' && 'Disconnected'}
+          {stateUnavailableReason !== null && connectionState !== 'disconnected' ? (
+            <>
+              <span>Session state is unavailable. Retrying...</span>
+              {stateUnavailableReason && <span data-chat-state-unavailable-reason className="ml-2 opacity-80">{stateUnavailableReason}</span>}
+            </>
+          ) : (
+            <>
+              {connectionState === 'connecting' && 'Connecting...'}
+              {connectionState === 'reconnecting' && 'Reconnecting...'}
+              {connectionState === 'disconnected' && 'Disconnected'}
+            </>
+          )}
         </div>
       )}
 

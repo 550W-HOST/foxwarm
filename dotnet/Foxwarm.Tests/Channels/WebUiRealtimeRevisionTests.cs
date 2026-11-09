@@ -783,18 +783,140 @@ public sealed class WebUiRealtimeRevisionTests
         );
         socket.SetSubscriptions(1, "known");
         await running.WaitAsync(stopped.Token);
-        Assert.Contains(
+        var error = Assert.Single(
             socket.Frames,
-            frame =>
-                frame["type"]?.GetValue<string>() == "error"
-                && frame["code"]?.GetValue<string>() == "SESSION_STATE_UNAVAILABLE"
+            frame => frame["code"]?.GetValue<string>() == "SESSION_STATE_UNAVAILABLE"
         );
+        Assert.Equal("error", error["type"]!.GetValue<string>());
+        Assert.Equal("known", error["sessionId"]!.GetValue<string>());
+        Assert.Equal(1, error["revision"]!.GetValue<long>());
+        Assert.Equal("This Session's data file is missing.", error["message"]!.GetValue<string>());
         Assert.DoesNotContain(
             socket.Frames,
             frame => frame["type"]?.GetValue<string>() == "session-deleted"
         );
         Assert.Equal("exact", manager.Catalog.Resolve("known")["kind"]!.GetValue<string>());
         Assert.Empty(manager.Owners());
+    }
+
+    [Fact]
+    public void Unavailable_reasons_map_failures_to_product_text_without_diagnostics()
+    {
+        const string missing = "This Session's data file is missing.";
+        const string unreadable = "This Session's data file can't be read.";
+        const string damaged = "This Session's data file is damaged.";
+        const string deleting = "This Session is being deleted.";
+        const string generic = "Session state could not be loaded.";
+        var cases = new (Exception Error, string Expected)[]
+        {
+            (SessionAuthorityErrors.Unavailable("s", new FileNotFoundException("x")), missing),
+            (SessionAuthorityErrors.Unavailable("s", new DirectoryNotFoundException("x")), missing),
+            (
+                new SessionAuthorityUnavailableException(
+                    "s",
+                    new(null, SessionAuthorityErrors.CatalogedMissingReason)
+                ),
+                missing
+            ),
+            (SessionAuthorityErrors.Unavailable("s", new UnauthorizedAccessException("x")), unreadable),
+            (SessionAuthorityErrors.Unavailable("s", new IOException("x")), unreadable),
+            (SessionAuthorityErrors.Unavailable("s", new System.Text.Json.JsonException("x")), damaged),
+            (SessionAuthorityErrors.Unavailable("s", new InvalidOperationException("x")), damaged),
+            (
+                SessionAuthorityErrors.Unavailable("s", SessionAuthorityErrors.Invalid("bad", "history")),
+                damaged
+            ),
+            (
+                SessionAuthorityErrors.Unavailable("s", SessionAuthorityErrors.Unsupported("new")),
+                damaged
+            ),
+            (new SessionAuthorityIdentityException("s"), damaged),
+            (SessionAuthorityErrors.Invalid("bad"), damaged),
+            (
+                new SessionDeletionException(
+                    SessionDeletionException.RetiredMessage,
+                    "SESSION_STATE_UNAVAILABLE"
+                ),
+                deleting
+            ),
+            (
+                new SessionDeletionException("Session is being deleted.", "SESSION_DELETE_IN_PROGRESS"),
+                deleting
+            ),
+            (
+                new SessionDeletionException(
+                    "This Session owner is no longer current.",
+                    "SESSION_STATE_UNAVAILABLE",
+                    409
+                ),
+                generic
+            ),
+            (new InvalidOperationException("/data/state/secret.json is locked"), generic),
+        };
+        foreach (var (error, expected) in cases)
+            Assert.Equal(expected, WebUiRealtime.UnavailableReason(error));
+    }
+
+    [Fact]
+    public async Task Unavailable_error_names_only_failing_sessions_with_path_free_reasons()
+    {
+        using var temp = new TempDirectory();
+        var data = Path.Combine(temp.Path, "data");
+        var work = Path.Combine(temp.Path, "work");
+        Directory.CreateDirectory(work);
+        using (var catalog = new SessionCatalog(data))
+        {
+            catalog.Initialize();
+            await SessionCatalogMigrationTests.Authority(data, "healthy");
+            catalog.Upsert([
+                SessionCatalogTests.Row("healthy", 0),
+                SessionCatalogTests.Row("corrupt", 0),
+                SessionCatalogTests.Row("absent", 0),
+            ]);
+        }
+        Directory.CreateDirectory(Path.Combine(data, "state", "sessions"));
+        File.WriteAllText(Path.Combine(data, "state", "sessions", "corrupt.json"), "{bad");
+        var options = new ResponsesClientOptions(
+            new Uri("http://127.0.0.1:1"),
+            "wire",
+            "a",
+            "",
+            "",
+            713
+        );
+        await using var manager = new SessionManager(
+            data,
+            work,
+            options,
+            HostModels.ForTest(options)
+        );
+        await manager.LoadAsync();
+        using var stopped = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var socket = new ProbeSocket();
+        var running = new WebUiRealtime(new SessionRuntime(manager)).RunAsync(
+            socket,
+            stopped.Token
+        );
+        socket.SetSessionUnion(1, ["healthy", "corrupt", "absent"]);
+        await running.WaitAsync(stopped.Token);
+        var errors = socket
+            .Frames.Where(frame => frame["code"]?.GetValue<string>() == "SESSION_STATE_UNAVAILABLE")
+            .ToDictionary(frame => frame["sessionId"]!.GetValue<string>());
+        Assert.Equal(["absent", "corrupt"], errors.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal(
+            "This Session's data file is damaged.",
+            errors["corrupt"]["message"]!.GetValue<string>()
+        );
+        Assert.Equal(
+            "This Session's data file is missing.",
+            errors["absent"]["message"]!.GetValue<string>()
+        );
+        Assert.All(errors.Values, frame => Assert.Equal(1, frame["revision"]!.GetValue<long>()));
+        Assert.DoesNotContain(
+            socket.Frames,
+            frame => frame["type"]?.GetValue<string>() == "subscriptions-accepted"
+        );
+        Assert.Equal("error", socket.Frames.Last()["type"]!.GetValue<string>());
     }
 
     [Fact]

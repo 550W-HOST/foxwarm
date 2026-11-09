@@ -80,7 +80,7 @@ internal sealed partial class SessionManager
             {
                 if (slot.Retired || slot.Retiring)
                     throw new SessionDeletionException(
-                        "Session authority is retired pending deletion cleanup.",
+                        SessionDeletionException.RetiredMessage,
                         "SESSION_STATE_UNAVAILABLE"
                     );
                 var owner = await slot.Owner.Task.WaitAsync(cancellationToken);
@@ -167,7 +167,7 @@ internal sealed partial class SessionManager
                 await store.LoadAsync(id)
                 ?? throw new SessionAuthorityUnavailableException(
                     id,
-                    new(null, "Cataloged Session authority is missing.")
+                    new(null, SessionAuthorityErrors.CatalogedMissingReason)
                 );
             AgentMemory.NormalizePersistedSelection(snapshot.AuthorityEnvelope);
             var recoveringBusy = snapshot.Busy;

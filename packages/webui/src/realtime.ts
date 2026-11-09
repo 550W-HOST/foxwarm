@@ -40,6 +40,7 @@ type LogsSubscription = { handlers: WebUiRealtimeHandlers; registeredGeneration:
 type SessionSubscription = { sessionId: string; handlers: WebUiRealtimeHandlers; registeredGeneration: number }
 
 const SOCKET_OPEN = 1
+export const SESSION_STATE_UNAVAILABLE = 'SESSION_STATE_UNAVAILABLE'
 const INITIAL_RECONNECT_DELAY_MS = 1_000
 const MAX_RECONNECT_DELAY_MS = 30_000
 
@@ -166,10 +167,6 @@ export class WebUiRealtimeTransport {
     this.sessionResolutions.clear()
     this.setStatus('connecting')
 
-    socket.onopen = () => {
-      if (!this.isCurrentSocket(socket, generation)) return
-      this.reconnectDelayMs = INITIAL_RECONNECT_DELAY_MS
-    }
     socket.onmessage = event => {
       if (!this.isCurrentSocket(socket, generation)) return
       this.handleMessage(event.data, generation)
@@ -201,6 +198,9 @@ export class WebUiRealtimeTransport {
     if (message.type === 'subscriptions-accepted' && message.revision === this.subscriptionRevision) {
       this.sessionListResolutions = new Map(Object.entries(message.sessionListResolutions || {}))
       this.sessionResolutions = new Map(Object.entries(message.sessionResolutions || {}))
+      // Only an accepted subscription proves the server can serve this union; a socket that opens
+      // and then fails initialization keeps backing off.
+      this.reconnectDelayMs = INITIAL_RECONNECT_DELAY_MS
       this.setStatus('connected')
       for (const subscription of this.listSubscriptions.values()) {
         if (subscription.registeredGeneration === generation) continue
@@ -255,6 +255,12 @@ export class WebUiRealtimeTransport {
         this.logsCursor = { fileId: window.fileId, offset: window.endOffset }
       }
       for (const subscription of this.logsSubscriptions.values()) subscription.handlers.onMessage(message)
+      return
+    }
+
+    if (message.type === 'error' && message.code === SESSION_STATE_UNAVAILABLE && !message.sessionId) {
+      // The whole subscription union closes after this frame, so every Session view is affected.
+      for (const subscription of this.sessionSubscriptions.values()) subscription.handlers.onMessage(message)
       return
     }
 

@@ -14,7 +14,7 @@ import { shouldAppendOptimisticMessage } from '../utils/chatOptimistic'
 import { buildReferencedAttachmentParts } from '../attachmentRefs'
 import { postReferencedMessage, toLegacyUploadedFiles, uploadReferencedFiles } from '../attachmentSend'
 import { createLatestRequestGate } from '../modelOptionsLoader'
-import { webUiRealtime } from '../realtime'
+import { SESSION_STATE_UNAVAILABLE, webUiRealtime } from '../realtime'
 import {
   advanceHistorySeqFrontier,
   buildOptimisticUserMessage,
@@ -287,6 +287,8 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
   const [sessionQueueLength, setSessionQueueLength] = useState(0)
   const [connectionState, setConnectionState] = useState<'connected' | 'connecting' | 'disconnected' | 'reconnecting'>('connecting')
   const [reconnectCountdown, setReconnectCountdown] = useState<number>(0)
+  // null: no failure; '' : unavailable without a stated reason.
+  const [stateUnavailableReason, setStateUnavailableReason] = useState<string | null>(null)
   const [streamingAssistantDraft, setStreamingAssistantDraft] = useState<StreamingAssistantDraft | null>(null)
   const streamingAssistantDraftRef = useRef<StreamingAssistantDraft | null>(null)
   const clearStreamingAssistantDraft = useCallback(() => {
@@ -826,6 +828,7 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
       onOpen: () => {
         setConnectionState('connected')
         setReconnectCountdown(0)
+        setStateUnavailableReason(null)
         if (historyBootstrapStartedRef.current) {
           reconnectAwaitingStateRef.current = true
           return
@@ -843,6 +846,10 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
       },
       onMessage: data => {
         try {
+        if (data.type === 'error' && data.code === SESSION_STATE_UNAVAILABLE) {
+          setStateUnavailableReason(typeof data.message === 'string' && data.message.trim() ? data.message.trim() : '')
+          return
+        }
         if (data.type === 'session-event' && data.event?.type === 'session-control-feedback') {
           const feedback = parseSessionControlFeedback(data.event.feedback)
           if (!feedback || data.event.requestId !== lastControlIdRef.current) return
@@ -1100,6 +1107,7 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
   }, [applySessionState, clearStreamingAssistantDraft, clearPendingControl, fetchHistory, scheduleAtomicRecovery, scheduleHistoryRefresh, sessionId])
 
   useEffect(() => {
+    setStateUnavailableReason(null)
     const unsubscribe = subscribeRealtime()
 
     return () => {
@@ -1299,6 +1307,7 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
     earlierHistoryError: earlierHistoryError || contextHistoryError === contextDemandKey,
     connectionState,
     reconnectCountdown,
+    stateUnavailableReason,
     loading,
     retryEarlierHistory,
     sendMessage,

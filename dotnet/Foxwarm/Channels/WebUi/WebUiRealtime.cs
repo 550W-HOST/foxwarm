@@ -22,6 +22,67 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
     private const int MaxPendingEvents = 1000; // webuiRealtime.ts initialization limit.
     private const int MaxSubscriptions = 5000; // webuiRealtime.ts union limit.
     private const int MaxMessageBytes = 32 * 1024 * 1024; // Two bounded UTF-8 ID arrays, including JSON escaping.
+    private const int MaxUnavailableFrames = 16;
+    private const string GenericUnavailableReason = "Session state could not be loaded.";
+    private const string MissingDataReason = "This Session's data file is missing.";
+    private const string UnreadableDataReason = "This Session's data file can't be read.";
+    private const string DamagedDataReason = "This Session's data file is damaged.";
+    private const string DeletingReason = "This Session is being deleted.";
+
+    // The frame carries one of these product strings; the precise diagnostic goes to Main's log.
+    internal static string UnavailableReason(Exception error) =>
+        error switch
+        {
+            SessionAuthorityIdentityException => DamagedDataReason,
+            SessionDeletionException { Code: "SESSION_DELETE_IN_PROGRESS" } => DeletingReason,
+            SessionDeletionException { Message: SessionDeletionException.RetiredMessage } =>
+                DeletingReason,
+            SessionAuthorityUnavailableException unavailable => DataFileReason(unavailable),
+            _ when SessionAuthorityErrors.Detail(error) is not null => DamagedDataReason,
+            _ => GenericUnavailableReason,
+        };
+
+    private static string DataFileReason(SessionAuthorityUnavailableException error) =>
+        error.InnerException switch
+        {
+            FileNotFoundException or DirectoryNotFoundException => MissingDataReason,
+            null when error.Diagnostic.Reason == SessionAuthorityErrors.CatalogedMissingReason =>
+                MissingDataReason,
+            UnauthorizedAccessException => UnreadableDataReason,
+            { } inner when SessionAuthorityErrors.Detail(inner) is not null => DamagedDataReason,
+            UnsupportedSessionAuthorityException or SessionAuthorityIdentityException =>
+                DamagedDataReason,
+            IOException => UnreadableDataReason,
+            _ => DamagedDataReason,
+        };
+
+    private static void LogUnavailable(Exception error, string? requestedSessionId = null) =>
+        MainLog.Diagnostic(
+            "WebUI realtime: Session state unavailable"
+                + (requestedSessionId is null ? "" : $" for {JsonData.Serialize(requestedSessionId)}")
+                + ": "
+                + MainLog.SafeFailure(error)
+                + (error is SessionDeletionException deletion ? $" ({deletion.Message})" : ""),
+            failure: true
+        );
+
+    private static JsonObject UnavailableFrame(
+        Exception error,
+        long revision,
+        string? requestedSessionId = null
+    )
+    {
+        var frame = new JsonObject
+        {
+            ["type"] = "error",
+            ["code"] = "SESSION_STATE_UNAVAILABLE",
+            ["message"] = UnavailableReason(error),
+            ["revision"] = revision,
+        };
+        if (requestedSessionId is not null)
+            frame["sessionId"] = requestedSessionId;
+        return frame;
+    }
 
     public async Task RunAsync(
         WebSocket socket,
@@ -465,31 +526,58 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
                         "Session changed while loading. Try again."
                     );
                 }
+                var failures = new List<(string Requested, Exception Error)>();
                 try
                 {
                     var admitted = await Task.WhenAll(
                         requestedSessions.Select(async id =>
-                            (
-                                Requested: id,
-                                Owner: await runtime.GetOwnerAsync(
-                                    SessionCatalog.Text(
-                                        resolvedSemantic.GetValueOrDefault(id)?["sessionId"]
-                                    ) ?? id,
-                                    attempt.Token
+                        {
+                            try
+                            {
+                                return (
+                                    Requested: id,
+                                    Owner: await runtime.GetOwnerAsync(
+                                        SessionCatalog.Text(
+                                            resolvedSemantic.GetValueOrDefault(id)?["sessionId"]
+                                        ) ?? id,
+                                        attempt.Token
+                                    ),
+                                    Error: (Exception?)null
+                                );
+                            }
+                            catch (Exception error)
+                                when (error is not OperationCanceledException
+                                    || !attempt.IsCancellationRequested
                                 )
-                            )
-                        )
+                            {
+                                return (Requested: id, Owner: (SessionOwner?)null, Error: error);
+                            }
+                        })
                     );
-                    admittedOwners = admitted.ToDictionary(
-                        pair => pair.Requested,
-                        pair => pair.Owner,
-                        StringComparer.Ordinal
-                    );
-                    semantic = admitted.ToDictionary(
-                        pair => pair.Requested,
-                        pair => CurrentId(pair.Owner),
-                        StringComparer.Ordinal
-                    );
+                    admittedOwners = admitted
+                        .Where(pair => pair.Error is null)
+                        .ToDictionary(
+                            pair => pair.Requested,
+                            pair => pair.Owner,
+                            StringComparer.Ordinal
+                        );
+                    semantic = new Dictionary<string, string?>(StringComparer.Ordinal);
+                    foreach (var pair in admitted)
+                    {
+                        if (pair.Error is not null)
+                        {
+                            failures.Add((pair.Requested, pair.Error));
+                            continue;
+                        }
+                        try
+                        {
+                            semantic[pair.Requested] = CurrentId(pair.Owner);
+                        }
+                        catch (InvalidOperationException error)
+                        {
+                            failures.Add((pair.Requested, error));
+                        }
+                    }
                 }
                 catch (OperationCanceledException) when (attempt.IsCancellationRequested)
                 {
@@ -497,16 +585,18 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
                 }
                 catch (Exception error)
                 {
-                    await Send(
-                        new JsonObject
-                        {
-                            ["type"] = "error",
-                            ["code"] = "SESSION_STATE_UNAVAILABLE",
-                            ["message"] = error.Message,
-                            ["revision"] = requested,
-                        },
-                        requested
-                    );
+                    LogUnavailable(error);
+                    await Send(UnavailableFrame(error, requested), requested);
+                    await CloseFailedInitialization(requested);
+                    return;
+                }
+                if (failures.Count > 0)
+                {
+                    foreach (var (id, error) in failures)
+                        LogUnavailable(error, id);
+                    // The whole union closes, so name each failing Session (bounded) before the close.
+                    foreach (var (id, error) in failures.Take(MaxUnavailableFrames))
+                        await Send(UnavailableFrame(error, requested, id), requested);
                     await CloseFailedInitialization(requested);
                     return;
                 }
@@ -642,16 +732,8 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
             }
             catch (Exception error)
             {
-                await Send(
-                    new JsonObject
-                    {
-                        ["type"] = "error",
-                        ["code"] = "SESSION_STATE_UNAVAILABLE",
-                        ["message"] = error.Message,
-                        ["revision"] = requested,
-                    },
-                    requested
-                );
+                LogUnavailable(error);
+                await Send(UnavailableFrame(error, requested), requested);
                 await CloseFailedInitialization(requested);
             }
             finally

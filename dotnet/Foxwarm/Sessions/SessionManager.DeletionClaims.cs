@@ -9,6 +9,8 @@ internal sealed class SessionDeletionException(
     JsonObject? details = null
 ) : InvalidOperationException(message)
 {
+    internal const string RetiredMessage = "Session authority is retired pending deletion cleanup.";
+
     internal string Code { get; } = code;
     internal int Status { get; } = status;
     internal JsonObject Details { get; } = details ?? new();

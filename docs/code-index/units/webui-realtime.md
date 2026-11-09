@@ -15,8 +15,11 @@ Owns the authenticated page-scoped WebUI WebSocket and the server-side multiplex
 - sends one complete, revisioned `set-subscriptions` snapshot containing the union of desired IDs;
 - preserves requested-to-canonical mappings from `subscriptions-accepted` and filters bounded list deltas back to each logical consumer;
 - reports registration to a new subscriber exactly once per physical socket generation, while reconnect registration reaches every retained subscriber;
-- fences stale socket generations and reconnect timers, uses bounded exponential backoff with jitter, and suspends cleanly across `pagehide`/`pageshow`;
+- fences stale socket generations and reconnect timers, uses bounded exponential backoff with jitter, and suspends cleanly across `pagehide`/`pageshow`. The delay returns to its initial value only when a subscription is accepted, not when the socket merely opens, so a server that keeps failing initialization is retried at growing intervals;
+- delivers `error` frames with code `SESSION_STATE_UNAVAILABLE` to the Session subscription named by `sessionId`, or to every Session subscription when the frame names none (the whole subscription union is closing); list and Logs consumers never receive them;
 - derives `/api/webui/stream` through `makeWebSocketUrl`, preserving deployment prefixes and WS/WSS selection.
+
+Chat records such a frame's `message` and replaces its connection banner with the unavailable text plus that reason until the next accepted registration (`mainHostSessionUnavailable.e2e.mjs` covers the real Main and browser, including backoff and recovery).
 
 `subscriptions-accepted` is the registration boundary: the server has installed subscriptions but has not yet emitted the asynchronous initial snapshots. The mounted Chat synchronization hook begins history at this point, preserving the register-before-history/live-event ordering contract. `subscriptions-applied` marks completion of initial snapshots and buffered events but does not re-bootstrap existing logical subscribers.
 
@@ -57,7 +60,7 @@ Initial Session SSE delivery is `connected`, `session-state`, and a `session-eve
 ## Tests
 
 - `packages/webui/test/mainHostSse.e2e.mjs` exercises the actual owned HTTP SSE route, checks initial state/tool snapshots and a subsequent committed model reply on the same open connection. The common host fixture runs this check against managed Main or a selected native executable.
-- Browser transport tests prove N logical consumers use one socket, disjoint list deltas remain isolated, later subscribers bootstrap on an already-open socket, reconnect resubscribes the union, and dispose fences stale callbacks.
+- Browser transport tests prove unavailable-state routing and that reconnect delay grows across failed initializations and resets on acceptance, N logical consumers use one socket, disjoint list deltas remain isolated, later subscribers bootstrap on an already-open socket, reconnect resubscribes the union, and dispose fences stale callbacks.
 - Hub tests cover authentication, alias resolution, snapshot-before-buffered-live ordering, superseded revisions, cleanup, and the real HTTP WebSocket upgrade path.
 - Chat browser fixtures use the revisioned WebSocket handshake and preserve register-before-history behavior across reconnect.
 - The static [WebUI demo](./webui-demo.md) replays recorded `session-state`, `tool-call-snapshot` and `model-stream-snapshot` frames through a browser stand-in for this handshake; its e2e test fails if the WebUI's subscription use outgrows what the stand-in answers.

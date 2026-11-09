@@ -20,6 +20,8 @@ internal sealed record SessionAuthorityDiagnostic(string? Field, string Reason)
 
 internal static class SessionAuthorityErrors
 {
+    internal const string CatalogedMissingReason = "Cataloged Session authority is missing.";
+
     private static readonly object DiagnosticKey = new();
 
     internal static InvalidDataException Invalid(string reason, string? field = null) =>
@@ -73,12 +75,9 @@ internal sealed class SessionAuthorityUnavailableException(
 }
 
 internal sealed class SessionAuthorityIdentityException(string sessionId)
-    : IOException(
-        new SessionAuthorityDiagnostic(
-            "id",
-            "Authority identity does not match its catalog ID."
-        ).Format(sessionId)
-    )
+    : IOException(new SessionAuthorityDiagnostic("id", Reason).Format(sessionId))
 {
+    internal const string Reason = "Authority identity does not match its catalog ID.";
+
     internal string SafeDetail => Message;
 }
