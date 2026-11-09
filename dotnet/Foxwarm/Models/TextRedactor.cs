@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
@@ -22,17 +21,19 @@ internal sealed class TextRedactionException(
     internal string Kind { get; } = tooLarge ? TextRedactionFailureKind.TooLarge : kind;
 }
 
-// One redactor per placeholder key; neither keys nor detection results depend on Session
-// identity. The instance key makes placeholders stable across Sessions and restarts without
-// letting a model provider confirm guesses of short values by hashing them itself.
+// One redactor per installation (`InstanceSecrets.TextRedactor`); neither keys nor detection
+// results depend on Session identity. The instance key makes placeholders stable across
+// Sessions and restarts without letting a model provider confirm guesses of short values by
+// hashing them itself.
 //
-// The redactor owns two bounded memory-only stores. The reverse map records which original
-// each placeholder replaced; it detects collisions and lets later requests mask known
-// originals literally. The detection cache records, per distinct slot text, the detected
-// spans and, once the slot has been through literal masking, that pass's spans, so an
-// unchanged slot is sent the same way while it stays cached. Neither store restores output:
-// restoration uses only the pairs one request registered (`TextRedactionScope`).
-internal sealed partial class TextRedactor
+// The redactor owns two bounded memory stores. The reverse map records which original each
+// placeholder replaced; it detects collisions and lets later requests mask known originals
+// literally. The detection cache records, per distinct slot text, the detected spans and,
+// once the slot has been through literal masking, that pass's spans, so an unchanged slot is
+// sent the same way while it stays cached. With a `TextRedactionStore`, both survive a
+// restart (see TextRedactor.Persistence.cs). Neither store restores output: restoration uses
+// only the pairs one request registered (`TextRedactionScope`).
+internal sealed partial class TextRedactor : IDisposable
 {
     internal const string Prefix = "[[PRIVATE_";
     internal const int DigestCharacters = 16;
@@ -40,9 +41,6 @@ internal sealed partial class TextRedactor
     internal const long DefaultKnownBytes = 16L * 1024 * 1024;
     private const int EntryOverhead = 96;
     private static readonly UTF8Encoding Utf8 = new(false, true);
-    private static readonly ConcurrentDictionary<string, TextRedactor> ByKey = new(
-        StringComparer.Ordinal
-    );
     private readonly byte[] key;
     private readonly int digestCharacters;
     private readonly Regex placeholder;
@@ -70,6 +68,9 @@ internal sealed partial class TextRedactor
     // Masked holds the literal pass's spans over the detected text, once that pass has run.
     private sealed record Detection(DetectionKey Key, Found[] Spans, Found[]? Masked = null)
     {
+        // The day this entry's disk record was last written or touched; 0 when it has none.
+        internal long Touched { get; set; }
+
         internal long Size =>
             EntryOverhead
             + 2L * Key.Digest.Length
@@ -89,6 +90,9 @@ internal sealed partial class TextRedactor
         internal string Placeholder { get; } = placeholder;
         internal string Original { get; } = original;
         internal string[] Labels { get; set; } = labels;
+
+        // The day this original's disk record was last written or touched.
+        internal long Touched { get; set; }
         internal long Size => EntryOverhead + 2L * (Placeholder.Length + Original.Length);
     }
 
@@ -96,7 +100,8 @@ internal sealed partial class TextRedactor
         byte[] key,
         long cacheBytes = DefaultCacheBytes,
         long knownBytes = DefaultKnownBytes,
-        int digestCharacters = DigestCharacters
+        int digestCharacters = DigestCharacters,
+        TextRedactionStore? store = null
     )
     {
         if (key.Length < 32)
@@ -109,15 +114,9 @@ internal sealed partial class TextRedactor
             Regex.Escape(Prefix) + "[0-9a-f]{" + digestCharacters + @"}\]\]",
             RegexOptions.CultureInvariant
         );
+        this.store = store;
+        LoadKnown();
     }
-
-    // The process-wide redactor for one derived instance key, shared by every request.
-    internal static TextRedactor For(byte[] key) =>
-        ByKey.GetOrAdd(
-            Convert.ToHexStringLower(SHA256.HashData(key)),
-            static (_, value) => new TextRedactor(value),
-            key
-        );
 
     internal TextRedactionScope Begin(
         HttpClient http,
@@ -182,25 +181,45 @@ internal sealed partial class TextRedactor
         return Restore(text, registered);
     }
 
-    internal (Found[] Spans, Found[]? Masked)? Cached(TextRedactionOptions options, string digest)
+    // The cached result of one slot. A memory miss reads the slot's finished result from the
+    // store, when there is one, and caches it again.
+    internal (Found[] Spans, Found[]? Masked)? Cached(
+        TextRedactionOptions options,
+        string text,
+        string digest
+    )
     {
         lock (gate)
         {
-            if (!detections.TryGetValue(new(options, digest), out var node))
-                return null;
-            detectionOrder.Remove(node);
-            detectionOrder.AddLast(node);
-            return (node.Value.Spans, node.Value.Masked);
+            if (detections.TryGetValue(new(options, digest), out var node))
+            {
+                detectionOrder.Remove(node);
+                detectionOrder.AddLast(node);
+                var entry = node.Value;
+                if (store is not null && entry.Masked is not null && entry.Touched < store.Today)
+                {
+                    entry.Touched = store.Today;
+                    store.TouchSlot(options, digest);
+                }
+                return (entry.Spans, entry.Masked);
+            }
         }
+        if (Stored(options, text, digest) is not { } stored)
+            return null;
+        Admit(options, digest, stored.Spans, stored.Masked);
+        store!.TouchSlot(options, digest);
+        return stored;
     }
 
-    // Reads a cached slot without refreshing its LRU position, for presentation only.
-    internal (Found[] Spans, Found[]? Masked)? Peek(TextRedactionOptions options, string digest)
+    // Reads a cached slot without refreshing its LRU position or caching a stored result, for
+    // presentation only.
+    internal (Found[] Spans, Found[]? Masked)? Peek(TextRedactionOptions options, string text)
     {
+        var digest = Digest(text);
         lock (gate)
-            return detections.TryGetValue(new(options, digest), out var node)
-                ? (node.Value.Spans, node.Value.Masked)
-                : null;
+            if (detections.TryGetValue(new(options, digest), out var node))
+                return (node.Value.Spans, node.Value.Masked);
+        return Stored(options, text, digest);
     }
 
     // The detection cache key of one slot text.
@@ -208,24 +227,38 @@ internal sealed partial class TextRedactor
         Convert.ToHexStringLower(SHA256.HashData(MemoryMarshal.AsBytes(text.AsSpan())));
 
     // Records the literal pass's spans for a cached slot. The first result is kept, so the
-    // slot stays the same for as long as it is cached, whatever is registered later.
-    internal void Memoize(TextRedactionOptions options, string digest, Found[] masked)
+    // slot stays the same for as long as it is cached, whatever is registered later. The
+    // finished result is also written to the store.
+    internal void Memoize(
+        TextRedactionOptions options,
+        string digest,
+        Found[] spans,
+        Found[] masked
+    )
+    {
+        if (MemoizeInMemory(options, digest, masked))
+            // Encoding and queueing the record happen outside the lock.
+            store?.PutSlot(options, digest, spans, masked);
+    }
+
+    // False when the slot already had a memoized result, which is then kept. An entry evicted
+    // meanwhile is still written: the store may keep it longer.
+    private bool MemoizeInMemory(TextRedactionOptions options, string digest, Found[] masked)
     {
         lock (gate)
         {
-            if (
-                !detections.TryGetValue(new(options, digest), out var node)
-                || node.Value.Masked is not null
-            )
-                return;
-            var entry = node.Value with { Masked = masked };
+            if (!detections.TryGetValue(new(options, digest), out var node))
+                return true;
+            if (node.Value.Masked is not null)
+                return false;
+            var entry = node.Value with { Masked = masked, Touched = store?.Today ?? 0 };
             var size = entry.Size;
             cacheBytes -= node.Value.Size;
             if (size > cacheLimit)
             {
                 detectionOrder.Remove(node);
                 detections.Remove(entry.Key);
-                return;
+                return true;
             }
             node.Value = entry;
             cacheBytes += size;
@@ -235,6 +268,7 @@ internal sealed partial class TextRedactor
                 detections.Remove(oldest.Value.Key);
                 cacheBytes -= oldest.Value.Size;
             }
+            return true;
         }
     }
 
@@ -267,15 +301,24 @@ internal sealed partial class TextRedactor
             {
                 if (!string.Equals(node.Value.Original, original, StringComparison.Ordinal))
                     return false;
-                if (labels.Except(node.Value.Labels, StringComparer.Ordinal).Any())
-                    node.Value.Labels = node
-                        .Value.Labels.Union(labels, StringComparer.Ordinal)
-                        .ToArray();
+                var current = node.Value;
+                if (labels.Except(current.Labels, StringComparer.Ordinal).Any())
+                {
+                    current.Labels = current.Labels.Union(labels, StringComparer.Ordinal).ToArray();
+                    store?.PutKnown(placeholder, original, current.Labels);
+                    current.Touched = store?.Today ?? 0;
+                }
+                else if (store is not null && current.Touched < store.Today)
+                {
+                    store.TouchKnown(placeholder);
+                    current.Touched = store.Today;
+                }
                 knownOrder.Remove(node);
                 knownOrder.AddLast(node);
                 return true;
             }
-            var entry = new Known(placeholder, original, labels);
+            var entry = new Known(placeholder, original, labels) { Touched = store?.Today ?? 0 };
+            store?.PutKnown(placeholder, original, labels);
             node = knownOrder.AddLast(entry);
             known[placeholder] = node;
             knownBytes += entry.Size;
@@ -293,6 +336,7 @@ internal sealed partial class TextRedactor
         known.Remove(entry.Placeholder);
         knownBytes -= entry.Size;
         knownGeneration++;
+        store?.DeleteKnown(entry.Placeholder);
     }
 
     internal static string Apply(string text, IReadOnlyList<Found> spans)

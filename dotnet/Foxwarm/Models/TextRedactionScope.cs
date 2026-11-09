@@ -19,10 +19,12 @@ internal sealed class TextRedactionScope(
     private readonly Dictionary<string, string> registered = new(StringComparer.Ordinal);
 
     // Literal masking is memoized per cached slot. `pending` maps detected text awaiting the
-    // literal pass to the cache digests of its slots; `finished` maps text whose result is
-    // already known in this attempt to that result and the literal ranges it adds (none when
-    // `DetectAsync` already returned the final form).
-    private readonly Dictionary<string, List<string>> pending = new(StringComparer.Ordinal);
+    // literal pass to the cache digests and detected spans of its slots; `finished` maps text
+    // whose result is already known in this attempt to that result and the literal ranges it
+    // adds (none when `DetectAsync` already returned the final form).
+    private readonly Dictionary<string, List<(string Digest, Found[] Spans)>> pending = new(
+        StringComparer.Ordinal
+    );
     private readonly Dictionary<string, (string Result, Found[] Literal)> finished = new(
         StringComparer.Ordinal
     );
@@ -50,7 +52,7 @@ internal sealed class TextRedactionScope(
         var pending = texts
             .Where(text => text.Length > 0)
             .Distinct(StringComparer.Ordinal)
-            .Where(text => redactor.Cached(options, TextRedactor.Digest(text)) is null)
+            .Where(text => redactor.Cached(options, text, TextRedactor.Digest(text)) is null)
             .ToArray();
         var calls = Batches(pending, options.BatchBytes);
         // Ahead detection only helps when it combines texts or runs calls side by side.
@@ -121,7 +123,7 @@ internal sealed class TextRedactionScope(
         if (text.Length == 0)
             return text;
         var digest = TextRedactor.Digest(text);
-        var cached = redactor.Cached(options, digest);
+        var cached = redactor.Cached(options, text, digest);
         Stats?.Slot(cached is not null);
         if (cached is { Masked: { } masked })
         {
@@ -167,9 +169,9 @@ internal sealed class TextRedactionScope(
         // New registrations may need a newer matcher for the literal pass.
         originals = null;
         var detected = TextRedactor.Apply(text, spans);
-        if (!pending.TryGetValue(detected, out var digests))
-            pending[detected] = digests = [];
-        digests.Add(digest);
+        if (!pending.TryGetValue(detected, out var slots))
+            pending[detected] = slots = [];
+        slots.Add((digest, spans));
         return detected;
     }
 
@@ -179,12 +181,12 @@ internal sealed class TextRedactionScope(
     // returned unchanged even if more originals are known now.
     internal string MaskKnown(string text)
     {
-        if (pending.Remove(text, out var digests))
+        if (pending.Remove(text, out var slots))
         {
             var found = Scan(text);
             var result = TextRedactor.Apply(text, found);
-            foreach (var digest in digests)
-                redactor.Memoize(options, digest, found);
+            foreach (var (digest, spans) in slots)
+                redactor.Memoize(options, digest, spans, found);
             finished[text] = (result, found);
             Stats?.Count(found, literal: true);
             return result;

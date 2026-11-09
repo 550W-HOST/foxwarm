@@ -1,6 +1,6 @@
 // Text redaction observability over a real C# Main with a local fake detector and provider:
-// the turn usage summary, System › Usage statistics and failures, and the memory-only sent
-// version, including after a restart.
+// the turn usage summary, System › Usage statistics and failures, and the sent version, which
+// survives a restart and is unavailable after a settings change.
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
@@ -51,12 +51,13 @@ const provider = createServer(async (request, response) => {
 })
 for (const server of [detector, provider]) { server.listen(0, '127.0.0.1'); await once(server, 'listening') }
 const detectorUrl = `http://127.0.0.1:${detector.address().port}/classify`
-await writeFile(fixture.modelPath, JSON.stringify({
+const writeModels = threshold => writeFile(fixture.modelPath, JSON.stringify({
   default: 'guarded/wire',
   providers: {
-    guarded: { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${provider.address().port}`, models: ['wire'], contextLimit: 100000, asyncCompact: false, textRedaction: { enabled: true, endpoint: detectorUrl } },
+    guarded: { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${provider.address().port}`, models: ['wire'], contextLimit: 100000, asyncCompact: false, textRedaction: { enabled: true, endpoint: detectorUrl, threshold } },
   },
 }))
+await writeModels(0.5)
 await mkdir(join(fixture.work, 'memory'), { recursive: true })
 await writeFile(join(fixture.work, 'memory/ONBOOT.md'), ' \n')
 const shots = process.env.FOXWARM_SYSTEM_SCREENSHOT_DIR
@@ -158,24 +159,39 @@ try {
   await sectionHandle.evaluate(item => item.scrollIntoView({ block: 'center' }))
   await shot(sectionHandle, 'usage-overview-redaction.png')
 
-  // After a restart the in-memory cache is gone; the view says so instead of guessing.
+  // Opens the first user message's sent version after a restart.
+  const callsBefore = detectorCalls
+  const reopen = async label => {
+    await page.evaluate(() => { location.hash = 'chat' })
+    await page.reload()
+    await waitForWebUiReady(page)
+    await page.waitForFunction(() => typeof window.foxwarmTest?.switchToSession === 'function')
+    await page.evaluate(sessionId => window.foxwarmTest.switchToSession(sessionId), id)
+    await page.waitForSelector('.foxwarm-user-message-bubble')
+    await until(async () => {
+      await page.evaluate(() => document.querySelector('.foxwarm-user-action-buttons button[title="Sent version"]')?.click())
+      return page.waitForSelector('[data-sent-version-dialog]', { timeout: 2000 }).then(() => true, () => false)
+    }, 'sent version dialog ' + label)
+  }
+
+  // The sent version survives a restart: it is read from the persisted results.
   await fixture.stop()
   await fixture.start()
-  const callsBefore = detectorCalls
-  const restarted = page
-  await restarted.evaluate(() => { location.hash = 'chat' })
-  await restarted.reload()
-  await waitForWebUiReady(restarted)
-  await restarted.waitForFunction(() => typeof window.foxwarmTest?.switchToSession === 'function')
-  await restarted.evaluate(sessionId => window.foxwarmTest.switchToSession(sessionId), id)
-  await restarted.waitForSelector('.foxwarm-user-message-bubble')
-  await until(async () => {
-    await restarted.evaluate(() => document.querySelector('.foxwarm-user-action-buttons button[title="Sent version"]')?.click())
-    return restarted.waitForSelector('[data-sent-version-dialog]', { timeout: 2000 }).then(() => true, () => false)
-  }, 'sent version dialog after restart')
-  await restarted.waitForSelector('[data-sent-version-dialog][data-sent-version-state="unavailable"]')
-  assert.match(await restarted.$eval('[data-sent-version-summary]', item => item.textContent), /^The sent version is no longer available\.$/)
-  await shot(await restarted.$('[data-sent-version-dialog]'), 'sent-version-unavailable.png')
+  await reopen('after restart')
+  await page.waitForSelector('[data-sent-version-dialog][data-sent-version-state="available"]')
+  const restartedMarks = await page.$$eval('[data-sent-version-dialog] mark', items => items.map(item => [item.childNodes[0].textContent, item.getAttribute('data-sent-version-range')]))
+  assert.deepEqual(restartedMarks, [[PERSON, 'detected'], [EMAIL, 'detected']])
+  await page.keyboard.press('Escape')
+  await page.waitForFunction(() => !document.querySelector('[data-sent-version-dialog]'))
+
+  // Changed detection settings start over, so the earlier version is no longer available.
+  await fixture.stop()
+  await writeModels(0.6)
+  await fixture.start()
+  await reopen('after a settings change')
+  await page.waitForSelector('[data-sent-version-dialog][data-sent-version-state="unavailable"]')
+  assert.match(await page.$eval('[data-sent-version-summary]', item => item.textContent), /^The sent version is no longer available\.$/)
+  await shot(await page.$('[data-sent-version-dialog]'), 'sent-version-unavailable.png')
   // Rendering the view never asks the detector.
   assert.equal(detectorCalls, callsBefore)
 

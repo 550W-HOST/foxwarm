@@ -93,7 +93,7 @@ public sealed class TextRedactionRegressionTests
         using var http = ProviderHttpRequest.CreateClient();
         using var keys = new TextRedactionKeys();
         var options = new TextRedactionOptions(detector.Endpoint, null, 0.5, 30000);
-        var redactor = TextRedactor.For(keys.Secrets.TextRedactionPlaceholderKey());
+        var redactor = keys.Secrets.TextRedactor();
         var first = redactor.Begin(http, options, default);
         var placeholder = (await first.RedactAsync("My name is Alice."))["My name is ".Length..^1];
         var output = TextRedactionProjection.RestoreMessage(
@@ -470,7 +470,7 @@ public sealed class TextRedactionRegressionTests
             new ResponsesClientOptions(new("http://127.0.0.1:1"), "m", "p/m", "", "", 100)
             {
                 HardTimeoutMs = timeoutMs,
-                TextRedactionKey = () => Key,
+                TextRedactorSource = () => new TextRedactor(Key),
             },
             new TextRedactionOptions(new("http://127.0.0.1:1/classify"), null, 0.5, 30000),
             null,

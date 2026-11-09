@@ -33,7 +33,7 @@ public sealed partial class TextRedactionTests
             Interlocked.Decrement(ref inFlight);
             return false;
         };
-        var redactor = TextRedactor.For(Enumerable.Range(41, 32).Select(i => (byte)i).ToArray());
+        var redactor = new TextRedactor(Enumerable.Range(41, 32).Select(i => (byte)i).ToArray());
         using var http = ProviderHttpRequest.CreateClient();
         // Four requests at once: the last waits about 450 ms, longer than one call's timeout.
         var options = new TextRedactionOptions(detector.Endpoint, null, 0.5, 400);
@@ -67,7 +67,7 @@ public sealed partial class TextRedactionTests
             await release.Task;
             return false;
         };
-        var redactor = TextRedactor.For(Enumerable.Range(77, 32).Select(i => (byte)i).ToArray());
+        var redactor = new TextRedactor(Enumerable.Range(77, 32).Select(i => (byte)i).ToArray());
         using var http = ProviderHttpRequest.CreateClient();
         var options = new TextRedactionOptions(detector.Endpoint, null, 0.5, 30000);
         var first = redactor.Begin(http, options, CancellationToken.None).DetectAsync("first");
@@ -142,7 +142,8 @@ public sealed partial class TextRedactionTests
             new ResponsesClientOptions(new("http://127.0.0.1:1"), "m", "p/m", "", "", 100)
             {
                 Instructions = "Instructions for " + names[1],
-                TextRedactionKey = () => Enumerable.Range(150, 32).Select(i => (byte)i).ToArray(),
+                TextRedactorSource = () =>
+                    new TextRedactor(Enumerable.Range(150, 32).Select(i => (byte)i).ToArray()),
             },
             new TextRedactionOptions(detector.Endpoint, null, 0.5, 30000) { MaxConcurrency = 3 },
             null,
@@ -182,7 +183,8 @@ public sealed partial class TextRedactionTests
             ProviderHttpRequest.CreateClient(),
             new ResponsesClientOptions(new("http://127.0.0.1:1"), "m", "p/m", "", "", 100)
             {
-                TextRedactionKey = () => Enumerable.Range(190, 32).Select(i => (byte)i).ToArray(),
+                TextRedactorSource = () =>
+                    new TextRedactor(Enumerable.Range(190, 32).Select(i => (byte)i).ToArray()),
             },
             new TextRedactionOptions(detector.Endpoint, null, 0.5, 30000) { MaxConcurrency = 4 },
             null,

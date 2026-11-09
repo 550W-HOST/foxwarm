@@ -14,6 +14,10 @@ internal sealed partial class InstanceSecrets : IDisposable
     private readonly TimeProvider clock;
     private readonly List<(string Id, Func<IEnumerable<KnownSecret>> Values)> sources = new();
     private InstanceKeys? keys;
+    private readonly string dataRoot;
+    private readonly object textRedactorGate = new();
+    private Foxwarm.Models.TextRedactor? textRedactor;
+    private bool disposed;
     private SecretRedactor redactor = SecretRedactor.Empty;
     private long builtGeneration = -1;
     private long builtAt;
@@ -34,6 +38,7 @@ internal sealed partial class InstanceSecrets : IDisposable
     {
         this.clock = clock ?? TimeProvider.System;
         var root = Path.GetFullPath(dataRoot);
+        this.dataRoot = root;
         KeyPath = InstanceKeys.DefaultPath(root);
         Store = new SecretStore(Path.Combine(root, "state", "secrets.json"), OpenKeys, this.clock);
         Exposures = new SecretExposures(
@@ -126,6 +131,34 @@ internal sealed partial class InstanceSecrets : IDisposable
     // key is missing or unreadable, so enabled redaction fails closed.
     internal byte[] TextRedactionPlaceholderKey() =>
         OpenKeys().Derive(InstanceKeys.TextRedactionPlaceholderPurpose);
+
+    // The installation's reversible text redactor, created on first use with its persistent
+    // store `<data root>/state/text-redaction.sqlite`. Throws like
+    // `TextRedactionPlaceholderKey` while the instance key is unavailable; a store that cannot
+    // be opened leaves it memory-only.
+    internal Foxwarm.Models.TextRedactor TextRedactor()
+    {
+        lock (textRedactorGate)
+        {
+            if (textRedactor is not null)
+                return textRedactor;
+            var opened = OpenKeys();
+            // A request still finishing during shutdown runs without the closed store.
+            var store = disposed
+                ? null
+                : Foxwarm.Models.TextRedactionStore.Open(
+                    Path.Combine(dataRoot, "state", Foxwarm.Models.TextRedactionStore.FileName),
+                    opened.Derive(InstanceKeys.TextRedactionStorePurpose, 64),
+                    Foxwarm.Models.TextRedactor.DefaultKnownBytes,
+                    clock
+                );
+            textRedactor = new Foxwarm.Models.TextRedactor(
+                opened.Derive(InstanceKeys.TextRedactionPlaceholderPurpose),
+                store: store
+            );
+            return textRedactor;
+        }
+    }
 
     // Literal values from configuration that should also be masked. Each source is
     // re-read at most every few seconds, or immediately after Invalidate.
@@ -280,7 +313,15 @@ internal sealed partial class InstanceSecrets : IDisposable
             Exposures.Record(findings.Reasoning, source + "-reasoning", sessionId);
     }
 
-    public void Dispose() => Exposures.Dispose();
+    public void Dispose()
+    {
+        Exposures.Dispose();
+        lock (textRedactorGate)
+        {
+            disposed = true;
+            textRedactor?.Dispose();
+        }
+    }
 
     // Literal credentials in sink fields, labelled with their configuration location.
     internal static IEnumerable<KnownSecret> Literals(

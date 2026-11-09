@@ -28,8 +28,9 @@ public sealed record ResponsesClientOptions(
         ModelHistoryCompatibility.Exact;
     internal TextRedactionOptions? TextRedaction { get; init; }
 
-    // Supplies the instance placeholder key; enabled redaction fails without one.
-    internal Func<byte[]>? TextRedactionKey { get; init; }
+    // Supplies the installation's redactor, which needs the instance key; enabled redaction
+    // fails without one.
+    internal Func<TextRedactor>? TextRedactorSource { get; init; }
 
     // Compaction omits a slot the detection service rejects as too large instead of failing.
     internal bool TextRedactionOmitsOversized { get; init; }

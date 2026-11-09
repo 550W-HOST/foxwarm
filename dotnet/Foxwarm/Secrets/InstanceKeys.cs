@@ -15,6 +15,9 @@ internal sealed class InstanceKeys
     // Reserved for model text-redaction placeholders (HMAC), owned by that feature.
     internal const string TextRedactionPlaceholderPurpose = "text-redaction-placeholder";
 
+    // Encryption and record-key hashing of the text-redaction store (64 bytes, split).
+    internal const string TextRedactionStorePurpose = "text-redaction-store";
+
     private readonly byte[] master;
 
     internal string KeyId { get; }

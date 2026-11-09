@@ -31,10 +31,9 @@ internal sealed class TextRedactionChatService(
         TextRedactor redactor;
         try
         {
-            redactor = TextRedactor.For(
-                options.TextRedactionKey?.Invoke()
-                    ?? throw new InvalidOperationException("No instance key source.")
-            );
+            redactor =
+                options.TextRedactorSource?.Invoke()
+                ?? throw new InvalidOperationException("No instance key source.");
         }
         catch (Exception)
         {

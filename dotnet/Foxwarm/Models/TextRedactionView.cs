@@ -4,9 +4,10 @@ using Foxwarm.Sessions;
 namespace Foxwarm.Models;
 
 // Which ranges of one stored message were replaced when it was last sent, computed on demand
-// from the redactor's in-memory detection cache and memoized literal results. It never calls
-// the detector and persists nothing; a slot that is no longer cached (restart, eviction or
-// different settings) is reported as unavailable rather than guessed.
+// from the redactor's detection cache and memoized literal results, in memory or persisted in
+// its store. It never calls the detector and writes nothing; a slot that is not cached (store
+// eviction or deletion, different settings, never sent) is reported as unavailable rather
+// than guessed.
 //
 // The slot texts are rebuilt the way a request builds them (stage-S secret masking, concrete
 // history preparation, then the redaction projection), so the cache key matches. The result
@@ -62,7 +63,7 @@ internal static class TextRedactionView
         try
         {
             if (secrets is not null)
-                redactor = TextRedactor.For(secrets.TextRedactionPlaceholderKey());
+                redactor = secrets.TextRedactor();
         }
         catch (Exception)
         {
@@ -89,7 +90,7 @@ internal static class TextRedactionView
                     row["name"] = slot.Name;
                 if (slot.CallId is not null)
                     row["callId"] = slot.CallId;
-                var cached = redactor?.Peek(candidate.Options, TextRedactor.Digest(text));
+                var cached = redactor?.Peek(candidate.Options, text);
                 // A slot that never finished its literal pass was not sent in this form.
                 if (cached is { Masked: { } masked })
                 {

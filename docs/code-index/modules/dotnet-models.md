@@ -14,6 +14,7 @@ Leading instruction composition follows [conditional memory and request prefixes
 
 - [Reversible model text redaction](../units/model-text-redaction.md)
 - [Text redaction observability](../units/model-text-redaction-observability.md)
+- [Text redaction persistence](../units/model-text-redaction-persistence.md)
 - [Model configuration and routing](../units/model-configuration.md)
 - [Provider-neutral request history and OpenAI wire helpers](../units/model-common-wire.md)
 - [Anthropic and Chat Completions adapters](../units/model-anthropic-completions.md)

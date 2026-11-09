@@ -38,10 +38,7 @@ public sealed partial class TextRedactionTests
                 first,
                 await new TextRedactor(key).Begin(http, options, default).RedactAsync(value)
             );
-            Assert.Same(
-                TextRedactor.For(key),
-                TextRedactor.For(restarted.TextRedactionPlaceholderKey())
-            );
+            Assert.Same(restarted.TextRedactor(), restarted.TextRedactor());
         }
         Assert.Equal(
             await new TextRedactor(Key).Begin(http, options, default).RedactAsync(value),

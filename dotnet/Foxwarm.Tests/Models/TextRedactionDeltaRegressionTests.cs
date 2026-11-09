@@ -632,9 +632,7 @@ public sealed class TextRedactionDeltaRegressionTests(Xunit.Abstractions.ITestOu
         };
         using var http = ProviderHttpRequest.CreateClient();
         using var keys = new TextRedactionKeys();
-        var placeholder = TextRedactor
-            .For(keys.Secrets.TextRedactionPlaceholderKey())
-            .Placeholder(Encoding.UTF8.GetBytes("Alice"));
+        var placeholder = keys.Secrets.TextRedactor().Placeholder(Encoding.UTF8.GetBytes("Alice"));
         await using var p = await Provider.StartAsync(n =>
             n == 1 ? (500, """{"error":{"message":"down"}}""") : (200, Answer("Hi " + placeholder))
         );

@@ -14,7 +14,7 @@ public sealed partial class TextRedactionTests
     public async Task Combined_detection_maps_ranges_back_to_each_slot()
     {
         await using var detector = await TextDetectionPeer.StartAsync("Alice", "Bob");
-        var redactor = TextRedactor.For(Enumerable.Range(60, 32).Select(i => (byte)i).ToArray());
+        var redactor = new TextRedactor(Enumerable.Range(60, 32).Select(i => (byte)i).ToArray());
         using var http = ProviderHttpRequest.CreateClient();
         var options = new TextRedactionOptions(detector.Endpoint, null, 0.5, 30000)
         {
@@ -85,7 +85,7 @@ public sealed partial class TextRedactionTests
             Assert.True(end <= bytes.Length);
             return response;
         };
-        var redactor = TextRedactor.For(Enumerable.Range(70, 32).Select(i => (byte)i).ToArray());
+        var redactor = new TextRedactor(Enumerable.Range(70, 32).Select(i => (byte)i).ToArray());
         using var http = ProviderHttpRequest.CreateClient();
         var options = new TextRedactionOptions(detector.Endpoint, null, 0.5, 30000);
 
@@ -138,7 +138,8 @@ public sealed partial class TextRedactionTests
             new ResponsesClientOptions(new("http://127.0.0.1:1"), "m", "p/m", "", "", 100)
             {
                 Instructions = "Instructions",
-                TextRedactionKey = () => Enumerable.Range(80, 32).Select(i => (byte)i).ToArray(),
+                TextRedactorSource = () =>
+                    new TextRedactor(Enumerable.Range(80, 32).Select(i => (byte)i).ToArray()),
             },
             new TextRedactionOptions(detector.Endpoint, null, 0.5, 30000) { BatchBytes = 65536 },
             null,
@@ -176,7 +177,8 @@ public sealed partial class TextRedactionTests
             ProviderHttpRequest.CreateClient(),
             new ResponsesClientOptions(new("http://127.0.0.1:1"), "m", "p/m", "", "", 100)
             {
-                TextRedactionKey = () => Enumerable.Range(90, 32).Select(i => (byte)i).ToArray(),
+                TextRedactorSource = () =>
+                    new TextRedactor(Enumerable.Range(90, 32).Select(i => (byte)i).ToArray()),
             },
             new TextRedactionOptions(detector.Endpoint, null, 0.5, 30000) { BatchBytes = 65536 },
             null,
@@ -196,7 +198,7 @@ public sealed partial class TextRedactionTests
     public async Task Kept_values_are_not_replaced_or_spread()
     {
         await using var detector = await TextDetectionPeer.StartAsync("Acme", "Alice");
-        var redactor = TextRedactor.For(Enumerable.Range(100, 32).Select(i => (byte)i).ToArray());
+        var redactor = new TextRedactor(Enumerable.Range(100, 32).Select(i => (byte)i).ToArray());
         using var http = ProviderHttpRequest.CreateClient();
         var keep = new TextRedactionOptions(detector.Endpoint, null, 0.5, 30000)
         {
@@ -226,7 +228,7 @@ public sealed partial class TextRedactionTests
         var platform = "web" + "ui";
         var tag = "foxwarm" + "-message";
         await using var detector = await TextDetectionPeer.StartAsync(platform, tag, "Alice");
-        var redactor = TextRedactor.For(Enumerable.Range(110, 32).Select(i => (byte)i).ToArray());
+        var redactor = new TextRedactor(Enumerable.Range(110, 32).Select(i => (byte)i).ToArray());
         using var http = ProviderHttpRequest.CreateClient();
         var options = new TextRedactionOptions(detector.Endpoint, null, 0.5, 30000);
         var scope = redactor.Begin(http, options, default);
