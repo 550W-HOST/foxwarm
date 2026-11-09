@@ -270,6 +270,9 @@ internal sealed class UsageOverview : IAsyncDisposable
 
         internal long Tokens => Cached + Input + Output;
 
+        // Text redaction statistics, kept for totals and group rows but not per bucket.
+        internal RedactionTotals? Redaction;
+
         internal JsonObject ToJson()
         {
             var result = new JsonObject
@@ -283,8 +286,70 @@ internal sealed class UsageOverview : IAsyncDisposable
             // Unknown prices never become zero: cost appears only when some request had one.
             if (Priced > 0)
                 result["cost"] = Cost;
+            if (Redaction is { Recorded: true })
+                result["redaction"] = Redaction.ToJson();
             return result;
         }
+    }
+
+    /// <summary>
+    /// Redacted attempts and detection failures. Failures happened before any provider send, so
+    /// they are counted separately and never as requests or attempts.
+    /// </summary>
+    private sealed class RedactionTotals
+    {
+        private long attempts;
+        private long detected;
+        private long literal;
+        private long slots;
+        private long cachedSlots;
+        private long detectorCalls;
+        private long omitted;
+        private double detectionMs;
+        private readonly SortedDictionary<string, long> labels = new(StringComparer.Ordinal);
+        private readonly SortedDictionary<string, long> failures = new(StringComparer.Ordinal);
+
+        internal bool Recorded => attempts > 0 || failures.Count > 0;
+
+        internal void Add(LlmRedactionCell cell)
+        {
+            attempts += cell.Attempts;
+            detected += cell.Detected;
+            literal += cell.Literal;
+            slots += cell.Slots;
+            cachedSlots += cell.CachedSlots;
+            detectorCalls += cell.DetectorCalls;
+            omitted += cell.Omitted;
+            detectionMs += cell.DetectionMs;
+            foreach (var (label, count) in cell.Labels)
+                labels[label] = labels.GetValueOrDefault(label) + count;
+            foreach (var (kind, count) in cell.Failures)
+                failures[kind] = failures.GetValueOrDefault(kind) + count;
+        }
+
+        private static JsonObject Counts(SortedDictionary<string, long> values)
+        {
+            var result = new JsonObject();
+            foreach (var (key, value) in values.OrderByDescending(pair => pair.Value))
+                result[key] = value;
+            return result;
+        }
+
+        internal JsonObject ToJson() =>
+            new()
+            {
+                ["attempts"] = attempts,
+                ["replacements"] = detected + literal,
+                ["detected"] = detected,
+                ["literal"] = literal,
+                ["labels"] = Counts(labels),
+                ["slots"] = slots,
+                ["cachedSlots"] = cachedSlots,
+                ["detectorCalls"] = detectorCalls,
+                ["detectionMs"] = Math.Round(detectionMs, 1),
+                ["failures"] = Counts(failures),
+                ["omitted"] = omitted,
+            };
     }
 
     private sealed record Group(string? Key, string Kind)
@@ -327,9 +392,18 @@ internal sealed class UsageOverview : IAsyncDisposable
         IReadOnlyDictionary<string, SessionOwnerInfo> sessions =
             new Dictionary<string, SessionOwnerInfo>();
         IReadOnlyList<LlmUsageCell> cells;
+        IReadOnlyList<LlmRedactionCell> redactionCells;
         if (bySession)
         {
-            sessions = DescribeSessions(journal.UsageSessions(boundaries[0], boundaries[^1]));
+            sessions = DescribeSessions(
+                journal
+                    .UsageSessions(boundaries[0], boundaries[^1])
+                    .Union(
+                        journal.RedactionSessions(boundaries[0], boundaries[^1]),
+                        StringComparer.Ordinal
+                    )
+                    .ToArray()
+            );
             var starts = sessions
                 .Where(pair => pair.Value.Start is not null)
                 .ToDictionary(
@@ -338,34 +412,58 @@ internal sealed class UsageOverview : IAsyncDisposable
                     StringComparer.Ordinal
                 );
             cells = journal.QueryUsage(boundaries, column, bySession: true, starts);
+            redactionCells = journal.QueryRedaction(boundaries, column, bySession: true, starts);
         }
         else
-            cells = journal.QueryUsage(boundaries, column);
-        Owner OwnerOf(LlmUsageCell cell)
         {
-            if (cell.SessionId is not { } id)
+            cells = journal.QueryUsage(boundaries, column);
+            redactionCells = journal.QueryRedaction(boundaries, column);
+        }
+        Owner OwnerOf(string? sessionId, bool beforeStart)
+        {
+            if (sessionId is not { } id)
                 return new("none", null, null);
             var info = sessions[id];
-            return info.CurrentId is not null && !cell.BeforeSessionStart
+            return info.CurrentId is not null && !beforeStart
                 ? new("session", info.CurrentId, info.Agent)
                 : new("deleted", null, info.FormerAgent);
         }
         var owned = cells
-            .Select(cell => (Cell: cell, Owner: bySession ? OwnerOf(cell) : null))
+            .Select(cell =>
+                (
+                    Cell: cell,
+                    Owner: bySession ? OwnerOf(cell.SessionId, cell.BeforeSessionStart) : null
+                )
+            )
+            .ToArray();
+        var redactionOwned = redactionCells
+            .Select(cell =>
+                (
+                    Cell: cell,
+                    Owner: bySession ? OwnerOf(cell.SessionId, cell.BeforeSessionStart) : null
+                )
+            )
             .ToArray();
         if (agent is not null)
+        {
             owned = owned
                 .Where(item => item.Owner!.Kind != "none" && item.Owner.Agent == agent)
                 .ToArray();
+            redactionOwned = redactionOwned
+                .Where(item => item.Owner!.Kind != "none" && item.Owner.Agent == agent)
+                .ToArray();
+        }
         var coverage = journal.UsageCoverage();
         var bucketCount = boundaries.Count - 1;
-        var total = new Totals();
+        var total = new Totals { Redaction = new() };
         var buckets = Enumerable.Range(0, bucketCount).Select(_ => new Totals()).ToArray();
         foreach (var (cell, _) in owned)
         {
             total.Add(cell);
             buckets[cell.Bucket].Add(cell);
         }
+        foreach (var (cell, _) in redactionOwned)
+            total.Redaction.Add(cell);
         var result = new JsonObject
         {
             ["version"] = 1,
@@ -386,7 +484,7 @@ internal sealed class UsageOverview : IAsyncDisposable
         };
         if (groupBy is null)
             return result;
-        var groups = Grouped(owned, groupBy, agent);
+        var groups = Grouped(owned, redactionOwned, groupBy, agent);
         var ordered = groups
             .Values.OrderByDescending(group => group.Total.Priced > 0 ? group.Total.Cost : -1)
             .ThenByDescending(group => group.Total.Tokens)
@@ -430,32 +528,47 @@ internal sealed class UsageOverview : IAsyncDisposable
 
     private Dictionary<string, Group> Grouped(
         IReadOnlyList<(LlmUsageCell Cell, Owner? Owner)> owned,
+        IReadOnlyList<(LlmRedactionCell Cell, Owner? Owner)> redactionOwned,
         string groupBy,
         string? agent
     )
     {
         var groups = new Dictionary<string, Group>(StringComparer.Ordinal);
-        Func<LlmUsageCell, Owner?, Group> describe = groupBy switch
+        Func<string?, Owner?, Group> describe = groupBy switch
         {
             "agent" => (_, owner) =>
                 owner!.Kind == "none" ? new(null, "none")
                 : owner.Agent is null ? new("", "unknown")
                 : new(owner.Agent, "agent"),
-            "tree" or "session" => SessionGroups(owned, groupBy == "tree", agent),
-            _ => (cell, _) => new(cell.Key, cell.Key is null ? "none" : groupBy),
+            "tree" or "session" => SessionGroups(
+                owned
+                    .Select(item => item.Owner)
+                    .Concat(redactionOwned.Select(item => item.Owner))
+                    .ToArray(),
+                groupBy == "tree",
+                agent
+            ),
+            _ => (key, _) => new(key, key is null ? "none" : groupBy),
         };
-        foreach (var (cell, owner) in owned)
+        Group Find(string? key, Owner? owner)
         {
-            var group = describe(cell, owner);
+            var group = describe(key, owner);
             // Keys are prefixed with their kind so null and deleted keys stay distinct.
             var identity = group.Kind + "\u0000" + (group.Key ?? "");
             if (!groups.TryGetValue(identity, out var existing))
                 groups[identity] = existing = group;
+            return existing;
+        }
+        foreach (var (cell, owner) in owned)
+        {
+            var existing = Find(cell.Key, owner);
             existing.Total.Add(cell);
             if (!existing.Buckets.TryGetValue(cell.Bucket, out var bucket))
                 existing.Buckets[cell.Bucket] = bucket = new();
             bucket.Add(cell);
         }
+        foreach (var (cell, owner) in redactionOwned)
+            (Find(cell.Key, owner).Total.Redaction ??= new()).Add(cell);
         return groups;
     }
 
@@ -465,14 +578,14 @@ internal sealed class UsageOverview : IAsyncDisposable
     /// tree is that Agent's own part of it: its root is the highest ancestor reached through
     /// Sessions of the same Agent, so another Agent's coordinator never stands in for it.
     /// </summary>
-    private Func<LlmUsageCell, Owner?, Group> SessionGroups(
-        IReadOnlyList<(LlmUsageCell Cell, Owner? Owner)> owned,
+    private Func<string?, Owner?, Group> SessionGroups(
+        IReadOnlyList<Owner?> owners,
         bool tree,
         string? agent
     )
     {
-        var live = owned
-            .Select(item => item.Owner!)
+        var live = owners
+            .Select(owner => owner!)
             .Where(owner => owner.Kind == "session")
             .Select(owner => owner.SessionId!)
             .Distinct(StringComparer.Ordinal)

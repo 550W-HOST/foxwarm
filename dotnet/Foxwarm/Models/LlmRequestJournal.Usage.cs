@@ -625,32 +625,9 @@ public sealed partial class LlmRequestJournalStore
             return [];
         var starts = bySession && sessionStarts is { Count: > 0 };
         if (starts)
-        {
-            using var create = connection.CreateCommand();
-            create.CommandText =
-                "CREATE TEMP TABLE usage_session_starts(session_id TEXT PRIMARY KEY,started_at INTEGER NOT NULL)";
-            create.ExecuteNonQuery();
-            using var insert = connection.CreateCommand();
-            insert.CommandText = "INSERT INTO temp.usage_session_starts VALUES($id,$at)";
-            var id = insert.Parameters.Add("$id", SqliteType.Text);
-            var at = insert.Parameters.Add("$at", SqliteType.Integer);
-            foreach (var (session, started) in sessionStarts!)
-            {
-                id.Value = session;
-                at.Value = started;
-                insert.ExecuteNonQuery();
-            }
-        }
+            CreateSessionStarts(connection, sessionStarts!);
         using var command = connection.CreateCommand();
-        var values = new StringBuilder();
-        for (var index = 0; index + 1 < boundaries.Count; index++)
-        {
-            if (index > 0)
-                values.Append(',');
-            values.Append($"({index},$b{index},$b{index + 1})");
-        }
-        for (var index = 0; index < boundaries.Count; index++)
-            Add(command, "$b" + index, boundaries[index]);
+        var values = BucketValues(command, boundaries);
         var key = groupColumn is null ? "NULL" : "u." + groupColumn;
         var sessionColumn = bySession ? "u.session_id" : "NULL";
         var before = starts
@@ -682,6 +659,43 @@ public sealed partial class LlmRequestJournalStore
                 )
             );
         return cells;
+    }
+
+    /// <summary>The start of each queried Session's current history, for Session-level queries.</summary>
+    private static void CreateSessionStarts(
+        SqliteConnection connection,
+        IReadOnlyDictionary<string, long> sessionStarts
+    )
+    {
+        using var create = connection.CreateCommand();
+        create.CommandText =
+            "CREATE TEMP TABLE IF NOT EXISTS usage_session_starts(session_id TEXT PRIMARY KEY,started_at INTEGER NOT NULL)";
+        create.ExecuteNonQuery();
+        using var insert = connection.CreateCommand();
+        insert.CommandText = "INSERT OR REPLACE INTO temp.usage_session_starts VALUES($id,$at)";
+        var id = insert.Parameters.Add("$id", SqliteType.Text);
+        var at = insert.Parameters.Add("$at", SqliteType.Integer);
+        foreach (var (session, started) in sessionStarts)
+        {
+            id.Value = session;
+            at.Value = started;
+            insert.ExecuteNonQuery();
+        }
+    }
+
+    /// <summary>The `(index, start, end)` rows of the bucket CTE, with their parameters.</summary>
+    private static string BucketValues(SqliteCommand command, IReadOnlyList<long> boundaries)
+    {
+        var values = new StringBuilder();
+        for (var index = 0; index + 1 < boundaries.Count; index++)
+        {
+            if (index > 0)
+                values.Append(',');
+            values.Append($"({index},$b{index},$b{index + 1})");
+        }
+        for (var index = 0; index < boundaries.Count; index++)
+            Add(command, "$b" + index, boundaries[index]);
+        return values.ToString();
     }
 
     /// <summary>

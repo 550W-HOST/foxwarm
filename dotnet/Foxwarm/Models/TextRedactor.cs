@@ -1,17 +1,25 @@
 using System.Collections.Concurrent;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 
 namespace Foxwarm.Models;
 
-internal sealed class TextRedactionException(string message, bool retryable, bool tooLarge = false)
-    : Exception(message)
+internal sealed class TextRedactionException(
+    string message,
+    bool retryable,
+    bool tooLarge = false,
+    string kind = TextRedactionFailureKind.Other
+) : Exception(message)
 {
     internal bool Retryable { get; } = retryable;
 
     // The detection service rejected one text slot as larger than it accepts.
     internal bool TooLarge { get; } = tooLarge;
+
+    // The failure kind recorded in usage statistics (`TextRedactionFailureKind`).
+    internal string Kind { get; } = tooLarge ? TextRedactionFailureKind.TooLarge : kind;
 }
 
 // One redactor per placeholder key; neither keys nor detection results depend on Session
@@ -185,6 +193,19 @@ internal sealed partial class TextRedactor
             return (node.Value.Spans, node.Value.Masked);
         }
     }
+
+    // Reads a cached slot without refreshing its LRU position, for presentation only.
+    internal (Found[] Spans, Found[]? Masked)? Peek(TextRedactionOptions options, string digest)
+    {
+        lock (gate)
+            return detections.TryGetValue(new(options, digest), out var node)
+                ? (node.Value.Spans, node.Value.Masked)
+                : null;
+    }
+
+    // The detection cache key of one slot text.
+    internal static string Digest(string text) =>
+        Convert.ToHexStringLower(SHA256.HashData(MemoryMarshal.AsBytes(text.AsSpan())));
 
     // Records the literal pass's spans for a cached slot. The first result is kept, so the
     // slot stays the same for as long as it is cached, whatever is registered later.

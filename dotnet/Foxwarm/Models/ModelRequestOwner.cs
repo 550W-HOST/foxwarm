@@ -312,10 +312,14 @@ internal sealed class ModelRequestOwner(
                     turnId,
                     journalPurpose
                 );
+                var redactionStats = options.TextRedaction is null
+                    ? null
+                    : new TextRedactionStats();
                 options = options with
                 {
                     Images = images,
                     TextRedactionKey = secrets is null ? null : secrets.TextRedactionPlaceholderKey,
+                    TextRedactionStats = redactionStats,
                     Diagnostics = interaction?.StartAttempt(
                         leaf,
                         options,
@@ -344,6 +348,43 @@ internal sealed class ModelRequestOwner(
                 }
                 var currentJournalRequestId = journalRequestId;
                 var currentJournalAttempt = journal is null ? 0 : ++journalAttempt;
+                // Counts only, for the usage overview; never originals or placeholders.
+                LlmRedactionRecord? Redaction(string? failureKind) =>
+                    redactionStats is null
+                        ? null
+                        : LlmRedactionRecord.From(
+                            redactionStats,
+                            sessionId.Length == 0 ? null : sessionId,
+                            journalPurpose,
+                            leaf.Key,
+                            leaf.ProviderKey,
+                            leaf.ProviderType,
+                            request is null ? null : route.Key,
+                            failureKind
+                        );
+                async Task RecordRedactionAsync(string? failureKind)
+                {
+                    if (
+                        journal is null
+                        || currentJournalRequestId is null
+                        || Redaction(failureKind) is not { } record
+                    )
+                        return;
+                    try
+                    {
+                        await journal
+                            .AppendRedactionAsync(
+                                currentJournalRequestId,
+                                currentJournalAttempt,
+                                record
+                            )
+                            .ConfigureAwait(false);
+                    }
+                    catch (Exception journalError)
+                    {
+                        warning?.Invoke(journalError);
+                    }
+                }
                 if (journal is not null && currentJournalRequestId is not null)
                     journalRequestStarted?.Invoke(currentJournalRequestId);
                 var attemptPrepared = false;
@@ -449,6 +490,10 @@ internal sealed class ModelRequestOwner(
                         meta["modelId"] = leaf.Key;
                         if (result.Usage is not null)
                             meta["usage"] = result.Usage.DeepClone();
+                        if (redactionStats is { Completed: true })
+                            meta["textRedaction"] = redactionStats.ToMeta();
+                        else
+                            meta.Remove("textRedaction");
                         if (request is null)
                             meta.Remove("virtualModelKey");
                         else
@@ -471,7 +516,8 @@ internal sealed class ModelRequestOwner(
                                     currentJournalAttempt,
                                     JournalResult(result),
                                     cancellationToken,
-                                    new LlmUsageAttribution(leaf.ProviderKey)
+                                    new LlmUsageAttribution(leaf.ProviderKey),
+                                    redactionStats is { Completed: true } ? Redaction(null) : null
                                 )
                                 .ConfigureAwait(false);
                         }
@@ -512,10 +558,15 @@ internal sealed class ModelRequestOwner(
                         {
                             warning?.Invoke(journalError);
                         }
+                    if (attemptPrepared && redactionStats is { Completed: true })
+                        await RecordRedactionAsync(null).ConfigureAwait(false);
                     throw;
                 }
                 catch (TextRedactionException error) when (!attemptPrepared)
                 {
+                    // Nothing was sent: the row records the failure kind without an attempt
+                    // start or result, so it never reads as a provider attempt.
+                    await RecordRedactionAsync(error.Kind).ConfigureAwait(false);
                     failure = new ModelAttemptFailure(
                         error.Message,
                         "text-redaction",
@@ -595,6 +646,8 @@ internal sealed class ModelRequestOwner(
                         {
                             warning?.Invoke(journalError);
                         }
+                    if (attemptPrepared && redactionStats is { Completed: true })
+                        await RecordRedactionAsync(null).ConfigureAwait(false);
                 }
                 finally
                 {

@@ -1,6 +1,4 @@
 using System.Collections.Concurrent;
-using System.Runtime.InteropServices;
-using System.Security.Cryptography;
 using Found = Foxwarm.Models.TextRedactor.Found;
 
 namespace Foxwarm.Models;
@@ -22,14 +20,20 @@ internal sealed class TextRedactionScope(
 
     // Literal masking is memoized per cached slot. `pending` maps detected text awaiting the
     // literal pass to the cache digests of its slots; `finished` maps text whose result is
-    // already known in this attempt to that result.
+    // already known in this attempt to that result and the literal ranges it adds (none when
+    // `DetectAsync` already returned the final form).
     private readonly Dictionary<string, List<string>> pending = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, string> finished = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, (string Result, Found[] Literal)> finished = new(
+        StringComparer.Ordinal
+    );
     private TextRedactor.KnownOriginals? originals;
 
     // Compaction replaces a slot the detection service rejects as too large instead of
     // failing, so a long message cannot prevent the Session from being compacted.
     internal bool OmitOversized { get; init; }
+
+    // Counts and timings of this attempt, when the request owner records them.
+    internal TextRedactionStats? Stats { get; init; }
 
     internal IReadOnlyDictionary<string, string> Registered => registered;
 
@@ -47,7 +51,7 @@ internal sealed class TextRedactionScope(
         var pending = texts
             .Where(text => text.Length > 0)
             .Distinct(StringComparer.Ordinal)
-            .Where(text => redactor.Cached(options, Digest(text)) is null)
+            .Where(text => redactor.Cached(options, TextRedactor.Digest(text)) is null)
             .ToArray();
         if (pending.Length < 2)
             return;
@@ -63,6 +67,7 @@ internal sealed class TextRedactionScope(
                 {
                     try
                     {
+                        Stats?.Call();
                         prefetched[text] = await redactor
                             .DetectAsync(http, options, text, cancel)
                             .ConfigureAwait(false);
@@ -73,24 +78,24 @@ internal sealed class TextRedactionScope(
             .ConfigureAwait(false);
     }
 
-    private static string Digest(string text) =>
-        Convert.ToHexStringLower(SHA256.HashData(MemoryMarshal.AsBytes(text.AsSpan())));
-
     // Detection only. Unchanged slot text reuses its cached spans without a detection call.
     internal async Task<string> DetectAsync(string text)
     {
         token.ThrowIfCancellationRequested();
         if (text.Length == 0)
             return text;
-        var digest = Digest(text);
+        var digest = TextRedactor.Digest(text);
         var cached = redactor.Cached(options, digest);
+        Stats?.Slot(cached is not null);
         if (cached is { Masked: { } masked })
         {
             // Already through both passes: send it exactly as before.
             Register(cached.Value.Spans);
             Register(masked);
+            Stats?.Count(cached.Value.Spans, literal: false);
+            Stats?.Count(masked, literal: true);
             var result = TextRedactor.Apply(TextRedactor.Apply(text, cached.Value.Spans), masked);
-            finished.TryAdd(result, result);
+            finished.TryAdd(result, (result, []));
             return result;
         }
         Found[] spans;
@@ -98,12 +103,19 @@ internal sealed class TextRedactionScope(
         {
             try
             {
-                spans = prefetched.TryRemove(text, out var early)
-                    ? early
-                    : await redactor.DetectAsync(http, options, text, token).ConfigureAwait(false);
+                if (prefetched.TryRemove(text, out var early))
+                    spans = early;
+                else
+                {
+                    Stats?.Call();
+                    spans = await redactor
+                        .DetectAsync(http, options, text, token)
+                        .ConfigureAwait(false);
+                }
             }
             catch (TextRedactionException error) when (error.TooLarge && OmitOversized)
             {
+                Stats?.Omit();
                 return OmittedText;
             }
             // Register before caching: a colliding result is never cached.
@@ -115,6 +127,7 @@ internal sealed class TextRedactionScope(
             spans = cached.Value.Spans;
             Register(spans);
         }
+        Stats?.Count(spans, literal: false);
         // New registrations may need a newer matcher for the literal pass.
         originals = null;
         var detected = TextRedactor.Apply(text, spans);
@@ -136,12 +149,18 @@ internal sealed class TextRedactionScope(
             var result = TextRedactor.Apply(text, found);
             foreach (var digest in digests)
                 redactor.Memoize(options, digest, found);
-            finished[text] = result;
+            finished[text] = (result, found);
+            Stats?.Count(found, literal: true);
             return result;
         }
         if (finished.TryGetValue(text, out var known))
-            return known;
-        return TextRedactor.Apply(text, Scan(text));
+        {
+            Stats?.Count(known.Literal, literal: true);
+            return known.Result;
+        }
+        var scanned = Scan(text);
+        Stats?.Count(scanned, literal: true);
+        return TextRedactor.Apply(text, scanned);
     }
 
     private Found[] Scan(string text)

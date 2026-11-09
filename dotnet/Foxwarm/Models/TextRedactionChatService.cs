@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
 
@@ -40,13 +41,17 @@ internal sealed class TextRedactionChatService(
             // Without the instance key no placeholder can be formed; never send the original.
             throw new TextRedactionException(
                 "Text redaction is unavailable because the instance key cannot be read; no model request was sent. Check Setup > Secrets.",
-                false
+                false,
+                kind: TextRedactionFailureKind.Config
             );
         }
+        var stats = options.TextRedactionStats;
         var scope = new TextRedactionScope(redactor, http, settings, token)
         {
             OmitOversized = options.TextRedactionOmitsOversized,
+            Stats = stats,
         };
+        var started = Stopwatch.GetTimestamp();
         Task<string> Detect(string text) => scope.DetectAsync(text);
         Task<string> MaskKnown(string text) => Task.FromResult(scope.MaskKnown(text));
         string instructions;
@@ -98,13 +103,22 @@ internal sealed class TextRedactionChatService(
         {
             throw new TextRedactionException(
                 "Text detection timed out; no model request was sent.",
-                true
+                true,
+                kind: TextRedactionFailureKind.Timeout
             );
         }
+        finally
+        {
+            if (stats is not null)
+                stats.DetectionMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+        }
+        if (stats is not null)
+            stats.Completed = true;
         var committed = new List<JsonObject>();
         var preparedOptions = options with
         {
             TextRedaction = null,
+            TextRedactionStats = null,
             Instructions = instructions,
             Tools = tools,
             CommitAssistantSegment = options.CommitAssistantSegment is null

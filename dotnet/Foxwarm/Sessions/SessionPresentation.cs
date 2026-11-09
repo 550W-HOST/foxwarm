@@ -63,6 +63,9 @@ internal static class SessionPresentation
         };
         if (meta.Cost is double cost)
             result["tokenUsage"]!["cost"] = cost;
+        // Requests on the current model replace private text before sending.
+        if (model is not null && TextRedactionView.Candidates(catalog, meta.Model).Count > 0)
+            result["textRedaction"] = true;
         if (meta.Questions is { } questions)
             result["questions"] = questions.DeepClone();
         var policyModel = meta.Runtime == ClaudeRuntimeState.Kind ? null : meta.Model;

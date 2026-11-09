@@ -79,7 +79,8 @@ internal sealed partial class TextRedactor
                     throw new TextRedactionException(TooLargeMessage, false, tooLarge: true);
                 throw new TextRedactionException(
                     "Text detection failed (HTTP " + status + "); no model request was sent.",
-                    status is 408 or 429 || status is >= 500 and <= 599
+                    status is 408 or 429 || status is >= 500 and <= 599,
+                    kind: TextRedactionFailureKind.ForStatus(status)
                 );
             }
             var result = JsonNode.Parse(await response.Content.ReadAsStringAsync(deadline.Token));
@@ -160,21 +161,24 @@ internal sealed partial class TextRedactor
         {
             throw new TextRedactionException(
                 "Text detection timed out; no model request was sent.",
-                true
+                true,
+                kind: TextRedactionFailureKind.Timeout
             );
         }
         catch (HttpRequestException)
         {
             throw new TextRedactionException(
                 "Text detection connection failed; no model request was sent.",
-                true
+                true,
+                kind: TextRedactionFailureKind.Connection
             );
         }
         catch (IOException)
         {
             throw new TextRedactionException(
                 "Text detection connection failed; no model request was sent.",
-                true
+                true,
+                kind: TextRedactionFailureKind.Connection
             );
         }
         catch (Exception error)
@@ -253,5 +257,9 @@ internal sealed partial class TextRedactor
             : null;
 
     private static TextRedactionException InvalidResponse() =>
-        new("Text detection returned an invalid response; no model request was sent.", false);
+        new(
+            "Text detection returned an invalid response; no model request was sent.",
+            false,
+            kind: TextRedactionFailureKind.InvalidResponse
+        );
 }

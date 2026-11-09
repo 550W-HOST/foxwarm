@@ -331,7 +331,8 @@ public sealed partial class LlmRequestJournalStore : IDisposable, IAsyncDisposab
         JsonNode? result,
         JsonObject? error,
         CancellationToken token = default,
-        UsageRow? ledger = null
+        UsageRow? ledger = null,
+        LlmRedactionRecord? redaction = null
     )
     {
         CheckOpen();
@@ -393,6 +394,15 @@ public sealed partial class LlmRequestJournalStore : IDisposable, IAsyncDisposab
                         );
                     if (recorded)
                         AdvanceUsageHigh(connection, transaction, rowid);
+                    if (redaction is not null)
+                        TryRecordRedaction(
+                            connection,
+                            transaction,
+                            requestId,
+                            attempt,
+                            completedAt,
+                            redaction
+                        );
                     return ledger is null || recorded;
                 },
                 token
@@ -410,7 +420,8 @@ public sealed partial class LlmRequestJournalStore : IDisposable, IAsyncDisposab
         int attempt,
         ChatResult result,
         CancellationToken token = default,
-        LlmUsageAttribution? attribution = null
+        LlmUsageAttribution? attribution = null,
+        LlmRedactionRecord? redaction = null
     )
     {
         var ledger = PrepareUsageRow(result, attribution);
@@ -421,7 +432,8 @@ public sealed partial class LlmRequestJournalStore : IDisposable, IAsyncDisposab
                 ToSourceResult(result),
                 null,
                 token,
-                ledger
+                ledger,
+                redaction
             )
             .ConfigureAwait(false);
         if (await receipt.Completion.ConfigureAwait(false))
@@ -1489,7 +1501,9 @@ public sealed partial class LlmRequestJournalStore : IDisposable, IAsyncDisposab
                 CREATE TABLE IF NOT EXISTS llm_journal_attempt_starts(event_id TEXT PRIMARY KEY,request_id TEXT NOT NULL,attempt INTEGER NOT NULL,started_at INTEGER NOT NULL,concrete_model_id TEXT NOT NULL,virtual_model_key TEXT,provider_type TEXT NOT NULL,semantic_payload_sha256 TEXT NOT NULL,prompt_object_id TEXT);
                 CREATE TABLE IF NOT EXISTS llm_journal_attempt_results(event_id TEXT PRIMARY KEY,request_id TEXT NOT NULL,attempt INTEGER NOT NULL,completed_at INTEGER NOT NULL,outcome TEXT NOT NULL,result_json TEXT,error_json TEXT);
                 CREATE TABLE IF NOT EXISTS llm_journal_import_state(source_path TEXT PRIMARY KEY,imported_size INTEGER NOT NULL,updated_at INTEGER NOT NULL);
-                """ + UsageSchemaSql;
+                """
+            + UsageSchemaSql
+            + RedactionSchemaSql;
         command.ExecuteNonQuery();
         using var columns = connection.CreateCommand();
         columns.Transaction = schema;

@@ -122,6 +122,7 @@ internal sealed class WebUiAccess(SessionRuntime runtime, AccessConfiguration co
                     or "/api/sessions/{id}/history/continuous"
                     or "/api/sessions/{id}/stream"
                     or "/api/sessions/{id}/questions"
+                    or "/api/sessions/{id}/messages/{seq}/redaction"
                     // Approvers additionally need to be named by the request's rules.
                     or "/api/sessions/{id}/approvals/{approvalId}"
             ) => true,
@@ -292,6 +293,7 @@ internal sealed class WebUiAccess(SessionRuntime runtime, AccessConfiguration co
                 "childEffortAllowed",
                 "childModelEffortDefault",
                 "questions",
+                "textRedaction",
             }
         )
             if (source.ContainsKey(key))

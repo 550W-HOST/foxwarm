@@ -6,6 +6,18 @@ using Foxwarm.Tools;
 
 namespace Foxwarm.Models;
 
+// One text slot of a request history: its message and part, what it is (`text`, `system`,
+// `content`, `arguments` for unparsable raw argument text, `argument` for one string value
+// at `Path`, `output`) and, for calls and results, the tool name and call ID.
+internal readonly record struct TextSlot(
+    int Message,
+    int Part,
+    string Kind,
+    string? Path = null,
+    string? Name = null,
+    string? CallId = null
+);
+
 // These are semantic text slots, not a walk over the final provider payload.
 internal static class TextRedactionProjection
 {
@@ -20,20 +32,38 @@ internal static class TextRedactionProjection
 
     // The configured request owner has already made this copy and hydrated its
     // image parts. Mutate text slots in place to retain request-local part identity.
-    internal static async Task RedactHistoryAsync(
+    internal static Task RedactHistoryAsync(
         IReadOnlyList<JsonObject> history,
         Func<string, Task<string>> redact
+    ) => RedactSlotsAsync(history, (_, text) => redact(text));
+
+    // The same walk, telling the callback which slot each text belongs to.
+    internal static async Task RedactSlotsAsync(
+        IReadOnlyList<JsonObject> history,
+        Func<TextSlot, string, Task<string>> redactSlot
     )
     {
-        foreach (var message in history)
+        for (var index = 0; index < history.Count; index++)
         {
-            await ContentAsync(message, redact);
-            foreach (var part in (message["parts"] as JsonArray ?? []).OfType<JsonObject>())
+            var message = history[index];
+            await ContentAsync(message, text => redactSlot(new(index, -1, "content"), text));
+            var parts = (message["parts"] as JsonArray ?? []).ToArray();
+            for (var partIndex = 0; partIndex < parts.Length; partIndex++)
             {
-                await FieldAsync(part, "text", redact);
-                await FieldAsync(part, "system", redact);
+                if (parts[partIndex] is not JsonObject part)
+                    continue;
+                Func<string, Task<string>> Slot(
+                    string kind,
+                    string? path = null,
+                    string? name = null,
+                    string? callId = null
+                ) => text => redactSlot(new(index, partIndex, kind, path, name, callId), text);
+                await FieldAsync(part, "text", Slot("text"));
+                await FieldAsync(part, "system", Slot("system"));
                 if (part["functionCall"] is JsonObject call)
                 {
+                    var name = SessionWait.Text(call["name"]);
+                    var callId = SessionWait.Text(call["id"]);
                     var parsed = SessionWait.Text(call["rawArgsText"]) is string raw
                         ? FunctionCallArguments.Parse(JsonValue.Create(raw))
                         : null;
@@ -41,10 +71,18 @@ internal static class TextRedactionProjection
                         SessionWait.Text(call["argsParseError"]) is { Length: > 0 }
                         || parsed?.ArgsParseError is not null
                     )
-                        await FieldAsync(call, "rawArgsText", redact);
+                        await FieldAsync(
+                            call,
+                            "rawArgsText",
+                            Slot("arguments", null, name, callId)
+                        );
                     else if ((parsed?.Args ?? call["args"]) is JsonNode args)
                     {
-                        var transformed = await StringsAsync(args, redact);
+                        var transformed = await StringsAsync(
+                            args,
+                            (path, text) => Slot("argument", path, name, callId)(text),
+                            ""
+                        );
                         call["args"] = transformed;
                         // Serializers prefer rawArgsText when present. Keep both forms in
                         // agreement after a substitution; otherwise keep the raw text as is.
@@ -58,9 +96,12 @@ internal static class TextRedactionProjection
                 if (part["functionResponse"] is JsonObject response)
                     response["response"] = new JsonObject
                     {
-                        ["output"] = await redact(
-                            ToolResponseFormatting.Format(response["response"])
-                        ),
+                        ["output"] = await Slot(
+                            "output",
+                            null,
+                            SessionWait.Text(response["name"]),
+                            SessionWait.Text(response["tool_use_id"])
+                        )(ToolResponseFormatting.Format(response["response"])),
                     };
             }
         }
@@ -146,25 +187,31 @@ internal static class TextRedactionProjection
             obj[field] = await redact(text);
     }
 
+    // `path` names the value inside the arguments (`command`, `items[0].name`).
     private static async Task<JsonNode?> StringsAsync(
         JsonNode? node,
-        Func<string, Task<string>> transform
+        Func<string, string, Task<string>> transform,
+        string path
     )
     {
         if (SessionWait.Text(node) is string text)
-            return JsonValue.Create(await transform(text));
+            return JsonValue.Create(await transform(path, text));
         if (node is JsonObject obj)
         {
             var copy = new JsonObject();
             foreach (var (key, value) in obj)
-                copy[key] = await StringsAsync(value, transform);
+                copy[key] = await StringsAsync(
+                    value,
+                    transform,
+                    path.Length == 0 ? key : path + "." + key
+                );
             return copy;
         }
         if (node is JsonArray array)
         {
             var copy = new JsonArray();
-            foreach (var child in array)
-                copy.Add(await StringsAsync(child, transform));
+            for (var index = 0; index < array.Count; index++)
+                copy.Add(await StringsAsync(array[index], transform, path + "[" + index + "]"));
             return copy;
         }
         return node?.DeepClone();
