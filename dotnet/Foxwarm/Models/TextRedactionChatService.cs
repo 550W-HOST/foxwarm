@@ -53,8 +53,30 @@ internal sealed class TextRedactionChatService(
         JsonArray? tools;
         try
         {
-            // Detect every slot first (serially; the service handles one request at a time),
-            // then mask known originals everywhere, including ones this request just found.
+            // With a concurrency limit above one, detect the slot texts ahead, concurrently. The
+            // collecting pass runs on a throwaway copy because the projection rewrites slots.
+            if (settings.MaxConcurrency > 1)
+            {
+                var texts = new List<string>();
+                Task<string> Collect(string text)
+                {
+                    texts.Add(text);
+                    return Task.FromResult(text);
+                }
+                await TextRedactionProjection
+                    .RedactHistoryAsync(
+                        history.Select(message => (JsonObject)message.DeepClone()).ToArray(),
+                        Collect
+                    )
+                    .ConfigureAwait(false);
+                texts.Add(options.Instructions);
+                await TextRedactionProjection
+                    .ToolsAsync(options.Tools, Collect)
+                    .ConfigureAwait(false);
+                await scope.PrefetchAsync(texts).ConfigureAwait(false);
+            }
+            // Detect every slot in order, then mask known originals everywhere, including
+            // ones this request just found.
             await TextRedactionProjection.RedactHistoryAsync(history, Detect).ConfigureAwait(false);
             instructions = await Detect(options.Instructions).ConfigureAwait(false);
             tools = await TextRedactionProjection

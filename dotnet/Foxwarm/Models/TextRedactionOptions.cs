@@ -18,6 +18,12 @@ internal sealed record TextRedactionOptions(
     // settings share cache entries.
     internal IReadOnlyList<string> ExcludeLabels { get; init; } = DefaultExcludeLabels;
 
+    internal const int MaxConcurrencyLimit = 64;
+
+    // Detection calls in flight to this endpoint at once, shared by every request and Session.
+    // It does not change detection results, so it is not part of cache identity.
+    internal int MaxConcurrency { get; init; } = 1;
+
     // Labels match case-insensitively and ignore surrounding whitespace.
     internal static string NormalizeLabel(string label) => label.Trim().ToLowerInvariant();
 
@@ -61,6 +67,10 @@ internal sealed record TextRedactionOptions(
                     && double.IsFinite(timeout)
                     && timeout is > 0 and <= int.MaxValue
                     && Math.Floor(timeout) == timeout,
+                "maxConcurrency" => SessionWait.Number(item) is double concurrency
+                    && double.IsFinite(concurrency)
+                    && concurrency is >= 1 and <= MaxConcurrencyLimit
+                    && Math.Floor(concurrency) == concurrency,
                 "excludeLabels" => item is JsonArray labels
                     && labels.All(label =>
                         SessionWait.Text(label) is string text && text.Trim().Length > 0
@@ -107,6 +117,11 @@ internal sealed record TextRedactionOptions(
             HostModels.Positive(options["timeoutMs"], 30000, "textRedaction.timeoutMs")
         )
         {
+            MaxConcurrency = HostModels.Positive(
+                options["maxConcurrency"],
+                1,
+                "textRedaction.maxConcurrency"
+            ),
             ExcludeLabels = options["excludeLabels"] is JsonArray labels
                 ? labels
                     .Select(label => NormalizeLabel(SessionWait.Text(label)!))

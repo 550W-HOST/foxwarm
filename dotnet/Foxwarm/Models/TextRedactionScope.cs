@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using Found = Foxwarm.Models.TextRedactor.Found;
@@ -32,15 +33,56 @@ internal sealed class TextRedactionScope(
 
     internal IReadOnlyDictionary<string, string> Registered => registered;
 
+    // Detection results fetched ahead of the ordered pass, by slot text. Registration and
+    // caching still happen in slot order in `DetectAsync`.
+    private readonly ConcurrentDictionary<string, Found[]> prefetched = new(StringComparer.Ordinal);
+
+    // Detects the uncached texts concurrently, up to the endpoint's limit, before the ordered
+    // pass consumes them. A failure fails the request as it would in the ordered pass; a text
+    // rejected as too large is left for that pass, which applies the same rule.
+    internal async Task PrefetchAsync(IEnumerable<string> texts)
+    {
+        if (options.MaxConcurrency <= 1)
+            return;
+        var pending = texts
+            .Where(text => text.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .Where(text => redactor.Cached(options, Digest(text)) is null)
+            .ToArray();
+        if (pending.Length < 2)
+            return;
+        await Parallel
+            .ForEachAsync(
+                pending,
+                new ParallelOptions
+                {
+                    MaxDegreeOfParallelism = options.MaxConcurrency,
+                    CancellationToken = token,
+                },
+                async (text, cancel) =>
+                {
+                    try
+                    {
+                        prefetched[text] = await redactor
+                            .DetectAsync(http, options, text, cancel)
+                            .ConfigureAwait(false);
+                    }
+                    catch (TextRedactionException error) when (error.TooLarge) { }
+                }
+            )
+            .ConfigureAwait(false);
+    }
+
+    private static string Digest(string text) =>
+        Convert.ToHexStringLower(SHA256.HashData(MemoryMarshal.AsBytes(text.AsSpan())));
+
     // Detection only. Unchanged slot text reuses its cached spans without a detection call.
     internal async Task<string> DetectAsync(string text)
     {
         token.ThrowIfCancellationRequested();
         if (text.Length == 0)
             return text;
-        var digest = Convert.ToHexStringLower(
-            SHA256.HashData(MemoryMarshal.AsBytes(text.AsSpan()))
-        );
+        var digest = Digest(text);
         var cached = redactor.Cached(options, digest);
         if (cached is { Masked: { } masked })
         {
@@ -56,9 +98,9 @@ internal sealed class TextRedactionScope(
         {
             try
             {
-                spans = await redactor
-                    .DetectAsync(http, options, text, token)
-                    .ConfigureAwait(false);
+                spans = prefetched.TryRemove(text, out var early)
+                    ? early
+                    : await redactor.DetectAsync(http, options, text, token).ConfigureAwait(false);
             }
             catch (TextRedactionException error) when (error.TooLarge && OmitOversized)
             {

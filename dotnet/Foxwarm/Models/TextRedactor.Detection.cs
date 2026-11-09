@@ -9,10 +9,14 @@ namespace Foxwarm.Models;
 
 internal sealed partial class TextRedactor
 {
-    // The detection service classifies one text at a time and answers 429 while busy instead
-    // of queueing. Requests from every Session share one queue per endpoint, so they wait for
-    // each other here rather than failing each other's attempts.
-    private static readonly ConcurrentDictionary<Uri, SemaphoreSlim> EndpointQueues = new();
+    // A detection service may accept only a few requests at a time and answer 429 beyond that
+    // instead of queueing. Requests from every Session share one limit per endpoint
+    // (`maxConcurrency`), so they wait for each other here rather than failing each other's
+    // attempts. Changing the limit starts a new queue; calls already admitted finish.
+    private static readonly ConcurrentDictionary<
+        (Uri Endpoint, int Limit),
+        SemaphoreSlim
+    > EndpointQueues = new();
 
     internal const string TooLargeMessage =
         "Part of this request is too long for the text detection service, so nothing was sent to the model. Shorten or delete the long message, or turn off text redaction for this model.";
@@ -28,7 +32,10 @@ internal sealed partial class TextRedactor
     {
         // Waiting for another request's detection is bounded by this request's own deadline
         // and Stop, not by the per-call detection timeout.
-        var queue = EndpointQueues.GetOrAdd(options.Endpoint, static _ => new SemaphoreSlim(1, 1));
+        var queue = EndpointQueues.GetOrAdd(
+            (options.Endpoint, options.MaxConcurrency),
+            static key => new SemaphoreSlim(key.Limit, key.Limit)
+        );
         await queue.WaitAsync(token).ConfigureAwait(false);
         try
         {

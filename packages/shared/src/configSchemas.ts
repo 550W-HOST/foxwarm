@@ -139,6 +139,7 @@ const textRedaction = {
         apiKey: { type: 'string', description: 'Optional Bearer credential for the detection service.' },
         threshold: { type: 'number', minimum: 0, maximum: 1, default: 0.5 },
         timeoutMs: { type: 'integer', minimum: 1, maximum: 2147483647, default: 30000 },
+        maxConcurrency: { type: 'integer', minimum: 1, maximum: 64, default: 1, description: 'Detection requests sent to this endpoint at once, shared by all Sessions. Use 1 for a service that handles one request at a time without queueing.' },
         excludeLabels: { type: 'array', items: { type: 'string', pattern: '\\S' }, default: ['private_date', 'private_url'], description: 'Detection labels to leave unchanged. A list replaces the inherited one; an empty list redacts every label.' },
       },
     },
