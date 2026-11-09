@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
@@ -8,12 +9,38 @@ namespace Foxwarm.Models;
 
 internal sealed partial class TextRedactor
 {
+    // The detection service classifies one text at a time and answers 429 while busy instead
+    // of queueing. Requests from every Session share one queue per endpoint, so they wait for
+    // each other here rather than failing each other's attempts.
+    private static readonly ConcurrentDictionary<Uri, SemaphoreSlim> EndpointQueues = new();
+
     internal const string TooLargeMessage =
         "Part of this request is too long for the text detection service, so nothing was sent to the model. Shorten or delete the long message, or turn off text redaction for this model.";
 
     // One detection call for one slot text. Returns the replaced ranges; registration and
     // caching belong to the request scope.
     internal async Task<Found[]> DetectAsync(
+        HttpClient http,
+        TextRedactionOptions options,
+        string text,
+        CancellationToken token
+    )
+    {
+        // Waiting for another request's detection is bounded by this request's own deadline
+        // and Stop, not by the per-call detection timeout.
+        var queue = EndpointQueues.GetOrAdd(options.Endpoint, static _ => new SemaphoreSlim(1, 1));
+        await queue.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            return await SendDetectionAsync(http, options, text, token).ConfigureAwait(false);
+        }
+        finally
+        {
+            queue.Release();
+        }
+    }
+
+    private async Task<Found[]> SendDetectionAsync(
         HttpClient http,
         TextRedactionOptions options,
         string text,
