@@ -37,7 +37,7 @@ Use sessions for individual chats or task threads. One agent can have many sessi
 
 A **child session** is a session linked to a parent session for parallel work such as investigation, testing, review, or research.
 
-Child sessions should explicitly report back to the parent when they finish.
+Child sessions report back to the parent when they finish; for a Task assignment, completing the Task is the report.
 
 ### Tool
 
@@ -53,7 +53,7 @@ A **node** is an execution host for tools.
 
 - `master` is the default local node where the Foxwarm server runs.
 - Remote nodes can run on another machine, in Docker, in a terminal approval UI, in a browser extension, or in a sandbox.
-- Nodes are paired with the Foxwarm master and then approved.
+- Native Nodes are paired with `master` and approved; Provider Nodes are listed or created by a configured Provider.
 
 Use nodes when tools should run somewhere other than the master process, for example on another machine, inside a sandbox, or inside a browser.
 

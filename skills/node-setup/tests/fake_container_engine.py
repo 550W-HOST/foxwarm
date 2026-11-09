@@ -135,6 +135,12 @@ def execute(args):
 
 
 def stdio_node():
+    if (ROOT / "stdio-flood").exists():
+        # A workload-controlled line without an end.
+        sys.stdout.write("x" * 70000)
+        sys.stdout.flush()
+        sys.stdin.read()
+        return
     print(json.dumps({"type": "node_stdio_ready", "services": {"vscode-fs": 1, "vscode-git": 2, "vscode-pty": 1}}), flush=True)
     for line in sys.stdin:
         frame = json.loads(line)
@@ -158,16 +164,23 @@ def main():
         run(rest)
     elif command == "exec":
         execute(rest)
-    elif command in ("start", "stop"):
+    elif command in ("start", "stop", "pause", "unpause"):
         item = find(rest[0]) or fail("Error: No such container")
-        item["State"]["Status"] = "running" if command == "start" else "exited"
+        if command == "start" and item["State"]["Status"] == "paused":
+            fail("Error: cannot start a paused container, try unpause instead")
+        item["State"]["Status"] = {"start": "running", "stop": "exited", "pause": "paused", "unpause": "running"}[command]
         save(item)
         print(rest[0])
     elif command == "rm":
         item = find(rest[-1])
         if item is None:
             fail("Error: No such container")
+        if (ROOT / "rm-fails").exists():
+            fail("Error: removal failed")
         subprocess.run(["rm", "-rf", str(CONTAINERS / item["Id"])], check=True)
+        if (ROOT / "rm-races").exists():
+            # Someone else removed it first.
+            fail("Error: No such container")
         print(rest[-1])
     else:
         fail("unsupported fake engine command", 2)

@@ -29,6 +29,10 @@ PROFILE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 NODE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 MEMORY = re.compile(r"^[0-9]+[bkmgBKMG]?$")
 DIAGNOSTIC_BYTES = 2000
+# The ready line comes from inside the container; Core bounds its own handshake the same way.
+READY_LINE_BYTES = 65536
+# Engine states in which a container's processes still exist.
+LIVE_STATES = {"running", "paused", "restarting"}
 
 DESCRIPTION = (
     "Disposable Linux containers created from administrator-defined profiles. Each Node is one "
@@ -326,7 +330,15 @@ def ensure(engine, config, provider_id, request):
     if item["profile"] != profile_name:
         raise ProviderError("ProfileMismatch", "This Node uses profile " + str(item["profile"]) + "; ensure never changes an existing container's profile.")
     effect = "The container was already running."
-    if item["status"] != "running":
+    if item["status"] == "paused":
+        status, _ = engine.run(["unpause", item["name"]])
+        if status:
+            raise ProviderError("StartFailed", "The paused container could not be resumed.")
+        effect = "Resumed the paused container."
+        items = inventory(engine, provider_id, node_id)
+        if not items:
+            raise ProviderError("StartFailed", "The container disappeared while resuming.")
+    elif item["status"] != "running":
         status, _ = engine.run(["start", item["name"]])
         if status:
             raise ProviderError("StartFailed", "The existing container could not be started.")
@@ -353,7 +365,8 @@ def destroy(engine, provider_id, request):
     if not items:
         return {"nodeId": node_id, "effect": "No container existed for this Node."}
     status, _ = engine.run(["rm", "-f", "-v", items[0]["name"]])
-    if status:
+    # A container removed concurrently makes rm fail, but the Node is gone all the same.
+    if status and inventory(engine, provider_id, node_id):
         raise ProviderError("DestroyFailed", "The container could not be removed.")
     return {"nodeId": node_id, "effect": "Removed the container with its workspace and command logs.",
             "dataRetention": "Nothing from this container remains in the engine except its image."}
@@ -367,9 +380,13 @@ def primitive(engine, provider_id, operation, request):
     try:
         return target(engine, name, operation, request)
     except ProviderError:
-        # A removed container can never finish a command; a stopped one is reported as an error until it starts again.
-        if operation == "exec-poll" and not inventory(engine, provider_id, node_id):
-            return {"ok": True, "result": {"state": "lost", "reason": "The container no longer exists."}}
+        if operation == "exec-poll":
+            items = inventory(engine, provider_id, node_id)
+            if not items:
+                return {"ok": True, "result": {"state": "lost", "reason": "The container no longer exists."}}
+            # Stopping a container ends its processes; they do not come back when it starts again.
+            if items[0]["status"] not in LIVE_STATES:
+                return {"ok": True, "result": {"state": "lost", "reason": "The container stopped, which ended the command."}}
         raise
 
 
@@ -389,7 +406,10 @@ def connect(engine, provider_id, request, reply):
     child = engine.start(["exec", "-i", items[0]["name"], "foxwarm-node", "--stdio"],
                          stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     try:
-        ready = json.loads(child.stdout.readline())
+        line = child.stdout.readline(READY_LINE_BYTES)
+        if not line.endswith(b"\n"):
+            raise ValueError()
+        ready = json.loads(line)
         if ready.get("type") != "node_stdio_ready" or not isinstance(ready.get("services"), dict):
             raise ValueError()
     except (ValueError, AttributeError):

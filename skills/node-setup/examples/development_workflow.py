@@ -123,10 +123,11 @@ def main(args):
             if not node.startswith(provider + "/") or len(node) == len(provider) + 1:
                 raise ValueError("nodeId must be a new ID under providerId, for example provider/task-id")
             state.update({"providerId": provider, "nodeId": node})
-            state["stage"] = "ensure environment"
-            receipt = builtin("node", {"action": "ensure", "providerId": provider, "nodeId": node,
+            state["stage"] = "create environment"
+            # create, not ensure: Core refuses an ID that still exists, so a reused ID cannot reattach to an old environment.
+            receipt = builtin("node", {"action": "create", "providerId": provider, "nodeId": node,
                                        "parameters": args.get("parameters", {})})
-            state["ensureReceipt"] = receipt
+            state["createReceipt"] = receipt
             descriptor = receipt.get("node") or {}
             if descriptor.get("availability") != "ready":
                 state["stage"] = "inspect environment"

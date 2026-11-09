@@ -184,5 +184,46 @@ public sealed partial class AgentRulesTreeTests
         await Deny(Call("builtin", "node", """{"action":"destroy","nodeId":"assistant-node"}"""));
         await Deny(Call("builtin", "send_to_session", $$"""{"sessionId":"{{f.Owner.Id}}"}"""));
         await Deny(Call("builtin", "write_memory", """{"filePath":"MEMORY.md","content":"x"}"""));
+
+        // Inbound files of an Agent without legacy isolation are saved on master under its directory.
+        var paths = new WorkspaceTools(f.Manager.IdentityWorkspace(chat).ToolDirectory);
+        var received = Path.Combine(
+            f.Manager.AgentDirectory("assistant"),
+            ".temp",
+            "channel-files",
+            "telegram",
+            "doc.txt"
+        );
+        Task OnMaster(string name, string path) =>
+            f.Manager.AuthorizeToolAsync(
+                chat,
+                Call("node", name, new JsonObject { ["filePath"] = path }.ToJsonString()),
+                paths,
+                default
+            );
+        await OnMaster("read", received);
+        foreach (
+            var outside in new[]
+            {
+                Path.Combine(f.Manager.AgentDirectory("assistant"), "secret.txt"),
+                Path.Combine(
+                    f.Manager.AgentDirectory("assistant"),
+                    ".temp",
+                    "channel-files",
+                    "..",
+                    "secret.txt"
+                ),
+            }
+        )
+            await Assert.ThrowsAsync<ToolAuthorizationDeniedException>(() => OnMaster("read", outside));
+        await Assert.ThrowsAsync<ToolAuthorizationDeniedException>(() => OnMaster("write", received));
+        await Assert.ThrowsAsync<ToolAuthorizationDeniedException>(() =>
+            f.Manager.AuthorizeToolAsync(
+                chat,
+                Call("node", "exec", """{"command":"cat doc.txt"}"""),
+                paths,
+                default
+            )
+        );
     }
 }

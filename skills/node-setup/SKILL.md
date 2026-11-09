@@ -88,9 +88,9 @@ It does **not** use the removed unauthenticated direct-registration flow. `/node
 
 ## Mental model
 
-A **Node** is an execution environment that tools can target: `master` (where Main runs), a paired CLI Node, an exec-only Shell Node, or a Node supplied by a configured **Provider**. Providers either list existing machines (such as the SSH adapter) or create Nodes on request (such as the container adapter, through `node` `create`/`ensure`/`destroy`).
+A **Node** is an execution environment that tools can target: `master` (where the Main server runs), a paired CLI Node, an exec-only Shell Node, or a Node supplied by a configured **Provider**. Providers either list existing machines (such as the SSH adapter) or create Nodes on request (such as the container adapter, through `node` `create`/`ensure`/`destroy`).
 
-After pairing and approval, a CLI or Shell Node receives tool calls from Main, keeps its own credentials and reconnects with them.
+After pairing and approval, a CLI or Shell Node receives tool calls from the Main server, keeps its own credentials and reconnects with them.
 
 Keep three controls apart:
 
@@ -490,9 +490,9 @@ rm -f /opt/foxwarm-node/data/state/node_credentials.json
 
 Then restart and re-approve.
 
-### A containerized Node sees the wrong files or state
+### The Main server in a container shows unexpected Agents or state
 
-Check the `FOXWARM_DATA_DIR` its compose file or environment sets. A Node started with a different data directory reads and writes a different state tree.
+Check the `FOXWARM_DATA_DIR` its compose file sets; a different data directory is a different installation state.
 
 ## Related skills
 

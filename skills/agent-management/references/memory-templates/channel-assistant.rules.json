@@ -1,5 +1,13 @@
 [
   {
+    "id": "channel-files",
+    "tool": { "source": "node", "name": "read" },
+    "node": { "exact": "master" },
+    "path": { "allWithin": "${agent.dir}/.temp/channel-files" },
+    "action": "allow",
+    "reason": "Files people send in the conversation are saved here on master."
+  },
+  {
     "id": "no-master",
     "node": { "exact": "master" },
     "action": "deny",

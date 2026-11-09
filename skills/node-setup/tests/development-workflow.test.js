@@ -80,7 +80,7 @@ test('Monty provision and release use only the public node and session tools in 
   assert.equal(provisioned.defaultCwd, '/workspace')
   const released = await run({ phase: 'release', nodeId: 'sandbox/task_1', workerSessionId: 'worker/task_1', confirmation: 'destroy node sandbox/task_1' }, tools)
   assert.equal(released.status, 'completed')
-  assert.deepEqual(calls.map(request => [request.name, request.args.action]), [['node', 'ensure'], ['node', 'inspect'], ['delete_session', undefined], ['node', 'destroy']])
+  assert.deepEqual(calls.map(request => [request.name, request.args.action]), [['node', 'create'], ['node', 'inspect'], ['delete_session', undefined], ['node', 'destroy']])
 });
 
 test('Monty assignment preserves caller handoff fields and verifies actual Task notification', async () => {

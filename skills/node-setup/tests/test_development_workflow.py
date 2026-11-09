@@ -27,6 +27,7 @@ class Tools:
         self.notification = "sent"
         self.task = None
         self.availability = "ready"
+        self.existing_nodes = set()
         self.fail_session_delete = False
 
     def __call__(self, request):
@@ -60,7 +61,9 @@ class Tools:
                         "ownerSessionId": None, "sentNotifications": 0}
             return {"task": self.task}
         if name == "node":
-            if args["action"] in ("ensure", "inspect"):
+            if args["action"] == "create" and args["nodeId"] in self.existing_nodes:
+                raise RuntimeError("Node already exists; create was not invoked")
+            if args["action"] in ("create", "inspect"):
                 return {"node": {"id": args["nodeId"], "availability": self.availability, "defaultCwd": "/workspace"}}
             if args["action"] == "destroy":
                 return {"nodeId": args["nodeId"], "effect": "Removed."}
@@ -233,14 +236,21 @@ class DevelopmentWorkflowTests(unittest.TestCase):
         self.assertFalse((self.artifacts / "later.log").exists())
         self.assertEqual(self.git(self.source, "rev-parse", "HEAD"), self.base)
 
-    def test_provision_ensures_a_fresh_provider_node_and_reports_unready_environments(self):
+    def test_provision_creates_a_fresh_provider_node_and_reports_unready_environments(self):
         result = self.main({"phase": "provision", "providerId": "sandbox", "nodeId": "sandbox/task_1",
                             "parameters": {"profile": "offline"}})
         self.assertEqual(result["status"], "completed", result)
         self.assertEqual(result["defaultCwd"], "/workspace")
-        ensure = self.tools.calls[-1]
-        self.assertEqual(ensure["args"], {"action": "ensure", "providerId": "sandbox", "nodeId": "sandbox/task_1",
+        create = self.tools.calls[-1]
+        self.assertEqual(create["args"], {"action": "create", "providerId": "sandbox", "nodeId": "sandbox/task_1",
                                           "parameters": {"profile": "offline"}})
+        # An ID that still exists is refused instead of reattaching to its environment.
+        self.tools.existing_nodes.add("sandbox/task_1")
+        calls = len(self.tools.calls)
+        reused = self.main({"phase": "provision", "providerId": "sandbox", "nodeId": "sandbox/task_1"})
+        self.assertEqual(reused["status"], "failed")
+        self.assertIn("already exists", reused["error"])
+        self.assertEqual(len(self.tools.calls), calls + 1)
         self.tools.availability = "offline"
         result = self.main({"phase": "provision", "providerId": "sandbox", "nodeId": "sandbox/task_2"})
         self.assertEqual(result["status"], "needs-verification")

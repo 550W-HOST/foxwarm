@@ -158,6 +158,12 @@ class ContainerProviderTests(unittest.TestCase):
         self.assertEqual(len(self.calls("run")), runs)
         self.assertEqual(len(self.calls("start")), 1)
         self.assertEqual(self.ok("ensure", {"nodeId": "fresh", "parameters": {"profile": "offline"}})["node"]["id"], "fresh")
+        self.engine_fake("pause", "foxwarm-" + self.digest("sandbox") + "-task-1")
+        listed = {item["id"]: item["availability"] for item in self.ok("list")["nodes"]}
+        self.assertEqual(listed, {"task-1": "offline", "fresh": "ready"})
+        resumed = self.ok("ensure", {"nodeId": "task-1", "parameters": {"profile": "offline"}})
+        self.assertEqual((resumed["node"]["availability"], resumed["effect"]), ("ready", "Resumed the paused container."))
+        self.assertEqual(len(self.calls("start")), 1)
 
     def digest(self, provider):
         import hashlib
@@ -192,13 +198,29 @@ class ContainerProviderTests(unittest.TestCase):
         log = self.ok("filesystem", {"nodeId": "task-1", "operation": "read", "path": started["outputPath"], "offset": 0, "count": 100})
         self.assertEqual(base64.b64decode(log["dataBase64"]).decode(), "hello ü")
         name = "foxwarm-" + self.digest("sandbox") + "-task-1"
-        self.engine_fake("stop", name)
+        self.engine_fake("pause", name)
+        # Paused processes still exist, so the command is not reported lost.
         self.assertEqual(self.error("exec-poll", {"nodeId": "task-1", "ref": started["ref"]}), "ContainerUnavailable")
+        self.engine_fake("unpause", name)
+        self.engine_fake("stop", name)
+        stopped = self.ok("exec-poll", {"nodeId": "task-1", "ref": started["ref"]})
+        self.assertEqual((stopped["state"], stopped["reason"]), ("lost", "The container stopped, which ended the command."))
         self.assertEqual(self.ok("destroy", {"nodeId": "task-1"})["nodeId"], "task-1")
         lost = self.ok("exec-poll", {"nodeId": "task-1", "ref": started["ref"]})
         self.assertEqual(lost["state"], "lost")
         self.assertEqual(self.ok("destroy", {"nodeId": "task-1"})["effect"], "No container existed for this Node.")
         self.assertEqual(self.error("inspect", {"nodeId": "task-1"}), "NotFound")
+
+    def test_destroy_is_idempotent_when_another_caller_removes_the_container_first(self):
+        self.create()
+        (self.engine / "rm-fails").write_text("")
+        self.assertEqual(self.error("destroy", {"nodeId": "task-1"}), "DestroyFailed")
+        self.assertEqual(len(self.ok("list")["nodes"]), 1)
+        (self.engine / "rm-fails").unlink()
+        (self.engine / "rm-races").write_text("")
+        self.assertEqual(self.ok("destroy", {"nodeId": "task-1"})["effect"],
+                         "Removed the container with its workspace and command logs.")
+        self.assertEqual(self.ok("list")["nodes"], [])
 
     def poll(self, ref):
         for _ in range(100):
@@ -247,6 +269,13 @@ class ContainerProviderTests(unittest.TestCase):
         self.assertEqual(process.stdout.read(), "")
         process.stdout.close()
         self.assertEqual((self.engine / "stdio-ended").read_text(), "eof")
+
+    def test_service_channel_refuses_an_unbounded_ready_line(self):
+        self.create("editor", profile="code")
+        (self.engine / "stdio-flood").write_text("")
+        started = time.monotonic()
+        self.assertEqual(self.error("connect", {"nodeId": "editor"}), "ServiceUnavailable")
+        self.assertLess(time.monotonic() - started, 20)
 
     def test_installed_skill_copy_finds_the_shared_target_helper(self):
         installed = self.root / "installed-skill"

@@ -78,7 +78,7 @@ Session names use ASCII letters, digits, `_` and `-`. Display names are separate
 - `agentTree.maxDepth` (default 16) and `agentTree.maxChildren` (default 128 direct children) limit the tree. Lowering a limit does not disable existing Agents.
 - An Agent cannot be deleted while Agents created from it exist.
 
-There is no tool to write another Agent's memory. After creating an Agent, write its memory files with ordinary file tools under `agents/<agent>/memory/` if your permissions allow, or ask the user.
+There is no tool to write another Agent's memory. After creating an Agent, write its memory files with ordinary file tools if your permissions allow, or ask the user. Agent folders are siblings, so the new Agent's memory is `<parent of your agent_folder>/<agent>/memory/MEMORY.md`. Use that absolute path, because a relative path resolves against your own Session or Agent directory, and read the file back once.
 
 ## Restrict an Agent
 
@@ -93,24 +93,25 @@ Create a restricted Agent with its rules in one call, so no Session runs without
 create_agent({agentName:"worker", createMainSession:false, rules:<contents of restricted-worker.rules.json>})
 ```
 
-Then write the matching memory template to `agents/worker/memory/MEMORY.md`. The rules in the templates were reviewed for these hazards; keep them when adapting:
+Then write the matching memory template to the worker Agent's `memory/MEMORY.md` by its absolute path, as described above. The rules in the templates were reviewed for these hazards; keep them when adapting:
 
 - **Scope environment allowances with `tool: {source: node}`.** A top-level `node` selector also matches the `node` tool's select, inspect and destroy targets and file-transfer endpoints. Without the tool scope, a worker could inspect or destroy its own environment.
 - **Deny `master` first.** `node: {current: true}` matches `master` for a Session placed there.
-- **Never reuse Node IDs.** `current` compares IDs, so a finished Session that still selects a reused ID would reach the next environment. Use a fresh ID per assignment and delete finished worker Sessions.
+- **Never reuse Node IDs.** `current` compares IDs, so a finished Session that still selects a reused ID would reach the next environment. Provision each assignment with `create` and a fresh ID (it refuses an ID that still exists), and delete finished worker Sessions.
 - **Deny memory writes.** All Sessions of an Agent share its memory, so one compromised Session could change every later Session's instructions.
 - **No `ask_user` and no MCP for workers.** Workers ask their parent through a parent-owned Task. MCP servers run on `master`.
 - **The global policy must let the intended calls through.** A local allow only passes its own layer.
 - **Copying out goes through the coordinator.** A worker's copy with a `master` endpoint is denied, so the coordinator collects results.
+- **Agent rules govern Foxwarm tools only.** Web search or image generation built into a model are controlled by the model configuration, so give restricted Agents a model without them.
 
-Check a candidate with `explain_tool_authorization` (find it with `search_tools`) for a real Session of the Agent before relying on it.
+Check a candidate with `explain_tool_authorization` (find it with `search_tools`) for a real Session of the Agent before relying on it. A worker Agent without a main Session has none until its first assignment; check that Session before it starts work.
 
 ### Restricted workers
 
 Use one long-lived worker Agent for all assignments of a kind instead of one Agent per worker: rules apply to every Session of the Agent, while Agents cannot be deleted by models. Each assignment gets:
 
-- a fresh Node, for example `node({action:"ensure", providerId:"sandbox", nodeId:"sandbox/<assignment>", parameters:{profile:"offline"}})`;
-- a Task and a child Session on that Node: `create_child_session({agentName:"worker", node:"sandbox/<assignment>", taskId:"<task>"})`. Task completion notifies the coordinator;
+- a fresh Node: `node({action:"create", providerId:"sandbox", nodeId:"sandbox/<assignment>", parameters:{profile:"offline"}})`. Use `ensure` only as a deliberate reconnect to an environment that should still exist;
+- a Task and a child Session on that Node: `create_child_session({agentName:"worker", suffix:"<assignment>", node:"sandbox/<assignment>", taskId:"<task>", …handoff fields})`. Task completion notifies the coordinator;
 - an explicit release after review: `delete_session` for the worker, then `node({action:"destroy", ...})` with its exact confirmation.
 
 The [node-setup development workflow](../../node-setup/references/development-workflow.md) runs these steps with source transfer and delivery.
@@ -119,9 +120,11 @@ The [node-setup development workflow](../../node-setup/references/development-wo
 
 For an Agent that answers a chat channel, reserve one long-lived Node for it (an `ensure`d container or a paired machine), then create the Agent with `defaultNode` set to that Node and the rules from `channel-assistant.rules.json`. Channel Sessions start on the default Node. The template allows tools on the current Node, file delivery to the same conversation, its own history and skills.
 
+Files people send to an Agent without legacy isolation are saved on `master` in its directory under `.temp/channel-files`, not on its Node; the template's first rule allows reading only that directory there. All conversations of the Agent share its Node and these files. Use one Agent and Node per group of people who may see each other's material.
+
 ## Placement
 
-A new Session's Node is, in order: a legacy isolation binding; the explicit `node` given at creation; the current Node of a parent Session in the same Agent; the Agent's `defaultNode`; the installation's `agentDefaultNode`; then `master`. `defaultCwd` applies only when the Session starts on that default Node.
+A new Session's Node is, in order: a legacy isolation binding; the explicit `node` given at creation; for `create_child_session` in the same Agent, the parent's current Node; the Agent's `defaultNode`; the installation's `agentDefaultNode`; then `master`. `defaultCwd` applies only when the Session starts on that default Node.
 
 Set defaults with `create_agent` or in the WebUI's Agent settings. Changing them does not move existing Sessions, and a default Node need not be online. Placement grants nothing: what a Session can do on a Node is decided by policy.
 
@@ -183,4 +186,4 @@ The replacement is the pattern above: an Agent-local rule layer plus a Node, wit
 4. Test with `explain_tool_authorization` while isolation is still on, using a non-isolated test Agent with the same rules where isolation would hide gaps.
 5. With approval, clear isolation: `set_agent_isolated({agentName, nodeId:""})` or `/agent isolated <agent> off`.
 
-Clearing isolation also removes its incoming-message and own-directory guards, and legacy isolation allowed own-memory writes that the templates deny. Review those differences explicitly; do not clear isolation to work around a denied call.
+Clearing isolation also removes its incoming-message and own-directory guards, and legacy isolation allowed own-memory writes that the templates deny. It also moves inbound channel files from the bound Node to `master` in the Agent's directory, so the local layer must allow reading them there, as the channel-assistant template does. Review those differences explicitly; do not clear isolation to work around a denied call.

@@ -4,7 +4,7 @@ This example transfers a committed source snapshot and selected materials, assig
 
 ## Prerequisites and ownership
 
-- A coordinator authorized to run ToolScript, execute on the source and worker Nodes, transfer files across **both** endpoints, create/read Tasks and child Sessions, and, for provisioned Nodes, `ensure`, `inspect` and `destroy` them and delete worker Sessions. The worker Agent has its own narrower rules.
+- A coordinator authorized to run ToolScript, execute on the source and worker Nodes, transfer files across **both** endpoints, create/read Tasks and child Sessions, and, for provisioned Nodes, `create`, `inspect` and `destroy` them and delete worker Sessions. The worker Agent has its own narrower rules.
 - A non-master Node with canonical file/exec support and retained programmatic exec data: an existing one, or one the `provision` phase creates. Both environments run POSIX shells, Python 3 and Git. This example is not a Windows or exec-only Shell Node workflow.
 - A source repository, one committed base, a **new absent** worker workspace with an existing parent directory, existing temporary directories, a local Git author identity and a separate destination artifact directory for each delivery. Keep the input bundle and material destination paths outside the new workspace, for example in an assignment-specific temporary directory: transfers happen before repository initialization. Use absolute paths. Transfer paths use Node defaults, not Session cwd; the helper targets Nodes explicitly without changing the coordinator's selected Node.
 - One owner for each mutable workspace and service. The coordinator owns provisioning, source preparation, assignment, review/import and release. The worker owns only the stated task workspace. Say whether commits, tests or restarts are authorized and whether children are forbidden.
@@ -22,7 +22,7 @@ Tool routing rules are not OS, network or resource isolation. A Provider label, 
 create_agent({agentName:"developer-worker", createMainSession:false, rules:<contents of restricted-worker.rules.json>})
 ```
 
-Then write the matching [memory template](../../agent-management/references/memory-templates/restricted-worker.md) to the new Agent's `memory/MEMORY.md`. The layer keeps the worker's tools on its current Node, lets it report through its Task and ask its parent through a parent-owned Task, and denies `master`, memory writes and everything else. [Restrict an Agent](../../agent-management/references/OPERATIONS.md#restrict-an-agent) explains each rule.
+Then write the matching [memory template](../../agent-management/references/memory-templates/restricted-worker.md) to the new Agent's `memory/MEMORY.md`. Agent folders are siblings, so use the absolute path `<parent of your agent_folder>/developer-worker/memory/MEMORY.md` and read it back once. The layer keeps the worker's tools on its current Node, lets it report through its Task and ask its parent through a parent-owned Task, and denies `master`, memory writes and everything else. These rules govern Foxwarm tools only, so also give the worker Agent a model without built-in web search or image generation. [Restrict an Agent](../../agent-management/references/OPERATIONS.md#restrict-an-agent) explains each rule.
 
 **Let the global policy pass these calls.** A local layer only narrows. With the default `defaultAction: allow` and no conflicting rules, nothing more is needed. If the instance policy denies by default, merge reviewed allows for the coordinator and the worker Agent; [access-control's policy reference](../../access-control/references/tool-policy.md) is the canonical syntax. This is a **fragment**, not a replacement policy:
 
@@ -34,7 +34,7 @@ rules:
     action: allow   # narrowed by developer-worker's local layer
 ```
 
-The coordinator rule is intentionally powerful; use the installation's trusted coordinator identity, and review earlier matching rules first. If the coordinator is restricted instead, remember that Provider-wide `ensure` and `create` have no concrete Node target and need their own rules, that cross-Node copy allows must cover both endpoints, and that `run_script` is a separate grant. Do not generate exact Node or Task rules per assignment, and do not let this helper edit authorization.
+The coordinator rule is intentionally powerful; use the installation's trusted coordinator identity, and review earlier matching rules first. If the coordinator is restricted instead, remember that Provider-wide `create` and `ensure` have no concrete Node target and need their own rules, that cross-Node copy allows must cover both endpoints, and that `run_script` is a separate grant. Do not generate exact Node or Task rules per assignment, and do not let this helper edit authorization.
 
 ## Load the runnable example
 
@@ -48,7 +48,7 @@ Choose the source Node that actually holds the script. This `node` argument cont
 
 ### 0. Provision a fresh Node (Providers that create Nodes)
 
-Skip this for an existing Node. Otherwise choose a Node ID for this assignment that has never been used, for example `sandbox/parser-change-01`. Authorization rules that follow a Session's current Node compare IDs, so a reused ID would reach the new environment from an old Session.
+Skip this for an existing Node, which works the same way in the later steps. Otherwise choose a Node ID for this assignment that has never been used, for example `sandbox/parser-change-01`. Authorization rules that follow a Session's current Node compare IDs, so a reused ID would reach the new environment from an old Session.
 
 ```json
 {
@@ -59,7 +59,7 @@ Skip this for an existing Node. Otherwise choose a Node ID for this assignment t
 }
 ```
 
-The helper calls `node` `ensure` and returns the Node's `defaultCwd`. If the receipt does not show the Node ready, it inspects the Node once and returns `needs-verification` instead of continuing. Creation does not select the Node or assign work. For a container profile, put the workspace under its default directory in the next step, for example `/workspace/example-task`.
+The helper calls `node` `create` and returns the Node's `defaultCwd`. Core refuses an ID that still exists, so the phase fails instead of reattaching to an old environment. If the receipt does not show the Node ready, it inspects the Node once and returns `needs-verification` instead of continuing. Creation does not select the Node or assign work. To reconnect deliberately to an environment that should still exist, for example a stopped container, call `node` `ensure` yourself; the helper never does. For a container profile, put the workspace under its default directory in the next step, for example `/workspace/example-task`.
 
 ### 1. Prepare source and transfer
 
@@ -78,7 +78,7 @@ Record the returned full commit ID as `base`. The source bundle includes reachab
   "phase": "prepare",
   "sourceNode": "master",
   "sourceBundle": "/tmp/assignment-source.bundle",
-  "nodeId": "linux-machines/build-linux",
+  "nodeId": "sandbox/parser-change-01",
   "bundlePath": "/tmp/example-task-source.bundle",
   "workDir": "/workspace/example-task",
   "tempDir": "/tmp",
@@ -121,7 +121,7 @@ After the worker releases mutable ownership for delivery, the coordinator runs:
 ```json
 {
   "phase": "snapshot",
-  "nodeId": "linux-machines/build-linux",
+  "nodeId": "sandbox/parser-change-01",
   "workDir": "/workspace/example-task",
   "tempDir": "/tmp",
   "base": "FULL_COMMIT_ID_FROM_REV_PARSE"
@@ -184,6 +184,6 @@ For a provisioned Node, first decide whether anything inside it is still needed:
 }
 ```
 
-The helper inspects the Node, deletes the finished worker Session (its archive is kept), then destroys the Node, which removes the container with its workspace and command logs. If deleting the Session fails, for example because it is still busy, the helper stops before destroying anything. Omit `workerSessionId` to keep the Session for reference; with its Node destroyed and the ID never reused, its file and command tools have nowhere to run.
+The helper inspects the Node, deletes the finished worker Session (its archive is kept), then destroys the Node, which removes the container with its workspace and command logs. If deleting the Session fails, for example because it is still busy, the helper stops before destroying anything; a busy Session receives a stop request, so run release again once it is idle. Omit `workerSessionId` to keep the Session for reference; with its Node destroyed and the ID never reused, its file and command tools have nowhere to run.
 
 Existing SSH hosts advertise **no create, ensure or destroy**. Releasing there means removing only explicitly owned task files, retained execution logs or processes when independently authorized, not shutting down the host. Removing a Task or Session or changing Node routing never erases files, stops commands or releases compute by itself. Preserve imported refs and delivered artifacts according to the coordinator's normal policy.
