@@ -9,7 +9,9 @@ internal sealed record ChannelMessage(
     string Text,
     string? ClientMessageId,
     IReadOnlyList<JsonObject>? Parts = null,
-    string? ControlRequestId = null
+    string? ControlRequestId = null,
+    // Who sent WebUI input: the administrator or a scoped identity. Administrator-only evidence.
+    JsonObject? Sender = null
 );
 
 internal sealed record MessageRouteResult(int Status, object Value);
@@ -275,7 +277,7 @@ internal sealed partial class MessageRouter(SessionRuntime runtime)
             SessionBoundary.ChannelInput(parts, context.Platform),
             ClientMessageId: message.ClientMessageId,
             // Direct user input; while the Session waits on a question it is the answer.
-            OpenFields: new JsonObject { ["userInput"] = true }
+            OpenFields: InputSender.With(new JsonObject { ["userInput"] = true }, message.Sender)
         );
         if (attachmentOwner is null)
             await runtime.SubmitAndRunAsync(context.SessionId, item);

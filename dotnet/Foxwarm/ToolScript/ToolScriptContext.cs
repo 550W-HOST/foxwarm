@@ -22,6 +22,7 @@ internal sealed record ToolScriptContext(
     internal ToolScriptWaitScope WaitScope { get; init; } = new();
     internal Action<JsonObject>? SessionMessageDelivered { get; set; }
     internal Action<JsonObject>? ExecPlacementObserved { get; set; }
+    internal Action<JsonObject>? TargetObserved { get; set; }
 
     // 1-based position of the current call_tool host call within this run slice.
     internal int? SubCallOrdinal { get; set; }

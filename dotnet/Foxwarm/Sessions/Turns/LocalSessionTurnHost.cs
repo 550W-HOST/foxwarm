@@ -634,6 +634,13 @@ public sealed partial class LocalSessionTurnHost
                     message["__meta"] = meta = new JsonObject();
                 meta["questionAnswer"] = answer.DeepClone();
             }
+            // Administrator-only evidence of who sent WebUI input; scoped projections remove it.
+            if (item.OpenFields?["sender"] is JsonObject sender)
+            {
+                if (message["__meta"] is not JsonObject meta)
+                    message["__meta"] = meta = new JsonObject();
+                meta["sender"] = sender.DeepClone();
+            }
             rawMessages.Add(DeferredQueueInput.Message(item, message));
             committedAnyInput = true;
         }

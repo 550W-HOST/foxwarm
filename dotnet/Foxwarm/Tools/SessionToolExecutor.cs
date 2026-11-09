@@ -25,7 +25,11 @@ internal sealed partial class SessionToolExecutor(
 
     internal ClaudeRuntimeRun? ExternalRun { get; set; }
 
-    internal async Task AuthorizeAsync(ResolvedTool resolved, CancellationToken token)
+    internal async Task AuthorizeAsync(
+        ResolvedTool resolved,
+        CancellationToken token,
+        JsonObject? target = null
+    )
     {
         void RequireRuntime()
         {
@@ -60,7 +64,17 @@ internal sealed partial class SessionToolExecutor(
         for (var attempt = 0; ; attempt++)
             try
             {
-                await sessions.AuthorizeToolAsync(hosted, resolved, files, token);
+                await sessions.AuthorizeToolAsync(
+                    hosted,
+                    resolved,
+                    files,
+                    token,
+                    observe: assessment =>
+                    {
+                        if (target is not null)
+                            target["rules"] = RuleRecord(assessment);
+                    }
+                );
                 break;
             }
             // A grant whose facts no longer match the call is replaced by a new request.
@@ -98,6 +112,39 @@ internal sealed partial class SessionToolExecutor(
     }
 
     private const int MaxApprovalRequests = 3;
+
+    // Audit evidence of what a call resolved to. Display data, never routing or policy authority.
+    internal static JsonObject TargetRecord(ResolvedTool resolved)
+    {
+        var target = new JsonObject
+        {
+            ["source"] = resolved.Source,
+            ["name"] = resolved.Name,
+            ["node"] = resolved.ExecutionNode,
+        };
+        if (resolved.Server is not null)
+            target["server"] = resolved.Server;
+        if (resolved.InvocationName != resolved.Name)
+            target["invocationName"] = resolved.InvocationName;
+        return target;
+    }
+
+    // The deciding rule of each generic policy layer, named as approval records name them.
+    internal static JsonArray RuleRecord(AuthorizationAssessment assessment) =>
+        new(
+            assessment
+                .Layers.Select(layer =>
+                    (JsonNode?)
+                        new JsonObject
+                        {
+                            ["layer"] = layer.Layer is null ? "global" : "agent:" + layer.Layer,
+                            ["id"] =
+                                SessionWait.Text(layer.Decision.Rule?["id"]) ?? "defaultAction",
+                            ["effect"] = AuthorizationDecision.Name(layer.Decision.Effect),
+                        }
+                )
+                .ToArray()
+        );
 
     // Where an exec command runs, so an approver can judge relative commands. Master resolves
     // the directory as the launch will; another Node receives the declared or Session cwd, and
@@ -203,7 +250,13 @@ internal sealed partial class SessionToolExecutor(
             }
         }
         var settled = await Task.WhenAll(preparations.Select(Settle));
-        settled.CopyTo(preparations, 0);
+        for (var index = 0; index < settled.Length; index++)
+            preparations[index] = settled[index] is { } value
+                ? value with
+                {
+                    Target = preparations[index]?.Target,
+                }
+                : null;
     }
 
     private readonly List<string> explicitWaitIds = [];
@@ -314,6 +367,7 @@ internal sealed partial class SessionToolExecutor(
         CancellationToken token
     )
     {
+        JsonObject? target = null;
         try
         {
             var args =
@@ -325,9 +379,10 @@ internal sealed partial class SessionToolExecutor(
                 execSnapshot.Value?.Node ?? sessions.CurrentNode(hosted),
                 token
             );
+            target = TargetRecord(resolved);
             try
             {
-                await AuthorizeAsync(resolved, token);
+                await AuthorizeAsync(resolved, token, target);
                 return null;
             }
             catch (ToolApprovalRequiredException required)
@@ -341,7 +396,8 @@ internal sealed partial class SessionToolExecutor(
                         new("turn", SessionWait.Text(call["id"]), null),
                         unattended,
                         ApprovalWorkingDirectory(resolved)
-                    )
+                    ),
+                    Target: target
                 );
             }
         }
@@ -366,7 +422,7 @@ internal sealed partial class SessionToolExecutor(
         }
         catch (ToolAuthorizationDeniedException error)
         {
-            return new(error.ToolError());
+            return new(error.ToolError(), Target: target);
         }
         catch (Exception error)
             when (error
@@ -377,7 +433,10 @@ internal sealed partial class SessionToolExecutor(
                         or NotSupportedException
             )
         {
-            return new(UnsupportedTurnToolExecutor.ToolError("tool_error", error.Message));
+            return new(
+                UnsupportedTurnToolExecutor.ToolError("tool_error", error.Message),
+                Target: target
+            );
         }
     }
 
@@ -405,6 +464,7 @@ internal sealed partial class SessionToolExecutor(
             ? skipped with
             {
                 Approval = await AbandonApprovalAsync(grant, token) ?? prepared.Approval,
+                Target = prepared.Target,
             }
             : skipped;
 
@@ -414,7 +474,8 @@ internal sealed partial class SessionToolExecutor(
             Interlocked.Exchange(ref policyUnavailable, 1);
         return new(
             (JsonObject)prepared.Response!.DeepClone(),
-            Approval: (JsonObject?)prepared.Approval?.DeepClone()
+            Approval: (JsonObject?)prepared.Approval?.DeepClone(),
+            Target: (JsonObject?)prepared.Target?.DeepClone()
         );
     }
 
@@ -476,7 +537,8 @@ internal sealed partial class SessionToolExecutor(
                 current.SessionMessages,
                 current.DeferredCwdNode,
                 current.ExecPlacement,
-                current.Approval
+                current.Approval,
+                current.Target
             );
         }
         finally
@@ -675,6 +737,8 @@ internal sealed partial class SessionToolExecutor(
                 ExecutionNode,
                 cancellationToken
             );
+            if (invocation.Value is { } targeted)
+                targeted.Target = TargetRecord(resolved);
             if (
                 resolved.Name is "run_script" or "start_toolscript_run"
                 && invocation.Value is { } scriptCall
@@ -715,7 +779,7 @@ internal sealed partial class SessionToolExecutor(
                     files.ResolvedPaths = paths =>
                         invocation.Value!.ResolvedPaths = (JsonArray)paths.DeepClone();
                 }
-                await AuthorizeAsync(resolved, cancellationToken);
+                await AuthorizeAsync(resolved, cancellationToken, invocation.Value?.Target);
                 if (identity == hosted.Id)
                     break;
             }
@@ -1381,7 +1445,8 @@ internal sealed record TurnToolPreparation(
     bool PolicyUnavailable = false,
     PendingToolApproval? Pending = null,
     ToolApprovalGrant? Grant = null,
-    JsonObject? Approval = null
+    JsonObject? Approval = null,
+    JsonObject? Target = null
 );
 
 internal sealed record TurnToolExecution(
@@ -1394,7 +1459,8 @@ internal sealed record TurnToolExecution(
     JsonArray? SessionMessages = null,
     string? DeferredCwdNode = null,
     JsonObject? ExecPlacement = null,
-    JsonObject? Approval = null
+    JsonObject? Approval = null,
+    JsonObject? Target = null
 );
 
 internal sealed record TurnToolReceipt(
@@ -1429,6 +1495,9 @@ internal sealed class TurnToolInvocation(string callId)
 
     // Presentation-only outcome of this call's approval request.
     internal JsonObject? Approval { get; set; }
+
+    // Audit evidence: the resolved capability, its Node and the deciding policy rules.
+    internal JsonObject? Target { get; set; }
 
     internal string? DeliverySeq(bool script) =>
         InheritedDelivery ?? SessionManager.BatchDeliverySeq(AnchorSeq, Index, Total, script);

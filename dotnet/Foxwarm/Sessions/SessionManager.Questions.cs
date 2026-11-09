@@ -120,7 +120,12 @@ internal sealed partial class SessionManager
     /// Admits a structured WebUI answer as user input. The question must still be open when the
     /// owner admits it; a concurrent earlier answer wins and this one fails.
     /// </summary>
-    internal async Task AnswerQuestionAsync(SessionOwner owner, string questionId, JsonObject body)
+    internal async Task AnswerQuestionAsync(
+        SessionOwner owner,
+        string questionId,
+        JsonObject body,
+        JsonObject? sender = null
+    )
     {
         var record = owner.Entry.WithState(state =>
             SessionQuestions.Find(state.Meta, questionId)?.DeepClone() as JsonObject
@@ -150,7 +155,10 @@ internal sealed partial class SessionManager
         var item = new QueueItem(
             QueueItemType.User,
             SessionBoundary.ChannelInput([new JsonObject { ["text"] = text }], "webui"),
-            OpenFields: new JsonObject { ["userInput"] = true, ["questionAnswer"] = stored }
+            OpenFields: InputSender.With(
+                new JsonObject { ["userInput"] = true, ["questionAnswer"] = stored },
+                sender
+            )
         );
         await new SessionRuntime(this).SubmitExternalAsync(
             owner,

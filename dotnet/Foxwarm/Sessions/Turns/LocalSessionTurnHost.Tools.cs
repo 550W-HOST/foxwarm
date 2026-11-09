@@ -127,6 +127,12 @@ public sealed partial class LocalSessionTurnHost
                 && result.ResolvedPaths is { Count: > 0 } paths
             )
                 response["__meta"] = new JsonObject { ["resolvedPaths"] = paths.DeepClone() };
+            if (result.Target is { } target)
+            {
+                var meta = response["__meta"] as JsonObject ?? new JsonObject();
+                meta["target"] = target.DeepClone();
+                response["__meta"] = meta;
+            }
             if (result.ExecPlacement is { } placement)
             {
                 var meta = response["__meta"] as JsonObject ?? new JsonObject();

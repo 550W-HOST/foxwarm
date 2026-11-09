@@ -28,6 +28,12 @@ internal sealed class WebUiAccess(SessionRuntime runtime, AccessConfiguration co
 
     internal static WebUiRequest? Request(HttpRequest request) => Request(request.HttpContext);
 
+    // Who is sending WebUI input or answers: a scoped identity, otherwise the administrator.
+    internal static JsonObject Sender(HttpRequest request) =>
+        Request(request) is { } scoped
+            ? InputSender.Identity(scoped.IdentityId)
+            : InputSender.Administrator();
+
     internal void Start()
     {
         configuration.Changed += Revoke;

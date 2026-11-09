@@ -190,6 +190,7 @@ internal sealed partial class WebUIChannel
                     result.Remove("memorySize");
                     result["session"] = scoped.Session(result["session"]!.AsObject());
                     WebUiSessionImages.Project(result, hosted.Id, archive: false);
+                    result = InputSender.Without(result)!;
                 }
                 return Results.Ok(JsonData.WebNode(result));
             }
@@ -244,6 +245,7 @@ internal sealed partial class WebUIChannel
                 {
                     scoped.Require(canonicalId);
                     WebUiSessionImages.Project(page, canonicalId, archive: true);
+                    page = InputSender.Without(page)!;
                 }
                 return Results.Ok(JsonData.WebNode(page));
             }

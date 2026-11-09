@@ -76,6 +76,8 @@ internal sealed partial class SessionToolExecutor
                             context.SessionMessageDelivered?.Invoke(delivery);
                     if (execution.ExecPlacement is { } placement)
                         context.ExecPlacementObserved?.Invoke(placement);
+                    if (execution.Target is { } target)
+                        context.TargetObserved?.Invoke(target);
                     if (
                         execution.Receipt is not null
                         && (

@@ -159,7 +159,8 @@ internal sealed partial class SessionManager
         CancellationToken token,
         SessionOwner? concreteTarget = null,
         bool toolScriptSourceRead = false,
-        IReadOnlyList<string>? nodeEffects = null
+        IReadOnlyList<string>? nodeEffects = null,
+        Action<AuthorizationAssessment>? observe = null
     )
     {
         var assessment = await AssessToolAsync(
@@ -171,6 +172,7 @@ internal sealed partial class SessionManager
             toolScriptSourceRead,
             nodeEffects
         );
+        observe?.Invoke(assessment);
         if (assessment.Denied is { } denied)
             throw new ToolAuthorizationDeniedException(
                 SessionWait.Text(denied.Decision.Rule?["reason"])

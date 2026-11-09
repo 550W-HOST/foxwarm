@@ -48,7 +48,12 @@ internal sealed partial class WebUIChannel
                 }
                 try
                 {
-                    await sessions.AnswerQuestionAsync(hosted, questionId, body);
+                    await sessions.AnswerQuestionAsync(
+                        hosted,
+                        questionId,
+                        body,
+                        WebUiAccess.Sender(request)
+                    );
                 }
                 catch (KeyNotFoundException error)
                 {

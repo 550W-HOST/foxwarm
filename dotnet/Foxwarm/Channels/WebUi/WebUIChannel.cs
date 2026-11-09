@@ -416,7 +416,13 @@ internal sealed partial class WebUIChannel(
                         canonical = ingressOwner.Id;
                     var result = await router.HandleMessageAsync(
                         new ChannelContext(canonical, "webui"),
-                        new ChannelMessage(text, clientId, prepared.Parts, controlId),
+                        new ChannelMessage(
+                            text,
+                            clientId,
+                            prepared.Parts,
+                            controlId,
+                            WebUiAccess.Sender(request)
+                        ),
                         hasUploads || scoped is not null ? ingressOwner : null,
                         scoped is null ? null : () => scoped.Require(ingressOwner!.Id)
                     );
@@ -594,7 +600,10 @@ internal sealed partial class WebUIChannel(
                             {
                                 if (scoped is not null && payload["session"] is JsonObject session)
                                     payload["session"] = scoped.Session(session);
-                                await SendSse(context, payload);
+                                await SendSse(
+                                    context,
+                                    scoped is null ? payload : InputSender.Without(payload)!
+                                );
                             }
                             if (item.Kind == SessionEventKind.Deleted)
                             {

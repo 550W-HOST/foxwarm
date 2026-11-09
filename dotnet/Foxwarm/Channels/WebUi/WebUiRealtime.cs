@@ -674,6 +674,8 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
                 if (data["session"] is JsonObject session)
                     data["session"] = scoped.Session(session);
             }
+            if (scoped is not null)
+                data = InputSender.Without(data)!;
             var bytes = JsonData.SerializeToUtf8Bytes(
                 Foxwarm.Images.ImageTransport.Project(data),
                 SendJson

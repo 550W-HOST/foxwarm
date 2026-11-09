@@ -33,6 +33,14 @@ Definition discovery is not authorization. Invalid/ambiguous rules fail closed; 
 - Main native and Provider exec build it from their own start records. A Node reports `__foxwarmExecPlacement` only when Main sets `execPlacement` in the exec frame after the Node advertises `features.execPlacement`, so an older Main never exposes the field to a model. Main parses its bounded shape and strips it from every result; it is never cwd, path or control authority.
 - Without a valid report (older or TypeScript CLI, Shell HTTP) the record is `cwdSource:"unknown"` with the Node and forwarded Session cwd. Only the [.NET CLI](../units/dotnet-cli-node.md#persistent-session-exec) reports; the TypeScript CLI is unchanged by explicit scope.
 
+### D-tool-effect-record
+
+**User-approved (2026-11-09).** Every resolved call records what it resolved to, where, and which rules decided it, so an audit view can answer who ran what on which Node with which effect. Like the exec record, this is audit/display evidence, never routing, cwd or policy authority; older rows stay unknown and are not backfilled from guesses.
+
+- A model `functionResponse` carries `__meta.target`, and a ToolScript subcall carries `target`: `source`, `name`, `node` (the resolved execution Node), and when present `server` and `invocationName`. It is present on denials and other failures whenever the call resolved; an unresolved call has none.
+- `target.rules` lists the deciding rule of each generic policy layer as `{layer, id, effect}`: `layer` is `global` or `agent:<name>`, `id` is the rule ID or `defaultAction`, and `effect` is `allow`, `ask` or `deny`. It is taken from the assessment of the call's own dispatch gate, the same one approval records name.
+- WebUI input (messages and dock answers) records its sender on the committed user row as `__meta.sender`: `{kind:"administrator"}` or `{kind:"identity", id}`, the shape approval decisions use. It is administrator-only: scoped history, continuous history, WebSocket and compatibility SSE payloads remove it through `InputSender.Without`, which clones rather than altering shared payloads. Model requests never carry message `__meta`.
+
 ## Outbound MCP values and trusted control
 
 The [outbound MCP client](../units/mcp.md) receives an actual trusted Session owner from unified discovery/execution, including nested ToolScript. Its SDK bindings are transient connection authority, not Session history or a model-supplied caller identity. Real configuration changes, identity moves, deletion, and host shutdown invalidate their corresponding lifetimes.
