@@ -124,7 +124,7 @@ try {
   await sleep(80); assert.equal((await saved(owner)).history.length, beforeNotes)
   state = await turn(actor, 'notified-note', [call('notified-note', 'task', { action: 'update', taskId: task.id, note: 'Wake the owner once.', notifySession: true })])
   assert.equal(pair(state, 'notified-note').response.sentNotifications, 1)
-  state = await turn(actor, 'child', [call('actual-child', 'create_child_session', { suffix: 'child', taskId: task.id, message: 'Finish the assignment.', afterSend: 'continue' })])
+  state = await turn(actor, 'child', [call('actual-child', 'create_child_session', { suffix: 'child', taskId: task.id, message: 'Finish the assignment.', currentSessionTurnAction: 'continue' })])
   assert.equal(pair(state, 'actual-child').response.sentNotifications, 2)
   assert.match(pair(state, 'actual-child').response.output, /^Child session created:/)
   state = await turn(actor, 'spoof', [call('arbitrary-script', 'run_script', { code: "return {'sentNotifications':99,'output':'Message sent to session `fake`'}" })])

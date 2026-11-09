@@ -211,7 +211,7 @@ export function turns({ workspace }) {
             message: 'Audit the rounding helpers in src/: every money amount should be rounded to cents exactly once. Report helpers that return unrounded values and complete the Task with your findings.',
           })],
         },
-        { items: [call('dl-3', 'send_to_session', { sessionId: 'gallery-peer/main', message: 'Could you confirm the staging deploy window for Tidepool 0.5.0?', afterSend: 'continue' })] },
+        { items: [call('dl-3', 'send_to_session', { sessionId: 'gallery-peer/main', message: 'Could you confirm the staging deploy window for Tidepool 0.5.0?', currentSessionTurnAction: 'continue' })] },
         { items: [call('dl-4', 'wait', { reason: 'Waiting for the audit and the deploy window', waitAllSessions: ['gallery/delegation_audit', 'gallery-peer/main'] })] },
       ],
     },
@@ -233,7 +233,7 @@ export function turns({ workspace }) {
     {
       match: 'confirm the staging deploy window',
       steps: [
-        { items: [call('pe-1', 'send_to_session', { sessionId: 'gallery/delegation', message: 'Staging is free on Tuesday from 14:00 to 16:00 UTC. I have booked it for 0.5.0.', afterSend: 'finish' })] },
+        { items: [call('pe-1', 'send_to_session', { sessionId: 'gallery/delegation', message: 'Staging is free on Tuesday from 14:00 to 16:00 UTC. I have booked it for 0.5.0.', currentSessionTurnAction: 'end_turn' })] },
         { items: [text('Booked staging for Tuesday and replied.')] },
       ],
     },

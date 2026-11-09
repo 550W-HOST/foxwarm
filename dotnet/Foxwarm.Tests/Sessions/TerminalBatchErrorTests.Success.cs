@@ -8,7 +8,7 @@ public sealed partial class TerminalBatchErrorTests
 {
     [Theory]
     [InlineData("wait")]
-    [InlineData("finish")]
+    [InlineData("end_turn")]
     public async Task Handled_script_errors_and_nonzero_exec_results_preserve_successful_terminal_controls(
         string after
     )
@@ -37,7 +37,7 @@ public sealed partial class TerminalBatchErrorTests
                             {
                                 ["sessionId"] = targetId,
                                 ["message"] = "delivered once",
-                                ["afterSend"] = after,
+                                ["currentSessionTurnAction"] = after,
                             }
                         )
                     )
@@ -99,7 +99,7 @@ public sealed partial class TerminalBatchErrorTests
                                             {
                                                 ["sessionId"] = id,
                                                 ["message"] = "coalesced handoff",
-                                                ["afterSend"] = "wait",
+                                                ["currentSessionTurnAction"] = "wait",
                                             }
                                         )
                                 )
@@ -151,7 +151,7 @@ public sealed partial class TerminalBatchErrorTests
 
     [Theory]
     [InlineData("wait")]
-    [InlineData("finish")]
+    [InlineData("end_turn")]
     public async Task Stop_after_suppressed_handoff_leaves_the_paired_exchange_available_to_Continue(
         string after
     )
@@ -181,7 +181,7 @@ public sealed partial class TerminalBatchErrorTests
                                 {
                                     ["sessionId"] = targetId,
                                     ["message"] = "once before Stop",
-                                    ["afterSend"] = after,
+                                    ["currentSessionTurnAction"] = after,
                                 }
                             ),
                             Call("failure", "read", new() { ["filePath"] = "missing.txt" })

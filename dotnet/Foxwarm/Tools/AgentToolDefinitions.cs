@@ -419,10 +419,10 @@ internal static class AgentToolDefinitions
                         ["message"] = String(
                             "Optional initial instruction. A forked child reads it from this call and starts work; it can rely on the shared context. With taskId, add only information not already in the task; a fresh child receives it with the assignment."
                         ),
-                        ["afterSend"] = Choice(
-                            "What this session does after creation and any initial delivery: continue (default), finish the turn without waiting, or wait for a reply. With fork, it applies only to the parent. Waiting requires taskId or a nonempty message; other incoming activity can also resume the session. If any tool in the same batch returns an error, the session continues instead of waiting or finishing.",
+                        ["currentSessionTurnAction"] = Choice(
+                            "Controls the current Session's turn after creation and any initial delivery: continue (default) if you still have work to do, end_turn to end this turn without waiting, or wait for a reply. With fork, it applies only to the parent. Waiting requires taskId or a nonempty message; other incoming activity can also resume the current Session. If any tool in the same batch returns an error, the current Session continues instead of waiting or ending its turn.",
                             "continue",
-                            "finish",
+                            "end_turn",
                             "wait"
                         ),
                         ["node"] = String(
@@ -437,7 +437,7 @@ internal static class AgentToolDefinitions
             ),
             Tool(
                 "send_to_session",
-                "Send a message to another Session. Self-send is available only from inside ToolScript. Use this to assign work or report results across Sessions. For a completed child report, use afterSend=finish; use wait only when you need a later response.",
+                "Send a message to another Session. Self-send is available only from inside ToolScript. Use this to assign work or report results across Sessions. For a completed child report, use currentSessionTurnAction=end_turn; use wait only when you need a later response.",
                 Parameters(
                     new JsonObject
                     {
@@ -446,10 +446,10 @@ internal static class AgentToolDefinitions
                         ),
                         ["handoffRecall"] = String(HandoffConfirmation.RecallDescription),
                         ["message"] = String("Message to deliver."),
-                        ["afterSend"] = Choice(
-                            "What this session does after successful delivery: continue (default), finish the turn without waiting, or wait for a response. Other incoming activity can also resume a waiting session. If any tool in the same batch returns an error, the session continues instead of waiting or finishing.",
+                        ["currentSessionTurnAction"] = Choice(
+                            "Controls the current Session's turn after delivery: continue (default) if you still have work to do, end_turn to end this turn without waiting, or wait for a response. Other incoming activity can also resume a waiting Session. If any tool in the same batch returns an error, the current Session continues instead of waiting or ending its turn.",
                             "continue",
-                            "finish",
+                            "end_turn",
                             "wait"
                         ),
                         ["handoffConfirmation"] = String(HandoffConfirmation.Description),

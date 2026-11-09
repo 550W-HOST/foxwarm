@@ -242,7 +242,7 @@ try {
   // The same resolved handlers retain complete-batch handoff/finish/wait semantics.
   const sink = await create('sink')
   const sinkScript = 'task-' + (++serial); scripts.set(sinkScript, { calls: [], owner: sink })
-  await task([invoke('unified-handoff', 'builtin:send_to_session', { sessionId: sink, message: 'MCP-TASK ' + sinkScript, afterSend: 'finish' }), invoke('handoff-following-write', 'node:master/write', { filePath: 'handoff-paired.txt', content: 'complete-batch' })], { final: false })
+  await task([invoke('unified-handoff', 'builtin:send_to_session', { sessionId: sink, message: 'MCP-TASK ' + sinkScript, currentSessionTurnAction: 'end_turn' }), invoke('handoff-following-write', 'node:master/write', { filePath: 'handoff-paired.txt', content: 'complete-batch' })], { final: false })
   await pair('unified-handoff'); await pair('handoff-following-write'); await idle()
   assert.equal(await readFile(join(data, 'agents', 'team', 'handoff-paired.txt'), 'utf8'), 'complete-batch')
   await until(async () => (await history(sink)).some(row => row.parts?.some(part => part.text === 'DONE-' + sinkScript)), 'delivered peer')
@@ -253,8 +253,8 @@ try {
 
   const childTask = 'task-' + (++serial); const childId = current + '_mcp-kid'
   const parentTask = 'task-' + (++serial)
-  scripts.set(childTask, { calls: [invoke('child-report', 'builtin:send_to_session', { sessionId: current, message: 'CHILD-RESULT', afterSend: 'finish' })], owner: childId })
-  scripts.set(parentTask, { calls: [invoke('unified-create-child', 'builtin:create_child_session', { suffix: 'mcp-kid', message: 'MCP-TASK ' + childTask, afterSend: 'wait' }),
+  scripts.set(childTask, { calls: [invoke('child-report', 'builtin:send_to_session', { sessionId: current, message: 'CHILD-RESULT', currentSessionTurnAction: 'end_turn' })], owner: childId })
+  scripts.set(parentTask, { calls: [invoke('unified-create-child', 'builtin:create_child_session', { suffix: 'mcp-kid', message: 'MCP-TASK ' + childTask, currentSessionTurnAction: 'wait' }),
     invoke('child-parent-following-write', 'node:master/write', { filePath: 'child-parent-paired.txt', content: 'paired-before-postaction' })], owner: current })
   assert.equal((await request('POST', route(current) + '/message', { text: 'MCP-TASK ' + parentTask })).status, 202)
   await pair('unified-create-child'); await pair('child-parent-following-write'); await pair('child-report', childId)

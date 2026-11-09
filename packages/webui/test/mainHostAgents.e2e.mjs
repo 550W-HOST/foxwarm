@@ -108,7 +108,7 @@ try {
         if (!previousCalls.some(item => item.call_id === 'spawn'))
           output = [call('spawn', 'create_child_session', {
             suffix: 'probe', agentName: 'beta', message: 'CHILD-TASK',
-            forceModel: { modelId: 'local-b/two', effort: 'low' }, afterSend: 'continue',
+            forceModel: { modelId: 'local-b/two', effort: 'low' }, currentSessionTurnAction: 'continue',
           })]
         else {
           heldParent = true
@@ -126,7 +126,7 @@ try {
           assert.deepEqual(body.input.filter(item => item.type === 'function_call_output' && ['report', 'child-error'].includes(item.call_id)).map(item => item.call_id), ['report', 'child-error'])
           output = [text('CHILD-ERROR-HANDLED')]
         } else output = [call('report', 'send_to_session', {
-          sessionId: '<parent>', message: 'CHILD-REPORT: BETA-WORK', afterSend: 'finish',
+          sessionId: '<parent>', message: 'CHILD-REPORT: BETA-WORK', currentSessionTurnAction: 'end_turn',
         }), call('child-error', 'nonexistent_tool', {})]
       } else if (latest.includes('ALPHA-SECOND'))
         output = previousCalls.some(item => item.call_id === 'second-pwd') ? [text('SECOND-DONE')] :
@@ -136,7 +136,7 @@ try {
           assert.deepEqual(body.input.filter(item => item.type === 'function_call_output' && ['other-send', 'other-error'].includes(item.call_id)).map(item => item.call_id), ['other-send', 'other-error'])
           output = [text('OTHER-ERROR-HANDLED')]
         } else output = [call('other-send', 'send_to_session', {
-          sessionId: betaId, message: 'BETA-NONPARENT', afterSend: 'finish',
+          sessionId: betaId, message: 'BETA-NONPARENT', currentSessionTurnAction: 'end_turn',
         }), call('other-error', 'nonexistent_tool', {})]
       }
       else if (latest.includes('BETA-NONPARENT')) output = [text('BETA-RECEIVED-NONPARENT')]

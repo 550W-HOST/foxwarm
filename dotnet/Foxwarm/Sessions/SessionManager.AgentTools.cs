@@ -363,7 +363,7 @@ internal sealed partial class SessionManager
                             "displayName",
                             "handoffRecall",
                             "message",
-                            "afterSend",
+                            "currentSessionTurnAction",
                             "runtime",
                             "forceModel",
                             "model",
@@ -377,7 +377,7 @@ internal sealed partial class SessionManager
                     var forceModel = OptionalModelRequest(args, "forceModel");
                     var suggestedModel = OptionalModelRequest(args, "model");
                     CreationModelPlan? modelPlan = null;
-                    var after = AfterSend(args);
+                    var after = CurrentSessionTurnAction(args);
                     var taskId = OptionalString(args, "taskId");
                     if (
                         after == "wait"
@@ -385,7 +385,7 @@ internal sealed partial class SessionManager
                         && string.IsNullOrWhiteSpace(OptionalString(args, "message"))
                     )
                         throw new InvalidDataException(
-                            "create_child_session with afterSend=wait requires a nonempty initial message."
+                            "create_child_session with currentSessionTurnAction=wait requires a nonempty initial message."
                         );
                     var initialMessage = OptionalString(args, "message");
                     var initialNode = CreationNode(args);
@@ -470,7 +470,7 @@ internal sealed partial class SessionManager
                     childResult["sentNotifications"] = sentNotifications;
                     return (
                         childResult,
-                        taskId is null ? after == "finish" : delivered && after == "finish"
+                        taskId is null ? after == "end_turn" : delivered && after == "end_turn"
                     );
                 }
                 case "send_to_session":
@@ -481,12 +481,12 @@ internal sealed partial class SessionManager
                             "sessionId",
                             "handoffRecall",
                             "message",
-                            "afterSend",
+                            "currentSessionTurnAction",
                             "handoffConfirmation",
                         ],
                         ["sessionId", "message"]
                     );
-                    var after = AfterSend(args);
+                    var after = CurrentSessionTurnAction(args);
                     var requested = RequiredString(args, "sessionId");
                     var target = await SendAsync(
                         source,
@@ -509,7 +509,7 @@ internal sealed partial class SessionManager
                                 : $"Message sent to session `{target}` (requested `{requested}`)",
                             after == "wait" ? target : null
                         ),
-                        after == "finish"
+                        after == "end_turn"
                     );
                 }
                 case "refresh_session_snapshot":
@@ -620,11 +620,13 @@ internal sealed partial class SessionManager
         return node;
     }
 
-    private static string AfterSend(JsonObject args)
+    private static string CurrentSessionTurnAction(JsonObject args)
     {
-        var value = OptionalString(args, "afterSend") ?? "continue";
-        if (value is not ("continue" or "finish" or "wait"))
-            throw new InvalidDataException("afterSend must be continue, finish, or wait.");
+        var value = OptionalString(args, "currentSessionTurnAction") ?? "continue";
+        if (value is not ("continue" or "end_turn" or "wait"))
+            throw new InvalidDataException(
+                "currentSessionTurnAction must be continue, end_turn, or wait."
+            );
         return value;
     }
 

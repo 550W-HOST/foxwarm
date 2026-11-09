@@ -195,7 +195,7 @@ return {"inlineDataItems": [image["inlineData"] for image in images]}
 
 ### Explicit Session notifications
 
-A real script host call may use `send_to_session` to queue a message to its own canonical Session, as well as other permitted Sessions. This exception belongs to actual run/continue execution; direct model/tool self-send remains rejected. Existing generic/target permissions and configured handoff recall/confirmation fields still apply. Self-notifications identify script provenance without a reply route back to the same Session. Use `afterSend: "continue"` (or omit it) for notifications rather than assuming a nested send changes the calling turn.
+A real script host call may use `send_to_session` to queue a message to its own canonical Session, as well as other permitted Sessions. This exception belongs to actual run/continue execution; direct model/tool self-send remains rejected. Existing generic/target permissions and configured handoff recall/confirmation fields still apply. Self-notifications identify script provenance without a reply route back to the same Session. Use `currentSessionTurnAction: "continue"` (or omit it) for notifications rather than assuming a nested send changes the calling turn.
 
 To run periodic checks without first asking a model, load `timer-automation` and create an `action: "toolscript"` timer. Scheduled invocations keep ordinary explicit tools and model requests, but have no calling model turn: a terminal nested `wait` cannot arm the owner's Session wait, and returned send/task controls are not consumed as caller-turn actions. Source files are reauthorized and reread each tick; failures/pauses remain run diagnostics unless the script explicitly notifies a Session.
 

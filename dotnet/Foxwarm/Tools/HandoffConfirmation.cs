@@ -14,7 +14,7 @@ internal static class HandoffConfirmation
     internal const string RecallDescription =
         "Put this before message. Briefly consider what to say and which existing rules apply.";
     internal const string Description =
-        "Put this last; only afterSend may follow it. Briefly and honestly check whether this handoff should proceed. Only if it should, end with the exact sentence: “I confirm this handoff should proceed.” Otherwise omit or cancel the call.";
+        "Put this last; only currentSessionTurnAction may follow it. Briefly and honestly check whether this handoff should proceed. Only if it should, end with the exact sentence: “I confirm this handoff should proceed.” Otherwise omit or cancel the call.";
 
     internal static bool Enabled(JsonObject app)
     {
@@ -94,8 +94,8 @@ internal static class HandoffConfirmation
         return copy;
     }
 
-    // afterSend only selects the caller's own state after delivery, so it may follow the review.
-    private const string TrailingControl = "afterSend";
+    // currentSessionTurnAction only selects the caller's own turn after delivery, so it may follow the review.
+    private const string TrailingControl = "currentSessionTurnAction";
 
     internal static void Validate(JsonObject args)
     {
@@ -128,7 +128,7 @@ internal static class HandoffConfirmation
         {
             ordering = true;
             problems.Add(
-                "Inter-agent handoff confirmation must follow every argument except afterSend."
+                "Inter-agent handoff confirmation must follow every argument except currentSessionTurnAction."
             );
         }
         var message = Array.IndexOf(keys, "message");
@@ -167,8 +167,11 @@ internal static class HandoffConfirmation
             Validate(args);
     }
 
-    internal static string GuidanceArgument(string parentSessionId, string afterSend = "finish") =>
-        $"handoffRecall: \"{RecallPlaceholder}\", sessionId: `{parentSessionId}`, message: \"...\", afterSend: \"{afterSend}\", handoffConfirmation: \"{Placeholder}\\n{Suffix}\"";
+    internal static string GuidanceArgument(
+        string parentSessionId,
+        string turnAction = "end_turn"
+    ) =>
+        $"handoffRecall: \"{RecallPlaceholder}\", sessionId: `{parentSessionId}`, message: \"...\", currentSessionTurnAction: \"{turnAction}\", handoffConfirmation: \"{Placeholder}\\n{Suffix}\"";
 
     internal const string Guidance =
         " Keep handoffRecall before message and handoffConfirmation last. Briefly recall the relevant rules and what to say, then honestly check the handoff. End the confirmation with “I confirm this handoff should proceed.” only if it should proceed; otherwise omit or cancel the call.";

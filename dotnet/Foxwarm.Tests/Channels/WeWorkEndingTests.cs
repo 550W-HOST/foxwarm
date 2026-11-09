@@ -44,7 +44,8 @@ public sealed class WeWorkEndingTests
                                 {
                                     ["sessionId"] = target,
                                     ["message"] = "handoff payload",
-                                    ["afterSend"] = kind == "handoff-wait" ? "wait" : "finish",
+                                    ["currentSessionTurnAction"] =
+                                        kind == "handoff-wait" ? "wait" : "end_turn",
                                 }
                             )
                     );

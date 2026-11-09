@@ -86,7 +86,7 @@ async function buildFixtureBundle() {
         call: { id: 'child-call', name: 'create_child_session', args: {
           suffix: 'task-child', taskId: 'task_demo', agentName: 'worker', displayName: 'Task child',
           node: 'remote-a', forceModel: { modelId: 'openai/gpt-5.6-sol', effort: 'high' },
-          message: 'Start the assigned work.', afterSend: 'wait',
+          message: 'Start the assigned work.', currentSessionTurnAction: 'wait',
         } },
         response: { tool_use_id: 'child-call', name: 'create_child_session', response: { output: 'Child session created: \`agent/child\`' } },
       },

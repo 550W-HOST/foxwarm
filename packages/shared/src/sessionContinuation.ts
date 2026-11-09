@@ -123,7 +123,10 @@ function hasOnlyEffectiveBareWaitArgs(args: Record<string, unknown> | null | und
 function isTerminalCompletionCall(call: ContinuationFunctionCall): boolean {
   if (call.name === 'wait') return hasOnlyEffectiveBareWaitArgs(call.args);
   return (call.name === 'send_to_session' || call.name === 'create_child_session')
-    && (call.args?.afterSend === 'wait'
+    && (call.args?.currentSessionTurnAction === 'wait'
+      || call.args?.currentSessionTurnAction === 'end_turn'
+      // Read-only history: calls persisted before the rename used afterSend.
+      || call.args?.afterSend === 'wait'
       || call.args?.afterSend === 'finish'
       || call.args?.waitAfterHandoff === true
       || call.args?.noFurtherAssistantReply === true);

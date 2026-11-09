@@ -150,12 +150,12 @@ public sealed partial class TerminalBatchErrorTests
             );
             taskId = SessionWait.Text(created.Payload["task"]!["id"]);
         }
-        var after = mode.EndsWith("finish") ? "finish" : "wait";
+        var after = mode.EndsWith("finish") ? "end_turn" : "wait";
         var sendArgs = new JsonObject
         {
             ["sessionId"] = mode.StartsWith("failed-send") ? "main/missing-recipient" : target.Id,
             ["message"] = "once-only delivery",
-            ["afterSend"] = after,
+            ["currentSessionTurnAction"] = after,
         };
         JsonObject control = mode switch
         {
@@ -186,7 +186,7 @@ public sealed partial class TerminalBatchErrorTests
                 {
                     ["suffix"] = "worker",
                     ["taskId"] = taskId,
-                    ["afterSend"] = after,
+                    ["currentSessionTurnAction"] = after,
                 }
             ),
             _ => errorFirst
@@ -206,7 +206,7 @@ public sealed partial class TerminalBatchErrorTests
                     {
                         ["sessionId"] = target.Id,
                         ["message"] = "second once-only delivery",
-                        ["afterSend"] = "finish",
+                        ["currentSessionTurnAction"] = "end_turn",
                     }
                 )
             );

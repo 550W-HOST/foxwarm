@@ -175,7 +175,11 @@ public static class SessionContinuation
                 : BareWait(Property(call, "args"));
         return name is "send_to_session" or "create_child_session"
             && (
-                Text(Property(Property(call, "args"), "afterSend")) is "wait" or "finish"
+                Text(Property(Property(call, "args"), "currentSessionTurnAction"))
+                    is "wait"
+                        or "end_turn"
+                // Read-only history: calls persisted before the rename used afterSend.
+                || Text(Property(Property(call, "args"), "afterSend")) is "wait" or "finish"
                 || Flag(Property(Property(call, "args"), "waitAfterHandoff"), true)
                 || Flag(Property(Property(call, "args"), "noFurtherAssistantReply"), true)
             );

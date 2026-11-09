@@ -209,7 +209,7 @@ public sealed partial class InContextCompactTests
                         {
                             ["sessionId"] = receiver,
                             ["message"] = "complete",
-                            ["afterSend"] = "finish",
+                            ["currentSessionTurnAction"] = "end_turn",
                         }
                     ),
                     _ => Call(

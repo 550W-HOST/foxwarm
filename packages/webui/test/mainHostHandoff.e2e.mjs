@@ -41,7 +41,7 @@ const provider = createServer(async (request, output) => {
     let calls = scripts.get(key); if (calls) scripts.delete(key)
     if (!calls && ['child-report', 'fork-report'].includes(key) && !body.input.some(item => item.type === 'function_call_output' && item.call_id?.startsWith('report-'))) {
       assert(hasCheckpoint(input)); assert(input.includes('send_to_session')); childReports++
-      calls = [tool('report-' + key, 'send_to_session', confirmed({ sessionId: '<parent>', message: 'HAND-TASK:result-' + key, afterSend: 'finish' }))]
+      calls = [tool('report-' + key, 'send_to_session', confirmed({ sessionId: '<parent>', message: 'HAND-TASK:result-' + key, currentSessionTurnAction: 'end_turn' }))]
     }
     if (key === 'finish-with-error' && !calls) {
       const ids = ['finish-bad-review', 'finish-valid', 'finish-sibling']
@@ -87,7 +87,7 @@ try {
   assert((await response('parent', 'individual')).response.canceled); assert((await response('parent', 'wrapped-cancel')).response.canceled); assert((await response('parent', 'malformed')).response.error); assert.equal(await readFile(join(fixture.work, 'malformed-neighbor.txt'), 'utf8'), 'live')
   await run('search-concrete', [tool('search', 'search_tools', { query: 'send_to_session create_child_session', sources: ['builtin'], limit: 10, includeSchema: true })])
   const discovered = (await response('parent', 'search')).response.output
-  for (const name of ['send_to_session', 'create_child_session']) { const line = discovered.split('\n').find(value => value.includes('builtin:' + name)); assert(line); assert.match(line, /handoffConfirmation: string/); assert.match(line, /handoffRecall: string/); assert(line.indexOf('handoffRecall: string') < line.search(/\bmessage\??:/)); assert(line.indexOf('handoffConfirmation: string') > line.indexOf('afterSend')) }
+  for (const name of ['send_to_session', 'create_child_session']) { const line = discovered.split('\n').find(value => value.includes('builtin:' + name)); assert(line); assert.match(line, /handoffConfirmation: string/); assert.match(line, /handoffRecall: string/); assert(line.indexOf('handoffRecall: string') < line.search(/\bmessage\??:/)); assert(line.indexOf('handoffConfirmation: string') > line.indexOf('currentSessionTurnAction')) }
   const barrierCalls = [tool('barrier-exec-first', 'exec', { command: 'printf %s $$ > handoff-first-pid; touch handoff-start; while [ ! -f handoff-release ]; do sleep 0.02; done; printf first', timeout: 60 }), tool('barrier-child', 'create_child_session', confirmed({ suffix: 'barrier-child' })), tool('barrier-exec-next', 'exec', { command: 'printf %s $$ > handoff-next-pid; touch handoff-next; printf next', timeout: 60 })]
   scripts.set('actual-barrier', barrierCalls); assert.equal((await fixture.api('POST', route('parent') + '/message', { text: 'HAND-TASK:actual-barrier' })).status, 202)
   await until(() => exists(join(fixture.work, 'handoff-start')), 'real first exec held'); assert.equal(await exists(join(fixture.data, 'state/sessions/parent_barrier-child.json')), false); assert.equal(await exists(join(fixture.work, 'handoff-next')), false)
@@ -101,7 +101,7 @@ try {
   const fork = await saved('parent_forked'), parent = await saved('parent'); assert(beforeFork.every(row => fork.history.some(value => JSON.stringify(value) === JSON.stringify(row))))
   assert.equal(fork.promptCacheKey, parent.promptCacheKey); assert.equal(fork.persistentMemorySnapshot, parent.persistentMemorySnapshot); assert(JSON.stringify(fork.history).includes('report-fork-report'))
   for (const id of ['parent_active', 'parent_forked']) { const value = await saved(id); const calls = value.history.flatMap(row => row.parts || []).filter(part => part.functionCall?.name === 'send_to_session'); assert(calls.length); assert(value.history.flatMap(row => row.parts || []).some(part => part.functionResponse?.tool_use_id?.startsWith('report-'))) }
-  await run('finish-with-error', [tool('finish-bad-review', 'create_child_session', { suffix: 'finish-bad-review' }), wrapped('finish-valid', 'send_to_session', confirmed({ sessionId: 'recipient', message: 'HAND-TASK:recipient-finish', afterSend: 'finish' })), tool('finish-sibling', 'write', { filePath: 'finish-sibling.txt', content: 'complete batch' })])
+  await run('finish-with-error', [tool('finish-bad-review', 'create_child_session', { suffix: 'finish-bad-review' }), wrapped('finish-valid', 'send_to_session', confirmed({ sessionId: 'recipient', message: 'HAND-TASK:recipient-finish', currentSessionTurnAction: 'end_turn' })), tool('finish-sibling', 'write', { filePath: 'finish-sibling.txt', content: 'complete batch' })])
   assert((await response('parent', 'finish-bad-review')).response.error); assert.equal((await response('parent', 'finish-valid')).response.error, undefined); assert.equal(await readFile(join(fixture.work, 'finish-sibling.txt'), 'utf8'), 'complete batch'); assert.equal(countTask('finish-with-error'), 2)
   const finishRows = (await history('parent')).messages
   assert(finishRows.some(row => row.parts?.some(part => part.text === 'DONE-finish-with-error')), 'Sibling error continues the model after successful delivery')

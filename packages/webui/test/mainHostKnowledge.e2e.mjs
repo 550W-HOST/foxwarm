@@ -58,7 +58,7 @@ async function final(id, marker) {
 }
 async function deliver(source, target, label, extra = []) {
   const id = `${label}-send`
-  plans.get(source).push([call(id, 'send_to_session', { sessionId: target, message: label, afterSend: 'finish' }), ...extra])
+  plans.get(source).push([call(id, 'send_to_session', { sessionId: target, message: label, currentSessionTurnAction: 'end_turn' }), ...extra])
   await send(source, label); await idle(source)
   await until(async () => (await history(source)).some(row => row.parts?.some(part => part.functionResponse?.tool_use_id === id)), `${label} paired`)
 }
@@ -231,10 +231,10 @@ try {
 
   // Fresh children use their owning Agent's current graph, not the parent's captured old prefix.
   plans.set('leaf/kid', [body => { assert(prompt(body).includes('BASE-V2') && !prompt(body).includes('MIDDLE-V1')); assert(messageText(body).includes(`currentSessionId="leaf/kid" currentNode="master" cwd="${agentDir('leaf')}"`), messageText(body)); return [text('CHILD-LEAF-DONE'), text('[NO_ACTION]')] }])
-  plans.get('leaf/main').push([call('child-leaf', 'create_child_session', { suffix: 'kid', message: 'OWNING-KNOWLEDGE', afterSend: 'finish' })])
+  plans.get('leaf/main').push([call('child-leaf', 'create_child_session', { suffix: 'kid', message: 'OWNING-KNOWLEDGE', currentSessionTurnAction: 'end_turn' })])
   await send('leaf/main', 'CHILD-LEAF'); await final('leaf/kid', 'CHILD-LEAF-DONE'); await idle('leaf/main')
   plans.set('base/cross', [body => { assert(prompt(body).includes('BASE-V2') && !prompt(body).includes('LEAF-V1') && !prompt(body).includes('TARGET-LEAF-ONLY')); return [text('CHILD-BASE-DONE'), text('[NO_ACTION]')] }])
-  plans.get('leaf/main').push([call('child-base', 'create_child_session', { agentName: 'base', suffix: 'cross', message: 'CROSS-KNOWLEDGE', afterSend: 'finish' })])
+  plans.get('leaf/main').push([call('child-base', 'create_child_session', { agentName: 'base', suffix: 'cross', message: 'CROSS-KNOWLEDGE', currentSessionTurnAction: 'end_turn' })])
   await send('leaf/main', 'CHILD-BASE'); await final('base/cross', 'CHILD-BASE-DONE'); await idle('leaf/main')
   // Browser-created leaf is top-level in the creator tree, even though its memory inherits base.
   // A model-created child may inherit leaf; that memory graph does not make base its creator ancestor.

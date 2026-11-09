@@ -57,7 +57,7 @@ async function final(id, marker) {
 }
 async function deliver(source, target, label, extra = []) {
   const id = `${label}-send`
-  plans.get(source).push([call(id, 'send_to_session', { sessionId: target, message: label, afterSend: 'finish' }), ...extra])
+  plans.get(source).push([call(id, 'send_to_session', { sessionId: target, message: label, currentSessionTurnAction: 'end_turn' }), ...extra])
   await send(source, label); await idle(source)
   await until(async () => (await history(source)).some(row => row.parts?.some(part => part.functionResponse?.tool_use_id === id)), `${label} paired`)
 }

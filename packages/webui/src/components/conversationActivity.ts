@@ -110,7 +110,7 @@ export function buildConversationActivitySummary(messages: readonly Message[], h
           created++
           if (typeof sentNotifications === 'number') sent += numberFact(sentNotifications)
           else if (/\. Task assignment sent(?: with warning:|\.)/.test(output)
-            || ['wait', 'finish'].includes(tool.args?.afterSend) && /\. Initial message sent\.$/.test(output)) sent++
+            || (['wait', 'end_turn'].includes(tool.args?.currentSessionTurnAction) || ['wait', 'finish'].includes(tool.args?.afterSend)) && /\. Initial message sent\.$/.test(output)) sent++
         }
         if (tool.name === 'send_to_session' && /^Message sent to session `[^`]+`/.test(output)
           || tool.name === 'send_to_channel' && /^Message sent to channel target `[^`]+`/.test(output)) sent++

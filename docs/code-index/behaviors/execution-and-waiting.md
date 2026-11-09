@@ -69,7 +69,7 @@ Wait and handoff authority comes from the executed control operation, not contro
 
 `wait` registers Session wait state and returns; it does not hold the tool invocation open until work completes. Its stop-turn request takes effect after the current tool batch.
 
-[2026-10-29] In the maintained runtime, any non-null top-level tool-response `error` in the complete batch suppresses that batch's terminal controls: explicit `wait`, `afterSend:"wait"`, and `afterSend:"finish"`, including mixed controls. The complete ordered call/result exchange is committed before the model continues to handle the error. The executor consumes pending controls, clears only explicit wait tokens created by that batch, and does not arm a handoff wait. Successful delivery, child creation and Task effects remain committed and are not replayed. A failed handoff supplies no successful terminal effect.
+[2026-10-29] In the maintained runtime, any non-null top-level tool-response `error` in the complete batch suppresses that batch's terminal controls: explicit `wait`, `currentSessionTurnAction:"wait"`, and `currentSessionTurnAction:"end_turn"`, including mixed controls. The complete ordered call/result exchange is committed before the model continues to handle the error. The executor consumes pending controls, clears only explicit wait tokens created by that batch, and does not arm a handoff wait. Successful delivery, child creation and Task effects remain committed and are not replayed. A failed handoff supplies no successful terminal effect.
 
 This rule uses the existing tool-error classification, not a scan of script return values, stdout or nonzero exec status. Successful controls keep their existing queue/fast-reply behavior. User Stop, unavailable authorization and fatal persistence failures retain their independent handling.
 
@@ -96,7 +96,7 @@ Declared Session dependencies also support a quiescence diagnostic: a closed dep
 
 An exec returns `execId` after its foreground budget; a background copy returns `transferId`. The Agent can then call `wait` with `waitExecIds` containing that exact ID. Completion is ordinary Session input; a fallback wake merely asks the Agent to reassess while the command may still run. Neither wake authorizes replaying the launch.
 
-A terminal handoff can also end a turn, with or without a Session activity wait. It does not mean the target Task completed. Keep delivery/terminal behavior at the adjacent [handoff contract](../threads/message-processing-pipeline.md#d-pipeline-handoff-wait), including `afterSend`, sibling errors, coalescing and fast replies.
+A terminal handoff can also end a turn, with or without a Session activity wait. It does not mean the target Task completed. Keep delivery/terminal behavior at the adjacent [handoff contract](../threads/message-processing-pipeline.md#d-pipeline-handoff-wait), including `currentSessionTurnAction`, sibling errors, coalescing and fast replies.
 
 ### Asking the user
 

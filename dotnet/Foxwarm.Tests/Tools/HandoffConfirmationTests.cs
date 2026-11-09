@@ -85,9 +85,9 @@ public sealed partial class HandoffConfirmationTests
             args["handoffRecall"] = recall;
             Assert.Throws<InvalidDataException>(() => HandoffConfirmation.Validate(args));
         }
-        var trailingAfterSend = Args(Review());
-        trailingAfterSend["afterSend"] = "finish";
-        HandoffConfirmation.Validate(trailingAfterSend);
+        var trailingTurnAction = Args(Review());
+        trailingTurnAction["currentSessionTurnAction"] = "end_turn";
+        HandoffConfirmation.Validate(trailingTurnAction);
         var wrongOrder = Args(Review());
         wrongOrder["fork"] = true;
         Assert.Throws<InvalidDataException>(() => HandoffConfirmation.Validate(wrongOrder));
@@ -110,18 +110,21 @@ public sealed partial class HandoffConfirmationTests
             ["message"] = "task",
             ["handoffRecall"] = Recall(),
             ["handoffConfirmation"] = Review(),
-            ["afterSend"] = "finish",
+            ["currentSessionTurnAction"] = "end_turn",
             ["fork"] = true,
         };
         var error = Assert.Throws<InvalidDataException>(() => HandoffConfirmation.Validate(args));
-        Assert.Contains("confirmation must follow every argument except afterSend", error.Message);
+        Assert.Contains(
+            "confirmation must follow every argument except currentSessionTurnAction",
+            error.Message
+        );
         Assert.Contains("recall must be before the message argument", error.Message);
         Assert.Contains(
-            "Received argument order: sessionId, message, handoffRecall, handoffConfirmation, afterSend, fork.",
+            "Received argument order: sessionId, message, handoffRecall, handoffConfirmation, currentSessionTurnAction, fork.",
             error.Message
         );
         Assert.Contains(
-            "Resend in this order: sessionId, handoffRecall, message, fork, afterSend, handoffConfirmation.",
+            "Resend in this order: sessionId, handoffRecall, message, fork, currentSessionTurnAction, handoffConfirmation.",
             error.Message
         );
 

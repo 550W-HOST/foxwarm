@@ -16,7 +16,11 @@ public sealed partial class ClaudeRuntimeTests
             Call("wait", new JsonObject { ["waitForInput"] = true }),
             Call(
                 "create_child_session",
-                new JsonObject { ["suffix"] = "forbidden", ["afterSend"] = "finish" }
+                new JsonObject
+                {
+                    ["suffix"] = "forbidden",
+                    ["currentSessionTurnAction"] = "end_turn",
+                }
             ),
             new JsonObject
             {
@@ -28,7 +32,7 @@ public sealed partial class ClaudeRuntimeTests
                     {
                         ["sessionId"] = "target",
                         ["message"] = "must not send",
-                        ["afterSend"] = "wait",
+                        ["currentSessionTurnAction"] = "wait",
                     }.ToJsonString(),
                 },
             },
@@ -140,7 +144,9 @@ public sealed partial class ClaudeRuntimeTests
         if (send is not null)
             Assert.Equal(
                 "[\"continue\"]",
-                send["inputSchema"]!["properties"]!["afterSend"]!["enum"]!.ToJsonString()
+                send["inputSchema"]!["properties"]!["currentSessionTurnAction"]![
+                    "enum"
+                ]!.ToJsonString()
             );
         var results = f.Lines("results.jsonl");
         Assert.NotEqual(true, results[0]["result"]!["isError"]?.GetValue<bool>());
@@ -238,7 +244,7 @@ public sealed partial class ClaudeRuntimeTests
                         {
                             ["sessionId"] = "<parent>",
                             ["message"] = "completed",
-                            ["afterSend"] = "continue",
+                            ["currentSessionTurnAction"] = "continue",
                         }
                     )
                 ),

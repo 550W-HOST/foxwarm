@@ -103,13 +103,13 @@ internal static class SessionBoundary
         var args = handoffConfirmation
             ? HandoffConfirmation.GuidanceArgument(
                 parentSessionId,
-                externalRuntime ? "continue" : "finish"
+                externalRuntime ? "continue" : "end_turn"
             )
-            : $"sessionId: `{Escape(parentSessionId)}`, message: \"...\", afterSend: \"{(externalRuntime ? "continue" : "finish")}\"";
+            : $"sessionId: `{Escape(parentSessionId)}`, message: \"...\", currentSessionTurnAction: \"{(externalRuntime ? "continue" : "end_turn")}\"";
         var guidance = handoffConfirmation ? HandoffConfirmation.Guidance : "";
         if (externalRuntime)
-            return $"<foxwarm-system kind=\"child-reminder\" event=\"missing-handoff\" parentSessionId=\"{Escape(parentSessionId)}\">Reminder: check whether your work still needs a completion report. If your current work is tracked by a task, complete it with the task tool unless it is already complete; do not send a duplicate routine completion report. Otherwise, if you need to report completion to the parent session, call send_to_session({{{args}}}) now.{guidance} Use afterSend: \"continue\" or omit it. After reporting, end your Claude Code response. If you need a reply from the parent, send the question and end this response; the reply will arrive as new input. If no separate report or parent action is needed, say `[NO_ACTION]`.</foxwarm-system>";
-        return $"<foxwarm-system kind=\"child-reminder\" event=\"missing-handoff\" parentSessionId=\"{Escape(parentSessionId)}\">Reminder: check whether your work still needs a completion report. If your current work is tracked by a task, complete it with the task tool unless it is already complete; do not send a duplicate routine completion report. Otherwise, if you need to report completion to the parent session, call send_to_session({{{args}}}) now.{guidance} This reports so the Session becomes idle without a wait. Use afterSend: \"wait\" only when you genuinely require a later reply; do not add a separate wait call. If no separate report or parent action is needed, say `[NO_ACTION]`.</foxwarm-system>";
+            return $"<foxwarm-system kind=\"child-reminder\" event=\"missing-handoff\" parentSessionId=\"{Escape(parentSessionId)}\">Reminder: check whether your work still needs a completion report. If your current work is tracked by a task, complete it with the task tool unless it is already complete; do not send a duplicate routine completion report. Otherwise, if you need to report completion to the parent session, call send_to_session({{{args}}}) now.{guidance} Use currentSessionTurnAction: \"continue\" or omit it. After reporting, end your Claude Code response. If you need a reply from the parent, send the question and end this response; the reply will arrive as new input. If no separate report or parent action is needed, say `[NO_ACTION]`.</foxwarm-system>";
+        return $"<foxwarm-system kind=\"child-reminder\" event=\"missing-handoff\" parentSessionId=\"{Escape(parentSessionId)}\">Reminder: check whether your work still needs a completion report. If your current work is tracked by a task, complete it with the task tool unless it is already complete; do not send a duplicate routine completion report. Otherwise, if you need to report completion to the parent session, call send_to_session({{{args}}}) now.{guidance} This reports so the Session becomes idle without a wait. Use currentSessionTurnAction: \"wait\" only when you genuinely require a later reply; do not add a separate wait call. If no separate report or parent action is needed, say `[NO_ACTION]`.</foxwarm-system>";
     }
 
     private static string Escape(string value) =>
@@ -297,12 +297,15 @@ internal static class SessionBoundary
         if (taskId is not null)
             return $"This Session is linked to task {Escape(taskId)}. When the work is complete, complete the task with the task tool; completion automatically notifies the task creator. Do not send a separate routine completion message.";
         var args = handoffConfirmation
-            ? HandoffConfirmation.GuidanceArgument(parent, externalRuntime ? "continue" : "finish")
-            : $"sessionId: `{parent}`, message: \"...\", afterSend: \"{(externalRuntime ? "continue" : "finish")}\"";
+            ? HandoffConfirmation.GuidanceArgument(
+                parent,
+                externalRuntime ? "continue" : "end_turn"
+            )
+            : $"sessionId: `{parent}`, message: \"...\", currentSessionTurnAction: \"{(externalRuntime ? "continue" : "end_turn")}\"";
         var guidance = handoffConfirmation ? HandoffConfirmation.Guidance : "";
         if (externalRuntime)
-            return $"If your current work is tracked by a task, complete the task with the task tool. Completion notifies a Session creator automatically; do not send a separate routine completion report. For work not tracked by a task, when you finish, explicitly call send_to_session({{{args}}}).{guidance} Use afterSend: \"continue\" or omit it. After reporting, end your Claude Code response. If you need a reply from the parent, send the question and end this response; the reply will arrive as new input. If no separate report or parent action is needed, end your final message with `[NO_ACTION]`.";
-        return $"If your current work is tracked by a task, complete the task with the task tool. Completion notifies a Session creator automatically; do not send a separate routine completion report. For work not tracked by a task, when you finish, explicitly call send_to_session({{{args}}}).{guidance} This sends the report and ends the turn idle without creating a wait. Use afterSend: \"wait\" only when you genuinely require a later reply from the parent; do not add a separate wait call. If no separate report or parent action is needed, end your final message with `[NO_ACTION]`.";
+            return $"If your current work is tracked by a task, complete the task with the task tool. Completion notifies a Session creator automatically; do not send a separate routine completion report. For work not tracked by a task, when you finish, explicitly call send_to_session({{{args}}}).{guidance} Use currentSessionTurnAction: \"continue\" or omit it. After reporting, end your Claude Code response. If you need a reply from the parent, send the question and end this response; the reply will arrive as new input. If no separate report or parent action is needed, end your final message with `[NO_ACTION]`.";
+        return $"If your current work is tracked by a task, complete the task with the task tool. Completion notifies a Session creator automatically; do not send a separate routine completion report. For work not tracked by a task, when you finish, explicitly call send_to_session({{{args}}}).{guidance} This sends the report and ends the turn idle without creating a wait. Use currentSessionTurnAction: \"wait\" only when you genuinely require a later reply from the parent; do not add a separate wait call. If no separate report or parent action is needed, end your final message with `[NO_ACTION]`.";
     }
 
     // The forked child's own result for the creating call; the parent receives a separate result.
@@ -314,7 +317,7 @@ internal static class SessionBoundary
     )
     {
         var text =
-            $"Fork complete: you are the child session `{child}`, now running separately from the parent session `{parent}`, which received its own result for this call. This call's afterSend applies only to the parent.";
+            $"Fork complete: you are the child session `{child}`, now running separately from the parent session `{parent}`, which received its own result for this call. This call's currentSessionTurnAction applies only to the parent.";
         if (taskId is not null)
             return text
                 + $" Task {taskId} is assigned to you; its assignment follows."

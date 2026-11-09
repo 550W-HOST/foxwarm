@@ -155,7 +155,7 @@ export const getToolCallSearchText = (call: FunctionCall): string => {
   }
   if (call.name === 'exec' || call.name === 'run_script') return executionArgumentsSearchText(call)
   if (call.name === 'send_to_session') return [args.sessionId, typeof args.message === 'string' ? args.message : formatCompactObjectPreview(args.message)].join('\u0000')
-  if (call.name === 'create_child_session') return [args.suffix, args.taskId, args.agentName, args.displayName, args.node, args.afterSend, typeof args.model === 'object' ? formatCompactObjectPreview(args.model) : args.model, typeof args.forceModel === 'object' ? formatCompactObjectPreview(args.forceModel) : args.forceModel, args.message].filter(value => typeof value === 'string').join('\u0000')
+  if (call.name === 'create_child_session') return [args.suffix, args.taskId, args.agentName, args.displayName, args.node, args.currentSessionTurnAction ?? args.afterSend, typeof args.model === 'object' ? formatCompactObjectPreview(args.model) : args.model, typeof args.forceModel === 'object' ? formatCompactObjectPreview(args.forceModel) : args.forceModel, args.message].filter(value => typeof value === 'string').join('\u0000')
   return formatCompactObjectPreview(call.name === 'session' ? call.args || { action: 'status' } : call.args)
 }
 
@@ -623,7 +623,8 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
       ['Node', call.args.node],
       ['Model', call.args.model],
       ['Force model', call.args.forceModel],
-      ['After send', call.args.afterSend],
+      // Calls persisted before the rename recorded afterSend.
+      ['Turn action', call.args.currentSessionTurnAction ?? call.args.afterSend],
     ] as Array<[string, unknown]>).filter(([, value]) => value !== undefined && value !== null && value !== '')
     return (
       <div className="space-y-1">

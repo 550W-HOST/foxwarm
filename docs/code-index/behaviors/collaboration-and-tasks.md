@@ -15,7 +15,7 @@ For developers and Agents changing delegation, shared Tasks, or inter-session co
 | Send to another Session | A source-labelled input admitted to that target's ordinary queue. | Task completion, parent reassignment, immediate model consumption, or a synchronous answer. |
 | Ordinary assistant reply | Output to the current conversation and its eligible Channel delivery path. | An inter-session report or a Task mutation. |
 
-A child with no initial message or Task is created but not started merely by the creation acknowledgement. A non-fork child still receives its creation/identity context; “fresh” does not mean it has no prompt or lifecycle notice. With a non-task initial message and default `afterSend`, delivery is asynchronous after creation; creation success is not a receipt that the child has consumed its assignment. Terminal handoff modes await initial delivery. A model-created fork instead reads its message from the copied creating call and starts without a separate delivery; each side's result for that call says whether it is the parent or the child ([fork dual return](../threads/session-lifecycle.md#d-lifecycle-fork-dual-return)). See [child tools](../units/src-tools-session-agent.md) and [Session lifecycle](../threads/session-lifecycle.md#child-and-fork-lifecycle).
+A child with no initial message or Task is created but not started merely by the creation acknowledgement. A non-fork child still receives its creation/identity context; “fresh” does not mean it has no prompt or lifecycle notice. With a non-task initial message and default `currentSessionTurnAction`, delivery is asynchronous after creation; creation success is not a receipt that the child has consumed its assignment. Terminal handoff modes await initial delivery. A model-created fork instead reads its message from the copied creating call and starts without a separate delivery; each side's result for that call says whether it is the parent or the child ([fork dual return](../threads/session-lifecycle.md#d-lifecycle-fork-dual-return)). See [child tools](../units/src-tools-session-agent.md) and [Session lifecycle](../threads/session-lifecycle.md#child-and-fork-lifecycle).
 
 ### Parent, Agent, and Task relations are independent
 
@@ -81,15 +81,15 @@ The figures come from recorded attribution (each assistant message's concrete mo
 
 The child receives the full stored description plus any additional message as **one Task assignment**, not a duplicate inter-agent directive. Completion through the Task tool sends the result to the Task's Session creator automatically. A separate routine parent report is not needed. Actual parent and Task creator can differ; completion of the recorded attached Task resolves the child's routine-handoff reminder without pretending it sent a message to its parent. `task complete` does not itself stop the caller's turn; it returns through the ordinary tool loop. Actionable errors or further coordination remain separate messages when needed.
 
-Child creation/assignment can succeed while notification delivery fails. The receipt reports that distinction and does not roll back the child or Task ownership. A failed assignment delivery does not apply a requested terminal `afterSend` action. Do not respond by blindly creating another child; inspect the existing child/Task and delivery warning. The source owner is [Task child attachment](../units/src-tasks.md#child-attachment-and-webui).
+Child creation/assignment can succeed while notification delivery fails. The receipt reports that distinction and does not roll back the child or Task ownership. A failed assignment delivery does not apply a requested terminal `currentSessionTurnAction`. Do not respond by blindly creating another child; inspect the existing child/Task and delivery warning. The source owner is [Task child attachment](../units/src-tasks.md#child-attachment-and-webui).
 
 ## Is sending a report the same as ending the current turn?
 
 No. `send_to_session` and child creation distinguish delivery from the caller's next action:
 
-- Default `afterSend:"continue"` delivers and lets the caller keep working.
-- `afterSend:"finish"` ends the current turn idle after success, without a wait. It does not finish the target Session or complete a Task.
-- `afterSend:"wait"` ends the current turn and arms an ordinary activity wait for later input from the resolved target set. It is not a blocking RPC that returns the answer inside the send result, and unrelated ordinary input can still wake it.
+- Default `currentSessionTurnAction:"continue"` delivers and lets the caller keep working.
+- `currentSessionTurnAction:"end_turn"` ends the current turn idle after success, without a wait. It does not finish the target Session or complete a Task.
+- `currentSessionTurnAction:"wait"` ends the current turn and arms an ordinary activity wait for later input from the resolved target set. It is not a blocking RPC that returns the answer inside the send result, and unrelated ordinary input can still wake it.
 
 The canonical post-batch ordering, fast-reply races, sibling errors, and explicit-wait interaction stay in [handoff/wait mechanics](../threads/message-processing-pipeline.md#d-pipeline-handoff-wait) and [execution and waiting](./execution-and-waiting.md#explicit-wait-ends-an-otherwise-finished-turn). The maintained runtime suppresses terminal handoff controls when the complete batch has a tool error, under the linked execution contract. Failed sends do not establish a successful handoff.
 

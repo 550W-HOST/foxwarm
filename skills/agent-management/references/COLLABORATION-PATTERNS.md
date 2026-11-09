@@ -2,7 +2,7 @@
 
 Read this before writing memory for Agents whose Sessions delegate work, coordinate parallel work or inherit shared collaboration rules.
 
-The framework prompt already teaches every Session the basics: delegating with `create_child_session`, Task completion as the report, `send_to_session` and its `afterSend` choice, `wait`, `ask_user` for user decisions, and where knowledge belongs. Do not copy those rules into Agent memory; copies drift as Foxwarm changes. Agent memory should record only the choices that differ for this installation or domain. [`coordination-base.md`](memory-templates/coordination-base.md) lists them.
+The framework prompt already teaches every Session the basics: delegating with `create_child_session`, Task completion as the report, `send_to_session` and its `currentSessionTurnAction` choice, `wait`, `ask_user` for user decisions, and where knowledge belongs. Do not copy those rules into Agent memory; copies drift as Foxwarm changes. Agent memory should record only the choices that differ for this installation or domain. [`coordination-base.md`](memory-templates/coordination-base.md) lists them.
 
 Keep public or shared memory free of private paths, account details, credentials and one-off project history.
 

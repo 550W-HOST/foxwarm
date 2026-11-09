@@ -45,7 +45,7 @@ The Session's memory snapshot is passed to Claude Code as appended system instru
 
 ```markdown
 <foxwarm-if runtime="claude-code">
-Report with send_to_session and afterSend "continue".
+Report with send_to_session and currentSessionTurnAction "continue".
 </foxwarm-if>
 <foxwarm-if runtime="foxwarm">
 Instructions that use wait or other batch controls.
@@ -56,7 +56,7 @@ In a Claude Code Session, `model-id` conditions match the model name reported by
 
 ## Limits and precautions
 
-- **Current support:** Linux, hosted on master only. Fork, Foxwarm compaction, wait/batch controls and ToolScript run/resume are unavailable. Use `afterSend: "continue"` for reports. Model/effort changes belong to Claude Code, not Foxwarm's Session controls.
+- **Current support:** Linux, hosted on master only. Fork, Foxwarm compaction, wait/batch controls and ToolScript run/resume are unavailable. Use `currentSessionTurnAction: "continue"` for reports. Model/effort changes belong to Claude Code, not Foxwarm's Session controls.
 - **Trust:** the host account, executable and user/managed configuration are trusted. Private cwd and `--setting-sources user` exclude project/local settings but do not create an OS sandbox or override unrestricted host-tool grants. Review automatic helpers/hooks before real-account use. Flags were checked against 2.1.314; the installed CLI/account still needs qualification.
 - **Recovery:** A known missing or non-executable launcher leaves input unsubmitted; repair the launcher and use Continue to submit it. Stop revokes run access and drains the CLI. Unknown input outcomes are not replayed; Continue explicitly resumes known work. Restore a missing transcript or Clear. Clear starts a fresh context and clears the Session's Foxwarm history, without deleting the CLI account's transcripts.
 

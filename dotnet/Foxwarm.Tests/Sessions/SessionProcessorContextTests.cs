@@ -58,13 +58,13 @@ public sealed class SessionProcessorContextTests
                             {
                                 ["sessionId"] = child.Id,
                                 ["message"] = "report to parent",
-                                ["afterSend"] = "finish",
+                                ["currentSessionTurnAction"] = "end_turn",
                             }
                             : new JsonObject
                             {
                                 ["suffix"] = "worker",
                                 ["message"] = "report to parent",
-                                ["afterSend"] = "finish",
+                                ["currentSessionTurnAction"] = "end_turn",
                             };
                     var name = launch == "script-send" ? "send_to_session" : "create_child_session";
                     output =
@@ -90,7 +90,7 @@ public sealed class SessionProcessorContextTests
                         {
                             ["sessionId"] = "<parent>",
                             ["message"] = "child reporting completion",
-                            ["afterSend"] = "finish",
+                            ["currentSessionTurnAction"] = "end_turn",
                         }
                     );
                 }

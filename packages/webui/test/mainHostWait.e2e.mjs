@@ -56,7 +56,7 @@ async function final(id, marker) {
 }
 async function deliver(source, target, label, extra = []) {
   const id = `${label}-send`
-  plans.get(source).push([call(id, 'send_to_session', { sessionId: target, message: label, afterSend: 'finish' }), ...extra])
+  plans.get(source).push([call(id, 'send_to_session', { sessionId: target, message: label, currentSessionTurnAction: 'end_turn' }), ...extra])
   await send(source, label); await idle(source)
   await until(async () => (await history(source)).some(row => row.parts?.some(part => part.functionResponse?.tool_use_id === id)), `${label} paired`)
 }
@@ -114,7 +114,7 @@ try {
   const continued = await create('continued', [async (_, res) => { res.on('close', () => stopped.release()); await stopped.promise; return null },
     async (_, res) => { res.on('close', () => stoppedContinue.release()); await stoppedContinue.promise; return null },
     async () => { await held.promise; return [call('once-write', 'write', { filePath: 'once.txt', content: 'one-effect' })] },
-    [call('finished-report', 'send_to_session', { sessionId: sink, message: 'REPORT-ONCE', afterSend: 'finish' })]])
+    [call('finished-report', 'send_to_session', { sessionId: sink, message: 'REPORT-ONCE', currentSessionTurnAction: 'end_turn' })]])
   await page.evaluate(id => { location.hash = '#session/' + encodeURIComponent(id) }, continued)
   await send(continued, 'INTERRUPT-ME'); await until(() => counts.get(continued) === 1, 'held provider')
   assert.equal((await command(continued, '/continue')).status, 200)
@@ -136,11 +136,11 @@ try {
   // A successful child creation survives its sibling error, but the handoff wait is suppressed.
   const releaseErrorChild = signal(); holds.push(releaseErrorChild)
   const errorChild = 'team/handoff-error_error-child'
-  const handoffError = await create('handoff-error', [[call('error-birth', 'create_child_session', { suffix: 'error-child', message: 'ERROR-WORK', afterSend: 'wait' }), call('handoff-sibling-error', 'nonexistent_tool', {})], body => {
+  const handoffError = await create('handoff-error', [[call('error-birth', 'create_child_session', { suffix: 'error-child', message: 'ERROR-WORK', currentSessionTurnAction: 'wait' }), call('handoff-sibling-error', 'nonexistent_tool', {})], body => {
     assert.deepEqual(body.input.filter(item => item.type === 'function_call_output').map(item => item.call_id), ['error-birth', 'handoff-sibling-error'])
     return [text('HANDOFF-ERROR-HANDLED')]
   }, body => { assert(messageText(body).includes('ERROR-CHILD-RESULT')); return [text('ERROR-CHILD-RECEIVED')] }])
-  plans.set(errorChild, [async () => { await releaseErrorChild.promise; return [call('error-child-report', 'send_to_session', { sessionId: handoffError, message: 'ERROR-CHILD-RESULT', afterSend: 'finish' })] }])
+  plans.set(errorChild, [async () => { await releaseErrorChild.promise; return [call('error-child-report', 'send_to_session', { sessionId: handoffError, message: 'ERROR-CHILD-RESULT', currentSessionTurnAction: 'end_turn' })] }])
   await send(handoffError, 'HANDLE-HANDOFF-ERROR'); await final(handoffError, 'HANDOFF-ERROR-HANDLED')
   await until(() => counts.get(errorChild) === 1, 'committed child is still active')
   assert.equal(counts.get(handoffError), 2); assert.equal((await authority(handoffError)).meta.wait, undefined)
@@ -156,8 +156,8 @@ try {
 
   // An all-success handoff really waits; a child result releases the same parent processor.
   const releaseChild = signal(); holds.push(releaseChild)
-  const slow = await create('slow', [[call('birth', 'create_child_session', { suffix: 'slow-child', message: 'DO-WORK', afterSend: 'wait' })], [text('SLOW-PARENT-DONE')]])
-  plans.set('team/slow_slow-child', [async () => { await releaseChild.promise; return [call('slow-report', 'send_to_session', { sessionId: slow, message: 'SLOW-RESULT', afterSend: 'finish' })] }])
+  const slow = await create('slow', [[call('birth', 'create_child_session', { suffix: 'slow-child', message: 'DO-WORK', currentSessionTurnAction: 'wait' })], [text('SLOW-PARENT-DONE')]])
+  plans.set('team/slow_slow-child', [async () => { await releaseChild.promise; return [call('slow-report', 'send_to_session', { sessionId: slow, message: 'SLOW-RESULT', currentSessionTurnAction: 'end_turn' })] }])
   await page.evaluate(id => { location.hash = '#session/' + encodeURIComponent(id) }, slow)
   await send(slow, 'DELEGATE'); await waiting(slow)
   await until(() => frames.some(frame => frame.type === 'session-state' && frame.sessionId === slow && frame.session.runtimeState?.state === 'waiting'), 'real Chat waiting frame')
@@ -169,8 +169,8 @@ try {
   // An explicit wait loses only its own token when another tool errors, then continues the provider loop.
   const explicit = await create('explicit', [[call('wait-error-batch', 'wait', { waitForInput: true }), call('bad-sibling', 'nonexistent_tool', {})], [text('EXPLICIT-ERROR-HANDLED')]])
   await send(explicit, 'HANDLE-ERROR'); await final(explicit, 'EXPLICIT-ERROR-HANDLED'); assert.equal((await authority(explicit)).meta.wait, undefined)
-  const fast = await create('fast', [[call('fast-birth', 'create_child_session', { suffix: 'fast-child', message: 'FAST-WORK', afterSend: 'wait' }), call('slow-sibling', 'exec', { command: 'sleep 1', timeout: 2 })], [text('FAST-PARENT-DONE')]])
-  plans.set('team/fast_fast-child', [[call('fast-report', 'send_to_session', { sessionId: fast, message: 'FAST-RESULT', afterSend: 'finish' })]])
+  const fast = await create('fast', [[call('fast-birth', 'create_child_session', { suffix: 'fast-child', message: 'FAST-WORK', currentSessionTurnAction: 'wait' }), call('slow-sibling', 'exec', { command: 'sleep 1', timeout: 2 })], [text('FAST-PARENT-DONE')]])
+  plans.set('team/fast_fast-child', [[call('fast-report', 'send_to_session', { sessionId: fast, message: 'FAST-RESULT', currentSessionTurnAction: 'end_turn' })]])
   await send(fast, 'FAST-DELEGATE')
   await until(async () => (await authority(fast)).queue.some(item => item.parts?.some(part => part.system?.includes('FAST-RESULT'))), 'actual fast reply queued before handoff wait arm')
   assert(!(await history(fast)).some(row => row.parts?.some(part => part.functionResponse?.tool_use_id === 'fast-birth')))
