@@ -33,7 +33,7 @@ try {
   }
   assert.equal((await childIds(page, 'seven')).length, 5)
   // Continuation keeps its step.
-  await page.evaluate(() => [...document.querySelectorAll('button')].find(button => /Show \d+ more/.test(button.textContent || ''))?.click())
+  await page.click('[data-session-continuation="more"][data-session-continuation-owner="seven"]')
   await until(async () => (await childIds(page, 'seven')).length === 7, 'Show more reveals the remaining children')
   // A realtime refresh does not shrink the window the user grew.
   assert.equal((await fixture.api('POST', '/api/sessions', { agentId: 'main', sessionId: 'refresh-trigger' })).status < 300, true)

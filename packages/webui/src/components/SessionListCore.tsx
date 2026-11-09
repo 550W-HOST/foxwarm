@@ -1211,11 +1211,15 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   // the Agent's main Session).
   const disclosureColumn = compact && viewMode !== 'flat-time' && !isFiltering
   // `Show N more` / `Show less`: the chevron sits in the disclosure column and the label on the
-  // title column of the rows it continues. `contentX` is those rows' content start.
-  const continuationRow = (props: { onClick: () => void; label: string; less?: boolean; contentX: number; attributes?: Record<string, string> }) => (
+  // title column of the rows it continues. `contentX` is those rows' content start. `owner` names
+  // the list being continued (a parent Session ID, `roots`, `pinned` or `group:<key>`), and with
+  // `data-session-continuation` gives tests and tools a stable anchor independent of the copy.
+  const continuationRow = (props: { onClick: () => void; label: string; less?: boolean; contentX: number; owner: string; attributes?: Record<string, string> }) => (
     <button
       type="button"
       onClick={props.onClick}
+      data-session-continuation={props.less ? 'less' : 'more'}
+      data-session-continuation-owner={props.owner}
       {...props.attributes}
       className="flex w-full items-center gap-1.5 py-2 pr-2 text-left text-xs text-fw-text-muted hover:text-fw-text dark:hover:text-fw-text-strong"
       style={{ paddingLeft: `${props.contentX}px` }}
@@ -1231,7 +1235,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       <SessionListSectionHeader label="Pinned" disclosureColumn={disclosureColumn} collapsed={pinnedCollapsed} onToggle={togglePinnedCollapsed} toggleLabel={`${pinnedCollapsed ? 'Expand' : 'Collapse'} pinned sessions`} count={pinnedCollapsed ? pinnedRoots.length : undefined} />
       {!pinnedCollapsed && pinnedRoots.map(session => renderSession(session))}
       {!pinnedCollapsed && showMore && hiddenRootCount > 0 && (
-        continuationRow({ onClick: toggleShowMoreRoots, label: `Show ${Math.min(hiddenRootCount, MORE_VISIBLE_ROOTS_STEP)} more`, contentX: SESSION_ROW_PADDING_PX })
+        continuationRow({ onClick: toggleShowMoreRoots, label: `Show ${Math.min(hiddenRootCount, MORE_VISIBLE_ROOTS_STEP)} more`, contentX: SESSION_ROW_PADDING_PX, owner: 'pinned' })
       )}
     </section>
   )
@@ -1292,7 +1296,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
               />
               {!collapsed && members.map(session => renderSession(session))}
               {!collapsed && remaining > 0 && (
-                continuationRow({ onClick: () => view.loadMoreGroup(group.key), label: `Show ${remaining} more`, contentX: SESSION_ROW_PADDING_PX, attributes: { 'data-session-group-more': group.key } })
+                continuationRow({ onClick: () => view.loadMoreGroup(group.key), label: `Show ${remaining} more`, contentX: SESSION_ROW_PADDING_PX, owner: `group:${group.key}`, attributes: { 'data-session-group-more': group.key } })
               )}
             </section>
           )
@@ -1605,10 +1609,10 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
               </button>
             ))}
             {showMoreChildren && branchRow('more', (
-              continuationRow({ onClick: () => toggleShowMore(session.id), label: `Show ${Math.min(hiddenCount, MORE_VISIBLE_CHILDREN_STEP)} more`, contentX: SESSION_ROW_PADDING_PX + (level + 1) * 16 })
+              continuationRow({ onClick: () => toggleShowMore(session.id), label: `Show ${Math.min(hiddenCount, MORE_VISIBLE_CHILDREN_STEP)} more`, contentX: SESSION_ROW_PADDING_PX + (level + 1) * 16, owner: session.id })
             ))}
             {!bounded && hiddenCount <= 0 && children.length > DEFAULT_VISIBLE_CHILDREN && branchRow('less', (
-              continuationRow({ onClick: () => toggleShowMore(session.id), label: 'Show less', less: true, contentX: SESSION_ROW_PADDING_PX + (level + 1) * 16 })
+              continuationRow({ onClick: () => toggleShowMore(session.id), label: 'Show less', less: true, contentX: SESSION_ROW_PADDING_PX + (level + 1) * 16, owner: session.id })
             ))}
           </div>
         )}
@@ -1817,10 +1821,10 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                   ) : null
                 })}
                 {!groupedRoots && hiddenRootCount > 0 && (
-                  continuationRow({ onClick: toggleShowMoreRoots, label: `Show ${Math.min(hiddenRootCount, MORE_VISIBLE_ROOTS_STEP)} more`, contentX: SESSION_ROW_PADDING_PX })
+                  continuationRow({ onClick: toggleShowMoreRoots, label: `Show ${Math.min(hiddenRootCount, MORE_VISIBLE_ROOTS_STEP)} more`, contentX: SESSION_ROW_PADDING_PX, owner: 'roots' })
                 )}
                 {!bounded && hiddenRootCount <= 0 && rootSessions.length > DEFAULT_VISIBLE_ROOTS && (
-                  continuationRow({ onClick: toggleShowMoreRoots, label: 'Show less', less: true, contentX: SESSION_ROW_PADDING_PX })
+                  continuationRow({ onClick: toggleShowMoreRoots, label: 'Show less', less: true, contentX: SESSION_ROW_PADDING_PX, owner: 'roots' })
                 )}
               </>
             ) : (

@@ -411,8 +411,8 @@ try {
   assert.equal((await request('GET', `/api/session-list/sidebar?limit=2&cursor=${encodeURIComponent(beforeListChange)}`)).body.reset, true)
   const metadataSearch = (await request('GET', '/api/session-list/search?q=Alpha%20named&limit=10')).body
   assert(metadataSearch.sessions.some(row => row.id === parentId))
-  await until(async () => page.evaluate(() => document.querySelector('button') && [...document.querySelectorAll('button')].some(item => /Show .* more\.\.\./.test(item.textContent))), 'original Sidebar load-more root cursor')
-  await page.evaluate(() => [...document.querySelectorAll('button')].find(item => /Show .* more\.\.\./.test(item.textContent))?.click())
+  await until(async () => page.evaluate(() => !!document.querySelector('[data-session-continuation="more"][data-session-continuation-owner="roots"]')), 'original Sidebar load-more root cursor')
+  await page.click('[data-session-continuation="more"][data-session-continuation-owner="roots"]')
   await until(async () => page.evaluate(() => document.querySelectorAll('[data-session-id]').length > 50), 'original Sidebar bounded next page')
   await page.type('input[aria-label="Search sessions"]', 'Alpha named')
   await until(async () => page.evaluate(id => !!document.querySelector(`[data-session-id="${id}"]`)
