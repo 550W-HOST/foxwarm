@@ -115,6 +115,9 @@ function mainWindow(f) {
 
 const panePids = f => mainWindow(f).map(pane => Number(pane.split(' ')[1]));
 
+// PID of the fixture's private tmux server.
+const tmuxServerPid = f => Number(f.tmux('display-message', '-p', '#{pid}'));
+
 function ok(result) {
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
   return result;
@@ -286,34 +289,18 @@ test('an exited Main pane is restarted in place or removed', linux, t => {
   const dir = path.join(f.root, 'foxwarm');
   ok(f.install(['--package', f.makePackage('0.9.0'), '--no-start']));
   ok(f.control(dir, 'start'));
-  const initialPane = mainWindow(f)[0];
-  const [pane, panePid] = initialPane.split(' ');
-  const killedPid = mainPid(dir);
-  process.kill(killedPid, 'SIGKILL');
-  // tmux can mark the pane dead when its terminal closes, before it reaps the process and
-  // records how it ended. Wait for that record, which the status line reports.
-  let lastSignal;
-  try {
-    waitFor(() => {
-      lastSignal = f.tmux('display-message', '-p', '-t', pane, '#{pane_dead_signal}');
-      return lastSignal === '9';
-    });
-  } catch (error) {
-    // Capture the failed condition before fixture cleanup destroys the pane. Keep
-    // command failures as evidence rather than masking the original assertion.
-    const output = result => ({ status: result.status, signal: result.signal,
-      error: result.error?.message, stdout: result.stdout, stderr: result.stderr });
-    t.diagnostic(JSON.stringify({
-      initialPane, killedPid, killedProcessState: processState(killedPid), lastSignal,
-      tmuxVersion: output(f.run('tmux', ['-V'])),
-      panes: output(f.run('tmux', ['list-panes', '-a', '-F',
-        '#{pane_id}|#{pane_pid}|#{pane_dead}|#{pane_dead_signal}|#{pane_dead_status}|#{pane_current_command}|#{pane_current_path}'])),
-      processes: output(f.run('ps', ['-ww', '-o', 'pid,ppid,pgid,sid,stat,args', '-p', `${killedPid},${panePid}`])),
-      status: output(f.control(dir, 'status')),
-      terminal: output(f.run('tmux', ['capture-pane', '-p', '-t', pane])),
-    }, null, 2));
-    throw error;
-  }
+  const [pane] = mainWindow(f)[0].split(' ');
+  const killed = mainPid(dir);
+  process.kill(killed, 'SIGKILL');
+  // tmux records how a pane ended only when SIGCHLD makes it reap the process. tmux 3.4 and
+  // 3.5 built with utempter (as packaged by Ubuntu) can lose that signal: the terminal closes
+  // first, and the process exits while tmux runs the utempter helper with default SIGCHLD
+  // handling, leaving a dead pane over an unreaped zombie. tmux 3.6 then signals itself; do
+  // the same for this private server once the pane is dead and the process has exited. The
+  // unreaped case itself is covered by the next test.
+  waitFor(() => !alive(killed) && f.tmux('display-message', '-p', '-t', pane, '#{pane_dead}') === '1');
+  process.kill(tmuxServerPid(f), 'SIGCHLD');
+  waitFor(() => f.tmux('display-message', '-p', '-t', pane, '#{pane_dead_signal}') === '9');
   const exited = f.control(dir, 'status');
   assert.equal(exited.status, 3);
   assert.match(exited.stdout, /Exited with signal 9/);
@@ -327,6 +314,48 @@ test('an exited Main pane is restarted in place or removed', linux, t => {
   ok(f.control(dir, 'stop'));
   assert.equal(f.run('tmux', ['has-session', '-t', '=release-fixture']).status, 1);
   assert.equal(f.control(dir, 'status').status, 3);
+});
+
+test('a crashed Main that tmux has not reaped is reported exited, then restarted or removed', linux, t => {
+  const f = fixture(t);
+  const dir = path.join(f.root, 'foxwarm');
+  ok(f.install(['--package', f.makePackage('0.9.0'), '--no-start']));
+  // A tmux server keeps the signal mask of the client that starts it (Node children get an
+  // empty one). With SIGCHLD blocked it never reaps, so a crash stays a dead pane over a
+  // zombie with no exit record, the state a lost SIGCHLD leaves on a real server.
+  ok(f.run('/usr/bin/python3', ['-c', `
+import os, signal, sys
+signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGCHLD})
+os.execvp(sys.argv[1], sys.argv[1:])
+`, 'tmux', 'new-session', '-d', '-s', 'user', '-c', f.root, 'sleep 600']));
+  const blocked = fs.readFileSync(`/proc/${tmuxServerPid(f)}/status`, 'utf8').match(/^SigBlk:\s*([0-9a-f]+)$/m);
+  assert(blocked && (BigInt(`0x${blocked[1]}`) >> BigInt(os.constants.signals.SIGCHLD - 1)) & 1n,
+    'The fixture tmux server must block SIGCHLD.');
+
+  ok(f.control(dir, 'start'));
+  const [pane] = mainWindow(f)[0].split(' ');
+  const crashed = mainPid(dir);
+  process.kill(crashed, 'SIGKILL');
+  const unreaped = pid => processState(pid) === 'Z'
+    && f.tmux('display-message', '-p', '-t', pane, '#{pane_dead}|#{pane_dead_status}|#{pane_dead_signal}') === '1||';
+  waitFor(() => unreaped(crashed));
+  const exited = f.control(dir, 'status');
+  assert.equal(exited.status, 3);
+  assert.match(exited.stdout, /^\[foxwarm\] Exited\. Inspect it with/);
+
+  ok(f.control(dir, 'restart'));
+  const restarted = mainPid(dir);
+  assert(alive(restarted));
+  assert.deepEqual(mainWindow(f), [`${pane} ${restarted}`], 'Main restarts in its own pane.');
+  assert.equal(processState(crashed), 'Z', 'The crashed Main is still unreaped.');
+
+  process.kill(restarted, 'SIGKILL');
+  waitFor(() => unreaped(restarted));
+  ok(f.control(dir, 'stop'));
+  assert.deepEqual(mainWindow(f), []);
+  const stopped = f.control(dir, 'status');
+  assert.equal(stopped.status, 3);
+  assert.match(stopped.stdout, /Not running/);
 });
 
 test('an installation reached through a symlink recognizes its Main', linux, t => {
