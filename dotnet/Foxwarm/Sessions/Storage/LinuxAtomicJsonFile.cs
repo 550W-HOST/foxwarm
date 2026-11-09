@@ -42,7 +42,7 @@ public sealed class LinuxAtomicJsonFile
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(root);
         ArgumentException.ThrowIfNullOrWhiteSpace(relativePath);
-        this.root = Path.GetFullPath(root);
+        this.root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
         filePath = Path.GetFullPath(Path.Combine(this.root, relativePath));
         if (!filePath.StartsWith(this.root + Path.DirectorySeparatorChar, StringComparison.Ordinal))
             throw new ArgumentException(

@@ -17,6 +17,12 @@ $StopSeconds = 60
 
 function Write-Step($Message) { Write-Host "[foxwarm] $Message" }
 
+# A plain message and exit code 1, not a PowerShell error record with a stack position.
+function Fail($Message) {
+  [Console]::Error.WriteLine("[foxwarm] $Message")
+  exit 1
+}
+
 function Show-Usage {
   @'
 Usage: foxwarmctl COMMAND
@@ -77,7 +83,10 @@ function Invoke-Control($Request) {
     $pipe.Write($bytes, 0, $bytes.Length)
     $pipe.Flush()
     $reader = New-Object System.IO.StreamReader($pipe, [System.Text.Encoding]::UTF8)
-    return $reader.ReadToEnd() | ConvertFrom-Json
+    # Whoever owns the pipe name may never answer; do not wait for it forever.
+    $read = $reader.ReadToEndAsync()
+    if (-not $read.Wait(5000)) { throw "No reply from the control pipe $PipeName within 5 seconds." }
+    return $read.Result | ConvertFrom-Json
   } finally { $pipe.Dispose() }
 }
 
@@ -93,6 +102,102 @@ function Test-Pid($ProcessId) {
   return [bool](Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)
 }
 
+function Get-ProcessDetail($ProcessId) {
+  return Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction SilentlyContinue
+}
+
+function Format-ProcessDetail($ProcessId) {
+  $detail = Get-ProcessDetail $ProcessId
+  if (-not $detail) { return "no process with PID $ProcessId" }
+  $program = if ($detail.ExecutablePath) { $detail.ExecutablePath } else { $detail.Name }
+  return "PID $ProcessId ($program)"
+}
+
+# The control pipe name is predictable, so a process that answers on it is not necessarily
+# this installation's Main. A process is Main when its command line names this installation
+# root and its program is a release under runtime\ (Foxwarm.exe, or Foxwarm.dll run by dotnet).
+function Test-OwnedMain($ProcessId) {
+  try {
+    $detail = Get-ProcessDetail $ProcessId
+    if (-not $detail -or -not $detail.CommandLine) { return $false }
+    $commandLine = [string]$detail.CommandLine
+    $named = [regex]::Match($commandLine, '--installation-root\s+(?:"([^"]*)"|(\S+))')
+    if (-not $named.Success) { return $false }
+    $namedRoot = if ($named.Groups[1].Success) { $named.Groups[1].Value } else { $named.Groups[2].Value }
+    if ([System.IO.Path]::GetFullPath($namedRoot).TrimEnd('\', '/') -ne [System.IO.Path]::GetFullPath($Root).TrimEnd('\', '/')) { return $false }
+    $program = $null
+    if ($detail.Name -eq 'Foxwarm.exe') { $program = $detail.ExecutablePath }
+    elseif ($detail.Name -eq 'dotnet.exe') {
+      $dll = [regex]::Match($commandLine, '^\s*"[^"]+"\s+"([^"]+\\Foxwarm\.dll)"')
+      if ($dll.Success) { $program = $dll.Groups[1].Value }
+    }
+    if (-not $program) { return $false }
+    $releases = [System.IO.Path]::GetFullPath($RuntimeDir).TrimEnd('\', '/') + '\'
+    return [System.IO.Path]::GetFullPath($program).StartsWith($releases, [System.StringComparison]::OrdinalIgnoreCase)
+  } catch { return $false }
+}
+
+# State is none (nothing answers), running (this installation's Main answers) or foreign
+# (something else answers on the pipe name).
+function Get-Instance {
+  $status = Get-Status
+  if (-not $status) { return [pscustomobject]@{ State = 'none'; Status = $null; Pid = 0 } }
+  $processId = [int]$status.pid
+  # A reply from a process that has just exited (a Main that failed while starting) is not an instance.
+  if (-not (Test-Pid $processId)) { return [pscustomobject]@{ State = 'none'; Status = $null; Pid = 0 } }
+  $state = if (Test-OwnedMain $processId) { 'running' } else { 'foreign' }
+  return [pscustomobject]@{ State = $state; Status = $status; Pid = $processId }
+}
+
+function Fail-Foreign($Instance) {
+  Fail "The control pipe '$PipeName' is answered by $(Format-ProcessDetail $Instance.Pid), which is not this installation's Foxwarm. Nothing was started or stopped. Close the program that holds the pipe; if it is a stale Foxwarm, end it in Task Manager."
+}
+
+function Get-HttpPort {
+  $config = Join-Path $DataRoot 'state\config.yaml'
+  if (Test-Path -LiteralPath $config) {
+    $match = Select-String -LiteralPath $config -Pattern '^\s*httpPort:\s*(\d+)' | Select-Object -First 1
+    if ($match) { return [int]$match.Matches[0].Groups[1].Value }
+  }
+  return 3001
+}
+
+function Get-PortHolder($Port) {
+  try {
+    $listener = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Stop | Select-Object -First 1
+    $process = Get-Process -Id $listener.OwningProcess -ErrorAction SilentlyContinue
+    $name = if ($process) { $process.ProcessName } else { 'another program' }
+    return "$name (PID $($listener.OwningProcess))"
+  } catch { return $null }
+}
+
+# What Main wrote to the error log since this start began.
+function Read-NewErrors($Offset) {
+  try {
+    $stream = [System.IO.File]::Open($StderrLog, 'Open', 'Read', 'ReadWrite')
+    try {
+      if ($stream.Length -le $Offset) { return '' }
+      $null = $stream.Seek($Offset, 'Begin')
+      return (New-Object System.IO.StreamReader($stream)).ReadToEnd()
+    } finally { $stream.Dispose() }
+  } catch { return '' }
+}
+
+function Fail-Startup($Offset) {
+  $errors = (Read-NewErrors $Offset).Trim()
+  if ($errors -match 'AddressInUse') {
+    $port = Get-HttpPort
+    $holder = Get-PortHolder $port
+    $by = if ($holder) { " by $holder" } else { '' }
+    Fail "Foxwarm could not start: port $port is already in use$by. Stop that program, or set bot.httpPort in $(Join-Path $DataRoot 'state\config.yaml') to a free port."
+  }
+  if ($errors -match 'ControlPipeUnavailable') {
+    Fail "Foxwarm could not start: the control pipe '$PipeName' is already in use by another process. Close the program that holds the pipe."
+  }
+  $last = if ($errors) { ' The last error was: ' + (($errors -split "`r?`n" | Select-Object -Last 1).Trim()) } else { '' }
+  Fail "Foxwarm exited during startup.$last See $StderrLog"
+}
+
 function Get-SelectedRelease {
   $link = (Get-Item $Current).Target | Select-Object -First 1
   if (-not $link) { throw "$Current is not a junction to an installed release." }
@@ -105,13 +210,14 @@ function Get-SelectedRelease {
 function Get-Launcher($Directory) {
   if ((Read-Release $Directory).selfContained) { return @((Join-Path $Directory 'Foxwarm.exe')) }
   $dotnet = Get-Command dotnet -ErrorAction SilentlyContinue
-  if (-not $dotnet) { throw 'This package needs the ASP.NET Core 10 runtime and dotnet on PATH.' }
+  if (-not $dotnet) { Fail 'This package needs the ASP.NET Core 10 runtime and dotnet on PATH.' }
   return @($dotnet.Source, (Join-Path $Directory 'Foxwarm.dll'))
 }
 
 function Start-Foxwarm {
-  $existing = Get-Status
-  if ($existing) { throw "Foxwarm is already running (PID $($existing.pid))." }
+  $existing = Get-Instance
+  if ($existing.State -eq 'running') { Fail "Foxwarm is already running (PID $($existing.Pid))." }
+  if ($existing.State -eq 'foreign') { Fail-Foreign $existing }
   New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
   # Resolve the selected release now so a later update does not move a running Main.
   $release = Get-SelectedRelease
@@ -121,29 +227,52 @@ function Start-Foxwarm {
   $env:FOXWARM_MAIN_LIFETIME_PIPE = $null
   # cmd appends both streams to the lifecycle logs and keeps no console attached to this window.
   $line = "/d /s /c `"$commandLine --installation-root `"$Root`" --windows-background >> `"$StdoutLog`" 2>> `"$StderrLog`"`""
-  Start-Process -FilePath $env:ComSpec -ArgumentList $line -WorkingDirectory $Root -WindowStyle Hidden | Out-Null
+  $errorOffset = if (Test-Path -LiteralPath $StderrLog) { (Get-Item -LiteralPath $StderrLog).Length } else { 0 }
+  $launch = Start-Process -FilePath $env:ComSpec -ArgumentList $line -WorkingDirectory $Root -WindowStyle Hidden -PassThru
+  # Success means Main is serving: the control pipe answers from this installation's process and
+  # reports it ready. The pipe comes up before the HTTP listener, so an answer alone is not enough.
   $deadline = (Get-Date).AddSeconds(60)
-  do {
+  $started = $null
+  $instance = $null
+  while ((Get-Date) -lt $deadline) {
     Start-Sleep -Milliseconds 300
-    $status = Get-Status
-  } while (-not $status -and (Get-Date) -lt $deadline)
-  if (-not $status) { throw "Foxwarm did not start. Check $StderrLog" }
-  Write-Step "Started $((Read-Release $release).version) from $release in the background (PID $($status.pid))."
+    $instance = Get-Instance
+    if ($instance.State -eq 'foreign' -and (Test-Pid $instance.Pid)) { Fail-Foreign $instance }
+    if ($instance.State -eq 'running') {
+      # Main versions without the field are treated as ready once they answer.
+      $ready = $instance.Status.PSObject.Properties['ready']
+      if (-not $ready -or $ready.Value) { $started = $instance; break }
+    } elseif ($launch.HasExited) {
+      Fail-Startup $errorOffset
+    }
+  }
+  if (-not $started) {
+    if ($instance -and $instance.State -eq 'running') {
+      Fail "Foxwarm (PID $($instance.Pid)) did not finish starting within 60 seconds and is still starting. Check $StdoutLog and $StderrLog"
+    }
+    Fail "Foxwarm did not start within 60 seconds. Check $StderrLog"
+  }
+  Write-Step "Started $((Read-Release $release).version) from $release in the background (PID $($started.Pid))."
   Write-Step "Data:   $DataRoot"
   Write-Step "Logs:   $LogDir"
 }
 
 function Stop-Foxwarm {
-  $status = Get-Status
-  if (-not $status) {
+  $instance = Get-Instance
+  if ($instance.State -eq 'none') {
     Write-Step 'Foxwarm is not running.'
     return
   }
-  $processId = [int]$status.pid
+  if ($instance.State -eq 'foreign') { Fail-Foreign $instance }
+  $processId = $instance.Pid
   try { Invoke-Control 'stop' | Out-Null } catch { Write-Warning "Stop request failed: $_" }
   $deadline = (Get-Date).AddSeconds($StopSeconds)
   while ((Test-Pid $processId) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 200 }
   if (Test-Pid $processId) {
+    # Only this installation's Main is ever terminated, never a PID that merely came over the pipe.
+    if (-not (Test-OwnedMain $processId)) {
+      Fail "PID $processId is not this installation's Foxwarm and was not terminated."
+    }
     Write-Warning "Foxwarm did not stop within $StopSeconds seconds; terminating PID $processId."
     Stop-Process -Id $processId -Force
     Wait-Process -Id $processId -Timeout 10 -ErrorAction SilentlyContinue
@@ -152,13 +281,19 @@ function Stop-Foxwarm {
 }
 
 function Show-Status {
-  $status = Get-Status
-  if (-not $status) {
+  $instance = Get-Instance
+  if ($instance.State -eq 'none') {
     '[foxwarm] Not running.'
     exit 3
   }
+  if ($instance.State -eq 'foreign') {
+    "[foxwarm] Not running: the control pipe '$PipeName' is answered by $(Format-ProcessDetail $instance.Pid), which is not this installation's Foxwarm."
+    exit 3
+  }
+  $status = $instance.Status
+  $starting = $status.PSObject.Properties['ready'] -and -not $status.ready
   $release = Read-Release $Current
-  "[foxwarm] Running (PID $($status.pid)$(if ($status.stopping) { ', stopping' })), release $($release.version) $($release.target)."
+  "[foxwarm] Running (PID $($status.pid)$(if ($status.stopping) { ', stopping' } elseif ($starting) { ', starting' })), release $($release.version) $($release.target)."
   "[foxwarm] Data:   $DataRoot"
   "[foxwarm] Logs:   $LogDir"
 }
@@ -204,7 +339,9 @@ function Update-Foxwarm {
     $launcher = @(Get-Launcher $staging.FullName)
     & $launcher[0] @($launcher | Select-Object -Skip 1) --installation-root $Root --inspect-upgrade
     if ($LASTEXITCODE -ne 0) { throw "Upgrade inspection blocked $($next.version); the installed release is unchanged." }
-    $wasRunning = [bool](Get-Status)
+    $running = Get-Instance
+    if ($running.State -eq 'foreign') { Fail-Foreign $running }
+    $wasRunning = $running.State -eq 'running'
     if ($wasRunning) { Stop-Foxwarm }
     $name = $next.version
     if (Test-Path (Join-Path $RuntimeDir $name)) { $name = "$name-$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())" }
@@ -228,7 +365,12 @@ function Update-Foxwarm {
 switch ($Command) {
   'start' { Start-Foxwarm }
   'stop' { Stop-Foxwarm }
-  'restart' { Stop-Foxwarm; Start-Foxwarm }
+  'restart' {
+    # Check that Main can be launched before stopping the running one.
+    $null = @(Get-Launcher (Get-SelectedRelease))
+    Stop-Foxwarm
+    Start-Foxwarm
+  }
   'status' { Show-Status }
   'run' {
     $release = Get-SelectedRelease

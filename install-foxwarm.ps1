@@ -22,6 +22,50 @@ $CallDir = (Get-Location).Path
 
 function Write-Step($Message) { Write-Host "[foxwarm-install] $Message" -ForegroundColor Cyan }
 
+# The installation's control script runs through foxwarmctl.cmd, which starts PowerShell with
+# -ExecutionPolicy Bypass for that script only, so a Restricted or AllSigned policy does not stop it.
+function Invoke-Control($Arguments) {
+  # Show the script's output instead of returning it with the exit code.
+  & (Join-Path $Dir 'foxwarmctl.cmd') @Arguments | Out-Host
+  return $LASTEXITCODE
+}
+
+function Start-Control {
+  if ((Invoke-Control @('start')) -ne 0) {
+    throw "Foxwarm is installed in $Dir but did not start. Fix the problem described above, then run: & '$Dir\foxwarmctl.cmd' start"
+  }
+}
+
+function Show-SignIn($DataRoot) {
+  $TokenFile = Join-Path $DataRoot 'state\token'
+  $Token = $null
+  for ($i = 0; $i -lt 120; $i++) {
+    if (Test-Path $TokenFile) {
+      $Token = ([string](Get-Content $TokenFile -Raw)).Trim()
+      if ($Token) { break }
+    }
+    Start-Sleep -Milliseconds 500
+  }
+  $Port = 3001
+  $Config = Join-Path $DataRoot 'state\config.yaml'
+  if (Test-Path $Config) {
+    $match = Select-String -Path $Config -Pattern '^\s*httpPort:\s*(\d+)' | Select-Object -First 1
+    if ($match) { $Port = [int]$match.Matches[0].Groups[1].Value }
+  }
+  Write-Host ''
+  Write-Step "Program dir: $Dir"
+  Write-Step "Data dir: $DataRoot"
+  if ($Token) {
+    $Url = "http://localhost:$Port/#token=$Token"
+    Write-Step "WebUI: $Url"
+    try { Start-Process $Url } catch { }
+  } else {
+    Write-Warning "The sign-in token is not ready yet. When startup finishes, read $TokenFile"
+    Write-Step "WebUI: http://localhost:$Port/"
+  }
+  Write-Step "Control: & '$Dir\foxwarmctl.cmd' status | stop | restart | update"
+}
+
 function Resolve-InstallerPath($Value, $BaseDir) {
   if ($Value -eq '~') { $Value = $HOME } elseif ($Value.StartsWith('~/')) { $Value = Join-Path $HOME $Value.Substring(2) }
   if (-not [System.IO.Path]::IsPathRooted($Value)) { $Value = Join-Path $BaseDir $Value }
@@ -41,18 +85,18 @@ $RequestedData = if ($DataDir) { $DataDir } elseif ($env:FOXWARM_DATA_DIR) { $en
 $Pointer = Join-Path $Dir 'data_dir'
 $Saved = if (Test-Path $Pointer) { ([string](Get-Content $Pointer -Raw)).Trim() } else { '' }
 
-$Control = Join-Path $Dir 'foxwarmctl.ps1'
 if (Test-Path (Join-Path $Dir 'runtime\current\release.json')) {
   if ($RequestedData -and (-not $Saved -or (Resolve-InstallerPath $RequestedData $CallDir) -ne (Resolve-InstallerPath $Saved $Dir))) {
     throw "$Dir already uses the data directory in its data_dir file. Stop Foxwarm and edit that file to change it."
   }
   Write-Step "Foxwarm is already installed in $Dir; updating it."
-  $update = @{}
-  if ($Package) { $update.Package = $Package }
-  if ($Version) { & $Control update $Version @update } else { & $Control update @update }
+  $update = @('update')
+  if ($Version) { $update += $Version }
+  if ($Package) { $update += @('-Package', $Package) }
+  if ((Invoke-Control $update) -ne 0) { throw "Updating Foxwarm in $Dir failed; see the message above." }
   if (-not $NoStart) {
-    & $Control status | Out-Null
-    if ($LASTEXITCODE -ne 0) { & $Control start }
+    if ((Invoke-Control @('status')) -ne 0) { Start-Control }
+    Show-SignIn $(if ($Saved) { Resolve-InstallerPath $Saved $Dir } else { $Dir })
   }
   return
 }
@@ -123,32 +167,5 @@ if ($NoStart) {
   Write-Step "Start it with: & '$Dir\foxwarmctl.cmd' start"
   return
 }
-& $Control start
-
-$TokenFile = Join-Path $Data 'state\token'
-$Token = $null
-for ($i = 0; $i -lt 120; $i++) {
-  if (Test-Path $TokenFile) {
-    $Token = ([string](Get-Content $TokenFile -Raw)).Trim()
-    if ($Token) { break }
-  }
-  Start-Sleep -Milliseconds 500
-}
-$Port = 3001
-$Config = Join-Path $Data 'state\config.yaml'
-if (Test-Path $Config) {
-  $match = Select-String -Path $Config -Pattern '^\s*httpPort:\s*(\d+)' | Select-Object -First 1
-  if ($match) { $Port = [int]$match.Matches[0].Groups[1].Value }
-}
-Write-Host ''
-Write-Step "Program dir: $Dir"
-Write-Step "Data dir: $Data"
-if ($Token) {
-  $Url = "http://localhost:$Port/#token=$Token"
-  Write-Step "WebUI: $Url"
-  try { Start-Process $Url } catch { }
-} else {
-  Write-Warning "The sign-in token is not ready yet. When startup finishes, read $TokenFile"
-  Write-Step "WebUI: http://localhost:$Port/"
-}
-Write-Step "Control: & '$Dir\foxwarmctl.cmd' status | stop | restart | update"
+Start-Control
+Show-SignIn $Data

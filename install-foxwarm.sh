@@ -91,6 +91,29 @@ if [ -e "$FOXWARM_DIR/.git" ]; then
   fail "$FOXWARM_DIR is a source checkout. Update it from source, or choose another --dir and pass --data-dir to reuse its data."
 fi
 
+# Print where to sign in once Foxwarm is running (the start command has already confirmed it).
+show_signin() {
+  local data="$1" token="" port i
+  for ((i = 1; i <= 120; i++)); do
+    if [ -s "$data/state/token" ]; then token="$(cat "$data/state/token")"; break; fi
+    [ $((i % 20)) -eq 0 ] && warn "Still waiting for startup. Inspect it with: '$FOXWARM_DIR/foxwarmctl' status"
+    sleep 0.5
+  done
+  port="$(sed -n 's/^ *httpPort: *\([0-9][0-9]*\).*/\1/p' "$data/state/config.yaml" 2>/dev/null | sed -n 1p)"
+  port="${port:-3001}"
+  echo
+  echo "Program dir: $FOXWARM_DIR"
+  echo "Data dir:    $data"
+  if [ -n "$token" ]; then
+    echo "WebUI: http://localhost:${port}/#token=${token}"
+  else
+    warn "The sign-in token is not ready yet. When startup finishes, read it with: cat '$data/state/token'"
+    echo "WebUI: http://localhost:${port}/"
+  fi
+  echo
+  echo "Control: '$FOXWARM_DIR/foxwarmctl' status | stop | restart | update | attach"
+}
+
 if [ -e "$FOXWARM_DIR/runtime/current/release.json" ]; then
   if [ -n "${FOXWARM_DATA_DIR:-}" ]; then
     saved="$(trimmed_file "$FOXWARM_DIR/data_dir")"
@@ -104,7 +127,10 @@ if [ -e "$FOXWARM_DIR/runtime/current/release.json" ]; then
   [ -n "$PACKAGE" ] && args+=(--package "$PACKAGE")
   [ -n "$VERSION" ] && args+=("$VERSION")
   "$FOXWARM_DIR/foxwarmctl" update ${args[@]+"${args[@]}"}
-  if [ "$START" = true ] && ! "$FOXWARM_DIR/foxwarmctl" status >/dev/null; then "$FOXWARM_DIR/foxwarmctl" start; fi
+  if [ "$START" = true ]; then
+    if ! "$FOXWARM_DIR/foxwarmctl" status >/dev/null; then "$FOXWARM_DIR/foxwarmctl" start; fi
+    show_signin "$(absolute_path "$(trimmed_file "$FOXWARM_DIR/data_dir")" "$FOXWARM_DIR")"
+  fi
   exit 0
 fi
 
@@ -178,22 +204,4 @@ if [ "$START" = false ]; then
 fi
 "$FOXWARM_DIR/foxwarmctl" start
 
-token=""
-for ((i = 1; i <= 120; i++)); do
-  if [ -s "$FOXWARM_DATA_DIR/state/token" ]; then token="$(cat "$FOXWARM_DATA_DIR/state/token")"; break; fi
-  [ $((i % 20)) -eq 0 ] && warn "Still waiting for startup. Inspect it with: '$FOXWARM_DIR/foxwarmctl' status"
-  sleep 0.5
-done
-port="$(sed -n 's/^ *httpPort: *\([0-9][0-9]*\).*/\1/p' "$FOXWARM_DATA_DIR/state/config.yaml" 2>/dev/null | sed -n 1p)"
-port="${port:-3001}"
-echo
-echo "Program dir: $FOXWARM_DIR"
-echo "Data dir:    $FOXWARM_DATA_DIR"
-if [ -n "$token" ]; then
-  echo "WebUI: http://localhost:${port}/#token=${token}"
-else
-  warn "The sign-in token is not ready yet. When startup finishes, read it with: cat '$FOXWARM_DATA_DIR/state/token'"
-  echo "WebUI: http://localhost:${port}/"
-fi
-echo
-echo "Control: '$FOXWARM_DIR/foxwarmctl' status | stop | restart | update | attach"
+show_signin "$FOXWARM_DATA_DIR"

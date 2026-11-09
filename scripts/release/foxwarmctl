@@ -14,6 +14,8 @@ PHYSICAL_ROOT="$ROOT"
 PID_FILE="$ROOT/foxwarm.pid"
 RELEASES="https://github.com/550W-HOST/foxwarm/releases"
 STOP_SECONDS=60
+OUT_OFFSET=0
+ERR_OFFSET=0
 
 log() { printf '[foxwarm] %s\n' "$*"; }
 fail() { printf '[foxwarm] %s\n' "$*" >&2; exit 1; }
@@ -140,6 +142,7 @@ log_paths() {
   fi
   case "$data" in '~') data="$HOME" ;; '~/'*) data="$HOME/${data#\~/}" ;; esac
   case "$data" in '') data="$ROOT" ;; /*) ;; *) data="$ROOT/$data" ;; esac
+  CONFIG_PATH="$data/state/config.yaml"
   LOG_DIR="$data/state/logs"
   STDOUT_LOG="$LOG_DIR/foxwarm.stdout.log"
   STDERR_LOG="$LOG_DIR/foxwarm.stderr.log"
@@ -148,6 +151,49 @@ log_paths() {
 logs_hint() {
   log_paths
   printf 'Logs: %s and %s.' "$STDOUT_LOG" "$STDERR_LOG"
+}
+
+# Main listens on bot.httpPort from the selected data root's config.yaml, else 3001.
+http_port() {
+  local port
+  log_paths
+  port="$(sed -n 's/^ *httpPort: *\([0-9][0-9]*\).*/\1/p' "$CONFIG_PATH" 2>/dev/null | sed -n 1p)"
+  printf '%s' "${port:-3001}"
+}
+
+file_size() { local size; size="$( { wc -c < "$1"; } 2>/dev/null || echo 0)"; printf '%s' "$((size))"; }
+
+# What this start has printed: the pane in tmux mode, otherwise the log bytes appended since
+# OUT_OFFSET/ERR_OFFSET were recorded before launch.
+startup_output() {
+  if [ -n "$PANE" ]; then
+    tmux capture-pane -p -J -S - -t "$PANE" 2>/dev/null || true
+  else
+    log_paths
+    { tail -c "+$((OUT_OFFSET + 1))" "$STDOUT_LOG"; tail -c "+$((ERR_OFFSET + 1))" "$STDERR_LOG"; } 2>/dev/null || true
+  fi
+}
+
+startup_failed() {
+  case "$(startup_output)" in
+    *AddressInUse*) fail "Foxwarm could not start: port $(http_port) is already in use. Stop the program that uses it, or set bot.httpPort in $CONFIG_PATH to a free port." ;;
+  esac
+  fail "Foxwarm exited during startup. Use '$ROOT/foxwarmctl' attach for the pane or log paths."
+}
+
+# Success means Main is serving: it is alive and has reported its listener. A process that is
+# merely alive can still fail to bind its port a moment later.
+wait_ready() {
+  local i out
+  for ((i = 0; i < 300; i++)); do
+    running || startup_failed
+    out="$(startup_output)"
+    case "$out" in
+      *'Main HTTP listening'*|*'Main started without HTTP'*) return 0 ;;
+    esac
+    sleep 0.2
+  done
+  log "Foxwarm is running (PID $PID) but has not reported that it is listening yet."
 }
 
 foreign_hint() {
@@ -159,6 +205,9 @@ cmd_start() {
   command="$(main_command)"
   find_main
   [ "$STATE" != running ] || fail "Foxwarm is already running (PID $PID, $MODE)."
+  log_paths
+  OUT_OFFSET="$(file_size "$STDOUT_LOG")"
+  ERR_OFFSET="$(file_size "$STDERR_LOG")"
   if have tmux; then
     case "$STATE" in
       foreign) fail "$(foreign_hint)" ;;
@@ -184,14 +233,16 @@ cmd_start() {
     (cd "$ROOT" && exec nohup bash -c "$command") </dev/null >>"$STDOUT_LOG" 2>>"$STDERR_LOG" &
     printf '%s\n' "$!" > "$PID_FILE"
   fi
-  sleep 1
-  running || fail "Foxwarm exited during startup. Use '$ROOT/foxwarmctl' attach for the pane or log paths."
+  wait_ready
   if [ "$MODE" = tmux ]; then
     log "Started $(release_field "$CURRENT" version) in tmux window '$SESSION:$WINDOW'. Attach with: '$ROOT/foxwarmctl' attach"
   else
     log "Started $(release_field "$CURRENT" version) in the background (PID $PID). $(logs_hint)"
   fi
 }
+
+# Fail before anything is stopped when Main could not be launched afterwards.
+check_launcher() { launcher "$(cd "$CURRENT" && pwd -P)" >/dev/null; }
 
 # Stop removes Main's pane. Restart and update pass "keep" and start Main again in the
 # same pane, so a pane the user split into the window does not take the window over.
@@ -333,7 +384,7 @@ cmd_update() {
 case "${1:-}" in
   start) cmd_start ;;
   stop) cmd_stop ;;
-  restart) cmd_stop keep; cmd_start ;;
+  restart) check_launcher; cmd_stop keep; cmd_start ;;
   status) cmd_status ;;
   attach) cmd_attach ;;
   run) eval "$(main_command)" ;;

@@ -24,11 +24,16 @@ if [ "$1" = --inspect-upgrade ]; then
   exit
 fi
 data="$(cat "$root/data_dir")"
+if [ -e "$root/fake-bind-failure" ]; then
+  echo "Main fatal startup failure at host start: IOException / AddressInUseException / AddressAlreadyInUse" >&2
+  exit 1
+fi
 mkdir -p "$data/state"
 printf fixture-token > "$data/state/token"
 echo $$ > "$root/main.pid"
 echo "fixture stdout $$"
 echo "fixture stderr $$" >&2
+echo "Main HTTP listening: http://0.0.0.0:3001"
 [ -e "$root/fake-ignore-term" ] && trap '' TERM || trap 'exit 0' TERM
 while :; do sleep 0.1; done
 `;
@@ -84,7 +89,7 @@ function fixture(t) {
     fs.mkdirSync(bin);
     // Only the tools used by the control script and fixture Main, deliberately no tmux.
     for (const name of ['awk', 'bash', 'basename', 'cat', 'cp', 'date', 'dirname', 'env',
-      'gzip', 'ln', 'mkdir', 'mktemp', 'mv', 'nohup', 'ps', 'rm', 'sed', 'sleep', 'tar', 'uname', checksum]) {
+      'gzip', 'ln', 'mkdir', 'mktemp', 'mv', 'nohup', 'ps', 'rm', 'sed', 'sleep', 'tail', 'tar', 'uname', 'wc', checksum]) {
       const executable = spawnSync('/bin/bash', ['-c', 'command -v "$1"', 'bash', name], { encoding: 'utf8' }).stdout.trim();
       assert(executable, `${name} must be available for the fixture`);
       fs.symlinkSync(executable, path.join(bin, name));
@@ -527,4 +532,50 @@ esac
   assert.equal(invalid.status, 1);
   assert.match(invalid.stderr, /Checksum verification failed/);
   assert.equal(fs.readlinkSync(path.join(dir, 'runtime/current')), '0.9.1');
+});
+
+test('start reports a port conflict and leaves nothing running when Main cannot bind', linux, t => {
+  const f = fixture(t);
+  const dir = path.join(f.root, 'foxwarm');
+  ok(f.install(['--package', f.makePackage('0.9.0'), '--no-start']));
+  fs.writeFileSync(path.join(dir, 'fake-bind-failure'), '');
+  fs.mkdirSync(path.join(f.root, 'foxwarm-data/state'), { recursive: true });
+  fs.writeFileSync(path.join(f.root, 'foxwarm-data/state/config.yaml'), 'bot:\n  httpPort: 3456\n');
+  const tmux = f.control(dir, 'start');
+  assert.equal(tmux.status, 1);
+  assert.match(tmux.stderr, /port 3456 is already in use/);
+  assert.doesNotMatch(tmux.stdout, /Started/);
+
+  f.withoutTmux();
+  const background = f.control(dir, 'start');
+  assert.equal(background.status, 1);
+  assert.match(background.stderr, /port 3456 is already in use/);
+  assert.doesNotMatch(background.stdout, /Started/);
+});
+
+test('restart checks that Main can be launched before stopping the running one', linux, t => {
+  const f = fixture(t);
+  const dir = path.join(f.root, 'foxwarm');
+  ok(f.install(['--package', f.makePackage('0.9.0'), '--no-start']));
+  ok(f.control(dir, 'start'));
+  const running = mainPid(dir);
+  const release = path.join(dir, 'runtime/current/release.json');
+  fs.writeFileSync(release, fs.readFileSync(release, 'utf8').replace('"selfContained": true', '"selfContained": false'));
+  f.withoutTmux();
+  const restarted = f.control(dir, 'restart');
+  assert.equal(restarted.status, 1);
+  assert.match(restarted.stderr, /dotnet on PATH/);
+  assert(alive(running), 'The running Main must not be stopped when it could not be started again.');
+  fs.writeFileSync(release, fs.readFileSync(release, 'utf8').replace('"selfContained": false', '"selfContained": true'));
+  ok(f.control(dir, 'stop'));
+});
+
+test('rerunning the installer on a stopped installation prints the sign-in link', linux, t => {
+  const f = fixture(t);
+  const pkg = f.makePackage('0.9.0');
+  ok(f.install(['--package', pkg]));
+  ok(f.control(path.join(f.root, 'foxwarm'), 'stop'));
+  const rerun = ok(f.install(['--package', pkg]));
+  assert.match(rerun.stdout, /already installed/);
+  assert.match(rerun.stdout, /WebUI: http:\/\/localhost:3001\/#token=fixture-token/);
 });
