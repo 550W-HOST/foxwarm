@@ -11,13 +11,12 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import puppeteer from 'puppeteer-core'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
-import { NEW_SESSION_DIALOG_TRIGGER } from './mainHostFixture.mjs'
+import { NEW_SESSION_DIALOG_TRIGGER, mainHostLaunch } from './mainHostFixture.mjs'
 
 const root = await mkdtemp(join(tmpdir(), 'foxwarm-agents-e2e-'))
 const dataRoot = join(root, 'data'); const workRoot = join(dataRoot, 'agents', 'main')
 const apiToken = 'synthetic-agents-api-secret'; const providerToken = 'synthetic-agents-provider-secret'
 const dll = process.env.FOXWARM_TEST_MAIN_DLL || resolve('dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')
-const dotnet = join(process.env.DOTNET_ROOT || '', 'dotnet')
 assert(process.env.DOTNET_ROOT, 'Set DOTNET_ROOT to a .NET 10 SDK')
 const errors = []; const requests = []; const counts = new Map()
 const sleep = ms => new Promise(done => setTimeout(done, ms))
@@ -168,7 +167,7 @@ try {
   }
   async function startHost() {
     await migrateModelFixture(dataRoot, modelsFile, { LOCAL_A_SECRET: providerToken, LOCAL_B_SECRET: providerToken })
-    const child = spawn(dotnet, [dll], { stdio: ['ignore', 'pipe', 'pipe'], env: testEnvironment.isolatedApplicationEnv(dataRoot) })
+    const child = spawn(...mainHostLaunch(dll), { stdio: ['ignore', 'pipe', 'pipe'], env: testEnvironment.isolatedApplicationEnv(dataRoot) })
     let output = ''; for (const stream of [child.stdout, child.stderr]) stream.on('data', data => { output = (output + data).slice(-18000) })
     await until(async () => {
       if (child.exitCode !== null) throw new Error(`Host exited ${child.exitCode}: ${output}`)

@@ -13,6 +13,7 @@ import { createRequire } from 'node:module'
 import puppeteer from 'puppeteer-core'
 import { writeModelFixture } from './mainModelFixture.mjs'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
+import { mainHostLaunch } from './mainHostFixture.mjs'
 const require = createRequire(import.meta.url)
 const { createMcpOAuthFixture } = require(resolve('lib/mcpOAuthTestFixture.js'))
 assert(process.env.DOTNET_ROOT, 'Set DOTNET_ROOT to a .NET 10 SDK')
@@ -35,7 +36,7 @@ async function api(method, path, body, extra = {}) {
   return { status: response.status, body: await response.json().catch(() => ({})) }
 }
 async function start() {
-  const child = spawn(join(process.env.DOTNET_ROOT, 'dotnet'), [resolve('dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')], {
+  const child = spawn(...mainHostLaunch(resolve('dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')), {
     stdio: ['ignore', 'pipe', 'pipe'], env: { ...testEnvironment.isolatedApplicationEnv(data), FOXWARM_DATA_DIR: data,
        } })
   let output = ''

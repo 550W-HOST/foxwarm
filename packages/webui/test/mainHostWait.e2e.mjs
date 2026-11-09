@@ -10,11 +10,11 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import puppeteer from 'puppeteer-core'
+import { mainHostLaunch } from './mainHostFixture.mjs'
 
 const root = await mkdtemp(join(tmpdir(), 'foxwarm-wait-e2e-'))
 const dataRoot = join(root, 'data'); const workRoot = join(dataRoot, 'agents', 'main')
 const token = 'synthetic-wait-api-token'; const providerToken = 'synthetic-wait-provider-token'
-const dotnet = join(process.env.DOTNET_ROOT || '', 'dotnet')
 assert(process.env.DOTNET_ROOT, 'Set DOTNET_ROOT to a .NET 10 SDK')
 const plans = new Map(); const requests = []; const errors = []; const counts = new Map(); const holds = []
 const sleep = ms => new Promise(done => setTimeout(done, ms))
@@ -62,7 +62,7 @@ async function deliver(source, target, label, extra = []) {
 }
 async function startHost() {
   await writeModelFixture(dataRoot, { default: 'local', providers: { 'local': { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${provider.address().port}`, apiKey: providerToken, models: ['wire'] } } })
-  const child = spawn(dotnet, [resolve('dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')], {
+  const child = spawn(...mainHostLaunch(resolve('dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')), {
     stdio: ['ignore', 'pipe', 'pipe'], env: { ...testEnvironment.isolatedApplicationEnv(dataRoot), } })
   let output = ''; for (const stream of [child.stdout, child.stderr]) stream.on('data', bytes => { output = (output + bytes).slice(-14000) })
   const owned = { child, get output() { return output } }; host = owned

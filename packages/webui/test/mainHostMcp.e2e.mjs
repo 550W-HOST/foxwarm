@@ -11,13 +11,13 @@ import { mkdtemp, mkdir, readFile, rm, writeFile, access } from 'node:fs/promise
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import puppeteer from 'puppeteer-core'
+import { mainHostLaunch } from './mainHostFixture.mjs'
 
 const root = await mkdtemp(join(tmpdir(), 'foxwarm-unified-mcp-'))
 const data = join(root, 'data'); const work = join(data, 'agents', 'main'); const peerRoot = join(root, 'peer')
 const peerFile = resolve(import.meta.dirname, 'mainHostMcp.peer.mjs')
 const token = 'synthetic-mcp-api-token'; const providerToken = 'synthetic-mcp-provider-token'
 assert(process.env.DOTNET_ROOT, 'Set DOTNET_ROOT to a .NET 10 SDK')
-const dotnet = join(process.env.DOTNET_ROOT, 'dotnet')
 const sleep = ms => new Promise(done => setTimeout(done, ms))
 const exists = file => access(file).then(() => true, () => false)
 const text = value => ({ type: 'message', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: value }] })
@@ -65,7 +65,7 @@ async function startHost() {
   await mkdir(join(data, 'state'), { recursive: true })
   await writeFile(join(data, 'state', 'token'), token, { mode: 0o600 })
   await writeModelFixture(data, { default: 'local', providers: { 'local': { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${provider.address().port}`, apiKey: providerToken, models: ['wire'] } } })
-  const child = spawn(dotnet, [resolve('dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...testEnvironment.isolatedApplicationEnv(data),
+  const child = spawn(...mainHostLaunch(resolve('dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')), { stdio: ['ignore', 'pipe', 'pipe'], env: { ...testEnvironment.isolatedApplicationEnv(data),
     MCP_HOST_ONLY_SENTINEL: 'synthetic-host-only-credential' } })
   let output = ''; for (const stream of [child.stdout, child.stderr]) stream.on('data', bytes => { output = (output + bytes).slice(-20000) })
   host = { child, get output() { return output } }; pids.push(child.pid)

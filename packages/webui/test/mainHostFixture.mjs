@@ -35,6 +35,12 @@ export async function saveModelsInOriginalApp(page, raw, modelPath) {
   await page.waitForFunction(() => !!window.foxwarmTest?.switchToSession)
   await waitForWebUiReady(page)
 }
+// Launch for drivers that spawn their own owned Main: FOXWARM_TEST_MAIN_EXECUTABLE selects a
+// published Main executable, such as a NativeAOT publication; otherwise the managed assembly runs.
+export function mainHostLaunch(assembly) {
+  const executable = process.env.FOXWARM_TEST_MAIN_EXECUTABLE
+  return executable ? [executable, []] : [join(process.env.DOTNET_ROOT || '', 'dotnet'), [assembly]]
+}
 export async function createHostFixture(name, options = {}) {
   const root = await mkdtemp(join(tmpdir(), 'foxwarm-' + name + '-')), data = join(root, 'data'), work = join(data, 'agents', 'main')
   await mkdir(join(data, 'state'), { recursive: true }); await mkdir(work, { recursive: true })

@@ -10,12 +10,12 @@ import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import puppeteer from 'puppeteer-core'
+import { mainHostLaunch } from './mainHostFixture.mjs'
 
 const root = await mkdtemp(join(tmpdir(), 'foxwarm-files-e2e-'))
 const dataRoot = join(root, 'data'); const workRoot = join(dataRoot, 'agents', 'main')
 const apiToken = 'synthetic-devtools-api-secret'; const providerToken = 'synthetic-provider-secret'
 const dll = process.env.FOXWARM_TEST_MAIN_DLL || resolve('dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')
-const dotnet = join(process.env.DOTNET_ROOT || '', 'dotnet')
 assert(process.env.DOTNET_ROOT, 'Set DOTNET_ROOT to a .NET 10 SDK')
 const seen = []; const errors = []
 const tasks = new Map(); let taskCounter = 0
@@ -64,7 +64,7 @@ try {
   await writeFile(join(dataRoot, 'state/token'), apiToken, { mode: 0o600 })
   async function startHost() {
     await writeModelFixture(dataRoot, { default: 'scripted-wire', providers: { 'scripted-wire': { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${providerPort}`, apiKey: providerToken, models: ['scripted-wire'] } } })
-    const child = spawn(dotnet, [dll], { detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: testEnvironment.isolatedApplicationEnv(dataRoot) })
+    const child = spawn(...mainHostLaunch(dll), { detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: testEnvironment.isolatedApplicationEnv(dataRoot) })
     let output = ''; child.stdout.on('data', value => { output = (output + value).slice(-12000) })
     child.stderr.on('data', value => { output = (output + value).slice(-12000) })
     try { await until(async () => {

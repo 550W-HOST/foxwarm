@@ -13,7 +13,7 @@ import { gunzipSync, brotliDecompressSync } from 'node:zlib'
 import puppeteer from 'puppeteer-core'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
 import yamlReader from 'js-yaml'
-import { saveModelsInOriginalApp } from './mainHostFixture.mjs'
+import { saveModelsInOriginalApp, mainHostLaunch } from './mainHostFixture.mjs'
 
 const sleep = ms => new Promise(done => setTimeout(done, ms))
 async function until(check, label, timeout = 22000) { const end = Date.now() + timeout; while (Date.now() < end) { if (errors.length) throw new Error(errors.join('\n')); if (await check()) return; await sleep(25) } throw new Error('Timed out: ' + label) }
@@ -22,7 +22,7 @@ const root = await mkdtemp(join(tmpdir(), 'foxwarm-completions-')), data = join(
 await mkdir(join(data, 'state'), { recursive: true }); await mkdir(work, { recursive: true })
 await writeFile(join(data, 'state/config.yaml'), 'llm:\n  maxOutput: 713\n  compactKeepPercent: 0.3\n')
 const apiToken = 'synthetic-completions-api', oldToken = 'synthetic-completions-old', newToken = 'synthetic-completions-new'
-const dotnet = join(process.env.DOTNET_ROOT, 'dotnet'), hostPort = await freePort(), origin = `http://127.0.0.1:${hostPort}`
+const hostPort = await freePort(), origin = `http://127.0.0.1:${hostPort}`
 await writeFile(join(data, 'state/config.yaml'), (await readFile(join(data, 'state/config.yaml'), 'utf8')) + `bot: {httpPort: ${hostPort}}\n`)
 await writeFile(join(data, 'state/token'), apiToken, { mode: 0o600 })
 const modelPath = join(data, 'state/models.yaml'), effectPath = join(work, 'note.txt')
@@ -148,7 +148,7 @@ async function state() { return (await api('GET', route(current) + '/state')).bo
 const notices = value => value.messages.filter(row => ['system-event', 'llm-retry'].includes(row.__meta?.noticeType))
 const terminalFailure = row => row.__meta?.sessionNotice?.source === 'session' || row.__meta?.retry?.final === true
 async function start() {
-  const child = spawn(dotnet, [resolve('dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...testEnvironment.isolatedApplicationEnv(data), FOXWARM_DATA_DIR: data, } }); let output = ''; for (const stream of [child.stdout, child.stderr]) stream.on('data', bytes => { output = (output + bytes).slice(-20000) }); host = { child, get output() { return output } }; hostPids.push(child.pid)
+  const child = spawn(...mainHostLaunch(resolve('dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')), { stdio: ['ignore', 'pipe', 'pipe'], env: { ...testEnvironment.isolatedApplicationEnv(data), FOXWARM_DATA_DIR: data, } }); let output = ''; for (const stream of [child.stdout, child.stderr]) stream.on('data', bytes => { output = (output + bytes).slice(-20000) }); host = { child, get output() { return output } }; hostPids.push(child.pid)
   await until(async () => { if (child.exitCode !== null) throw new Error(output); try { return (await api('GET', '/health')).status === 200 } catch { return false } }, 'host ready')
 }
 async function save(raw) { assert.equal((await api('POST', '/api/setup/models', { yaml: raw })).status, 200); assert.equal(await readFile(modelPath, 'utf8'), raw) }

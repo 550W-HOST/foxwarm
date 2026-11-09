@@ -27,6 +27,12 @@ const toolFile = path.join(runRoot, 'tool-work', 'roundtrip.txt')
 // unexpected requests, but the global request order is not enforced.
 const selectedFiles = process.argv.length > 2 ? process.argv.slice(2) : (process.env.FOXWARM_APP_E2E_FILES || '').split(',').map(value => value.trim()).filter(Boolean)
 const fixtureEnv = testEnvironment.isolatedApplicationEnv(dataRoot)
+// The default application is the package launcher. FOXWARM_TEST_MAIN_EXECUTABLE selects
+// a published Main executable instead, such as a NativeAOT publication, with the same
+// owned data, ports and lifetime. It is a test input, not a Main runtime setting.
+const mainExecutable = process.env.FOXWARM_TEST_MAIN_EXECUTABLE
+  ? path.resolve(process.env.FOXWARM_TEST_MAIN_EXECUTABLE)
+  : undefined
 let provider
 let appPort
 let baseUrl
@@ -152,7 +158,7 @@ async function spawnApplication(logName) {
   }
   appLog = createdAppLog
   throwIfCancelled()
-  app = spawn(process.execPath, ['.'], {
+  app = spawn(mainExecutable || process.execPath, mainExecutable ? [] : ['.'], {
     cwd: repoRoot,
     detached: process.platform !== 'win32',
     env: {

@@ -12,13 +12,12 @@ import { once } from 'node:events'
 import puppeteer from 'puppeteer-core'
 import { startScriptedProvider } from './mainHostModelCompact.provider.mjs'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
-import { NEW_SESSION_DIALOG_TRIGGER } from './mainHostFixture.mjs'
+import { NEW_SESSION_DIALOG_TRIGGER, mainHostLaunch } from './mainHostFixture.mjs'
 
 const token = 'local-multimodel-test-api-token'
 const alphaToken = 'local-alpha-provider-secret'
 const betaToken = 'local-beta-provider-secret'
 const dll = process.env.FOXWARM_TEST_MAIN_DLL || resolve(import.meta.dirname, '../../../dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')
-const dotnet = join(process.env.DOTNET_ROOT || '', 'dotnet')
 assert(process.env.DOTNET_ROOT, 'Set DOTNET_ROOT to a .NET 10 SDK.')
 
 const root = await mkdtemp(join(tmpdir(), 'foxwarm-model-compact-browser-'))
@@ -51,7 +50,7 @@ async function json(hostPort, method, path, body) {
 }
 async function hostStart(hostPort, dataRoot, modelsFile) {
   await migrateModelFixture(dataRoot, modelsFile, { FOXWARM_ALPHA_PROVIDER_KEY: alphaToken, FOXWARM_BETA_PROVIDER_KEY: betaToken })
-  const child = spawn(dotnet, [dll], { detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: testEnvironment.isolatedApplicationEnv(dataRoot) })
+  const child = spawn(...mainHostLaunch(dll), { detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: testEnvironment.isolatedApplicationEnv(dataRoot) })
   let output = ''
   child.stdout.on('data', chunk => { output = (output + chunk).slice(-12000) })
   child.stderr.on('data', chunk => { output = (output + chunk).slice(-12000) })
