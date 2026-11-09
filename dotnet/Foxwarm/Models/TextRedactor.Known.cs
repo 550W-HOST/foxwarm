@@ -42,12 +42,12 @@ internal sealed partial class TextRedactor
     // placeholders and secret markers are never entered. An original whose edge is an ASCII
     // letter or digit only matches where the neighbouring character is not one, so a short
     // name does not replace part of a longer word. Originals detected only under labels this
-    // request excludes stay unchanged. The scan is one Aho-Corasick pass, linear in the text
+    // request excludes, and originals on its keep list, stay unchanged. The scan is one Aho-Corasick pass, linear in the text
     // length plus the occurrences found.
     internal List<Found> FindKnown(
         KnownOriginals originals,
         string text,
-        IReadOnlyList<string> excluded
+        TextRedactionOptions options
     )
     {
         var found = new List<Found>();
@@ -57,11 +57,11 @@ internal sealed partial class TextRedactor
         foreach (var (start, end) in Guarded(text))
         {
             if (start > cursor)
-                originals.Scan(text, cursor, start, excluded, found);
+                originals.Scan(text, cursor, start, options, found);
             cursor = Math.Max(cursor, end);
         }
         if (cursor < text.Length)
-            originals.Scan(text, cursor, text.Length, excluded, found);
+            originals.Scan(text, cursor, text.Length, options, found);
         return found;
     }
 
@@ -141,7 +141,7 @@ internal sealed partial class TextRedactor
             string text,
             int from,
             int to,
-            IReadOnlyList<string> excluded,
+            TextRedactionOptions options,
             List<Found> found
         )
         {
@@ -179,7 +179,8 @@ internal sealed partial class TextRedactor
                         if (
                             size > longest[start - from]
                             && Bounded(text, start, size)
-                            && !Excluded(patterns[output[match]].Labels, excluded)
+                            && !Excluded(patterns[output[match]].Labels, options.ExcludeLabels)
+                            && !options.Keeps(patterns[output[match]].Original)
                         )
                             longest[start - from] = size;
                     }

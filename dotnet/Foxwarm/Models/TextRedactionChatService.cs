@@ -58,9 +58,9 @@ internal sealed class TextRedactionChatService(
         JsonArray? tools;
         try
         {
-            // With a concurrency limit above one, detect the slot texts ahead, concurrently. The
-            // collecting pass runs on a throwaway copy because the projection rewrites slots.
-            if (settings.MaxConcurrency > 1)
+            // With combined calls or a concurrency limit above one, detect the slot texts ahead.
+            // The collecting pass runs on a throwaway copy because the projection rewrites slots.
+            if (settings.MaxConcurrency > 1 || settings.BatchBytes > 0)
             {
                 var texts = new List<string>();
                 Task<string> Collect(string text)

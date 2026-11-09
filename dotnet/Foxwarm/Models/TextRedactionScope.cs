@@ -41,41 +41,77 @@ internal sealed class TextRedactionScope(
     // caching still happen in slot order in `DetectAsync`.
     private readonly ConcurrentDictionary<string, Found[]> prefetched = new(StringComparer.Ordinal);
 
-    // Detects the uncached texts concurrently, up to the endpoint's limit, before the ordered
-    // pass consumes them. A failure fails the request as it would in the ordered pass; a text
-    // rejected as too large is left for that pass, which applies the same rule.
+    // Detects the uncached texts ahead of the ordered pass: combined into calls of up to
+    // `batchBytes` and sent concurrently up to the endpoint's limit. A failure fails the request
+    // as it would in the ordered pass. Texts of a call rejected as too large are left for that
+    // pass, which detects them one by one and applies the same rule.
     internal async Task PrefetchAsync(IEnumerable<string> texts)
     {
-        if (options.MaxConcurrency <= 1)
-            return;
         var pending = texts
             .Where(text => text.Length > 0)
             .Distinct(StringComparer.Ordinal)
             .Where(text => redactor.Cached(options, TextRedactor.Digest(text)) is null)
             .ToArray();
-        if (pending.Length < 2)
+        var calls = Batches(pending, options.BatchBytes);
+        // Ahead detection only helps when it combines texts or runs calls side by side.
+        var combined = calls.Any(call => call.Count > 1);
+        if (!combined && (options.MaxConcurrency <= 1 || calls.Count < 2))
             return;
         await Parallel
             .ForEachAsync(
-                pending,
+                calls,
                 new ParallelOptions
                 {
                     MaxDegreeOfParallelism = options.MaxConcurrency,
                     CancellationToken = token,
                 },
-                async (text, cancel) =>
+                async (call, cancel) =>
                 {
                     try
                     {
                         Stats?.Call();
-                        prefetched[text] = await redactor
-                            .DetectAsync(http, options, text, cancel)
+                        if (call.Count == 1)
+                        {
+                            prefetched[call[0]] = await redactor
+                                .DetectAsync(http, options, call[0], cancel)
+                                .ConfigureAwait(false);
+                            return;
+                        }
+                        var found = await redactor
+                            .DetectBatchAsync(http, options, call, cancel)
                             .ConfigureAwait(false);
+                        for (var index = 0; index < call.Count; index++)
+                            prefetched[call[index]] = found[index];
                     }
                     catch (TextRedactionException error) when (error.TooLarge) { }
                 }
             )
             .ConfigureAwait(false);
+    }
+
+    // Groups texts in order into calls whose combined UTF-8 size, separators included, stays
+    // within `limit`. A text at or above the limit, or any text when the limit is 0, is a call
+    // of its own.
+    internal static List<List<string>> Batches(IReadOnlyList<string> texts, int limit)
+    {
+        var calls = new List<List<string>>();
+        var separator = System.Text.Encoding.UTF8.GetByteCount(TextRedactor.BatchSeparator);
+        List<string>? current = null;
+        var size = 0;
+        foreach (var text in texts)
+        {
+            var bytes = System.Text.Encoding.UTF8.GetByteCount(text);
+            if (current is not null && size + separator + bytes <= limit)
+            {
+                current.Add(text);
+                size += separator + bytes;
+                continue;
+            }
+            current = [text];
+            size = bytes;
+            calls.Add(current);
+        }
+        return calls;
     }
 
     // Detection only. Unchanged slot text reuses its cached spans without a detection call.
@@ -166,7 +202,7 @@ internal sealed class TextRedactionScope(
     private Found[] Scan(string text)
     {
         originals ??= redactor.KnownSnapshot();
-        var found = redactor.FindKnown(originals, text, options.ExcludeLabels).ToArray();
+        var found = redactor.FindKnown(originals, text, options).ToArray();
         Register(found);
         return found;
     }

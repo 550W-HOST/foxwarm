@@ -24,6 +24,50 @@ internal sealed record TextRedactionOptions(
     // It does not change detection results, so it is not part of cache identity.
     internal int MaxConcurrency { get; init; } = 1;
 
+    // Values never replaced, trimmed, distinct ignoring case and sorted. A detected range whose
+    // text equals one (ignoring case and surrounding whitespace) is left in place and does not
+    // become a known value; known values on the list are not masked either. Part of cache
+    // identity, so a changed list applies to the next request. Configured values add to
+    // Foxwarm's own vocabulary, which is always kept.
+    internal IReadOnlyList<string> KeepValues { get; init; } = [];
+
+    // Names Foxwarm itself writes into model input: its name, the channel platforms in message
+    // envelopes, and `foxwarm-*` envelope tag names. The detector can mistake them for personal
+    // data in envelope context, and a mistaken value would otherwise be masked everywhere.
+    private static readonly HashSet<string> OwnVocabulary = new(
+        ["foxwarm", "webui", "telegram", "qqbot", "wework", "weixin", "matrix", "mcp"],
+        StringComparer.OrdinalIgnoreCase
+    );
+
+    private HashSet<string>? keepSet;
+
+    internal bool Keeps(string original)
+    {
+        var value = original.Trim();
+        if (OwnVocabulary.Contains(value) || IsEnvelopeTagName(value))
+            return true;
+        return KeepValues.Count > 0
+            && (
+                keepSet ??= new HashSet<string>(KeepValues, StringComparer.OrdinalIgnoreCase)
+            ).Contains(value);
+    }
+
+    // `foxwarm-` followed by lowercase letters, digits and hyphens.
+    private static bool IsEnvelopeTagName(string value) =>
+        value.Length > "foxwarm-".Length
+        && value.StartsWith("foxwarm-", StringComparison.OrdinalIgnoreCase)
+        && value.All(character =>
+            character is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9' or '-'
+        );
+
+    internal const int BatchBytesLimit = 262144;
+
+    // Combines uncached slot texts into detection calls of up to this many UTF-8 bytes; 0 sends
+    // each slot alone. A combined call lets the detector see neighbouring slots as context, so
+    // results can differ slightly from single-slot detection. Cache entries are shared either
+    // way, so it is not part of cache identity.
+    internal int BatchBytes { get; init; }
+
     // Labels match case-insensitively and ignore surrounding whitespace.
     internal static string NormalizeLabel(string label) => label.Trim().ToLowerInvariant();
 
@@ -33,10 +77,18 @@ internal sealed record TextRedactionOptions(
         && ApiKey == other.ApiKey
         && Threshold.Equals(other.Threshold)
         && TimeoutMs == other.TimeoutMs
-        && ExcludeLabels.SequenceEqual(other.ExcludeLabels, StringComparer.Ordinal);
+        && ExcludeLabels.SequenceEqual(other.ExcludeLabels, StringComparer.Ordinal)
+        && KeepValues.SequenceEqual(other.KeepValues, StringComparer.Ordinal);
 
     public override int GetHashCode() =>
-        HashCode.Combine(Endpoint, ApiKey, Threshold, TimeoutMs, string.Join('\n', ExcludeLabels));
+        HashCode.Combine(
+            Endpoint,
+            ApiKey,
+            Threshold,
+            TimeoutMs,
+            string.Join('\n', ExcludeLabels),
+            string.Join('\n', KeepValues)
+        );
 
     internal static void Validate(JsonNode? value)
     {
@@ -71,6 +123,14 @@ internal sealed record TextRedactionOptions(
                     && double.IsFinite(concurrency)
                     && concurrency is >= 1 and <= MaxConcurrencyLimit
                     && Math.Floor(concurrency) == concurrency,
+                "batchBytes" => SessionWait.Number(item) is double batch
+                    && double.IsFinite(batch)
+                    && batch is >= 0 and <= BatchBytesLimit
+                    && Math.Floor(batch) == batch,
+                "keepValues" => item is JsonArray values
+                    && values.All(value =>
+                        SessionWait.Text(value) is string text && text.Trim().Length > 0
+                    ),
                 "excludeLabels" => item is JsonArray labels
                     && labels.All(label =>
                         SessionWait.Text(label) is string text && text.Trim().Length > 0
@@ -122,6 +182,7 @@ internal sealed record TextRedactionOptions(
                 1,
                 "textRedaction.maxConcurrency"
             ),
+            BatchBytes = (int)(SessionWait.Number(options["batchBytes"]) ?? 0),
             ExcludeLabels = options["excludeLabels"] is JsonArray labels
                 ? labels
                     .Select(label => NormalizeLabel(SessionWait.Text(label)!))
@@ -129,6 +190,15 @@ internal sealed record TextRedactionOptions(
                     .Order(StringComparer.Ordinal)
                     .ToArray()
                 : DefaultExcludeLabels,
+            KeepValues = options["keepValues"] is JsonArray values
+                ? values
+                    .Select(value => SessionWait.Text(value)!.Trim())
+                    .GroupBy(value => value, StringComparer.OrdinalIgnoreCase)
+                    .Select(group => group.First())
+                    .Order(StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(value => value, StringComparer.Ordinal)
+                    .ToArray()
+                : [],
         };
     }
 

@@ -36,10 +36,15 @@ internal sealed partial class TextRedactor
             (options.Endpoint, options.MaxConcurrency),
             static key => new SemaphoreSlim(key.Limit, key.Limit)
         );
+        var input = Encode(text);
         await queue.WaitAsync(token).ConfigureAwait(false);
         try
         {
-            return await SendDetectionAsync(http, options, text, token).ConfigureAwait(false);
+            return ToFound(
+                options,
+                input,
+                await ClassifyAsync(http, options, text, input, token).ConfigureAwait(false)
+            );
         }
         finally
         {
@@ -47,10 +52,69 @@ internal sealed partial class TextRedactor
         }
     }
 
-    private async Task<Found[]> SendDetectionAsync(
+    // Separates slot texts combined into one detection call. Paragraph breaks keep each slot
+    // a separate passage for the detector, and the bytes are ASCII so slot boundaries stay
+    // UTF-8 character boundaries.
+    internal const string BatchSeparator = "\n\n";
+
+    // One detection call for several slot texts joined by `BatchSeparator`. Each detected
+    // range is clipped to the slots it overlaps and moved to that slot's own offsets; a
+    // clipped part that is only whitespace is dropped. A range that crosses a separator is
+    // therefore replaced in both slots. The detector sees neighbouring slots as context, so a
+    // result may differ from detecting the slot alone.
+    internal async Task<Found[][]> DetectBatchAsync(
+        HttpClient http,
+        TextRedactionOptions options,
+        IReadOnlyList<string> texts,
+        CancellationToken token
+    )
+    {
+        var joined = string.Join(BatchSeparator, texts);
+        var input = Encode(joined);
+        var queue = EndpointQueues.GetOrAdd(
+            (options.Endpoint, options.MaxConcurrency),
+            static key => new SemaphoreSlim(key.Limit, key.Limit)
+        );
+        List<(int Start, int End, string[] Labels)> spans;
+        await queue.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            spans = await ClassifyAsync(http, options, joined, input, token).ConfigureAwait(false);
+        }
+        finally
+        {
+            queue.Release();
+        }
+        var results = new Found[texts.Count][];
+        var separatorBytes = Utf8.GetByteCount(BatchSeparator);
+        var slotStart = 0;
+        for (var index = 0; index < texts.Count; index++)
+        {
+            var slot = Encode(texts[index]);
+            var slotEnd = slotStart + slot.Length;
+            var local = new List<(int Start, int End, string[] Labels)>();
+            foreach (var (start, end, labels) in spans)
+            {
+                var clippedStart = Math.Max(start, slotStart) - slotStart;
+                var clippedEnd = Math.Min(end, slotEnd) - slotStart;
+                if (clippedStart >= clippedEnd)
+                    continue;
+                if (slot.AsSpan(clippedStart, clippedEnd - clippedStart).Trim(" \t\r\n"u8).IsEmpty)
+                    continue;
+                local.Add((clippedStart, clippedEnd, labels));
+            }
+            results[index] = ToFound(options, slot, local);
+            slotStart = slotEnd + separatorBytes;
+        }
+        return results;
+    }
+
+    // Sends one text and returns the detected byte ranges whose labels are not excluded.
+    private static async Task<List<(int Start, int End, string[] Labels)>> ClassifyAsync(
         HttpClient http,
         TextRedactionOptions options,
         string text,
+        byte[] input,
         CancellationToken token
     )
     {
@@ -58,7 +122,6 @@ internal sealed partial class TextRedactor
         deadline.CancelAfter(options.TimeoutMs);
         try
         {
-            var input = Utf8.GetBytes(text);
             var body = new JsonObject { ["text"] = text, ["threshold"] = options.Threshold };
             using var request = new HttpRequestMessage(HttpMethod.Post, options.Endpoint)
             {
@@ -123,39 +186,7 @@ internal sealed partial class TextRedactor
                     continue;
                 spans.Add((start.Value, end.Value, [label]));
             }
-            spans.Sort((left, right) => left.Start.CompareTo(right.Start));
-            var merged = new List<(int Start, int End, string[] Labels)>();
-            foreach (var span in spans)
-            {
-                if (merged.Count > 0 && span.Start < merged[^1].End)
-                    merged[^1] = (
-                        merged[^1].Start,
-                        Math.Max(merged[^1].End, span.End),
-                        merged[^1].Labels.Union(span.Labels, StringComparer.Ordinal).ToArray()
-                    );
-                else
-                    merged.Add(span);
-            }
-            var found = new List<Found>();
-            var byteCursor = 0;
-            var charCursor = 0;
-            foreach (var (start, end, labels) in WithoutSecretMarkers(input, merged))
-            {
-                charCursor += Utf8.GetCharCount(input, byteCursor, start - byteCursor);
-                var original = Utf8.GetString(input, start, end - start);
-                found.Add(
-                    new(
-                        charCursor,
-                        original.Length,
-                        Placeholder(input.AsSpan(start, end - start)),
-                        original,
-                        labels
-                    )
-                );
-                charCursor += original.Length;
-                byteCursor = end;
-            }
-            return found.ToArray();
+            return spans;
         }
         catch (OperationCanceledException) when (!token.IsCancellationRequested)
         {
@@ -191,6 +222,53 @@ internal sealed partial class TextRedactor
         {
             throw InvalidResponse();
         }
+    }
+
+    // Drops ranges whose text is a kept value, merges overlapping ranges, keeps secret
+    // markers, and converts byte ranges of `input`
+    // into replaced UTF-16 ranges with their placeholders.
+    private Found[] ToFound(
+        TextRedactionOptions options,
+        byte[] input,
+        List<(int Start, int End, string[] Labels)> spans
+    )
+    {
+        spans.RemoveAll(span =>
+            options.Keeps(Utf8.GetString(input, span.Start, span.End - span.Start))
+        );
+        spans.Sort((left, right) => left.Start.CompareTo(right.Start));
+        var merged = new List<(int Start, int End, string[] Labels)>();
+        foreach (var span in spans)
+        {
+            if (merged.Count > 0 && span.Start < merged[^1].End)
+                merged[^1] = (
+                    merged[^1].Start,
+                    Math.Max(merged[^1].End, span.End),
+                    merged[^1].Labels.Union(span.Labels, StringComparer.Ordinal).ToArray()
+                );
+            else
+                merged.Add(span);
+        }
+        var found = new List<Found>();
+        var byteCursor = 0;
+        var charCursor = 0;
+        foreach (var (start, end, labels) in WithoutSecretMarkers(input, merged))
+        {
+            charCursor += Utf8.GetCharCount(input, byteCursor, start - byteCursor);
+            var original = Utf8.GetString(input, start, end - start);
+            found.Add(
+                new(
+                    charCursor,
+                    original.Length,
+                    Placeholder(input.AsSpan(start, end - start)),
+                    original,
+                    labels
+                )
+            );
+            charCursor += original.Length;
+            byteCursor = end;
+        }
+        return found.ToArray();
     }
 
     // Secret markers from the irreversible secret stage pass through unchanged: a detected
@@ -255,6 +333,20 @@ internal sealed partial class TextRedactor
         && Math.Floor(value) == value
             ? (int)value
             : null;
+
+    // Text that cannot be encoded strictly (an unpaired surrogate) cannot be matched to the
+    // service's byte offsets.
+    private static byte[] Encode(string text)
+    {
+        try
+        {
+            return Utf8.GetBytes(text);
+        }
+        catch (EncoderFallbackException)
+        {
+            throw InvalidResponse();
+        }
+    }
 
     private static TextRedactionException InvalidResponse() =>
         new(

@@ -482,7 +482,15 @@ public sealed class TextRedactionDeltaRegressionTests(Xunit.Abstractions.ITestOu
                     .Select(_ => alphabet[random.Next(alphabet.Length)])
                     .ToArray()
             );
-        var excluded = new[] { "private_date" };
+        var excluded = new TextRedactionOptions(
+            new Uri("http://detector.invalid/"),
+            null,
+            0.5,
+            1000
+        )
+        {
+            ExcludeLabels = ["private_date"],
+        };
         for (var round = 0; round < 40; round++)
         {
             var redactor = new TextRedactor(Key);

@@ -559,6 +559,8 @@ var textRedaction = {
         threshold: { type: "number", minimum: 0, maximum: 1, default: 0.5 },
         timeoutMs: { type: "integer", minimum: 1, maximum: 2147483647, default: 3e4 },
         maxConcurrency: { type: "integer", minimum: 1, maximum: 64, default: 1, description: "Detection requests sent to this endpoint at once, shared by all Sessions. Use 1 for a service that handles one request at a time without queueing." },
+        batchBytes: { type: "integer", minimum: 0, maximum: 262144, default: 0, description: "Combine short texts into detection requests of up to this many bytes. 0 sends each text separately. Combined texts give the detector more context, so results can differ slightly." },
+        keepValues: { type: "array", items: { type: "string", pattern: "\\S" }, default: [], description: "Values never replaced, such as project or product names the detector mistakes for personal data. Matching ignores case. A list replaces the inherited list. Foxwarm's own names, such as channel platforms and message tags, are always kept." },
         excludeLabels: { type: "array", items: { type: "string", pattern: "\\S" }, default: ["private_date", "private_url"], description: "Detection labels to leave unchanged. A list replaces the inherited one; an empty list redacts every label." }
       }
     }

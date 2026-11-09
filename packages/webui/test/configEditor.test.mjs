@@ -71,11 +71,11 @@ test('text redaction schema supports inherited options and concrete disablement'
   const config = {
     defaults: { textRedaction: { enabled: true, endpoint: 'https://detector.example/classify', threshold: 0.5 } },
     providers: {
-      p: { textRedaction: { timeoutMs: 1000, maxConcurrency: 4, excludeLabels: [] }, models: ['inherited', { id: 'off', textRedaction: false }, { id: 'dates', textRedaction: { excludeLabels: ['private_url'] } }] },
+      p: { textRedaction: { timeoutMs: 1000, maxConcurrency: 4, batchBytes: 65536, keepValues: ['Foxwarm'], excludeLabels: [] }, models: ['inherited', { id: 'off', textRedaction: false }, { id: 'dates', textRedaction: { excludeLabels: ['private_url'] } }] },
     },
   }
   assert.equal(validateModelsSchema(config), true, JSON.stringify(validateModelsSchema.errors))
-  for (const invalid of [null, { enabled: 'yes' }, { threshold: 1.1 }, { timeoutMs: 0 }, { maxConcurrency: 0 }, { maxConcurrency: 65 }, { maxConcurrency: 1.5 }, { endpoint: 'file:///invalid' }, { unknown: true }, { excludeLabels: 'private_url' }, { excludeLabels: [''] }, { excludeLabels: [' '] }, { excludeLabels: [1] }]) {
+  for (const invalid of [null, { enabled: 'yes' }, { threshold: 1.1 }, { timeoutMs: 0 }, { maxConcurrency: 0 }, { maxConcurrency: 65 }, { maxConcurrency: 1.5 }, { batchBytes: -1 }, { batchBytes: 262145 }, { batchBytes: 0.5 }, { keepValues: 'Foxwarm' }, { keepValues: [''] }, { keepValues: [1] }, { endpoint: 'file:///invalid' }, { unknown: true }, { excludeLabels: 'private_url' }, { excludeLabels: [''] }, { excludeLabels: [' '] }, { excludeLabels: [1] }]) {
     assert.equal(validateModelsSchema({ defaults: { textRedaction: invalid }, providers: { p: {} } }), false)
   }
   assert.equal(validateModelsSchema({ providers: { p: {}, alias: { providerType: 'session-hash', targets: ['p'], textRedaction: false } } }), false)
