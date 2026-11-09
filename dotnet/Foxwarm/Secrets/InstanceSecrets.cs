@@ -17,7 +17,11 @@ internal sealed partial class InstanceSecrets : IDisposable
     private SecretRedactor redactor = SecretRedactor.Empty;
     private long builtGeneration = -1;
     private long builtAt;
-    private int invalidated = 1;
+
+    // Invalidate advances this count; a build records the count it started from, so a
+    // build in progress never makes its predecessor look current.
+    private long invalidations;
+    private long builtInvalidations = -1;
     private int rebuildScheduled;
     private string? lastBuildFailure;
 
@@ -116,7 +120,7 @@ internal sealed partial class InstanceSecrets : IDisposable
 
     internal void Invalidate()
     {
-        Interlocked.Exchange(ref invalidated, 1);
+        Interlocked.Increment(ref invalidations);
         // Log lines and canonical appends use the last built matcher and never rebuild it;
         // rebuild in the background so they see changes without waiting for other traffic.
         if (Interlocked.Exchange(ref rebuildScheduled, 1) == 0)
@@ -149,7 +153,7 @@ internal sealed partial class InstanceSecrets : IDisposable
                 var now = clock.GetTimestamp();
                 if (Current(now))
                     return redactor;
-                Interlocked.Exchange(ref invalidated, 0);
+                var invalidation = Interlocked.Read(ref invalidations);
                 var generation = Store.Generation;
                 var known = new List<KnownSecret>();
                 try
@@ -177,6 +181,7 @@ internal sealed partial class InstanceSecrets : IDisposable
                 Volatile.Write(ref redactor, new SecretRedactor(known));
                 Interlocked.Exchange(ref builtGeneration, generation);
                 Interlocked.Exchange(ref builtAt, now);
+                Interlocked.Exchange(ref builtInvalidations, invalidation);
                 return redactor;
             }
             finally
@@ -188,7 +193,7 @@ internal sealed partial class InstanceSecrets : IDisposable
     }
 
     private bool Current(long now) =>
-        Volatile.Read(ref invalidated) == 0
+        Interlocked.Read(ref invalidations) == Interlocked.Read(ref builtInvalidations)
         && Store.Generation == Interlocked.Read(ref builtGeneration)
         && clock.GetElapsedTime(Interlocked.Read(ref builtAt), now) < SourceRefresh;
 

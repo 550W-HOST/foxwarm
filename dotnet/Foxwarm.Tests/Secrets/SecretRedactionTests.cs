@@ -138,4 +138,63 @@ public sealed class SecretRedactionTests
         Assert.Contains(secrets.Exposures.List(), item => item.LastSource == "model-request");
         secrets.Dispose();
     }
+
+    // Source refreshes are then driven only by invalidation, not by elapsed time.
+    private sealed class StoppedClock : TimeProvider
+    {
+        public override long GetTimestamp() => 0;
+    }
+
+    [Fact]
+    public void A_reader_during_a_rebuild_waits_for_the_rebuilt_matcher()
+    {
+        const string before = "synthetic-source-value-before-0001";
+        const string after = "synthetic-source-value-after-0002";
+        using var temp = new TempDirectory();
+        using var secrets = new InstanceSecrets(temp.Path, new StoppedClock());
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var current = before;
+        var holdNext = 0;
+        secrets.AddSource(
+            "source",
+            () =>
+            {
+                var value = Volatile.Read(ref current);
+                if (Interlocked.Exchange(ref holdNext, 0) == 1)
+                {
+                    entered.Set();
+                    release.Wait();
+                }
+                return [new KnownSecret("source", value)];
+            }
+        );
+        Assert.Equal("got [[FW_SECRET:source]]", secrets.Redact("got " + before, "test"));
+
+        // A configuration change publishes the new value and invalidates. Hold the rebuild
+        // that reads it while another caller asks for the matcher: that caller must wait for
+        // the rebuild rather than mask with the previous matcher.
+        Volatile.Write(ref current, after);
+        Volatile.Write(ref holdNext, 1);
+        secrets.Invalidate();
+        var rebuild = Task.Run(() => secrets.Redactor);
+        Assert.True(entered.Wait(TimeSpan.FromSeconds(30)), "the rebuild did not read the source");
+        string? observed = null;
+        var reader = new Thread(() => observed = secrets.Redact("got " + after, "test"));
+        reader.Start();
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+        while (
+            reader.IsAlive && (reader.ThreadState & System.Threading.ThreadState.WaitSleepJoin) == 0
+        )
+        {
+            Assert.True(DateTime.UtcNow < deadline, "the reader neither finished nor waited");
+            Thread.Yield();
+        }
+        var finishedDuringRebuild = !reader.IsAlive;
+        release.Set();
+        rebuild.Wait();
+        reader.Join();
+        Assert.False(finishedDuringRebuild, "the reader used the matcher from before the change");
+        Assert.Equal("got [[FW_SECRET:source]]", observed);
+    }
 }
