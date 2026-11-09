@@ -113,4 +113,31 @@ public sealed class SecretSetupRouteTests
         );
         Assert.Equal("[[FW_SECRET:node-pairing-token]]", manager.Secrets.Redactor.Redact(pairing));
     }
+
+    [Theory]
+    [InlineData("sk-synthetic-literal-draft-0004", "sk-synthetic-literal-draft-0004")]
+    [InlineData("${secret:provider-key}", Value)]
+    public void Setup_provider_drafts_resolve_with_the_secret_store(string apiKey, string token)
+    {
+        using var temp = new TempDirectory();
+        using var secrets = new Foxwarm.Secrets.InstanceSecrets(temp.Path);
+        secrets.Store.Set("provider-key", Value);
+        var provider = new JsonObject
+        {
+            ["providerType"] = "openai-responses",
+            ["baseUrl"] = "http://127.0.0.1:9/v1",
+            ["apiKey"] = apiKey,
+            ["models"] = new JsonArray("draft-model"),
+        };
+        var model = SetupProviderRequests.ResolveTransientModel(
+            provider,
+            new JsonObject(),
+            "draft",
+            "draft-model",
+            secrets
+        );
+        Assert.Equal(token, model.Token);
+        Assert.Equal("draft-model", model.ModelId);
+        Assert.Equal(apiKey, provider["apiKey"]!.GetValue<string>());
+    }
 }

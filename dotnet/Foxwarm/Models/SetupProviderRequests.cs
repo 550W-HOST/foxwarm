@@ -128,7 +128,7 @@ internal static class SetupProviderRequests
                 )["llm"]!.DeepClone();
             }
             if (missing.Count == 0)
-                return (wrapped["providers"]!["setup"]!.AsObject(), resolvedApp);
+                return ((JsonObject)wrapped["providers"]!["setup"]!.DeepClone(), resolvedApp);
         }
         catch (Foxwarm.Secrets.SecretStoreLockedException)
         {
