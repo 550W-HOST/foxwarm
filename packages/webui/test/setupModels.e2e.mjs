@@ -719,11 +719,22 @@ test('Setup uses accessible Appearance, Models, Config, Secrets and Notification
     assert.deepEqual(secretRequests.filter(entry => entry.method === 'PUT').map(entry => ({ ...entry, path: entry.path.replace(/^.*\/api\//, '/api/') })), [{ method: 'PUT', path: '/api/setup/secrets/telegram-token', body: { value: 'short-value' } }])
     assert.equal(await setupPage.$eval('form[aria-label="Add secret"] input[type="password"]', input => input.value), '')
     assert.equal((await setupPage.$eval('[data-setup-section="secrets"]', element => element.textContent || '')).includes('short-value'), false)
+    // The Setup Refresh action also reloads Secrets, which has no refresh control of its own.
+    const secretLoads = () => secretRequests.filter(entry => entry.method === 'GET').length
+    const loadsBeforeRefresh = secretLoads()
+    await setupPage.click('button::-p-text(Refresh)')
+    const deadline = Date.now() + 5000
+    while (secretLoads() === loadsBeforeRefresh && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 25))
+    assert.equal(secretLoads(), loadsBeforeRefresh + 1)
+    const contentBox = (section) => setupPage.$eval(`[data-setup-section="${section}"] > div`, element => { const box = element.getBoundingClientRect(); return { left: box.left, width: box.width } })
+    const secretsBox = await contentBox('secrets')
     await setupPage.focus('[data-setup-tab="secrets"]')
     await setupPage.keyboard.press('ArrowRight')
     await setupPage.waitForSelector('[data-setup-tab="notifications"][aria-selected="true"]')
     assert.equal(await setupPage.$eval('[data-setup-section="notifications"]', (panel) => panel.hidden), false)
     await setupPage.waitForSelector('[data-question-notification-choice="all"] input:checked')
+    // Secrets uses the same content column as the other Setup panels.
+    assert.deepEqual(secretsBox, await contentBox('notifications'))
     await setupPage.keyboard.press('ArrowRight')
     await setupPage.waitForSelector('[data-setup-tab="appearance"][aria-selected="true"]')
     assert.equal(await setupPage.$eval('[data-theme-manager]', element => element.textContent?.includes('Appearance')), true)

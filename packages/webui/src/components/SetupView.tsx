@@ -152,6 +152,12 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
   const [status, setStatus] = useState<SetupStatus | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // Secrets loads its own data; the Setup Refresh action reloads it too.
+  const [secretsRefreshRequest, setSecretsRefreshRequest] = useState(0)
+  const refreshSetup = () => {
+    setSecretsRefreshRequest((current) => current + 1)
+    void loadStatus()
+  }
 
   const [rawModelsYaml, setRawModelsYaml] = useState(DEFAULT_MODELS_YAML)
   const [configYaml, setConfigYaml] = useState(DEFAULT_CONFIG_YAML)
@@ -481,7 +487,7 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => void loadStatus()}
+              onClick={refreshSetup}
               className="inline-flex items-center gap-1 rounded-lg border border-fw-border px-3 py-1.5 text-sm font-medium text-fw-text hover:bg-fw-hover dark:border-fw-border dark:text-fw-text-strong dark:hover:bg-fw-hover"
             >
               <RefreshCw className="h-4 w-4" /> Refresh
@@ -505,7 +511,7 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
         {key:'config',label:'Config',checked:activeTab==='config',selection:'radio',icon:<SlidersHorizontal size={16}/>,onSelect:()=>activateTab('config')},
         {key:'secrets',label:'Secrets',checked:activeTab==='secrets',selection:'radio',icon:<KeyRound size={16}/>,onSelect:()=>activateTab('secrets')},
         {key:'notifications',label:'Notifications',checked:activeTab==='notifications',selection:'radio',icon:<Bell size={16}/>,onSelect:()=>activateTab('notifications')},
-        {key:'sep',type:'separator'}, {key:'refresh',label:'Refresh',icon:<RefreshCw size={16}/>,onSelect:()=>{void loadStatus()}},
+        {key:'sep',type:'separator'}, {key:'refresh',label:'Refresh',icon:<RefreshCw size={16}/>,onSelect:refreshSetup},
       ]} />
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -691,7 +697,9 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
             </section>
 
             <section id="setup-panel-secrets" role="tabpanel" aria-labelledby="setup-tab-secrets" data-setup-section="secrets" hidden={activeTab !== 'secrets'} className="min-h-0 flex-1 overflow-y-auto p-4 md:p-5">
-              {activeTab === 'secrets' && <SecretsPanel />}
+              <div className="mx-auto w-full max-w-5xl">
+                {activeTab === 'secrets' && <SecretsPanel refreshRequest={secretsRefreshRequest} />}
+              </div>
             </section>
 
             <section id="setup-panel-notifications" role="tabpanel" aria-labelledby="setup-tab-notifications" data-setup-section="notifications" hidden={activeTab !== 'notifications'} className="min-h-0 flex-1 overflow-y-auto p-4 md:p-5">
