@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
+using Found = Foxwarm.Models.TextRedactor.Found;
 
 namespace Foxwarm.Models;
 
@@ -18,6 +19,13 @@ internal sealed class TextRedactionScope(
 
     private readonly Dictionary<string, string> registered = new(StringComparer.Ordinal);
 
+    // Literal masking is memoized per cached slot. `pending` maps detected text awaiting the
+    // literal pass to the cache digests of its slots; `finished` maps text whose result is
+    // already known in this attempt to that result.
+    private readonly Dictionary<string, List<string>> pending = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> finished = new(StringComparer.Ordinal);
+    private TextRedactor.KnownOriginals? originals;
+
     // Compaction replaces a slot the detection service rejects as too large instead of
     // failing, so a long message cannot prevent the Session from being compacted.
     internal bool OmitOversized { get; init; }
@@ -33,8 +41,18 @@ internal sealed class TextRedactionScope(
         var digest = Convert.ToHexStringLower(
             SHA256.HashData(MemoryMarshal.AsBytes(text.AsSpan()))
         );
-        var spans = redactor.Cached(options, digest);
-        if (spans is null)
+        var cached = redactor.Cached(options, digest);
+        if (cached is { Masked: { } masked })
+        {
+            // Already through both passes: send it exactly as before.
+            Register(cached.Value.Spans);
+            Register(masked);
+            var result = TextRedactor.Apply(TextRedactor.Apply(text, cached.Value.Spans), masked);
+            finished.TryAdd(result, result);
+            return result;
+        }
+        Found[] spans;
+        if (cached is null)
         {
             try
             {
@@ -51,19 +69,45 @@ internal sealed class TextRedactionScope(
             redactor.Cache(options, digest, spans);
         }
         else
+        {
+            spans = cached.Value.Spans;
             Register(spans);
-        return TextRedactor.Apply(text, spans);
+        }
+        // New registrations may need a newer matcher for the literal pass.
+        originals = null;
+        var detected = TextRedactor.Apply(text, spans);
+        if (!pending.TryGetValue(detected, out var digests))
+            pending[detected] = digests = [];
+        digests.Add(digest);
+        return detected;
     }
 
     // Replaces exact occurrences of originals that earlier detections replaced, whatever the
-    // detector reports for this text.
+    // detector reports for this text. A slot detected in this attempt is scanned once, and
+    // its result is kept with the slot's cached detection; a slot that already has one is
+    // returned unchanged even if more originals are known now.
     internal string MaskKnown(string text)
     {
-        var found = redactor.FindKnown(text, options.ExcludeLabels);
-        if (found.Count == 0)
-            return text;
+        if (pending.Remove(text, out var digests))
+        {
+            var found = Scan(text);
+            var result = TextRedactor.Apply(text, found);
+            foreach (var digest in digests)
+                redactor.Memoize(options, digest, found);
+            finished[text] = result;
+            return result;
+        }
+        if (finished.TryGetValue(text, out var known))
+            return known;
+        return TextRedactor.Apply(text, Scan(text));
+    }
+
+    private Found[] Scan(string text)
+    {
+        originals ??= redactor.KnownSnapshot();
+        var found = redactor.FindKnown(originals, text, options.ExcludeLabels).ToArray();
         Register(found);
-        return TextRedactor.Apply(text, found);
+        return found;
     }
 
     internal async Task<string> RedactAsync(string text) =>

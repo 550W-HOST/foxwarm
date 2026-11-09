@@ -216,11 +216,21 @@ internal sealed class ModelRequestOwner(
                 }
                 if (explicitSelectionChanged)
                     redactionRequired = null;
-                var selection =
-                    request is null ? null
-                    : redactionRequired == true
-                        ? routing.Select(request, cacheKey, target => Redacts(catalog, target))
-                    : routing.Select(request, cacheKey);
+                // Route health is shared by every Session. When a failover route's primary
+                // target redacts, every request on it admits only redacting targets from its
+                // first attempt, so a cooling primary never starts a request on a plain one.
+                if (
+                    redactionRequired is null
+                    && request is { Strategy: "failover" }
+                    && Redacts(catalog, request.Targets[0])
+                )
+                    redactionRequired = true;
+                var redactingCatalog = catalog;
+                Func<string, bool>? eligible =
+                    redactionRequired == true ? target => Redacts(redactingCatalog, target) : null;
+                var selection = request is null
+                    ? null
+                    : routing.Select(request, cacheKey, eligible);
                 var leaf =
                     selection is null ? route
                     : catalog.Contains(selection.TargetKey) ? catalog.Resolve(selection.TargetKey)
@@ -603,7 +613,16 @@ internal sealed class ModelRequestOwner(
                         ? routing.Failed(request, selection, cause is not null)
                         : null;
                 var terminalTarget = routed?.Terminal == true;
-                var failsOver = routed is { Terminal: false, EnteredCooldown: true };
+                // With only ineligible alternatives left, the next selection is this same
+                // target again; a configuration cause then ends the request as it does for a
+                // single model.
+                var failsOver =
+                    routed is { Terminal: false, EnteredCooldown: true }
+                    && (
+                        eligible is null
+                        || routing.Select(request!, cacheKey, eligible).TargetKey
+                            != selection!.TargetKey
+                    );
                 var final =
                     !failure.Retryable
                     || terminalTarget

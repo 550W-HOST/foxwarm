@@ -70,9 +70,11 @@ internal static class SecretConfigurationChanges
 
     // Detector settings inherit field by field, so an endpoint at any level can redirect a
     // referenced key from another level. Compare each concrete leaf's effective settings as
-    // the catalog itself enumerates and resolves them, before and after the edit. A leaf whose
-    // detector key is a reference must keep its endpoint, key source and enablement; a new
-    // leaf counts as changed from disabled, while removing a leaf sends nothing anywhere.
+    // the catalog itself enumerates and resolves them, before and after the edit. An existing
+    // leaf whose detector key is a reference must keep its endpoint, key source and
+    // enablement. A new leaf (added or renamed) may use a referenced key only with an endpoint
+    // that key is already paired with, so it cannot newly send the key anywhere; removing a
+    // leaf sends nothing anywhere.
     private static void RequireDetectorRoutes(
         JsonObject current,
         JsonObject candidate,
@@ -83,9 +85,16 @@ internal static class SecretConfigurationChanges
         // leaf escapes this comparison. An unreadable current file makes every leaf new.
         var after = DetectorRoutes(HostModels.Parse(candidate, app));
         Dictionary<string, DetectorRoute> before;
+        var paired = new HashSet<(string? Endpoint, string? ApiKey)>();
         try
         {
             before = DetectorRoutes(HostModels.Parse(current, app));
+            foreach (var route in before.Values)
+                paired.Add((route.Endpoint, route.ApiKey));
+            if (current["defaults"]?["textRedaction"] is JsonObject defaults)
+                paired.Add(
+                    (SessionWait.Text(defaults["endpoint"]), SessionWait.Text(defaults["apiKey"]))
+                );
         }
         catch (InvalidDataException)
         {
@@ -93,24 +102,23 @@ internal static class SecretConfigurationChanges
         }
         foreach (var (key, route) in after)
         {
-            var previous = before.GetValueOrDefault(key, DetectorRoute.Disabled);
-            if (
-                route != previous
-                && (
-                    SecretReferences.Contains(route.ApiKey)
-                    || SecretReferences.Contains(previous.ApiKey)
-                )
-            )
+            var changed = before.TryGetValue(key, out var previous)
+                ? route != previous
+                    && (
+                        SecretReferences.Contains(route.ApiKey)
+                        || SecretReferences.Contains(previous.ApiKey)
+                    )
+                : SecretReferences.Contains(route.ApiKey)
+                    && route.Endpoint is not null
+                    && !paired.Contains((route.Endpoint, route.ApiKey));
+            if (changed)
                 throw new InvalidDataException(
                     string.Format(SetConfigDenied, "text redaction for model " + key)
                 );
         }
     }
 
-    private sealed record DetectorRoute(bool Enabled, string? Endpoint, string? ApiKey)
-    {
-        internal static DetectorRoute Disabled { get; } = new(false, null, null);
-    }
+    private sealed record DetectorRoute(bool Enabled, string? Endpoint, string? ApiKey);
 
     // Raw documents keep reference text, so ApiKey is the configured key source.
     private static Dictionary<string, DetectorRoute> DetectorRoutes(HostModels catalog)

@@ -20,9 +20,10 @@ internal sealed class TextRedactionException(string message, bool retryable, boo
 //
 // The redactor owns two bounded memory-only stores. The reverse map records which original
 // each placeholder replaced; it detects collisions and lets later requests mask known
-// originals literally. The detection cache records detected spans per distinct slot text.
-// Neither store restores output: restoration uses only the pairs one request registered
-// (`TextRedactionScope`).
+// originals literally. The detection cache records, per distinct slot text, the detected
+// spans and, once the slot has been through literal masking, that pass's spans, so an
+// unchanged slot is sent the same way while it stays cached. Neither store restores output:
+// restoration uses only the pairs one request registered (`TextRedactionScope`).
 internal sealed partial class TextRedactor
 {
     internal const string Prefix = "[[PRIVATE_";
@@ -47,9 +48,6 @@ internal sealed partial class TextRedactor
     private readonly Dictionary<string, LinkedListNode<Known>> known = new(StringComparer.Ordinal);
     private readonly LinkedList<Known> knownOrder = new();
 
-    // Known originals indexed by their first two UTF-16 code units, longest first.
-    private readonly Dictionary<int, List<Known>> byPrefix = new();
-
     // One replaced range of a slot text, in UTF-16 code units.
     internal readonly record struct Found(
         int Start,
@@ -61,19 +59,24 @@ internal sealed partial class TextRedactor
 
     private sealed record DetectionKey(TextRedactionOptions Options, string Digest);
 
-    private sealed record Detection(DetectionKey Key, Found[] Spans)
+    // Masked holds the literal pass's spans over the detected text, once that pass has run.
+    private sealed record Detection(DetectionKey Key, Found[] Spans, Found[]? Masked = null)
     {
         internal long Size =>
             EntryOverhead
             + 2L * Key.Digest.Length
-            + Spans.Sum(span =>
+            + SpansSize(Spans)
+            + (Masked is null ? 0 : SpansSize(Masked));
+
+        private static long SpansSize(Found[] spans) =>
+            spans.Sum(span =>
                 EntryOverhead
                 + 2L * (span.Placeholder.Length + span.Original.Length)
                 + span.Labels.Sum(label => 2L * label.Length)
             );
     }
 
-    private sealed class Known(string placeholder, string original, string[] labels)
+    internal sealed class Known(string placeholder, string original, string[] labels)
     {
         internal string Placeholder { get; } = placeholder;
         internal string Original { get; } = original;
@@ -171,7 +174,7 @@ internal sealed partial class TextRedactor
         return Restore(text, registered);
     }
 
-    internal Found[]? Cached(TextRedactionOptions options, string digest)
+    internal (Found[] Spans, Found[]? Masked)? Cached(TextRedactionOptions options, string digest)
     {
         lock (gate)
         {
@@ -179,7 +182,38 @@ internal sealed partial class TextRedactor
                 return null;
             detectionOrder.Remove(node);
             detectionOrder.AddLast(node);
-            return node.Value.Spans;
+            return (node.Value.Spans, node.Value.Masked);
+        }
+    }
+
+    // Records the literal pass's spans for a cached slot. The first result is kept, so the
+    // slot stays the same for as long as it is cached, whatever is registered later.
+    internal void Memoize(TextRedactionOptions options, string digest, Found[] masked)
+    {
+        lock (gate)
+        {
+            if (
+                !detections.TryGetValue(new(options, digest), out var node)
+                || node.Value.Masked is not null
+            )
+                return;
+            var entry = node.Value with { Masked = masked };
+            var size = entry.Size;
+            cacheBytes -= node.Value.Size;
+            if (size > cacheLimit)
+            {
+                detectionOrder.Remove(node);
+                detections.Remove(entry.Key);
+                return;
+            }
+            node.Value = entry;
+            cacheBytes += size;
+            while (cacheBytes > cacheLimit && detectionOrder.First is { } oldest && oldest != node)
+            {
+                detectionOrder.RemoveFirst();
+                detections.Remove(oldest.Value.Key);
+                cacheBytes -= oldest.Value.Size;
+            }
         }
     }
 
@@ -224,14 +258,7 @@ internal sealed partial class TextRedactor
             node = knownOrder.AddLast(entry);
             known[placeholder] = node;
             knownBytes += entry.Size;
-            if (original.Length >= 2)
-            {
-                var prefix = PrefixKey(original[0], original[1]);
-                if (!byPrefix.TryGetValue(prefix, out var list))
-                    byPrefix[prefix] = list = [];
-                var index = list.FindIndex(item => item.Original.Length < original.Length);
-                list.Insert(index < 0 ? list.Count : index, entry);
-            }
+            knownGeneration++;
             while (knownBytes > knownLimit && knownOrder.First is { } oldest && oldest != node)
                 Forget(oldest);
             return true;
@@ -244,81 +271,7 @@ internal sealed partial class TextRedactor
         knownOrder.Remove(node);
         known.Remove(entry.Placeholder);
         knownBytes -= entry.Size;
-        if (
-            entry.Original.Length >= 2
-            && byPrefix.TryGetValue(PrefixKey(entry.Original[0], entry.Original[1]), out var list)
-        )
-        {
-            list.Remove(entry);
-            if (list.Count == 0)
-                byPrefix.Remove(PrefixKey(entry.Original[0], entry.Original[1]));
-        }
-    }
-
-    // Exact occurrences of retained originals, leftmost and then longest first. Existing
-    // placeholders and secret markers are never entered. An original whose edge is an ASCII
-    // letter or digit only matches where the neighbouring character is not one, so a short
-    // name does not replace part of a longer word. Originals detected only under labels this
-    // request excludes stay unchanged.
-    internal List<Found> FindKnown(string text, IReadOnlyList<string> excluded)
-    {
-        var found = new List<Found>();
-        if (text.Length < 2)
-            return found;
-        var guarded = Guarded(text);
-        var next = 0;
-        lock (gate)
-        {
-            if (byPrefix.Count == 0)
-                return found;
-            var index = 0;
-            while (index < text.Length - 1)
-            {
-                while (next < guarded.Count && guarded[next].End <= index)
-                    next++;
-                if (next < guarded.Count && guarded[next].Start <= index)
-                {
-                    index = guarded[next].End;
-                    continue;
-                }
-                var limit = next < guarded.Count ? guarded[next].Start : text.Length;
-                Known? match = null;
-                if (byPrefix.TryGetValue(PrefixKey(text[index], text[index + 1]), out var list))
-                    foreach (var candidate in list)
-                    {
-                        var length = candidate.Original.Length;
-                        if (
-                            index + length <= limit
-                            && text.AsSpan(index, length).SequenceEqual(candidate.Original)
-                            && Bounded(text, index, length)
-                            && !Excluded(candidate.Labels, excluded)
-                        )
-                        {
-                            match = candidate;
-                            break;
-                        }
-                    }
-                if (match is null)
-                {
-                    index++;
-                    continue;
-                }
-                var node = known[match.Placeholder];
-                knownOrder.Remove(node);
-                knownOrder.AddLast(node);
-                found.Add(
-                    new(
-                        index,
-                        match.Original.Length,
-                        match.Placeholder,
-                        match.Original,
-                        match.Labels
-                    )
-                );
-                index += match.Original.Length;
-            }
-        }
-        return found;
+        knownGeneration++;
     }
 
     internal static string Apply(string text, IReadOnlyList<Found> spans)
@@ -334,8 +287,6 @@ internal sealed partial class TextRedactor
         }
         return output.Append(text, cursor, text.Length - cursor).ToString();
     }
-
-    private static int PrefixKey(char first, char second) => first << 16 | second;
 
     private static bool Word(char character) => char.IsAsciiLetterOrDigit(character);
 
@@ -363,6 +314,9 @@ internal sealed partial class TextRedactor
     private static IEnumerable<(int Start, int End)> MarkerRanges(string text)
     {
         var prefix = Foxwarm.Secrets.SecretRedactor.MarkerPrefix;
+        // The next closing bracket pair is searched again only once it lies behind, so
+        // many unclosed prefixes do not make this quadratic.
+        var close = -1;
         for (
             var start = text.IndexOf(prefix, StringComparison.Ordinal);
             start >= 0;
@@ -373,7 +327,8 @@ internal sealed partial class TextRedactor
         )
         {
             var labelStart = start + prefix.Length;
-            var close = text.IndexOf("]]", labelStart, StringComparison.Ordinal);
+            if (close < labelStart)
+                close = text.IndexOf("]]", labelStart, StringComparison.Ordinal);
             if (close < 0)
                 yield break;
             // Labels are names or configuration paths; whitespace means this is not a marker.
