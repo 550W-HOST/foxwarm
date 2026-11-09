@@ -103,7 +103,15 @@ internal sealed class ModelRouting(Func<long>? clock = null)
         return new Selection(targets[selected], selected, selected == targets.Count - 1);
     }
 
-    internal Selection Select(Request request, string routingKey)
+    /// <param name="eligible">
+    /// Failover targets this request may use. Ineligible targets are passed over like cooled
+    /// ones; when the walk would end on one, it is still returned so the caller can refuse it.
+    /// </param>
+    internal Selection Select(
+        Request request,
+        string routingKey,
+        Func<string, bool>? eligible = null
+    )
     {
         if (request.Strategy == "session-hash")
             return Hash(request.VirtualKey, routingKey, request.Targets);
@@ -119,9 +127,17 @@ internal sealed class ModelRouting(Func<long>? clock = null)
                         continue;
                     request.Health.Remove(target);
                 }
+                if (eligible?.Invoke(target) == false)
+                    continue;
                 return new Selection(target, index, index == request.Targets.Length - 1);
             }
-            return new Selection(request.Targets[^1], request.Targets.Length - 1, true);
+            // Every usable target is cooling: keep the existing last-target fallback, unless
+            // that target is ineligible. Then return the first ineligible target to refuse.
+            var last = request.Targets.Length - 1;
+            if (eligible?.Invoke(request.Targets[last]) != false)
+                return new Selection(request.Targets[last], last, true);
+            var refused = Array.FindIndex(request.Targets, target => !eligible!(target));
+            return new Selection(request.Targets[refused], refused, true);
         }
     }
 

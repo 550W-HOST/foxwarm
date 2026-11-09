@@ -19,6 +19,14 @@ internal sealed class ModelRequestOwner(
 {
     internal const int DefaultMaxAttempts = 6;
 
+    internal const string RedactionFailoverRefused =
+        "Can't fail over to {0}: this request started on a model that uses text redaction, and {0} doesn't. Nothing was sent to {0}.";
+
+    private static bool Redacts(HostModels catalog, string key) =>
+        catalog.Contains(key)
+        && catalog.Resolve(key).Configuration["textRedaction"] is JsonObject settings
+        && TextRedactionOptions.FromResolved(settings) is not null;
+
     internal static int RetryDelay(int failedAttempt, IReadOnlyList<int>? intervals = null)
     {
         var delays = intervals ?? HostModels.DefaultRetryIntervalsMs;
@@ -182,6 +190,7 @@ internal sealed class ModelRequestOwner(
             ? Array.Empty<JsonObject>()
             : (await requestContext().ConfigureAwait(false)).ToArray();
         history = baseHistory.WithContext(retainedContext);
+        bool? redactionRequired = null;
         try
         {
             for (var attempt = 1; attempt <= maxAttempts; attempt++)
@@ -205,7 +214,13 @@ internal sealed class ModelRequestOwner(
                     journalRequestId = null;
                     journalAttempt = 0;
                 }
-                var selection = request is null ? null : routing.Select(request, cacheKey);
+                if (explicitSelectionChanged)
+                    redactionRequired = null;
+                var selection =
+                    request is null ? null
+                    : redactionRequired == true
+                        ? routing.Select(request, cacheKey, target => Redacts(catalog, target))
+                    : routing.Select(request, cacheKey);
                 var leaf =
                     selection is null ? route
                     : catalog.Contains(selection.TargetKey) ? catalog.Resolve(selection.TargetKey)
@@ -214,6 +229,15 @@ internal sealed class ModelRequestOwner(
                     );
                 if (leaf.IsVirtual)
                     throw new ModelPreparationException("Virtual targets must be concrete models.");
+                // A request that started on a redacting model never fails over to one that
+                // would receive its originals.
+                redactionRequired ??=
+                    leaf.Configuration["textRedaction"] is JsonObject started
+                    && TextRedactionOptions.FromResolved(started) is not null;
+                if (redactionRequired == true && !Redacts(catalog, leaf.Key))
+                    throw new ModelPreparationException(
+                        string.Format(RedactionFailoverRefused, leaf.Key)
+                    );
                 catalog.RequireSecrets(leaf);
                 var effort =
                     rawEffort is not null && leaf.AllowedEfforts.Contains(rawEffort)

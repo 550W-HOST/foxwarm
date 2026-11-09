@@ -36,21 +36,26 @@ internal sealed class SecretSinks
     private SecretSinks(params (string Pattern, SecretSinkKind Kind)[] patterns) =>
         this.patterns = patterns.Select(item => (item.Pattern.Split('.'), item.Kind)).ToArray();
 
-    // models.yaml. `models` is the legacy alias of the providers map. The text-redaction
-    // key is sent only to the configured detection endpoint, at every inheritance level.
+    // models.yaml. `models` is the legacy alias of the providers map, and a provider's `model`
+    // list is the singular alias of its `models` list. The text-redaction key is sent only to
+    // the configured detection endpoint, at every inheritance level.
     internal static SecretSinks Models { get; } =
         new(
             ("providers.*.apiKey", SecretSinkKind.Credential),
             ("providers.*.extraHeaders.*", SecretSinkKind.Header),
             ("providers.*.models.[].extraHeaders.*", SecretSinkKind.Header),
+            ("providers.*.model.[].extraHeaders.*", SecretSinkKind.Header),
             ("models.*.apiKey", SecretSinkKind.Credential),
             ("models.*.extraHeaders.*", SecretSinkKind.Header),
             ("models.*.models.[].extraHeaders.*", SecretSinkKind.Header),
+            ("models.*.model.[].extraHeaders.*", SecretSinkKind.Header),
             ("defaults.textRedaction.apiKey", SecretSinkKind.Credential),
             ("providers.*.textRedaction.apiKey", SecretSinkKind.Credential),
             ("providers.*.models.[].textRedaction.apiKey", SecretSinkKind.Credential),
+            ("providers.*.model.[].textRedaction.apiKey", SecretSinkKind.Credential),
             ("models.*.textRedaction.apiKey", SecretSinkKind.Credential),
-            ("models.*.models.[].textRedaction.apiKey", SecretSinkKind.Credential)
+            ("models.*.models.[].textRedaction.apiKey", SecretSinkKind.Credential),
+            ("models.*.model.[].textRedaction.apiKey", SecretSinkKind.Credential)
         );
 
     // config.yaml credential fields consumed by Main-owned clients.

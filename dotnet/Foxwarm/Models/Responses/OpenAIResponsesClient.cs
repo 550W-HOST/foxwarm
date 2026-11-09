@@ -30,6 +30,9 @@ public sealed record ResponsesClientOptions(
 
     // Supplies the instance placeholder key; enabled redaction fails without one.
     internal Func<byte[]>? TextRedactionKey { get; init; }
+
+    // Compaction omits a slot the detection service rejects as too large instead of failing.
+    internal bool TextRedactionOmitsOversized { get; init; }
     internal double? HardTimeoutMs { get; init; }
     internal TimeProvider? Clock { get; init; }
     internal bool KeepReasoningOnError { get; init; }

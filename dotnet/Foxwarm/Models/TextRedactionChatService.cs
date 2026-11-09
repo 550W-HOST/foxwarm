@@ -43,17 +43,31 @@ internal sealed class TextRedactionChatService(
                 false
             );
         }
-        Task<string> Redact(string text) => redactor.RedactAsync(http, settings, text, token);
+        var scope = new TextRedactionScope(redactor, http, settings, token)
+        {
+            OmitOversized = options.TextRedactionOmitsOversized,
+        };
+        Task<string> Detect(string text) => scope.DetectAsync(text);
+        Task<string> MaskKnown(string text) => Task.FromResult(scope.MaskKnown(text));
         string instructions;
         JsonArray? tools;
         try
         {
-            await TextRedactionProjection.RedactHistoryAsync(history, Redact).ConfigureAwait(false);
-            instructions = await Redact(options.Instructions).ConfigureAwait(false);
+            // Detect every slot first (serially; the service handles one request at a time),
+            // then mask known originals everywhere, including ones this request just found.
+            await TextRedactionProjection.RedactHistoryAsync(history, Detect).ConfigureAwait(false);
+            instructions = await Detect(options.Instructions).ConfigureAwait(false);
             tools = await TextRedactionProjection
-                .ToolsAsync(options.Tools, Redact)
+                .ToolsAsync(options.Tools, Detect)
                 .ConfigureAwait(false);
             token.ThrowIfCancellationRequested();
+            await TextRedactionProjection
+                .RedactHistoryAsync(history, MaskKnown)
+                .ConfigureAwait(false);
+            instructions = scope.MaskKnown(instructions);
+            tools = await TextRedactionProjection
+                .ToolsAsync(tools, MaskKnown)
+                .ConfigureAwait(false);
         }
         catch (OperationCanceledException)
             when (!cancellationToken.IsCancellationRequested
@@ -69,14 +83,13 @@ internal sealed class TextRedactionChatService(
         var preparedOptions = options with
         {
             TextRedaction = null,
-            HardTimeoutMs = null,
             Instructions = instructions,
             Tools = tools,
             CommitAssistantSegment = options.CommitAssistantSegment is null
                 ? null
                 : async (message, deliver) =>
                 {
-                    var restored = TextRedactionProjection.RestoreMessage(message, redactor);
+                    var restored = TextRedactionProjection.RestoreMessage(message, scope);
                     var row = await options
                         .CommitAssistantSegment(restored, deliver)
                         .ConfigureAwait(false);
@@ -91,26 +104,27 @@ internal sealed class TextRedactionChatService(
             preparedOptions,
             progress is null
                 ? null
-                : (id, value) =>
-                    progress(id, TextRedactionProjection.RestoreProgress(value, redactor))
+                : (id, value) => progress(id, TextRedactionProjection.RestoreProgress(value, scope))
         );
         var result = await service.ChatAsync(sessionId, history, token).ConfigureAwait(false);
         var wireAssistant = result.AssistantMessage is null
             ? null
             : (JsonObject)result.AssistantMessage.DeepClone();
-        // Canonical replay serializes the transformed argument object, including
-        // on the next turn. Use that same representation for the WS prefix.
+        // A restored call is re-serialized canonically, and the next request serializes its
+        // redacted arguments the same way. Use that representation for the WS prefix; a
+        // call without placeholders keeps the provider's raw text on both sides.
         foreach (var part in (wireAssistant?["parts"] as JsonArray ?? []).OfType<JsonObject>())
             if (
                 part["functionCall"] is JsonObject call
                 && call["args"] is JsonObject args
                 && call.ContainsKey("rawArgsText")
                 && string.IsNullOrEmpty(SessionWait.Text(call["argsParseError"]))
+                && TextRedactionProjection.Restores(call, scope)
             )
-                call["rawArgsText"] = args.ToJsonString();
+                call["rawArgsText"] = TextRedactionProjection.Serialize(args);
         var restoredAssistant = wireAssistant is null
             ? null
-            : TextRedactionProjection.RestoreMessage(wireAssistant, redactor);
+            : TextRedactionProjection.RestoreMessage(wireAssistant, scope);
         var finalizer = result.HistoryAppend;
         return result with
         {

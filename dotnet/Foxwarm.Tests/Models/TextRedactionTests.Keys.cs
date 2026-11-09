@@ -18,12 +18,9 @@ public sealed partial class TextRedactionTests
         using var http = ProviderHttpRequest.CreateClient();
         var options = new TextRedactionOptions(detector.Endpoint, null, .5, 30000);
         using var keys = new TextRedactionKeys();
-        var first = await new TextRedactor(keys.Secrets.TextRedactionPlaceholderKey()).RedactAsync(
-            http,
-            options,
-            value,
-            default
-        );
+        var first = await new TextRedactor(keys.Secrets.TextRedactionPlaceholderKey())
+            .Begin(http, options, default)
+            .RedactAsync(value);
         Assert.Matches(new Regex(@"^\[\[PRIVATE_[0-9a-f]{16}\]\]$"), first);
         Assert.DoesNotContain("FW_SECRET", first);
         Assert.NotEqual(
@@ -39,7 +36,7 @@ public sealed partial class TextRedactionTests
             var key = restarted.TextRedactionPlaceholderKey();
             Assert.Equal(
                 first,
-                await new TextRedactor(key).RedactAsync(http, options, value, default)
+                await new TextRedactor(key).Begin(http, options, default).RedactAsync(value)
             );
             Assert.Same(
                 TextRedactor.For(key),
@@ -47,17 +44,17 @@ public sealed partial class TextRedactionTests
             );
         }
         Assert.Equal(
-            await new TextRedactor(Key).RedactAsync(http, options, value, default),
-            await new TextRedactor(Key).RedactAsync(http, options, value, default)
+            await new TextRedactor(Key).Begin(http, options, default).RedactAsync(value),
+            await new TextRedactor(Key).Begin(http, options, default).RedactAsync(value)
         );
         using var otherInstance = new TextRedactionKeys();
-        var other = await new TextRedactor(
-            otherInstance.Secrets.TextRedactionPlaceholderKey()
-        ).RedactAsync(http, options, value, default);
+        var other = await new TextRedactor(otherInstance.Secrets.TextRedactionPlaceholderKey())
+            .Begin(http, options, default)
+            .RedactAsync(value);
         Assert.NotEqual(first, other);
         Assert.NotEqual(
-            await new TextRedactor(Key).RedactAsync(http, options, value, default),
-            await new TextRedactor(OtherKey).RedactAsync(http, options, value, default)
+            await new TextRedactor(Key).Begin(http, options, default).RedactAsync(value),
+            await new TextRedactor(OtherKey).Begin(http, options, default).RedactAsync(value)
         );
         Assert.NotEqual(
             Convert.ToHexString(keys.Secrets.TextRedactionPlaceholderKey()),
@@ -89,16 +86,17 @@ public sealed partial class TextRedactionTests
         await using var detector = await TextDetectionPeer.StartAsync(first, second!);
         using var http = ProviderHttpRequest.CreateClient();
         var options = new TextRedactionOptions(detector.Endpoint, null, .5, 30000);
-        var redacted = await redactor.RedactAsync(http, options, "to " + first, default);
+        var scope = redactor.Begin(http, options, default);
+        var redacted = await scope.RedactAsync("to " + first);
         var failure = await Assert.ThrowsAsync<TextRedactionException>(() =>
-            redactor.RedactAsync(http, options, "to " + second, default)
+            redactor.Begin(http, options, default).RedactAsync("to " + second)
         );
         Assert.False(failure.Retryable);
         Assert.Contains("collision", failure.Message);
-        Assert.Equal("to " + first, redactor.Restore(redacted));
+        Assert.Equal("to " + first, scope.Restore(redacted));
         // The failed text was not cached as a successful detection.
         await Assert.ThrowsAsync<TextRedactionException>(() =>
-            redactor.RedactAsync(http, options, "to " + second, default)
+            redactor.Begin(http, options, default).RedactAsync("to " + second)
         );
         Assert.Equal(3, detector.Texts.Count);
     }
@@ -168,7 +166,7 @@ public sealed partial class TextRedactionTests
                     models: [inherited, {id: none, textRedaction: {excludeLabels: []}}]
                   q:
                     baseUrl: http://127.0.0.1:2
-                    textRedaction: {excludeLabels: [private_person, private_date, private_person]}
+                    textRedaction: {excludeLabels: [private_person, ' Private_Date ', PRIVATE_PERSON]}
                     models: [listed, {id: again, textRedaction: {threshold: 0.6}}]
                 """,
             }
@@ -203,29 +201,24 @@ public sealed partial class TextRedactionTests
             "https://example.test/x",
             "bob@example.test"
         );
-        detector.Labels["2026-11-09"] = "private_date";
+        detector.Labels["2026-11-09"] = "PRIVATE_DATE";
         detector.Labels["https://example.test/x"] = "private_url";
         detector.Labels["bob@example.test"] = "private_email";
         using var http = ProviderHttpRequest.CreateClient();
         var redactor = new TextRedactor(Key);
         var defaults = new TextRedactionOptions(detector.Endpoint, null, .5, 30000);
-        var kept = await redactor.RedactAsync(http, defaults, text, default);
+        var kept = await redactor.Begin(http, defaults, default).RedactAsync(text);
         Assert.Contains("2026-11-09", kept);
         Assert.Contains("https://example.test/x", kept);
         Assert.DoesNotContain("bob@example.test", kept);
-        var all = await redactor.RedactAsync(
-            http,
-            defaults with
-            {
-                ExcludeLabels = [],
-            },
-            text,
-            default
-        );
+        var everything = redactor.Begin(http, defaults with { ExcludeLabels = [] }, default);
+        var all = await everything.RedactAsync(text);
         Assert.DoesNotContain("2026-11-09", all);
         Assert.DoesNotContain("https://example.test", all);
-        Assert.Equal(text, redactor.Restore(all));
+        Assert.Equal(text, everything.Restore(all));
         Assert.Equal(2, detector.Texts.Count);
+        // Dates and URLs registered under the empty list stay literal where they are excluded.
+        Assert.Equal(kept, await redactor.Begin(http, defaults, default).RedactAsync(text));
     }
 
     [Fact]
@@ -242,17 +235,22 @@ public sealed partial class TextRedactionTests
             " " + indexed + " "
         );
         using var http = ProviderHttpRequest.CreateClient();
-        var redactor = new TextRedactor(Key);
         var options = new TextRedactionOptions(detector.Endpoint, null, .5, 30000);
-        var result = await redactor.RedactAsync(http, options, text, default);
+        var scope = new TextRedactor(Key).Begin(http, options, default);
+        var result = await scope.RedactAsync(text);
         Assert.Contains(marker, result);
         Assert.Contains(indexed, result);
         Assert.DoesNotContain("Alice", result);
         Assert.DoesNotContain("key " + marker, result);
         Assert.DoesNotContain(marker + " for", result);
         Assert.Contains("then " + indexed + " ok.", result);
-        Assert.Equal(text, redactor.Restore(result));
-        Assert.Equal(marker + " " + indexed, redactor.Restore(marker + " " + indexed));
-        Assert.Equal("prefix " + marker, redactor.RestoreProgress("prefix " + marker));
+        Assert.Equal(text, scope.Restore(result));
+        Assert.Equal(marker + " " + indexed, scope.Restore(marker + " " + indexed));
+        Assert.Equal("prefix " + marker, scope.RestoreProgress("prefix " + marker));
+        // Literal masking of known originals masks plain text but never enters markers.
+        var masked = scope.MaskKnown(indexed + " Alice [[FW_SECRET:Alice]]");
+        Assert.StartsWith(indexed + " " + TextRedactor.Prefix, masked);
+        Assert.EndsWith(" [[FW_SECRET:Alice]]", masked);
+        Assert.Equal(indexed + " Alice [[FW_SECRET:Alice]]", scope.Restore(masked));
     }
 }

@@ -83,6 +83,7 @@ internal static class ConfiguredModelRequests
             TextRedaction = TextRedactionOptions.FromResolved(
                 model.Configuration["textRedaction"] as JsonObject
             ),
+            TextRedactionOmitsOversized = purpose == "compact-plan",
             KeepReasoningOnError =
                 model.Configuration["keepReasoningOnError"]?.GetValue<bool>() == true,
             BaseUri = model.BaseUri,

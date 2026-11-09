@@ -107,6 +107,7 @@ public sealed partial class TextRedactionTests
                 "{\"threshold\":1.1}",
                 "{\"timeoutMs\":0}",
                 "{\"endpoint\":\"file:///tmp/a\"}",
+                "{\"endpoint\":\"HTTP://127.0.0.1/classify\"}",
                 "{\"unused\":true}",
                 "true",
             }
@@ -131,28 +132,30 @@ public sealed partial class TextRedactionTests
             0.5,
             30000
         );
-        var redactor = new TextRedactor(Key, cacheCharacters: 200000);
+        var redactor = new TextRedactor(Key);
+        var scope = redactor.Begin(http, settings, default);
         var text = "前🙂 " + secret + " " + new string('a', 60000);
-        var first = await redactor.RedactAsync(http, settings, text, default);
+        var first = await scope.RedactAsync(text);
         for (var i = 0; i < 8; i++)
-            Assert.Equal(first, await redactor.RedactAsync(http, settings, text, default));
+            Assert.Equal(first, await redactor.Begin(http, settings, default).RedactAsync(text));
         Assert.Single(detector.Texts);
         Assert.Equal("Bearer detector-credential", detector.Authorization);
-        var key = await redactor.RedactAsync(http, settings, secret, default);
+        var key = await scope.RedactAsync(secret);
         Assert.Contains(key, first);
         var another = new TextRedactor(Key);
-        Assert.Equal(key, await another.RedactAsync(http, settings, secret, default));
-        Assert.Equal(text, redactor.Restore(first));
+        Assert.Equal(key, await another.Begin(http, settings, default).RedactAsync(secret));
+        Assert.Equal(text, scope.Restore(first));
         Assert.Equal(
             TextRedactor.Prefix + new string('0', 16) + "]]",
-            redactor.Restore(TextRedactor.Prefix + new string('0', 16) + "]]")
+            scope.Restore(TextRedactor.Prefix + new string('0', 16) + "]]")
         );
         for (var i = 1; i < key.Length; i++)
-            Assert.Equal("prefix ", redactor.RestoreProgress("prefix " + key[..i]));
-        Assert.Equal("prefix " + secret, redactor.RestoreProgress("prefix " + key));
-        var tiny = new TextRedactor(Key, cacheCharacters: 10);
-        await tiny.RedactAsync(http, settings, text, default);
-        await tiny.RedactAsync(http, settings, text, default);
+            Assert.Equal("prefix ", scope.RestoreProgress("prefix " + key[..i]));
+        Assert.Equal("prefix " + secret, scope.RestoreProgress("prefix " + key));
+        // A cache smaller than one entry keeps nothing.
+        var tiny = new TextRedactor(Key, cacheBytes: 10);
+        await tiny.Begin(http, settings, default).RedactAsync(text);
+        await tiny.Begin(http, settings, default).RedactAsync(text);
         Assert.Equal(3, detector.Texts.Count(value => value == text));
     }
 
@@ -168,7 +171,7 @@ public sealed partial class TextRedactionTests
             return value;
         };
         var failure = await Assert.ThrowsAsync<TextRedactionException>(() =>
-            new TextRedactor(Key).RedactAsync(http, options, "😀", default)
+            new TextRedactor(Key).Begin(http, options, default).RedactAsync("😀")
         );
         Assert.False(failure.Retryable);
         detector.Transform = value =>
@@ -176,10 +179,10 @@ public sealed partial class TextRedactionTests
             value["entities"]![0]!["label"] = "future_category";
             return value;
         };
-        var redactor = new TextRedactor(Key);
-        var result = await redactor.RedactAsync(http, options, "😀", default);
+        var scope = new TextRedactor(Key).Begin(http, options, default);
+        var result = await scope.RedactAsync("😀");
         Assert.DoesNotContain("😀", result);
-        Assert.Equal("😀", redactor.Restore(result));
+        Assert.Equal("😀", scope.Restore(result));
     }
 
     [Theory]

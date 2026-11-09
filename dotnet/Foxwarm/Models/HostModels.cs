@@ -226,14 +226,7 @@ internal sealed partial class HostModels
                     throw new InvalidDataException(
                         "Concrete provider forbids routing field " + key + "."
                     );
-            var rawMembers = provider["models"] ?? provider["model"];
-            JsonNode?[] members =
-                rawMembers is JsonArray list ? list.ToArray()
-                : rawMembers is null || SessionWait.Text(rawMembers) == "" ? []
-                : rawMembers is JsonValue value && value.TryGetValue<string>(out _) ? [rawMembers]
-                : throw new InvalidDataException(
-                    "Provider models must be a string or array of IDs/model objects."
-                );
+            var members = Members(provider);
             if (members.Length > 0 && provider.ContainsKey("pricing"))
                 throw new InvalidDataException(
                     "pricing belongs on individual model objects, or a concrete provider without models."
@@ -396,6 +389,22 @@ internal sealed partial class HostModels
                 SessionWait.Number(llm["memoryWarningThresholdPercent"]) ?? .15,
         };
     }
+
+    // Model entries of a concrete provider: `models`, or the singular `model` alias.
+    internal static JsonNode?[] Members(JsonObject provider)
+    {
+        var rawMembers = provider["models"] ?? provider["model"];
+        return rawMembers is JsonArray list ? list.ToArray()
+            : rawMembers is null || SessionWait.Text(rawMembers) == "" ? []
+            : rawMembers is JsonValue value && value.TryGetValue<string>(out _) ? [rawMembers]
+            : throw new InvalidDataException(
+                "Provider models must be a string or array of IDs/model objects."
+            );
+    }
+
+    // Catalog keys with their models, including the provider alias of a single-model provider.
+    internal IEnumerable<KeyValuePair<string, ConcreteHostModel>> Entries =>
+        owner is null ? entries : Capture().Entries;
 
     private static string ProviderType(JsonObject provider)
     {

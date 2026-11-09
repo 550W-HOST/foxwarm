@@ -1,3 +1,4 @@
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
@@ -8,6 +9,15 @@ namespace Foxwarm.Models;
 // These are semantic text slots, not a walk over the final provider payload.
 internal static class TextRedactionProjection
 {
+    // Argument JSON keeps non-ASCII and HTML characters literal, as tool output does.
+    private static readonly JsonSerializerOptions ArgumentJson = new()
+    {
+        TypeInfoResolver = MainJsonContext.Default,
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+    };
+
+    internal static string Serialize(JsonNode? node) => node?.ToJsonString(ArgumentJson) ?? "null";
+
     // The configured request owner has already made this copy and hydrated its
     // image parts. Mutate text slots in place to retain request-local part identity.
     internal static async Task RedactHistoryAsync(
@@ -34,11 +44,15 @@ internal static class TextRedactionProjection
                         await FieldAsync(call, "rawArgsText", redact);
                     else if ((parsed?.Args ?? call["args"]) is JsonNode args)
                     {
-                        call["args"] = await StringsAsync(args, redact);
-                        // Serializers prefer rawArgsText when present. Keep both forms
-                        // in agreement after transforming structured string values.
-                        if (call.ContainsKey("rawArgsText"))
-                            call["rawArgsText"] = call["args"]!.ToJsonString();
+                        var transformed = await StringsAsync(args, redact);
+                        call["args"] = transformed;
+                        // Serializers prefer rawArgsText when present. Keep both forms in
+                        // agreement after a substitution; otherwise keep the raw text as is.
+                        if (
+                            call.ContainsKey("rawArgsText")
+                            && !JsonNode.DeepEquals(args, transformed)
+                        )
+                            call["rawArgsText"] = Serialize(transformed);
                     }
                 }
                 if (part["functionResponse"] is JsonObject response)
@@ -156,45 +170,54 @@ internal static class TextRedactionProjection
         return node?.DeepClone();
     }
 
-    private static JsonNode? RestoreStrings(JsonNode? node, TextRedactor redactor)
+    private static JsonNode? RestoreStrings(JsonNode? node, TextRedactionScope scope)
     {
         if (SessionWait.Text(node) is string text)
-            return JsonValue.Create(redactor.Restore(text));
+            return JsonValue.Create(scope.Restore(text));
         if (node is JsonObject obj)
         {
             var copy = new JsonObject();
             foreach (var (key, value) in obj)
-                copy[key] = RestoreStrings(value, redactor);
+                copy[key] = RestoreStrings(value, scope);
             return copy;
         }
         if (node is JsonArray array)
-            return new JsonArray(array.Select(child => RestoreStrings(child, redactor)).ToArray());
+            return new JsonArray(array.Select(child => RestoreStrings(child, scope)).ToArray());
         return node?.DeepClone();
     }
 
-    internal static JsonObject RestoreMessage(JsonObject original, TextRedactor redactor)
+    // Restores this attempt's placeholders in ordinary text and structured arguments. Valid
+    // raw argument text is re-serialized only when a placeholder was actually restored.
+    internal static JsonObject RestoreMessage(JsonObject original, TextRedactionScope scope)
     {
         var message = (JsonObject)original.DeepClone();
         foreach (var part in (message["parts"] as JsonArray ?? []).OfType<JsonObject>())
         {
             if (SessionWait.Text(part["text"]) is string text)
-                part["text"] = redactor.Restore(text);
+                part["text"] = scope.Restore(text);
             if (part["functionCall"] is JsonObject call && call["args"] is JsonObject args)
             {
-                call["args"] = RestoreStrings(args, redactor);
+                var restored = RestoreStrings(args, scope);
+                if (JsonNode.DeepEquals(args, restored))
+                    continue;
+                call["args"] = restored;
                 if (
                     call.ContainsKey("rawArgsText")
                     && string.IsNullOrEmpty(SessionWait.Text(call["argsParseError"]))
                 )
-                    call["rawArgsText"] = call["args"]!.ToJsonString();
+                    call["rawArgsText"] = Serialize(restored);
             }
         }
         return message;
     }
 
+    // Whether restoring would change this function call's arguments.
+    internal static bool Restores(JsonObject call, TextRedactionScope scope) =>
+        call["args"] is JsonObject args && !JsonNode.DeepEquals(args, RestoreStrings(args, scope));
+
     internal static ResponsesStreamProgress RestoreProgress(
         ResponsesStreamProgress value,
-        TextRedactor redactor
+        TextRedactionScope scope
     )
     {
         string? Arguments(string? raw)
@@ -203,7 +226,9 @@ internal static class TextRedactionProjection
                 return null;
             try
             {
-                return RestoreStrings(JsonNode.Parse(raw), redactor)?.ToJsonString();
+                var parsed = JsonNode.Parse(raw);
+                var restored = RestoreStrings(parsed, scope);
+                return JsonNode.DeepEquals(parsed, restored) ? raw : Serialize(restored);
             }
             catch (JsonException)
             {
@@ -213,13 +238,13 @@ internal static class TextRedactionProjection
         }
         return value with
         {
-            Text = redactor.RestoreProgress(value.Text),
+            Text = scope.RestoreProgress(value.Text),
             Parts = value
                 .Parts?.Select(part =>
                     part.Kind == "text" && part.Text is string text
                         ? part with
                         {
-                            Text = redactor.RestoreProgress(text),
+                            Text = scope.RestoreProgress(text),
                         }
                         : part
                 )

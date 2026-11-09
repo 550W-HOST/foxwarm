@@ -14,8 +14,12 @@ internal sealed record TextRedactionOptions(
     internal static IReadOnlyList<string> DefaultExcludeLabels { get; } =
     ["private_date", "private_url"];
 
-    // Detection labels left in place. Sorted and distinct, so equal settings share cache entries.
+    // Detection labels left in place, trimmed and lowercase. Sorted and distinct, so equal
+    // settings share cache entries.
     internal IReadOnlyList<string> ExcludeLabels { get; init; } = DefaultExcludeLabels;
+
+    // Labels match case-insensitively and ignore surrounding whitespace.
+    internal static string NormalizeLabel(string label) => label.Trim().ToLowerInvariant();
 
     public bool Equals(TextRedactionOptions? other) =>
         other is not null
@@ -39,7 +43,12 @@ internal sealed record TextRedactionOptions(
             var valid = key switch
             {
                 "enabled" => item is JsonValue enabled && enabled.TryGetValue<bool>(out _),
+                // Lowercase scheme, matching the shared configuration schema.
                 "endpoint" => SessionWait.Text(item) is string endpoint
+                    && (
+                        endpoint.StartsWith("http://", StringComparison.Ordinal)
+                        || endpoint.StartsWith("https://", StringComparison.Ordinal)
+                    )
                     && Uri.TryCreate(endpoint, UriKind.Absolute, out var uri)
                     && uri.Scheme is "http" or "https"
                     && uri.UserInfo.Length == 0
@@ -100,7 +109,7 @@ internal sealed record TextRedactionOptions(
         {
             ExcludeLabels = options["excludeLabels"] is JsonArray labels
                 ? labels
-                    .Select(label => SessionWait.Text(label)!)
+                    .Select(label => NormalizeLabel(SessionWait.Text(label)!))
                     .Distinct(StringComparer.Ordinal)
                     .Order(StringComparer.Ordinal)
                     .ToArray()
@@ -119,10 +128,18 @@ internal sealed record TextRedactionOptions(
             return false;
         if (provider["textRedaction"] is JsonObject own && own.ContainsKey("apiKey"))
             return false;
+        JsonNode?[] listed;
+        try
+        {
+            listed = HostModels.Members(provider);
+        }
+        catch (InvalidDataException)
+        {
+            // Catalog parsing reports invalid model lists.
+            return false;
+        }
         JsonObject?[] members =
-            provider["models"] is JsonArray list && list.Count > 0
-                ? list.Select(member => member as JsonObject).ToArray()
-                : [null];
+            listed.Length > 0 ? listed.Select(member => member as JsonObject).ToArray() : [null];
         foreach (var model in members)
         {
             if (model?["textRedaction"] is JsonObject leaf && leaf.ContainsKey("apiKey"))
