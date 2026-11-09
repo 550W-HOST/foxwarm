@@ -1,6 +1,6 @@
 // Owned .NET hosts, unchanged official CLI services, original WebUI, and optional official Code assets.
 import assert from 'node:assert/strict'
-import { createServer } from 'node:http'
+import { createServer, request as httpRequest } from 'node:http'
 import { once } from 'node:events'
 import { spawn, execFileSync } from 'node:child_process'
 import { mkdir, readFile, writeFile, access } from 'node:fs/promises'
@@ -87,6 +87,20 @@ async function rawApi(method, path, bytes) {
   return { status: response.status, bytes: Buffer.from(await response.arrayBuffer()) }
 }
 const get = (operation, path) => fixture.api('GET', fsUrl(operation, path))
+// Main rejects an oversized upload from its Content-Length before reading the body and then
+// closes the connection, so a client still sending the body can lose the response to a reset.
+// Ask for 100-continue: the body is sent only if Main starts reading it.
+function rejectedUploadStatus(path, bytes) {
+  return new Promise((done, fail) => {
+    let status
+    const outgoing = httpRequest(fixture.origin + path, { method: 'PUT', headers: { authorization: 'Bearer ' + fixture.token, 'content-length': bytes.length, expect: '100-continue' } }, response => {
+      status = response.statusCode; response.resume(); outgoing.destroy(); done(status)
+    })
+    outgoing.once('continue', () => outgoing.end(bytes))
+    outgoing.once('error', error => status === undefined ? fail(error) : done(status))
+    outgoing.flushHeaders()
+  })
+}
 const ptyRequests = () => wire.filter(row => row.type === 'node_service_request' && row.service === 'vscode-pty')
 async function terminal(nodeId = 'official-code') {
   const result = await fixture.api('POST', '/api/terminals', { nodeId, cwd: repo, cols: 100, rows: 30 }); assert.equal(result.status, 200, JSON.stringify(result)); assert(result.body.terminal.pid > 0); return result.body.terminal
@@ -134,7 +148,7 @@ try {
   assert.equal((await rawApi('PUT', fsUrl('write-file', boundary) + '&create=1', large)).status, 200)
   assert.deepEqual((await rawApi('GET', fsUrl('read-file', boundary))).bytes, large)
   const beforeOversize = wire.filter(row => row.type === 'node_service_request' && row.operation === 'write-file').length
-  assert.equal((await rawApi('PUT', fsUrl('write-file', boundary) + '&overwrite=1', Buffer.alloc(large.length + 1))).status, 413)
+  assert.equal(await rejectedUploadStatus(fsUrl('write-file', boundary) + '&overwrite=1', Buffer.alloc(large.length + 1)), 413)
   assert.equal(wire.filter(row => row.type === 'node_service_request' && row.operation === 'write-file').length, beforeOversize)
   const gitUrl = operation => '/api/vscode-web/git/' + operation + '?nodeId=official-code&workspace=' + encodeURIComponent(repo)
   const status = (await fixture.api('GET', gitUrl('status'))).body; assert.equal(status.topLevel, repo); assert(status.changes.some(row => row.path === 'renamed.txt'))
