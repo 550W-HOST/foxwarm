@@ -26,7 +26,8 @@ internal static partial class UnifiedTools
         Func<string, string, string?, bool>? visible = null,
         Foxwarm.ToolScript.ToolScriptDataBudget? budget = null,
         SessionOwner? owner = null,
-        IReadOnlyList<string>? broadServers = null
+        IReadOnlyList<string>? broadServers = null,
+        Func<string, bool>? broadServerVisible = null
     )
     {
         ToolRegistry.Keys(args, ["query", "sources", "server", "nodeId", "limit", "includeSchema"]);
@@ -159,6 +160,9 @@ internal static partial class UnifiedTools
                 warnings.Add("MCP server discovery failed; configuration is unavailable.");
                 servers = [];
             }
+            // Policy failures propagate rather than reading as unavailable configuration.
+            if (string.IsNullOrEmpty(filter) && broadServerVisible is not null)
+                servers = servers.Where(broadServerVisible).ToArray();
             var listed = await ListMcpAsync(
                 registry,
                 servers,

@@ -53,15 +53,84 @@ internal sealed partial class AgentCatalog
         ValidateName(inherit);
         if (name == inherit)
             throw new InvalidDataException("Agent cannot inherit from itself.");
-        if (IsolatedToolCompatibility.Metadata(MetadataSnapshot()[inherit]).Isolated)
+        var source = MetadataSnapshot()[inherit];
+        if (IsolatedToolCompatibility.Metadata(source).Isolated)
             throw new InvalidDataException(
                 $"Agent '{inherit}' is isolated and cannot be used as an inherit source."
+            );
+        if (!Inheritable(source))
+            throw new InvalidDataException(
+                $"Agent '{inherit}' is not inheritable and cannot be used as an inherit source."
             );
         if (!Exists(inherit) || !Directory.Exists(SourceDirectory(inherit)))
             throw new InvalidDataException($"Inherited Agent '{inherit}' does not exist.");
         if (InheritanceChain(inherit).Contains(name, StringComparer.Ordinal))
             throw new InvalidDataException("Circular Agent inheritance is not allowed.");
         ValidateCreatorInheritance(name, inherit);
+    }
+
+    // `inheritable: false` keeps an Agent's memory out of other Agents' prompts.
+    // Only an explicit false blocks inheritance.
+    internal static bool Inheritable(JsonNode? row) =>
+        !(
+            row is JsonObject metadata
+            && metadata["inheritable"] is JsonValue value
+            && value.TryGetValue<bool>(out var flag)
+            && !flag
+        );
+
+    internal bool Inheritable(string name) => Inheritable(MetadataSnapshot()[name]);
+
+    /// <summary>Agents whose ongoing inheritance names this Agent as a direct source.</summary>
+    internal string[] Inheritors(string name)
+    {
+        var snapshot = MetadataSnapshot();
+        return snapshot
+            .Where(pair => pair.Value is JsonObject row && SessionWait.Text(row["inherit"]) == name)
+            .Select(pair => pair.Key)
+            .Where(Exists)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    internal async Task SetInheritableAsync(string name, bool inheritable)
+    {
+        await createGate.WaitAsync();
+        try
+        {
+            if (!Exists(name))
+                throw new InvalidDataException("Agent not found.");
+            if (!inheritable && Inheritors(name) is { Length: > 0 } inheritors)
+                throw new InvalidDataException(
+                    $"Agent '{name}' is inherited by {string.Join(", ", inheritors)}; change their inheritance first."
+                );
+            var next = MetadataSnapshot();
+            var row = next[name] as JsonObject ?? new JsonObject();
+            next[name] = row;
+            if (inheritable)
+                row.Remove("inheritable");
+            else
+                row["inheritable"] = false;
+            try
+            {
+                AtomicIndexWrite(
+                    indexPath,
+                    Payload(List().Where(id => id != "main"), next).ToJsonString()
+                );
+            }
+            catch (AuthorityCommittedException)
+            {
+                lock (stateGate)
+                    metadata = next;
+                throw;
+            }
+            lock (stateGate)
+                metadata = next;
+        }
+        finally
+        {
+            createGate.Release();
+        }
     }
 
     internal async Task SetInheritAsync(string name, string? inherit)

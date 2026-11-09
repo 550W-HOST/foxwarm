@@ -265,6 +265,44 @@ internal sealed partial class WebUIChannel
                 }
             }
         );
+        // Administrator-only legacy isolation migration: a read-only inventory and an
+        // explicit per-Agent apply. Neither disables legacy isolation.
+        app.MapGet(
+            "/api/agents/isolation-migration",
+            (string? agent) =>
+            {
+                try
+                {
+                    return Results.Ok(sessions.IsolationMigrationInventory(agent));
+                }
+                catch (InvalidDataException error)
+                {
+                    return Results.Json(
+                        new JsonObject { ["error"] = error.Message },
+                        statusCode: agent is not null && !sessions.Agents().Contains(agent)
+                            ? 404
+                            : 400
+                    );
+                }
+            }
+        );
+        app.MapPost(
+            "/api/agents/{agentId}/isolation-migration",
+            async (string agentId, CancellationToken token) =>
+            {
+                if (!sessions.Agents().Contains(agentId))
+                    return Results.NotFound(new JsonObject { ["error"] = "Agent not found." });
+                try
+                {
+                    return Results.Ok(await sessions.ApplyIsolationMigrationAsync(agentId, token));
+                }
+                catch (Exception error)
+                    when (error is InvalidDataException or IOException or InvalidOperationException)
+                {
+                    return Results.BadRequest(new JsonObject { ["error"] = error.Message });
+                }
+            }
+        );
         app.MapGet(
             "/api/agents/{agentId}/memory",
             (string agentId) =>
@@ -316,6 +354,7 @@ internal sealed partial class WebUIChannel
                                     or "rules"
                                     or "defaultNode"
                                     or "defaultCwd"
+                                    or "inheritable"
                                 )
                         )
                         || !new[]
@@ -325,10 +364,11 @@ internal sealed partial class WebUIChannel
                             "rules",
                             "defaultNode",
                             "defaultCwd",
+                            "inheritable",
                         }.Any(body.ContainsKey)
                     )
                         throw new InvalidDataException(
-                            "Provide inheritAgent, isolatedNode, rules, defaultNode or defaultCwd."
+                            "Provide inheritAgent, isolatedNode, rules, defaultNode, defaultCwd or inheritable."
                         );
                     if (!sessions.Agents().Contains(agentId))
                         return Results.NotFound(new JsonObject { ["error"] = "Agent not found." });
@@ -345,6 +385,14 @@ internal sealed partial class WebUIChannel
                             body["defaultNode"]?.GetValue<string>(),
                             body.ContainsKey("defaultCwd"),
                             body["defaultCwd"]?.GetValue<string>()
+                        );
+                    if (body.ContainsKey("inheritable"))
+                        await sessions.SetAgentInheritableAsync(
+                            agentId,
+                            body["inheritable"] is JsonValue flag
+                            && flag.TryGetValue<bool>(out var inheritable)
+                                ? inheritable
+                                : throw new InvalidDataException("inheritable must be a boolean.")
                         );
                     if (body.ContainsKey("isolatedNode"))
                         await sessions.SetAgentNodeAsync(
@@ -380,6 +428,7 @@ internal sealed partial class WebUIChannel
                                 ["defaultCwd"] = JsonData.WebNode(
                                     sessions.AgentMetadata[agentId]?["defaultCwd"]?.DeepClone()
                                 ),
+                                ["inheritable"] = sessions.AgentInheritable(agentId),
                                 ["isolated"] = sessions.AgentIsolated(agentId),
                                 ["isolatedNode"] = sessions.RecordedIsolationNode(agentId),
                             },

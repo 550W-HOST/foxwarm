@@ -85,6 +85,7 @@ internal sealed partial class AgentCatalog
             && (File.GetAttributes(agentRoot) & FileAttributes.ReparsePoint) != 0
         )
             throw new InvalidDataException("Agent directory root cannot be a symbolic link.");
+        RequireReaderVersion();
         foreach (var row in metadata)
             _ = Foxwarm.Tools.IsolatedToolCompatibility.Metadata(row.Value);
         if (!canonicalLayout)
@@ -391,6 +392,10 @@ internal sealed partial class AgentCatalog
 
     private void AtomicIndexWrite(string path, string text)
     {
+        var written = JsonNode.Parse(text) as JsonObject;
+        EnsureReaderVersion(
+            (canonicalLayout ? written : written?["metadata"] as JsonObject) ?? new JsonObject()
+        );
         try
         {
             new LinuxAtomicJsonFile(

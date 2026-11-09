@@ -204,8 +204,11 @@ internal sealed partial class SessionManager
                             (agents.MetadataSnapshot()[name]?["rules"] as JsonArray)?.Count ?? 0,
                         ["defaultNode"] = agents.DefaultNode(name),
                         ["defaultCwd"] = agents.DefaultCwd(name),
+                        ["inheritable"] = agents.Inheritable(name),
                         ["isolated"] = AgentIsolated(name),
                         ["isolatedNode"] = RecordedIsolationNode(name),
+                        ["isolationMigrated"] =
+                            agents.MetadataSnapshot()[name]?["legacyIsolation"] is not null,
                         ["sessionCount"] = owned.Total,
                         ["activeSessionCount"] = owned.Active,
                         ["queuedSessionCount"] = owned.Queued,

@@ -1141,6 +1141,16 @@ internal sealed partial class SessionToolExecutor(
         }
     }
 
+    // One caller snapshot for every server of a single broad search.
+    private static Func<string, bool> BroadMcpServerVisible(
+        SessionManager manager,
+        SessionOwner owner
+    )
+    {
+        SessionManager.ToolVisibilityContext? context = null;
+        return server => manager.McpServerVisible(context ??= manager.VisibilityFor(owner), server);
+    }
+
     internal static ToolRegistry CreateRegistry(
         JsonArray definitions,
         Foxwarm.McpClient mcp,
@@ -1296,7 +1306,8 @@ internal sealed partial class SessionToolExecutor(
                     ),
                 owner.ScriptBudget,
                 owner.Hosted,
-                IsolatedMcpServers(owner.Manager, owner.Hosted.Agent)
+                IsolatedMcpServers(owner.Manager, owner.Hosted.Agent),
+                BroadMcpServerVisible(owner.Manager, owner.Hosted)
             );
         handlers["call_tool"] = (_, _, _) =>
             throw new InvalidDataException("call_tool is a dispatcher, not a concrete target.");

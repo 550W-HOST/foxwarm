@@ -13,6 +13,7 @@ This module documents current .NET source behavior. Cross-module contracts belon
 - [Shared native file primitives](../units/dotnet-node-primitives.md)
 - [Local file, exec, delivery, and workspace tools](../units/tools-local-io.md)
 - [Tool authorization and isolation compatibility](../units/tool-authorization.md)
+- [Legacy isolation migration](../units/isolation-migration.md)
 - [Node list visibility](../units/node-list-visibility.md)
 - [External Node trust and ordinary tools](../units/external-nodes.md)
 - [Outbound MCP client](../units/mcp.md)

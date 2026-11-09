@@ -186,6 +186,42 @@ internal sealed partial class SessionManager
         );
     }
 
+    /// <summary>
+    /// Whether broad MCP discovery should list this server for the caller: false only when
+    /// some effective policy layer denies every tool of the server regardless of name and
+    /// arguments. Listing a server starts its connection, so a definitely denied server is
+    /// skipped; an explicitly named server is still listed as requested.
+    /// </summary>
+    internal bool McpServerVisible(ToolVisibilityContext context, string server)
+    {
+        if (context.Layers is null)
+            return false;
+        try
+        {
+            var request = new ToolAuthorizationRequest(
+                "mcp",
+                "",
+                server,
+                new JsonObject(),
+                [],
+                context.Agent,
+                context.Session,
+                "master",
+                toolWorkspace,
+                agents.AgentDirectory(context.Agent),
+                agents.MemoryDirectory(context.Agent),
+                CurrentNode: context.CurrentNode
+            );
+            return context.Policies.All(policy =>
+                ToolAuthorizationEvaluation.Visible(policy, request, unknownName: true)
+            );
+        }
+        catch (InvalidDataException)
+        {
+            return false;
+        }
+    }
+
     private bool VisibleRequest(
         ToolVisibilityContext context,
         string source,

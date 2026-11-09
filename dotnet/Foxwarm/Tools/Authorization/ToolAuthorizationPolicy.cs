@@ -17,6 +17,8 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
         {
             ["send_to_session"] = ("sessionId", "send"),
             ["send_file"] = ("sessionId", "file"),
+            // Every `session` action treats an omitted or blank sessionId as the caller.
+            ["session"] = ("sessionId", "session"),
             ["recall"] = ("sessionId", "recall"),
             ["view_session"] = ("sessionId", "required"),
             ["get_session_messages"] = ("sessionId", "required"), // Persisted Session-target selectors.

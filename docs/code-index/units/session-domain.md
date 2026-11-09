@@ -71,6 +71,10 @@ The requested hierarchical delegation uses the approved immutable `createdBy` re
 
 **Review-selected implementation choices, subject to later user revision:** `agentTree.maxDepth` defaults to 16 edges with root depth zero; `agentTree.maxChildren` defaults to 128 currently present direct child Agents; retained records without membership do not consume the limit. Both are nonnegative configuration integers, enforced in serialized creation admission. Lowering a limit does not disable existing valid Agents. Creator descendants, including retained metadata references, block Agent deletion before Session or directory effects. Normal creation cannot silently replace command-deleted creator/rule authority. Trusted [explicit restoration and retained-record cleanup](./session-manager-lifecycle-identity.md#retained-agent-administration) release the administrative dead end: restoration preserves that authority and requires a valid live creator chain; cleanup refuses remaining creator references. Legacy-only recreation remains supported, preserving and validating retained metadata rather than resetting it. A placement default alone does not reserve a name.
 
+`inheritable: false` (absent means inheritable) keeps an Agent out of ongoing inheritance: `ValidateInheritance` rejects it as a source, and setting it fails while any Agent still inherits from it. The legacy isolated-source ban continues alongside it until legacy isolation is retired.
+
+The installation reader-level marker is described in [isolation migration](./isolation-migration.md#installation-reader-level).
+
 Authorization evaluation and migration belong to [Agent-local policy layers](./tool-authorization.md#agent-local-authorization-layers). The root-to-initiator chain is never inferred from Session topology or memory inheritance.
 
 ## History ownership

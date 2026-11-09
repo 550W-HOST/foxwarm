@@ -516,6 +516,11 @@ internal sealed partial class SessionManager
                     )
         );
 
+    internal Task SetAgentInheritableAsync(string agent, bool inheritable) =>
+        agents.SetInheritableAsync(agent, inheritable);
+
+    internal bool AgentInheritable(string agent) => agents.Inheritable(agent);
+
     internal string? AgentDefaultNode(string agent) => agents.EffectiveDefaultNode(agent);
 
     internal string? AgentDefaultCwd(string agent) => agents.DefaultCwd(agent);

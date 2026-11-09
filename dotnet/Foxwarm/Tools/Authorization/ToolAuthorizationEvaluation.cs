@@ -180,7 +180,13 @@ internal static class ToolAuthorizationEvaluation
     private static bool Optional(JsonObject match, string key, AuthorizationFact actual) =>
         !match.ContainsKey(key) || Scalar(match[key], actual);
 
-    internal static bool ToolMatches(JsonNode? matcher, string source, string name, string? server)
+    internal static bool ToolMatches(
+        JsonNode? matcher,
+        string source,
+        string name,
+        string? server,
+        bool unknownName = false
+    )
     {
         // Read old persisted selectors as the renamed builtin only. This is not a
         // dispatch alias, and MCP/Node tools with the same name retain their identities.
@@ -192,16 +198,22 @@ internal static class ToolAuthorizationEvaluation
         if (matcher is JsonObject map)
             return Optional(map, "source", AuthorizationFact.Of(source))
                 && Optional(map, "server", AuthorizationFact.Of(server))
-                && (!map.ContainsKey("name") || Name(map["name"]));
-        return Name(matcher);
+                && (unknownName || !map.ContainsKey("name") || Name(map["name"]));
+        return unknownName || Name(matcher);
     }
+
+    // Whether a rule's tool selector depends on the tool name, which server-level
+    // discovery does not know yet.
+    private static bool NameConstrained(JsonNode? matcher) =>
+        matcher is not null && (matcher is not JsonObject map || map.ContainsKey("name"));
 
     internal static bool Identity(
         JsonObject match,
         ToolAuthorizationRequest request,
         bool unknownNode = false,
         bool unknownNodeTargets = false,
-        bool deny = false
+        bool deny = false,
+        bool unknownName = false
     ) =>
         (
             !match.ContainsKey("agent")
@@ -220,7 +232,7 @@ internal static class ToolAuthorizationEvaluation
         )
         && (
             !match.ContainsKey("tool")
-            || ToolMatches(match["tool"], request.Source, request.Name, request.Server)
+            || ToolMatches(match["tool"], request.Source, request.Name, request.Server, unknownName)
         )
         && (unknownNode || Optional(match, "targetNode", AuthorizationFact.Of(request.TargetNode)))
         && (
@@ -536,7 +548,8 @@ internal static class ToolAuthorizationEvaluation
         ToolAuthorizationRequest request,
         bool unknownNode = false,
         bool unknownNodeTargets = false,
-        IReadOnlySet<string>? knownArgs = null
+        IReadOnlySet<string>? knownArgs = null,
+        bool unknownName = false
     )
     {
         if (!unknownNodeTargets)
@@ -546,7 +559,14 @@ internal static class ToolAuthorizationEvaluation
             var match = rule["match"]!.AsObject();
             if (
                 !rule["enabled"]!.GetValue<bool>()
-                || !Identity(match, request, unknownNode, unknownNodeTargets, Restrictive(rule))
+                || !Identity(
+                    match,
+                    request,
+                    unknownNode,
+                    unknownNodeTargets,
+                    Restrictive(rule),
+                    unknownName
+                )
             )
                 continue;
             // Arguments the caller states as known are matched exactly; the rest stay unresolved.
@@ -565,7 +585,8 @@ internal static class ToolAuthorizationEvaluation
             if (argsMismatch)
                 continue;
             var conditional =
-                match.ContainsKey("path")
+                unknownName && NameConstrained(match["tool"])
+                || match.ContainsKey("path")
                 || unknownArgs
                 || unknownNode && match.ContainsKey("targetNode")
                 || unknownNodeTargets && match.ContainsKey("node");
