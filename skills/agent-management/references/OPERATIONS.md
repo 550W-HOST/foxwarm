@@ -176,7 +176,7 @@ A multi-step setup that fails partway is not rolled back. Report exactly which A
 
 ## Legacy isolated Agents
 
-An isolated Agent is bound to one non-master Node. All its Sessions run there; on `master` they may use only their own Agent directory and memory; optional exact `toolRules` apply; and messages cross Agents only along direct parent/child links. These checks still run after the generic policy. Existing isolated Agents keep working, but do not create new ones.
+An isolated Agent is bound to one non-master Node. All its Sessions run there; on `master` they may use only their own Agent directory and memory; optional exact `toolRules` apply; and its Sessions may send to or wait on only themselves, their direct parent and their direct children. These checks still run after the generic policy. Existing isolated Agents keep working, but do not create new ones.
 
 The replacement is the pattern above: an Agent-local rule layer plus a Node, with `defaultNode` for placement. To migrate an isolated Agent:
 
@@ -186,4 +186,4 @@ The replacement is the pattern above: an Agent-local rule layer plus a Node, wit
 4. Test with `explain_tool_authorization` while isolation is still on, using a non-isolated test Agent with the same rules where isolation would hide gaps.
 5. With approval, clear isolation: `set_agent_isolated({agentName, nodeId:""})` or `/agent isolated <agent> off`.
 
-Clearing isolation also removes its incoming-message and own-directory guards, and legacy isolation allowed own-memory writes that the templates deny. It also moves inbound channel files from the bound Node to `master` in the Agent's directory, so the local layer must allow reading them there, as the channel-assistant template does. Review those differences explicitly; do not clear isolation to work around a denied call.
+Clearing isolation also removes its outgoing-message and own-directory guards, and legacy isolation allowed own-memory writes that the templates deny. It also moves inbound channel files from the bound Node to `master` in the Agent's directory, so the local layer must allow reading them there, as the channel-assistant template does. Review those differences explicitly; do not clear isolation to work around a denied call.
