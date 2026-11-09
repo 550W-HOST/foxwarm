@@ -110,4 +110,4 @@ FOXWARM_TEST_CONTAINER_ENGINE=podman FOXWARM_TEST_CONTAINER_IMAGE=localhost/foxw
   node packages/webui/test/mainHostProviderContainer.e2e.mjs
 ```
 
-It requires a built Main server, a running engine and locally built images from `Containerfile`; the Code image is optional and adds a terminal check. It creates and removes only containers labelled with its own Provider ID. The manually started **Container Provider** GitHub workflow runs it against the runner's Docker and against rootless Podman, with a CLI Node built from the same commit.
+It requires a built Main server, a running engine and locally built images from `Containerfile`; the Code image is optional and adds a terminal check. It creates and removes only containers labelled with its own Provider ID. The opt-in **Container Provider** GitHub workflow runs it against the runner's Docker and against rootless Podman, with a CLI Node built from the same commit.

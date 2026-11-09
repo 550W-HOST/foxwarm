@@ -2,12 +2,20 @@ name: Container Provider
 
 # Opt-in qualification of the reference container Node provider
 # (skills/node-setup/examples/container) through a real C# Main server and a
-# real engine. It runs only when started manually.
+# real engine. It runs when started manually, or on pushes to the dedicated
+# ci/container-provider branch so a candidate can be checked before it reaches
+# the default branch. Pushes to other branches do not start it.
 on:
+  push:
+    branches: [ci/container-provider]
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: container-provider-${{ github.ref }}
+  cancel-in-progress: true
 
 defaults:
   run:
