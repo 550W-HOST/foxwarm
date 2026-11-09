@@ -110,6 +110,9 @@ try {
   await mkdir(join(data, 'state'), { recursive: true })
   await writeFile(join(data, 'state/config.yaml'), `bot: {httpPort: ${port}}\n`)
   await writeFile(join(data, 'state/token'), token, { mode: 0o600 })
+  // Manual MCP configuration edits take effect at startup: begin with a broken file.
+  const configFile = join(data, 'state', 'mcp.json')
+  await writeFile(configFile, JSON.stringify({ servers: { malformed: { transport: 'synthetic-private-transport', token: 'synthetic-private-transport' } } }))
   await startHost(); assert.equal((await request('POST', '/api/agents', { agentId: 'team' })).status, 201)
   current = await create('driver'); const admin = await create('operator')
   browser = await puppeteer.launch({ executablePath: process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium', headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'], userDataDir: join(root, 'browser') })
@@ -119,13 +122,11 @@ try {
   await task([fn('discover-builtin', 'search_tools', { query: 'MCP server', sources: ['builtin'], limit: 10 }), fn('discover-node', 'search_tools', { query: 'read', sources: ['node'], limit: 1 })], { browserSend: true })
   assert.match((await pair('discover-builtin')).output, /builtin:mcp_config/); assert.match((await pair('discover-builtin')).output, /builtin:list_mcp_servers/)
   assert.match((await pair('discover-node')).output, /node:master\/read/); assert(!(await pair('discover-node')).output.includes('builtin:read'))
-  const configFile = join(data, 'state', 'mcp.json')
-  await writeFile(configFile, JSON.stringify({ servers: { malformed: { transport: 'synthetic-private-transport', token: 'synthetic-private-transport' } } }))
   for (let index = 0; index < 2; index++) {
     const partial = await perform('builtin:search_tools', { sources: ['builtin', 'mcp'], query: 'session', limit: 1 }, 'config-unavailable-' + index)
     assert.match(partial.output, /builtin:session/); assert.match(partial.output, /configuration is unavailable/); assert(!partial.output.includes('synthetic-private-transport'))
   }
-  await writeFile(configFile, JSON.stringify({ servers: {} }))
+  await stopHost(); await writeFile(configFile, JSON.stringify({ servers: {} })); await startHost()
   assert((await perform('builtin:skill', { action: 'load', skillName: 'mcp-management' }, 'guide')).output.includes('MCP management'))
   assert.equal((await perform('node:master/write', { filePath: 'same-owner.txt', content: 'one-write' }, 'owned-write')).error, undefined)
   assert.match((await perform({ source: 'node', name: 'read', nodeId: 'current' }, { filePath: 'same-owner.txt' }, 'owned-read')).output, /one-write/)
