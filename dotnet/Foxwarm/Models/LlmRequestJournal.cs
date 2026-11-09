@@ -380,18 +380,17 @@ public sealed partial class LlmRequestJournalStore : IDisposable, IAsyncDisposab
                     );
                     // A success written without its ledger row stays outside the covered range
                     // so the backfill adds it; anything else is covered as soon as it commits.
-                    var recorded =
-                        ledger is null
-                            ? outcome != "success"
-                            : TryRecordLiveUsage(
-                                connection,
-                                transaction,
-                                requestId,
-                                attempt,
-                                completedAt,
-                                start,
-                                ledger
-                            );
+                    var recorded = ledger is null
+                        ? outcome != "success"
+                        : TryRecordLiveUsage(
+                            connection,
+                            transaction,
+                            requestId,
+                            attempt,
+                            completedAt,
+                            start,
+                            ledger
+                        );
                     if (recorded)
                         AdvanceUsageHigh(connection, transaction, rowid);
                     return ledger is null || recorded;
@@ -1481,15 +1480,16 @@ public sealed partial class LlmRequestJournalStore : IDisposable, IAsyncDisposab
         using var schema = connection.BeginTransaction(deferred: false);
         using var command = connection.CreateCommand();
         command.Transaction = schema;
-        command.CommandText = """
-            CREATE TABLE IF NOT EXISTS llm_journal_metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS llm_journal_objects(object_id TEXT PRIMARY KEY,object_kind TEXT NOT NULL,payload TEXT NOT NULL,created_at INTEGER NOT NULL);
-            CREATE TABLE IF NOT EXISTS llm_journal_requests(request_id TEXT PRIMARY KEY,session_id TEXT,purpose TEXT NOT NULL,iteration INTEGER NOT NULL,created_at INTEGER NOT NULL,prompt_object_id TEXT NOT NULL,tool_schema_object_id TEXT NOT NULL,requested_model_key TEXT NOT NULL,prompt_cache_key_hash TEXT NOT NULL,message_count INTEGER NOT NULL,checkpoint_message_ids_json TEXT,base_request_id TEXT,common_prefix_length INTEGER,appended_message_ids_json TEXT,delta_depth INTEGER NOT NULL);
-            CREATE INDEX IF NOT EXISTS idx_llm_journal_requests_session_created ON llm_journal_requests(session_id,created_at,request_id);
-            CREATE TABLE IF NOT EXISTS llm_journal_attempt_starts(event_id TEXT PRIMARY KEY,request_id TEXT NOT NULL,attempt INTEGER NOT NULL,started_at INTEGER NOT NULL,concrete_model_id TEXT NOT NULL,virtual_model_key TEXT,provider_type TEXT NOT NULL,semantic_payload_sha256 TEXT NOT NULL,prompt_object_id TEXT);
-            CREATE TABLE IF NOT EXISTS llm_journal_attempt_results(event_id TEXT PRIMARY KEY,request_id TEXT NOT NULL,attempt INTEGER NOT NULL,completed_at INTEGER NOT NULL,outcome TEXT NOT NULL,result_json TEXT,error_json TEXT);
-            CREATE TABLE IF NOT EXISTS llm_journal_import_state(source_path TEXT PRIMARY KEY,imported_size INTEGER NOT NULL,updated_at INTEGER NOT NULL);
-            """ + UsageSchemaSql;
+        command.CommandText =
+            """
+                CREATE TABLE IF NOT EXISTS llm_journal_metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS llm_journal_objects(object_id TEXT PRIMARY KEY,object_kind TEXT NOT NULL,payload TEXT NOT NULL,created_at INTEGER NOT NULL);
+                CREATE TABLE IF NOT EXISTS llm_journal_requests(request_id TEXT PRIMARY KEY,session_id TEXT,purpose TEXT NOT NULL,iteration INTEGER NOT NULL,created_at INTEGER NOT NULL,prompt_object_id TEXT NOT NULL,tool_schema_object_id TEXT NOT NULL,requested_model_key TEXT NOT NULL,prompt_cache_key_hash TEXT NOT NULL,message_count INTEGER NOT NULL,checkpoint_message_ids_json TEXT,base_request_id TEXT,common_prefix_length INTEGER,appended_message_ids_json TEXT,delta_depth INTEGER NOT NULL);
+                CREATE INDEX IF NOT EXISTS idx_llm_journal_requests_session_created ON llm_journal_requests(session_id,created_at,request_id);
+                CREATE TABLE IF NOT EXISTS llm_journal_attempt_starts(event_id TEXT PRIMARY KEY,request_id TEXT NOT NULL,attempt INTEGER NOT NULL,started_at INTEGER NOT NULL,concrete_model_id TEXT NOT NULL,virtual_model_key TEXT,provider_type TEXT NOT NULL,semantic_payload_sha256 TEXT NOT NULL,prompt_object_id TEXT);
+                CREATE TABLE IF NOT EXISTS llm_journal_attempt_results(event_id TEXT PRIMARY KEY,request_id TEXT NOT NULL,attempt INTEGER NOT NULL,completed_at INTEGER NOT NULL,outcome TEXT NOT NULL,result_json TEXT,error_json TEXT);
+                CREATE TABLE IF NOT EXISTS llm_journal_import_state(source_path TEXT PRIMARY KEY,imported_size INTEGER NOT NULL,updated_at INTEGER NOT NULL);
+                """ + UsageSchemaSql;
         command.ExecuteNonQuery();
         using var columns = connection.CreateCommand();
         columns.Transaction = schema;

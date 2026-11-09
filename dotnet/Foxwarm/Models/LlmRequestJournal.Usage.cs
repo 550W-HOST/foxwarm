@@ -283,7 +283,10 @@ public sealed partial class LlmRequestJournalStore
         command.ExecuteNonQuery();
     }
 
-    private static bool UsageTableExists(SqliteConnection connection, SqliteTransaction? transaction) =>
+    private static bool UsageTableExists(
+        SqliteConnection connection,
+        SqliteTransaction? transaction
+    ) =>
         ReadScalar(
             connection,
             transaction,
@@ -313,10 +316,13 @@ public sealed partial class LlmRequestJournalStore
             if (top <= high)
                 break;
             var end = Math.Min(top, high + batchSize);
-            var rows = source.Read($"a.rowid>{high} AND a.rowid<={end}", ascending: true, limit: null);
+            var rows = source.Read(
+                $"a.rowid>{high} AND a.rowid<={end}",
+                ascending: true,
+                limit: null
+            );
             token.ThrowIfCancellationRequested();
-            high = await WriteUsageBatchAsync(rows.Rows, HighKey, end, token)
-                .ConfigureAwait(false);
+            high = await WriteUsageBatchAsync(rows.Rows, HighKey, end, token).ConfigureAwait(false);
         }
         while (low > 1)
         {
@@ -350,8 +356,10 @@ public sealed partial class LlmRequestJournalStore
                         reset = true;
                     }
                     else if (
-                        ReadScalar(connection, transaction, "SELECT 1 FROM llm_usage LIMIT 1") is null
-                        && MetadataNumber(ReadMetadata(connection, transaction, HighKey)) is long covered
+                        ReadScalar(connection, transaction, "SELECT 1 FROM llm_usage LIMIT 1")
+                            is null
+                        && MetadataNumber(ReadMetadata(connection, transaction, HighKey))
+                            is long covered
                         && ReadScalar(
                             connection,
                             transaction,
@@ -381,7 +389,9 @@ public sealed partial class LlmRequestJournalStore
                     );
                     long Read(string key, long initial)
                     {
-                        if (MetadataNumber(ReadMetadata(connection, transaction, key)) is long value)
+                        if (
+                            MetadataNumber(ReadMetadata(connection, transaction, key)) is long value
+                        )
                             return value;
                         WriteMetadata(connection, transaction, key, initial);
                         return initial;
@@ -445,7 +455,11 @@ public sealed partial class LlmRequestJournalStore
 
         internal long MaxResultRowid() =>
             Convert.ToInt64(
-                ReadScalar(connection, null, "SELECT coalesce(max(rowid),0) FROM llm_journal_attempt_results"),
+                ReadScalar(
+                    connection,
+                    null,
+                    "SELECT coalesce(max(rowid),0) FROM llm_journal_attempt_results"
+                ),
                 CultureInfo.InvariantCulture
             );
 
@@ -476,7 +490,11 @@ public sealed partial class LlmRequestJournalStore
             Add(command, "$attempt", attempt);
             using var reader = command.ExecuteReader();
             return reader.Read()
-                ? (reader.GetString(0), reader.IsDBNull(1) ? null : reader.GetString(1), reader.GetString(2))
+                ? (
+                    reader.GetString(0),
+                    reader.IsDBNull(1) ? null : reader.GetString(1),
+                    reader.GetString(2)
+                )
                 : null;
         }
 
@@ -501,7 +519,9 @@ public sealed partial class LlmRequestJournalStore
                 LEFT JOIN temp.usage_starts s ON s.request_id=a.request_id AND s.attempt=a.attempt
                 WHERE {range} AND a.outcome='success'
                   AND NOT EXISTS(SELECT 1 FROM llm_usage u WHERE u.request_id=a.request_id AND u.attempt=a.attempt)
-                ORDER BY a.rowid {(ascending ? "ASC" : "DESC")}{(limit is null ? "" : " LIMIT " + limit)}
+                ORDER BY a.rowid {(ascending ? "ASC" : "DESC")}{(
+                    limit is null ? "" : " LIMIT " + limit
+                )}
                 """;
             using var reader = command.ExecuteReader();
             var rows = new List<PendingUsage>();
@@ -517,7 +537,11 @@ public sealed partial class LlmRequestJournalStore
                 var attempt = reader.GetInt64(2);
                 var start = reader.IsDBNull(7)
                     ? Start(requestId, attempt)
-                    : (reader.GetString(7), reader.IsDBNull(8) ? null : reader.GetString(8), reader.GetString(9));
+                    : (
+                        reader.GetString(7),
+                        reader.IsDBNull(8) ? null : reader.GetString(8),
+                        reader.GetString(9)
+                    );
                 if (start is not { } found)
                     continue;
                 JsonNode? usage = null;

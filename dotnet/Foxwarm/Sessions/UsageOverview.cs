@@ -152,7 +152,12 @@ internal sealed class UsageOverview : IAsyncDisposable
     }
 
     /// <summary>Who a recorded Session's usage belongs to now.</summary>
-    internal sealed record SessionOwnerInfo(string? CurrentId, string? Agent, long? Start, string? FormerAgent);
+    internal sealed record SessionOwnerInfo(
+        string? CurrentId,
+        string? Agent,
+        long? Start,
+        string? FormerAgent
+    );
 
     /// <summary>
     /// Resolves recorded Session IDs: the current Session (exact or through a committed alias)
@@ -160,20 +165,22 @@ internal sealed class UsageOverview : IAsyncDisposable
     /// recorded in the retained Archive. Unresolvable Sessions stay unattributed rather than
     /// guessed from IDs.
     /// </summary>
-    internal IReadOnlyDictionary<string, SessionOwnerInfo> DescribeSessions(IReadOnlyCollection<string> ids)
+    internal IReadOnlyDictionary<string, SessionOwnerInfo> DescribeSessions(
+        IReadOnlyCollection<string> ids
+    )
     {
         var current = new Dictionary<string, string?>(StringComparer.Ordinal);
         foreach (var chunk in ids.Distinct(StringComparer.Ordinal).Chunk(200))
-            foreach (var (id, resolution) in manager.Catalog.ResolveMany(chunk))
-                current[id] = SessionCatalog.Text(resolution["kind"]) is "exact" or "alias"
-                    ? SessionCatalog.Text(resolution["sessionId"])
-                    : null;
+        foreach (var (id, resolution) in manager.Catalog.ResolveMany(chunk))
+            current[id] = SessionCatalog.Text(resolution["kind"]) is "exact" or "alias"
+                ? SessionCatalog.Text(resolution["sessionId"])
+                : null;
         var agents = new Dictionary<string, string?>(StringComparer.Ordinal);
         foreach (
             var chunk in current.Values.OfType<string>().Distinct(StringComparer.Ordinal).Chunk(200)
         )
-            foreach (var row in manager.Catalog.GetMany(chunk))
-                agents[SessionCatalog.Text(row["id"])!] = SessionCatalog.Text(row["agent"]);
+        foreach (var row in manager.Catalog.GetMany(chunk))
+            agents[SessionCatalog.Text(row["id"])!] = SessionCatalog.Text(row["agent"]);
         using var db = OpenArchive();
         var result = new Dictionary<string, SessionOwnerInfo>(StringComparer.Ordinal);
         foreach (var id in ids)
@@ -185,7 +192,12 @@ internal sealed class UsageOverview : IAsyncDisposable
             // the same ID; a deleted Session's Archive keeps the Agent that owned it.
             var history = ArchiveHistory(db, now ?? id);
             var former = now is null || now == id ? history.Agent : ArchiveHistory(db, id).Agent;
-            result[id] = new(now, now is null ? null : agents[now], now is null ? null : history.Start, former);
+            result[id] = new(
+                now,
+                now is null ? null : agents[now],
+                now is null ? null : history.Start,
+                former
+            );
         }
         return result;
     }
@@ -294,7 +306,12 @@ internal sealed class UsageOverview : IAsyncDisposable
         CancellationToken token = default
     ) => Task.Run(() => Query(boundaries, groupBy, agent, limit), token);
 
-    private JsonObject Query(IReadOnlyList<long> boundaries, string? groupBy, string? agent, int limit)
+    private JsonObject Query(
+        IReadOnlyList<long> boundaries,
+        string? groupBy,
+        string? agent,
+        int limit
+    )
     {
         var column = groupBy switch
         {
@@ -307,14 +324,19 @@ internal sealed class UsageOverview : IAsyncDisposable
         // Agent attribution, Agent filtering and Session groupings need the Session behind
         // every row; other reports aggregate directly.
         var bySession = agent is not null || groupBy is "agent" or "tree" or "session";
-        IReadOnlyDictionary<string, SessionOwnerInfo> sessions = new Dictionary<string, SessionOwnerInfo>();
+        IReadOnlyDictionary<string, SessionOwnerInfo> sessions =
+            new Dictionary<string, SessionOwnerInfo>();
         IReadOnlyList<LlmUsageCell> cells;
         if (bySession)
         {
             sessions = DescribeSessions(journal.UsageSessions(boundaries[0], boundaries[^1]));
             var starts = sessions
                 .Where(pair => pair.Value.Start is not null)
-                .ToDictionary(pair => pair.Key, pair => pair.Value.Start!.Value, StringComparer.Ordinal);
+                .ToDictionary(
+                    pair => pair.Key,
+                    pair => pair.Value.Start!.Value,
+                    StringComparer.Ordinal
+                );
             cells = journal.QueryUsage(boundaries, column, bySession: true, starts);
         }
         else
@@ -328,9 +350,13 @@ internal sealed class UsageOverview : IAsyncDisposable
                 ? new("session", info.CurrentId, info.Agent)
                 : new("deleted", null, info.FormerAgent);
         }
-        var owned = cells.Select(cell => (Cell: cell, Owner: bySession ? OwnerOf(cell) : null)).ToArray();
+        var owned = cells
+            .Select(cell => (Cell: cell, Owner: bySession ? OwnerOf(cell) : null))
+            .ToArray();
         if (agent is not null)
-            owned = owned.Where(item => item.Owner!.Kind != "none" && item.Owner.Agent == agent).ToArray();
+            owned = owned
+                .Where(item => item.Owner!.Kind != "none" && item.Owner.Agent == agent)
+                .ToArray();
         var coverage = journal.UsageCoverage();
         var bucketCount = boundaries.Count - 1;
         var total = new Totals();
@@ -349,7 +375,9 @@ internal sealed class UsageOverview : IAsyncDisposable
             ["groupBy"] = groupBy,
             ["agent"] = agent,
             ["total"] = total.ToJson(),
-            ["buckets"] = new JsonArray(buckets.Select(bucket => (JsonNode?)bucket.ToJson()).ToArray()),
+            ["buckets"] = new JsonArray(
+                buckets.Select(bucket => (JsonNode?)bucket.ToJson()).ToArray()
+            ),
             ["coverage"] = new JsonObject
             {
                 ["earliest"] = coverage.Earliest,
@@ -384,11 +412,12 @@ internal sealed class UsageOverview : IAsyncDisposable
                     Enumerable
                         .Range(0, bucketCount)
                         .Select(bucket =>
-                            (JsonNode?)(
-                                group.Buckets.TryGetValue(bucket, out var value)
-                                    ? value
-                                    : new Totals()
-                            ).ToJson()
+                            (JsonNode?)
+                                (
+                                    group.Buckets.TryGetValue(bucket, out var value)
+                                        ? value
+                                        : new Totals()
+                                ).ToJson()
                         )
                         .ToArray()
                 );
@@ -453,16 +482,19 @@ internal sealed class UsageOverview : IAsyncDisposable
         {
             var paths = new Dictionary<string, string[]>(StringComparer.Ordinal);
             foreach (var chunk in live.Chunk(100))
-                foreach (var (focus, path) in manager.Catalog.Paths(chunk))
-                    if (path.Length > 0)
-                        paths[focus] = path;
+            foreach (var (focus, path) in manager.Catalog.Paths(chunk))
+                if (path.Length > 0)
+                    paths[focus] = path;
             var pathAgents = new Dictionary<string, string?>(StringComparer.Ordinal);
             if (agent is not null)
                 foreach (
-                    var chunk in paths.Values.SelectMany(path => path).Distinct(StringComparer.Ordinal).Chunk(200)
+                    var chunk in paths
+                        .Values.SelectMany(path => path)
+                        .Distinct(StringComparer.Ordinal)
+                        .Chunk(200)
                 )
-                    foreach (var row in manager.Catalog.GetMany(chunk))
-                        pathAgents[SessionCatalog.Text(row["id"])!] = SessionCatalog.Text(row["agent"]);
+                foreach (var row in manager.Catalog.GetMany(chunk))
+                    pathAgents[SessionCatalog.Text(row["id"])!] = SessionCatalog.Text(row["agent"]);
             foreach (var (focus, path) in paths)
             {
                 var root = path.Length - 1;
@@ -476,8 +508,8 @@ internal sealed class UsageOverview : IAsyncDisposable
         }
         var rows = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
         foreach (var chunk in target.Values.Distinct(StringComparer.Ordinal).Chunk(200))
-            foreach (var row in manager.Catalog.GetMany(chunk))
-                rows[SessionCatalog.Text(row["id"])!] = row;
+        foreach (var row in manager.Catalog.GetMany(chunk))
+            rows[SessionCatalog.Text(row["id"])!] = row;
         var kind = tree ? "tree" : "session";
         return (_, owner) =>
         {
