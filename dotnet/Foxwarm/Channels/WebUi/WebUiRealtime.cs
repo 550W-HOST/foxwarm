@@ -159,11 +159,14 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
         void WebhooksChanged() => Deliver(new JsonObject { ["type"] = "webhooks-changed" });
         // Installation usage totals (System › Usage, status bar) follow the same list scope.
         void UsageChanged() => Deliver(new JsonObject { ["type"] = "usage-changed" });
+        // System › Activity refreshes when recorded activity changes.
+        void ActivityChanged() => Deliver(new JsonObject { ["type"] = "activity-changed" });
         runtime.Changed += Changed;
         runtime.TopologyChanged += Invalidated;
         runtime.Manager.Timers.Changed += TimersChanged;
         runtime.Manager.Webhooks.Changed += WebhooksChanged;
         runtime.Manager.Usage.Changed += UsageChanged;
+        runtime.Manager.Activity.Changed += ActivityChanged;
         async Task Pump()
         {
             await foreach (var item in output.Reader.ReadAllAsync(lifetime.Token))
@@ -398,6 +401,7 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
             runtime.Manager.Timers.Changed -= TimersChanged;
             runtime.Manager.Webhooks.Changed -= WebhooksChanged;
             runtime.Manager.Usage.Changed -= UsageChanged;
+            runtime.Manager.Activity.Changed -= ActivityChanged;
             lifetime.Cancel();
             lock (gate)
             {

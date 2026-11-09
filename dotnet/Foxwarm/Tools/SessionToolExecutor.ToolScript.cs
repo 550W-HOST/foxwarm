@@ -61,6 +61,7 @@ internal sealed partial class SessionToolExecutor
                         return planned.Preset;
                     var request = (JsonObject)wrapper.DeepClone();
                     request["args"] = planned.Call["args"]!.DeepClone();
+                    var effectStarted = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                     var execution = await ExecuteAttributedAsync(
                         new JsonObject
                         {
@@ -78,6 +79,28 @@ internal sealed partial class SessionToolExecutor
                         context.ExecPlacementObserved?.Invoke(placement);
                     if (execution.Target is { } target)
                         context.TargetObserved?.Invoke(target);
+                    // Unattended slices have no Session tool row; their calls are recorded directly.
+                    if (unattended)
+                        sessions.Activity.RecordDirect(() =>
+                            ArchiveToolEffects.FromDirectCall(
+                                hosted.Id,
+                                hosted.Agent,
+                                unattendedOrigin + "-script",
+                                effectStarted,
+                                execution.Target,
+                                resolved.Name,
+                                execution.ExecPlacement,
+                                execution.Response,
+                                sessions.RedactActivity(
+                                    ToolArgsPreview(resolved.Name, resolved.Args),
+                                    hosted.Id
+                                ),
+                                new(0, unattendedOrigin, null),
+                                context.ToolScriptRunId,
+                                null,
+                                execution.SessionMessages?.OfType<JsonObject>().FirstOrDefault()
+                            )
+                        );
                     if (
                         execution.Receipt is not null
                         && (

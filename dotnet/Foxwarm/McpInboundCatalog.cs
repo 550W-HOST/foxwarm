@@ -15,10 +15,12 @@ internal sealed class McpInboundCatalog
     private readonly McpExternalAuthorization authorization;
     private readonly McpInboundSessions sessions;
     private readonly McpInboundNodes externalNodes;
+    private readonly SessionManager manager;
     private static readonly JsonArray wrappers = LoadWrappers();
 
     internal McpInboundCatalog(SessionManager manager)
     {
+        this.manager = manager;
         mcp = manager.OutboundMcp;
         ChannelRegistry = manager.ChannelRegistry;
         nodes = manager.Nodes;
@@ -149,7 +151,18 @@ internal sealed class McpInboundCatalog
                 case "foxwarm_discover":
                     return await DiscoverAsync(context, args, token);
                 case "foxwarm_call":
-                    return await CallConcreteAsync(context, args, token);
+                {
+                    var started = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                    JsonObject? called = null;
+                    try
+                    {
+                        return called = await CallConcreteAsync(context, args, token);
+                    }
+                    finally
+                    {
+                        RecordExternal(context, args, started, called);
+                    }
+                }
                 case "foxwarm_node":
                     Keys(args, "action", "nodeId");
                     var action = Text(args, "action", true)!;
@@ -257,6 +270,67 @@ internal sealed class McpInboundCatalog
             allowReply ?? legacy ?? false,
             token
         );
+    }
+
+    // Inbound MCP calls never reach a Session Archive, so their activity is recorded directly.
+    // A call that ended in an exception is recorded as an error with no further detail.
+    private void RecordExternal(
+        McpExternalContext context,
+        JsonObject args,
+        long started,
+        JsonObject? result
+    )
+    {
+        try
+        {
+            if (args["toolId"] is not JsonValue value || !value.TryGetValue<string>(out var id))
+                return;
+            var colon = id.IndexOf(':');
+            var slash = id.IndexOf('/', colon + 1);
+            var source = colon > 0 ? id[..colon] : null;
+            var scope = colon > 0 && slash > colon ? id[(colon + 1)..slash] : null;
+            var tool =
+                slash > 0 ? id[(slash + 1)..]
+                : colon > 0 ? id[(colon + 1)..]
+                : id;
+            var callArgs = args["args"] as JsonObject ?? new JsonObject();
+            var failed = result is null || result["isError"]?.GetValue<bool>() == true;
+            var target = new JsonObject { ["name"] = tool };
+            if (source is not null)
+                target["source"] = source;
+            if (source == "mcp" && scope is not null)
+                target["server"] = scope;
+            if (source == "node" && scope is not null)
+                target["node"] = scope;
+            manager.Activity.RecordDirect(() =>
+                ArchiveToolEffects.FromDirectCall(
+                    null,
+                    null,
+                    "external-mcp",
+                    started,
+                    target,
+                    tool,
+                    null,
+                    failed
+                        ? new JsonObject
+                        {
+                            ["error"] = new JsonObject { ["type"] = "external_call_failed" },
+                        }
+                        : new JsonObject(),
+                    manager.RedactActivity(
+                        SessionToolExecutor.ToolArgsPreview(tool, callArgs),
+                        null
+                    ),
+                    new(0, "external", context.ExternalId),
+                    null,
+                    "external:" + context.ExternalId
+                )
+            );
+        }
+        catch (Exception)
+        {
+            // Activity is presentation; it never changes the call's result.
+        }
     }
 
     private async Task<JsonObject> CallConcreteAsync(

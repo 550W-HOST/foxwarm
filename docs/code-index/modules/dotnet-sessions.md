@@ -24,6 +24,7 @@ This module documents current .NET source behavior. Cross-module contracts belon
 - [Session catalog projections and indexed queries](../units/session-catalog-projection.md)
 - [Session catalog authority, identity, deletion, and presentation mutations](../units/session-catalog-mutations.md)
 - [Archive message store and read queries](../units/archive-message-store.md)
+- [Installation activity index](../units/activity-index.md)
 - [Session sequence projection and deliverySeq](../units/dotnet-session-sequence.md)
 - [Archive branches, blocks, and reservations](../units/archive-branch-lineage.md)
 - [Archive identity reservations and Session identity moves](../units/archive-identity-and-moves.md)

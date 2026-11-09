@@ -47,6 +47,9 @@ internal sealed partial class SessionManager : IAsyncDisposable
 
     /// <summary>Installation-wide usage read from the journal's derived ledger.</summary>
     internal UsageOverview Usage { get; }
+
+    /// <summary>Installation activity: the derived index of tool effects and its records.</summary>
+    internal ActivityIndex Activity { get; }
     internal Foxwarm.Vector.VectorService Vector { get; }
     private readonly Foxwarm.Persistence.SqliteWriterOwners.Lease archiveWriter;
     internal TaskService Tasks { get; }
@@ -307,6 +310,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         Journal = new LlmRequestJournalStore(this.root);
         Usage = new UsageOverview(this, Journal);
         archiveWriter = SqliteArchiveMessageStore.AcquireWriter(ArchiveDatabase);
+        Activity = new ActivityIndex(this);
         Vector = new(
             this.root,
             Foxwarm.Vector.VectorConfiguration.Capture(models.ConfigurationOwner?.AppConfiguration),
@@ -473,7 +477,10 @@ internal sealed partial class SessionManager : IAsyncDisposable
         }
         await executor.RegisterRecordsAsync(id => Catalog.Get(id) is not null);
         if (startMainServices)
+        {
             Usage.StartBackfill(admissionStop.Token);
+            Activity.StartBackfill(admissionStop.Token);
+        }
         var ids = Catalog
             .RestartIds()
             .Concat(Catalog.PendingApprovalIds())
@@ -841,6 +848,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         Nodes.Dispose();
         await websockets.DisposeAsync();
         await Usage.DisposeAsync();
+        await Activity.DisposeAsync();
         await Journal.DisposeAsync();
         await archiveWriter.DisposeAsync();
         Tasks.Dispose();

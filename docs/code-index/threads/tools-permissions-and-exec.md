@@ -39,6 +39,7 @@ Definition discovery is not authorization. Invalid/ambiguous rules fail closed; 
 
 - A model `functionResponse` carries `__meta.target`, and a ToolScript subcall carries `target`: `source`, `name`, `node` (the resolved execution Node), and when present `server` and `invocationName`. It is present on denials and other failures whenever the call resolved; an unresolved call has none.
 - `target.rules` lists the deciding rule of each generic policy layer as `{layer, id, effect}`: `layer` is `global` or `agent:<name>`, `id` is the rule ID or `defaultAction`, and `effect` is `allow`, `ask` or `deny`. It is taken from the assessment of the call's own dispatch gate, the same one approval records name.
+- The [activity index](../units/activity-index.md) derives System › Activity from these records; unattended ToolScript and inbound MCP calls, which have no Session tool row, are recorded there directly.
 - WebUI input (messages and dock answers) records its sender on the committed user row as `__meta.sender`: `{kind:"administrator"}` or `{kind:"identity", id}`, the shape approval decisions use. It is administrator-only: scoped history, continuous history, WebSocket and compatibility SSE payloads remove it through `InputSender.Without`, which clones rather than altering shared payloads. Model requests never carry message `__meta`.
 
 ## Outbound MCP values and trusted control

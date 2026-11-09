@@ -140,6 +140,37 @@ public sealed class WebUiSenderTests
                 Assert.Equal(adminMessages.Count, aliceMessages.Count);
                 Assert.DoesNotContain(aliceMessages, message => Sender(message) is not null);
             }
+            // System › Activity is administrator-only and validates its filters.
+            using (
+                var scopedActivity = await alice.PostAsJsonAsync("/api/activity", new JsonObject())
+            )
+                Assert.Equal(HttpStatusCode.Forbidden, scopedActivity.StatusCode);
+            using (
+                var invalid = await admin.PostAsJsonAsync(
+                    "/api/activity",
+                    new JsonObject { ["kind"] = "everything" }
+                )
+            )
+                Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
+            using (
+                var activity = await admin.PostAsJsonAsync(
+                    "/api/activity",
+                    new JsonObject
+                    {
+                        ["kind"] = "all",
+                        ["sessionId"] = "chat",
+                        ["tree"] = true,
+                        ["limit"] = 5,
+                    }
+                )
+            )
+            {
+                Assert.Equal(HttpStatusCode.OK, activity.StatusCode);
+                var page = await activity.Content.ReadFromJsonAsync<JsonObject>();
+                Assert.Empty(page!["items"]!.AsArray());
+                Assert.False(page["hasMore"]!.GetValue<bool>());
+                Assert.NotNull(page["coverage"]);
+            }
             // The scoped projection never altered the stored record.
             Assert.NotNull(
                 Sender(chat.History().Last(row => SessionWait.Text(row["role"]) == "user"))

@@ -52,6 +52,8 @@ The per-context delivery capture and actual run ID are installed only around the
 
 The per-context delivery capture is installed only around the actual unified host call and restored afterward. A successful builtin send attaches bounded canonical destination/body to that completed subcall; a started exec attaches its [placement record](../threads/tools-permissions-and-exec.md#d-exec-placement-record) as `exec` through the same scoped capture. Nested run contexts cannot overwrite outer captures; current-slice projection retains the existing start/continuation boundaries. No send is inferred from source, stdout or result fields.
 
+Calls of unattended slices (timer and webhook runs) have no Session tool row, so each is recorded directly in the [activity index](./activity-index.md) with its origin, run ID and target; attended subcalls are indexed from their `toolScriptSubCalls` record.
+
 ## Tests
 
 `dotnet/Foxwarm.Tests/ToolScript/MainToolScriptTests.cs`; `ToolScriptBudgetTests.cs`; `ToolScriptHostTests.cs`; `ToolScriptSourceTests.cs` covers captured Main source authorization during a real policy retry, live nested cwd under a captured batch, source-selector validation, target-unknown discovery, and the bundled ordinary automation example through explicit Main file source and ask/continue; `ToolScriptNativeExceptionTests.cs` qualifies actual native 0.0.19 uncaught single/multiline host errors, caught errors followed by independent VM failures, and persisted pending exceptions resumed by a fresh runtime without replay or stale-diagnostic attribution. `ToolScriptLifecycleTests.cs`; `ToolScriptOwnershipTests.cs`; `ToolScriptRecordJson`/snapshot/cancellation coverage.

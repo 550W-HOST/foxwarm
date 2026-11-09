@@ -39,6 +39,8 @@ internal static class SqliteArchiveIdentityMove
                             "archive_branches",
                             "archive_checkpoints",
                             "archive_import_state",
+                            ArchiveToolEffects.Table,
+                            ArchiveToolEffects.DirectTable,
                         }
                     )
                         if (Has(table))
