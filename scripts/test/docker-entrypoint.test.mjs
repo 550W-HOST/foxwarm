@@ -1,4 +1,5 @@
 // Entry point logic with shimmed id/getent/find/chown/setpriv: no privileges or images are needed.
+// The entry point never changes ownership of mounted data; that is the operator's step.
 import assert from 'node:assert/strict'
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync, rmSync, existsSync } from 'node:fs'
 import { execFileSync, spawnSync } from 'node:child_process'
@@ -43,11 +44,10 @@ test('the script is valid POSIX shell', () => {
   execFileSync('/bin/sh', ['-n', entrypoint])
 })
 
-test('an already correct data directory is left alone and Foxwarm runs as the fixed user', () => {
+test('a writable data directory is left alone and Foxwarm runs as the fixed user', () => {
   const result = run({ rootOwned: false })
   assert.equal(result.status, 0, result.stderr)
-  assert.doesNotMatch(result.calls, /chown/)
-  assert.match(result.calls, /find .* -maxdepth 2 -user 0/)
+  assert.doesNotMatch(result.calls, /chown|find/)
   assert.match(result.calls, /setpriv --reuid=1000 --regid=1000 --init-groups -- env/)
   // sudo in the image depends on setuid still working after the privilege drop.
   assert.doesNotMatch(result.calls, /no-new-privs|no_new_privs/)
@@ -56,12 +56,10 @@ test('an already correct data directory is left alone and Foxwarm runs as the fi
   assert.match(result.stdout, /^FOXWARM_DATA_DIR=/m)
 })
 
-test('root-owned data is chowned recursively once before privileges are dropped', () => {
-  const result = run({ rootOwned: true })
-  assert.equal(result.status, 0, result.stderr)
-  assert.match(result.calls, /chown -R 1000:1000 .*\/data/)
-  assert.ok(result.calls.indexOf('chown') < result.calls.lastIndexOf('setpriv'))
-  assert.match(result.stderr, /taking ownership/)
+test('root-owned data is never re-owned by the entry point', () => {
+  const result = run({ rootOwned: true, writable: false })
+  assert.doesNotMatch(result.calls, /chown/)
+  assert.match(result.stderr, /not writable by node \(1000:1000\).*chown -R 1000:1000/)
 })
 
 test('a non-root start executes the command directly', () => {
@@ -71,10 +69,10 @@ test('a non-root start executes the command directly', () => {
   assert.match(result.stdout, /^HOME=\/root$/m)
 })
 
-test('an unwritable data directory is reported but does not block startup', () => {
+test('an unwritable data directory is reported with the host fix and startup continues', () => {
   const result = run({ writable: false })
   assert.equal(result.status, 0, result.stderr)
-  assert.match(result.stderr, /not writable by node/)
+  assert.match(result.stderr, /not writable by node \(1000:1000\); on the host, run chown -R 1000:1000/)
 })
 
 test('the command receives its arguments unchanged', () => {

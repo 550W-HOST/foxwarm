@@ -148,14 +148,14 @@ Logs are under `state/logs/` in the data directory.
 The image includes the ASP.NET Core runtime, Node.js and Chromium:
 
 ```bash
-mkdir -p foxwarm-data
+mkdir -p foxwarm-data && sudo chown 1000:1000 foxwarm-data
 curl -fsSLO https://raw.githubusercontent.com/550W-HOST/foxwarm/main/docker/seccomp-chromium.json
 docker run -d --name foxwarm --init -p 3001:3001 \
   --security-opt seccomp=seccomp-chromium.json --shm-size 1g \
   -v "$PWD/foxwarm-data:/data" ghcr.io/550w-host/foxwarm:latest
 ```
 
-The container runs Foxwarm as the non-root `node` user (uid 1000) with passwordless `sudo`, so Agents can still install packages. On first start it re-owns an existing data directory written by an earlier root-run image to that user. The seccomp profile is Docker's default plus the namespace calls Chromium's sandbox needs, so browser tools work with the sandbox on and without extra capabilities. Without it, the first browser call fails with a sandbox error.
+The container runs Foxwarm as the non-root `node` user (uid 1000) with passwordless `sudo`, so Agents can still install packages. The mounted data directory must be writable by uid 1000; Foxwarm does not change its ownership and refuses to start otherwise. A data directory written by an earlier image that ran as root needs a one-time `sudo chown -R 1000:1000 foxwarm-data` before upgrading. The seccomp profile is Docker's default plus the namespace calls Chromium's sandbox needs, so browser tools work with the sandbox on and without extra capabilities. Without it, the first browser call fails with a sandbox error.
 
 Open `http://localhost:3001/` using the token from `foxwarm-data/state/token`. Tags follow releases, such as `0.9.0`, `0.9` and `latest`; to update, pull the new image and recreate the container. First-run model setup works the same way as a local installation.
 
@@ -165,6 +165,7 @@ The repository's `docker-compose.yml` runs the same image with a healthcheck, pl
 git clone https://github.com/550W-HOST/foxwarm.git foxwarm
 cd foxwarm
 mkdir -p foxwarm-data/state foxwarm-data/agents
+sudo chown -R 1000:1000 foxwarm-data
 docker compose up -d foxwarm
 ```
 

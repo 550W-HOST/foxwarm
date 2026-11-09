@@ -85,8 +85,8 @@ RUN mkdir -p /data /app/packages/vscode-web/assets/vscode-web \
 
 # Foxwarm and everything it launches run as the image's fixed non-root `node` account (uid 1000),
 # which has passwordless sudo so Agents can still install packages.
-# The entry point starts as root only to fix ownership of data written by earlier root-run
-# images, then drops privileges with setpriv. Chromium's own sandbox is left on; it needs the
+# The entry point starts as root only to check that the data directory is writable by that account,
+# then drops privileges with setpriv; it does not change ownership of mounted data. Chromium's own sandbox is left on; it needs the
 # seccomp profile in docker/seccomp-chromium.json (see the install guide).
 RUN echo 'node ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/node \
     && chmod 0440 /etc/sudoers.d/node \

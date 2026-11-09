@@ -3,7 +3,8 @@
 #   docker compose up -d foxwarm
 # Then open http://localhost:3001 and finish WebUI OOBE.
 # To skip OOBE, create foxwarm-data/state/models.yaml before starting.
-# Data written by an earlier root-run image is re-owned to the container user on first start.
+# Foxwarm runs as uid 1000 and does not change ownership of ./foxwarm-data; create it owned by 1000:1000
+# (data from an earlier root-run image needs a one-time `sudo chown -R 1000:1000 foxwarm-data`).
 # To run this checkout instead of the published release, build the image first:
 #   docker build -t ghcr.io/550w-host/foxwarm:latest .
 

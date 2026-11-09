@@ -310,7 +310,9 @@ jobs:
           docker build --target release --build-context "package=$(ls -d "$RUNNER_TEMP"/package/*/)" -t foxwarm:ci .
       - name: Start and serve the sign-in page
         run: |
+          # The image runs as node (1000:1000) and never re-owns mounted data.
           mkdir -p "$RUNNER_TEMP/data"
+          sudo chown 1000:1000 "$RUNNER_TEMP/data"
           docker run -d --name foxwarm -p 127.0.0.1:3001:3001 --security-opt seccomp=docker/seccomp-chromium.json -v "$RUNNER_TEMP/data:/data" foxwarm:ci
           for i in $(seq 120); do
             if curl -fsS -o /dev/null http://127.0.0.1:3001/login.html; then ready=1; break; fi

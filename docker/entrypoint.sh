@@ -1,6 +1,6 @@
 #!/bin/sh
-# Container entry point: start as root only long enough to make the data directory
-# usable by the fixed `node` account (uid 1000), then run Foxwarm as that account.
+# Container entry point: start as root only to check the data directory, then run Foxwarm as the
+# fixed `node` account (uid 1000). Ownership of the mounted data belongs to the operator.
 set -eu
 
 account=node
@@ -16,17 +16,8 @@ gid=$(id -g "$account")
 home=$(getent passwd "$account" | cut -d: -f6)
 
 mkdir -p "$data"
-# Data written by earlier root-run images is root-owned. Look only at the root and its first two
-# levels (state/, agents/ and their children), so a correctly owned installation costs one bounded
-# scan instead of a recursive walk, and only then fix the whole tree. Directories owned by some
-# other account are left alone.
-if [ -n "$(find "$data" -maxdepth 2 -user 0 -print -quit 2>/dev/null)" ]; then
-    echo "foxwarm: taking ownership of root-owned files in $data for $account ($uid:$gid)" >&2
-    chown -R "$uid:$gid" "$data" ||
-        echo "foxwarm: could not change ownership of $data; continuing" >&2
-fi
 if ! setpriv --reuid="$uid" --regid="$gid" --init-groups test -w "$data"; then
-    echo "foxwarm: $data is not writable by $account ($uid:$gid); fix its owner or mode" >&2
+    echo "foxwarm: $data is not writable by $account ($uid:$gid); on the host, run chown -R $uid:$gid on the mounted data directory" >&2
 fi
 
 HOME=$home USER=$account LOGNAME=$account

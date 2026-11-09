@@ -109,6 +109,14 @@ docker compose pull foxwarm
 docker compose up -d foxwarm
 ```
 
+Images since the non-root change run Foxwarm as uid 1000 and do not change ownership of the mounted data. A data directory written by an earlier image that ran as root must be handed over once, after stopping the container and before starting the new image:
+
+```bash
+sudo chown -R 1000:1000 foxwarm-data
+```
+
+Otherwise the container reports that `/data` is not writable and Foxwarm does not start.
+
 For a container started with `docker run`, pull `ghcr.io/550w-host/foxwarm:latest`, remove the old container and start a new one with the same data mount and options (including the seccomp profile). Check the container logs and the WebUI afterward. A new image does not require a new data directory.
 
 For archive storage details and external JSONL export, see [Archive Store](https://github.com/550W-HOST/foxwarm/blob/main/docs/archive-store.md).
