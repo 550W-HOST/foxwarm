@@ -2,7 +2,7 @@
 
 This reference adapter creates disposable Linux containers through Docker or Podman and exposes each container as a Foxwarm Node. It uses the optional [generic executable-provider protocol](https://github.com/550W-HOST/foxwarm/blob/main/docs/executable-node-provider-protocol.md) unchanged. Core has no container-specific configuration type, routing branch or model tool; this is optional example code that administrators register deliberately.
 
-It drives the Docker or Podman CLI on Linux; rootless engines are recommended. Fake-engine tests cover the adapter itself, and `mainHostProviderContainer.e2e.mjs` is an opt-in check against a real engine: run it with your engine and image before relying on the adapter. Docker Desktop on macOS and Windows has not been checked. The adapter needs Python 3 and the engine CLI where the Main server runs; nothing is installed by loading this skill.
+It drives the Docker or Podman CLI on Linux; rootless engines are recommended. The opt-in **Container Provider** workflow qualified it on Ubuntu 24.04 with rootless Podman and with Docker's standard rootful daemon. Other platforms and engines, including rootless Docker and Docker Desktop, are untested; run `mainHostProviderContainer.e2e.mjs` with your engine and image before relying on them. The adapter needs Python 3 and the engine CLI where the Main server runs; nothing is installed by loading this skill.
 
 `provider.py` runs the same target helper as the [Linux SSH adapter](../linux-ssh/README.md) (`../linux-ssh/target.py`), sent through `<engine> exec` instead of SSH. Use the installed `node-setup` skill directory or copy the whole skill, not only this directory.
 
