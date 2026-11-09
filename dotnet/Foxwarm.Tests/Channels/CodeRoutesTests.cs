@@ -284,8 +284,9 @@ public sealed class CodeRoutesTests
         await using var f = await Fixture.Create();
         var roots = await f.Json(await f.Client.GetAsync("/api/vscode-web/fs/workspace-roots"));
         Assert.Equal(1, roots["version"]!.GetValue<int>());
+        // Captured roots carry no trailing separator, unlike AppContext.BaseDirectory.
         Assert.Equal(
-            Path.GetFullPath(AppContext.BaseDirectory),
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(AppContext.BaseDirectory)),
             roots["roots"]!["app"]!["path"]!.ToString()
         );
         Assert.Equal(f.Data, roots["roots"]!["data"]!["path"]!.ToString());

@@ -41,7 +41,8 @@ internal sealed partial class CodeWorkbench
         dataRoot = sessions.DataRoot;
         var config = sessions.Models.ConfigurationOwner;
         applicationRoot =
-            config?.Paths.ApplicationRoot ?? Path.GetFullPath(AppContext.BaseDirectory);
+            config?.Paths.ApplicationRoot
+            ?? Path.TrimEndingDirectorySeparator(Path.GetFullPath(AppContext.BaseDirectory));
         var resources = config?.Paths.ResourceRoot ?? AppContext.BaseDirectory;
         appConfig = config is null ? null : Path.GetFullPath(config.AppPath);
         modelsConfig = config is null ? null : Path.GetFullPath(config.ActivePath);
