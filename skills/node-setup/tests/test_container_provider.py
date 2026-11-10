@@ -1,5 +1,6 @@
 """Container Provider reference adapter against a fake engine CLI; no real engine or Foxwarm instance."""
 import base64
+import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -107,7 +108,7 @@ class ContainerProviderTests(unittest.TestCase):
         node = result["node"]
         self.assertEqual(node, {"id": "task-1", "label": "task-1", "kind": "sandbox", "type": "container",
                                 "availability": "ready", "defaultCwd": "/workspace", "filesystem": "read-write",
-                                "exec": True})
+                                "exec": True, "execEnv": True})
         self.assertIn("offline", result["effect"])
         run = self.calls("run")[0]
         joined = " ".join(run)
@@ -210,6 +211,22 @@ class ContainerProviderTests(unittest.TestCase):
         self.assertEqual(lost["state"], "lost")
         self.assertEqual(self.ok("destroy", {"nodeId": "task-1"})["effect"], "No container existed for this Node.")
         self.assertEqual(self.error("inspect", {"nodeId": "task-1"}), "NotFound")
+
+    def test_commands_receive_secret_environment_only_in_their_process(self):
+        self.create()
+        self.assertTrue(self.ok("list")["nodes"][0]["execEnv"])
+        value = "synthetic-container-env-0606"
+        started = self.ok("exec-start", {"nodeId": "task-1", "command": "printf '%s' \"$CI_TOKEN\" | sha256sum | cut -c1-64",
+                                         "env": {"CI_TOKEN": value}})
+        self.assertEqual(self.poll(started["ref"])["exitCode"], 0)
+        log = self.ok("filesystem", {"nodeId": "task-1", "operation": "read", "path": started["outputPath"], "offset": 0, "count": 100})
+        self.assertEqual(base64.b64decode(log["dataBase64"]).decode().strip(), hashlib.sha256(value.encode()).hexdigest())
+        # Neither the adapter, the engine nor the target helper wrote the value to a file.
+        for path in self.root.rglob("*"):
+            if path.is_file():
+                self.assertNotIn(value.encode(), path.read_bytes(), str(path))
+        refused = self.call("exec-start", {"nodeId": "task-1", "command": "true", "env": {"CI_TOKEN": 1}})
+        self.assertEqual(refused["error"]["code"], "InvalidRequest")
 
     def test_destroy_is_idempotent_when_another_caller_removes_the_container_first(self):
         self.create()

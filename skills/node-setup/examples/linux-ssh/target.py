@@ -114,6 +114,10 @@ def start(request, cwd, state_dir):
         raise NotADirectoryError(errno.ENOTDIR, "Command working directory does not exist.")
     if not isinstance(request.get("command"), str) or not request["command"].strip():
         raise ValueError("Command must be a non-empty string.")
+    # Foxwarm sends env only to Nodes that declare execEnv: stored secret values for this command.
+    variables = request.get("env", {})
+    if not isinstance(variables, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in variables.items()):
+        raise ValueError("Command environment must map names to text.")
     state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     ref = str(uuid.uuid4())
     directory = state_dir / ref
@@ -129,8 +133,10 @@ def start(request, cwd, state_dir):
     (directory / "command.sh").write_text(script, encoding="utf-8")
     (directory / "output.log").touch(mode=0o600)
     atomic_json(directory / "launch.json", {"cwd": cwd})
+    # The values pass only through the supervisor's environment to the command, never to a file.
     process = subprocess.Popen([sys.executable, str(directory / "runner.py"), "--run", str(directory)],
-                               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
+                               env=dict(os.environ, **variables))
     started = timestamp()
     atomic_json(directory / "process.json", {"pid": process.pid, "identity": identity(process.pid)})
     return {"ref": "process:" + ref, "outputPath": str(directory / "output.log"), "cwd": cwd, "startedAt": started, "pid": process.pid}

@@ -181,6 +181,33 @@ internal sealed partial class NodeExecManager(
         }
     }
 
+    // Values Main resolved for exec.secretEnv. They must cover exactly the requested variables:
+    // a call naming secrets without Main's values (for example an external-owner call) is
+    // refused rather than run without them.
+    internal static IReadOnlyDictionary<string, string>? SecretEnvironment(
+        JsonObject frame,
+        JsonObject args
+    )
+    {
+        var requested = args["secretEnv"] is { } names
+            ? ExecSecretEnvironment.Parse(names, "secretEnv")
+            : null;
+        var values = frame["env"] is { } env ? ExecSecretEnvironment.Parse(env, "env") : null;
+        if (requested is null && values is null)
+            return null;
+        if (
+            requested is null
+            || values is null
+            || !requested
+                .Keys.Order(StringComparer.Ordinal)
+                .SequenceEqual(values.Keys.Order(StringComparer.Ordinal), StringComparer.Ordinal)
+        )
+            throw new InvalidDataException(
+                "secretEnv values are supplied only by Foxwarm Main for the variables the call names."
+            );
+        return values;
+    }
+
     internal async Task<JsonObject> Start(
         JsonObject frame,
         string? agent,
@@ -197,6 +224,7 @@ internal sealed partial class NodeExecManager(
             ?? "";
         if (string.IsNullOrWhiteSpace(command))
             throw new InvalidDataException("exec requires command");
+        var environment = SecretEnvironment(frame, args);
         var requested = Text(frame, "backgroundExecId");
         string id;
         await mutation.WaitAsync();
@@ -306,6 +334,9 @@ internal sealed partial class NodeExecManager(
                 launch.Environment["FOXWARM_EXEC_STATUS_PATH"] = windowsLog + ".exit.json";
                 launch.Environment["FOXWARM_EXEC_CWD_PATH"] = windowsLog + ".cwd.txt";
             }
+            // Stored secrets reach only the process environment, never the script or the entry.
+            if (environment is not null)
+                ExecSecretEnvironment.Apply(launch.Environment, environment);
             BeforeLaunch?.Invoke();
             if (stop.IsCancellationRequested)
                 throw new InvalidDataException(

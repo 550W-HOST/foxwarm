@@ -28,6 +28,7 @@ internal sealed class ProviderExecBackend(ExecutableNodeProvider provider, strin
     internal async Task<Started> StartAsync(
         string command,
         string? cwd,
+        IReadOnlyDictionary<string, string>? environment,
         Action beforeLaunch,
         CancellationToken hardCancellation
     )
@@ -35,6 +36,12 @@ internal sealed class ProviderExecBackend(ExecutableNodeProvider provider, strin
         var request = new JsonObject { ["nodeId"] = LocalId, ["command"] = command };
         if (cwd is not null)
             request["cwd"] = cwd;
+        // Admission required the Node's execEnv support; the adapter sets these only on the
+        // command's process.
+        if (environment is not null)
+            request["env"] = new JsonObject(
+                environment.Select(pair => KeyValuePair.Create(pair.Key, (JsonNode?)pair.Value))
+            );
         beforeLaunch();
         var dispatched = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         try

@@ -20,6 +20,11 @@ internal sealed partial class NodeConnectionHub
     internal Func<string, JsonObject, Task>? SessionEvent { get; set; }
     internal Func<string, JsonObject, Task>? BackgroundRegistration { get; set; }
 
+    // Resolves exec.secretEnv values just before dispatch; set by the host when a store exists.
+    internal Func<JsonObject, IReadOnlyDictionary<string, string>?>? SecretEnvironment { get; set; }
+
+    internal const string SecretEnvFeature = "secretEnv";
+
     private sealed class NodeToolException(JsonNode? error, bool? started)
         : InvalidOperationException(
             "Node tool failed: "
@@ -147,6 +152,22 @@ internal sealed partial class NodeConnectionHub
             throw new InvalidOperationException(
                 "Remote exec requires its current Main-owned Session."
             );
+        JsonObject? environment = null;
+        if (args.ContainsKey("secretEnv"))
+        {
+            // Only a Node that applies the values to the process alone receives them.
+            if (
+                connection.Http is not null
+                || connection.Capabilities["features"]?[SecretEnvFeature]?.GetValue<bool>() != true
+            )
+                throw new InvalidDataException(ExecSecretEnvironment.Unsupported(id));
+            var values =
+                SecretEnvironment?.Invoke(args)
+                ?? throw new InvalidDataException("The secret store is unavailable on this host.");
+            environment = new JsonObject(
+                values.Select(pair => KeyValuePair.Create(pair.Key, (JsonNode?)pair.Value))
+            );
+        }
         var legacy = false;
         for (var attempt = 0; attempt < 16; attempt++)
         {
@@ -177,7 +198,8 @@ internal sealed partial class NodeConnectionHub
                     claim,
                     owner,
                     admission,
-                    pathMetadata
+                    pathMetadata,
+                    environment
                 );
             }
             catch (NodeToolException error)
@@ -210,7 +232,8 @@ internal sealed partial class NodeConnectionHub
         RemoteExecAuthority.Claim? claim,
         SessionOwner? owner,
         IDisposable? dispatchAdmission = null,
-        Action<JsonNode?>? pathMetadata = null
+        Action<JsonNode?>? pathMetadata = null,
+        JsonObject? environment = null
     )
     {
         var callId = "call_" + Guid.NewGuid().ToString("N");
@@ -259,6 +282,8 @@ internal sealed partial class NodeConnectionHub
             }
             if (currentNode == connection.Id && cwd is not null)
                 request["sessionCwd"] = cwd;
+            if (environment is not null)
+                request["env"] = environment.DeepClone();
             if (
                 tool == "exec"
                 && connection.Capabilities["features"]?[ExecPlacement.Feature]?.GetValue<bool>()

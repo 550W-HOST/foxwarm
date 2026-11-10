@@ -21,7 +21,8 @@ internal sealed partial class LocalExecManager
         MainNativePaths paths,
         string? requestedCwd,
         CancellationToken stop,
-        Action? beforeLaunch
+        Action? beforeLaunch,
+        IReadOnlyDictionary<string, string>? environment = null
     )
     {
         var date = DateTime.Now;
@@ -83,6 +84,9 @@ internal sealed partial class LocalExecManager
             launch.Environment["FOXWARM_EXEC_STATUS_PATH"] = windowsLog + ".exit.json";
             launch.Environment["FOXWARM_EXEC_CWD_PATH"] = windowsLog + ".cwd.txt";
         }
+        // Stored secrets reach only the process environment, never the script or the record.
+        if (environment is not null)
+            ExecSecretEnvironment.Apply(launch.Environment, environment);
         beforeLaunch?.Invoke();
         stop.ThrowIfCancellationRequested();
         var started = Now();

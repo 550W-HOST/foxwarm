@@ -296,6 +296,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
             tools.Redaction = (result, sessionId) => owned.Redact(result, "tool-output", sessionId);
             tools.KnownSecretLabel = label => owned.Redactor.HasLabel(label);
             executor.InheritedSecret = value => owned.Redactor.IsKnownValue(value);
+            executor.SecretEnvironment = ResolveSecretEnvironment;
+            Nodes.SecretEnvironment = ResolveSecretEnvironment;
             owned.AddSource(
                 "nodes",
                 () =>

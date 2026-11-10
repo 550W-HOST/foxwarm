@@ -352,11 +352,20 @@ internal sealed partial class NodeProviderRegistry
                     .ToArray()
             );
         if (descriptor["exec"]?.GetValue<bool>() == true)
-            definitions.Add(LocalExecManager.Definitions()[0]!.DeepClone());
+        {
+            var exec = LocalExecManager.Definitions()[0]!.DeepClone();
+            if (descriptor["execEnv"]?.GetValue<bool>() != true)
+                exec["parameters"]!["properties"]!.AsObject().Remove("secretEnv");
+            definitions.Add(exec);
+        }
         return definitions;
     }
 
-    internal async Task<ProviderExecBackend> AdmitExecAsync(string node, CancellationToken token)
+    internal async Task<ProviderExecBackend> AdmitExecAsync(
+        string node,
+        CancellationToken token,
+        bool environment = false
+    )
     {
         var descriptor = await ResolveAsync(node, token);
         RequireAuthorizationAncestry(node);
@@ -366,6 +375,8 @@ internal sealed partial class NodeProviderRegistry
             || descriptor["exec"]?.GetValue<bool>() != true
         )
             throw new InvalidOperationException("Node exec capability is unavailable: " + node);
+        if (environment && descriptor["execEnv"]?.GetValue<bool>() != true)
+            throw new InvalidOperationException(ExecSecretEnvironment.Unsupported(node));
         return ResolveExecBackend(node[..node.IndexOf('/')], node);
     }
 

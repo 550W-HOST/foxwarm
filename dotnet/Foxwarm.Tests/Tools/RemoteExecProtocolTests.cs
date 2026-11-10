@@ -12,7 +12,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Foxwarm.Tests;
 
-public sealed class RemoteExecProtocolTests
+public sealed partial class RemoteExecProtocolTests
 {
     private static ResponsesClientOptions Options =>
         new(new Uri("http://127.0.0.1:1"), "wire", "a", "", "", 713);
@@ -34,7 +34,8 @@ public sealed class RemoteExecProtocolTests
             bool legacy = false,
             bool cancel = true,
             bool advertiseExec = true,
-            bool execPlacement = false
+            bool execPlacement = false,
+            bool secretEnv = false
         )
         {
             Manager = new(
@@ -52,7 +53,7 @@ public sealed class RemoteExecProtocolTests
                 return Task.CompletedTask;
             };
             Credential = Manager.Nodes.Registry.Create("remote");
-            await Connect(legacy, cancel, advertiseExec, execPlacement);
+            await Connect(legacy, cancel, advertiseExec, execPlacement, secretEnv);
             await Manager.SelectNodeAsync(Owner, "remote");
         }
 
@@ -60,7 +61,8 @@ public sealed class RemoteExecProtocolTests
             bool legacy = false,
             bool cancel = true,
             bool advertiseExec = true,
-            bool execPlacement = false
+            bool execPlacement = false,
+            bool secretEnv = false
         )
         {
             var builder = WebApplication.CreateBuilder();
@@ -96,6 +98,7 @@ public sealed class RemoteExecProtocolTests
                         ["remoteExecBackgroundRegistration"] = true,
                         ["execWaitCancellation"] = cancel,
                         [ExecPlacement.Feature] = execPlacement,
+                        [NodeConnectionHub.SecretEnvFeature] = secretEnv,
                     },
                 },
             };

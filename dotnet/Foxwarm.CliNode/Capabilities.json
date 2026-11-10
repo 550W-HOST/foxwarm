@@ -146,6 +146,13 @@
             "type": "string",
             "description": "Working directory for this command. Relative paths use the session working directory supplied for this Node, or the Node process working directory if unset. With no cwd, execution uses that same default chain. On master and CLI Nodes, a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected."
           },
+          "secretEnv": {
+            "type": "object",
+            "description": "Environment variables to set from stored secrets, as {\"VARIABLE\": \"secret-name\"}. The command receives the values; they never appear in the command, its logs or this conversation. Supported on master and on Nodes that offer it.",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
           "timeout": {
             "type": "number",
             "minimum": 1,
@@ -176,7 +183,8 @@
     "execPlacement": true,
     "externalToolOwner": 1,
     "unifiedEdit": true,
-    "toolCallCancellation": true
+    "toolCallCancellation": true,
+    "secretEnv": true
   },
   "services": {
     "vscode-fs": 1,

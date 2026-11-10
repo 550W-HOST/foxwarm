@@ -14,6 +14,7 @@ It drives the Docker or Podman CLI on Linux; rootless engines are recommended. T
 - **Fixed hardening.** `--cap-drop ALL`, `--security-opt no-new-privileges`, `--init`, `--restart no` and `--pull never` are always applied.
 - **No state of its own.** Container labels (`net.foxwarm.provider`, `net.foxwarm.node`, `net.foxwarm.profile` and a few more) are the inventory. Container names start with `foxwarm-` followed by a digest of the Provider ID; leave that prefix to this adapter. Labels identify containers by Provider ID only, so installations that share one engine account must use distinct Provider IDs, or separate engine accounts.
 - **Command records survive** the request process and Main server restarts, like the SSH adapter's, and live in the container at `/var/tmp/foxwarm-provider`. Stopping or removing a container ends its commands, and Foxwarm then reports them as `lost`. Pausing only suspends them.
+- **Stored secrets as environment variables.** Nodes declare `execEnv`, so a command can receive stored secrets through `exec`'s `secretEnv`. The values travel on the engine's standard input and reach only the command's process environment, not its script, records or log.
 - **Optional Code and Terminal** for profiles with `"services": true`, served by the native CLI Node's `foxwarm-node --stdio` mode inside the container.
 
 Cleanup is always an explicit `destroy`. There is no idle timeout, lease or automatic removal; the [development workflow](../../references/development-workflow.md) shows the coordinator's release step.

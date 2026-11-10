@@ -35,6 +35,13 @@ internal sealed partial class LocalExecManager
                             ["description"] =
                                 "Working directory for this command. Relative paths use the session working directory, or the Node's default directory if unset. When omitted, execution uses that same default chain; on master, the final default is the agent directory. On master and CLI Nodes, a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected.",
                         },
+                        ["secretEnv"] = new JsonObject
+                        {
+                            ["type"] = "object",
+                            ["description"] =
+                                "Environment variables to set from stored secrets, as {\"VARIABLE\": \"secret-name\"}. The command receives the values; they never appear in the command, its logs or this conversation. Supported on master and on Nodes that offer it.",
+                            ["additionalProperties"] = new JsonObject { ["type"] = "string" },
+                        },
                         ["timeout"] = new JsonObject
                         {
                             ["type"] = "number",

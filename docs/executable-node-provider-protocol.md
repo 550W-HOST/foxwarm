@@ -78,11 +78,12 @@ Agents use `node({action:"inspect",providerId:"provider-id"})` to discover the d
   "defaultCwd": "provider-defined://root",
   "filesystem": "read-write",
   "exec": true,
+  "execEnv": true,
   "services": { "vscode-fs": 1, "vscode-git": 2, "vscode-pty": 1 }
 }
 ```
 
-`label`, `kind`, `defaultCwd`, `exec` and `services` are optional. `services` declares the fixed Code/Terminal services the Node can serve over the [service channel](#optional-service-channel), with the same names and versions as a resident Node's capabilities. A Provider that omits it keeps today's behavior; no version or negotiation field is added. Names Core does not know are ignored; a malformed shape or a version that is not a positive integer rejects the inventory. Kind is `remote` (the default) or `sandbox`; the latter is provider metadata, not an isolation guarantee. Availability is `ready`, `offline`, `unavailable` or `error`.
+`label`, `kind`, `defaultCwd`, `exec`, `execEnv` and `services` are optional. `execEnv:true` requires `exec:true` and declares that `exec-start` accepts [`env`](#start). `services` declares the fixed Code/Terminal services the Node can serve over the [service channel](#optional-service-channel), with the same names and versions as a resident Node's capabilities. A Provider that omits it keeps today's behavior; no version or negotiation field is added. Names Core does not know are ignored; a malformed shape or a version that is not a positive integer rejects the inventory. Kind is `remote` (the default) or `sandbox`; the latter is provider metadata, not an isolation guarantee. Availability is `ready`, `offline`, `unavailable` or `error`.
 
 `filesystem:"read"` derives canonical `read`. `filesystem:"read-write"` also derives `write`, `edit` and `apply_patch`. `exec:true` derives canonical `exec`. Every executable-provider Node exposes at least a read filesystem: exec logs must be readable in the same Node namespace. Providers do not supply model tool schemas, tool formatting or patch semantics. Unsupported capabilities never fall back to Main.
 
@@ -133,7 +134,17 @@ Tool authorization applies to the original model call and exact target Node, not
 { "nodeId": "example-node", "command": "printf hello", "cwd": "provider-defined://cwd" }
 ```
 
-`cwd` is optional. Pass the command unchanged to the target's command interpreter. Return after submitting the execution, not after waiting for the command:
+`cwd` is optional. Pass the command unchanged to the target's command interpreter.
+
+A Node that declares `execEnv:true` may also receive `env`, an object mapping environment variable names to text values:
+
+```json
+{ "nodeId": "example-node", "command": "deploy", "env": { "API_TOKEN": "value" } }
+```
+
+These are stored secrets a caller passed to this command. Set them only in the command's process environment, over any inherited value of the same name. Do not write them to the command script, execution records, logs or any other file, and do not put them in a process argument. Core sends `env` only to Nodes that declare `execEnv`, so an adapter without it never receives the field.
+
+Return after submitting the execution, not after waiting for the command:
 
 ```json
 {

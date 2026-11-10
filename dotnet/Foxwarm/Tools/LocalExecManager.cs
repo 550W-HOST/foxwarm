@@ -34,6 +34,9 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
     internal Func<long> Now { get; init; } = () => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
     internal Func<string, string, bool>? RemoteIdentityReserved { get; set; }
     internal Func<string, string, ProviderExecBackend>? ResolveProviderBackend { get; set; }
+
+    // Resolves exec.secretEnv values just before launch; set by the host when a store exists.
+    internal Func<JsonObject, IReadOnlyDictionary<string, string>?>? SecretEnvironment { get; set; }
     internal JsonObject[] Tracked => pending.Values.Select(record => record.ToJson()).ToArray();
 
     private sealed record ExecRecord(
@@ -397,13 +400,17 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
             return Error("exec_unavailable", "Host is shutting down.");
         if (
             args is null
-            || args.Count - (args.ContainsKey("summary") ? 1 : 0) is < 1 or > 3
+            || args.Count
+                - (args.ContainsKey("summary") ? 1 : 0)
+                - (args.ContainsKey("secretEnv") ? 1 : 0)
+                is < 1
+                    or > 3
             || Text(args, "command") is not string command
             || (args.ContainsKey("cwd") && Text(args, "cwd") is null)
         )
             return Error(
                 "invalid_tool_arguments",
-                "exec requires command, optional cwd and optional timeout."
+                "exec requires command, optional cwd, optional timeout and optional secretEnv."
             );
         double seconds;
         string? warning;
@@ -435,6 +442,20 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
         }
         else if (cwd is { Length: 0 })
             return Error("invalid_tool_arguments", "Exec cwd must be a non-empty string.");
+        IReadOnlyDictionary<string, string>? environment = null;
+        if (args.ContainsKey("secretEnv"))
+            try
+            {
+                environment =
+                    SecretEnvironment?.Invoke(args)
+                    ?? throw new InvalidDataException(
+                        "The secret store is unavailable on this host."
+                    );
+            }
+            catch (InvalidDataException error)
+            {
+                return Error("invalid_tool_arguments", error.Message);
+            }
         // A supported identity move may commit while reservation or start is awaiting a receipt.
         var agent = agentForSession(sessionId);
         var id = await ReserveAsync(sessionId);
@@ -451,7 +472,8 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
                     paths,
                     Text(args, "cwd"),
                     ct,
-                    beforeLaunch
+                    beforeLaunch,
+                    environment
                 )
                 : await StartProviderAsync(
                     sessionId,
@@ -460,6 +482,7 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
                     command,
                     cwd,
                     backend,
+                    environment,
                     () =>
                     {
                         ct.ThrowIfCancellationRequested();

@@ -16,6 +16,61 @@ internal sealed partial class SessionManager
     // add_secret's secret fact: adding a value under a name configuration already references
     // lets those consumers use it. The name has no owner yet, so it needs a grant like any
     // other secret. A new, unreferenced name sends nothing anywhere.
+    // exec.secretEnv maps environment variables to secret names.
+    internal static IReadOnlyDictionary<string, string>? SecretEnvNames(JsonObject args)
+    {
+        if (args["secretEnv"] is not { } node)
+            return null;
+        var names = ExecSecretEnvironment.Parse(node, "secretEnv");
+        foreach (var name in names.Values)
+            SecretStore.ValidateName(name);
+        return names;
+    }
+
+    // An exec's secret facts are the secrets it passes; an invalid mapping is refused before
+    // launch, so it carries none.
+    private static IReadOnlyList<string>? ExecSecretFacts(JsonObject args)
+    {
+        try
+        {
+            return SecretEnvNames(args)
+                ?.Values.Distinct(StringComparer.Ordinal)
+                .Order(StringComparer.Ordinal)
+                .ToArray();
+        }
+        catch (InvalidDataException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Values for exec.secretEnv, read just before launch after the call was authorized with
+    /// their names. They go only into the command's environment.
+    /// </summary>
+    internal IReadOnlyDictionary<string, string>? ResolveSecretEnvironment(JsonObject args)
+    {
+        if (SecretEnvNames(args) is not { } names)
+            return null;
+        if (secrets is not { } instance)
+            throw new InvalidDataException("The secret store is unavailable on this host.");
+        var values = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (variable, name) in names)
+            try
+            {
+                values[variable] =
+                    instance.Store.Resolve(name)
+                    ?? throw new InvalidDataException(
+                        $"Secret `{name}` has no value. Ask the user to set it in Setup."
+                    );
+            }
+            catch (SecretStoreLockedException error)
+            {
+                throw new InvalidDataException(error.Message);
+            }
+        return values;
+    }
+
     private IReadOnlyList<string>? AddSecretFacts(JsonObject args) =>
         SessionWait.Text(args["name"])?.Trim() is { } name ? UnsetReferencedSecrets([name]) : null;
 

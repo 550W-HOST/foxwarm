@@ -986,7 +986,11 @@ internal sealed partial class SessionToolExecutor(
         CancellationToken token
     )
     {
-        var backend = await registry.Providers!.AdmitExecAsync(resolved.ExecutionNode, token);
+        var backend = await registry.Providers!.AdmitExecAsync(
+            resolved.ExecutionNode,
+            token,
+            environment: resolved.Args.ContainsKey("secretEnv")
+        );
         string? observed = null;
         var response = await hosted.Executor.ExecuteAsync(
             hosted.Id,

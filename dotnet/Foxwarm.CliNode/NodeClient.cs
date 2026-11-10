@@ -616,6 +616,7 @@ internal sealed partial class NodeClient
             capabilities["features"]!.AsObject().Remove("execWaitCancellation");
             capabilities["features"]!.AsObject().Remove("remoteExecBackgroundRegistration");
             capabilities["features"]!.AsObject().Remove(ExecPlacement.Feature);
+            capabilities["features"]!.AsObject().Remove("secretEnv");
         }
         if (browser is not null)
             foreach (var definition in browser)

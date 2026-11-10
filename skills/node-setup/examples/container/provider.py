@@ -226,7 +226,8 @@ def descriptor(item):
     status = item["status"]
     availability = "ready" if status == "running" else "error" if status == "dead" else "offline"
     node = {"id": item["node"], "label": item["node"], "kind": "sandbox", "type": "container",
-            "availability": availability, "defaultCwd": item["workdir"], "filesystem": "read-write", "exec": True}
+            "availability": availability, "defaultCwd": item["workdir"], "filesystem": "read-write", "exec": True,
+            "execEnv": True}
     if item["services"]:
         node["services"] = dict(SERVICES)
     return node

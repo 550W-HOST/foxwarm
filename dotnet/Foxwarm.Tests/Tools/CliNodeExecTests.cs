@@ -4,7 +4,7 @@ using Foxwarm.Tools;
 
 namespace Foxwarm.Tests;
 
-public sealed class CliNodeExecTests
+public sealed partial class CliNodeExecTests
 {
     private sealed class OwnedPaths : IDisposable
     {

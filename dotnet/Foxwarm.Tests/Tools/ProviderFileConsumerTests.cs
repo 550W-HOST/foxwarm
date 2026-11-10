@@ -83,6 +83,7 @@ public sealed partial class ProviderFileConsumerTests
         internal SessionOwner Owner = null!;
         internal SessionToolExecutor Tools = null!;
         internal ToolRegistry Registry = null!;
+        internal ModelConfiguration Configuration = null!;
         private Foxwarm.McpClient mcp = null!;
         internal string Provider = "fixture";
         internal string Local = "target";
@@ -119,6 +120,7 @@ public sealed partial class ProviderFileConsumerTests
             var configuration = new ModelConfiguration(
                 HostPaths.ForDataRoot(f.Data, f.Temp.Path, environment: _ => null)
             );
+            f.Configuration = configuration;
             var models = new HostModels(configuration);
             var options = new ResponsesClientOptions(
                 new Uri("http://127.0.0.1:1"),

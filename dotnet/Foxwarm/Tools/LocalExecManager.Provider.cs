@@ -18,11 +18,18 @@ internal sealed partial class LocalExecManager
         string command,
         string? cwd,
         ProviderExecBackend backend,
+        IReadOnlyDictionary<string, string>? environment,
         Action beforeLaunch,
         CancellationToken hardCancellation
     )
     {
-        var receipt = await backend.StartAsync(command, cwd, beforeLaunch, hardCancellation);
+        var receipt = await backend.StartAsync(
+            command,
+            cwd,
+            environment,
+            beforeLaunch,
+            hardCancellation
+        );
         return new ExecRecord(
             session,
             id,

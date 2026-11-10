@@ -93,6 +93,8 @@ try:
         nodes = [{"id": local_id, "type": "fixture", "availability": "ready", "filesystem": "read-write", "exec": True, "defaultCwd": "opaque://root"},
                  {"id": "readonly", "type": "fixture", "availability": "ready", "filesystem": "read"},
                  {"id": "offline", "type": "fixture", "availability": "offline", "filesystem": "read"}]
+        if (root / "exec-env").exists():
+            nodes[0]["execEnv"] = True
         if mode == "duplicate":
             nodes.append(nodes[0])
         if mode == "lifecycle":
@@ -142,8 +144,9 @@ try:
         if (root / "details.json").exists():
             result["details"] = json.loads((root / "details.json").read_text())
     elif operation == "exec-start":
-        assert set(body) <= {"nodeId", "command", "cwd"}
+        assert set(body) <= {"nodeId", "command", "cwd", "env"}
         assert "/" not in body["nodeId"]
+        assert "env" not in body or (root / "exec-env").exists()
         reference = uuid.uuid4().hex
         job = root / "exec" / reference
         job.mkdir(parents=True)
@@ -151,8 +154,10 @@ try:
         started = time.time()
         metadata = {"command": body["command"], "cwd": cwd, "startedAt": started}
         (job / "request.json").write_text(json.dumps(metadata))
+        # Like a real adapter, the variables reach only the command's process environment.
         child = subprocess.Popen([sys.executable, str(pathlib.Path(__file__).with_name("provider-exec-job.py")), str(root), reference],
-                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
+                                 env=dict(os.environ, **body.get("env", {})))
         (job / "pid").write_text(str(child.pid))
         if mode == "lost-start":
             print("{}\n{}", flush=True)

@@ -399,6 +399,8 @@ internal sealed partial class SessionManager
         CancellationToken token
     )
     {
+        if (resolved is { Source: "node", Name: "exec" })
+            return ExecSecretFacts(resolved.Args);
         if (resolved.Source != "builtin")
             return null;
         if (resolved.Name == "mcp_config")

@@ -139,6 +139,7 @@ internal sealed partial class ExecutableNodeProvider(string id, JsonObject confi
                 "availability",
                 "filesystem",
                 "exec",
+                "execEnv",
                 "defaultCwd",
                 "services",
             ]
@@ -158,6 +159,14 @@ internal sealed partial class ExecutableNodeProvider(string id, JsonObject confi
                     node["exec"] is not JsonValue flag
                     || !flag.TryGetValue<bool>(out var exec)
                     || !exec
+                )
+            // execEnv: exec-start accepts env, set only on the command's process.
+            || node.ContainsKey("execEnv")
+                && (
+                    node["execEnv"] is not JsonValue environment
+                    || !environment.TryGetValue<bool>(out var env)
+                    || !env
+                    || node["exec"]?.GetValue<bool>() != true
                 )
         )
             throw Invalid("Provider Node has invalid primitive support or availability.");

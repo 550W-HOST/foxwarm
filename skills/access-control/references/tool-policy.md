@@ -84,7 +84,7 @@ For list access, grant `args: { action: list, scope: owned }`. `owned` includes 
 
 ### Stored secrets
 
-A `set_config` or `mcp_config` change that would send a stored secret (`${secret:NAME}`) to a new destination carries those secret names: a new reference, or a changed provider base URL or protocol, inherited `llm` base URL, text-redaction endpoint, ASR URL, channel server, or MCP URL, transport, command, arguments, working directory or environment. Model lists, limits, descriptions, timeouts and enablement carry none. `add_secret` carries its name, and `ask_user` the names its secret questions ask for, when configuration already refers to that name, because the new value then reaches those destinations.
+A `set_config` or `mcp_config` change that would send a stored secret (`${secret:NAME}`) to a new destination carries those secret names: a new reference, or a changed provider base URL or protocol, inherited `llm` base URL, text-redaction endpoint, ASR URL, channel server, or MCP URL, transport, command, arguments, working directory or environment. Model lists, limits, descriptions, timeouts and enablement carry none. `exec` carries the secret names in its `secretEnv`, which passes stored secrets to the command as environment variables. `add_secret` carries its name, and `ask_user` the names its secret questions ask for, when configuration already refers to that name, because the new value then reaches those destinations.
 
 ```yaml
 rules:
