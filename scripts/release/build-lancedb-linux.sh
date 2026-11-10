@@ -20,5 +20,7 @@ export CARGO_HOME="${CARGO_HOME:-$work/cargo}"
 cargo build --release --locked --manifest-path "$source/Cargo.toml"
 cp "$source/target/release/liblancedb_ffi.so" "$output/liblancedb_ffi.so"
 printf '%s\n' "$commit" > "$output/lancedb-source-commit"
-ldd --version | head -1
+# sed reads all of its input: an early-exiting reader such as head can SIGPIPE the
+# writer, which fails the script under pipefail.
+ldd --version | sed -n 1p
 objdump -T "$output/liblancedb_ffi.so" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1

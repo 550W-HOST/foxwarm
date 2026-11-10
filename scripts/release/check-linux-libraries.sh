@@ -14,7 +14,9 @@ allowed='^(libc|libm|libdl|libpthread|librt|libutil|libresolv|libgcc_s|libstdc\+
 newer() { [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -1)" != "$2" ]; }
 status=0
 while IFS= read -r -d '' file; do
-  head -c 4 "$file" | grep -q $'^\x7fELF' || continue
+  magic=""
+  IFS= LC_ALL=C read -r -d '' -n 4 magic < "$file" || true
+  [ "$magic" = $'\x7fELF' ] || continue
   name="${file#"$payload"/}"
   glibc="$(objdump -T "$file" 2>/dev/null | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -uV | tail -1 || true)"
   glibcxx="$(objdump -T "$file" 2>/dev/null | grep -o 'GLIBCXX_[0-9.]*' | sort -uV | tail -1 || true)"
