@@ -83,9 +83,25 @@ internal sealed partial class AgentMemory
 
 internal sealed partial class SessionManager
 {
-    internal string ListAgentsText()
+    // The model-facing Agent list: Agents that own a listed Session or that an Agent-targeted
+    // action might address, with counts of listed Sessions only. The caller's Agent is always
+    // listed. Administrator surfaces use AgentListEntries unfiltered.
+    internal string ListAgentsText(SessionOwner caller)
     {
-        var rows = AgentListEntries();
+        var visibility = SessionVisibilityFor(caller);
+        var rows = AgentListEntries()
+            .Select(row =>
+                row with
+                {
+                    SessionCount = visibility.ListedCount(row.Id, row.SessionCount),
+                }
+            )
+            .Where(row =>
+                row.Id == caller.Agent
+                || row.SessionCount > 0
+                || visibility.AgentAddressable(row.Id)
+            )
+            .ToArray();
         if (rows.Length == 0)
             return "No agents found.";
         var result = $"Found {rows.Length} agent(s):\n\n";

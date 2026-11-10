@@ -184,7 +184,14 @@ internal static class SessionStatus
 
 internal sealed partial class SessionManager
 {
-    internal async Task<JsonObject> ObserveAsync(SessionOwner source, string name, JsonObject args)
+    // Model-facing lists show only Sessions the caller's policy might let it address. An
+    // administrator surface that renders the same status (`/status`) passes administrator: true.
+    internal async Task<JsonObject> ObserveAsync(
+        SessionOwner source,
+        string name,
+        JsonObject args,
+        bool administrator = false
+    )
     {
         if (name == "view_session")
         {
@@ -305,9 +312,11 @@ internal sealed partial class SessionManager
             var count = (int)
                 Math.Clamp(Math.Truncate(OptionalNumber(args, "count") ?? 20), 0, 1000);
             var query = ListQuery(args);
-            var (total, page) = query is null
-                ? CatalogMetadataOffset(start, count, agent)
-                : SearchMetadata(query, start, count, agent);
+            var visibility = SessionVisibilityFor(source);
+            var (total, page) =
+                query is null && visibility.Covers(agent)
+                    ? CatalogMetadataOffset(start, count, agent)
+                    : VisibleMetadata(visibility, query, start, count, agent);
             start = (int)Math.Min(start, total);
             var matching = query is null ? "" : $" matching `{query}`";
             if (total == 0)
@@ -349,7 +358,9 @@ internal sealed partial class SessionManager
         var summary = statusTarget.ContextSummary();
         var catalog = models.Capture();
         var leaf = catalog.All.Count == 0 ? null : catalog.Resolve(meta.Model);
-        var (_, children) = CatalogMetadataOffset(0, 10, parent: statusTarget.Id);
+        var children = administrator
+            ? CatalogMetadataOffset(0, 10, parent: statusTarget.Id).Page
+            : VisibleChildren(SessionVisibilityFor(source), statusTarget.Id, 10);
         var currentNode = SessionWait.Text(dto["currentNode"])!;
         var usage = summary.Usage;
         var cached = SessionWait.Number(usage?["cachedTokens"]) ?? 0;
@@ -481,18 +492,41 @@ internal sealed partial class SessionManager
         return query;
     }
 
-    // Keyword list uses the same metadata candidate scan as WebUI search, then applies the
-    // ordinary list order and offset to the matches.
-    private (long Total, JsonObject[] Page) SearchMetadata(
-        string query,
+    // Filtered list: the listed Sessions in scope, optionally narrowed by the same metadata
+    // matcher as WebUI search, in the ordinary list order and offset. When only the caller, its
+    // parent, its children and Sessions a rule names can be listed, only those are read;
+    // otherwise the scope is scanned like a keyword search.
+    private (long Total, JsonObject[] Page) VisibleMetadata(
+        SessionListVisibility visibility,
+        string? query,
         int start,
         int count,
         string? agent
     )
     {
-        var matches = ListPresentations()
+        // Sessions outside the caller's Agent can be listed beyond the explicit set only when
+        // the other-Agent class admits; otherwise the caller's Agent rows and that set suffice.
+        var candidates =
+            !visibility.Broad(agent) ? CatalogPresentations(visibility.ExplicitIds(), true)
+            : agent is not null || !visibility.Broad(null, sameAgent: false)
+                ? CatalogPresentations(
+                    Catalog
+                        .OffsetPage(
+                            (int)Math.Min(Catalog.Count(visibility.Agent) + 1, int.MaxValue),
+                            0,
+                            visibility.Agent
+                        )
+                        .Select(row => SessionCatalog.Text(row["id"])!)
+                        .Concat(visibility.ExplicitIds())
+                        .ToArray(),
+                    true
+                )
+            : ListPresentations();
+        var matcher = query is null ? null : SessionListQueries.MetadataMatcher(query);
+        var matches = candidates
             .Where(row => agent is null || SessionCatalog.Text(row["agent"]) == agent)
-            .Where(SessionListQueries.MetadataMatcher(query))
+            .Where(row => matcher is null || matcher(row))
+            .Where(visibility.Admits)
             .OrderByDescending(row => SessionWait.Number(row["lastMessageTime"]) ?? 0)
             .ThenBy(
                 row => SessionWait.Text(row["id"])!,
@@ -500,6 +534,22 @@ internal sealed partial class SessionManager
             )
             .ToArray();
         return (matches.Length, matches.Skip(start).Take(count).ToArray());
+    }
+
+    // Most recent children of a Session that the caller may list, filtered before the cap.
+    private JsonObject[] VisibleChildren(SessionListVisibility visibility, string parent, int limit)
+    {
+        if (visibility.Covers(null))
+            return CatalogMetadataOffset(0, limit, parent: parent).Page;
+        var result = new List<JsonObject>();
+        for (var start = 0; result.Count < limit; start += 50)
+        {
+            var (total, page) = CatalogMetadataOffset(start, 50, parent: parent);
+            result.AddRange(page.Where(visibility.Admits).Take(limit - result.Count));
+            if (page.Length == 0 || start + 50 >= total)
+                break;
+        }
+        return result.ToArray();
     }
 
     private static double? OptionalNumber(JsonObject args, string name)

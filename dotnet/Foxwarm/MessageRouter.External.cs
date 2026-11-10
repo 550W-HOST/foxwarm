@@ -239,7 +239,14 @@ internal sealed partial class MessageRouter
                 case "/status":
                     await source.Reply(
                         SessionWait.Text(
-                            (await runtime.Manager.ObserveAsync(owner!, "session", new()))["output"]
+                            (
+                                await runtime.Manager.ObserveAsync(
+                                    owner!,
+                                    "session",
+                                    new(),
+                                    administrator: true
+                                )
+                            )["output"]
                         )!
                     );
                     break;

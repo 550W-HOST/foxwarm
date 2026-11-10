@@ -194,7 +194,7 @@ rules:
     action: deny
 ```
 
-This grants only inbound send to one existing Session for `peer` if no earlier rule wins. It does not grant read/list, create a Session, or transfer the external identity's privileges to the receiving Session. Session-list permission exposes a bounded global catalog; it is not filtered by per-target read grants.
+This grants only inbound send to one existing Session for `peer` if no earlier rule wins. It does not grant read/list, create a Session, or transfer the external identity's privileges to the receiving Session. Inbound Session-list permission exposes the bounded global catalog; per-ID read and send grants do not filter it. A model's own Session list shows only itself and the Sessions its policy might let it read, message, assign to, stop or rename.
 
 Internal callers may also use registered relationship matching:
 
@@ -216,10 +216,11 @@ rules:
     action: deny
 ```
 
-The `session` matcher supports `self: true`, `sameAgent: true`, and `relation: parent | child | [parent, child]`. Present fields are AND; parent/child are direct canonical links and can cross Agents. Self does not include siblings or descendants. This is supported only for exact registered builtin families: `send_to_session`, `send_file`, timer CRUD, `recall`, archive reads, `view_session`, `stop_session`, and the `task` assignment target. Names combined in one selector must share one registered target resolver. It is not available for arbitrary MCP/Node arguments or external callers. Missing-argument/alias behavior follows each tool, not a universal “missing means self” rule; channel-target file delivery has no Session target. Nonexistent or invalid targets do not match.
+The `session` matcher supports `self: true`, `sameAgent: true`, and `relation: parent | child | [parent, child]`. Present fields are AND; parent/child are direct canonical links and can cross Agents. Self does not include siblings or descendants. This is supported only for exact registered builtin families: `session`, `send_to_session`, `send_file`, timer CRUD, `recall`, archive reads, `view_session`, `stop_session`, and the `task` assignment target. Names combined in one selector must share one registered target resolver. It is not available for arbitrary MCP/Node arguments or external callers. Missing-argument/alias behavior follows each tool, not a universal “missing means self” rule; channel-target file delivery has no Session target. Nonexistent or invalid targets do not match.
 
 | Registered family | Target/default behavior |
 | --- | --- |
+| `session` | `sessionId` defaults to the calling Session for every action, including `list`. `{session: {self: true}}` allows the list and the caller's own status; `{sameAgent: true}` also allows status of the Agent's other Sessions. |
 | `send_to_session` | Required `sessionId`; resolves `<main>`, `<parent>`, and catalog aliases. Self-send is rejected by the handler even if policy allows it. |
 | `send_file` | Session target defaults to self only without a non-empty channel target. Channel delivery has no Session relationship target. |
 | `create_timer`, `list_timers`, `update_timer`, `delete_timer` | `sessionId` defaults to self. This matcher scopes the owner, not persisted timer settings or `agentName` for new-session delivery. |
@@ -231,7 +232,7 @@ The `session` matcher supports `self: true`, `sameAgent: true`, and `relation: p
 
 Each table row is a separate resolver family; combine names only within the same row when a rule uses the Session matcher. The family registry is `ToolAuthorizationPolicy.TargetResolvers` in the Main server; see the [policy selectors and authoritative facts](../../../docs/code-index/units/tool-authorization.md#policy-selectors-and-authoritative-facts) for target and default resolution.
 
-Registered target resolution uses authoritative catalog IDs and direct-parent facts, not ID prefixes. Scalar argument matching instead compares the supplied value, before tool-local defaults/normalization. For example, `{ exists: false }` requires absence, not an empty string or `null` accepted as a default by some handlers. `session`, `skill.agentName`, timer new-session Agent fields, and channel attachment ownership do not gain relationship matching merely by having target-like arguments. A permitted Session list exposes its bounded catalog; individual read grants do not project that list into a private subset.
+Registered target resolution uses authoritative catalog IDs and direct-parent facts, not ID prefixes. Scalar argument matching instead compares the supplied value, before tool-local defaults/normalization. For example, `{ exists: false }` requires absence, not an empty string or `null` accepted as a default by some handlers. `skill.agentName`, timer new-session Agent fields, and channel attachment ownership do not gain relationship matching merely by having target-like arguments. Model-facing Session and Agent lists are filtered by these grants; see List visibility below.
 
 ### Session creation targets
 
@@ -250,6 +251,10 @@ The Agent matcher is registered only for this exact builtin/argument pair; `same
 Discovery and default tool injection conservatively project the ordered policy without knowing every future argument or path. A definite identity-only deny can hide a tool; an argument/path/unknown-target denial does not prove that all invocations are denied. Conditional allows may keep the tool visible. Do not diagnose a rule by assuming every denied call removes its tool schema.
 
 `search_tools` has its own authorization and filters returned capabilities. Only `call_tool` is a permission-neutral dispatcher. ToolScript's nested `call_tool` uses the same resolved authorization boundary; that does not make `run_script` or all of its host functionality an unconditional grant.
+
+#### List visibility
+
+`session(action: "list")` and `list_agents` show the caller's own Session and Agent, plus the Sessions and Agents its policy might let it use. A Session is listed when `session` status or rename, `view_session`, `recall` or archive reads with its `sessionId`, `send_to_session`, `stop_session`, or a `task` created for or assigned to it might be allowed. An Agent is listed when it owns a listed Session, or when creating or moving Sessions there, reading its skills or managing it might be allowed. Timers, `send_file`, compaction and settings tools, `delete_session`, `move_session` and parent changes don't add rows. A rule that allows `session` status for every Session lists every Session; limit it with `args.sessionId: {session: {…}}` to narrow the list. The list doesn't grant any call, and hiding a Session doesn't make it confidential.
 
 ### Node and path scope
 

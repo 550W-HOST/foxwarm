@@ -223,7 +223,9 @@ internal sealed partial class SessionManager
         IReadOnlyList<string>? targets,
         bool unknownNode,
         bool unknownNodeTargets,
-        IReadOnlySet<string>? knownArgs
+        IReadOnlySet<string>? knownArgs,
+        AuthorizationTarget? sessionTarget = null,
+        string? sourceParent = null
     )
     {
         if (context.Layers is null)
@@ -242,6 +244,8 @@ internal sealed partial class SessionManager
                 toolWorkspace,
                 agents.AgentDirectory(context.Agent),
                 agents.MemoryDirectory(context.Agent),
+                SourceParent: sourceParent,
+                SessionTarget: sessionTarget,
                 NodeTargets: targets,
                 CurrentNode: context.CurrentNode,
                 NodeForest: targets is { Count: > 0 } ? context.Forest : null

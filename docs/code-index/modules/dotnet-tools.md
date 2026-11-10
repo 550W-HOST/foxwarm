@@ -15,6 +15,7 @@ This module documents current .NET source behavior. Cross-module contracts belon
 - [Tool authorization](../units/tool-authorization.md)
 - [Legacy isolation migration](../units/isolation-migration.md)
 - [Node list visibility](../units/node-list-visibility.md)
+- [Session and Agent list visibility](../units/session-list-visibility.md)
 - [External Node trust and ordinary tools](../units/external-nodes.md)
 - [Outbound MCP client](../units/mcp.md)
 - [Tool-output secret masking and writer guard](../threads/secret-references-and-redaction.md#redaction-points)

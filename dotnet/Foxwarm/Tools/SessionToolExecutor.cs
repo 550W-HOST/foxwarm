@@ -1329,7 +1329,9 @@ internal sealed partial class SessionToolExecutor(
             handlers[name] = (owner, args, token) =>
                 MemoryTools.ExecuteAsync(owner.Hosted, owner.Manager, name, args, token);
         handlers["list_agents"] = (owner, _, _) =>
-            Task.FromResult(new JsonObject { ["output"] = owner.Manager.ListAgentsText() });
+            Task.FromResult(
+                new JsonObject { ["output"] = owner.Manager.ListAgentsText(owner.Hosted) }
+            );
         handlers["set_config"] = (owner, args, token) =>
             owner.Manager.InstallConfigAsync(
                 owner.Hosted,

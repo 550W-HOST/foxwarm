@@ -97,7 +97,7 @@ Exact builtin `create_session` rules accept `args.agentName: {agent: {sameAgent:
 
 ## Node list visibility
 
-The model's Node list is a presentation projection of this policy; see [Node list visibility](./node-list-visibility.md).
+The model's Node list is a presentation projection of this policy; see [Node list visibility](./node-list-visibility.md). The model's Session list and `list_agents` are projected the same way; see [Session and Agent list visibility](./session-list-visibility.md).
 
 ## Authorization explanation
 

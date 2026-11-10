@@ -14,6 +14,7 @@ This module documents current .NET source behavior. Cross-module contracts belon
 - [Session manager bootstrap, admission, and catalog publication](../units/session-manager-bootstrap.md)
 - [Session manager lifecycle, deletion, and identity moves](../units/session-manager-lifecycle-identity.md)
 - [Session manager Agent, setup, files, knowledge, waits, and compaction](../units/session-manager-operations.md)
+- [Session and Agent list visibility](../units/session-list-visibility.md)
 - [Session manager tasks, timers, and ToolScript launch](../units/session-manager-services.md)
 - [Session runtime, owner, and turn runner](../units/session-turns.md)
 - [Automatic Session titles](../units/session-auto-title.md)
