@@ -288,11 +288,12 @@ jobs:
         run: bash scripts/release/smoke-upgrade.sh dist/foxwarm-linux-x64.tar.gz dist/foxwarm-linux-x64-native.tar.gz 3001 --native
       - name: Native package, PTY, ToolScript and Vector child on Ubuntu 22.04 without .NET
         run: |
-          # The runner's Node.js (glibc 2.28 floor) drives the package qualification.
+          # The runner's Node.js (glibc 2.28 floor) drives the package qualification, which reads
+          # the archive store through python3's sqlite3; neither is part of the package.
           node_bin="$(dirname "$(readlink -f "$(command -v node)")")"
           docker run --rm -v "$PWD:/repo:ro" -v "$node_bin:/opt/node/bin:ro" ubuntu:22.04 bash -c '
             set -e
-            apt-get update -qq && apt-get install -y -qq tmux curl ca-certificates libicu70 procps >/dev/null
+            apt-get update -qq && apt-get install -y -qq tmux curl ca-certificates libicu70 procps python3 >/dev/null
             ! command -v dotnet
             ldd --version | head -1
             bash /repo/scripts/release/smoke-server.sh /repo/dist/foxwarm-linux-x64-native.tar.gz
