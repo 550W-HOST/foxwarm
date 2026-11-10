@@ -5,14 +5,12 @@ namespace Foxwarm.Sessions;
 
 internal sealed partial class SessionManager
 {
-    private bool NodeCanAccessSession(string node, JsonObject session) =>
-        ResolveExecutionNode(session, BoundNode(SessionWait.Text(session["agent"]) ?? "main"))
-            == node
-        || BoundNode(SessionWait.Text(session["agent"]) ?? "main") == node;
+    private static bool NodeCanAccessSession(string node, JsonObject session) =>
+        ResolveExecutionNode(session) == node;
 
     private InvalidDataException NodeSessionDenied(string node, string id, string action) =>
         new(
-            $"Node \"{node}\" cannot {action} session \"{id}\" because the session is not assigned to that node or its isolated agent."
+            $"Node \"{node}\" cannot {action} session \"{id}\" because the session is not assigned to that node."
         );
 
     private JsonObject RequireNodeSessionProjection(string node, string requested, string action)
@@ -140,10 +138,7 @@ internal sealed partial class SessionManager
             ["lastMessageTime"] =
                 session["lastMessageTime"]?.DeepClone()
                 ?? session["meta"]?["lastMessageTime"]?.DeepClone(),
-            ["currentNode"] = ResolveExecutionNode(
-                session,
-                BoundNode(SessionWait.Text(session["agent"]) ?? "main")
-            ),
+            ["currentNode"] = ResolveExecutionNode(session),
             ["cwd"] = session["cwd"]?.DeepClone(),
             ["busy"] = session["busy"]?.DeepClone() ?? JsonValue.Create(false),
             ["queueLength"] = session["queueLength"]?.DeepClone() ?? JsonValue.Create(0),

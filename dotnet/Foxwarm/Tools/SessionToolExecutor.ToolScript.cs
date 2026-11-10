@@ -196,10 +196,8 @@ internal sealed partial class SessionToolExecutor
                         new JsonObject { ["filePath"] = file }
                     ),
                     files,
-                    currentToken,
-                    toolScriptSourceRead: true
+                    currentToken
                 );
-                sessions.RequireMainFileSourcePath(hosted, actual);
                 if (!WorkspaceTools.RegularFile(actual))
                     throw new FileNotFoundException(
                         "ToolScript source must be a regular file.",

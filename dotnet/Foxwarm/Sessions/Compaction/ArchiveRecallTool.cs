@@ -52,7 +52,7 @@ internal static class ArchiveRecallTool
                           "current-session",
                           "current-agent"
                         ],
-                        "description": "Scope for semantic search. Searches stay within this agent; legacy isolated agents are further limited to the current session."
+                        "description": "Scope for semantic search. Searches stay within this agent."
                       },
                       "agentName": {
                         "type": "string",

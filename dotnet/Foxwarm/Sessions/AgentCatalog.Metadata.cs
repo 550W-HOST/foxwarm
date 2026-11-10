@@ -54,10 +54,6 @@ internal sealed partial class AgentCatalog
         if (name == inherit)
             throw new InvalidDataException("Agent cannot inherit from itself.");
         var source = MetadataSnapshot()[inherit];
-        if (IsolatedToolCompatibility.Metadata(source).Isolated)
-            throw new InvalidDataException(
-                $"Agent '{inherit}' is isolated and cannot be used as an inherit source."
-            );
         if (!Inheritable(source))
             throw new InvalidDataException(
                 $"Agent '{inherit}' is not inheritable and cannot be used as an inherit source."
@@ -149,62 +145,6 @@ internal sealed partial class AgentCatalog
                 row.Remove("inherit");
             else
                 row["inherit"] = inherit;
-            try
-            {
-                AtomicIndexWrite(
-                    indexPath,
-                    Payload(List().Where(id => id != "main"), next).ToJsonString()
-                );
-            }
-            catch (AuthorityCommittedException)
-            {
-                lock (stateGate)
-                    metadata = next;
-                throw;
-            }
-            lock (stateGate)
-                metadata = next;
-        }
-        finally
-        {
-            createGate.Release();
-        }
-    }
-
-    internal Task SetNodeAsync(string name, string? node) =>
-        SetIsolationAsync(name, node, true, null);
-
-    internal async Task SetIsolationAsync(
-        string name,
-        string? node,
-        bool updateNode,
-        JsonArray? rules
-    )
-    {
-        await createGate.WaitAsync();
-        try
-        {
-            if (!Exists(name))
-                throw new InvalidDataException("Agent not found.");
-            var next = MetadataSnapshot();
-            var row = next[name] as JsonObject ?? new JsonObject();
-            next[name] = row;
-            if (updateNode)
-            {
-                if (node is null)
-                {
-                    row.Remove("isolated");
-                    row.Remove("isolatedNode");
-                }
-                else
-                {
-                    row["isolated"] = true;
-                    row["isolatedNode"] = node;
-                }
-            }
-            if (rules is not null)
-                row["toolRules"] = rules.DeepClone();
-            _ = IsolatedToolCompatibility.Metadata(row);
             try
             {
                 AtomicIndexWrite(

@@ -65,12 +65,8 @@ public sealed partial class ProviderFileConsumerTests
         Assert.False(Directory.Exists(Path.Combine(f.Work, ".temp", "tool-output")));
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Main_produced_results_use_the_readable_Session_Node_for_Node_only_and_bound_callers(
-        bool bound
-    )
+    [Fact]
+    public async Task Main_produced_results_use_the_readable_Session_Node_for_Node_only_callers()
     {
         if (!OperatingSystem.IsLinux())
             return;
@@ -87,34 +83,11 @@ public sealed partial class ProviderFileConsumerTests
                     new JsonObject { ["output"] = content, ["resultId"] = "node-readable" }
                 )
         );
-        if (bound)
-            await f.Manager.SetAgentIsolationAsync(
-                "main",
-                f.Node,
-                true,
-                new JsonArray(
-                    new JsonObject
-                    {
-                        ["effect"] = "allow",
-                        ["source"] = "builtin",
-                        ["tool"] = "large_result",
-                    },
-                    new JsonObject
-                    {
-                        ["effect"] = "allow",
-                        ["source"] = "builtin",
-                        ["tool"] = "node",
-                    }
-                )
-            );
-        else
-        {
-            await File.WriteAllTextAsync(
-                Path.Combine(f.Data, "state", "tool-authorization.yaml"),
-                "version: 1\ndefaultAction: deny\nrules:\n- action: allow\n  node: { current: true }\n- action: allow\n  match: { tool: { source: builtin, name: large_result } }\n- action: allow\n  match: { tool: { source: builtin, name: node } }\n- action: allow\n  match: { tool: { source: builtin, name: run_script } }\n"
-            );
-            f.Manager.Authorization.Invalidate();
-        }
+        await File.WriteAllTextAsync(
+            Path.Combine(f.Data, "state", "tool-authorization.yaml"),
+            "version: 1\ndefaultAction: deny\nrules:\n- action: allow\n  node: { current: true }\n- action: allow\n  match: { tool: { source: builtin, name: large_result } }\n- action: allow\n  match: { tool: { source: builtin, name: node } }\n- action: allow\n  match: { tool: { source: builtin, name: run_script } }\n"
+        );
+        f.Manager.Authorization.Invalidate();
         var result = await f.Call("large_result", new JsonObject());
         Success(result);
         Assert.Equal("node-readable", result["resultId"]!.GetValue<string>());
@@ -164,15 +137,6 @@ public sealed partial class ProviderFileConsumerTests
         Assert.StartsWith("--- return ---\n", completeOuter);
         Assert.Contains("entry-05000", completeOuter);
         Assert.Contains("node-readable", completeOuter);
-        if (bound)
-            Assert.NotNull(
-                (
-                    await f.Call(
-                        "node",
-                        new JsonObject { ["action"] = "select", ["nodeId"] = f.Node }
-                    )
-                )["error"]
-            );
         Assert.False(Directory.Exists(Path.Combine(f.Work, ".temp", "tool-output")));
     }
 

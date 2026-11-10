@@ -128,19 +128,15 @@ public sealed partial class SessionCreationParityTests
         );
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Nonisolated_agent_conversion_admits_an_isolated_source_through_shared_identity_effects(
-        bool bindTarget
-    )
+    [Fact]
+    public async Task Agent_conversion_admits_a_restricted_source_through_shared_identity_effects()
     {
         await using var f = await ExternalChannelFixture.CreateAsync();
         RegisterAgentTools(f);
         await f.Configuration.SaveAsync(new JsonObject { ["yaml"] = ClosureModels(true) });
         f.Manager.Nodes.Registry.Create("source-offline");
-        f.Manager.Nodes.Registry.Create("target-offline");
-        await f.Manager.CreateAgentAsync("isolated-convert", isolatedNode: "source-offline");
+        await f.Manager.CreateAgentAsync("isolated-convert", defaultNode: "source-offline");
+        await LegacyIsolationFixture.RestrictAsync(f.Manager, "isolated-convert", "source-offline");
         var source = await f.Manager.RequiredAsync("isolated-convert/main");
         await source.Entry.SaveLane.CommitSettingsAsync(
             new JsonObject
@@ -182,10 +178,7 @@ public sealed partial class SessionCreationParityTests
             ["sourceSessionId"] = oldId,
             ["convertSession"] = true,
             ["inheritMemory"] = true,
-            ["toolRules"] = new JsonArray(),
         };
-        if (bindTarget)
-            args["isolatedNode"] = "target-offline";
         Successful(await f.ToolAsync("create_agent", args));
         Assert.Same(source, await f.Manager.RequiredAsync("converted-isolated/main"));
         Assert.Same(source, await f.Manager.RequiredAsync(oldId));
@@ -195,13 +188,9 @@ public sealed partial class SessionCreationParityTests
             source.Id,
             SessionWait.Text(f.Manager.ChannelBinding("webui:conversion-proof")?["sessionId"])
         );
-        Assert.True(f.Manager.AgentIsolated("isolated-convert"));
-        Assert.Equal(bindTarget, f.Manager.AgentIsolated(source.Agent));
-        Assert.Equal(
-            bindTarget ? "target-offline" : "source-offline",
-            f.Manager.CurrentNode(source)
-        );
-        Assert.Empty(f.Manager.AgentMetadata[source.Agent]!["toolRules"]!.AsArray());
+        Assert.NotNull(f.Manager.AgentMetadata["isolated-convert"]!["rules"]);
+        Assert.Null(f.Manager.AgentMetadata[source.Agent]?["rules"]);
+        Assert.Equal("source-offline", f.Manager.CurrentNode(source));
         Assert.Null(f.Manager.AgentInherit(source.Agent));
         Assert.Equal(
             "conversion one-time copy",
@@ -239,34 +228,18 @@ public sealed partial class SessionCreationParityTests
     }
 
     [Fact]
-    public async Task Agent_conversion_keeps_authorization_ordinary_move_isolation_reservation_and_shared_failure_fences()
+    public async Task Agent_conversion_keeps_authorization_reservation_and_shared_failure_fences()
     {
         await using var f = await ExternalChannelFixture.CreateAsync();
         RegisterAgentTools(f);
         f.Manager.Nodes.Registry.Create("source-offline");
-        await f.Manager.CreateAgentAsync("isolated-guard", isolatedNode: "source-offline");
+        await f.Manager.CreateAgentAsync("isolated-guard", defaultNode: "source-offline");
+        await LegacyIsolationFixture.RestrictAsync(f.Manager, "isolated-guard", "source-offline");
         var source = await f.Manager.RequiredAsync("isolated-guard/main");
         var child = (
             await f.Manager.CreateChildAsync(source, "child", null, null, null, null)
         ).Child;
         f.Manager.AttachChannel("webui:guard-proof", source);
-        var outward = await f.ToolAsync(
-            "move_session",
-            new JsonObject
-            {
-                ["sessionId"] = source.Id,
-                ["createAgent"] = true,
-                ["newAgentName"] = "ordinary-outward",
-            }
-        );
-        Assert.Contains("Isolated Agents cannot move", outward!["error"]!.ToString());
-        Assert.DoesNotContain("ordinary-outward", f.Manager.Agents());
-        var inward = await f.ToolAsync(
-            "move_session",
-            new JsonObject { ["newSessionId"] = "inward", ["newAgentName"] = "isolated-guard" }
-        );
-        Assert.Contains("Isolated Agents cannot move", inward!["error"]!.ToString());
-        Assert.Null(await f.Manager.GetExistingAsync("isolated-guard/inward"));
         var isolatedCaller = await f.ToolAsync(
             "create_agent",
             new JsonObject

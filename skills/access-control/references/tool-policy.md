@@ -25,7 +25,7 @@ rules:
     action: deny
 ```
 
-This complete example restricts internal calls from the `reviewer` Agent while preserving the internal default for other Agents. It does not create that Agent or change its isolation/Node binding. Merge rules into the real policy only after reviewing existing ordering.
+This complete example restricts internal calls from the `reviewer` Agent while preserving the internal default for other Agents. It does not create that Agent or change its default Node. Merge rules into the real policy only after reviewing existing ordering.
 
 - Top level: `version: 1`, optional `defaultAction: allow | ask | deny` (omission means `allow`), and optional `rules` (omission means an empty list). Prefer writing both optional fields explicitly.
 - Rule: optional unique non-empty `id` (omission assigns `rule-<position>`), optional `enabled` (defaults to `true`), optional `match` (omission/`{}` matches all callers), required `action: allow | ask | deny`, optional `reason`, and optional `approval` (only with `ask`; see [Require approval](#require-approval)).
@@ -124,10 +124,7 @@ Before granting a builtin, check:
 
 1. **Targets and defaults:** which parameters select an Agent, Session, Node, path, or channel? Follow the actual resolver; omission does not universally mean self.
 2. **Effects:** include reads, mutations, file delivery, notifications, and queued input. For example, task assignment, comments, and completion can notify another Session; granting task operations is not merely granting a private task list.
-3. **Isolation-dependent checks:** which guards stop running without the isolated flag? Validate the proposed policy with a non-isolated test caller so legacy guards do not mask missing restrictions.
-4. **Expressibility:** can existing matchers enforce the intended boundary? If not, omit the capability from the baseline or make it a separately reviewed grant; do not compensate with an unconditional allow.
-
-A familiar name in the legacy default list is not evidence that an unconditional allow is safe after isolation is removed. Use [the offline baseline generator](isolated-rules.md) when its conservative scope fits; review its omissions rather than treating it as an exact migration.
+3. **Expressibility:** can existing matchers enforce the intended boundary? If not, omit the capability from the baseline or make it a separately reviewed grant; do not compensate with an unconditional allow.
 
 ## Require approval
 
@@ -147,7 +144,7 @@ A familiar name in the legacy default list is not evidence that an unconditional
 
 - `approval` is optional and valid only with `ask`. `timeoutSeconds` is an integer from 30 to 604800. `approvers` lists 1–64 access identity IDs. Ask cannot be combined with an `externalId` selector.
 - The instance administrator can always decide. A scoped WebUI identity decides only when its `webui.sessions` scope includes the Session and every rule that asked for this call names it. When several layers ask, the shortest timeout applies. `approvers` limits who decides, not who sees: anyone who can open the Session sees the request and its arguments, as they see the call in its history.
-- Layers combine deny over ask over allow: any denying layer denies the call; otherwise any asking layer makes it wait. Legacy isolation is checked before the request is made, and the call is authorized again against the current policy after approval, so a deny installed meanwhile still wins.
+- Layers combine deny over ask over allow: any denying layer denies the call; otherwise any asking layer makes it wait. The call is authorized again against the current policy after approval, so a deny installed meanwhile still wins.
 - Without `timeoutSeconds`, foreground calls wait until a decision or Stop. Unattended timer script slices and webhook handler runs use one hour. A pending request expires when Foxwarm restarts; the call is not replayed. If the call is stopped after approval but before it starts, the request is recorded as cancelled.
 - An approval covers exactly one call and the internal checks of that call. An ask that applies only to an internal step of another allowed call (for example, a tool that reads the policy file as part of its work) is not requested and fails the call; ask for the outer tool instead. Nested ToolScript calls are separate calls and ask on their own.
 - A timer that would later create a Session through an asking `create_session` outcome is rejected at registration.
@@ -288,10 +285,8 @@ An Agent can also carry its own ordered rule list. Set it with `create_agent({ru
 
 Two node-selector details matter for allowlists. A top-level `node` selector also matches the `node` tool's select, inspect and destroy targets and the endpoints of file transfers, so scope an environment allowance with `tool: {source: node}` unless those are intended. `node: {current: true}` also matches `master` when a Session is placed there, so put an explicit master deny first. The [agent-management templates](../../agent-management/references/memory-templates/) include complete reviewed layers for a restricted worker and a channel assistant.
 
-## Generic policy versus legacy isolation
+## Generic policy and tool-local checks
 
-Generic deny applies to isolated and non-isolated Sessions. Generic allow passes only this policy layer: current legacy isolated-Agent exact tool rules, bound-Node restrictions, own-Agent master paths, Session relations, own channel attachment requirements, and tool-local validation remain separate checks. A denied call cannot be fixed merely by adding a generic allow if a later structural check rejects it.
+Generic deny applies to every internal Session. Generic allow passes only this policy layer: Agent-local layers, own channel attachment requirements, Node readiness and tool-local validation remain separate checks. A denied call cannot be fixed merely by adding a generic allow if a later check rejects it.
 
-Use [agent-management](../../agent-management/SKILL.md) for actual isolation creation, binding, migration, and lifecycle operations. Do not remove existing isolation as a workaround for a policy mismatch.
-
-If a separately approved migration removes isolation, the generic policy still applies, but the legacy exact rules and isolated-only guards no longer do. Review lost path/target/incoming restrictions and persisted automation explicitly; [the generated baseline's limits](isolated-rules.md#differences-from-legacy-isolation) are not proof of full equivalence.
+Agents migrated from legacy isolation carry a generated Agent-local layer. Review or replace it with [agent-management](../../agent-management/SKILL.md); a global allow cannot widen it.

@@ -41,22 +41,25 @@ public sealed class OutboundMcpDiscoveryTests
     }
 
     [Fact]
-    public async Task Broad_search_for_isolated_Agent_connects_only_to_servers_with_MCP_allow_rules()
+    public async Task Broad_search_for_migrated_isolated_Agent_connects_only_to_servers_with_MCP_allow_rules()
     {
         using var temp = new TempDirectory();
         await using var peer = await OutboundSdkPeer.StartAsync(temp.Path);
         await using var fixture = await OutboundMcpFixture.CreateAsync(
             mainMetadata: new JsonObject
             {
-                ["isolated"] = true,
-                ["toolRules"] = new JsonArray(
-                    new JsonObject
-                    {
-                        ["source"] = "mcp",
-                        ["effect"] = "allow",
-                        ["server"] = "peer",
-                        ["tool"] = "probe",
-                    }
+                ["rules"] = LegacyIsolationFixture.Layer(
+                    "main",
+                    null,
+                    new JsonArray(
+                        new JsonObject
+                        {
+                            ["source"] = "mcp",
+                            ["effect"] = "allow",
+                            ["server"] = "peer",
+                            ["tool"] = "probe",
+                        }
+                    )
                 ),
             }
         );

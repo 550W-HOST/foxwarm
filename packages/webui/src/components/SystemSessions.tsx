@@ -42,7 +42,6 @@ export function SessionOperationRow({ session, selected, current, now, nodeLabel
           <div className="flex min-w-0 items-center gap-2">
             <span className="truncate text-sm font-semibold text-fw-text-strong" title={name}>{name}</span>
             {current ? renderMetaBadge('current', 'active') : null}
-            {session.isolated ? renderMetaBadge('isolated', 'warning') : null}
             {session.archived ? renderMetaBadge('archived', 'muted') : null}
           </div>
           {session.displayName ? <div className="mt-0.5 truncate font-mono text-[10px] text-fw-text-muted">{session.id}</div> : null}
@@ -165,7 +164,6 @@ export function SessionInspector({ session, parent, children, childTotal, hasMor
             <InspectorField label="Node" value={<span className="inline-flex items-center gap-1.5"><span className={`h-1.5 w-1.5 rounded-full ${node?.online ? 'bg-fw-success' : 'bg-fw-text-subtle'}`} />{node?.displayName || getArchitectureSessionNodeId(session)}</span>} />
             <InspectorField label="Node ID" value={getArchitectureSessionNodeId(session)} mono />
             <InspectorField label="CWD" value={session.cwd || '—'} mono />
-            <InspectorField label="Isolation" value={session.isolated ? 'isolated agent' : 'shared runtime'} />
           </dl>
         </section>
 

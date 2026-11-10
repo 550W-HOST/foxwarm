@@ -122,7 +122,6 @@ public sealed partial class CompactLifecycleTests
         await manager.LoadMainHostAsync();
         var owner = await manager.CreateNamedAsync("main", "files", null, null);
         owner.Registry.TriggerOverride = _ => Task.CompletedTask;
-        await manager.SetAgentIsolationAsync("main", "fixture/target", true, new JsonArray());
         await manager.SelectNodeAsync(owner, "fixture/target");
         await owner.UpdateCwdAsync("opaque://root/plans");
         for (var index = 0; index < 8; index++)

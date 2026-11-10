@@ -3,9 +3,9 @@ using Foxwarm.Tools;
 
 namespace Foxwarm.Sessions;
 
-// Legacy isolation migration (R1): a read-only inventory and an explicit per-Agent apply.
-// Applying installs the generated local layer while legacy isolation stays enforced; the
-// legacy fields remain as the downgrade fence. Nothing here disables legacy isolation.
+// Legacy isolation migration: a read-only inventory and an explicit per-Agent apply (R1).
+// Since R2 the same migration also runs automatically at startup (IsolationStartup); the
+// legacy fields remain only as the downgrade fence.
 internal sealed partial class SessionManager
 {
     private static readonly string[] TimerReportFields =
@@ -107,6 +107,7 @@ internal sealed partial class SessionManager
                     .ToArray()
             ),
             ["channelGuests"] = ChannelGuestReport(),
+            ["startup"] = StartupIsolationMigration?.DeepClone(),
         };
         if (policyError is not null)
             result["policyError"] = policyError;
@@ -294,6 +295,7 @@ internal sealed partial class SessionManager
                         ["agentId"] = guest["agentId"]?.DeepClone(),
                         ["mode"] = guest["mode"]?.DeepClone(),
                         ["isolated"] = guest["isolated"]?.GetValue<bool>() != false,
+                        ["template"] = guest["template"]?.DeepClone(),
                         ["node"] = guest["node"]?.DeepClone(),
                     }
                 );
@@ -305,7 +307,7 @@ internal sealed partial class SessionManager
 
     /// <summary>
     /// Applies the generated migration to one isolated Agent, then records the bound Node
-    /// as the current Node of its Sessions that have none. Legacy isolation stays enforced.
+    /// as the current Node of its Sessions that have none. Legacy fields stay as the fence.
     /// For an already migrated Agent only the idempotent backfill runs again, so an
     /// interrupted or partly failed apply can be resumed. Creator descendants are restricted
     /// by the layer too, so they must be acknowledged.
@@ -338,47 +340,23 @@ internal sealed partial class SessionManager
                 },
                 DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
             );
-        var node = RecordedIsolationNode(agent);
-        var materialized = new JsonArray();
-        var review = new JsonArray();
-        var failed = new JsonArray();
-        if (node is not null)
-            foreach (
-                var id in Catalog
-                    .OffsetPage(int.MaxValue, 0, agent: agent)
-                    .Select(row => SessionCatalog.Text(row["id"]))
-                    .OfType<string>()
-            )
-            {
-                try
+        var node = Isolation(agent).RecordedNode;
+        var placement =
+            node is null
+                ? new JsonObject
                 {
-                    var owner = await RequiredAsync(id);
-                    var current = await MaterializeCurrentNodeAsync(owner, node, token);
-                    if (current is null)
-                        materialized.Add((JsonNode?)id);
-                    else if (current != node)
-                        review.Add(
-                            new JsonObject { ["sessionId"] = id, ["currentNode"] = current }
-                        );
+                    ["materializedSessions"] = new JsonArray(),
+                    ["placementReview"] = new JsonArray(),
+                    ["failedSessions"] = new JsonArray(),
                 }
-                catch (Exception error)
-                    when (error
-                            is InvalidDataException
-                                or InvalidOperationException
-                                or IOException
-                                or AuthorityCommittedException
-                    )
-                {
-                    failed.Add(new JsonObject { ["sessionId"] = id, ["error"] = error.Message });
-                }
-            }
+                : await MaterializeAgentPlacementAsync(agent, node, token);
         var result = new JsonObject
         {
             ["agent"] = agent,
             ["applied"] = applied is not null,
-            ["materializedSessions"] = materialized,
-            ["placementReview"] = review,
-            ["failedSessions"] = failed,
+            ["materializedSessions"] = placement["materializedSessions"]!.DeepClone(),
+            ["placementReview"] = placement["placementReview"]!.DeepClone(),
+            ["failedSessions"] = placement["failedSessions"]!.DeepClone(),
         };
         if (applied is not null)
         {

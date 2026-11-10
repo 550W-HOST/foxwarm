@@ -5,21 +5,18 @@ namespace Foxwarm.Sessions;
 
 internal sealed partial class SessionManager
 {
-    internal string? BoundNode(string agent) =>
-        AgentIsolated(agent) ? RecordedIsolationNode(agent) : null;
-
     internal (string Node, string? Cwd) ExecutionPlacement(SessionOwner owner) =>
         owner.Entry.WithState(state =>
             (
-                ResolveExecutionNode(state.AuthorityEnvelope, BoundNode(owner.Agent)),
+                ResolveExecutionNode(state.AuthorityEnvelope),
                 SessionWait.Text(state.AuthorityEnvelope["cwd"])
             )
         );
 
-    internal static string ResolveExecutionNode(JsonObject authority, string? boundNode = null)
+    internal static string ResolveExecutionNode(JsonObject authority)
     {
         var node = SessionGoal.Trim(SessionWait.Text(authority["currentNode"]) ?? "");
-        return node.Length > 0 ? node : boundNode ?? "master";
+        return node.Length > 0 ? node : "master";
     }
 
     internal Task<JsonObject> UpdateProviderExecCwdAsync(
@@ -55,15 +52,6 @@ internal sealed partial class SessionManager
         return NodeSummaries(hasPty);
     }
 
-    internal void RequireNodeBoundary(SessionOwner owner, string node)
-    {
-        var isolation = Isolation(owner.Agent);
-        if (isolation.Isolated && node != (isolation.RecordedNode ?? "master"))
-            throw new ToolAuthorizationDeniedException(
-                "Isolated Agent can only execute tools on its bound Node."
-            );
-    }
-
     internal async Task<JsonObject> SelectNodeAsync(
         SessionOwner owner,
         string id,
@@ -78,7 +66,6 @@ internal sealed partial class SessionManager
         id = id.Trim();
         if (id != "master")
             Foxwarm.Nodes.NodeProviderRegistry.ValidateId(id);
-        RequireNodeBoundary(owner, id);
         await NodeProviders.RefreshAsync(id, token);
         if (!NodeProviders.Online(id))
             throw new InvalidOperationException("Node is offline or incompatible: " + id);
@@ -133,7 +120,6 @@ internal sealed partial class SessionManager
         token.ThrowIfCancellationRequested();
         if (!IsCurrentOwner(owner))
             throw new InvalidOperationException("Session owner changed before Node selection.");
-        RequireNodeBoundary(owner, id);
         await owner.Entry.SaveLane.CommitNodeAsync(id, clearCwd);
         return new JsonObject
         {
@@ -291,44 +277,5 @@ internal sealed partial class SessionManager
             RequireCaller
         );
         return new() { ["output"] = result.ToJsonString() };
-    }
-
-    internal async Task RequireAgentNodeAsync(string node)
-    {
-        if (node == "master")
-            throw new InvalidDataException("Use null to remove a Node binding.");
-        Foxwarm.Nodes.NodeProviderRegistry.ValidateId(node);
-        if (await NodeProviders.ResolveAsync(node, default) is null)
-            throw new InvalidDataException("Node not found.");
-    }
-
-    internal Task SetAgentNodeAsync(string agent, string? node) =>
-        SetAgentIsolationAsync(agent, node, true, null);
-
-    internal async Task SetAgentIsolationAsync(
-        string agent,
-        string? node,
-        bool updateNode,
-        JsonArray? rules
-    )
-    {
-        if (!agents.Exists(agent))
-            throw new InvalidDataException("Agent not found.");
-        node = string.IsNullOrWhiteSpace(node) ? null : node.Trim();
-        if (updateNode && node is not null)
-            await RequireAgentNodeAsync(node);
-        await agents.SetIsolationAsync(agent, node, updateNode, rules);
-        if (updateNode && node is not null)
-            foreach (
-                var row in Catalog.List().Where(row => SessionWait.Text(row["agent"]) == agent)
-            )
-            {
-                var owner = await RequiredAsync(row["id"]!.GetValue<string>());
-                await owner.Entry.SaveLane.CommitNodeAsync(node, clearCwd: false);
-            }
-        if (updateNode && node is null)
-            foreach (var owner in sessions.Values.Where(owner => owner.Agent == agent))
-                CaptureLocalProjection(owner);
-        TopologyChanged?.Invoke();
     }
 }

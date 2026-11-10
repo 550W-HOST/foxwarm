@@ -265,10 +265,6 @@ internal sealed partial class SessionManager
         }
         if (action == "update-parent")
         {
-            if (AgentIsolated(source.Agent))
-                throw new InvalidDataException(
-                    "Isolated session cannot use session parent update tool."
-                );
             var requestedTarget = OptionalSessionReference(args);
             var targetId = requestedTarget ?? source.Id;
             if (!args.ContainsKey("parentSessionId"))
@@ -340,10 +336,6 @@ internal sealed partial class SessionManager
                 "session.action must be \"status\", \"list\", \"update-display-name\", or \"update-parent\"."
             );
         var requestedStatusId = OptionalSessionReference(args) ?? source.Id;
-        if (AgentIsolated(source.Agent) && !IsCurrentSessionReference(source, requestedStatusId))
-            throw new InvalidDataException(
-                "Isolated session can only use session status for its current session."
-            );
         var statusTarget = IsCurrentSessionReference(source, requestedStatusId)
             ? source
             : await GetExistingAsync(requestedStatusId);
@@ -359,7 +351,6 @@ internal sealed partial class SessionManager
         var leaf = catalog.All.Count == 0 ? null : catalog.Resolve(meta.Model);
         var (_, children) = CatalogMetadataOffset(0, 10, parent: statusTarget.Id);
         var currentNode = SessionWait.Text(dto["currentNode"])!;
-        var isolated = AgentIsolated(statusTarget.Agent);
         var usage = summary.Usage;
         var cached = SessionWait.Number(usage?["cachedTokens"]) ?? 0;
         var input = SessionWait.Number(usage?["inputTokens"]) ?? 0;
@@ -380,7 +371,7 @@ internal sealed partial class SessionManager
                 );
         return Output(
             "📊 *Session Status*\n\n"
-                + $"- session id: `{meta.Id}`\n- name: {meta.DisplayName ?? "unset"}\n- agent id/name: `{statusTarget.Agent}`\n- current node: `{currentNode}` (connected={(NodeProviders.Connected(currentNode) ? "true" : "false")}, type={(currentNode == "master" ? "master" : NodeSummaries().OfType<JsonObject>().FirstOrDefault(node => SessionWait.Text(node["id"]) == currentNode)?["type"]?.GetValue<string>() ?? "unknown")}){(isolated ? " (isolated)" : "")}\n- agent directory: `{agents.AgentDirectory(statusTarget.Agent)}`\n- current cwd: {(currentCwd is string cwd && SessionGoal.Trim(cwd).Length > 0 ? $"`{SessionGoal.Trim(cwd)}`" : $"not set (defaults to current node agent directory; master: `{agents.AgentDirectory(statusTarget.Agent)}`)")}\n"
+                + $"- session id: `{meta.Id}`\n- name: {meta.DisplayName ?? "unset"}\n- agent id/name: `{statusTarget.Agent}`\n- current node: `{currentNode}` (connected={(NodeProviders.Connected(currentNode) ? "true" : "false")}, type={(currentNode == "master" ? "master" : NodeSummaries().OfType<JsonObject>().FirstOrDefault(node => SessionWait.Text(node["id"]) == currentNode)?["type"]?.GetValue<string>() ?? "unknown")})\n- agent directory: `{agents.AgentDirectory(statusTarget.Agent)}`\n- current cwd: {(currentCwd is string cwd && SessionGoal.Trim(cwd).Length > 0 ? $"`{SessionGoal.Trim(cwd)}`" : $"not set (defaults to current node agent directory; master: `{agents.AgentDirectory(statusTarget.Agent)}`)")}\n"
                 + (
                     meta.ParentSessionId is null
                         ? ""

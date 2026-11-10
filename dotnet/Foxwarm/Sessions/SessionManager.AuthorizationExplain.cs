@@ -205,38 +205,17 @@ internal sealed partial class SessionManager
                 ["precheck"] = denied.Message,
             };
         }
-        var isolation = Isolation(target.Agent);
-        var isolationResult = new JsonObject { ["isolated"] = isolation.Isolated };
-        if (isolation.Isolated)
-        {
-            isolationResult["node"] = isolation.RecordedNode ?? "master";
-            try
-            {
-                IsolatedToolCompatibility.Check(isolation, assessment.Request, AuthorizationTarget);
-                isolationResult["allowed"] = true;
-            }
-            catch (ToolAuthorizationDeniedException denied)
-            {
-                isolationResult["allowed"] = false;
-                isolationResult["reason"] = denied.Message;
-            }
-        }
         var policyDenied = assessment.Denied is not null;
-        var isolationDenied = isolationResult["allowed"]?.GetValue<bool>() == false;
-        // Deny and isolation are decided before anyone would be asked.
-        var asked =
-            !policyDenied && !isolationDenied && assessment.Effect == ToolAuthorizationEffect.Ask;
+        // Deny is decided before anyone would be asked.
+        var asked = !policyDenied && assessment.Effect == ToolAuthorizationEffect.Ask;
         var result = new JsonObject
         {
             ["decision"] =
-                policyDenied || isolationDenied ? "deny"
+                policyDenied ? "deny"
                 : asked ? "ask"
                 : "allow",
-            ["allowed"] = !policyDenied && !isolationDenied && !asked,
-            ["deniedBy"] =
-                policyDenied ? "policy"
-                : isolationDenied ? "isolation"
-                : null,
+            ["allowed"] = !policyDenied && !asked,
+            ["deniedBy"] = policyDenied ? "policy" : null,
         };
         if (asked)
         {
@@ -248,7 +227,6 @@ internal sealed partial class SessionManager
                 .Layers.Select(layer => (JsonNode?)ToolAuthorizationExplain.Layer(layer))
                 .ToArray()
         );
-        result["isolation"] = isolationResult;
         result["facts"] = ToolAuthorizationExplain.Facts(assessment.Request);
         return result;
     }

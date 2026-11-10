@@ -283,7 +283,6 @@ internal sealed class WebUiAccess(SessionRuntime runtime, AccessConfiguration co
                 "effectiveEffort",
                 "effortAllowed",
                 "effortDefault",
-                "isolated",
                 "childModelDefault",
                 "childModelPolicySource",
                 "childPolicyChain",
@@ -302,9 +301,6 @@ internal sealed class WebUiAccess(SessionRuntime runtime, AccessConfiguration co
         var row = id is null ? null : runtime.Catalog.Get(id);
         result["aliases"] = row?["aliases"]?.DeepClone() ?? new JsonArray();
         result["archived"] = row is not null && SessionCatalog.Flag(row["archived"]);
-        result["isolated"] = runtime.Manager.AgentIsolated(
-            SessionCatalog.Text(row?["agent"] ?? source["agent"]) ?? "main"
-        );
         return result;
     }
 }

@@ -260,13 +260,13 @@ public sealed partial class ToolAuthorizationEffectsTests
     }
 
     [Fact]
-    public async Task Creation_policy_intersects_agent_rules_but_does_not_import_legacy_structural_denial()
+    public async Task Creation_policy_intersects_agent_rules()
     {
         using var temp = new TempDirectory();
         await Seed(
             temp.Path,
             Obj(
-                """{"isolated":true,"rules":[{"tool":{"source":"builtin","name":"create_session"},"args":{"agentName":{"agent":{"sameAgent":false}}},"action":"deny"}]}"""
+                """{"rules":[{"tool":{"source":"builtin","name":"create_session"},"args":{"agentName":{"agent":{"sameAgent":false}}},"action":"deny"}]}"""
             )
         );
         await using var manager = Manager(temp.Path);
@@ -274,24 +274,10 @@ public sealed partial class ToolAuthorizationEffectsTests
         var owner = await manager.RequiredAsync("self");
         var execution = TimerExecutor(manager, owner, temp.Path);
         await using var mcp = execution.Mcp;
-        Assert.Equal(
-            "tool_authorization_denied",
-            Error(
-                await Call(
-                    execution.Tools,
-                    "create_session",
-                    Obj("""{"agentName":"alpha","sessionName":"legacy_denied"}""")
-                )
-            )
-        );
         Assert.Null(Error(await Call(execution.Tools, "create_timer", FreshTimer("alpha"))));
         Assert.Equal(
             "tool_authorization_denied",
             Error(await Call(execution.Tools, "create_timer", FreshTimer("beta")))
-        );
-        Assert.Equal(
-            "tool_authorization_denied",
-            Error(await Call(execution.Tools, "create_timer", FreshTimer("alpha", "outside")))
         );
     }
 

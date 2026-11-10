@@ -320,11 +320,9 @@ internal sealed class QQBotMedia(
         var parts = new List<JsonObject>();
         if (!string.IsNullOrWhiteSpace(content))
             parts.Add(Part(content));
-        bool main;
         try
         {
             using var admission = sessions.BeginFileIngress(owner);
-            main = sessions.InboundChannelNode(owner) == "master";
         }
         catch
         {
@@ -348,8 +346,6 @@ internal sealed class QQBotMedia(
                 continue;
             }
             var limit = attachment.Kind == "image" ? Math.Max(FileLimit, ImageLimit) : FileLimit;
-            if (!main)
-                limit = Math.Min(limit, 10L * MiB);
             var remaining = TotalLimit - total;
             var fetchLimit = Math.Min(limit, remaining);
             var downloaded = false;

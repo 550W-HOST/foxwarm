@@ -386,8 +386,6 @@ public sealed partial class ProviderFileConsumerTests
             "currentNode"
         ]!.GetValue<string>();
         Assert.Equal(f.Node, selected);
-        await f.Manager.SetAgentNodeAsync("main", f.Node);
-        Assert.Equal(f.Node, f.Manager.BoundNode("main"));
         f.Manager.RequireFileIngressOwner(f.Owner);
         f.Manager.AttachConfiguredChannel("fixture:inbound", f.Owner.Id);
         var parts = await f.Manager.SaveInboundChannelFileAsync(
@@ -399,19 +397,17 @@ public sealed partial class ProviderFileConsumerTests
             "",
             default
         );
-        Assert.Contains(f.Node, parts[0]["text"]!.GetValue<string>());
-        var writes = (await f.Requests())
-            .Where(call => call["request"]?["flag"]?.GetValue<string>() == "wx")
-            .ToArray();
-        Assert.Single(writes);
-        var body = writes[0]["request"]!;
-        Assert.StartsWith(".temp/channel-files/fixture/", body["path"]!.GetValue<string>());
-        Assert.Empty(body["context"]!.AsObject());
-        Assert.DoesNotContain("agent", body.ToJsonString());
+        // Inbound channel files are stored on master even when the Session runs elsewhere.
+        var text = parts[0]["text"]!.GetValue<string>();
+        Assert.Contains(f.Manager.AgentDirectory("main"), text);
+        Assert.DoesNotContain(
+            await f.Requests(),
+            call => call["request"]?["flag"]?.GetValue<string>() == "wx"
+        );
     }
 
     [Fact]
-    public async Task Oversized_WebUI_originals_keep_Main_for_selection_only_and_use_existing_bound_provider_file_transport()
+    public async Task Oversized_WebUI_originals_keep_Main_for_selection_only_and_are_stored_on_master()
     {
         if (!OperatingSystem.IsLinux())
             return;
@@ -424,10 +420,9 @@ public sealed partial class ProviderFileConsumerTests
         try
         {
             await f.Manager.SelectNodeAsync(f.Owner, f.Node);
-            foreach (var bound in new[] { false, true })
+            // Uploads are stored on master even while the Session runs on another Node.
+            foreach (var bound in new[] { false })
             {
-                if (bound)
-                    await f.Manager.SetAgentNodeAsync("main", f.Node);
                 var input = Path.Combine(staging, "original.png");
                 await File.WriteAllBytesAsync(input, bytes);
                 using var admission = f.Manager.BeginFileIngress(f.Owner);

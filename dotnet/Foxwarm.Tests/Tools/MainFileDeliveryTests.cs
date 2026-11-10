@@ -345,12 +345,14 @@ public sealed class MainFileDeliveryTests
     }
 
     [Fact]
-    public async Task Exact_isolated_allow_does_not_bypass_own_path_Main_shared_agents_self_or_attached_destination()
+    public async Task Migrated_exact_allow_does_not_bypass_own_path_self_or_attached_destination()
     {
+        // The generated layer for a master-only isolated Agent with exact delivery allows.
+        // (An isolated main in this shared layout fails closed at startup instead, because a
+        // layer cannot exclude the nested Agent directories.)
         var isolation = new JsonObject
         {
-            ["isolated"] = true,
-            ["toolRules"] = new JsonArray(
+            ["rules"] = LegacyIsolationFixture.Layer("main", null, new JsonArray(
                 new JsonObject
                 {
                     ["source"] = "builtin",
@@ -363,7 +365,7 @@ public sealed class MainFileDeliveryTests
                     ["effect"] = "allow",
                     ["tool"] = "image_write_to_file",
                 }
-            ),
+            )),
         };
         await using var f = await Fixture.Create(isolation);
         f.Manager.AttachWebUi(f.Owner.Id, f.Owner);
@@ -374,14 +376,6 @@ public sealed class MainFileDeliveryTests
         var outside = Path.Combine(f.Temp.Path, "outside");
         await File.WriteAllTextAsync(outside, "x");
         Assert.Equal("tool_authorization_denied", Error(await f.Call("send_file", Args(outside))));
-        var shared = Path.Combine(f.Work, "agents", "other");
-        Directory.CreateDirectory(Path.GetDirectoryName(shared)!);
-        await File.WriteAllTextAsync(shared, "x");
-        File.CreateSymbolicLink(Path.Combine(f.Work, "alias"), shared);
-        Assert.Equal(
-            "tool_authorization_denied",
-            Error(await f.Call("send_file", Args(Path.Combine(f.Work, "alias"))))
-        );
         var other = await f.Manager.CreateNamedAsync("main", "other", null, null);
         var args = Args(own);
         args["sessionId"] = other.Id;

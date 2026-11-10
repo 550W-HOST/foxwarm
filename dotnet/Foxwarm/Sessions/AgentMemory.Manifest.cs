@@ -13,12 +13,9 @@ internal sealed record AgentMemoryFile(
 internal sealed record AgentListEntry(
     string Id,
     string? Inherit,
-    string? IsolatedNode,
-    bool Isolated,
     int SessionCount,
     int ActiveSessionCount,
     int QueuedSessionCount,
-    int ToolRuleCount,
     string? CreatedBy,
     int RuleCount,
     string? DefaultNode,
@@ -102,12 +99,6 @@ internal sealed partial class SessionManager
                         : ""
                 )
                 + (row.Inherit is null ? "" : $" [inherits: {row.Inherit}]")
-                + (
-                    row.Isolated
-                        ? $" [isolated{(row.IsolatedNode is null ? "" : ":" + row.IsolatedNode)}]"
-                        : ""
-                )
-                + $" [tool rules:{row.ToolRuleCount}]"
                 + (row.CreatedBy is null ? "" : $" [created by: {row.CreatedBy}]")
                 + $" [local rules:{row.RuleCount}]"
                 + (row.DefaultNode is null ? "" : $" [default Node: {row.DefaultNode}]")
@@ -144,16 +135,12 @@ internal sealed partial class SessionManager
             .Select(name =>
             {
                 var owned = counts.GetValueOrDefault(name);
-                var isolation = IsolatedToolCompatibility.Metadata(agents.MetadataSnapshot()[name]);
                 return new AgentListEntry(
                     name,
                     AgentInherit(name),
-                    isolation.RecordedNode,
-                    isolation.Isolated,
                     owned.Total,
                     owned.Active,
                     owned.Queued,
-                    isolation.Rules.Count,
                     agents.CreatedBy(name),
                     (agents.MetadataSnapshot()[name]?["rules"] as JsonArray)?.Count ?? 0,
                     agents.DefaultNode(name),
@@ -205,10 +192,10 @@ internal sealed partial class SessionManager
                         ["defaultNode"] = agents.DefaultNode(name),
                         ["defaultCwd"] = agents.DefaultCwd(name),
                         ["inheritable"] = agents.Inheritable(name),
-                        ["isolated"] = AgentIsolated(name),
-                        ["isolatedNode"] = RecordedIsolationNode(name),
-                        ["isolationMigrated"] =
-                            agents.MetadataSnapshot()[name]?["legacyIsolation"] is not null,
+                        ["restricted"] = EndsInDeny(
+                            agents.MetadataSnapshot()[name]?["rules"] as JsonArray
+                        ),
+                        ["isolationMigration"] = IsolationMigrationSummary(name),
                         ["sessionCount"] = owned.Total,
                         ["activeSessionCount"] = owned.Active,
                         ["queuedSessionCount"] = owned.Queued,
@@ -218,11 +205,37 @@ internal sealed partial class SessionManager
                             manifest.Files.Count == 0
                                 ? (double?)null
                                 : manifest.Files.Max(file => file.ModifiedAt),
-                        ["toolRuleCount"] = IsolatedToolCompatibility
-                            .Metadata(agents.MetadataSnapshot()[name])
-                            .Rules.Count,
                     };
             })
             .ToArray();
+    }
+
+    // A local layer whose last rule denies every call without selectors allows only what it lists.
+    private static bool EndsInDeny(JsonArray? rules) =>
+        rules?.LastOrDefault() is JsonObject last
+        && SessionWait.Text(last["action"]) == "deny"
+        && last["match"] is null or JsonObject { Count: 0 };
+
+    // What the legacy isolation migration did to this Agent, for administrators. A layer that
+    // denies everything is reported only while it is still the installed one.
+    private JsonObject? IsolationMigrationSummary(string name)
+    {
+        var row = agents.MetadataSnapshot()[name] as JsonObject;
+        if (row?["legacyIsolation"] is not JsonObject marker)
+            return null;
+        var summary = new JsonObject
+        {
+            ["migratedAt"] = marker["migratedAt"]?.DeepClone(),
+            ["automatic"] = marker["automatic"]?.GetValue<bool>() == true,
+            ["node"] = marker["node"]?.DeepClone(),
+        };
+        if (
+            SessionWait.Text(marker["failClosed"]) is { } reason
+            && row["rules"] is JsonArray rules
+            && new IsolationMigrationPlan(rules, [], []).Digest
+                == SessionWait.Text(marker["rulesDigest"])
+        )
+            summary["failClosed"] = reason;
+        return summary;
     }
 }

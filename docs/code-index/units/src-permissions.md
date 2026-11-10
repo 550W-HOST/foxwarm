@@ -1,5 +1,7 @@
 # Unit: src-permissions
 
+> **Historical (retained TypeScript reference).** The maintained C# Main stopped enforcing legacy Agent isolation in R2; see [isolation migration](./isolation-migration.md#r2-startup-migration). This unit describes the retired behavior.
+
 Files: src/permissions.ts
 
 ## Purpose

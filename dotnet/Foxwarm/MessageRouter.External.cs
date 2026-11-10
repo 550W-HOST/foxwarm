@@ -267,7 +267,6 @@ internal sealed partial class MessageRouter
                 "/agent" => args.FirstOrDefault() switch
                 {
                     "create" => "❌ Failed to create agent: ",
-                    "isolated" => "❌ Failed to update agent isolation: ",
                     "inherit" => "❌ Failed to update inherit: ",
                     _ => "Command error: ",
                 },

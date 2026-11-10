@@ -7,12 +7,14 @@ namespace Foxwarm.Tests;
 // Regressions for the independent review of the R1 isolation migration.
 public sealed partial class ToolAuthorizationEffectsTests
 {
-    // Session-target resolvers registered by the release before R1. A generated layer that
-    // names any other tool in a Session-target matcher would fail to parse after a downgrade.
+    // Session-target resolvers registered by R1, the oldest release a migrated installation
+    // may be downgraded to. A generated layer that names any other tool in a Session-target
+    // matcher would fail to parse after that downgrade.
     private static readonly HashSet<string> PreviousReleaseSessionTargets = new(
         StringComparer.Ordinal
     )
     {
+        "session",
         "send_to_session",
         "send_file",
         "recall",
@@ -155,26 +157,6 @@ public sealed partial class ToolAuthorizationEffectsTests
     }
 
     [Fact]
-    public async Task Recorded_master_binding_is_a_blocker_and_apply_refuses_it()
-    {
-        using var temp = new TempDirectory();
-        await Seed(temp.Path, Obj("""{"isolated":true,"isolatedNode":"master"}"""));
-        await using var manager = Manager(temp.Path);
-        await manager.LoadAsync();
-        var report = manager.IsolationMigrationInventory("alpha")["agents"]![0]!;
-        Assert.False(report["applicable"]!.GetValue<bool>());
-        Assert.Contains(
-            report["blockers"]!.AsArray(),
-            blocker => blocker!.GetValue<string>().Contains("isolation Node is master")
-        );
-        await Assert.ThrowsAsync<InvalidDataException>(() =>
-            manager.ApplyIsolationMigrationAsync("alpha")
-        );
-        Assert.Null(manager.AgentMetadata["alpha"]?["rules"]);
-        Assert.Null(manager.AgentMetadata["alpha"]?["legacyIsolation"]);
-    }
-
-    [Fact]
     public void Exact_session_allow_is_reported_as_narrowed()
     {
         var plan = IsolationMigrationRules.Generate(
@@ -190,50 +172,6 @@ public sealed partial class ToolAuthorizationEffectsTests
             false
         );
         Assert.Equal("narrowed", plan.Notes.Single(note => note.Subject == "builtin:session").Kind);
-    }
-
-    [Fact]
-    public async Task Creator_descendants_are_reported_and_apply_requires_acknowledging_them()
-    {
-        using var temp = new TempDirectory();
-        await SeedCreatedBy(temp.Path, Obj("""{"isolated":true,"isolatedNode":"bound-node"}"""));
-        await using var manager = Manager(temp.Path);
-        await manager.LoadAsync();
-        var report = manager.IsolationMigrationInventory("alpha")["agents"]![0]!;
-        Assert.True(report["acknowledgeDescendantsRequired"]!.GetValue<bool>());
-        Assert.Contains(
-            report["candidate"]!["notes"]!.AsArray(),
-            note =>
-                note!["subject"]!.GetValue<string>() == "agent:beta"
-                && note["kind"]!.GetValue<string>() == "narrowed"
-        );
-
-        var refused = await Assert.ThrowsAsync<InvalidDataException>(() =>
-            manager.ApplyIsolationMigrationAsync("alpha")
-        );
-        Assert.Contains("beta", refused.Message);
-        Assert.Null(manager.AgentMetadata["alpha"]?["legacyIsolation"]);
-
-        var applied = await manager.ApplyIsolationMigrationAsync(
-            "alpha",
-            acknowledgeDescendants: true
-        );
-        Assert.True(applied["applied"]!.GetValue<bool>());
-        // The descendant is now bounded by the layer, as acknowledged.
-        var foreign = await manager.RequiredAsync("foreign");
-        var execution = Executor(manager, foreign, temp.Path);
-        await using var mcp = execution.Mcp;
-        Assert.False(
-            await Permits(
-                manager,
-                foreign,
-                execution.Files,
-                "node",
-                "exec",
-                """{"command":"ls"}""",
-                "other-node"
-            )
-        );
     }
 
     [Fact]
@@ -257,45 +195,4 @@ public sealed partial class ToolAuthorizationEffectsTests
         );
     }
 
-    [Fact]
-    public async Task Applying_to_a_migrated_Agent_resumes_the_placement_backfill()
-    {
-        using var temp = new TempDirectory();
-        await Seed(temp.Path, Obj("""{"isolated":true,"isolatedNode":"bound-node"}"""));
-        await using var manager = Manager(temp.Path);
-        await manager.LoadAsync();
-        // Simulate an interruption after the catalog write: publish the catalog step only.
-        var catalog = (AgentCatalog)
-            typeof(SessionManager)
-                .GetField(
-                    "agents",
-                    System.Reflection.BindingFlags.NonPublic
-                        | System.Reflection.BindingFlags.Instance
-                )!
-                .GetValue(manager)!;
-        await catalog.ApplyIsolationMigrationAsync(
-            "alpha",
-            isolation => manager.IsolationMigrationPlanFor("alpha", isolation),
-            1
-        );
-        var before = manager.IsolationMigrationInventory("alpha")["agents"]![0]!;
-        Assert.False(before["applicable"]!.GetValue<bool>());
-        Assert.True(before["needsBackfill"]!.GetValue<bool>());
-        var rules = manager.AgentMetadata["alpha"]!["rules"]!.DeepClone();
-
-        var resumed = await manager.ApplyIsolationMigrationAsync("alpha");
-        Assert.False(resumed["applied"]!.GetValue<bool>());
-        Assert.Equal(
-            new[] { "direct", "opaque" },
-            resumed["materializedSessions"]!.AsArray().Select(id => id!.GetValue<string>()).Order()
-        );
-        Assert.True(JsonNode.DeepEquals(rules, manager.AgentMetadata["alpha"]!["rules"]));
-        var again = await manager.ApplyIsolationMigrationAsync("alpha");
-        Assert.Empty(again["materializedSessions"]!.AsArray());
-        Assert.False(
-            manager.IsolationMigrationInventory("alpha")["agents"]![0]![
-                "needsBackfill"
-            ]!.GetValue<bool>()
-        );
-    }
 }

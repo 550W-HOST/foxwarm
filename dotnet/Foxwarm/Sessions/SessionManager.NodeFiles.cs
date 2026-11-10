@@ -35,19 +35,6 @@ internal sealed partial class SessionManager
         return paths;
     }
 
-    private void RequireFileNodeBoundary(SessionOwner owner, string node)
-    {
-        if (
-            AgentIsolated(owner.Agent)
-            && node != "master"
-            && node != CurrentNode(owner)
-            && node != BoundNode(owner.Agent)
-        )
-            throw new ToolAuthorizationDeniedException(
-                "Isolated Agent can only transfer files between master and its bound/current Node."
-            );
-    }
-
     internal Task AuthorizeNodeFileAsync(
         SessionOwner owner,
         string node,

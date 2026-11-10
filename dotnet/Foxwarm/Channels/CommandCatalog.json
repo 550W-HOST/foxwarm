@@ -467,7 +467,7 @@
           "value": "create",
           "kind": "literal",
           "description": "Create a new agent",
-          "usage": "/agent create <name> [--no-main] [--isolated <node-id>]",
+          "usage": "/agent create <name> [--no-main]",
           "children": [
             {
               "value": "<name>",
@@ -478,18 +478,6 @@
                   "value": "--no-main",
                   "kind": "literal",
                   "description": "Create the agent without a main session"
-                },
-                {
-                  "value": "--isolated",
-                  "kind": "literal",
-                  "description": "Create the agent in isolated mode bound to a node",
-                  "children": [
-                    {
-                      "value": "<node-id>",
-                      "kind": "placeholder",
-                      "description": "Bound non-master node id"
-                    }
-                  ]
                 }
               ]
             }
@@ -500,26 +488,6 @@
           "kind": "literal",
           "description": "Delete an Agent folder and matching Sessions (requires confirmation).",
           "usage": "/agent delete <name> [--confirm]"
-        },
-        {
-          "value": "isolated",
-          "kind": "literal",
-          "description": "Set or clear agent-level isolation",
-          "usage": "/agent isolated <agent> <node-id|off>",
-          "children": [
-            {
-              "value": "<agent>",
-              "kind": "placeholder",
-              "description": "Agent name",
-              "children": [
-                {
-                  "value": "<node-id|off>",
-                  "kind": "placeholder",
-                  "description": "Bind to node id or disable isolation with off"
-                }
-              ]
-            }
-          ]
         },
         {
           "value": "inherit",

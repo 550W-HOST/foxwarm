@@ -460,7 +460,7 @@ public sealed class MainTimerToolsTests
     }
 
     [Fact]
-    public async Task Independent_isolated_exact_self_and_same_Agent_bounds_survive_explicit_allow_rules()
+    public async Task Migrated_exact_self_and_same_Agent_bounds_survive_explicit_allow_rules()
     {
         var rules = new JsonArray(
             new JsonObject
@@ -471,7 +471,7 @@ public sealed class MainTimerToolsTests
             }
         );
         await using var f = await Fixture.Create(
-            new JsonObject { ["isolated"] = true, ["toolRules"] = rules }
+            new JsonObject { ["rules"] = LegacyIsolationFixture.Layer("main", null, rules) }
         );
         var args = Future();
         args["sessionId"] = "main";

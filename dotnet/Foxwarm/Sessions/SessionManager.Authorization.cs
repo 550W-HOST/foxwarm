@@ -11,12 +11,10 @@ internal sealed partial class SessionManager
     internal ToolAuthorizationAuthority Authorization => authorization;
     internal string ToolWorkspace => toolWorkspace;
 
+    // The retained legacy isolation fields. Since R2 they are a downgrade fence and the
+    // migration input only; nothing enforces them as authority.
     internal AgentIsolation Isolation(string agent) =>
         IsolatedToolCompatibility.Metadata(agents.MetadataSnapshot()[agent]);
-
-    internal string? RecordedIsolationNode(string agent) => Isolation(agent).RecordedNode;
-
-    internal bool AgentIsolated(string agent) => Isolation(agent).Isolated;
 
     private string? AuthorizationParent(JsonObject? row)
     {
@@ -24,24 +22,6 @@ internal sealed partial class SessionManager
         if (raw is null)
             return null;
         return SessionCatalog.Text(Catalog.Resolve(raw)["sessionId"]) ?? raw;
-    }
-
-    // Legacy isolation, outgoing direction only: an isolated Agent's Session may address itself
-    // and its direct parent or child. Who may contact an isolated Agent is the sender's policy.
-    internal void RequireIsolatedSessionRelation(
-        SessionOwner source,
-        string targetId,
-        string message
-    )
-    {
-        if (!AgentIsolated(source.Agent) || targetId == source.Id)
-            return;
-        if (
-            AuthorizationParent(Catalog.Get(source.Id)) == targetId
-            || AuthorizationParent(Catalog.Get(targetId)) == source.Id
-        )
-            return;
-        throw new ToolAuthorizationDeniedException(message);
     }
 
     internal AuthorizationTarget? AuthorizationTarget(string requested)
@@ -145,11 +125,12 @@ internal sealed partial class SessionManager
         }
         else
             requested ??= owner.Id;
-        return request with
-        {
-            SourceParent = parent,
-            SessionTarget = AuthorizationTarget(requested),
-        };
+        var target = AuthorizationTarget(requested);
+        // An Archive outlives its catalog row. Without a live row, the requested identity's
+        // Agent segment names the owner, so same-Agent rules still cover deleted Sessions.
+        if (target is null && family == "archive")
+            target = new(requested, requested.Split('/')[0], null);
+        return request with { SourceParent = parent, SessionTarget = target };
     }
 
     internal async Task AuthorizeToolAsync(
@@ -158,7 +139,6 @@ internal sealed partial class SessionManager
         WorkspaceTools? files,
         CancellationToken token,
         SessionOwner? concreteTarget = null,
-        bool toolScriptSourceRead = false,
         IReadOnlyList<string>? nodeEffects = null,
         Action<AuthorizationAssessment>? observe = null,
         IReadOnlyList<string>? secrets = null
@@ -170,7 +150,6 @@ internal sealed partial class SessionManager
             files,
             token,
             concreteTarget,
-            toolScriptSourceRead,
             nodeEffects,
             secrets: secrets
         );
@@ -189,12 +168,7 @@ internal sealed partial class SessionManager
                     : SessionWait.Text(denied.Decision.Rule?["reason"])
                         ?? $"Tool authorization rule denies {resolved.Source} capability `{resolved.Name}`."
             );
-        IsolatedToolCompatibility.Check(
-            Isolation(owner.Agent),
-            assessment.Request,
-            AuthorizationTarget
-        );
-        // Deny and isolation are final above. An ask outcome passes only within the invocation a
+        // Deny is final above. An ask outcome passes only within the invocation a
         // person approved, including its internal steps and effect-owner rechecks.
         if (
             assessment.Effect == ToolAuthorizationEffect.Ask
@@ -217,7 +191,6 @@ internal sealed partial class SessionManager
         WorkspaceTools? files,
         CancellationToken token,
         SessionOwner? concreteTarget = null,
-        bool toolScriptSourceRead = false,
         IReadOnlyList<string>? nodeEffects = null,
         ToolAuthorizationPolicy? global = null,
         IReadOnlyList<string>? secrets = null
@@ -228,26 +201,6 @@ internal sealed partial class SessionManager
             throw new InvalidOperationException(
                 "Tool source is no longer the current Session owner."
             );
-        if (resolved.Source == "node")
-        {
-            if (toolScriptSourceRead && resolved.ExecutionNode == "master")
-                RequireFileNodeBoundary(owner, resolved.ExecutionNode);
-            else
-                RequireNodeBoundary(owner, resolved.ExecutionNode);
-        }
-        if (
-            resolved.Source == "builtin"
-            && resolved.Name == "artifact"
-            && ToolRegistry.ArtifactFileSource(resolved.Args)
-        )
-            RequireFileNodeBoundary(owner, resolved.ExecutionNode);
-        if (resolved.Source == "builtin" && resolved.Name is "run_script" or "start_toolscript_run")
-            RequireFileNodeBoundary(owner, resolved.ExecutionNode);
-        if (resolved.Source == "builtin" && resolved.Name is "send_file" or "image_write_to_file")
-            RequireFileNodeBoundary(owner, resolved.ExecutionNode);
-        if (resolved.Source == "builtin" && resolved.Name == "copy_between_nodes")
-            foreach (var key in new[] { "sourceNode", "targetNode" })
-                RequireFileNodeBoundary(owner, SessionWait.Text(resolved.Args[key])?.Trim() ?? "");
         var remote =
             resolved.ExecutionNode != "master"
             && (
@@ -429,11 +382,6 @@ internal sealed partial class SessionManager
             );
             if (read.Effect != ToolAuthorizationEffect.Allow)
                 return null;
-            IsolatedToolCompatibility.Check(
-                Isolation(owner.Agent),
-                read.Request,
-                AuthorizationTarget
-            );
             var bytes = await files.CaptureConfigCandidateAsync(path, false, token);
             return Foxwarm.Secrets.SecretConfigurationChanges.ForConfiguration(
                 configuration,
@@ -522,8 +470,6 @@ internal sealed partial class SessionManager
             throw new ToolAuthorizationDeniedException(
                 $"Tool authorization rules require approval to create Sessions in Agent '{agent}'. A scheduled creation can't be approved in advance, so this timer was not registered."
             );
-        // Only generic policy is shared. Legacy structural create_session denial must not
-        // replace the timer's independent isolation and creator-target checks.
         source.Entry.RequireIdentityAuthority();
         if (!IsCurrentOwner(source))
             throw new InvalidOperationException(

@@ -32,7 +32,6 @@ internal sealed partial class SessionManager
         bool createMainSession = true,
         string? initialMemory = null,
         string? inherit = null,
-        string? isolatedNode = null,
         string? initialSoul = null,
         SessionOwner? sourceSession = null,
         string? initialModel = null,
@@ -42,19 +41,20 @@ internal sealed partial class SessionManager
         SessionOwner? creator = null,
         JsonArray? rules = null,
         string? defaultNode = null,
-        string? defaultCwd = null
+        string? defaultCwd = null,
+        string? guestTemplate = null
     )
     {
         await EnsureIdentityStartupAsync();
         if (!accepting)
             throw new InvalidOperationException("Host is shutting down.");
+        if (creator is not null && guestTemplate is not null)
+            throw new InvalidOperationException("A guest Agent has no creating Session.");
+        var creatorAgent = creator?.Agent ?? guestTemplate;
         using var membership = BeginAgentAdmission(
-            creator is null ? [agentName] : [agentName, creator.Agent]
+            creatorAgent is null ? [agentName] : [agentName, creatorAgent]
         );
         RequireAgentCreation(agentName);
-        isolatedNode = string.IsNullOrWhiteSpace(isolatedNode) ? null : isolatedNode.Trim();
-        if (isolatedNode is not null)
-            await RequireAgentNodeAsync(isolatedNode);
         inherit = string.IsNullOrWhiteSpace(inherit) ? null : inherit.Trim();
         using var operation = TrackCreation();
         var mainId = SessionIdentity.Build(agentName, "main");
@@ -88,10 +88,11 @@ internal sealed partial class SessionManager
                     initialMemory,
                     inherit,
                     initialSoul,
-                    creator?.Agent,
+                    creatorAgent,
                     rules,
                     defaultNode,
-                    defaultCwd
+                    defaultCwd,
+                    unlimitedChildren: guestTemplate is not null
                 );
             }
             catch (AuthorityCommittedException error)
@@ -106,8 +107,6 @@ internal sealed partial class SessionManager
             {
                 if (inheritMemory)
                     agents.CopyIdentityMemory(sourceSession?.Agent ?? "main", agentName);
-                if (isolatedNode is not null)
-                    await agents.SetNodeAsync(agentName, isolatedNode);
                 if (!createMainSession)
                     return (agentName, null);
                 var source = sourceSession?.Entry.Snapshot().AuthorityEnvelope;
@@ -523,11 +522,6 @@ internal sealed partial class SessionManager
                 semanticCaller.Value ?? CancellationToken.None,
                 target
             );
-        RequireIsolatedSessionRelation(
-            source,
-            target.Id,
-            "Isolated sessions can only communicate with themselves or their direct parent/child sessions."
-        );
         var selfSend = source.Id == target.Id;
         if (selfSend && string.IsNullOrEmpty(toolScriptRunId))
             throw new InvalidDataException("A Session cannot send to itself.");
@@ -681,13 +675,11 @@ internal sealed partial class SessionManager
             throw new InvalidDataException($"Session ID '{id}' is already reserved.");
         if (parentId is not null && Find(parentId) is null)
             throw new InvalidDataException("Parent Session does not exist.");
-        // User decision 2026-11-06: binding, explicit or same-Agent parent (supplied by the
-        // caller as initialNode; a timer's stored owner Node counts as one), Agent default,
-        // installation default, then master.
+        // User decision 2026-11-06: explicit or same-Agent parent (supplied by the caller as
+        // initialNode; a timer's stored owner Node counts as one), Agent default, installation
+        // default, then master. Legacy isolation bindings no longer place Sessions (R2).
         var selectedNode =
-            BoundNode(agentName)
-            ?? (timerCreation ? timerNode : initialNode)
-            ?? agents.EffectiveDefaultNode(agentName);
+            (timerCreation ? timerNode : initialNode) ?? agents.EffectiveDefaultNode(agentName);
         return await WithCreationIdentityAsync(
             id,
             async () =>

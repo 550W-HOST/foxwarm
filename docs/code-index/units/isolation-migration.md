@@ -1,8 +1,8 @@
 # Unit: Legacy isolation migration
 
-Files: `dotnet/Foxwarm/Tools/Authorization/IsolationMigrationRules.cs`, `dotnet/Foxwarm/Sessions/SessionManager.IsolationMigration.cs`, `dotnet/Foxwarm/Sessions/AgentCatalog.Migration.cs`
+Files: `dotnet/Foxwarm/Tools/Authorization/IsolationMigrationRules.cs`, `dotnet/Foxwarm/Sessions/SessionManager.IsolationMigration.cs`, `dotnet/Foxwarm/Sessions/SessionManager.IsolationStartup.cs`, `dotnet/Foxwarm/Sessions/AgentCatalog.Migration.cs`
 
-R1 of the [user-decided removal of legacy Agent isolation](../modules/tools-and-permissions.md#d-tools-legacy-isolation-deprecation). It adds generic replacements and an explicit per-Agent migration while legacy isolation stays enforced. The generated layer is an ordinary [Agent-local layer](./tool-authorization.md#agent-local-authorization-layers).
+Mechanics of the [user-decided removal of legacy Agent isolation](../modules/tools-and-permissions.md#d-tools-legacy-isolation-deprecation). R1 added generic replacements and an explicit per-Agent migration while legacy isolation stayed enforced. R2 migrates every remaining isolated Agent at startup and stops enforcing legacy isolation. The generated layer is an ordinary [Agent-local layer](./tool-authorization.md#agent-local-authorization-layers).
 
 ## Contract
 
@@ -26,7 +26,7 @@ R1 of the [user-decided removal of legacy Agent isolation](../modules/tools-and-
    - same-Agent archives and exact recall;
    - current-Session vector recall;
    - the Agent's own skills;
-   - `session` status;
+   - `session` status of the current Session (generator 2);
    - own-Session timers, whose new-Session target is the Agent's own Agent (an update may omit `newSession`);
    - ToolScript, wait, ask and other local tools.
 5. Translated exact allows.
@@ -48,9 +48,7 @@ Rule IDs are `isolation-<purpose>[-n]`. Every plan carries notes, each with one 
 - an isolated `main` in the retained shared-workspace layout, whose nested-Agent exclusion a local layer cannot express;
 - a recorded isolation Node of `master`, which no supported setter writes and which would otherwise become a rule granting every master path.
 
-**Downgrade grammar.** The layer uses only selectors the previous release parses. A downgraded Main must still read a migrated Agent's layer, and the layer of each of its creator descendants. In particular, Session-target matchers name only that release's resolver tools. `session` status is therefore not limited to the current Session by the layer. During R1, the retained legacy check enforces that limit.
-
-**R2 additions.** When legacy isolation is retired, add `sessionId: {session: {self: true}}` to the status rules. R1 registers the `session` target resolver family for this.
+**Downgrade grammar.** The layer uses only selectors the previous release parses. A downgraded Main must still read a migrated Agent's layer, and the layer of each of its creator descendants. In particular, Session-target matchers name only that release's resolver tools. Generator 1 (R1) therefore left `session` status unlimited and relied on the legacy check. Generator 2 (R2) adds `sessionId: {session: {self: true}}` to the status rules; R1 registered the `session` target resolver family for this, so R1 parses a generator 2 layer.
 
 ### Creator descendants
 
@@ -80,13 +78,38 @@ For an Agent that has not been migrated, one catalog write:
 - sets `defaultNode` to the bound Node when it is unset (a different existing value is kept and reported);
 - records `legacyIsolation` (`node`, `migratedAt`, `generator`, `rulesDigest`).
 
-It refuses Agents that have local rules, inheritors, unacknowledged descendants or a blocker. Legacy `isolated`, `isolatedNode` and `toolRules` stay unchanged as the downgrade fence, so legacy checks keep applying on top of the layer.
+It refuses Agents that have local rules, inheritors, unacknowledged descendants or a blocker. Legacy `isolated`, `isolatedNode` and `toolRules` stay unchanged as the downgrade fence, so a release that still enforces legacy isolation applies it on top of the layer.
 
 Afterwards, every Session of a bound Agent without a stored `currentNode` records the bound Node; the Session was already running there through the binding fallback. Sessions placed elsewhere and per-Session failures are reported.
 
 Applying again to a migrated Agent reruns only this idempotent backfill and returns `applied: false`. This resumes an interrupted or partly failed apply.
 
-Automatic migration is not enabled in R1.
+The explicit routes remain in R2 for inventory and for rerunning the backfill.
+
+## R2 startup migration
+
+`SessionManager.MigrateLegacyIsolationCatalogAsync` runs in `LoadOwnersAsync` right after identity startup, before Main accepts work, as one atomic catalog write (`AgentCatalog.MigrateMetadataAsync`).
+
+For each Agent still marked isolated without a `legacyIsolation` marker:
+- it installs the generator 2 layer;
+- when that is not safe it installs the fail-closed layer instead: one selector-free deny (`isolation-fail-closed`), which also denies the Agent's creator descendants. The cases are: the Agent already has local rules (kept in `legacyIsolation.previousRules` for a manual merge), a plan blocker such as a master binding or the retained-layout isolated `main`, and creator metadata that cannot be evaluated;
+- it sets `inheritable: false` unless other Agents inherit from it (reported as `inheritors`);
+- it sets `defaultNode` to the bound Node when unset; a different value is kept and reported;
+- it records `legacyIsolation` with `node`, `migratedAt`, `generator`, `rulesDigest`, `automatic: true` and, for the fail-closed case, `failClosed` (the reason).
+
+An Agent migrated by R1 (generator 1) is upgraded: its status rules gain the current-Session limit. Its digest is updated only when the layer was unchanged since migration; an edited layer is reported. Fail-closed markers are never upgraded.
+
+After owner recovery, `MaterializeMigratedPlacementAsync` records the bound Node on every Session of a bound migrated Agent that has no `currentNode`, as the R1 apply did. It repeats at each startup until every Session succeeded once, then marks `placementSettled`.
+
+Every outcome is written to the Main log (`MainLog.Diagnostic`; fail-closed and placement failures as failures). The report of the last startup is `StartupIsolationMigration`, returned as `startup` by the inventory route. The Agent registry reports `restricted` and an `isolationMigration` summary. `failClosed` is reported only while the stored layer still has the fail-closed digest, so replacing the rules clears it. The System view shows a `blocked` badge and notice for fail-closed Agents and a note for migrated ones.
+
+Legacy `isolated`, `isolatedNode` and `toolRules` are never changed, so a downgraded R1 enforces both legacy isolation and the layer. `IsolatedToolCompatibility.Metadata` is their only reader. Nothing else enforces them, and no setter writes them.
+
+Archive reads of cleared and deleted Sessions stay within the layer's same-Agent rule because the `archive` target resolver falls back to the requested ID's Agent segment ([tool authorization](./tool-authorization.md)).
+
+### Channel guests
+
+`ProvisionChannelGuestAsync` takes guest policy from `guestAgent.template`. The template must exist and have local rules on its creator chain. An inherited guest is created with the template as creator (bypassing the direct-child limit), inheriting memory from the configured Agent and using the configured Node as `defaultNode`. A single-mode guest Agent must be the template or a creator descendant of it, and its `defaultNode` must equal the configured Node. Without a template, provisioning refuses unless the configuration sets `isolated: false`. Existing guests were isolated Agents and migrate like any other.
 
 ## Installation reader level
 
@@ -97,7 +120,7 @@ The marker is computed per level: each level counts only data that earlier reade
 - Creator links and local rules do not raise it, because earlier binaries already enforce them.
 - Node ancestry is not covered.
 
-A catalog write raises the marker to the level its metadata requires before writing that metadata, and never lowers it. Startup does not write the marker. Binaries older than the marker ignore it, so it protects only later downgrades. Agents relying solely on local rules are not downgrade-supported.
+A catalog write raises the marker to the level its metadata requires before writing that metadata, and never lowers it. The R2 startup migration writes metadata through the same check. Binaries older than the marker ignore it, so it protects only later downgrades. Agents relying solely on local rules are not downgrade-supported.
 
 ## Tests
 
@@ -119,4 +142,6 @@ A catalog write raises the marker to the level its metadata requires before writ
 - the per-level reader marker;
 - the resumable backfill.
 
-`IsolationMigrationHttpTests` covers the administrator routes. `mainHostIsolationMigration.e2e.mjs` applies the migration on a real host and checks the recorded placement after restart; it is part of the native smoke.
+`ToolAuthorizationEffectsTests.IsolationStartup.cs` covers the startup migration of a pre-R1 isolated Agent (layer, marker, retained fields, placement, report, idempotent restart), the generator 1 upgrade with edited and unedited layers, the fail-closed cases and their clearing by new rules, and global rules that name a migrated Agent. `GuestTemplateTests` covers guest provisioning.
+
+`IsolationMigrationHttpTests` covers the administrator routes. `mainHostIsolationMigration.e2e.mjs` starts a real host on a legacy catalog and checks the startup report, the registry, the recorded placement and a restart; it is part of the native smoke.

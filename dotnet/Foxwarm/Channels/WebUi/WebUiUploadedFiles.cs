@@ -117,7 +117,6 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
                 await sessions.WaitForIdentityMutationAsync(owner.Id, token);
                 sessions.RequireFileIngressOwner(owner);
                 scoped?.RequireUpload(owner.Id, path);
-                var node = sessions.FileIngressNode(owner);
                 var timestamp = DateTimeOffset.UtcNow.ToString("yyyy-MM-ddTHH-mm-ss-fffZ");
                 var storage = ChannelFileNames.StorageName(
                     filename,
@@ -127,102 +126,64 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
                         System.Security.Cryptography.RandomNumberGenerator.GetBytes(4)
                     )
                 );
-                string destination;
-                if (node != "master")
+                // Uploads are stored on master under the Agent directory.
+                var directory = Path.Combine(
+                    sessions.AgentDirectory(owner.Agent),
+                    ".temp",
+                    "channel-files",
+                    "webui"
+                );
+                var destination = Path.Combine(directory, storage);
+                Directory.CreateDirectory(directory);
+                token.ThrowIfCancellationRequested();
+                // Keep the actual started destination across move; delete only this created temporary file.
+                var temp =
+                    destination
+                    + "."
+                    + Environment.ProcessId
+                    + "."
+                    + Guid.NewGuid().ToString("N")
+                    + ".tmp";
+                var created = false;
+                try
                 {
-                    // Existing Node whole-file transport; no implicit transfer during provider preparation.
-                    if (bytes is null)
+                    scoped?.Require(owner.Id);
+                    await using (
+                        var output = new FileStream(
+                            temp,
+                            FileMode.CreateNew,
+                            FileAccess.Write,
+                            FileShare.None,
+                            65536,
+                            FileOptions.Asynchronous
+                        )
+                    )
                     {
-                        using var buffer = new MemoryStream();
-                        await CopyStagedAsync(source, buffer, token);
-                        bytes = buffer.ToArray();
+                        created = true;
+                        source.Position = 0;
+                        await CopyStagedAsync(source, output, token);
+                        await output.FlushAsync(token);
+                        output.Flush(true);
                     }
-                    // Authenticated administrator ingress selects the real owner; it is not a model tool call.
-                    var relative = ".temp/channel-files/webui/" + storage;
-                    var written = await sessions.NodeProviders.WriteFileAsync(
-                        node,
-                        relative,
-                        bytes,
-                        false,
-                        owner,
-                        true,
-                        token
-                    );
-                    destination =
-                        SessionWait.Text(written["absolutePath"])
-                        ?? SessionWait.Text(written["filePath"])
-                        ?? relative;
+                    scoped?.Require(owner.Id);
+                    File.Move(temp, destination, overwrite: false);
+                    created = false;
                     saved.Add(
                         new JsonObject
                         {
                             ["path"] = destination,
                             ["filename"] = filename,
-                            ["node"] = node,
+                            ["node"] = "master",
                             ["mimeType"] = mime,
                             ["size"] = source.Length,
                         }
                     );
+                    LinuxAtomicJsonFile.LinuxDirectorySync.Sync(directory);
                 }
-                else
+                finally
                 {
-                    var directory = Path.Combine(
-                        sessions.AgentDirectory(owner.Agent),
-                        ".temp",
-                        "channel-files",
-                        "webui"
-                    );
-                    destination = Path.Combine(directory, storage);
-                    Directory.CreateDirectory(directory);
-                    token.ThrowIfCancellationRequested();
-                    // Keep the actual started destination across move; delete only this created temporary file.
-                    var temp =
-                        destination
-                        + "."
-                        + Environment.ProcessId
-                        + "."
-                        + Guid.NewGuid().ToString("N")
-                        + ".tmp";
-                    var created = false;
-                    try
-                    {
-                        scoped?.Require(owner.Id);
-                        await using (
-                            var output = new FileStream(
-                                temp,
-                                FileMode.CreateNew,
-                                FileAccess.Write,
-                                FileShare.None,
-                                65536,
-                                FileOptions.Asynchronous
-                            )
-                        )
-                        {
-                            created = true;
-                            source.Position = 0;
-                            await CopyStagedAsync(source, output, token);
-                            await output.FlushAsync(token);
-                            output.Flush(true);
-                        }
-                        scoped?.Require(owner.Id);
-                        File.Move(temp, destination, overwrite: false);
-                        created = false;
-                        saved.Add(
-                            new JsonObject
-                            {
-                                ["path"] = destination,
-                                ["filename"] = filename,
-                                ["node"] = "master",
-                                ["mimeType"] = mime,
-                                ["size"] = source.Length,
-                            }
-                        );
-                        LinuxAtomicJsonFile.LinuxDirectorySync.Sync(directory);
-                    }
-                    finally
-                    {
-                        if (created)
-                            File.Delete(temp);
-                    }
+                    if (created)
+                        File.Delete(temp);
                 }
                 await StageAsync(owner, "after-copy");
                 scoped?.Require(owner.Id);
@@ -233,7 +194,7 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
                             filename,
                             destination,
                             mime,
-                            node,
+                            "master",
                             isImage
                         ),
                     }

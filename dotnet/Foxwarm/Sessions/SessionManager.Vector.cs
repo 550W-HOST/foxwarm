@@ -119,27 +119,20 @@ internal sealed partial class SessionManager
             throw new InvalidDataException("scope must be all, current-session, or current-agent.");
         if (targetAgent.Length > 0 && targetAgent != source.Agent)
             throw new InvalidDataException(
-                AgentIsolated(source.Agent)
-                    ? "Isolated session can only search the current session."
-                    : "recall vector_query cannot access memories outside the current agent."
+                "recall vector_query cannot access memories outside the current agent."
             );
-        var isolated = AgentIsolated(source.Agent);
         string? canonical = null;
         if (targetId.Length > 0)
         {
             canonical = SessionCatalog.Text(Catalog.Resolve(targetId)["sessionId"]);
             if (canonical is null)
                 throw new InvalidDataException($"Session `{targetId}` not found.");
-            if (isolated && canonical != source.Id)
-                throw new InvalidDataException(
-                    "Isolated session can only search the current session."
-                );
             if (SessionCatalog.Text(Catalog.Get(canonical)?["agent"]) != source.Agent)
                 throw new InvalidDataException(
                     "recall vector_query cannot access memories outside the current agent."
                 );
         }
-        if (isolated || canonical is not null || scope == "current-session")
+        if (canonical is not null || scope == "current-session")
         {
             canonical ??= source.Id;
             var lineage = ArchiveReader(canonical).VectorLineage();

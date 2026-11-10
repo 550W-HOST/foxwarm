@@ -66,7 +66,6 @@ type ChatSessionRecord = {
   effectiveChildEffort?: string
   childEffortAllowed?: string[]
   childModelEffortDefault?: string | null
-  isolated?: boolean
   questions?: SessionQuestionsProjection
   /** Requests on the current model replace private text before sending. */
   textRedaction?: boolean

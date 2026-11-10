@@ -36,13 +36,13 @@ Message routing owns inbound channel-to-session routing, command dispatch, side 
 - Side requests do not mutate real model-visible history or execute returned tool calls.
 - Runtime phase state is set around model/tool execution and cleared on every exit path.
 - Compact maintenance items do not cancel an active wait.
-- Guest-session node selection follows current isolation semantics: isolated guests bind to their configured node; non-isolated guests may use the configured node as initial execution routing.
+- Guest Agents take their policy from `guestAgent.template` and use the configured node as their default Node.
 
 ## Canonical cross-module flows
 
 - Full request lifecycle: [message processing pipeline](../threads/message-processing-pipeline.md).
 - Provider-to-WebUI streaming: [streaming pipeline](../threads/streaming-pipeline.md).
-- Tool resolution and isolation: [tool dispatch](../threads/tool-dispatch.md).
+- Tool resolution and authorization: [tool dispatch](../threads/tool-dispatch.md).
 - Context maintenance: [context compaction and recall](../threads/context-compaction-and-recall.md).
 
 ## Compatibility

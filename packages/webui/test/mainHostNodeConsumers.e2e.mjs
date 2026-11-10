@@ -147,16 +147,17 @@ try {
   state = await saved(actor); assert.equal(state.busy, true); assert.equal(state.cwd, cwd)
   await page.waitForSelector('.foxwarm-node-picker-trigger[aria-label="Execution node: owned-cli"]')
   releaseHeld(); releaseHeld = undefined; await until(async () => !(await fixture.api('GET', route(actor) + '/history')).body.session.busy, 'held settled')
-  assert.equal((await fixture.api('POST', '/api/agents', { agentId: 'bound', isolatedNode: 'owned-cli' })).status, 201)
+  // A default Node chooses initial placement only; the picker stays unlocked.
+  assert.equal((await fixture.api('POST', '/api/agents', { agentId: 'bound', defaultNode: 'owned-cli' })).status, 201)
   const bound = await create('bound-consumer', 'bound')
+  assert.equal((await saved(bound)).currentNode, 'owned-cli')
   const options = (await fixture.api('GET', route(bound) + '/nodes')).body
-  assert.equal(options.nodes.length, 1); assert.equal(options.nodes[0].selectable, false); assert.match(options.lockedReason, /owned-cli/)
-  assert.equal((await fixture.api('POST', route(bound) + '/node', { nodeId: 'owned-cli' })).status, 400)
+  assert.equal(options.lockedReason, undefined); assert(options.nodes.length > 1)
   const boundHistory = page.waitForResponse(response => new URL(response.url()).pathname === prefix + route(bound) + '/history' && response.request().method() === 'GET')
   await page.evaluate(id => window.foxwarmTest.switchToSession(id), bound)
   assert.equal((await boundHistory).status(), 200)
   await page.locator('.foxwarm-node-picker-trigger').click()
-  await page.waitForSelector('[data-node-option="owned-cli"][disabled]'); await page.keyboard.press('Escape')
+  await page.waitForSelector('[data-node-option="master"]:not([disabled])'); await page.keyboard.press('Escape')
   await page.evaluate(id => window.foxwarmTest.switchToSession(id), actor)
   // Download and run the unchanged official POSIX client using the tool-created credential, never a model argument.
   const bootstrap = await fetch(host + '/node/run-shell.sh'); assert.equal(bootstrap.status, 200)

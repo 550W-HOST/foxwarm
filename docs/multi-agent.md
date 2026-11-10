@@ -145,7 +145,6 @@ send_to_session({
 /session fork
 /session parent <parent-session-id> [child-session-id]
 /session unparent [child-session-id]
-/session isolated [on|off] [node]
 /agent list
 /agent create <name> [--no-main]
 /agent inherit <agent> <parent-agent|none>
@@ -167,6 +166,6 @@ send_to_session({
 
 1. child session 是 session，不是独立 agent
 2. `agent.inherit` 只影响 memory 组合，不影响消息汇报关系
-3. isolated session 会限制跨 session / 跨 node 操作
+3. 跨 session / 跨 node 操作由全局工具策略与 agent 本地规则层决定
 4. child session 通常应显式调用 `send_to_session(...)` 回报，父会话仍应做最终协调
 5. snapshot 中会注入当前 agent 可见的 skills catalog；完整 skill 文档需按需调用 `skill({ action: "load", ... })`

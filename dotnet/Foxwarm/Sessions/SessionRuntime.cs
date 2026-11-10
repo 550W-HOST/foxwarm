@@ -306,10 +306,9 @@ internal sealed class SessionRuntime(SessionManager manager)
 internal sealed partial class SessionOwner
 {
     internal Func<SessionMetadata, SessionMetadata>? MainMetadata { get; init; }
-    internal Func<string, string?>? ResolveBoundNode { get; init; }
 
     internal string ExecutionNode(JsonObject authority) =>
-        SessionManager.ResolveExecutionNode(authority, ResolveBoundNode?.Invoke(Agent));
+        SessionManager.ResolveExecutionNode(authority);
 
     public SessionMetadata Metadata()
     {

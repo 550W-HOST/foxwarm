@@ -25,7 +25,7 @@ The canonical Node-capability set is deliberately narrow. A builtin cannot becom
 - Model-tool `node({ action: "select", nodeId })` validates the target, commits it to the current Session, and **clears the previous cwd**. Subsequent environment calls use the new Node's default until a cwd is established. Failed selection in an ordinary model batch skips unstarted later calls; completed effects remain. ToolScript has its ordinary explicit control flow instead of that model-batch skip rule.
 - The user `/node` command and administrator Chat Node picker retain the Session cwd. The picker commits only a confirmed exact-owner response, does not send a chat message or start a model turn, and keeps an unavailable current ID visible rather than substituting `master`.
 
-Agent-bound isolation restricts selection independently. The model cannot use selection to escape the binding; administrator/user controls retain their existing validation. These differences are owned by [selection prerequisites](../threads/tool-dispatch-authorization.md#d-dispatch-node-selection-batch-prerequisite) and the [Chat Node picker](../units/webui-chat-composer.md#d-composer-session-node-picker).
+[2026-11-10] Legacy isolation no longer restricts selection; a migrated Agent's generated layer denies `node` selection. The model cannot use selection to escape the binding; administrator/user controls retain their existing validation. These differences are owned by [selection prerequisites](../threads/tool-dispatch-authorization.md#d-dispatch-node-selection-batch-prerequisite) and the [Chat Node picker](../units/webui-chat-composer.md#d-composer-session-node-picker).
 
 ## Paths belong to an environment and an operation
 
@@ -53,12 +53,11 @@ Updating an existing native file through overwrite, exact edit, or patch Update 
 | Boundary | What it decides | What it does not establish |
 | --- | --- | --- |
 | Node environment | Available filesystem/process/browser capabilities and their actual effects. | Agent identity, tool authorization, or OS/network containment merely from its Node label. |
-| Agent isolation | Current legacy Agent-level target/path/relationship restrictions, including its bound Node and Agent-scoped Main paths. | Exclusive Node ownership or virtualization. Memory inheritance is not permission inheritance. |
 | Generic tool policy | Whether this caller may perform this resolved capability with these arguments, paths, and actual Node effects: allow, deny, or ask for an approver's decision first. | Bypass of structural checks, service availability, or the environment's own restrictions. |
 | Entry identity | Authority granted to an authenticated inbound MCP or scoped WebUI caller. | A fabricated internal Agent or automatic permission for the runtime Agent in an accessible Session. |
 | Administrator WebUI | Existing full-access instance administration and its fixed Code/Terminal routes. | A model tool-policy decision on behalf of a selected Session. |
 
-The legacy isolation mode is deprecated but its current checks still apply until explicitly migrated. Generic policy can restrict non-isolated Agents too; an allow passes that layer only. Path checks cover existing static symlink prefixes but are not a race-proof OS sandbox. Actual container, filesystem, process, or network isolation depends on the environment supplied by its operator/Provider. See [permissions](../modules/tools-and-permissions.md), [policy evaluation](../threads/tool-dispatch-authorization.md#d-dispatch-generic-tool-authorization), and [entry identities](../units/src-access-config.md).
+Legacy isolation is retired: formerly isolated Agents are migrated at startup to a generated local layer. Generic policy can restrict any Agent; an allow passes that layer only. Path checks cover existing static symlink prefixes but are not a race-proof OS sandbox. Actual container, filesystem, process, or network isolation depends on the environment supplied by its operator/Provider. See [permissions](../modules/tools-and-permissions.md), [policy evaluation](../threads/tool-dispatch-authorization.md#d-dispatch-generic-tool-authorization), and [entry identities](../units/src-access-config.md).
 
 Restricted text ingress must classify commands consistently with the actual dispatcher: alternate supported whitespace or mention forms cannot grant management effects, and ordinary non-command text must remain ordinary input. This concerns the [scoped WebUI entry boundary](../modules/webui.md#d-webui-identity-session-scope), not administrator selected-Session authority. The concrete admission and command paths are in [WebUI](../units/src-channels-webui.md#behavior) and [Router ingress](../units/src-message-router.md#behavior-and-invariants).
 
@@ -94,7 +93,7 @@ These meanings apply to both global and Agent-local rules:
 | `{current:true}` | Exactly the initiating Session's selected Node. |
 | `{provider: ID}` | The endpoint's exact provider namespace. |
 
-Rules retain ordered first-match evaluation and the original initiator's facts. A multi-endpoint allow must cover every endpoint in one rule; a deny needs any endpoint. Separate allows are not combined. Discovery visibility is not execution permission. Incoming Node history, message and event access remains exact selected/bound Node plus the existing per-exec completion grant; legacy isolation remains independent.
+Rules retain ordered first-match evaluation and the original initiator's facts. A multi-endpoint allow must cover every endpoint in one rule; a deny needs any endpoint. Separate allows are not combined. Discovery visibility is not execution permission. Incoming Node history, message and event access remains exact selected/bound Node plus the existing per-exec completion grant; Agent-local layers apply after it.
 
 ### Delegation
 
@@ -118,7 +117,7 @@ Implementation owners: [native registry mutations and cascade](../units/external
 
 ## Lifecycle and platform differences are explicit
 
-Inspect a Provider's advertised operations, parameter schemas, and retention description before create/ensure/destroy. Core routes lifecycle to the exact Provider; it does not prescribe that destroy deletes data, releases every external resource, or stops processes in every backend. Effectively isolated callers cannot create/ensure/destroy through this management surface even with an exact tool allow. Selection and inspect are not lifecycle creation.
+Inspect a Provider's advertised operations, parameter schemas, and retention description before create/ensure/destroy. Core routes lifecycle to the exact Provider; it does not prescribe that destroy deletes data, releases every external resource, or stops processes in every backend. A migrated Agent's generated layer denies select/create/ensure/destroy through this management surface. Selection and inspect are not lifecycle creation.
 
 Revoking an authenticated Node with `node_remove` is different again: it removes approval and disconnects the active runtime, but does not stop the client, destroy its environment, delete files, or rebind Sessions/Agents. Persisted selection can therefore name an unavailable Node. See [Node management](../modules/nodes.md).
 

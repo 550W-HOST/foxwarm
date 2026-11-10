@@ -23,7 +23,7 @@ let fixtureUrl
 await writeFile(entryPath, `
   import { createRoot } from 'react-dom/client'
   import ChatComposer from ${JSON.stringify(path.join(webuiRoot, 'src/components/ChatComposer.tsx'))}
-  window.fetch = async () => ({ ok: true, json: async () => ({ commands: [], nodes: [{ id: 'master', label: 'master', selectable: true, reason: null }, { id: 'build-node', label: 'build-node', selectable: true, reason: null }], lockedReason: null }) })
+  window.fetch = async () => ({ ok: true, json: async () => ({ commands: [], nodes: [{ id: 'master', label: 'master', selectable: true, reason: null }, { id: 'build-node', label: 'build-node', selectable: true, reason: null }] }) })
   const noop = async () => {}
   window.modelSelections = []
   window.childModelSelections = []

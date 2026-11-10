@@ -18,13 +18,12 @@ internal sealed partial class SessionManager
         if (!IsCurrentOwner(owner))
             throw new InvalidOperationException("Node tools require the current Session owner.");
         var action = ToolRegistry.Text(args, "action")?.Trim().ToLowerInvariant();
-        var isolated = AgentIsolated(owner.Agent);
         if (action == "list")
         {
             ToolRegistry.Keys(args, ["action"]);
             // One caller snapshot decides every Node and Provider row of this list.
             var visibility = VisibilityFor(owner);
-            var declared = await NodeProviders.ListProvidersAsync(isolated, token);
+            var declared = await NodeProviders.ListProvidersAsync(token);
             var destroyProviders = declared
                 .OfType<JsonObject>()
                 .Where(value =>
@@ -103,10 +102,6 @@ internal sealed partial class SessionManager
         {
             ToolRegistry.Keys(args, ["action", "nodeId"]);
             var id = RequiredNodeArgument(args, "nodeId", 193).Trim();
-            if (isolated)
-                throw new ToolAuthorizationDeniedException(
-                    "Isolated sessions cannot switch Node through model tools. Use the administrator Node command."
-                );
             return await SelectNodeAsync(owner, id, token);
         }
         if (action is not ("create" or "ensure" or "inspect" or "destroy"))
@@ -122,10 +117,6 @@ internal sealed partial class SessionManager
         var parameters =
             ToolRegistry.ObjectArg(args, "parameters", "parametersJson") ?? new JsonObject();
         ExecutableNodeProvider.BoundedJson(parameters, 64 * 1024, 12, int.MaxValue, true);
-        if (isolated && action != "inspect")
-            throw new ToolAuthorizationDeniedException(
-                "Effectively isolated sessions cannot mutate provider Nodes without an ownership policy."
-            );
         string? providerId = null;
         string? nodeId = null;
         JsonObject resultValue;
@@ -136,9 +127,8 @@ internal sealed partial class SessionManager
             providerId = RequiredNodeArgument(args, "providerId", 64).Trim();
             var description = await NodeProviders.InspectProviderAsync(providerId, token);
             resultValue = new JsonObject { ["provider"] = description };
-            // Normalize the full result before restricting disclosed actions, as on Main's service boundary.
+            // Normalize the full result as on Main's service boundary.
             ExecutableNodeProvider.BoundedJson(resultValue, 128 * 1024, 12, int.MaxValue, true);
-            description["lifecycle"] = NodeProviderRegistry.DisclosedActions(description, isolated);
         }
         else
         {
@@ -156,7 +146,6 @@ internal sealed partial class SessionManager
             else
             {
                 nodeId = RequiredNodeArgument(args, "nodeId", 193).Trim();
-                RequireNodeBoundary(owner, nodeId);
                 if (
                     action == "destroy"
                     && ToolRegistry.Text(args, "confirmation") != "destroy node " + nodeId

@@ -135,21 +135,23 @@ public sealed class NodePrivateCredentialTests
     }
 
     [Fact]
-    public async Task Main_policy_and_exact_isolation_grant_cannot_be_replaced_by_remote_authority()
+    public async Task Main_policy_and_migrated_exact_grant_cannot_be_replaced_by_remote_authority()
     {
         await using var fixture = new Fixture();
         await fixture.Start(
             new JsonObject
             {
-                ["isolated"] = true,
-                ["isolatedNode"] = "bound",
-                ["toolRules"] = new JsonArray(
-                    new JsonObject
-                    {
-                        ["source"] = "builtin",
-                        ["tool"] = "node_create_auth_token",
-                        ["effect"] = "allow",
-                    }
+                ["rules"] = LegacyIsolationFixture.Layer(
+                    "main",
+                    "bound",
+                    new JsonArray(
+                        new JsonObject
+                        {
+                            ["source"] = "builtin",
+                            ["tool"] = "node_create_auth_token",
+                            ["effect"] = "allow",
+                        }
+                    )
                 ),
             }
         );

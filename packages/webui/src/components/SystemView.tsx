@@ -399,7 +399,6 @@ export default function SystemView({
     { id: 'active', label: 'Active', count: sessions.filter(isSessionRuntimeActive).length },
     { id: 'waiting', label: 'Waiting', count: summary.waitingCount },
     { id: 'queued', label: 'Queued', count: sessions.filter(session => Number(session.runtimeState?.queueLength ?? session.queueLength ?? 0) > 0).length },
-    { id: 'isolated', label: 'Isolated', count: sessions.filter(session => session.isolated).length },
   ]
 
   const selectedRegistryAgent = selectedRegistryAgentId ? agentRegistry.find(agent => agent.id === selectedRegistryAgentId) || null : null

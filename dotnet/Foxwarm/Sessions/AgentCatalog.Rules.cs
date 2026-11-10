@@ -66,6 +66,9 @@ internal sealed partial class AgentCatalog
         return parent;
     }
 
+    /// <summary>The Agent's creator ancestors, root first, ending with the Agent itself.</summary>
+    internal string[] CreatorChainOf(string name) => CreatorChain(name, MetadataSnapshot());
+
     private string[] CreatorChain(string name, JsonObject snapshot)
     {
         var chain = new List<string>();
@@ -148,7 +151,13 @@ internal sealed partial class AgentCatalog
         }
     }
 
-    private void ValidateCreatorAdmission(string? creator, JsonObject snapshot)
+    // Channel guests created from a template are not limited by the direct-child limit: the
+    // administrator's channel configuration, not a model, decides how many there are.
+    private void ValidateCreatorAdmission(
+        string? creator,
+        JsonObject snapshot,
+        bool unlimitedChildren = false
+    )
     {
         if (creator is null)
             return;
@@ -157,8 +166,9 @@ internal sealed partial class AgentCatalog
         if (chain.Length > limits.MaxDepth)
             throw new InvalidDataException("Agent tree depth limit exceeded.");
         if (
-            snapshot.Count(pair => Exists(pair.Key) && Creator(snapshot, pair.Key) == creator)
-            >= limits.MaxChildren
+            !unlimitedChildren
+            && snapshot.Count(pair => Exists(pair.Key) && Creator(snapshot, pair.Key) == creator)
+                >= limits.MaxChildren
         )
             throw new InvalidDataException("Agent direct-child limit exceeded.");
     }

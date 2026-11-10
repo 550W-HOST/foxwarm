@@ -177,12 +177,16 @@ public sealed partial class SessionCreationParityTests
         var rules = new JsonArray(
             new JsonObject
             {
-                ["source"] = "builtin",
-                ["tool"] = "skill",
-                ["effect"] = "deny",
+                ["id"] = "no-skill",
+                ["action"] = "deny",
+                ["match"] = new JsonObject
+                {
+                    ["tool"] = new JsonObject { ["source"] = "builtin", ["name"] = "skill" },
+                },
             }
         );
-        // Legacy isolated-Agent creation (isolatedNode without a main Session), plus supported copy/rule inputs.
+        // Restricted Agent creation (rules and a default Node without a main Session), plus a
+        // one-time memory copy.
         Successful(
             await f.ToolAsync(
                 "call_tool",
@@ -193,43 +197,39 @@ public sealed partial class SessionCreationParityTests
                     ["args"] = new JsonObject
                     {
                         ["agentName"] = "worker",
-                        ["isolatedNode"] = "worker-node",
+                        ["defaultNode"] = "worker-node",
                         ["createMainSession"] = false,
                         ["inheritMemory"] = true,
-                        ["toolRules"] = rules,
+                        ["rules"] = rules,
                     },
                 }
             )
         );
         Assert.Null(await f.Manager.GetExistingAsync("worker/main"));
-        Assert.True(f.Manager.AgentIsolated("worker"));
-        Assert.Equal("worker-node", f.Manager.RecordedIsolationNode("worker"));
+        Assert.False(f.Manager.Isolation("worker").Isolated);
         Assert.Null(f.Manager.AgentInherit("worker"));
         var copied = Path.Combine(f.Manager.AgentDirectory("worker"), "memory", "COPY.md");
         Assert.Equal("one-time copied memory", await File.ReadAllTextAsync(copied));
         await File.WriteAllTextAsync(sourceMemory, "later source change");
         Assert.Equal("one-time copied memory", await File.ReadAllTextAsync(copied));
-        Assert.Equal(
-            "deny",
-            f.Manager.AgentMetadata["worker"]!["toolRules"]![0]!["effect"]!.ToString()
-        );
-        var child = await f.Manager.CreateNamedAsync(
-            "worker",
-            "owned",
-            null,
-            null,
-            initialNode: "master"
-        );
+        var child = await f.Manager.CreateNamedAsync("worker", "owned", null, null);
         Assert.Equal("worker-node", f.Manager.CurrentNode(child));
         var denied = await f.ToolAsync("skill", new JsonObject { ["action"] = "list" }, child);
         Assert.Equal("tool_authorization_denied", denied!["error"]!["type"]!.ToString());
-        Successful(
-            await f.ToolAsync(
+        // The retired legacy isolation parameters are unknown arguments now.
+        foreach (var retired in new[] { "isolatedNode", "toolRules" })
+        {
+            var refused = await f.ToolAsync(
                 "create_agent",
-                new JsonObject { ["agentName"] = "stored-rules", ["toolRules"] = new JsonArray() }
-            )
-        );
-        Assert.Empty(f.Manager.AgentMetadata["stored-rules"]!["toolRules"]!.AsArray());
+                new JsonObject
+                {
+                    ["agentName"] = "retired-" + retired.ToLowerInvariant(),
+                    [retired] = retired == "toolRules" ? new JsonArray() : "worker-node",
+                }
+            );
+            Assert.NotNull(refused!["error"]);
+            Assert.DoesNotContain("retired-" + retired.ToLowerInvariant(), f.Manager.Agents());
+        }
     }
 
     [Fact]
@@ -293,12 +293,12 @@ public sealed partial class SessionCreationParityTests
     }
 
     [Fact]
-    public async Task Ongoing_inheritance_rejects_an_isolated_source_at_the_shared_owner_without_forbidding_one_time_copy()
+    public async Task Ongoing_inheritance_rejects_a_noninheritable_source_at_the_shared_owner_without_forbidding_one_time_copy()
     {
         await using var f = await ExternalChannelFixture.CreateAsync();
         RegisterAgentTools(f);
-        f.Manager.Nodes.Registry.Create("retained-offline");
-        await f.Manager.CreateAgentAsync("isolated-source", isolatedNode: "retained-offline");
+        await f.Manager.CreateAgentAsync("isolated-source");
+        await f.Manager.SetAgentInheritableAsync("isolated-source", false);
         var memory = Path.Combine(
             f.Manager.AgentDirectory("isolated-source"),
             "memory",
@@ -318,7 +318,7 @@ public sealed partial class SessionCreationParityTests
             }
         );
         Assert.Contains(
-            "is isolated and cannot be used as an inherit source",
+            "not inheritable",
             rejected!["error"]!.ToString()
         );
         Assert.Null(f.Manager.AgentInherit("main"));
@@ -352,7 +352,7 @@ public sealed partial class SessionCreationParityTests
             new JsonObject { ["agentName"] = "rejected-inherit", ["inherit"] = "isolated-source" }
         );
         Assert.Contains(
-            "is isolated and cannot be used as an inherit source",
+            "not inheritable",
             partial!["error"]!.ToString()
         );
         Assert.NotNull(await f.Manager.GetExistingAsync("rejected-inherit/main"));

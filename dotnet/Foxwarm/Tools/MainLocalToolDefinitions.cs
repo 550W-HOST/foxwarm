@@ -131,7 +131,7 @@ internal static class MainLocalToolDefinitions
             ),
             Tool(
                 "list_agents",
-                "List the agents and their current session counts, memory metadata, inheritance, isolation, and tool-rule summary without hydrating every Session.",
+                "List the agents and their current session counts, memory metadata, inheritance, and rule summary without hydrating every Session.",
                 Parameters(new JsonObject())
             ),
         ];

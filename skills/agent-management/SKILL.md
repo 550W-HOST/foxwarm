@@ -14,7 +14,7 @@ Use this entry to choose an operation, then read only the linked section. Routin
 - An Agent created by a model records its creator Agent. Only Agents above it on that creator chain, or an administrator, can change its local rules; it can inherit memory only from that chain; and its creator cannot be deleted while it exists. See [creation](references/OPERATIONS.md#create-an-agent).
 - What a Session may do is decided by the global tool policy plus every Agent-local rule layer on its Agent's creator chain. Placement (`defaultNode`, a Session's `node`) chooses where tools run and grants nothing.
 - Containment comes from the environment a Node runs in: a container, VM or separate machine. Tool rules decide which tools reach that environment; they are not an OS or network sandbox.
-- Legacy Agent isolation (`isolatedNode`, `set_agent_isolated`, `/agent isolated`) is [deprecated](../../docs/code-index/modules/tools-and-permissions.md#d-tools-legacy-isolation-deprecation). Do not use it for new Agents; use local rules and a Node instead. Existing isolated Agents keep working until they are [migrated](references/OPERATIONS.md#legacy-isolated-agents).
+- Legacy Agent isolation has been [retired](../../docs/code-index/modules/tools-and-permissions.md#d-tools-legacy-isolation-deprecation). Restrict an Agent with local rules and a `defaultNode`. Agents that were isolated are [migrated at startup](references/OPERATIONS.md#legacy-isolated-agents).
 - Tools are for agents; `/agent`, `/session` and `/node` commands are for users. Do not send command-shaped text instead of calling a tool.
 - Deleting an Agent is a user command with confirmation. Check what depends on the Agent first.
 

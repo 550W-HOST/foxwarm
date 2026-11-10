@@ -345,6 +345,7 @@ const guestAgent = {
   properties: {
     agentId: { type: 'string' },
     mode: { enum: ['single', 'inherited'] },
+    template: { type: 'string' },
     isolated: { type: 'boolean' },
     node: { type: 'string' },
   },

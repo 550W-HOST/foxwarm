@@ -13,7 +13,6 @@ public sealed class SelectedPromptTests
         Directory.CreateDirectory(work);
         var agents = new AgentCatalog(Path.Combine(temp.Path, "data"), work);
         await agents.CreateAsync("restricted");
-        await agents.SetIsolationAsync("restricted", "synthetic-bound", true, null);
         var memory = new AgentMemory(agents, new Skills(agents, Path.Combine(temp.Path, "skills")));
         var directory = agents.AgentDirectory("restricted");
         var outside = Path.Combine(temp.Path, "outside.md");

@@ -36,7 +36,7 @@ Secrets, including the URL parts that [summaries redact](./src-mcp-client.md#d-m
 
 `McpServerSummaryTests` checks that server summaries omit URL, header, token, env and argument credentials, and that error redaction covers URL credentials.
 
-`OutboundMcpDiscoveryTests` qualifies the real 60-second discovery boundary against a delayed official SDK peer, subsequent discovery, no hidden retries/effects, and independence from the tool-call override. It also checks that broad `search_tools` for an isolated Agent skips servers without MCP allow rules, and that a hung server ends at the broad-search deadline as a warning while a healthy server's tools are still returned.
+`OutboundMcpDiscoveryTests` qualifies the real 60-second discovery boundary against a delayed official SDK peer, subsequent discovery, no hidden retries/effects, and independence from the tool-call override. It also checks that a hung server ends at the broad-search deadline as a warning while a healthy server's tools are still returned.
 
 `OutboundMcpLifecycleTests` uses official JavaScript SDK peers for stdio reuse, stateful initialize fallback, owner-scoped HTTP discovery/call/native Monty reuse and isolation, concurrent/single cancellation, real configuration/move/deletion/shutdown hooks, invalidated initialization, SSE, and auto initialization cleanup without effect replay.
 

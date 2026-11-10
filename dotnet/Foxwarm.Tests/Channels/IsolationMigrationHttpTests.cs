@@ -48,8 +48,8 @@ public sealed class IsolationMigrationHttpTests
                         )
                     ).StatusCode
                 );
-            // Record a binding to a Node this fixture does not provide, without the
-            // management route's Node existence check.
+            // Record legacy isolation the way an older release left it; this release has no
+            // setter, and startup migration has already run for this fixture.
             var catalog = (AgentCatalog)
                 typeof(SessionManager)
                     .GetField(
@@ -58,7 +58,15 @@ public sealed class IsolationMigrationHttpTests
                             | System.Reflection.BindingFlags.Instance
                     )!
                     .GetValue(f.Manager)!;
-            await catalog.SetIsolationAsync("guarded", "bound-node", true, null);
+            await catalog.MigrateMetadataAsync(metadata =>
+            {
+                metadata["guarded"] = new JsonObject
+                {
+                    ["isolated"] = true,
+                    ["isolatedNode"] = "bound-node",
+                };
+                return true;
+            });
 
             var inventory = await client.GetFromJsonAsync<JsonObject>(
                 "/api/agents/isolation-migration"
@@ -105,7 +113,7 @@ public sealed class IsolationMigrationHttpTests
                 .AsArray()
                 .Single(agent => agent!["id"]!.GetValue<string>() == "guarded")!;
             Assert.False(guarded["inheritable"]!.GetValue<bool>());
-            Assert.True(guarded["isolationMigrated"]!.GetValue<bool>());
+            Assert.False(guarded["isolationMigration"]!["automatic"]!.GetValue<bool>());
 
             var flagged = await client.PutAsJsonAsync(
                 "/api/agents/plain",

@@ -96,7 +96,8 @@ public sealed partial class SessionCreationParityTests
             _ => Task.FromResult(Encoding.UTF8.GetBytes(models.ToJsonString()))
         );
         f.Manager.Nodes.Registry.Create("prompt-bound");
-        await f.Manager.CreateAgentAsync("restricted", false, isolatedNode: "prompt-bound");
+        await f.Manager.CreateAgentAsync("restricted", false);
+        await LegacyIsolationFixture.RestrictAsync(f.Manager, "restricted", "prompt-bound");
         selectedFile = Path.Combine(f.Data, "selected.md");
         await File.WriteAllTextAsync(selectedFile, "selected prompt before dispatch");
         Successful(

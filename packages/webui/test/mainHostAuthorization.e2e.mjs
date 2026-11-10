@@ -121,21 +121,18 @@ try {
   await writeFile(join(fixture.data, 'agents/other', 'foreign'), 'foreign bytes')
   await fixture.stop(); stopped = true
   const agentPath = join(fixture.data, 'state/agents.json'), agentCatalog = JSON.parse(await readFile(agentPath, 'utf8'))
-  agentCatalog.team = { ...agentCatalog.team, isolated: true, isolatedNode: 'future-recorded-node', toolRules: [
+  // A master-only legacy isolated Agent, as an older release left it, is migrated at startup.
+  agentCatalog.team = { ...agentCatalog.team, isolated: true, toolRules: [
     { effect: 'allow', source: 'node', node: 'master', tool: 'exec' }, { effect: 'allow', source: 'node', node: 'master', tool: 'read' },
     { effect: 'allow', source: 'builtin', tool: 'session' }, { effect: 'allow', source: 'builtin', tool: 'skill' }, { effect: 'allow', source: 'builtin', tool: 'recall' }, { effect: 'allow', source: 'builtin', tool: 'create_agent' } ] }
-  await writeFile(agentPath, JSON.stringify(agentCatalog)); const agentBytes = await readFile(agentPath)
+  await writeFile(agentPath, JSON.stringify(agentCatalog))
   await fixture.start(); stopped = false; await page.reload({ waitUntil: 'domcontentloaded' })
-  const listed = (await fixture.api('GET', '/api/agents')).body.agents.find(agent => agent.id === 'team'); assert.equal(listed.isolated, true); assert.equal(listed.isolatedNode, 'future-recorded-node')
-  assert.equal((await fixture.api('PUT', '/api/agents/team', { inheritAgent: 'main', isolatedNode: 'missing-binding' })).status, 400); assert.deepEqual(await readFile(agentPath), agentBytes)
-  assert.equal((await fixture.api('PUT', '/api/agents/team', { isolatedNode: null })).status, 200)
-  const mainIsolation = (await fixture.api('GET', '/api/agents')).body.agents.find(agent => agent.id === 'team')
-  assert.equal(mainIsolation.isolated, false); assert.equal(mainIsolation.isolatedNode, null)
-  // A retained Main-only legacy flag is separate from active remote Node binding.
-  await fixture.stop(); stopped = true
-  const mainOnly = JSON.parse(await readFile(agentPath, 'utf8')); mainOnly.team.isolated = true
-  await writeFile(agentPath, JSON.stringify(mainOnly)); const mainIsolationBytes = await readFile(agentPath)
-  await fixture.start(); stopped = false
+  const migratedBytes = await readFile(agentPath), migrated = JSON.parse(migratedBytes).team
+  assert.equal(migrated.isolated, true); assert.equal(migrated.toolRules.length, 6); assert.equal(migrated.legacyIsolation.automatic, true); assert.equal(migrated.legacyIsolation.failClosed, undefined)
+  const listed = (await fixture.api('GET', '/api/agents')).body.agents.find(agent => agent.id === 'team')
+  assert.equal(listed.isolated, undefined); assert.equal(listed.isolatedNode, undefined); assert.equal(listed.restricted, true); assert.equal(listed.inheritable, false)
+  // The retired setter field is an unknown field now.
+  assert.equal((await fixture.api('PUT', '/api/agents/team', { isolatedNode: null })).status, 400); assert.deepEqual(await readFile(agentPath), migratedBytes)
   await run(current, 'isolated', [tool('isolated-exec', 'exec', { summary: 'Attempt file creation from an isolated Agent', command: 'touch forbidden-isolated-exec' }), invoke('isolated-neutral-exec', 'node:master/exec', { summary: 'Attempt file creation from an isolated Agent', command: 'touch forbidden-isolated-exec' }),
     tool('isolated-management', 'create_agent', { agentName: 'forbidden-agent' }), tool('isolated-own-read', 'read', { filePath: 'after-invalid' }),
     tool('isolated-foreign-read', 'read', { filePath: join(fixture.data, 'agents/other', 'foreign') }), tool('isolated-list', 'session', { action: 'list' }), tool('isolated-status', 'session', { action: 'status' }),
@@ -143,7 +140,7 @@ try {
   for (const call of ['isolated-exec', 'isolated-neutral-exec', 'isolated-management', 'isolated-foreign-read', 'isolated-list', 'isolated-skill', 'isolated-recall', 'isolated-history']) assert.equal((await paired(current, call)).error.type, 'tool_authorization_denied')
   assert(!(await paired(current, 'isolated-own-read')).error); assert(!(await paired(current, 'isolated-status')).error)
   assert(!await exists(join(own, 'forbidden-isolated-exec'))); assert(!await exists(join(fixture.data, 'agents/forbidden-agent')))
-  assert.deepEqual(await readFile(agentPath), mainIsolationBytes); assert.deepEqual(failures, [])
+  assert.deepEqual(await readFile(agentPath), migratedBytes); assert.deepEqual(failures, [])
   await fixture.stop(); stopped = true
   console.log(JSON.stringify({ ok: true, root: fixture.root, hostPids: fixture.hostPids, peerPids: (await readFile(join(peerRoot, 'processes.ndjson'), 'utf8')).trim().split('\n').map(value => JSON.parse(value).pid), requests: records.length, planning: records.filter(row => row.planning).length, peerCalls: (await peerCalls()).length }))
 } finally {

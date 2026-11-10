@@ -40,8 +40,51 @@ internal sealed record IsolationMigrationPlan(
 /// </summary>
 internal static class IsolationMigrationRules
 {
-    /// <summary>Version of the generated layer, recorded in the migration marker.</summary>
-    internal const int GeneratorVersion = 1;
+    /// <summary>
+    /// Version of the generated layer, recorded in the migration marker. Version 2 limits
+    /// <c>session</c> status to the current Session; version 1 (R1) relied on the legacy check.
+    /// </summary>
+    internal const int GeneratorVersion = 2;
+
+    /// <summary>Rule ID prefix of the generated <c>session</c> status allows.</summary>
+    internal const string SessionStatusRule = "isolation-session-status";
+
+    /// <summary>
+    /// The layer installed when an Agent cannot be migrated safely: it denies every call of
+    /// the Agent and of its creator descendants until an administrator replaces it.
+    /// </summary>
+    internal static JsonArray FailClosedRules() =>
+        new(new JsonObject { ["id"] = "isolation-fail-closed", ["action"] = "deny" });
+
+    /// <summary>
+    /// Adds the current-Session limit to the <c>session</c> status allows of a version 1
+    /// layer, leaving every other rule as it is. Returns the number of rules changed; an
+    /// administrator may have removed or rewritten them, in which case nothing matches.
+    /// </summary>
+    internal static int LimitSessionStatusToSelf(JsonArray rules)
+    {
+        var changed = 0;
+        foreach (var rule in rules.OfType<JsonObject>())
+        {
+            if (
+                SessionWait.Text(rule["id"])
+                    ?.StartsWith(SessionStatusRule, StringComparison.Ordinal) != true
+                || SessionWait.Text(rule["action"]) != "allow"
+                || rule["match"] is not JsonObject match
+                || SessionWait.Text(match["tool"]?["source"]) != "builtin"
+                || SessionWait.Text(match["tool"]?["name"]) != "session"
+                || match["args"] is not JsonObject args
+                || args.ContainsKey("sessionId")
+            )
+                continue;
+            args["sessionId"] = new JsonObject
+            {
+                ["session"] = new JsonObject { ["self"] = true },
+            };
+            changed++;
+        }
+        return changed;
+    }
 
     // Legacy structural denials an exact allow could never lift, plus `node` lifecycle and
     // selection, which isolated Sessions could not perform through model tools.
@@ -348,12 +391,15 @@ internal static class IsolationMigrationRules
             };
             Add("skill", skill);
         }
-        // Status only. The `session` target selector is newer than the previous release, so
-        // the current-Session limit stays with the retained legacy check until R2.
+        // Status of the current Session only.
         foreach (var action in new JsonNode[] { Absent(), "status" })
         {
             var status = Builtin("session");
-            status["args"] = new JsonObject { ["action"] = action.DeepClone() };
+            status["args"] = new JsonObject
+            {
+                ["action"] = action.DeepClone(),
+                ["sessionId"] = Self(),
+            };
             Add("session-status", status);
         }
 
@@ -577,14 +623,14 @@ internal static class IsolationMigrationRules
             new(
                 "narrowed",
                 "session",
-                "Status only; listing and other actions are denied. While legacy isolation applies, status is limited to the current Session by its retained check."
+                "Status of the current Session only; listing and other actions are denied."
             )
         );
         notes.Add(
             new(
                 "widened",
                 "builtin:create_session",
-                "Sessions may be created in the Agent's own Agent, which new-Session timers already allowed; other Agents stay denied. Legacy isolation still denies direct creation while it applies."
+                "Sessions may be created in the Agent's own Agent, which new-Session timers already allowed; other Agents stay denied."
             )
         );
         if (rules.Count > 256)

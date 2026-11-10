@@ -40,7 +40,7 @@ Active history transformation, compaction, archive-store, and vector retrieval a
 - `enqueueSessionItem` and typed queue-event helpers.
 - `startSessionWait`, stop/dequeue/retry controls, and router-trigger registration.
 - `forkSession`, `createChildSession`, `setSessionParent`, `sendToSession`.
-- Agent creation, inheritance/isolation, session move, and snapshot-refresh operations.
+- Agent creation, inheritance, session move, and snapshot-refresh operations.
 - Channel attachment, direct channel/file delivery, and session broadcast creation.
 - Managed-session open/step/release operations.
 - Goal set/clear/reminder operations.
@@ -67,7 +67,7 @@ The durable JSON implementation and backup semantics are canonical in [src-utils
 - Per-session JSON is authoritative for semantic state. Catalog-only presentation fields are not inferred from authority files when the catalog is missing.
 - Lazy hydration is tracked by explicit catalog-placeholder identity, not by history content. A hydrated Session with empty history remains a live owner and ordinary reads cannot replace its semantic fields from an older authority snapshot.
 - A managed session has at most one live lease. Input addressed to an actively managed target enters its managed inbox.
-- An isolated sender's inter-session delivery and wait dependencies require the same session or an explicit direct parent/child relation; unrelated and sibling sessions are denied. The incoming direction (a target in an isolated Agent) is not restricted by isolation; see [D-session-core-isolated-relations](#d-session-core-isolated-relations).
+- Inter-session delivery limits come from policy. A migrated legacy isolated Agent's generated layer limits `send_to_session` to the Session itself and its direct parent or child; wait dependencies are not limited; see [D-session-core-isolated-relations](#d-session-core-isolated-relations).
 - Fork lineage never exposes parent content created after the fork point.
 - Atomic in-process creation skips live/archived exact internal IDs, explicit creation rejects archive-only reuse, and per-channel first-message resolution converges on one attached lifetime while persisted live sessions still hydrate. Canonical contract: [archived ID reservation](../threads/session-lifecycle.md#d-lifecycle-archived-id-reservation).
 - Channel mutations are persisted after the in-memory map changes.
@@ -100,6 +100,8 @@ Active provider/tool phases are transient. Wait state persists. Legacy busy fiel
 Explicit direct parent/child relations are the only inter-session targets of an isolated sender, including within its own Agent. This exception does not grant tool, filesystem, or node permissions.
 
 [2026-11-09] User decision: only the outgoing direction remains a legacy isolation boundary. Delivery and wait dependencies from an isolated Agent's Session are limited to itself and its direct parent or child; the maintained C# Main enforces this in `SessionManager.SendAsync` (every sender path, including Task notifications) and `ValidateWait`. The incoming guard is retired: whether another Session may message, wait on, or view an isolated Agent's Sessions is decided by that caller's own policy. The retained TypeScript reference still enforces both directions. Removal of the outgoing check follows the [legacy isolation migration](./tools-and-permissions.md#d-tools-legacy-isolation-deprecation).
+
+[2026-11-10] R2 retires the remaining guard. The generated local layer of each migrated Agent allows `send_to_session` only to itself, its parent or its children (`session.self` / `relation` matchers), which covers direct, unified and ToolScript sends. Notifications produced by other tools, such as Task completion, follow the policy of the tool that produces them. The wait-dependency guard is retired without a replacement (coordinator decision for R2). `SessionManager.SendAsync` and `ValidateWait` no longer check isolation.
 
 ### D-session-core-child-identity
 

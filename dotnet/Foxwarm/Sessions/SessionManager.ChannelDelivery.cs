@@ -23,15 +23,6 @@ internal sealed partial class SessionManager
             token
         );
         using var admission = BeginOwnerMutation(owner);
-        if (
-            AgentIsolated(owner.Agent)
-            && SessionCatalog.Text(
-                deletionChannels.ReadForDelivery()["channels"]?[target]?["sessionId"]
-            ) != owner.Id
-        )
-            throw new ToolAuthorizationDeniedException(
-                "Isolated Session can only send messages to its own attached channel."
-            );
         owner.Entry.RequireIdentityAuthority();
         if (!IsCurrentOwner(owner))
             throw new InvalidOperationException("Channel source Session is no longer current.");

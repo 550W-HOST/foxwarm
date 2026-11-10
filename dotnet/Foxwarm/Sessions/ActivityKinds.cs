@@ -124,7 +124,6 @@ internal static class ActivityKinds
                 "set_config",
                 "add_secret",
                 "set_agent_inherit",
-                "set_agent_isolated",
                 "set_agent_rules",
                 "mcp_config",
                 "set_session_child_model",

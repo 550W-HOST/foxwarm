@@ -40,7 +40,6 @@ internal sealed partial class SessionManager
             ToolRegistry.Text(args, "node"),
             selectedNode ?? CurrentNode(owner)
         );
-        RequireFileNodeBoundary(owner, node);
         var raw = SessionGoal.Trim(ToolRegistry.Text(args, "filePath") ?? "");
         if (raw.Length == 0)
             throw new InvalidDataException("send_file requires filePath.");
@@ -65,7 +64,6 @@ internal sealed partial class SessionManager
                     .Where(pair => SessionCatalog.Text(pair.Value?["sessionId"]) == target)
                     .Select(pair => pair.Key)
                     .ToArray();
-        CheckFileDestinations(owner, target, direct, bindings);
         if (destinations.Length == 0)
             throw new InvalidDataException($"Session `{target}` has no attached channels.");
         string path;
@@ -118,7 +116,6 @@ internal sealed partial class SessionManager
                     IdentityWorkspace(owner),
                     token
                 );
-                CheckFileDestinations(owner, target, direct, bindings);
             }
             catch
             {
@@ -238,25 +235,6 @@ internal sealed partial class SessionManager
         SessionCatalog.Text(Catalog.Resolve(requested)["sessionId"])
         ?? throw new InvalidDataException("Session is not available: " + requested);
 
-    private void CheckFileDestinations(
-        SessionOwner owner,
-        string? target,
-        string direct,
-        JsonObject bindings
-    )
-    {
-        if (!Isolation(owner.Agent).Isolated)
-            return;
-        if (target is not null && target != owner.Id)
-            throw new ToolAuthorizationDeniedException(
-                "Isolated Session can only send files via its own current Session attachments."
-            );
-        if (direct.Length > 0 && SessionCatalog.Text(bindings[direct]?["sessionId"]) != owner.Id)
-            throw new ToolAuthorizationDeniedException(
-                "Isolated Session can only send files to its own attached destination."
-            );
-    }
-
     internal Func<string, string, Task>? BeforeFileStage { get; set; }
 
     private async Task FileStageAsync(SessionOwner owner, string stage)
@@ -278,7 +256,6 @@ internal sealed partial class SessionManager
             ToolRegistry.Text(args, "node"),
             selectedNode ?? CurrentNode(owner)
         );
-        RequireFileNodeBoundary(owner, node);
         var id = ToolRegistry.Text(args, "id");
         var raw = ToolRegistry.Text(args, "filePath");
         if (string.IsNullOrEmpty(id) || string.IsNullOrEmpty(raw))

@@ -323,7 +323,7 @@ public sealed partial class AgentRulesTreeTests
     }
 
     [Fact]
-    public async Task Inheritance_limits_and_deletion_keep_creator_authority_and_legacy_isolation()
+    public async Task Inheritance_limits_and_deletion_keep_creator_authority_and_migrated_isolation()
     {
         await using var f = await Fixture();
         var child = await ChildAgent(f, "child");
@@ -363,7 +363,7 @@ public sealed partial class AgentRulesTreeTests
         );
         Assert.Equal("child", SessionWait.Text(f.Manager.AgentMetadata["grand"]!["createdBy"]));
         f.Manager.Nodes.Registry.Create("isolated-node");
-        await f.Manager.SetAgentIsolationAsync("child", "isolated-node", true, null);
+        await LegacyIsolationFixture.RestrictAsync(f.Manager, "child", "isolated-node");
         Denied(
             await f.ToolAsync(
                 "create_agent",
@@ -379,7 +379,6 @@ public sealed partial class AgentRulesTreeTests
             )
         );
         var outside = Path.Combine(f.Work, "forbidden.txt");
-        await f.Manager.SetAgentRulesAsync("child", Rules("""[{"action":"allow"}]"""));
         Denied(
             await f.ToolAsync(
                 "write",
@@ -674,7 +673,7 @@ public sealed partial class AgentRulesTreeTests
     }
 
     [Fact]
-    public async Task Default_Node_is_new_session_placement_with_explicit_selection_and_legacy_binding_precedence()
+    public async Task Default_Node_is_new_session_placement_with_explicit_selection_precedence()
     {
         await using var f = await Fixture();
         Successful(
@@ -741,14 +740,14 @@ public sealed partial class AgentRulesTreeTests
             "master",
             f.Manager.CurrentNode(await f.Manager.RequiredAsync("placed/fork-explicit"))
         );
+        // A retired legacy binding no longer overrides an explicit selection.
         f.Manager.Nodes.Registry.Create("bound-node");
-        await f.Manager.SetAgentNodeAsync("placed", "bound-node");
         var bound = await f.Manager.CreateNamedAsync(
             "placed",
             "bound",
             null,
             null,
-            initialNode: "master"
+            initialNode: "bound-node"
         );
         Assert.Equal("bound-node", f.Manager.CurrentNode(bound));
         await f.Manager.SetAgentRulesAsync(
