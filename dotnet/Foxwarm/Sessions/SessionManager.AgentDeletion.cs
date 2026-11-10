@@ -107,7 +107,7 @@ internal sealed partial class SessionManager
             catch (Foxwarm.Secrets.SecretStoreLockedException error)
             {
                 throw new InvalidOperationException(
-                    $"Agent \"{name}\" was not deleted: secrets it added could not be handed to the instance. {error.Message}"
+                    $"Agent \"{name}\" was not deleted because its secrets could not be transferred to the instance. {error.Message}"
                 );
             }
             var deleted = new List<string>();

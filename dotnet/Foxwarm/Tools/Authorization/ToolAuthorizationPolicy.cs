@@ -274,7 +274,7 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
     {
         if (node is not JsonObject map || !map.ContainsKey("anyOf") && !map.ContainsKey("owned"))
             throw new InvalidDataException(
-                "Secrets matcher requires { anyOf: [names] } and/or { owned: true }."
+                "`secrets` requires `anyOf` names, `owned: true`, or both."
             );
         Fields(map, "anyOf", "owned");
         var result = new JsonObject();
@@ -303,7 +303,7 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
                 || !owned.TryGetValue<bool>(out var value)
                 || !value
             )
-                throw new InvalidDataException("Secrets owned matcher supports only true.");
+                throw new InvalidDataException("`secrets.owned` accepts only true.");
             result["owned"] = true;
         }
         return result;

@@ -167,7 +167,7 @@ internal sealed partial class SessionManager
         {
             if (size > limit)
                 throw new InvalidDataException(
-                    "The file is larger than a secret value may be (64 KiB)."
+                    "The file is larger than 64 KiB, the limit for a secret value."
                 );
         }
         byte[] bytes;
