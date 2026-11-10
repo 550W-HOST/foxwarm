@@ -299,7 +299,7 @@ internal sealed partial class SessionCompactor
         }
         token.ThrowIfCancellationRequested();
         if (automatic)
-            sessions?.Tasks.TaskContext(snapshot.Id, TaskProgress.Sequences(snapshot), false, []);
+            sessions?.Tasks.TaskContext(snapshot.Id, TaskProgress.Sequences(snapshot), false);
         try
         {
             await hosted.Entry.SaveLane.CommitCompactionAsync(

@@ -7,6 +7,7 @@ import {
   BellRing,
   Bot,
   Camera,
+  ClipboardList,
   GitFork,
   Info,
   Inbox,
@@ -27,6 +28,7 @@ import type { CSSProperties, MouseEvent, ReactNode } from 'react'
 import type { LucideIcon } from 'lucide-react'
 export { formatCompactObjectPreview } from '../../../shared/src/toolResponseFormatting'
 import { parseSessionLinkText } from '../../../shared/src/webuiToolRendering'
+import { isTaskReminderMessage } from '../../../shared/src/sessionContinuation'
 export {
   renderAssistantMarkdownSegments,
   renderAssistantMarkdownSegmentsWithSanitizer,
@@ -454,6 +456,7 @@ const isInternalSystemPart = (part: MessagePart): boolean => {
 
 export const isInternalTimelineMessage = (message: Message): boolean => {
   if (message.__meta?.synthetic === 'persistentMemorySnapshot') return true
+  if (isTaskReminderMessage(message)) return true
   if (message.role !== 'user' || message.parts.length === 0) return false
   let internal = false
   for (const part of message.parts) {
@@ -556,6 +559,17 @@ export const getSystemMessagePreviewDescriptor = (message: Message): SystemMessa
       previewPrefix: '',
       bodyText: llmError.bodyText,
       lineCount: llmError.lineCount,
+    }
+  }
+
+  // Its body follows the opening tag on the same line, so the line-based scan below cannot classify it.
+  if (isTaskReminderMessage(message)) {
+    const system = message.parts[0].system!
+    return {
+      kind: 'task-reminder',
+      source: 'foxwarm-system',
+      previewPrefix: '',
+      bodyText: system.slice(system.indexOf('>') + 1, -'</foxwarm-system>'.length),
     }
   }
 
@@ -856,6 +870,7 @@ const toolIcons: Record<string, LucideIcon> = {
   'system-snapshot': Camera,
   'system-session-boundary': SeparatorHorizontal,
   'system-goal-reminder': Target,
+  'system-task-reminder': ClipboardList,
   'system-child-reminder': BellRing,
   'system-system-prompt': ScrollText,
   'system-managed-session': Workflow,

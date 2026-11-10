@@ -789,7 +789,6 @@ public sealed class ModelInteractionDiagnosticsTests
 
     [Theory]
     [InlineData("history")]
-    [InlineData("context")]
     [InlineData("unchanged")]
     public async Task Canonical_retry_raw_pairs_follow_the_existing_logical_context_identity(
         string change
@@ -817,7 +816,6 @@ public sealed class ModelInteractionDiagnosticsTests
                 ["role"] = "user",
                 ["parts"] = new JsonArray(new JsonObject { ["text"] = text }),
             };
-        var context = false;
         await owner.RequestAsync(
             "s",
             HostModels.Parse(Catalog(uri), new JsonObject()),
@@ -834,15 +832,8 @@ public sealed class ModelInteractionDiagnosticsTests
             default,
             ModelRequestScope.Canonical,
             prepareRetry: _ =>
-            {
-                context = true;
-                return Task.FromResult<IReadOnlyList<JsonObject>?>(
+                Task.FromResult<IReadOnlyList<JsonObject>?>(
                     change == "history" ? [User("original"), User("new-input")] : null
-                );
-            },
-            requestContext: () =>
-                Task.FromResult<IReadOnlyList<JsonObject>>(
-                    change == "context" && context ? [User("new-input")] : []
                 )
         );
         Assert.Equal(2, handler.Bodies.Count);

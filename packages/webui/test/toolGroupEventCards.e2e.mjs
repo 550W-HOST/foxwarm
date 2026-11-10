@@ -14,6 +14,9 @@ const event = (id, seq, field = 'system') => ({
 const goalReminder = (id, seq, field = 'system') => ({
   role: 'user', parts: [{ [field]: `<foxwarm-system kind="goal-reminder">\nGOAL BODY ${id}\n</foxwarm-system>` }], __meta: { seq },
 })
+const taskReminder = (id, seq) => ({
+  role: 'user', parts: [{ system: `<foxwarm-system kind="task-reminder" seq="${seq}">Continue the active tasks:\ntask_${id} — TASK TITLE ${id} (active)</foxwarm-system>` }], __meta: { seq, taskReminder: true },
+})
 const direct = (text, seq) => ({ role: 'user', parts: [{ text }], __meta: { seq } })
 const final = (seq) => ({ role: 'model', parts: [{ text: 'FINAL ANSWER' }], __meta: { seq } })
 
@@ -36,6 +39,7 @@ const CASES = {
   goalStandalone: { messages: [goalReminder('outside', 120, 'text'), call('goal-standalone', 121), result('goal-standalone', 122), final(123)], timelineView: 'grouped' },
   goalNoTools: { messages: [goalReminder('alone', 130), goalReminder('still-alone', 131, 'text')], timelineView: 'grouped' },
   quotedGoal: { messages: [call('quoted-before', 140), result('quoted-before', 141), direct('Please explain <foxwarm-system kind="goal-reminder"> inside this message.', 142), call('quoted-after', 143), result('quoted-after', 144), final(145)], timelineView: 'grouped' },
+  task: { messages: [call('task-one', 160), result('task-one', 161), taskReminder('one', 162), call('task-two', 163), result('task-two', 164), final(165)], timelineView: 'grouped' },
   mixedGoal: { messages: [call('mixed-before', 150), result('mixed-before', 151), { role: 'user', parts: [{ system: '<foxwarm-system kind="session-boundary" event="compact-completed" />' }, { system: '<foxwarm-system kind="goal-reminder">\nMIXED REMINDER\n</foxwarm-system>' }], __meta: { seq: 152, goalReminder: true, goalReminderKind: 'compact-completion' } }, call('mixed-after', 153), result('mixed-after', 154), final(155)], timelineView: 'grouped' },
 }
 
@@ -95,6 +99,7 @@ const snapshot = async (name) => page.$eval(`#${name}`, element => ({
   summaryTags: [...element.querySelectorAll('.foxwarm-tool-card:has([aria-label="Expand tool group"]) [data-tool-tag-tone]')].map(tag => [tag.querySelector('span:last-child')?.textContent, tag.getAttribute('data-tool-tag-tone')]),
   eventCards: [...element.querySelectorAll('[data-system-message-kind="event"]')].map(card => card.textContent),
   goalCards: [...element.querySelectorAll('[data-system-message-kind="goal-reminder"]')].map(card => card.textContent),
+  taskCards: [...element.querySelectorAll('[data-system-message-kind="task-reminder"]')].map(card => card.textContent),
   toolCards: element.querySelectorAll('.foxwarm-tool-card:not(.foxwarm-tool-group-card):not(:has([aria-label="Expand tool group"]))').length,
   toolText: [...element.querySelectorAll('.foxwarm-tool-card:not(.foxwarm-tool-group-card):not(:has([aria-label="Expand tool group"]))')].map(card => card.textContent),
   rows: [...element.querySelectorAll('.foxwarm-chat-timeline [data-chat-message-anchor-key]')].map(row => row.getAttribute('data-chat-message-anchor-key')),
@@ -141,6 +146,20 @@ test('whole goal reminders join tool runs with their own counted icon/tag and fu
   await page.waitForFunction(() => !document.querySelector('#goal [data-tool-group]')?.style.height)
   await page.click('#goal [data-system-message-kind="goal-reminder"] [aria-label="Expand goal-reminder message"]')
   assert.ok((await page.$eval('#goal [data-system-message-kind="goal-reminder"] .foxwarm-system-message-body', node => node.textContent)).includes('GOAL BODY one'))
+})
+
+test('persisted task reminders join tool runs with their own tag and expand to a task-reminder card', async () => {
+  const collapsed = await snapshot('task')
+  assert.deepEqual(collapsed.summaryTags, [['exec ×2', 'neutral'], ['Task reminder ×1', 'system']])
+  assert.equal(collapsed.taskCards.length, 0)
+  await page.click('#task [aria-label="Expand tool group"]')
+  const expanded = await snapshot('task')
+  assert.equal(expanded.taskCards.length, 1)
+  assert.ok(expanded.taskCards[0].includes('Continue the active tasks:'))
+  assert.ok(!expanded.taskCards[0].includes('<foxwarm-system'))
+  await page.waitForFunction(() => !document.querySelector('#task [data-tool-group]')?.style.height)
+  await page.click('#task [data-system-message-kind="task-reminder"] [aria-label="Expand task-reminder message"]')
+  assert.ok((await page.$eval('#task [data-system-message-kind="task-reminder"] .foxwarm-system-message-body', node => node.textContent)).includes('TASK TITLE one'))
 })
 
 test('goal reminders retain the forced-open tail, stay visible with grouping disabled or no preceding call', async () => {

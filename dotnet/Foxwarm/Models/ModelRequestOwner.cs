@@ -72,8 +72,7 @@ internal sealed class ModelRequestOwner(
         Func<CancellationToken, Task<IReadOnlyList<JsonObject>?>>? prepareRetry = null,
         string journalPurpose = "low-level",
         int journalIteration = 0,
-        Action<string>? journalRequestStarted = null,
-        Func<Task<IReadOnlyList<JsonObject>>>? requestContext = null
+        Action<string>? journalRequestStarted = null
     ) =>
         RequestAsync(
             sessionId,
@@ -92,8 +91,7 @@ internal sealed class ModelRequestOwner(
             prepareRetry,
             journalPurpose,
             journalIteration,
-            journalRequestStarted,
-            requestContext
+            journalRequestStarted
         );
 
     internal Task<ChatResult> RequestAsync(
@@ -114,7 +112,6 @@ internal sealed class ModelRequestOwner(
         string journalPurpose = "low-level",
         int journalIteration = 0,
         Action<string>? journalRequestStarted = null,
-        Func<Task<IReadOnlyList<JsonObject>>>? requestContext = null,
         int maxAttempts = DefaultMaxAttempts
     ) =>
         RequestAsync(
@@ -140,7 +137,6 @@ internal sealed class ModelRequestOwner(
             journalPurpose,
             journalIteration,
             journalRequestStarted,
-            requestContext,
             maxAttempts: maxAttempts
         );
 
@@ -162,7 +158,6 @@ internal sealed class ModelRequestOwner(
         string journalPurpose = "low-level",
         int journalIteration = 0,
         Action<string>? journalRequestStarted = null,
-        Func<Task<IReadOnlyList<JsonObject>>>? requestContext = null,
         Func<CapturedRequest?>? recaptureSelection = null,
         Func<
             ConcreteHostModel,
@@ -185,11 +180,6 @@ internal sealed class ModelRequestOwner(
         var journalAttempt = 0;
         Task manifestCompletion = Task.CompletedTask;
         var interaction = diagnostics?.Begin(journalIteration);
-        var baseHistory = history;
-        var retainedContext = requestContext is null
-            ? Array.Empty<JsonObject>()
-            : (await requestContext().ConfigureAwait(false)).ToArray();
-        history = baseHistory.WithContext(retainedContext);
         bool? redactionRequired = null;
         try
         {
@@ -264,8 +254,7 @@ internal sealed class ModelRequestOwner(
                     cancellationToken.ThrowIfCancellationRequested();
                     if (updated is not null)
                     {
-                        baseHistory = updated;
-                        history = baseHistory.WithContext(retainedContext);
+                        history = updated;
                         interaction = diagnostics?.Begin(journalIteration);
                         // An adoption notice refreshes journal input, but the same
                         // response still includes elapsed retries and failover.
@@ -748,30 +737,11 @@ internal sealed class ModelRequestOwner(
                     cancellationToken.ThrowIfCancellationRequested();
                     if (updated is not null)
                     {
-                        baseHistory = updated;
-                        history = baseHistory.WithContext(retainedContext);
+                        history = updated;
                         interaction = diagnostics?.Begin(journalIteration);
                         requestStarted = null;
                         journalRequestId = null;
                         journalAttempt = 0;
-                    }
-                    if (requestContext is not null)
-                    {
-                        var nextContext = (await requestContext().ConfigureAwait(false)).ToArray();
-                        var changed =
-                            retainedContext.Length != nextContext.Length
-                            || retainedContext
-                                .Zip(nextContext)
-                                .Any(pair => !JsonNode.DeepEquals(pair.First, pair.Second));
-                        if (changed)
-                        {
-                            retainedContext = nextContext;
-                            history = baseHistory.WithContext(retainedContext);
-                            interaction = diagnostics?.Begin(journalIteration);
-                            requestStarted = null;
-                            journalRequestId = null;
-                            journalAttempt = 0;
-                        }
                     }
                 }
             }

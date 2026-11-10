@@ -22,7 +22,11 @@ internal static class TaskProgress
         if (
             json.TryGetProperty("__meta", out var meta)
             && meta.ValueKind == JsonValueKind.Object
-            && (Truthy(meta, "goalReminder") || Truthy(meta, "contextBlock"))
+            && (
+                Truthy(meta, "goalReminder")
+                || Truthy(meta, TaskReminder.MetaKey)
+                || Truthy(meta, "contextBlock")
+            )
         )
             return false;
         // Preserve canonical validation without creating a mutable copy.

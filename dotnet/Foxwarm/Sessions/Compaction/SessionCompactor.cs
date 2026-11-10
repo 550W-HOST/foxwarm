@@ -669,7 +669,7 @@ internal sealed partial class SessionCompactor
         if (sessions is null)
             return;
         var sequences = OrdinaryVisibleSequences(snapshot);
-        sessions.Tasks.TaskContext(snapshot.Id, sequences, false, []);
+        sessions.Tasks.TaskContext(snapshot.Id, sequences, false);
     }
 
     private async Task PlanAndApplyAwaitedAsync(CompactRun run, string? guidance)

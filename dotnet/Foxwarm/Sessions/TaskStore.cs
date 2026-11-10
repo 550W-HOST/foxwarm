@@ -294,12 +294,7 @@ internal sealed class TaskStore : IDisposable
         }
     }
 
-    internal JsonObject TaskContext(
-        string sessionId,
-        IReadOnlyList<long> sequences,
-        bool consume,
-        IReadOnlyList<string> retained
-    )
+    internal JsonObject TaskContext(string sessionId, IReadOnlyList<long> sequences, bool consume)
     {
         lock (gate)
         {
@@ -356,7 +351,7 @@ internal sealed class TaskStore : IDisposable
                     count = hasLast ? Math.Min(30, count + sequences.Count(seq => seq > last)) : 0;
                     var due = count >= 30;
                     var id = Text(row["id"])!;
-                    if (consume && (due || retained.Contains(id)))
+                    if (consume && due)
                     {
                         result.Add(
                             new JsonObject
@@ -366,8 +361,7 @@ internal sealed class TaskStore : IDisposable
                                 ["status"] = Text(row["status"]),
                             }
                         );
-                        if (due)
-                            count = 0;
+                        count = 0;
                     }
                     Update(
                         db,

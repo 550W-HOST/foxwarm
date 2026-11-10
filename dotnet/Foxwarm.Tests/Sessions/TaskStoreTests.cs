@@ -38,8 +38,7 @@ public sealed class TaskStoreTests
         var context = store.TaskContext(
             "main",
             Enumerable.Range(13, 40).Select(value => (long)value).ToArray(),
-            false,
-            []
+            false
         );
         Assert.Empty(context["tasks"]!.AsArray());
     }
@@ -99,7 +98,7 @@ public sealed class TaskStoreTests
             command.ExecuteNonQuery();
         }
 
-        Assert.Empty(store.TaskContext("main", [1, 2], false, [])!["tasks"]!.AsArray());
+        Assert.Empty(store.TaskContext("main", [1, 2], false)!["tasks"]!.AsArray());
         using var verify = new SqliteConnection(
             $"Data Source={Path.Combine(temp.Path, "state", "tasks.sqlite")}"
         );
@@ -323,11 +322,17 @@ public sealed class TaskStoreTests
                         .Payload["children"]!.AsArray()
                 )!["title"]!.GetValue<string>()
             );
+            // Anchor the unanchored task, then make its reminder due.
+            store.TaskContext("owner", [1], false);
             Assert.Equal(
                 title,
-                Assert.Single(store.TaskContext("owner", [], true, [id])["tasks"]!.AsArray())![
-                    "title"
-                ]!.GetValue<string>()
+                Assert.Single(
+                    store.TaskContext(
+                        "owner",
+                        Enumerable.Range(2, 30).Select(value => (long)value).ToArray(),
+                        true
+                    )["tasks"]!.AsArray()
+                )!["title"]!.GetValue<string>()
             );
             var beforeRejected = store
                 .Execute(new JsonObject { ["action"] = "get", ["taskId"] = id }, null)

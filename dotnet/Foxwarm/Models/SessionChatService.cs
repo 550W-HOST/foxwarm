@@ -75,44 +75,6 @@ internal sealed class SessionChatService(
         var notice = new ModelRetryNotice(hosted);
         var attempts = 0;
         var committedPrefix = false;
-        var retainedTaskIds = new List<string>();
-        Task<IReadOnlyList<JsonObject>> RequestContext()
-        {
-            var context = new List<JsonObject>();
-            if (TaskReminder() is { } task)
-                context.Add(task);
-            return Task.FromResult<IReadOnlyList<JsonObject>>(context);
-        }
-        JsonObject? TaskReminder()
-        {
-            if (tasks is null)
-                return null;
-            var visible = hosted.Entry.WithState(state => TaskProgress.Sequences(state.History));
-            var context = tasks.TaskContext(hosted.Id, visible, true, retainedTaskIds);
-            var current = context["tasks"]!.AsArray();
-            retainedTaskIds = current.Select(item => item!["id"]!.GetValue<string>()).ToList();
-            if (current.Count == 0)
-                return null;
-            var lines = current.Select(item =>
-                $"{item!["id"]!.GetValue<string>()} — {item["title"]!.GetValue<string>()} ({item["status"]!.GetValue<string>()})"
-            );
-            var omitted = context["omitted"]?.GetValue<int>() ?? 0;
-            var omittedText = omitted > 0 ? $"\n{omitted} more tasks." : "";
-            return new JsonObject
-            {
-                ["role"] = "user",
-                ["parts"] = new JsonArray(
-                    new JsonObject
-                    {
-                        ["system"] =
-                            "<foxwarm-system kind=\"task-reminder\">Continue the active tasks:\n"
-                            + string.Join('\n', lines)
-                            + omittedText
-                            + "</foxwarm-system>",
-                    }
-                ),
-            };
-        }
         async Task<string> Prompt(ConcreteHostModel leaf, CancellationToken token)
         {
             token.ThrowIfCancellationRequested();
@@ -137,6 +99,11 @@ internal sealed class SessionChatService(
         }
         try
         {
+            // Only the retry-capable owner path carries committed history that the reminder can extend.
+            if (prepareRetry is not null && await AppendTaskReminderAsync(cancellationToken))
+                history = hosted.Entry.WithState(state =>
+                    RequestHistory.FromSnapshot(state.History.Snapshot())
+                );
             return await requests.RequestAsync(
                 sessionId,
                 captured,
@@ -171,7 +138,6 @@ internal sealed class SessionChatService(
                 "normal-turn",
                 iteration,
                 id => hosted.BeginDraft(id),
-                RequestContext,
                 () =>
                 {
                     var raw = hosted.Entry.WithState(state =>
@@ -251,5 +217,49 @@ internal sealed class SessionChatService(
                 error
             );
         }
+    }
+
+    /// <summary>
+    /// Persists a due Task reminder as ordinary system history before this request. Provider
+    /// retries reuse committed history, and consumption resets progress, so it appends once.
+    /// </summary>
+    private async Task<bool> AppendTaskReminderAsync(CancellationToken cancellationToken)
+    {
+        if (tasks is null)
+            return false;
+        cancellationToken.ThrowIfCancellationRequested();
+        var visible = hosted.Entry.WithState(state => TaskProgress.Sequences(state.History));
+        if (TaskReminder.Build(tasks.TaskContext(hosted.Id, visible, true)) is not { } reminder)
+            return false;
+        IReadOnlyList<JsonObject> rows = [];
+        try
+        {
+            rows = await hosted
+                .Entry.SaveLane.CommitCanonicalAppendWithResultAsync(
+                    state =>
+                    {
+                        var operation = LocalSessionTurnHost.PrepareCanonicalAppend(
+                            state,
+                            [reminder],
+                            [],
+                            false,
+                            false,
+                            () => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                        );
+                        rows = operation.AppendedMessages;
+                        return operation;
+                    },
+                    cancellationToken: cancellationToken
+                )
+                .ConfigureAwait(false);
+        }
+        catch (AuthorityCommittedException)
+        {
+            hosted.Entry.InvokeHistoryAppended(rows);
+            hosted.Entry.InvokeCommitted(hosted.Entry.Snapshot());
+            throw;
+        }
+        hosted.Entry.InvokeCommitted(hosted.Entry.Snapshot());
+        return rows.Count > 0;
     }
 }

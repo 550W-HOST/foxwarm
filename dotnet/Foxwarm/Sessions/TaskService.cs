@@ -263,9 +263,8 @@ internal sealed class TaskService : IDisposable
     internal JsonObject TaskContext(
         string sessionId,
         IReadOnlyList<long> sequences,
-        bool consume,
-        IReadOnlyList<string> retained
-    ) => store.TaskContext(sessionId, sequences, consume, retained);
+        bool consume
+    ) => store.TaskContext(sessionId, sequences, consume);
 
     internal Task<AttachedChildResult> CreateAttachedChildAsync(
         string taskId,

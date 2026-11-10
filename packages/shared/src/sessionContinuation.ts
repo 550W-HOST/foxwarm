@@ -31,6 +31,7 @@ export interface ContinuationMessage {
     noticeType?: string;
     goalReminder?: boolean;
     goalReminderKind?: string;
+    taskReminder?: boolean;
     llmSegment?: { complete: boolean; [key: string]: unknown };
     [key: string]: unknown;
   };
@@ -99,10 +100,20 @@ function isCompactCompletedMessage(message: ContinuationMessage): boolean {
   return meaningfulParts.length > 0 && meaningfulParts.every(isCompactCompletedPart);
 }
 
+/** The generated Task reminder row: flagged and consisting only of its system wrapper. */
+export function isTaskReminderMessage(message: ContinuationMessage): boolean {
+  if (message.role !== 'user' || message.__meta?.taskReminder !== true || message.parts.length !== 1) return false;
+  const part = message.parts[0];
+  if (Object.keys(part).length !== 1 || typeof part.system !== 'string') return false;
+  // Canonical append stamps seq into the opening tag of persisted input wrappers.
+  return /^<foxwarm-system kind="task-reminder"[ >]/.test(part.system) && part.system.endsWith('</foxwarm-system>');
+}
+
 function isTransparentMessage(message: ContinuationMessage): boolean {
   if (isTransientClientMessage(message)) return true;
   if (isLlmRetryNotice(message)) return false;
-  return message.modelVisible === false || isCompactCompletedMessage(message);
+  // A Task reminder is appended immediately before a provider request; the history before it decides.
+  return message.modelVisible === false || isCompactCompletedMessage(message) || isTaskReminderMessage(message);
 }
 
 function hasSuccessfulResponse(response: ContinuationFunctionResponse): boolean {

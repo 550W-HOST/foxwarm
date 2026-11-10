@@ -84,7 +84,7 @@ Identity move and Archive reservation code use [Archive identity](../units/archi
 
 ## Current boundary
 
-The .NET source contains Main-local task service APIs, attached-child binding, persisted child-handoff boundary state, valid legacy Goal migration on owning saves, request-local task context, and compaction progress checkpoint calls. Request context is model-request-only and does not append history or wake a Session. Existing `OpenAIRequestText` child-reminder compatibility handling is separate from the persisted boundary state.
+The .NET source contains Main-local task service APIs, attached-child binding, persisted child-handoff boundary state, valid legacy Goal migration on owning saves, persisted Task reminder rows, and compaction progress checkpoint calls. A due reminder is appended through the canonical append path immediately before the normal request that consumes it and does not enqueue work or wake a Session ([D-tasks-reminder-history](../units/src-session-task-context.md#d-tasks-reminder-history)). Existing `OpenAIRequestText` child-reminder compatibility handling is separate from the persisted boundary state.
 
 ## External Node placement
 

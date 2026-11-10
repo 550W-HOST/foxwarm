@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { isSessionTurnIncomplete, type ContinuationMessage } from './sessionContinuation';
+import { isSessionTurnIncomplete, isTaskReminderMessage, type ContinuationMessage } from './sessionContinuation';
 
 const modelText = (text = 'done'): ContinuationMessage => ({ role: 'model', parts: [{ text }] })
 const userText = (text = 'please continue'): ContinuationMessage => ({ role: 'user', parts: [{ text }] })
@@ -21,6 +21,11 @@ const intervalGoalReminder = (): ContinuationMessage => ({
   role: 'user',
   parts: [{ system: compactCompletionGoalReminderText }],
   __meta: { goalReminder: true, goalReminderKind: 'interval' },
+})
+const taskReminder = (system = '<foxwarm-system kind="task-reminder" seq="9">Continue the active tasks:\ntask_0123456789ab — Ship it (active)</foxwarm-system>'): ContinuationMessage => ({
+  role: 'user',
+  parts: [{ system }],
+  __meta: { taskReminder: true, seq: 9 },
 })
 const llmRetry = (): ContinuationMessage => ({
   role: 'model', modelVisible: false, parts: [{ text: 'provider failed' }], __meta: { noticeType: 'llm-retry' },
@@ -87,6 +92,13 @@ const cases: Array<{ name: string; messages: ContinuationMessage[]; incomplete: 
       { system: '<foxwarm-system kind="event">real input</foxwarm-system>' },
     ],
   }], incomplete: true },
+  { name: 'task reminder over final model remains complete', messages: [userText(), modelText(), taskReminder()], incomplete: false },
+  { name: 'task reminder over user remains incomplete', messages: [modelText(), userText(), taskReminder()], incomplete: true },
+  { name: 'task reminder over dangling tool result remains incomplete', messages: [callMessage('read-task', 'read'), toolMessage('read-task', 'read'), taskReminder()], incomplete: true },
+  { name: 'task reminder over terminal wait remains complete', messages: [callMessage('wait-task', 'wait'), toolMessage('wait-task', 'wait'), taskReminder()], incomplete: false },
+  { name: 'unstamped task reminder is transparent', messages: [userText(), modelText(), taskReminder('<foxwarm-system kind="task-reminder">Continue the active tasks:\ntask_0123456789ab — Ship it (active)</foxwarm-system>')], incomplete: false },
+  { name: 'unflagged task-reminder text is ordinary input', messages: [userText(), modelText(), { ...taskReminder(), __meta: {} }], incomplete: true },
+  { name: 'flagged task reminder with additional content is ordinary input', messages: [userText(), modelText(), { ...taskReminder(), parts: [...taskReminder().parts, { text: 'more' }] }], incomplete: true },
   { name: 'llm retry notice is incomplete despite display-only visibility', messages: [userText(), llmRetry()], incomplete: true },
   { name: 'BTW notice is transparent over a complete model', messages: [userText(), modelText(), displayOnly()], incomplete: false },
   { name: 'BTW notice is transparent over an incomplete user message', messages: [modelText(), userText(), displayOnly()], incomplete: true },
@@ -225,4 +237,10 @@ test('nested business errors and nonzero exec status do not suppress a terminal 
       toolMessage('terminal', 'send_to_session').parts[0],
     ] },
   ]), false);
+});
+
+test('isTaskReminderMessage requires the generated wrapper', () => {
+  assert.equal(isTaskReminderMessage(taskReminder()), true);
+  assert.equal(isTaskReminderMessage(taskReminder('<foxwarm-system kind="task-reminders">x</foxwarm-system>')), false);
+  assert.equal(isTaskReminderMessage({ ...taskReminder(), role: 'model' }), false);
 });

@@ -143,7 +143,13 @@ public static class SessionContinuation
     private static bool Transparent(JsonElement message) =>
         Flag(Property(Property(message, "__meta"), "temporary"), true)
         || Flag(Property(Property(message, "__meta"), "optimistic"), true)
-        || !Retry(message) && (Flag(Property(message, "modelVisible"), false) || Compact(message));
+        || !Retry(message)
+            && (
+                Flag(Property(message, "modelVisible"), false)
+                || Compact(message)
+                // Appended immediately before a provider request; the history before it decides.
+                || TaskReminder.IsRow(message)
+            );
 
     private static bool BareWait(JsonElement args)
     {

@@ -2,7 +2,7 @@ import { receivedSessionCommunication } from './sessionCommunications'
 import type { Message } from './chatShared'
 import { getLlmErrorMessageDetails, parseFoxwarmMetadataLine } from './chatShared'
 import { isCommittedHistoryMessage } from '../chatHistoryState'
-import { isCompactCompletionMaintenanceMessage, isSessionTurnIncomplete } from '../../../shared/src/sessionContinuation'
+import { isCompactCompletionMaintenanceMessage, isSessionTurnIncomplete, isTaskReminderMessage } from '../../../shared/src/sessionContinuation'
 import type { SessionRuntimeState } from '../sessionRuntimeState'
 import { formatCompactDuration } from '../usageTiming'
 import type { TimelineRowView } from './timelineRows'
@@ -173,7 +173,7 @@ export function applyConversationTiming(
         }
       }
       // Multiple incoming inputs need evidence of processing before the next one, or continuous busy coverage.
-      const inputs = range.filter(message => message.role === 'user' && (boundary(message) !== 'visible' || message !== history[right.index] && receivedSessionCommunication(message)) && !message.parts.some(part => {
+      const inputs = range.filter(message => message.role === 'user' && !isTaskReminderMessage(message) && (boundary(message) !== 'visible' || message !== history[right.index] && receivedSessionCommunication(message)) && !message.parts.some(part => {
         const tag = parseFoxwarmMetadataLine(part.system || part.text || '')
         return tag?.tagName === 'foxwarm-system' && ['time', 'goal-reminder', 'session-boundary'].includes(tag.attrs.kind)
       }))

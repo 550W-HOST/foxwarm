@@ -65,7 +65,7 @@ export function projectSessionSearchFields(messages: Message[], timelineView: Ti
   })
   const input = { ...display, messages: committed, isMobile: false, timelineView, showUsageBadge: false, showTimeDividers: false, nestedDepth: 0, historyMessages: messages, currentHistoryMessages, expandedGroupKeys: new Set<string>() }
   const initial = buildTimelineRows(input, null)
-  // The normal collapsed render omits whole Event/Goal reminder rows inside groups.
+  // The normal collapsed render omits whole Event/Goal/Task reminder rows inside groups.
   // Reuse the same row builder in data-only expanded mode so their own row/group keys survive.
   const groupKeys = new Set(initial.rows.filter(row => row.group?.summaryItems.length && !row.group.keepExpanded).map(row => row.group!.key))
   const rows = timelineView !== 'conversation' && groupKeys.size

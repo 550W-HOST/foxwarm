@@ -273,12 +273,14 @@ test('internal runtime rows are recognized for timeline omission', () => {
   const firstRun = { role: 'user', parts: [{ system: '<foxwarm-system kind="session-boundary" event="first-run" currentSessionId="main" currentNode="master" seq="1" />\nFoxwarm setup has just finished.' }] }
   const snapshot = { role: 'tool', parts: [{ text: '<foxwarm-system kind="snapshot" hint="snapshot" />\n<foxwarm-current-model model-id="a/b" />' }], __meta: { timestamp: -1, synthetic: 'persistentMemorySnapshot' } }
   const withTime = { role: 'user', parts: [{ system: '<foxwarm-system kind="time" time="2026-11-03 07:00:00 +0000" />' }, settings.parts[0]] }
-  for (const message of [settings, firstRun, snapshot, withTime]) assert.equal(isInternalTimelineMessage(message), true)
+  const taskReminder = { role: 'user', parts: [{ system: '<foxwarm-system kind="task-reminder" seq="9">Continue the active tasks:\ntask_0123456789ab — Ship it (active)</foxwarm-system>' }], __meta: { taskReminder: true, seq: 9 } }
+  for (const message of [settings, firstRun, snapshot, withTime, taskReminder]) assert.equal(isInternalTimelineMessage(message), true)
 
   const childBoundary = { role: 'user', parts: [{ system: '<foxwarm-system kind="session-boundary" event="new-child" parentSessionId="p" currentSessionId="c" />' }] }
   const userText = { role: 'user', parts: [settings.parts[0], { text: 'Hello' }] }
   const event = { role: 'user', parts: [{ system: '<foxwarm-system kind="event" type="background-process-finished" />' }] }
   const welcome = { role: 'model', parts: [{ text: 'Hi, I am Foxwarm.' }] }
   const onlyTime = { role: 'user', parts: [{ system: '<foxwarm-system kind="time" time="2026-11-03 07:00:00 +0000" />' }] }
-  for (const message of [childBoundary, userText, event, welcome, onlyTime]) assert.equal(isInternalTimelineMessage(message), false)
+  const unflaggedReminder = { ...taskReminder, __meta: { seq: 9 } }
+  for (const message of [childBoundary, userText, event, welcome, onlyTime, unflaggedReminder]) assert.equal(isInternalTimelineMessage(message), false)
 })

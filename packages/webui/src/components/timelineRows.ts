@@ -221,7 +221,7 @@ const getMessageUsageAttribution = (msg: Message, timing: DerivedRequestTiming):
 })
 
 /** Whole event/reminder wrappers and metadata-classified display-only LLM retry notices may join a tool run; quoted content does not. */
-const getGroupableSystemKind = (msg: Message): 'event' | 'goal-reminder' | 'llm-error' | null => {
+const getGroupableSystemKind = (msg: Message): 'event' | 'goal-reminder' | 'task-reminder' | 'llm-error' | null => {
   if (getSessionNotice(msg) && !getLlmErrorMessageDetails(msg)) return null
   if (getLlmErrorMessageDetails(msg)) return 'llm-error'
   if (msg.role !== 'user' || msg.parts.length !== 1) return null
@@ -231,13 +231,15 @@ const getGroupableSystemKind = (msg: Message): 'event' | 'goal-reminder' | 'llm-
   if (!opening) return null
   const tag = parseFoxwarmMetadataLine(opening)
   const kind = tag?.attrs.kind
-  if (tag?.tagName !== 'foxwarm-system' || tag.closing || (kind !== 'event' && kind !== 'goal-reminder')) return null
+  if (tag?.tagName !== 'foxwarm-system' || tag.closing || (kind !== 'event' && kind !== 'goal-reminder' && kind !== 'task-reminder')) return null
   const wrapper = value.trim()
   if (/\/\s*>$/.test(opening)) return wrapper === opening ? kind : null
   // Text-backed history uses standalone wrapper lines. A direct-user inline quote is not one.
   if (part.text && !/^\r?\n/.test(wrapper.slice(opening.length))) return null
   return wrapper.slice(opening.length).trimEnd().endsWith('</foxwarm-system>') ? kind : null
 }
+
+const systemKindLabels = { event: 'Event', 'goal-reminder': 'Goal reminder', 'task-reminder': 'Task reminder' } as const
 
 const isGroupableSystemMessage = (msg: Message): boolean => getGroupableSystemKind(msg) !== null
 
@@ -457,7 +459,7 @@ const deriveGroup = (messages: Message[], scan: GroupScan, requestTimings: Deriv
         items.push({ name: 'system-llm-error', label: 'LLM error', tone: 'system' })
       }
     } else if (systemKind) {
-      items.push({ name: `system-${systemKind}`, label: systemKind === 'event' ? 'Event' : 'Goal reminder', tone: 'system' })
+      items.push({ name: `system-${systemKind}`, label: systemKindLabels[systemKind], tone: 'system' })
     }
     const parts = index === start ? msg.parts.slice(startPartFrom) : msg.parts
     parts.forEach((part) => {

@@ -6,7 +6,7 @@
 SessionTurnRunner / LocalSessionTurnHost
   -> SessionChatService.ChatCoreAsync
   -> ModelRequestOwner.RequestAsync + ConfiguredModelRequests
-     (normal canonical requests may refresh request-only Task context before retries)
+     (normal owner requests first append a due Task reminder row to committed history)
   -> concrete provider transport (HTTP/SSE or Responses WebSocket)
   -> completed eligible commentary prefix -> exact turn-host append callback
   -> ChatResult/stream result (uncommitted suffix only)
@@ -17,7 +17,7 @@ SessionTurnRunner / LocalSessionTurnHost
 - **Producer:** `LocalSessionTurnHost` supplies the exact Session snapshot/history, request scope, Agent memory, model settings, and tool definitions. It owns the outer tool loop, strict assistant/tool message pairs, retry safe point, and `SessionToolExecutor` batch calls.
 - **Owner:** `SessionChatService.ChatCoreAsync` selects route context and delegates provider-neutral request work to `ModelRequestOwner.RequestAsync`/`ConfiguredModelRequests`; concrete provider units own wire serialization/transport. `SessionChatService` does not own the tool-call loop.
 - **Durable boundaries:** `LlmRequestJournalStore.BeginRequestAsync` first persists a neutral manifest after `RequestHistoryRepair.SelectAndRepair` visibility/repair and request-only display projection, before concrete model filtering/image hydration. Later, after the concrete semantic wire payload is formed and immediately before transport, `AppendAttemptStartAsync` persists concrete model/provider/attempt/effective-prompt metadata plus a payload digest; it does not store the hydrated wire body, base64 image data, auth headers, or WebSocket suffix. Canonical assistant/tool messages enter active JSON/Archive only through `LocalSessionTurnHost` and `SessionSaveLane.CommitCanonicalAppendAsync`. Normal Responses streams use that same owner for ordered completed commentary prefixes; detached requests and incomplete function calls have no such commit lane.
-- **Consumers:** `LocalSessionTurnHost` executes returned tool calls through `SessionToolExecutor`, appends strict assistant/tool pairs, and decides whether to continue/terminal-stop; WebUI realtime receives deltas/events; DevTools reads journal/response fixtures. Normal canonical requests receive request-only Task context from `SessionChatService`; this context is not appended to active history or queue.
+- **Consumers:** `LocalSessionTurnHost` executes returned tool calls through `SessionToolExecutor`, appends strict assistant/tool pairs, and decides whether to continue/terminal-stop; WebUI realtime receives deltas/events; DevTools reads journal/response fixtures. Before a normal owner request, `SessionChatService` appends a due Task reminder as a committed history row and sends plain history; no request-only context is added ([D-tasks-reminder-history](../units/src-session-task-context.md#d-tasks-reminder-history)).
 
 ## Provider preparation and transport order
 
@@ -37,7 +37,7 @@ History-compatible missing generated blob and other local preparation/persistenc
 
 ## Retry and journal ordering
 
-`LocalSessionTurnHost.PrepareRetryAsync` reaches the save-lane safe point, drains leading queue inputs, and reports whether committed context changed. Normal provider retry applies backoff and preserves the outer retry budget. Enabled text-detection failures have a dedicated pre-send classification in that same budget; transient detection failures retry without provider health/failover or an attempt-start record. Other pre-send preparation failures remain outside this retry path. `SessionChatService` refreshes request-only Task context at the same retry safe point; if it changes, `ModelRequestOwner` starts a new journal logical request ID for the changed semantic context. Unchanged-input failover keeps the same ID, and a later leaf prompt override remains on that ID. Retry does not reset the outer budget.
+`LocalSessionTurnHost.PrepareRetryAsync` reaches the save-lane safe point, drains leading queue inputs, and reports whether committed context changed. Normal provider retry applies backoff and preserves the outer retry budget. Enabled text-detection failures have a dedicated pre-send classification in that same budget; transient detection failures retry without provider health/failover or an attempt-start record. Other pre-send preparation failures remain outside this retry path. A Task reminder appended before the request is committed history, so retries resend it unchanged and it never changes the logical request by itself. Unchanged-input failover keeps the same ID, and a later leaf prompt override remains on that ID. Retry does not reset the outer budget.
 
 Attempt-start persistence is required before provider transport; failure to make it durable is `LlmJournalPreparationException` and prevents sending that attempt. Result-write failure after a successful provider result is diagnostic-only: the result is returned and provider retry is not duplicated. Journal records are not active Session authority or child-handoff receipts.
 
