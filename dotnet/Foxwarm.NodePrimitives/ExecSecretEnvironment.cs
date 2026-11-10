@@ -13,7 +13,7 @@ internal static partial class ExecSecretEnvironment
     internal const int MaxVariables = 32;
 
     internal static string Unsupported(string node) =>
-        $"Node `{node}` cannot pass stored secrets to a command. Run it on master or on a Node that supports secretEnv.";
+        $"Node `{node}` can't pass stored secrets to commands. Run the command on master or on a Node that supports secretEnv.";
 
     [GeneratedRegex("^[A-Za-z_][A-Za-z0-9_]{0,127}$", RegexOptions.CultureInvariant)]
     private static partial Regex NamePattern();

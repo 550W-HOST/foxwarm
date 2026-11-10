@@ -148,7 +148,7 @@
           },
           "secretEnv": {
             "type": "object",
-            "description": "Environment variables to set from stored secrets, as {\"VARIABLE\": \"secret-name\"}. The command receives the values; they never appear in the command, its logs or this conversation. Supported on master and on Nodes that offer it.",
+            "description": "Environment variables to set from stored secrets, as {\"VARIABLE\": \"secret-name\"}. The command receives the values; they are not written into the command, exec records or this conversation, and command output that contains them is masked. Available on master and on Nodes that support it.",
             "additionalProperties": {
               "type": "string"
             }

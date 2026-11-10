@@ -44,7 +44,7 @@ public sealed partial class RemoteExecProtocolTests
             await legacy.Start();
             legacy.Manager.Nodes.SecretEnvironment = Resolve;
             var refused = await Assert.ThrowsAsync<InvalidDataException>(() => SecretExec(legacy));
-            Assert.Contains("cannot pass stored secrets", refused.Message);
+            Assert.Contains("can't pass stored secrets to commands", refused.Message);
             Assert.Equal(0, resolved);
             var plain = legacy.Exec();
             var first = await legacy.Read();

@@ -36,7 +36,10 @@ public sealed partial class ProviderFileConsumerTests
         // it fails before anything starts.
         Assert.False((await ExecParameters()).ContainsKey("secretEnv"));
         var refused = await f.Call("exec", Args());
-        Assert.Contains("cannot pass stored secrets", refused.ToJsonString());
+        Assert.Contains(
+            "can't pass stored secrets to commands",
+            refused["error"]!["message"]!.GetValue<string>()
+        );
         Assert.DoesNotContain(
             await f.Requests(),
             request => request["operation"]!.GetValue<string>() == "exec-start"

@@ -203,7 +203,7 @@ internal sealed partial class NodeExecManager(
                 .SequenceEqual(values.Keys.Order(StringComparer.Ordinal), StringComparer.Ordinal)
         )
             throw new InvalidDataException(
-                "secretEnv values are supplied only by Foxwarm Main for the variables the call names."
+                "Only the Main server supplies secretEnv values, and only for the variables the call names."
             );
         return values;
     }
