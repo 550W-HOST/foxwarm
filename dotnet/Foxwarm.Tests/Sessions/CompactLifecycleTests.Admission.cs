@@ -172,10 +172,9 @@ public sealed partial class CompactLifecycleTests
             release.TrySetResult();
             await owner.DrainForegroundAsync().WaitAsync(TimeSpan.FromSeconds(5));
         }
-        // Keep 5% of the 15.3k threshold so the short seed history has older rows to plan.
         var accepted = await client.PostAsJsonAsync(
             route + "/message",
-            new { text = "/compact 5", controlRequestId = "compact-after-settlement" }
+            new { text = "/compact", controlRequestId = "compact-after-settlement" }
         );
         Assert.Equal(HttpStatusCode.Accepted, accepted.StatusCode);
         Assert.True(

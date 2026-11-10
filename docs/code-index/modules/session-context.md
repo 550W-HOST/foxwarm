@@ -28,7 +28,7 @@ Session context owns model-context budgeting, layered compaction and direct acti
 ## Current defaults
 
 - Automatic compact threshold: 85% of the resolved model context window (`llm.compactThresholdPercent`, default `0.85`).
-- Recent raw history kept by default: the newest raw rows within 30% of the compact threshold, by estimated tokens (`llm.compactKeepPercent`, default `0.3`; [D-context-recent-raw-tail](../threads/context-compaction.md#d-context-recent-raw-tail)).
+- Recent raw history kept by default: the newest raw rows within 30% of the compact threshold (or of the raw region present, when smaller), by estimated tokens (`llm.compactKeepPercent`, default `0.3`; [D-context-recent-raw-tail](../threads/context-compaction.md#d-context-recent-raw-tail)).
 - Raw eligibility: more than 2,000 estimated tokens; default required replacement: 20%.
 - Block level eligibility: 3,000 summary tokens; high-backlog force threshold: 5,000.
 - Candidate block window: oldest 40%; default high-backlog required source-block coverage: 20%.

@@ -185,11 +185,6 @@ public sealed partial class CompactLifecycleTests
         managerForPeer = manager;
         await manager.LoadMainHostAsync();
         var owner = await manager.CreateNamedAsync("main", "files", null, null);
-        // Keep three of the eight ~1,650-token inputs (30% of a 20k threshold).
-        await owner.Entry.SaveLane.CommitSettingsAsync(
-            new JsonObject { ["compactThresholdTokens"] = 20000 },
-            manager.Models
-        );
         owner.Registry.TriggerOverride = _ => Task.CompletedTask;
         if (remote)
         {

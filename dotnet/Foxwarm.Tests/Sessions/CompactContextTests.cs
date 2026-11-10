@@ -299,7 +299,8 @@ public sealed class CompactContextTests
                 before.History.Materialize(),
                 CompactCandidateBuilder.KeepTokens(
                     models.CompactKeepFraction,
-                    SessionModelSettings.EffectiveThreshold(before.AuthorityEnvelope, models)
+                    SessionModelSettings.EffectiveThreshold(before.AuthorityEnvelope, models),
+                    before.History.Materialize()
                 )
             );
             Assert.All(

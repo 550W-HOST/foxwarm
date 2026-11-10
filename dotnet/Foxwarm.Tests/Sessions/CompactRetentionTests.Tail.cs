@@ -60,10 +60,19 @@ public sealed partial class CompactRetentionTests
     }
 
     [Fact]
-    public void Recent_tail_budget_is_the_keep_fraction_of_the_compact_threshold()
+    public void Recent_tail_budget_is_a_share_of_the_threshold_or_of_the_raw_region_present()
     {
-        Assert.Equal(85_000, CompactCandidateBuilder.KeepTokens(.5, 170_000));
-        Assert.Equal(1, CompactCandidateBuilder.KeepTokens(.3, 1));
-        Assert.Equal(0, CompactCandidateBuilder.KeepTokens(0, 170_000));
+        // Only the raw rows after the newest block count.
+        var raw = Enumerable.Range(10, 10).Select(seq => Sized(seq, 3000)).ToArray();
+        JsonObject[] history = [Sized(1, 30000), SummaryBlock(5, 1), .. raw];
+        var present = raw.Sum(CompactCandidateBuilder.RowTokens);
+        Assert.InRange(present, 9900, 10000);
+        Assert.Equal(
+            Math.Floor(.5 * present),
+            CompactCandidateBuilder.KeepTokens(.5, 170_000, history)
+        );
+        Assert.Equal(2000, CompactCandidateBuilder.KeepTokens(.5, 4000, history));
+        Assert.Equal(1, CompactCandidateBuilder.KeepTokens(.3, 170_000, [SummaryBlock(5, 1)]));
+        Assert.Equal(0, CompactCandidateBuilder.KeepTokens(0, 170_000, history));
     }
 }

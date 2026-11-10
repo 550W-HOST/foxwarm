@@ -146,15 +146,15 @@ public sealed partial class CompactRetentionTests
         for (var index = 0; index < 10; index++)
             inputs.Add(await Append("user", Text()));
         var call = await Append("model", Call("first"), Call("second"));
-        // The keep budget (1% of the 170k threshold) is below one input and above the exchange.
-        await Compact(inputs[0], inputs[6], .01);
+        await Compact(inputs[0], inputs[6], .3);
         var removedCompletion = owner.Entry.Snapshot().History.Last().Sequence!.Value;
         var firstResponse = await Append("tool", Response("first"));
         var secondResponse = await Append("tool", Response("second"));
         var archiveBefore = owner
             .Archive.ReadMessages()
             .ToDictionary(row => row.Seq, row => row.Message.ToJsonString());
-        await Compact(inputs[7], inputs[9], .01);
+        // A share of the remaining raw tokens that keeps the exchange but none of the inputs.
+        await Compact(inputs[7], inputs[9], .3);
         Assert.Equal(2, peer.RequestCount);
         var sparse = owner.History();
         Assert.DoesNotContain(

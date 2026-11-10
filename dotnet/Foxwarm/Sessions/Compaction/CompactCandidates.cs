@@ -102,9 +102,29 @@ internal static class CompactCandidateBuilder
     public static int Split(IReadOnlyList<JsonObject> history, double keepTokens) =>
         Split(history, keepTokens, RawSequenceCounts(history));
 
-    /// <summary>Raw-tail token budget: the keep fraction of the effective compact threshold.</summary>
-    public static double KeepTokens(double keepFraction, double threshold) =>
-        keepFraction > 0 && threshold > 0 ? Math.Max(1, Math.Floor(keepFraction * threshold)) : 0;
+    /// <summary>
+    /// Raw-tail token budget: the keep fraction of the effective compact threshold or of the raw
+    /// region after the newest summary block, whichever is smaller. Automatic compaction runs at or
+    /// above the threshold; a manual compaction of a shorter history keeps the same share of what
+    /// is present.
+    /// </summary>
+    public static double KeepTokens(
+        double keepFraction,
+        double threshold,
+        IReadOnlyList<JsonObject> history
+    )
+    {
+        if (keepFraction <= 0 || threshold <= 0)
+            return 0;
+        var raw = 0d;
+        for (var index = history.Count - 1; index >= 0; index--)
+        {
+            if (Meta(history[index])?["contextBlock"] is not null)
+                break;
+            raw += RowTokens(history[index]);
+        }
+        return Math.Max(1, Math.Floor(keepFraction * Math.Min(threshold, raw)));
+    }
 
     public static int RowTokens(JsonObject row) =>
         Visible(row) && !Completion(row) ? Tokens(Preview(row, true)) : 0;

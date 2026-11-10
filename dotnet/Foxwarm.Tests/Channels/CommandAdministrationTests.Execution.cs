@@ -202,8 +202,8 @@ public sealed partial class CommandAdministrationTests
     }
 
     [Theory]
-    [InlineData("50", 6)]
-    [InlineData("invalid", 3)]
+    [InlineData("50", 10)]
+    [InlineData("invalid", 6)]
     public async Task Manual_compact_text_passes_explicit_keep_or_configured_fallback_into_real_provider_preparation(
         string argument,
         int kept
@@ -249,11 +249,6 @@ public sealed partial class CommandAdministrationTests
                     ),
                 })
                 .ToArray()
-        );
-        // Each input is ~1,650 estimated tokens; the tail keeps a share of this 20k threshold.
-        await f.Owner.Entry.SaveLane.CommitSettingsAsync(
-            new JsonObject { ["compactThresholdTokens"] = 20000 },
-            f.Manager.Models
         );
         var replies = new List<string>();
         var source = Source(replies);
