@@ -127,6 +127,13 @@ The normal 200-source window protects the viewport plus 500 CSS pixels on either
 
 Scoped Archive image URLs carry the original sequence. Unsigned reads and signature issuance prove the blob in one exact effective-lineage message, recheck current Session access, and retain the existing resource-bound download signature. No arbitrary blob permission or per-image whole-Archive scan is added. Session deletion and committed rename/fork lifecycle remain unchanged.
 
+### D-context-recall-target-instrumentation
+
+**Directly selected by the user (2026-11-11, D8 of the CTX-block retention design).** Recalled blocks are not exempted from merging for now. A recalled block's content re-enters the raw tail and is summarized into the next level-1 block, which already gives a fresh trace. Before deciding on a spacing-effect rule, collect evidence about which blocks are recalled again, at which level and age.
+
+- `recall` with an exact `B#N`, `msg:B#N` or `msg#A-B` target appends one JSON line to `state/logs/recall-targets.jsonl`. A line holds the time, the caller and target Session IDs, the target kind, and either the block (ID, owning Session, level, source kind, raw range, content age from its raw end time, summary age from its creation) or the message range. Overview, block lists and semantic or literal queries are not recorded.
+- Records hold identifiers and ages, never content. Writing is best effort and never changes the recall result. At 4 MiB the file rotates to `recall-targets.1.jsonl`, replacing the previous one.
+
 ### D-context-history-search-viewer
 
 **Selected user-facing capability; directly requested.** Independent historical inspection serves [retained evidence access](../behaviors/conversation-and-history.md#historical-reading-is-bounded-and-has-a-different-scope-from-context), not Session execution. Reusing source-family ranking and bounded adjacent reads is the derived implementation; administrator access here does not broaden model-tool scope.

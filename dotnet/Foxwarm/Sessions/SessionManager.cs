@@ -90,6 +90,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         if (Directory.Exists(runtimeFiles))
             Directory.Delete(runtimeFiles, recursive: true);
         diagnostics = new(this.root);
+        RecallTargets = new(this.root);
         Nodes = new(this.root);
         Nodes.Registry.ConfigureLimits(() =>
             (
@@ -623,6 +624,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
     }
 
     public string DataRoot => root;
+
+    internal RecallTargetLog RecallTargets { get; }
     public bool Accepting => accepting;
     public HostModels Models => models;
 

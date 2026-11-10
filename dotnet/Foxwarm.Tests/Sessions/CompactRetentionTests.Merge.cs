@@ -15,6 +15,7 @@ public sealed partial class CompactRetentionTests
         private SessionManager manager = null!;
         public SessionOwner Owner { get; private set; } = null!;
         public int Requests => peer.RequestCount;
+        public SessionManager Manager => manager;
 
         /// <summary>Planner responses are taken in order; the last one repeats.</summary>
         public static async Task<RetentionFixture> CreateAsync(int responses)
@@ -235,5 +236,52 @@ public sealed partial class CompactRetentionTests
         )!;
         Assert.Equal(CompactRetention.NewBlockBudget, recorded["budget"]!.GetValue<int>());
         Assert.Equal(3, completion["compaction"]!["planner"]!["steps"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public async Task Exact_recall_targets_are_recorded_with_level_and_age_but_no_content()
+    {
+        await using var f = await RetentionFixture.CreateAsync(1);
+        await f.Append("user", Text());
+        await f.Append("user", Text());
+        await f.Compact();
+        var block = Assert.Single(f.Owner.Archive.ReadBlocks());
+        foreach (
+            var target in new[] { $"B#{block.Id}", $"msg:B#{block.Id}", "msg#1-1", "overview" }
+        )
+            Assert.Null(
+                (
+                    await ArchiveRecallTool.ExecuteAsync(
+                        f.Manager,
+                        f.Owner,
+                        new JsonObject { ["target"] = target }
+                    )
+                )["error"]
+            );
+        var records = File.ReadAllLines(f.Manager.RecallTargets.FilePath)
+            .Select(line => JsonNode.Parse(line)!.AsObject())
+            .ToArray();
+        Assert.Equal(
+            new[] { "B#", "msg:B#", "messages" },
+            records.Select(record => record["target"]!.GetValue<string>())
+        );
+        Assert.All(
+            records.Take(2),
+            record =>
+            {
+                Assert.Equal(block.Id, record["block"]!.GetValue<long>());
+                Assert.Equal(1, record["level"]!.GetValue<int>());
+                Assert.True(record["summaryAgeMs"]!.GetValue<long>() >= 0);
+                Assert.Equal(f.Owner.Id, record["session"]!.GetValue<string>());
+            }
+        );
+        Assert.Equal(
+            (1L, 1L),
+            (records[2]["first"]!.GetValue<long>(), records[2]["last"]!.GetValue<long>())
+        );
+        Assert.DoesNotContain(
+            new string('x', 100),
+            File.ReadAllText(f.Manager.RecallTargets.FilePath)
+        );
     }
 }

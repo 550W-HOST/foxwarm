@@ -164,7 +164,9 @@ internal static partial class CompactPrompt
         ]);
         if (!string.IsNullOrWhiteSpace(guidance))
         {
-            lines.Add("Additional guidance from compaction requester:");
+            lines.Add(
+                "Additional guidance from the compaction requester. It applies to the summaries; the operations above are fixed:"
+            );
             lines.Add(guidance);
             lines.Add("");
         }

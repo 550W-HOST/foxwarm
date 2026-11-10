@@ -557,6 +557,13 @@ internal static class ArchiveRecallTool
                             renderer.Budget
                         )
                     );
+                await manager.RecallTargets.BlockAsync(
+                    source.Id,
+                    id,
+                    target.Kind == "raw-block" ? "msg:B#" : "B#",
+                    block,
+                    DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                );
                 if (target.Kind == "raw-block")
                     target = new("messages", block.RawStartSeq, block.RawEndSeq);
             }
@@ -601,6 +608,14 @@ internal static class ArchiveRecallTool
                     )
                 );
             }
+            if (block is null)
+                await manager.RecallTargets.MessagesAsync(
+                    source.Id,
+                    id,
+                    target.First,
+                    target.Last,
+                    DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                );
             var records = reader.Messages(target.First, target.Last);
             var available = reader.Stats();
             if (programmatic)

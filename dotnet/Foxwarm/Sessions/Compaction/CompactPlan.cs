@@ -234,7 +234,8 @@ internal static class CompactPlanValidator
                 $"Raw-message hard quota requires message-source replaceAsBlocks entries to actually replace at least ~{candidates.RequiredRawTokens} eligible estimated tokens, but this plan replaces only ~{coveredTokens} after excluding preserveMessages (deficit ~{candidates.RequiredRawTokens - coveredTokens})."
             );
         var overBudget = OverBudget(operations, candidates);
-        if (overBudget.Count > 0 && !acceptOverBudget)
+        // In-context budgets are advisory: overruns are reported with the accepted plan.
+        if (overBudget.Count > 0 && !acceptOverBudget && !candidates.InContext)
             throw new CompactPlanBudgetException(
                 "Summary over budget (memory facts included); shorten it and resubmit the complete plan: "
                     + string.Join(
@@ -299,14 +300,27 @@ internal static class CompactPlanValidator
     {
         var firstIndex = candidates
             .Items.ToList()
-            .FindIndex(candidate =>
-                candidate.Kind == kind && candidate.TargetLevel == level && candidate.Start == start
-            );
+            .FindIndex(candidate => candidate.Kind == kind && candidate.Start == start);
         if (firstIndex < 0)
             throw new CompactPlanInvalidException(
                 $"replaceAsBlocks[{blockIndex}] sourceStart is not a listed candidate."
             );
         var first = candidates.Items[firstIndex];
+        // A single-block rewrite shortens a block without widening its time span, so it keeps the
+        // source level. Block summaries start at level 2, so a level-1 source still becomes level 2.
+        if (kind == "block" && first.End == end)
+        {
+            var single = Math.Max(2, first.SourceLevel);
+            if (level != single)
+                throw new CompactPlanInvalidException(
+                    $"replaceAsBlocks[{blockIndex}] must use level {single} for a single-block rewrite."
+                );
+            return (firstIndex, firstIndex, single);
+        }
+        if (first.TargetLevel != level)
+            throw new CompactPlanInvalidException(
+                $"replaceAsBlocks[{blockIndex}] sourceStart is not a listed candidate."
+            );
         for (var i = firstIndex; i < candidates.Items.Count; i++)
         {
             var candidate = candidates.Items[i];
@@ -333,13 +347,15 @@ internal static class CompactPlanValidator
     )
     {
         var result = new JsonArray();
-        if (candidates.InContext)
-            return result;
         foreach (var op in operations)
         {
-            var budget = candidates
-                .Retention.First(required => required.CandidateStart == op.CandidateStart)
-                .Budget;
+            var budget = candidates.InContext
+                ? op.Kind == "message"
+                    ? CompactRetention.NewBlockBudget
+                    : CompactRetention.MergedBlockBudget
+                : candidates
+                    .Retention.First(required => required.CandidateStart == op.CandidateStart)
+                    .Budget;
             // The budget covers the stored summary, including its memory facts section.
             var tokens = CompactCandidateBuilder.Tokens(
                 SessionCompactor.FormatSummary(op.Summary, op.MemoryFacts)

@@ -18,7 +18,7 @@ internal static class CompactToolDefinition
     "properties": {
       "sessionId": { "type": "string", "description": "Session to compact. Defaults to this session." },
       "summary": { "type": "string", "description": "Additional instructions for the compaction planner, not the final summary or plan." },
-      "keepPercent": { "type": "number", "description": "Recent history to keep unsummarized, measured in tokens as a share of the automatic compaction threshold: a fraction greater than 0 and up to 1, or a percentage greater than 1 and up to 100. Defaults to the configured share." }
+      "keepPercent": { "type": "number", "description": "Recent history to keep unsummarized, measured in tokens as a share of the automatic compaction threshold, or of the current unsummarized history when that is smaller: a fraction greater than 0 and up to 1, or a percentage greater than 1 and up to 100. Defaults to the configured share." }
     }
   }
 }
