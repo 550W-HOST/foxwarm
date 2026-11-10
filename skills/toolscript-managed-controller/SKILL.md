@@ -73,7 +73,7 @@ Returns structured data including:
 
 Important:
 
-- session/isolation permission checks still apply
+- session permission checks and tool authorization still apply
 - self-management is rejected
 - stale/orphaned leases are reclaimed by recovery logic
 
@@ -223,7 +223,7 @@ So in normal use, think in terms of **one controller run handling one managed se
 
 ## Permission / safety notes
 
-- managed control does **not** bypass isolation rules
+- managed control does **not** bypass tool authorization rules
 - only permitted owner/target relationships can manage each other
 - if a controller run disappears or a lease goes stale, recovery logic can reclaim the managed session
 - pending managed inbox work can wake the owner and, when available, the controller run

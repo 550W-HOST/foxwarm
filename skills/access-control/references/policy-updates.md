@@ -44,7 +44,7 @@ Use that with `search_tools`, then invoke with `call_tool`:
 }
 ```
 
-These examples require the existing permissions; they do not authorize changing live policy. `set_config` has no Node selector and always reads the candidate on `master`. Current isolated path restrictions still apply. Writing the candidate requires its own write permission, separate from the setter's candidate-read check.
+These examples require the existing permissions; they do not authorize changing live policy. `set_config` has no Node selector and always reads the candidate on `master`. The caller's own rules still apply. Writing the candidate requires its own write permission, separate from the setter's candidate-read check.
 
 ## Migration from the former setter
 

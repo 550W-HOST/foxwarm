@@ -192,7 +192,7 @@ internal sealed partial class SessionManager
                         ["defaultNode"] = agents.DefaultNode(name),
                         ["defaultCwd"] = agents.DefaultCwd(name),
                         ["inheritable"] = agents.Inheritable(name),
-                        ["restricted"] = EndsInDeny(
+                        ["restricted"] = IsolationMigrationRules.EndsInDeny(
                             agents.MetadataSnapshot()[name]?["rules"] as JsonArray
                         ),
                         ["isolationMigration"] = IsolationMigrationSummary(name),
@@ -210,11 +210,6 @@ internal sealed partial class SessionManager
             .ToArray();
     }
 
-    // A local layer whose last rule denies every call without selectors allows only what it lists.
-    private static bool EndsInDeny(JsonArray? rules) =>
-        rules?.LastOrDefault() is JsonObject last
-        && SessionWait.Text(last["action"]) == "deny"
-        && last["match"] is null or JsonObject { Count: 0 };
 
     // What the legacy isolation migration did to this Agent, for administrators. A layer that
     // denies everything is reported only while it is still the installed one.

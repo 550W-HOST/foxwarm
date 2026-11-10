@@ -53,9 +53,8 @@ Observable bindings, triggers, reply selection, progress and adapter limits are 
 - Weixin context tokens are in-memory per user; a new inbound message is required after token loss. QR login sessions expire after five minutes.
 - WebUI `sendFile` is intentionally a no-op because the browser uses authenticated downloads/tool metadata.
 - QQ Bot C2C/group attachments use an authorization-gated, bounded inbound
-  spool/materializer. Main-hosted saves use the path boundary; isolated or
-  bound-node saves reuse the existing whole-buffer node boundary only up to a
-  fixed 10 MiB attachment cap. Direct video/voice are generic saved
+  spool/materializer. Saves are always Main-hosted and use the path boundary.
+  Direct video/voice are generic saved
   descriptors and nested attachments remain deferred. C2C/group `sendFile`
   uses the destination-specific direct-small or streamed-large official upload
   flow. C2C/group text, media, and typing share one process-local outbound

@@ -1,6 +1,6 @@
 ---
 name: access-control
-description: Configure Foxwarm entry identities, scoped WebUI access, inbound MCP permissions, and internal tool authorization policy. Use for access.identities, tool-authorization.yaml, allow/ask/deny rules, or safe policy updates; use agent-management for Agent lifecycle, isolation, and Node binding.
+description: Configure Foxwarm entry identities, scoped WebUI access, inbound MCP permissions, and internal tool authorization policy. Use for access.identities, tool-authorization.yaml, allow/ask/deny rules, or safe policy updates; use agent-management for Agent lifecycle, Agent-local rules, and default Nodes.
 ---
 # Access control
 

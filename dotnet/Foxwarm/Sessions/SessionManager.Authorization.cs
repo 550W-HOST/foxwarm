@@ -127,9 +127,9 @@ internal sealed partial class SessionManager
             requested ??= owner.Id;
         var target = AuthorizationTarget(requested);
         // An Archive outlives its catalog row. Without a live row, the requested identity's
-        // Agent segment names the owner, so same-Agent rules still cover deleted Sessions.
-        if (target is null && family == "archive")
-            target = new(requested, requested.Split('/')[0], null);
+        // Agent names the owner, so same-Agent rules still cover deleted Sessions.
+        if (target is null && family == "archive" && SessionIdentity.IsValid(requested))
+            target = new(requested, SessionIdentity.Agent(requested), null);
         return request with { SourceParent = parent, SessionTarget = target };
     }
 

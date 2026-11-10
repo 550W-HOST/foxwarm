@@ -69,6 +69,9 @@ internal sealed partial class AgentCatalog
     /// <summary>The Agent's creator ancestors, root first, ending with the Agent itself.</summary>
     internal string[] CreatorChainOf(string name) => CreatorChain(name, MetadataSnapshot());
 
+    internal string[] CreatorChainIn(string name, JsonObject snapshot) =>
+        CreatorChain(name, snapshot);
+
     private string[] CreatorChain(string name, JsonObject snapshot)
     {
         var chain = new List<string>();
@@ -218,6 +221,9 @@ internal sealed partial class AgentCatalog
             var row = next[name] as JsonObject ?? new JsonObject();
             next[name] = row;
             row["rules"] = rules.DeepClone();
+            // Rules written here are the administrator's: startup reconciliation keeps them.
+            if (row["legacyIsolation"] is JsonObject marker)
+                marker["confirmedDigest"] = IsolationMigrationRules.Digest(rules);
             try
             {
                 AtomicIndexWrite(

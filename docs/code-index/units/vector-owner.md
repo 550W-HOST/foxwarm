@@ -31,7 +31,7 @@ Console and optional Desktop dispatch the private child branch before ordinary M
 - `OnArchiveCommitted` computes bounded hints and schedules raw/block work, then indexes committed memory facts asynchronously. It does not replace the save lane, Archive writer, journal or projection owner.
 - `ForceVectorIndexAsync` captures current authoritative sequence/block hints, awaits its queued target run (not merely an earlier background run), and only on success commits the legacy index-position compatibility fields through the ordinary save lane.
 - Fork seeds progress from captured caps; same-owner identity move/recovery invokes rename, with inverse rename on existing rollback. Newly created uncommitted branches reset derived data before exact branch compensation. Clear/deletion retain committed Archive and its derived sources.
-- `ResolveVectorScope` preserves isolated-current-Session and nonisolated-current-Agent model scope without hydrating searched owners. `VectorCanonicalSourceAllowed` rechecks resolved source authority before preview/fallback; [recall](./vector-recall.md) owns that contract.
+- `ResolveVectorScope` preserves the current-Agent model scope (the legacy isolated current-Session scope retired in R2; migrated Agents are denied Vector search by their layer) without hydrating searched owners. `VectorCanonicalSourceAllowed` rechecks resolved source authority before preview/fallback; [recall](./vector-recall.md) owns that contract.
 
 ## Tests and limits
 

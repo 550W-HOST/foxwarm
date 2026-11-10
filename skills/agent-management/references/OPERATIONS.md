@@ -186,4 +186,4 @@ The System view and the Main log list each migrated Agent. A blocked Agent stays
 
 Inbound channel files now always land on `master` in the Agent's directory, and channel sends from migrated Agents are denied. Channel guests take their rules from `guestAgent.template`.
 
-The retained `isolated`, `isolatedNode` and `toolRules` fields are no longer used except to keep older releases enforcing isolation after a downgrade. Saved scripts or ToolScripts that call `set_agent_isolated` or pass `isolatedNode`/`toolRules` must switch to `set_agent_rules` plus `defaultNode`.
+The retained `isolated`, `isolatedNode` and `toolRules` fields are no longer used except to keep older releases enforcing isolation after a downgrade. Foxwarm 0.9.4 enforces both those fields and the converted rules; earlier releases can't read the converted rules and refuse every call by these Agents and the Agents they created. Saved scripts or ToolScripts that call `set_agent_isolated` or pass `isolatedNode`/`toolRules` must switch to `set_agent_rules` plus `defaultNode`.

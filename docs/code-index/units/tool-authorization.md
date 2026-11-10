@@ -24,7 +24,7 @@ The captured `${workspace}` base is the configured Agents directory for canonica
 
 `browser_*` tools have no tool-specific authorization: master's browser capabilities follow the ordinary bound-Node fence, generic policy and caller-current versus explicit Node facts like any other Node tool. Persisted exact rules that name the retired `browse_*` tools still load and no longer match anything. See the [managed browser host](./browser-host.md#hosting).
 
-The hidden Archive message and block tools have no handler-local Agent guard; policy decides. Their `archive` target resolver uses live catalog identity and aliases first; without a live row it takes the requested ID's Agent segment, so same-Agent rules (such as a migrated Agent's generated layer) still cover cleared and deleted Sessions whose Archive is retained. Resolution never hydrates a target owner or requires its Node to be online. Missing permitted targets remain pure empty reads.
+The hidden Archive message and block tools have no handler-local Agent guard; policy decides. Their `archive` target resolver uses live catalog identity and aliases first; without a live row it takes the requested ID's Agent (`SessionIdentity.Agent`: the prefix, or `main` for an unprefixed ID), so same-Agent rules (such as a migrated Agent's generated layer) still cover cleared and deleted Sessions whose Archive is retained. Resolution never hydrates a target owner or requires its Node to be online. Missing permitted targets remain pure empty reads.
 
 ## Ask outcome and approvals
 

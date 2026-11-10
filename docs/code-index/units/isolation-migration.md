@@ -99,13 +99,21 @@ For each Agent still marked isolated without a `legacyIsolation` marker:
 
 An Agent migrated by R1 (generator 1) is upgraded: its status rules gain the current-Session limit. Its digest is updated only when the layer was unchanged since migration; an edited layer is reported. Fail-closed markers are never upgraded.
 
+Older releases still write the fence and the rules, so every startup also reconciles migrated rows with their fence (`ReconcileMigratedRow`). A formerly isolated Agent must never come out of startup less restricted than its last enforced state:
+- A layer written by this release through `set_agent_rules` records `confirmedDigest` in the marker and is the administrator's; reconciliation keeps it.
+- A layer edited elsewhere (an older release or by hand) that still ends in an unconditional deny on the Agent's creator chain is kept and reported once (`edited`), then confirmed. One that no longer restricts the Agent fails closed, with the edited rules in `previousRules`.
+- `isolatedNode` differing from `marker.node` means an older release re-bound the Agent. An unchanged generated layer is regenerated for the new Node (`rebound`), and `defaultNode` follows when it still named the old Node. An edited layer fails closed.
+- A cleared fence (`isolated: false`) keeps the layer and is reported once (`fenceCleared`); it never widens the Agent.
+
+Catalog writes validate only the rows they change. A layer that does not parse elsewhere is written unchanged and reported as `unreadableRules`; only that Agent's calls fail, and Main starts.
+
 After owner recovery, `MaterializeMigratedPlacementAsync` records the bound Node on every Session of a bound migrated Agent that has no `currentNode`, as the R1 apply did. It repeats at each startup until every Session succeeded once, then marks `placementSettled`.
 
 Every outcome is written to the Main log (`MainLog.Diagnostic`; fail-closed and placement failures as failures). The report of the last startup is `StartupIsolationMigration`, returned as `startup` by the inventory route. The Agent registry reports `restricted` and an `isolationMigration` summary. `failClosed` is reported only while the stored layer still has the fail-closed digest, so replacing the rules clears it. The System view shows a `blocked` badge and notice for fail-closed Agents and a note for migrated ones.
 
-Legacy `isolated`, `isolatedNode` and `toolRules` are never changed, so a downgraded R1 enforces both legacy isolation and the layer. `IsolatedToolCompatibility.Metadata` is their only reader. Nothing else enforces them, and no setter writes them.
+Legacy `isolated`, `isolatedNode` and `toolRules` are never changed, so a downgraded R1 (0.9.4) enforces both legacy isolation and the layer. Releases before R1 cannot parse the generator 2 `session` target matcher, so every call by a migrated Agent and its creator descendants is refused there until the installation is upgraded again; layers parse per call, so Main still starts. `IsolatedToolCompatibility.Metadata` is their only reader. Nothing else enforces them, and no setter writes them.
 
-Archive reads of cleared and deleted Sessions stay within the layer's same-Agent rule because the `archive` target resolver falls back to the requested ID's Agent segment ([tool authorization](./tool-authorization.md)).
+Archive reads of cleared and deleted Sessions stay within the layer's same-Agent rule because the `archive` target resolver falls back to the requested ID's Agent ([tool authorization](./tool-authorization.md)).
 
 ### Channel guests
 
@@ -142,6 +150,6 @@ A catalog write raises the marker to the level its metadata requires before writ
 - the per-level reader marker;
 - the resumable backfill.
 
-`ToolAuthorizationEffectsTests.IsolationStartup.cs` covers the startup migration of a pre-R1 isolated Agent (layer, marker, retained fields, placement, report, idempotent restart), the generator 1 upgrade with edited and unedited layers, the fail-closed cases and their clearing by new rules, and global rules that name a migrated Agent. `GuestTemplateTests` covers guest provisioning.
+`ToolAuthorizationEffectsTests.IsolationStartup.cs` covers the startup migration of a pre-R1 isolated Agent (layer, marker, retained fields, placement, report, idempotent restart), the generator 1 upgrade with edited and unedited layers, the fail-closed cases and their clearing by new rules, and global rules that name a migrated Agent. `ToolAuthorizationEffectsTests.IsolationReconcile.cs` covers reconciliation with the fence an older release left: an edited layer that no longer restricts the Agent, an edited layer that still ends in a deny, a re-bound Agent with an unchanged and an edited layer, a cleared fence, and an unreadable layer of another Agent during the startup write. `GuestTemplateTests` covers guest provisioning.
 
 `IsolationMigrationHttpTests` covers the administrator routes. `mainHostIsolationMigration.e2e.mjs` starts a real host on a legacy catalog and checks the startup report, the registry, the recorded placement and a restart; it is part of the native smoke.

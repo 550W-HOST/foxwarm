@@ -11,7 +11,7 @@ Part of the [tool dispatch](./tool-dispatch.md) thread. Covers the live MCP conf
 ## Invariants
 
 - MCP configuration reads use one authoritative live snapshot after first load; managed updates persist before replacing that snapshot.
-- MCP list/discovery/call/config operations share one versioned local/reverse facade with source/isolation checks, exact plain-record/JSON DTO validation, cloned results/errors, full call-argument permission parity, redacted summaries, all-server stored-secret error fencing, and terminal drain fencing. Managed transport semantics are validated once by the authoritative Main client before persistence/publication.
+- MCP list/discovery/call/config operations share one versioned local/reverse facade with source checks, exact plain-record/JSON DTO validation, cloned results/errors, full call-argument permission parity, redacted summaries, all-server stored-secret error fencing, and terminal drain fencing. Managed transport semantics are validated once by the authoritative Main client before persistence/publication.
 - MCP and node credentials remain transport/runtime state and are not exposed to the model through tool summaries.
 
 ## Design decisions

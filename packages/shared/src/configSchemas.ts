@@ -345,7 +345,7 @@ const guestAgent = {
   properties: {
     agentId: { type: 'string' },
     mode: { enum: ['single', 'inherited'] },
-    template: { type: 'string' },
+    template: { type: 'string', description: "Agent whose rules apply to this channel's guest Agents." },
     isolated: { type: 'boolean' },
     node: { type: 'string' },
   },

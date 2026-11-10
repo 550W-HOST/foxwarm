@@ -11,7 +11,7 @@ This is an explicit online text-message extension, not a subscription to B's his
 - A's current internal Session is permitted to configure/call the named MCP server and use `builtin:mcp_notifications`. A's MCP call permission targets `source: mcp`, the configured server name, and `name: foxwarm_session`, not `call_tool`.
 - The replying internal Session on B is permitted to use `builtin:send_to_channel`, in addition to its existing structural restrictions. The external identity's send grant does not grant this tool to B's Session.
 
-Load [access-control](../../access-control/SKILL.md) to change policy safely. Generic allow is not a bypass for legacy isolation. The temporary MCP reply endpoint has **no Session attachment**: isolated Sessions still need an own attachment for channel sends, so this workflow does not promise isolated-mode interoperability. Do not disable isolation just to make it work.
+Load [access-control](../../access-control/SKILL.md) to change policy safely. The temporary MCP reply endpoint has **no Session attachment**. Agents migrated from legacy isolation are denied `send_to_channel` by their generated rules, so this workflow does not work for them unless an administrator changes those rules.
 
 ## 1. Configure A's outbound connection to B
 
@@ -107,7 +107,7 @@ B receives ordinary external input with a server-owned `<foxwarm-system kind="ex
 
 Invoke with `call_tool`, or call `send_to_channel` directly with the same arguments. Do not turn that destination into a URL, expose another token, or create a reverse MCP server on A. An ordinary assistant final reply in B is **not** sent to this endpoint.
 
-The destination is an online channel endpoint, not another internal Session authority. Another normally authorized, non-isolated B Session can manually send to the same available target; it is not locked to the first recipient. Normal policy and own-attachment checks still apply.
+The destination is an online channel endpoint, not another internal Session authority. Another authorized B Session can manually send to the same available target; it is not locked to the first recipient. Normal policy still applies.
 
 ## 4. Reception, status, and stop
 

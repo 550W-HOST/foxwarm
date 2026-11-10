@@ -26,6 +26,6 @@ Never print or commit real tokens, environment secrets, or private headers. Obta
 
 ## Related skills
 
-- [agent-management](../agent-management/SKILL.md): Agent lifecycle, inheritance, isolation, and Node binding.
+- [agent-management](../agent-management/SKILL.md): Agent lifecycle, inheritance, local rules, and default Node.
 - [node-setup](../node-setup/SKILL.md): Node pairing and bootstrap.
 - [toolscript-automation](../toolscript-automation/SKILL.md): orchestration of dependent tool calls.

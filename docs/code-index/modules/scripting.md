@@ -25,7 +25,7 @@ Scripting owns ToolScript: a constrained Python-like automation runtime implemen
 - Source runs as ordinary top-level code with `args`; legacy main auto-call remains supported. See [source compatibility](../units/src-toolscript.md#d-toolscript-top-level-source).
 - The Monty worker VM enforces memory, recursion, and duration limits; the current runtime does not expose an allocation-count limit.
 - The slice timeout is checked at safe host-call boundaries and does not interrupt an in-progress tool or model call.
-- ToolScript has no separate file host API. Any file operation composed through `call_tool` passes the normal Foxwarm tool/path/isolation checks.
+- ToolScript has no separate file host API. Any file operation composed through `call_tool` passes the normal Foxwarm tool authorization and path checks.
 - Monty OS-function and mount capabilities are rejected so they cannot bypass the normal tool boundary, as required by [D-toolscript-os-effects-through-tools](../units/src-toolscript.md#d-toolscript-os-effects-through-tools).
 - A persisted run belongs to one session; other sessions cannot inspect or resume it.
 - A background run cannot be resumed concurrently.

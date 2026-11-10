@@ -84,7 +84,7 @@ Module support is deliberately limited:
 - Simple classes work, but inheritance, metaclasses, function/method decorators, and most custom dunder protocols do not.
 - `match`, `yield`, `del`, async iteration, and async context managers are unavailable.
 
-Use `call_tool("read", ...)`, `call_tool("write", ...)`, or `call_tool("exec", ...)` for permitted host filesystem and process work. Normal session, node, and isolation permissions apply.
+Use `call_tool("read", ...)`, `call_tool("write", ...)`, or `call_tool("exec", ...)` for permitted host filesystem and process work. Normal session, Node, and tool authorization apply.
 
 ## Script APIs
 

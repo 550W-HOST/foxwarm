@@ -4,7 +4,7 @@
 
 ## Responsibility
 
-This module owns model-facing tool definitions, builtin tool implementations, unified builtin/MCP/node discovery and dispatch, isolation enforcement, file and memory operations, persistent command execution, browser automation, image handling, and structured patch application.
+This module owns model-facing tool definitions, builtin tool implementations, unified builtin/MCP/node discovery and dispatch, tool authorization, file and memory operations, persistent command execution, browser automation, image handling, and structured patch application.
 
 ## Key units
 
@@ -57,7 +57,7 @@ The first four invariants describe the retained TypeScript reference. The mainta
 - The single `task` builtin uses Main-owned persistent storage and context-derived Session ownership; see [task contracts](../units/src-tasks.md).
 - Timer builtins remain discoverable but are not injected into the default model schema.
 - MCP server configuration/listing builtins remain discoverable but are not injected into the default model schema.
-- Approved-Node credential tools `node_create_auth_token` and `node_remove` remain discoverable but are not injected by default. Both execute through Main-owned management; removal requires an explicit Node ID and retains generic authorization and isolated capability checks.
+- Approved-Node credential tools `node_create_auth_token` and `node_remove` remain discoverable but are not injected by default. Both execute through Main-owned management; removal requires an explicit Node ID and generic authorization.
 - Patch application preserves the source line-ending convention.
 - Master and node patch results use the shared per-file add/update count formatter; the exact contract is canonical in [D-apply-patch-change-counts](../units/shared-apply-patch.md#d-apply-patch-change-counts).
 
@@ -78,9 +78,9 @@ Tool resolution across builtin, MCP, and generic Node sources is documented in [
 
 **Directly selected migration direction; removal completed in R2 except fence cleanup.** Generic policy must eventually separate tool authorization from [environment isolation](../behaviors/nodes-workspaces-and-permissions.md#authority-has-several-independent-boundaries). Current guards remain operative until their replacement/retirement is decided; implementation history does not make every legacy guard a permanent product constraint.
 
-[2026-10-10] The legacy Agent `isolated` authorization mode is deprecated and planned for removal. The current invariants above still describe implemented behavior; deprecation does not itself disable existing guards or migrate an installation. Generic tool authorization is the migration direction, not a permanent second layer alongside legacy isolation.
+[2026-10-10] The legacy Agent `isolated` authorization mode is deprecated and planned for removal. At that point the invariants above described implemented behavior, and deprecation did not itself disable guards or migrate an installation; R2 (below) did both. Generic tool authorization is the migration direction, not a permanent second layer alongside legacy isolation.
 
-The isolated-like rule generator provides a conservative migration baseline, not a requirement to reproduce every legacy behavior. During removal, remaining differences require explicit decisions: express a boundary through generic policy, retain an independent invariant, or retire the old restriction. No removal date or complete migration contract is established by this decision.
+The generated layer provides a conservative migration baseline, not a requirement to reproduce every legacy behavior. During removal, remaining differences require explicit decisions: express a boundary through generic policy, retain an independent invariant, or retire the old restriction. No removal date or complete migration contract is established by this decision.
 
 [2026-11-09] **User decisions for the removal.** Removal runs in two releases. R1 adds the generic replacements and an explicit, per-Agent migration while legacy isolation stays enforced (dual enforcement); R2, one release later, migrates remaining isolated Agents automatically and fails closed, then retires the legacy checks. Accepted choices: a generic `inheritable: false` Agent flag replaces the isolated-source inheritance ban; the bound Node becomes a soft `defaultNode` placement, not an access boundary; migrated Agents cannot send to channels directly (replies and own-Session file delivery remain); inbound channel files go to Main Agent storage; the generated layer includes the legacy-parity baseline (ToolScript run family, `ask_user`, `cancel_transfer`, `image_crop`, default-self status); channel guest policy comes from a creator-template Agent; Agents that rely only on local rules are not downgrade-supported, and an installation `minimumReaderVersion` marker refuses newer data in older readers that understand it. Of the Session relation guards only the outgoing one is kept ([D-session-core-isolated-relations](./session-core.md#d-session-core-isolated-relations)). The R1 mechanics are in [legacy isolation migration](../units/isolation-migration.md).
 

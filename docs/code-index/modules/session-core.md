@@ -97,7 +97,7 @@ Active provider/tool phases are transient. Wait state persists. Legacy busy fiel
 
 ### D-session-core-isolated-relations
 
-Explicit direct parent/child relations are the only inter-session targets of an isolated sender, including within its own Agent. This exception does not grant tool, filesystem, or node permissions.
+Historical until R2: explicit direct parent/child relations were the only inter-session targets of an isolated sender, including within its own Agent. This exception does not grant tool, filesystem, or node permissions.
 
 [2026-11-09] User decision: only the outgoing direction remains a legacy isolation boundary. Delivery and wait dependencies from an isolated Agent's Session are limited to itself and its direct parent or child; the maintained C# Main enforces this in `SessionManager.SendAsync` (every sender path, including Task notifications) and `ValidateWait`. The incoming guard is retired: whether another Session may message, wait on, or view an isolated Agent's Sessions is decided by that caller's own policy. The retained TypeScript reference still enforces both directions. Removal of the outgoing check follows the [legacy isolation migration](./tools-and-permissions.md#d-tools-legacy-isolation-deprecation).
 

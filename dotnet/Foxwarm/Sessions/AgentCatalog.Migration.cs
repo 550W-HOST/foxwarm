@@ -161,11 +161,16 @@ internal sealed partial class AgentCatalog
         await createGate.WaitAsync();
         try
         {
+            var before = MetadataSnapshot();
             var next = MetadataSnapshot();
             if (!mutate(next))
                 return false;
-            foreach (var (_, value) in next)
+            // Only rows this mutation changed are validated: a row it left alone is written
+            // unchanged, and an unreadable layer there fails only that Agent's calls.
+            foreach (var (name, value) in next)
             {
+                if (JsonNode.DeepEquals(before[name], value))
+                    continue;
                 _ = IsolatedToolCompatibility.Metadata(value);
                 if (value is JsonObject row && row["rules"] is JsonArray rules)
                     _ = AgentRulePolicy.Parse(rules);

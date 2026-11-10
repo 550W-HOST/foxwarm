@@ -25,10 +25,7 @@ internal sealed record IsolationMigrationPlan(
     IReadOnlyList<string> Blockers
 )
 {
-    internal string Digest =>
-        Convert
-            .ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Rules.ToJsonString())))
-            .ToLowerInvariant();
+    internal string Digest => IsolationMigrationRules.Digest(Rules);
 }
 
 /// <summary>
@@ -48,6 +45,24 @@ internal static class IsolationMigrationRules
 
     /// <summary>Rule ID prefix of the generated <c>session</c> status allows.</summary>
     internal const string SessionStatusRule = "isolation-session-status";
+
+    /// <summary>
+    /// SHA-256 of a layer's JSON, used to tell a stored layer from the one migration wrote.
+    /// </summary>
+    internal static string Digest(JsonArray rules) =>
+        Convert
+            .ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rules.ToJsonString())))
+            .ToLowerInvariant();
+
+    /// <summary>
+    /// A local layer whose last rule denies every call without selectors allows only what it
+    /// lists.
+    /// </summary>
+    internal static bool EndsInDeny(JsonArray? rules) =>
+        rules?.LastOrDefault() is JsonObject last
+        && last["action"]?.GetValueKind() == System.Text.Json.JsonValueKind.String
+        && last["action"]!.GetValue<string>() == "deny"
+        && last["match"] is null or JsonObject { Count: 0 };
 
     /// <summary>
     /// The layer installed when an Agent cannot be migrated safely: it denies every call of
@@ -630,7 +645,7 @@ internal static class IsolationMigrationRules
             new(
                 "widened",
                 "builtin:create_session",
-                "Sessions may be created in the Agent's own Agent, which new-Session timers already allowed; other Agents stay denied."
+                "New Sessions may be created only in this Agent, as new-Session timers already required."
             )
         );
         if (rules.Count > 256)
