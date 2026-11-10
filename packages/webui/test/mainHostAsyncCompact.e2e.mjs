@@ -6,7 +6,7 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import yaml from 'js-yaml'
 import { WebSocketServer } from 'ws'
-import { createHostFixture, saveModelsInOriginalApp, until, sleep } from './mainHostFixture.mjs'
+import { createHostFixture, requiredCompactOperations, saveModelsInOriginalApp, until, sleep } from './mainHostFixture.mjs'
 
 const fixture = await createHostFixture('async-compact'), records = [], errors = [], held = new Map(), connections = []
 const route = id => '/api/sessions/' + encodeURIComponent(id)
@@ -24,8 +24,8 @@ function record(body, full, kind, headers, complete) {
   const input = inputText(full), planning = input.includes('COMPACTION STARTED:'), scenario = [...input.matchAll(/CASE:([a-z0-9-]+)/g)].at(-1)?.[1] || 'unknown'
   const value = { body, full, kind, headers, planning, scenario, complete }; records.push(value)
   if (planning) {
-    value.ranges = [...input.matchAll(/^- M#(\d+)(?:-#(\d+))?\s/gm)].map(match => [Number(match[1]), Number(match[2] || match[1])])
-    assert(value.ranges.length, 'genuine frozen candidates'); value.valid = () => complete([tool('valid-plan-' + (++plans), 'submit_compact_plan', { replaceAsBlocks: [{ level: 1, sourceKind: 'message', sourceStart: value.ranges[0][0], sourceEnd: value.ranges.at(-1)[1], summary: 'Exact ordered prior dialogue and paired effects.' }] })])
+    value.operations = requiredCompactOperations(input, 'Exact ordered prior dialogue and paired effects.')
+    assert(value.operations.length, 'required retention operations'); value.valid = () => complete([tool('valid-plan-' + (++plans), 'submit_compact_plan', { replaceAsBlocks: value.operations })])
     value.invalid = () => complete([tool('invalid-plan-' + (++plans), 'submit_compact_plan', { replaceAsBlocks: [{ level: 1, sourceKind: 'message', sourceStart: 999999, sourceEnd: 1000000, summary: 'Invalid range.' }] })])
     if (JSON.stringify(full).includes('compact_plan_invalid')) {
       if (mode === 'reload') { assert(!body.previous_response_id); assert.equal(headers['x-generation'], 'two') }

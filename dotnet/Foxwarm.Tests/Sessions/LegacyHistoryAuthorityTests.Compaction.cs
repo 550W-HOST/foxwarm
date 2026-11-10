@@ -44,7 +44,7 @@ public sealed partial class LegacyHistoryAuthorityTests
                         ["name"] = "submit_compact_plan",
                         ["arguments"] = new JsonObject
                         {
-                            ["replaceAsBlocks"] = new JsonArray(Operation(7, 7), Operation(22, 35)),
+                            ["replaceAsBlocks"] = new JsonArray(Operation(7, 40)),
                         }.ToJsonString(),
                     }
                 );
@@ -96,13 +96,12 @@ public sealed partial class LegacyHistoryAuthorityTests
                     )
                     .Select(row => row.ToJsonString())
             );
+            // The required new level-1 block spans the unsequenced exchange, which stays after it.
             Assert.Contains(committed, row => row.Sequence == 10);
-            Assert.DoesNotContain(committed, row => row.Sequence is 7 or >= 22 and <= 35);
-            var blocks = owner.Archive.ReadBlocks();
-            Assert.Equal(2, blocks.Count);
-            var timeless = blocks.Single(block => block.SourceStart == 7);
+            Assert.DoesNotContain(committed, row => row.Sequence is 7 or >= 20 and <= 40);
+            var timeless = Assert.Single(owner.Archive.ReadBlocks());
+            Assert.Equal((7L, 40L), (timeless.SourceStart, timeless.SourceEnd));
             Assert.Null(timeless.RawStartTimestamp);
-            Assert.Null(timeless.RawEndTimestamp);
             var reader = new ArchiveContextReader(owner.Archive);
             var expanded = reader.Expand(owner.Id, timeless.Id, 4000)!;
             Assert.Equal(7, expanded["items"]![0]!["seq"]!.GetValue<long>());
@@ -200,20 +199,21 @@ public sealed partial class LegacyHistoryAuthorityTests
             );
             Assert.Equal(new long[] { 1, 5 }, candidates.Items.Select(item => item.Start));
             Assert.Empty(candidates.Preserved);
+            // In-context ranges stop at the exchange. The regular new level-1 block spans it,
+            // and the commit keeps the unsequenced exchange after the block.
+            JsonArray Spanning() => new(Operation(1, 5));
+            JsonArray Split() => new(Operation(1, 1), Operation(5, 5));
             Assert.Throws<CompactPlanInvalidException>(() =>
                 CompactPlanValidator.Validate(
-                    new JsonObject { ["replaceAsBlocks"] = new JsonArray(Operation(1, 5)) },
+                    new JsonObject { ["replaceAsBlocks"] = inContext ? Spanning() : Split() },
                     candidates
                 )
             );
             var plan = CompactPlanValidator.Validate(
-                new JsonObject
-                {
-                    ["replaceAsBlocks"] = new JsonArray(Operation(1, 1), Operation(5, 5)),
-                },
+                new JsonObject { ["replaceAsBlocks"] = inContext ? Split() : Spanning() },
                 candidates
             );
-            Assert.Equal(2, plan.Operations.Count);
+            Assert.Equal(inContext ? 2 : 1, plan.Operations.Count);
         }
     }
 

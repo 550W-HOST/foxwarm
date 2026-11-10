@@ -146,7 +146,9 @@ public sealed partial class CompactRetentionTests
         for (var index = 0; index < 10; index++)
             inputs.Add(await Append("user", Text()));
         var call = await Append("model", Call("first"), Call("second"));
-        await Compact(inputs[0], inputs[6], .3);
+        // 35% of the raw tokens keeps the last three inputs and the call; the required new
+        // level-1 block covers every raw row before them.
+        await Compact(inputs[0], inputs[6], .35);
         var removedCompletion = owner.Entry.Snapshot().History.Last().Sequence!.Value;
         var firstResponse = await Append("tool", Response("first"));
         var secondResponse = await Append("tool", Response("second"));

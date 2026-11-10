@@ -86,8 +86,11 @@ async function waitForAuthority(sessionId, predicate, timeout = 20_000) {
 
 function assertCommittedCompaction(authority, before, summary) {
   const blockMessage = authority.history[0]
+  // The required level-1 block covers every raw message before the kept tail.
+  const end = blockMessage.__meta?.contextBlock?.sourceEnd
+  assert(Number.isInteger(end) && end > 4 && end < before.history.length, `block end ${end}`)
   assert.equal(blockMessage.role, 'model')
-  assert.match(blockMessage.parts?.[0]?.text || '', new RegExp(`^\\[CTX-BLOCK L1 B#1 raw#1-#4 time .+\\] ${summary}$`))
+  assert.match(blockMessage.parts?.[0]?.text || '', new RegExp(`^\\[CTX-BLOCK L1 B#1 raw#1-#${end} time .+\\] ${summary}$`))
   assert.deepEqual({
     level: blockMessage.__meta?.contextBlock?.level,
     sourceKind: blockMessage.__meta?.contextBlock?.sourceKind,
@@ -95,9 +98,9 @@ function assertCommittedCompaction(authority, before, summary) {
     sourceEnd: blockMessage.__meta?.contextBlock?.sourceEnd,
     rawStartSeq: blockMessage.__meta?.contextBlock?.rawStartSeq,
     rawEndSeq: blockMessage.__meta?.contextBlock?.rawEndSeq,
-  }, { level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 4, rawStartSeq: 1, rawEndSeq: 4 })
-  assert.equal(authority.history.some(message => Number.isInteger(message.__meta?.seq) && message.__meta.seq <= 4), false)
-  assert.deepEqual(authority.history.slice(1, -1), before.history.slice(4))
+  }, { level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: end, rawStartSeq: 1, rawEndSeq: end })
+  assert.equal(authority.history.some(message => Number.isInteger(message.__meta?.seq) && message.__meta.seq <= end), false)
+  assert.deepEqual(authority.history.slice(1, -1), before.history.slice(end))
   assert.match(authority.history.at(-1)?.parts?.[0]?.system || '', /kind="session-boundary" event="compact-completed"/)
 }
 

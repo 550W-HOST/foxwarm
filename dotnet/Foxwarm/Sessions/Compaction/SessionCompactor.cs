@@ -513,7 +513,7 @@ internal sealed partial class SessionCompactor
         run.Candidates = candidates;
         if (
             candidates.Split <= 0
-            || candidates.Items.Count == 0
+            || !candidates.HasWork
                 && candidates.Preserved.Count == 0
                 && !candidates
                     .History.Take(candidates.Split)
@@ -525,7 +525,7 @@ internal sealed partial class SessionCompactor
         )
             return;
         run.Plan =
-            candidates.Items.Count == 0 && candidates.Preserved.Count == 0
+            !candidates.HasWork && candidates.Preserved.Count == 0
                 ? new CompactPlan([], new HashSet<long>(), new HashSet<long>())
                 : await PlanAsync(
                     run.Snapshot,

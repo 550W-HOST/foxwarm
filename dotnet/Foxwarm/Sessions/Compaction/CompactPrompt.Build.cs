@@ -46,22 +46,6 @@ internal static partial class CompactPrompt
         return TruncateGraphemes(normalized, limit, "…", includeSuffixInLimit: true);
     }
 
-    private static string SegmentHeader(IReadOnlyList<CompactCandidate> segment, int index)
-    {
-        var first = segment[0];
-        var last = segment[^1];
-        if (first.Kind == "message")
-            return $"Segment {index}: raw message candidates -> L1 block(s). Legal ranges must stay within {first.Key}..{last.Key} (sourceKind=message, level=1, sourceStart/sourceEnd at listed M# boundaries).";
-        var span = first.Start == last.End ? $"B#{first.Start}" : $"B#{first.Start}..B#{last.End}";
-        var baseText =
-            $"Segment {index}: history-contiguous L{first.SourceLevel} block candidates -> L{first.TargetLevel} block(s). Legal ranges must stay within this segment ({span}; sourceKind=block, level={first.TargetLevel}, sourceStart/sourceEnd at listed B# boundaries). Block ids inside a segment may skip numbers or be out of numeric order; a range covers the listed candidates between its endpoints, not every numeric id in between.";
-        if (segment.Count != 1)
-            return baseText;
-        return first.Stranded
-            ? $"{baseText} This is a stranded single-block segment, so sourceStart=sourceEnd={first.Start} is allowed only if lifting this block preserves useful detail; leaving it uncompressed is also fine."
-            : $"{baseText} This segment has only one block, so normally leave it uncompressed rather than creating an invalid single-block plan.";
-    }
-
     public static string Build(CompactCandidates policy, string? guidance = null)
     {
         var recent = policy.History.Skip(policy.Split).ToArray();
@@ -76,57 +60,49 @@ internal static partial class CompactPrompt
             "COMPACTION STARTED: stop any previous task and focus only on CTX-BLOCK compaction.",
             "Goal: Replace older context with compact, source-bound summaries that preserve what the main model needs to continue and identify when to recall details.",
             $"Recent messages {(recent.Length > 0 ? $"({recent.Length} rendered item(s), {Range(recentSeqs.FirstOrDefault(), recentSeqs.LastOrDefault())})" : "(none)")} are already force-kept verbatim by the system. No need to summarize/replace them.",
-            "Hard compaction limits for this run:",
         };
         if (policy.RequiredRawTokens > 0)
-            lines.Add(
-                $"- Raw messages: ~{policy.EligibleRawTokens} eligible estimated tokens; message-source replaceAsBlocks entries must actually replace at least ~{policy.RequiredRawTokens} estimated tokens. Raw messages listed in preserveMessages stay verbatim and do not count toward this minimum."
-            );
+            lines.AddRange([
+                "Hard compaction limits for this run:",
+                $"- Raw messages: ~{policy.EligibleRawTokens} eligible estimated tokens; message-source replaceAsBlocks entries must actually replace at least ~{policy.RequiredRawTokens} estimated tokens. Raw messages listed in preserveMessages stay verbatim and do not count toward this minimum.",
+            ]);
+        lines.Add("");
+        if (policy.Retention.Count == 0)
+            lines.Add("No new summary blocks are required in this run.");
         else
             lines.Add(
-                $"- Raw messages: no mandatory message compaction this run ({policy.RawSkipped ?? "no eligible raw message candidates"})."
+                "Required operations. Submit exactly one replaceAsBlocks entry for each, with the sourceKind, sourceStart, sourceEnd and level shown; you write its summary, memoryFacts and frictionScore:"
             );
-        foreach (var block in policy.BlockPolicies)
+        for (var n = 0; n < policy.Retention.Count; n++)
         {
-            var baseText =
-                $"- Source L{block.SourceLevel} blocks: {block.TotalCount} block(s), ~{block.TotalTokens} tokens; newest {block.ForcedKeep} are force-kept and are not candidates; oldest {block.CandidateCount} may be listed.";
-            if (block.EffectiveMin > 0)
-                lines.Add(
-                    $"{baseText} Valid multi-block operations must compact at least {block.EffectiveMin} source L{block.SourceLevel} block(s) in total."
-                );
-            else if (block.RequestedMin > 0)
-                lines.Add(
-                    $"{baseText} Requested minimum {block.RequestedMin} was reduced to 0 because no legal multi-block range is feasible{(block.Skipped is null ? "" : $" ({block.Skipped})")}; stranded single-block lifts do not count as effective compression."
-                );
-            else
-                lines.Add($"{baseText}{(block.Skipped is null ? "" : $" {block.Skipped}.")}");
-        }
-        lines.Add(
-            "Hard minima may be satisfied across multiple legal Segments, but every individual replaceAsBlocks range must remain inside one Segment."
-        );
-        lines.Add("");
-        var segments = policy.Segments();
-        if (segments.Count == 0)
-            lines.Add(
-                "No normal summary-block candidate segments are available in this compaction slice."
-            );
-        for (var s = 0; s < segments.Count; s++)
-        {
-            var segment = segments[s];
-            lines.Add(SegmentHeader(segment, s + 1));
-            for (var i = 0; i < segment.Count; i++)
+            var op = policy.Retention[n];
+            var sources = policy
+                .Items.Skip(op.CandidateStart)
+                .Take(op.CandidateEnd - op.CandidateStart + 1)
+                .Where(item => item.Kind == op.Kind)
+                .ToArray();
+            var head =
+                $"{n + 1}. sourceKind={op.Kind}, sourceStart={op.SourceStart}, sourceEnd={op.SourceEnd}, level={op.Level}";
+            if (op.Kind == "message")
             {
-                var item = segment[i];
-                var limit = i < 2 || i >= segment.Count - 2 ? 300 : 80;
-                var preview = TrimPreview(item.Preview, limit);
-                if (item.Kind == "message")
-                    lines.Add($"- {item.Key} {(preview.Length > 0 ? preview : "[empty message]")}");
-                else
+                lines.Add(
+                    $"{head}: new level-1 block from raw messages M#{op.SourceStart}..M#{op.SourceEnd} (~{sources.Sum(item => item.Tokens)} estimated tokens). Budget: {op.Budget} tokens."
+                );
+                for (var i = 0; i < sources.Length; i++)
+                {
+                    var limit = i < 2 || i >= sources.Length - 2 ? 300 : 80;
+                    var preview = TrimPreview(sources[i].Preview, limit);
                     lines.Add(
-                        $"- {item.Key} L{item.SourceLevel} raw{Range(item.RawStart, item.RawEnd)}{(item.FrictionScore is int score ? $" frictionScore={score}" : "")} {(preview.Length > 0 ? preview : "[empty block]")}"
+                        $"- {sources[i].Key} {(preview.Length > 0 ? preview : "[empty message]")}"
                     );
+                }
             }
+            else
+                lines.Add(
+                    $"{head}: merge {string.Join(", ", sources.Select(item => $"{item.Key} (L{item.SourceLevel}, raw{Range(item.RawStart, item.RawEnd)}{(item.FrictionScore is int score ? $", frictionScore={score}" : "")})"))} into one level-{op.Level} block. Budget: {op.Budget} tokens."
+                );
         }
+        lines.Add("");
         if (policy.Preserved.Count > 0)
         {
             lines.Add("Previously preserved raw messages already covered by summary blocks:");
@@ -134,36 +110,41 @@ internal static partial class CompactPrompt
                 "These are still verbatim in working history for exact wording. If the summary block is now sufficient, remove them with removePreservedMessages: number[]. Do not summarize them again just to remove them."
             );
             foreach (var item in policy.Preserved)
+            {
+                // Preserved rows of a merged block leave active history with that merge.
+                var merge = policy
+                    .Retention.ToList()
+                    .FindIndex(op =>
+                        op.Kind == "block"
+                        && policy
+                            .Items.Skip(op.CandidateStart)
+                            .Take(op.CandidateEnd - op.CandidateStart + 1)
+                            .Any(source => source.Kind == "block" && source.Start == item.BlockId)
+                    );
                 lines.Add(
-                    $"- M#{item.Seq} preserved from B#{item.BlockId}: {TrimPreview(item.Preview, 300)}"
+                    $"- M#{item.Seq} preserved from B#{item.BlockId}{(merge < 0 ? "" : $" (removed by operation {merge + 1})")}: {TrimPreview(item.Preview, 300)}"
                 );
+            }
         }
         lines.AddRange([
-            "Review the older candidate items above and finish by calling submit_compact_plan. Do not answer with plain text only.",
+            "Write the summaries for the operations above and finish by calling submit_compact_plan. Do not answer with plain text only.",
             "Rules:",
             "- Pass summary-block creations via replaceAsBlocks. Prefer a direct array of objects; a JSON string encoding that same array is also accepted as a fallback. Use replaceAsBlocks: [] or replaceAsBlocks: \"[]\" if you only need to remove previously preserved raw messages.",
             "- Each replaceAsBlocks entry may include memoryFacts: an array of durable facts tied to exactly that source range. Invalid/omitted facts are ignored and never affect block creation; do not repeat them manually in summary prose.",
-            "- Raw messages are summarized by L1 blocks, L1 blocks are summarized by L2 blocks, and so on.",
-            "- Items covered by replaceAsBlocks will be replaced by the summary. Other items stay verbatim unless listed in removePreservedMessages.",
-            "- Use preserveMessages for a small number of raw message seqs that must remain verbatim even though they are covered by a newly created message-source block. The system will extract them after the covering block in working history. Selecting any member of a tool exchange in preserveMessages keeps the model call message and all its paired response messages together.",
+            "- Each required operation appears exactly once. Do not add, split, combine or omit operations; the system chose them so the timeline keeps more detail for recent work and less for older work.",
+            "- The sources of each operation are replaced by its summary. Other items stay verbatim unless listed in removePreservedMessages or marked as removed by an operation.",
+            "- Use preserveMessages for a small number of raw message seqs that must remain verbatim even though they are covered by the new level-1 block. The system will extract them after the covering block in working history. Selecting any member of a tool exchange in preserveMessages keeps the model call message and all its paired response messages together.",
             "- Use removePreservedMessages only for messages listed in the \"Previously preserved raw messages\" section. This removes the raw message from active history only; it does not delete archive records or existing summary blocks. When removing a preserved tool exchange, list every member; partial removal is rejected.",
-            "- Block compression is optional after satisfying the hard minima above. Prefer compressing only older/resolved/repetitive block segments; keep recent, detail-rich, decision-heavy, or still-active blocks verbatim by omitting them from replaceAsBlocks.",
-            "- Subject to the hard minima above, if a block/message still seems useful, you can leave it uncompressed by simply omitting it from replaceAsBlocks.",
-            "",
-            "Block range rules (must be followed to produce a valid plan):",
-            "- Treat each Segment header as a hard boundary: replaceAsBlocks ranges must stay inside one listed segment and must not cross different block levels or different source kinds. Block ids may be non-consecutive or decreasing; use only listed B# endpoints in history order.",
-            "- A single block may be summarized only when it is a stranded island immediately surrounded on both sides by higher-level blocks; otherwise block sources must span at least two blocks.",
-            "- Blocks must have same kind and same level of source; do not combine low-level and high-level blocks in one replaceAsBlocks entry.",
-            "- Blocks must not overlap source ranges across replaceAsBlocks entries.",
-            "- Blocks must not separate seq/id range inside a candidate (can not separate a tool call and its response).",
             "",
             "Summary writing guidance:",
-            "Write a continuation brief, not a condensed transcript or a duplicate report.",
-            "- Keep information that changes what the next turn should do, what it may do, or how it should interpret unresolved evidence.",
-            "- Preserve essential intent, constraints, authorization, consequential decisions and unresolved dependencies. Retain historical corrections only when their distinction is still needed for continuation.",
-            "- When detailed findings are already saved in an identified document, keep the document\u2019s purpose, location and when to consult it. Do not reproduce its inventory, evidence ledger or completed-work chronology.",
-            "- Within the source range, consolidate repeated progress updates into the last supported checkpoint. Omit routine tool steps, intermediate checkpoints and successful checks unless they explain a remaining issue.",
-            "- When combining existing blocks, reassess what is still needed rather than concatenating their summaries. Merge repeated qualifications and references.",
+            "Write each summary as a continuation brief, not a narrative. Keep the goal and current state, decisions and their reasons, constraints and user preferences, open items and commitments, and the identifiers needed to find details later: Task IDs, files, commits, Session IDs and msg# ranges.",
+            "When a fact is already recorded in Agent memory, a Task, the Code Index, a document or a commit, write one line saying where it is instead of restating it.",
+            "A new level-1 block is the most detailed: keep the working state of this stretch, including procedures still in progress, error signatures and exact values the next turns may need.",
+            "When merging blocks, consolidate rather than concatenate. Drop finished procedures and step-by-step debugging first, then superseded decisions; keep outcomes, usually one line per finished thread. Carry forward every item that was still open at the end of the sources, with its Task ID or other locator, unless a later source shows it finished. Keep user decisions together with their msg# reference.",
+            "Blocks at level 5 and above keep the gist: themes, standing decisions with their msg# references, lasting constraints, a short list of items still open with their Task IDs, and where to recall details.",
+            "Each operation has a token budget, shown with it. Stay well under it when the content allows; a summary over budget is returned for revision.",
+            "Memory facts record only what the sources' facts don't already contain, and they count toward the operation's budget.",
+            "Preserved messages inside merged blocks are removed from history by this merge; cover what still matters from them in the summary.",
             "- Reduce information volume by selecting and consolidating content, not by removing spaces, shortening ordinary words or packing fragments together. Use normal spelling, spacing, punctuation and readable sentences.",
             "- Stay within the assigned source range. Do not import later outcomes or turn an earlier proposal into a confirmed decision.",
             "",

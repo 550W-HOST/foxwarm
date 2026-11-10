@@ -53,7 +53,7 @@ public sealed partial class CompactRetentionTests
         };
 
     [Fact]
-    public void Sparse_adjacent_candidates_share_a_range_but_a_real_notice_starts_the_next_segment()
+    public void Sparse_adjacent_candidates_share_a_segment_and_the_new_block_spans_a_real_notice()
     {
         JsonObject[] history =
         [
@@ -84,10 +84,11 @@ public sealed partial class CompactRetentionTests
             candidates.Items.Single(item => item.Start == 17).Segment,
             candidates.Items.Single(item => item.Start == 21).Segment
         );
+        // The required new level-1 block covers all raw messages; the notice is not a source.
         var plan = CompactPlanValidator.Validate(
             new JsonObject
             {
-                ["replaceAsBlocks"] = new JsonArray(Block(1, 9), Block(17, 21)),
+                ["replaceAsBlocks"] = new JsonArray(Block(1, 21)),
                 ["preserveMessages"] = new JsonArray(9),
             },
             candidates
@@ -97,7 +98,7 @@ public sealed partial class CompactRetentionTests
             CompactPlanValidator.Validate(
                 new JsonObject
                 {
-                    ["replaceAsBlocks"] = new JsonArray(Block(1, 9)),
+                    ["replaceAsBlocks"] = new JsonArray(Block(1, 21)),
                     ["preserveMessages"] = new JsonArray(5),
                 },
                 candidates
@@ -105,7 +106,7 @@ public sealed partial class CompactRetentionTests
         );
         Assert.Throws<CompactPlanInvalidException>(() =>
             CompactPlanValidator.Validate(
-                new JsonObject { ["replaceAsBlocks"] = new JsonArray(Block(1, 21)) },
+                new JsonObject { ["replaceAsBlocks"] = new JsonArray(Block(1, 9), Block(17, 21)) },
                 candidates
             )
         );
@@ -223,7 +224,7 @@ public sealed partial class CompactRetentionTests
             );
         var args = new JsonObject
         {
-            ["replaceAsBlocks"] = new JsonArray(Block(1, 4)),
+            ["replaceAsBlocks"] = new JsonArray(deliberate ? Block(1, 4) : Block(1, 6)),
             ["preserveMessages"] = new JsonArray(4),
         };
         Assert.Equal(

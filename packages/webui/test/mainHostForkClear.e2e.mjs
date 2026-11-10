@@ -6,7 +6,7 @@ import { readFile, writeFile, symlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import yaml from 'js-yaml'
 import { WebSocketServer } from 'ws'
-import { createHostFixture, saveModelsInOriginalApp, until } from './mainHostFixture.mjs'
+import { createHostFixture, requiredCompactOperations, saveModelsInOriginalApp, until } from './mainHostFixture.mjs'
 
 const fixture = await createHostFixture('fork-clear'), records = [], errors = [], connections = [], held = new Map(), heldOnce = new Set(), commandNotices = []
 const route = id => '/api/sessions/' + encodeURIComponent(id)
@@ -30,13 +30,8 @@ function dispatch(value) {
   const input = inputText(value.full), scenario = [...input.matchAll(/CASE:([a-z0-9-]+)/g)].at(-1)?.[1] || 'none'
   value.scenario = scenario; value.planning = input.includes('COMPACTION STARTED:')
   if (value.planning) {
-    const segments = [...input.matchAll(/^Segment \d+: raw message candidates[^\n]*\n([\s\S]*?)(?=^Segment \d+:|^Review the older candidate items)/gm)]
-    const replacements = segments.map(segment => {
-      const ranges = [...segment[1].matchAll(/^- M#(\d+)(?:-#(\d+))?\s/gm)].map(match => [Number(match[1]), Number(match[2] || match[1])])
-      assert(ranges.length, 'real eligible message candidates')
-      return { level: 1, sourceKind: 'message', sourceStart: ranges[0][0], sourceEnd: ranges.at(-1)[1], summary: 'Ordered dialogue, inherited provenance and paired tool results.' }
-    })
-    assert(replacements.length, 'real legal raw candidate segments')
+    const replacements = requiredCompactOperations(input, 'Ordered dialogue, inherited provenance and paired tool results.')
+    assert(replacements.length, 'required retention operations')
     value.valid = () => value.complete([tool('plan-' + (++planCount), 'submit_compact_plan', { replaceAsBlocks: replacements })])
     if (holdPlan) held.set('plan', value); else value.valid()
     return
