@@ -195,7 +195,7 @@ public sealed partial class LegacyHistoryAuthorityTests
         {
             var candidates = CompactCandidateBuilder.Build(
                 rows,
-                keepPercent: 0,
+                keepTokens: 0,
                 inContext: inContext
             );
             Assert.Equal(new long[] { 1, 5 }, candidates.Items.Select(item => item.Start));

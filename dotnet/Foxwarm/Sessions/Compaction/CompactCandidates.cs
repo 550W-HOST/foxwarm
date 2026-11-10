@@ -93,18 +93,41 @@ internal static class CompactCandidateBuilder
         return (int)Math.Ceiling(count);
     }
 
-    public static int Split(IReadOnlyList<JsonObject> history, double keepPercent = .3) =>
-        Split(history, keepPercent, RawSequenceCounts(history));
+    /// <summary>
+    /// Start of the force-kept recent raw tail: the newest rows whose estimated tokens fit within
+    /// <paramref name="keepTokens"/>, moved back to the start of a complete tool exchange. The
+    /// newest row is always kept, and the tail never extends over a summary block. Zero keeps
+    /// nothing.
+    /// </summary>
+    public static int Split(IReadOnlyList<JsonObject> history, double keepTokens) =>
+        Split(history, keepTokens, RawSequenceCounts(history));
+
+    /// <summary>Raw-tail token budget: the keep fraction of the effective compact threshold.</summary>
+    public static double KeepTokens(double keepFraction, double threshold) =>
+        keepFraction > 0 && threshold > 0 ? Math.Max(1, Math.Floor(keepFraction * threshold)) : 0;
+
+    public static int RowTokens(JsonObject row) =>
+        Visible(row) && !Completion(row) ? Tokens(Preview(row, true)) : 0;
 
     private static int Split(
         IReadOnlyList<JsonObject> history,
-        double keepPercent,
+        double keepTokens,
         IReadOnlyDictionary<long, int> seqCounts
     )
     {
-        var split =
-            keepPercent > 0 ? (int)Math.Floor(history.Count * (1 - keepPercent)) : history.Count;
-        if (keepPercent > 0 && split < history.Count)
+        var split = history.Count;
+        if (keepTokens > 0)
+        {
+            var total = 0d;
+            while (split > 0 && Meta(history[split - 1])?["contextBlock"] is null)
+            {
+                total += RowTokens(history[split - 1]);
+                if (total > keepTokens && split < history.Count)
+                    break;
+                split--;
+            }
+        }
+        if (keepTokens > 0 && split < history.Count)
         {
             var cursor = split;
             while (cursor > 0 && (Role(history[cursor]) == "tool" || Transparent(history[cursor])))
@@ -121,13 +144,13 @@ internal static class CompactCandidateBuilder
 
     public static CompactCandidates Build(
         IReadOnlyList<JsonObject> history,
-        double keepPercent = .3,
+        double keepTokens = 0,
         bool inContext = false
     )
     {
         var seqCounts = RawSequenceCounts(history);
         var unsequencedExchanges = UnsequencedExchangeMembers(history);
-        var split = inContext ? history.Count : Split(history, keepPercent, seqCounts);
+        var split = inContext ? history.Count : Split(history, keepTokens, seqCounts);
         var older = history.Take(split).ToArray();
         var blockCounts = new Dictionary<long, int>();
         for (var index = 0; index < older.Length; index++)

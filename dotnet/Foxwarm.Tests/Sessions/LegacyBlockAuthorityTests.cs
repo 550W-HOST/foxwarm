@@ -169,7 +169,7 @@ public sealed class LegacyBlockAuthorityTests
             Assert.Null(
                 Assert.Single(archive.ReadEffectiveBlocksNumericRange(3, 3)).SourceBlockIds
             );
-            var candidates = CompactCandidateBuilder.Build([loaded], keepPercent: 0);
+            var candidates = CompactCandidateBuilder.Build([loaded], keepTokens: 0);
             Assert.Empty(candidates.Items);
             Assert.Empty(candidates.BlockPolicies);
             var current = Enumerable
@@ -190,7 +190,7 @@ public sealed class LegacyBlockAuthorityTests
                 .ToArray();
             Assert.Equal(
                 expected["currentCandidates"]!.GetValue<int>(),
-                CompactCandidateBuilder.Build(current, keepPercent: 0).Items.Count
+                CompactCandidateBuilder.Build(current, keepTokens: 0).Items.Count
             );
             var admission = await owner.Compactor.StartManualAsync();
             Assert.True(admission.Started);

@@ -478,6 +478,16 @@ internal sealed partial class SessionCompactor
         }
     }
 
+    private static double KeepTokens(
+        SessionSnapshot snapshot,
+        HostModels catalog,
+        double keepFraction
+    ) =>
+        CompactCandidateBuilder.KeepTokens(
+            keepFraction,
+            SessionModelSettings.EffectiveThreshold(snapshot.AuthorityEnvelope, catalog)
+        );
+
     private static bool SupportsBackground(SessionSnapshot snapshot, HostModels catalog) =>
         !ModelRoutingFingerprint.False(
             catalog.Resolve(SessionWait.Text(snapshot.AuthorityEnvelope["model"])).Configuration[
@@ -495,7 +505,7 @@ internal sealed partial class SessionCompactor
         token.ThrowIfCancellationRequested();
         var candidates = CompactCandidateBuilder.Build(
             run.Snapshot.History.Materialize(),
-            run.Keep
+            KeepTokens(run.Snapshot, run.Catalog, run.Keep)
         );
         run.Candidates = candidates;
         if (

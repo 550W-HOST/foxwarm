@@ -71,7 +71,7 @@ public sealed partial class CompactRetentionTests
             Row("user", 17, Text()),
             Row("model", 21, Text()),
         ];
-        var candidates = CompactCandidateBuilder.Build(history, keepPercent: 0);
+        var candidates = CompactCandidateBuilder.Build(history, keepTokens: 0);
         var exchange = Assert.Single(candidates.Items, item => item.Start == 4);
         Assert.Equal(9, exchange.End);
         Assert.Equal(candidates.Items[0].Segment, exchange.Segment);
@@ -154,7 +154,7 @@ public sealed partial class CompactRetentionTests
             Row("tool", 12, Response("other"), 1),
             Row("user", 13, Text(), 1),
         ];
-        var candidates = CompactCandidateBuilder.Build(history, keepPercent: 0);
+        var candidates = CompactCandidateBuilder.Build(history, keepTokens: 0);
         Assert.Equal(new long[] { 10, 11 }, candidates.Preserved[0].Exchange);
         Assert.Equal(new long[] { 10, 11 }, candidates.Preserved[1].Exchange);
         Assert.Equal(new long[] { 12 }, candidates.Preserved[2].Exchange);
@@ -207,7 +207,7 @@ public sealed partial class CompactRetentionTests
         ];
         var candidates = CompactCandidateBuilder.Build(
             history,
-            keepPercent: 0,
+            keepTokens: 0,
             inContext: deliberate
         );
         var exchange = Assert.Single(candidates.Items, item => item.Start == 2);
@@ -249,7 +249,7 @@ public sealed partial class CompactRetentionTests
             response["parts"]!.AsArray().Add(Response("second"));
         history.Add(Display(20));
         history.Add(Row("user", 25, Text()));
-        var candidates = CompactCandidateBuilder.Build(history, keepPercent: 0);
+        var candidates = CompactCandidateBuilder.Build(history, keepTokens: 0);
         var exchange = Assert.Single(candidates.Items, item => item.Start == 3);
         var end = separateResponses ? 15 : 9;
         Assert.Equal(end, exchange.End);
@@ -343,7 +343,14 @@ public sealed partial class CompactRetentionTests
         Assert.Equal(2, candidates.Items.Single(item => item.Start == 2).End);
         if (barrier == "no-response")
         {
-            Assert.Equal(2, CompactCandidateBuilder.Split(history, .5));
+            // The tail keeps the newest input and the transparent notice, not the call.
+            Assert.Equal(
+                2,
+                CompactCandidateBuilder.Split(
+                    history,
+                    CompactCandidateBuilder.RowTokens(history[^1])
+                )
+            );
             CompactPlanValidator.Validate(
                 new JsonObject { ["replaceAsBlocks"] = new JsonArray(Block(2, 2)) },
                 candidates
@@ -362,7 +369,7 @@ public sealed partial class CompactRetentionTests
             Row("tool", 23, Response("other"), 1),
         ];
         var candidates = CompactCandidateBuilder.Build(history, inContext: true);
-        Assert.Equal(0, CompactCandidateBuilder.Split(history, .5));
+        Assert.Equal(0, CompactCandidateBuilder.Split(history, 1));
         Assert.Equal(
             new long[] { 10, 19 },
             candidates.Preserved.Single(item => item.Seq == 10).Exchange
@@ -390,7 +397,14 @@ public sealed partial class CompactRetentionTests
             CompactPlanValidator.Validate(args, candidates).Remove.Order()
         );
         history[1]["modelVisible"] = true;
-        Assert.Equal(2, CompactCandidateBuilder.Split(history, .5));
+        Assert.Equal(
+            2,
+            CompactCandidateBuilder.Split(
+                history,
+                CompactCandidateBuilder.RowTokens(history[2])
+                    + CompactCandidateBuilder.RowTokens(history[3])
+            )
+        );
         var visible = CompactCandidateBuilder.Build(history, inContext: true);
         Assert.Equal(new long[] { 19 }, visible.Preserved.Single(item => item.Seq == 19).Exchange);
     }

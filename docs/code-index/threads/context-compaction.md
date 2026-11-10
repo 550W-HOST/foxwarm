@@ -11,7 +11,7 @@ Owns what a compaction plan may summarize and what it records: triggers, respons
 - `checkAndCompactIfNeeded()` compares final usage with the effective compact threshold. The default is `llm.compactThresholdPercent` (85%) of the resolved model context window; a positive per-session threshold overrides it.
 - The runner's continuation trigger compares the previous provider result's total usage with that same threshold. A completed job committed at that safe point satisfies the trigger, and a measurement that strictly exceeds the resolved model context limit waits for pending compact planning before the next provider request. Wait, commit, and Stop rules are canonical in [compaction lifecycle](./compaction-lifecycle.md#commit-and-safe-points).
 - Explicit compact requests enter `processSessionCompactionRequest()`.
-- The default compact request keeps the newest 30% of rendered history (`llm.compactKeepPercent`, default `0.3`).
+- The recent raw tail stays out of compaction: the newest raw rows within `llm.compactKeepPercent` (default `0.3`) of the effective compact threshold, by estimated tokens. See [D-context-recent-raw-tail](#d-context-recent-raw-tail).
 
 At the automatic trigger, response-only pruning is attempted before layered planning. Layered planning runs only when pruning does not commit. The pruning rule is in [D-context-historical-tool-response-pruning](#d-context-historical-tool-response-pruning).
 
@@ -92,6 +92,15 @@ The maintained implementation, failure classifications and supported call paths 
 **Mixed level: directly selected coverage constraints, implemented by derived candidate guards.** The configured fractions and level thresholds serve [layered summarization](#overview) while retaining recent context. Atomic groups and legal segments implement supported preservation under the selected [active-history adjacency contract](#raw-sequence-gaps-and-active-history).
 
 Raw and block candidate quotas are computed after visibility, atomic grouping, and protection barriers. A plan may accumulate coverage across legal segments but one operation cannot cross a segment.
+
+### D-context-recent-raw-tail
+
+**Directly selected by the user (2026-11-11, D7 of the CTX-block retention design).** The force-kept recent tail is measured in estimated tokens, not in rendered rows. A row count mixes 100-character notices with 20k-character tool results and counts summary blocks as rows, so the kept raw volume varied by about a factor of two between compactions.
+
+- Budget: `compactKeepPercent` × the effective compact threshold (the per-Session `compactThresholdTokens`, or `compactThresholdPercent` of the model context window). The configuration key keeps its name and default; its unit changed from a share of rows to a share of the threshold. A manual `keepPercent` override uses the same unit.
+- The tail is the newest rows whose `CompactCandidateBuilder.Tokens` estimate of the model-visible preview fits the budget. The newest row is always kept. Display-only rows and compact-completion notices cost nothing. Summary blocks never belong to the tail: the walk stops at the newest block, so every block is available to block planning.
+- The split then moves back to the start of a complete tool exchange, as before. Response-only tool pruning uses the same split.
+- A zero budget keeps nothing (the complete prefix is compactable).
 
 ### D-context-preserved-raw
 

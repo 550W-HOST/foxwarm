@@ -200,7 +200,10 @@ internal sealed partial class SessionCompactor
     )
     {
         var originalRows = snapshot.History.Materialize();
-        var cutoff = CompactCandidateBuilder.Split(originalRows, keep);
+        var cutoff = CompactCandidateBuilder.Split(
+            originalRows,
+            KeepTokens(snapshot, models, keep)
+        );
         var persistentSnapshot =
             SessionWait.Text(snapshot.AuthorityEnvelope["persistentMemorySnapshot"]) ?? "";
         var before = EstimateHistory(originalRows, persistentSnapshot);

@@ -295,7 +295,13 @@ public sealed class CompactContextTests
             );
             retainedSequences = [noticeSeq, mixedSeq, sentSeq, recentSkillSeq, recentResponseSeq];
             var before = owner.Entry.Snapshot();
-            var split = CompactCandidateBuilder.Split(before.History.Materialize());
+            var split = CompactCandidateBuilder.Split(
+                before.History.Materialize(),
+                CompactCandidateBuilder.KeepTokens(
+                    models.CompactKeepFraction,
+                    SessionModelSettings.EffectiveThreshold(before.AuthorityEnvelope, models)
+                )
+            );
             Assert.All(
                 retainedSequences.Append(staleCompletionSeq),
                 seq => Assert.True(seq >= before.History[split].Sequence)

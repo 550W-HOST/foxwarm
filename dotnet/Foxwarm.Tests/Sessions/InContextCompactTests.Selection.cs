@@ -63,7 +63,7 @@ public sealed partial class InContextCompactTests
             block.ToMessage(),
             Row("user", 6, new JsonObject { ["text"] = "recent small" }),
         ];
-        Assert.Empty(CompactCandidateBuilder.Build(history, keepPercent: 0).Items);
+        Assert.Empty(CompactCandidateBuilder.Build(history, keepTokens: 0).Items);
         var candidates = CompactCandidateBuilder.Build(history, inContext: true);
         var args = Plan(6);
         args["replaceAsBlocks"]!

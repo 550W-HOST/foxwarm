@@ -212,6 +212,11 @@ public sealed partial class CompactLifecycleTests
         managerForPeer = manager;
         await manager.LoadMainHostAsync();
         var owner = await manager.CreateNamedAsync("main", "compact-repair", null, null);
+        // Keep three of the eight ~1,650-token inputs (30% of a 20k threshold).
+        await owner.Entry.SaveLane.CommitSettingsAsync(
+            new JsonObject { ["compactThresholdTokens"] = 20000 },
+            models
+        );
         owner.Entry.WithState(state =>
         {
             for (var seq = 1; seq <= 8; seq++)
@@ -388,6 +393,11 @@ public sealed partial class CompactLifecycleTests
         );
         await manager.LoadMainHostAsync();
         var owner = await manager.CreateNamedAsync("main", "compact-failure", null, null);
+        // Keep three of the eight ~1,650-token inputs (30% of a 20k threshold).
+        await owner.Entry.SaveLane.CommitSettingsAsync(
+            new JsonObject { ["compactThresholdTokens"] = 20000 },
+            models
+        );
         owner.Entry.WithState(state =>
         {
             for (var seq = 1; seq <= 8; seq++)

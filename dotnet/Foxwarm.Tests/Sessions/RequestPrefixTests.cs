@@ -132,7 +132,8 @@ public sealed partial class RequestPrefixTests
         var memoryPath = Path.Combine(temp.Path, "work", "memory", "prefix.md");
         await File.WriteAllTextAsync(memoryPath, "Refreshed memory after compact commit.");
         owner.Registry.TriggerOverride = _ => owner.StartProcessing();
-        var admission = await owner.Compactor.StartManualAsync(keepPercent: .5);
+        // 0.1% of the 170k threshold keeps only the short recent rows.
+        var admission = await owner.Compactor.StartManualAsync(keepPercent: .001);
         Assert.True(admission.Started);
         Assert.Equal(background, admission.Background);
         await owner.Compactor.DrainAsync().WaitAsync(TimeSpan.FromSeconds(25));
