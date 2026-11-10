@@ -118,6 +118,19 @@ internal sealed partial class McpClient
         return UpdateConfigurationAsync(name, patch, false);
     }
 
+    // Replaces literal fields of a server with references to a stored secret. The server must
+    // still be exactly as the patch was computed from.
+    internal Task ReplaceLiteralAsync(string name, JsonObject patch, JsonObject expected) =>
+        UpdateConfigurationAsync(
+            name,
+            patch,
+            false,
+            (before, _) =>
+                JsonNode.DeepEquals(before[name], expected)
+                    ? Task.CompletedTask
+                    : throw new InvalidOperationException("The server changed in the meantime.")
+        );
+
     private async Task UpdateConfigurationAsync(
         string name,
         JsonObject patch,

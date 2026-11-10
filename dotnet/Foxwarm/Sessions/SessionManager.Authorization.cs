@@ -348,7 +348,11 @@ internal sealed partial class SessionManager
         var policy = global ?? await authorization.LoadAsync(token);
         secrets ??= await SecretFactsAsync(owner, resolved, files, policy, token);
         if (secrets is { Count: > 0 })
-            request = request with { Secrets = secrets };
+            request = request with
+            {
+                Secrets = secrets,
+                OwnedSecrets = OwnedSecrets(owner.Agent, secrets),
+            };
         var layers = EffectiveLayers(owner.Agent, policy);
         request = PopulateEffectiveTargets(
             request,
@@ -368,6 +372,21 @@ internal sealed partial class SessionManager
         );
     }
 
+    // Those of the named secrets that the Agent owns. An unreadable store grants nothing.
+    private IReadOnlyList<string> OwnedSecrets(string agent, IReadOnlyList<string> names)
+    {
+        if (secrets is not { } store)
+            return [];
+        try
+        {
+            return names.Where(name => store.Store.Owner(name) == agent).ToArray();
+        }
+        catch (Foxwarm.Secrets.SecretStoreLockedException)
+        {
+            return [];
+        }
+    }
+
     // Stored secrets a configuration call would send to a new destination, against the
     // configuration as it is now. A set_config candidate is read only when the caller may read
     // it, so a fact never reveals anything about a file the caller cannot read; the call then
@@ -384,6 +403,8 @@ internal sealed partial class SessionManager
             return null;
         if (resolved.Name == "mcp_config")
             return mcp.SecretFacts(resolved.Args);
+        if (resolved.Name == "add_secret")
+            return AddSecretFacts(resolved.Args);
         if (
             resolved.Name != "set_config"
             || files is null

@@ -267,32 +267,46 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
         return new JsonObject { ["provider"] = provider };
     }
 
-    // `secrets: {anyOf: [...]}` selects calls by the stored secrets they would send somewhere.
-    // Patterns use secret-name characters and `*`. The object form leaves room for other
-    // conditions; it is normalized to a list.
+    // `secrets: {anyOf: [...], owned: true}` selects calls by the stored secrets they would send
+    // somewhere. Patterns use secret-name characters and `*`; `owned` selects secrets the
+    // caller's Agent owns. Both conditions apply to each name.
     private static JsonObject SecretsMatcher(JsonNode? node)
     {
-        if (node is not JsonObject map || !map.ContainsKey("anyOf"))
-            throw new InvalidDataException("Secrets matcher requires { anyOf: [names] }.");
-        Fields(map, "anyOf");
-        var values = map["anyOf"] is JsonArray list ? list.ToArray() : [map["anyOf"]];
-        if (values.Length is < 1 or > 64)
-            throw new InvalidDataException("Secrets matcher requires 1-64 names.");
-        var patterns = values.Select(value => String(value, 128)).ToArray();
-        if (
-            patterns.Any(value =>
-                !Regex.IsMatch(value, @"^[a-z0-9._*-]+$", RegexOptions.CultureInvariant)
-            )
-        )
+        if (node is not JsonObject map || !map.ContainsKey("anyOf") && !map.ContainsKey("owned"))
             throw new InvalidDataException(
-                "Secret name pattern supports secret name characters and '*' only."
+                "Secrets matcher requires { anyOf: [names] } and/or { owned: true }."
             );
-        return new JsonObject
+        Fields(map, "anyOf", "owned");
+        var result = new JsonObject();
+        if (map.ContainsKey("anyOf"))
         {
-            ["anyOf"] = new JsonArray(
+            var values = map["anyOf"] is JsonArray list ? list.ToArray() : [map["anyOf"]];
+            if (values.Length is < 1 or > 64)
+                throw new InvalidDataException("Secrets matcher requires 1-64 names.");
+            var patterns = values.Select(value => String(value, 128)).ToArray();
+            if (
+                patterns.Any(value =>
+                    !Regex.IsMatch(value, @"^[a-z0-9._*-]+$", RegexOptions.CultureInvariant)
+                )
+            )
+                throw new InvalidDataException(
+                    "Secret name pattern supports secret name characters and '*' only."
+                );
+            result["anyOf"] = new JsonArray(
                 patterns.Select(value => (JsonNode?)JsonValue.Create(value)).ToArray()
-            ),
-        };
+            );
+        }
+        if (map.ContainsKey("owned"))
+        {
+            if (
+                map["owned"] is not JsonValue owned
+                || !owned.TryGetValue<bool>(out var value)
+                || !value
+            )
+                throw new InvalidDataException("Secrets owned matcher supports only true.");
+            result["owned"] = true;
+        }
+        return result;
     }
 
     private static JsonNode? Argument(JsonNode? node)

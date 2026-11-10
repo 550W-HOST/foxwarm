@@ -95,6 +95,10 @@ internal sealed class ToolApprovalScope(SessionOwner owner)
             value["secrets"] = new JsonArray(
                 secrets.Select(name => (JsonNode?)JsonValue.Create(name)).ToArray()
             );
+        if (request.OwnedSecrets is { Count: > 0 } owned)
+            value["ownedSecrets"] = new JsonArray(
+                owned.Select(name => (JsonNode?)JsonValue.Create(name)).ToArray()
+            );
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value.ToJsonString())));
     }
 

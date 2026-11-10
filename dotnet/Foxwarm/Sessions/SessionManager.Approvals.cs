@@ -21,6 +21,16 @@ internal sealed class ToolApprovalNotPendingException(string message)
 
 internal sealed partial class SessionManager
 {
+    // The arguments approvers see. add_secret's value is not stored yet, so masking cannot hide
+    // it; approvers decide from the name and source.
+    internal static JsonObject ApprovalArgs(ResolvedTool resolved)
+    {
+        var args = (JsonObject)resolved.Args.DeepClone();
+        if (resolved is { Source: "builtin", Name: "add_secret" } && args.ContainsKey("value"))
+            args["value"] = HiddenSecretValue;
+        return args;
+    }
+
     /// <summary>
     /// Records a pending approval for a call that matched an ask rule and registers its live
     /// waiter. The record is committed before anyone can see or decide it.
@@ -35,6 +45,7 @@ internal sealed partial class SessionManager
     {
         var assessment = required.Assessment;
         var resolved = required.Resolved;
+        var shown = ApprovalArgs(resolved);
         var options = assessment.Approval;
         var timeout =
             options.TimeoutSeconds
@@ -57,7 +68,7 @@ internal sealed partial class SessionManager
             ["createdAt"] = now,
             ["origin"] = origin.Kind,
             ["tool"] = tool,
-            ["summary"] = SessionToolExecutor.ToolArgsPreview(resolved.Name, resolved.Args),
+            ["summary"] = SessionToolExecutor.ToolArgsPreview(resolved.Name, shown),
         };
         if (timeout is long seconds)
         {
@@ -70,9 +81,9 @@ internal sealed partial class SessionManager
             record["toolCallId"] = origin.ToolCallId;
         if (!string.IsNullOrEmpty(origin.RunId))
             record["runId"] = origin.RunId;
-        var args = resolved.Args.ToJsonString();
+        var args = shown.ToJsonString();
         if (Encoding.UTF8.GetByteCount(args) <= SessionApprovals.MaxArgsBytes)
-            record["args"] = resolved.Args.DeepClone();
+            record["args"] = shown.DeepClone();
         else
         {
             // The live waiter keeps the full arguments for approvers while the record is pending.
@@ -106,7 +117,7 @@ internal sealed partial class SessionManager
         record["approvers"] = new JsonArray(
             options.Approvers.Select(value => (JsonNode?)JsonValue.Create(value)).ToArray()
         );
-        var waiter = owner.ApprovalWaiters.Register(id, (JsonObject)resolved.Args.DeepClone());
+        var waiter = owner.ApprovalWaiters.Register(id, (JsonObject)shown.DeepClone());
         int? full = null;
         string? committed;
         try

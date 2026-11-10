@@ -65,6 +65,7 @@ internal static class ActivityKinds
                 "list_toolscript_runs",
                 "get_toolscript_run",
                 "explain_tool_authorization",
+                "list_secrets",
                 "browser_tabs",
                 "browser_read",
                 "browser_screenshot",
@@ -121,6 +122,7 @@ internal static class ActivityKinds
             null,
             [
                 "set_config",
+                "add_secret",
                 "set_agent_inherit",
                 "set_agent_isolated",
                 "set_agent_rules",

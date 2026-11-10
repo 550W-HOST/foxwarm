@@ -15,7 +15,9 @@ internal sealed record SecretMetadata(
     long UpdatedAt,
     long? SetAt,
     int RetiredVersions,
-    long? RetainedUntil
+    long? RetainedUntil,
+    // The Agent that owns the secret; null when it belongs to the instance.
+    string? Owner = null
 );
 
 internal sealed class SecretStoreLockedException(string message, Exception? inner = null)
@@ -120,7 +122,55 @@ internal sealed partial class SecretStore
         }
     }
 
-    internal SecretMetadata Set(string name, string value, string? description = null)
+    // The Agent that owns a secret, or null for the instance and for unknown names.
+    internal string? Owner(string name)
+    {
+        lock (gate)
+            return Entries()[name] is JsonObject entry ? OwnerOf(entry) : null;
+    }
+
+    // Sets the current value. A new name belongs to the instance; an existing one keeps its owner.
+    internal SecretMetadata Set(string name, string value, string? description = null) =>
+        Store(name, value, description, create: false, owner: null);
+
+    // Adds a value under a name that has none. A name whose values were all retired is reused
+    // and takes the new owner. ownerAgent null means the instance.
+    internal SecretMetadata Create(
+        string name,
+        string value,
+        string? description,
+        string? ownerAgent
+    ) => Store(name, value, description, create: true, owner: ownerAgent);
+
+    // Hands every secret an Agent owns to the instance, so a later Agent with the same name
+    // does not inherit them. Returns the affected names.
+    internal IReadOnlyList<string> TransferToInstance(string agent)
+    {
+        lock (gate)
+        {
+            var next = (JsonObject)Load().DeepClone();
+            var moved = new List<string>();
+            var now = Now();
+            foreach (var (name, node) in next["entries"]!.AsObject())
+                if (node is JsonObject entry && OwnerOf(entry) == agent)
+                {
+                    entry["owner"] = new JsonObject { ["kind"] = "instance" };
+                    entry["updatedAt"] = now;
+                    moved.Add(name);
+                }
+            if (moved.Count > 0)
+                Commit(next);
+            return moved;
+        }
+    }
+
+    private SecretMetadata Store(
+        string name,
+        string value,
+        string? description,
+        bool create,
+        string? owner
+    )
     {
         ValidateName(name);
         if (string.IsNullOrEmpty(value))
@@ -136,6 +186,8 @@ internal sealed partial class SecretStore
             var entries = next["entries"]!.AsObject();
             var now = Now();
             var entry = entries[name] as JsonObject;
+            if (create && entry is not null && Current(entry) is not null)
+                throw new InvalidOperationException($"Secret `{name}` already exists.");
             if (entry is null)
                 entries[name] = entry = new JsonObject
                 {
@@ -143,8 +195,10 @@ internal sealed partial class SecretStore
                     ["createdAt"] = now,
                     ["versions"] = new JsonArray(),
                 };
-            else if (description is not null)
-                entry["description"] = description;
+            else if (create || description is not null)
+                entry["description"] = description ?? "";
+            if (create || entry["owner"] is null)
+                entry["owner"] = OwnerNode(owner);
             var versions = entry["versions"]!.AsArray();
             var number =
                 versions
@@ -275,9 +329,24 @@ internal sealed partial class SecretStore
             retained.Length,
             retained.Length == 0
                 ? null
-                : retained.Max(version => (long)(SessionWait.Number(version["redactUntil"]) ?? 0))
+                : retained.Max(version => (long)(SessionWait.Number(version["redactUntil"]) ?? 0)),
+            OwnerOf(entry)
         );
     }
+
+    private static JsonObject OwnerNode(string? agent) =>
+        agent is null
+            ? new JsonObject { ["kind"] = "instance" }
+            : new JsonObject { ["kind"] = "agent", ["agent"] = agent };
+
+    // Entries written before ownership existed, and any owner this version does not
+    // recognize, belong to the instance: they grant no Agent anything.
+    private static string? OwnerOf(JsonObject entry) =>
+        entry["owner"] is JsonObject owner
+        && SessionWait.Text(owner["kind"]) == "agent"
+        && SessionWait.Text(owner["agent"]) is { Length: > 0 } agent
+            ? agent
+            : null;
 
     private JsonObject Entries() => Load()["entries"]!.AsObject();
 

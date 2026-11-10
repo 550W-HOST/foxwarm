@@ -37,6 +37,11 @@ internal static class ToolAuthorizationExplain
                 Matched(exec, layer.Policy, fallback.Rule);
                 detail["unrestrictedMasterExec"] = exec;
             }
+            else if (secrets.Owned)
+            {
+                detail["rule"] = null;
+                detail["owned"] = true;
+            }
             else
                 Matched(detail, layer.Policy, secrets.Rule);
             result["secrets"] = detail;
@@ -106,6 +111,10 @@ internal static class ToolAuthorizationExplain
         if (request.Secrets is { Count: > 0 } secrets)
             facts["secrets"] = new JsonArray(
                 secrets.Select(name => (JsonNode?)JsonValue.Create(name)).ToArray()
+            );
+        if (request.OwnedSecrets is { Count: > 0 } owned)
+            facts["ownedSecrets"] = new JsonArray(
+                owned.Select(name => (JsonNode?)JsonValue.Create(name)).ToArray()
             );
         return facts;
     }

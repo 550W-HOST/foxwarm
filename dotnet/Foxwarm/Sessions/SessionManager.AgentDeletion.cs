@@ -98,6 +98,18 @@ internal sealed partial class SessionManager
                         $"Agent \"{name}\" has sessions attached to non-WebUI channels: {string.Join(", ", blocked.Select(row => SessionCatalog.Text(row!["sessionId"])).Distinct())}"
                     );
             }
+            // Secrets the Agent added go to the instance, so a later Agent with the same name
+            // does not inherit them. Check first that the store can record that.
+            try
+            {
+                secrets?.Store.Check();
+            }
+            catch (Foxwarm.Secrets.SecretStoreLockedException error)
+            {
+                throw new InvalidOperationException(
+                    $"Agent \"{name}\" was not deleted: secrets it added could not be handed to the instance. {error.Message}"
+                );
+            }
             var deleted = new List<string>();
             foreach (var id in ids)
             {
@@ -123,6 +135,7 @@ internal sealed partial class SessionManager
                         ? $"Agent \"{name}\" still owns Sessions outside this command's selection. Its folder was kept; earlier deletions were not rolled back."
                         : $"Agent deletion stopped because new owned sessions appeared: {string.Join(", ", remaining)}"
                 );
+            secrets?.Store.TransferToInstance(name);
             await agents.RemoveDeletedAsync(
                 name,
                 retainMetadata: command,

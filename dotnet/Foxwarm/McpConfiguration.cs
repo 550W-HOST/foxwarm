@@ -16,6 +16,8 @@ internal sealed class McpConfiguration(string root, string? configPath = null)
     // Snapshot and summaries keep the reference text.
     internal Func<string, string?>? SecretLookup { get; set; }
 
+    internal string FilePath => configPath ?? Path.Combine(root, "state", "mcp.json");
+
     private JsonObject Load()
     {
         lock (gate)

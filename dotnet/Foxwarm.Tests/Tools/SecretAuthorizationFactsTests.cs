@@ -364,6 +364,9 @@ public sealed class SecretAuthorizationFactsTests
                 "{secrets: {anyOf: [a], allOf: [b]}, action: allow}",
                 "{externalId: client, secrets: {anyOf: [a]}, action: deny}",
                 "{match: {secrets: {anyOf: [a]}}, action: deny}",
+                "{secrets: {}, action: allow}",
+                "{secrets: {owned: false}, action: allow}",
+                "{secrets: {owned: 'true'}, action: allow}",
             }
         )
             Assert.ThrowsAny<InvalidDataException>(() =>
@@ -380,7 +383,82 @@ public sealed class SecretAuthorizationFactsTests
     }
 
     [Fact]
-    public void Legacy_isolation_never_grants_secret_facts()
+    public void Owned_secrets_need_no_allow_and_restrictive_rules_still_match_them()
+    {
+        var restricted = Local(
+            """[{"tool":{"source":"builtin","name":"set_config"},"action":"allow"},{"action":"deny"}]"""
+        );
+        ToolAuthorizationRequest Request(string[] secrets, string[] owned) =>
+            SetConfig("worker", secrets) with
+            {
+                OwnedSecrets = owned,
+            };
+        // Every secret owned: allowed without any rule or the master-exec fallback.
+        var owned = ToolAuthorizationEvaluation.Evaluate(restricted, Request(["mine"], ["mine"]));
+        Assert.Equal(ToolAuthorizationEffect.Allow, owned.Effect);
+        Assert.True(owned.Secrets!.Owned);
+        Assert.Null(owned.Secrets.Fallback);
+        // Ownership of a name outside the request does not count.
+        Assert.Equal(
+            ToolAuthorizationEffect.Deny,
+            Effect(restricted, Request(["mine", "shared"], ["mine", "other"]))
+        );
+        // An allow covers the secrets the Agent does not own.
+        var granted = Local(
+            """[{"secrets":{"anyOf":["shared"]},"action":"allow"},{"tool":{"source":"builtin","name":"set_config"},"action":"allow"},{"action":"deny"}]"""
+        );
+        Assert.Equal(
+            ToolAuthorizationEffect.Allow,
+            Effect(granted, Request(["mine", "shared"], ["mine"]))
+        );
+        Assert.Equal(
+            ToolAuthorizationEffect.Deny,
+            Effect(granted, Request(["mine", "unlisted"], ["mine"]))
+        );
+        // `owned: true` selects owned names and applies together with anyOf to each name.
+        var ownedDeny = Local(
+            """[{"secrets":{"owned":true,"anyOf":["prod-*"]},"action":"deny","reason":"Not production."},{"action":"allow"}]"""
+        );
+        var production = ToolAuthorizationEvaluation.Evaluate(
+            ownedDeny,
+            Request(["prod-key"], ["prod-key"])
+        );
+        Assert.Equal(ToolAuthorizationEffect.Deny, production.Effect);
+        Assert.Equal("Not production.", (string?)production.Secrets!.Rule!["reason"]);
+        Assert.Equal(
+            ToolAuthorizationEffect.Allow,
+            Effect(ownedDeny, Request(["dev-key"], ["dev-key"]))
+        );
+        Assert.Equal(ToolAuthorizationEffect.Allow, Effect(ownedDeny, Request(["prod-key"], [])));
+        var ownedAsk = Global(
+            """
+            version: 1
+            rules:
+              - {id: confirm-own, secrets: {owned: true}, action: ask}
+            """
+        );
+        Assert.Equal(
+            ToolAuthorizationEffect.Ask,
+            Effect(ownedAsk, Request(["mine", "shared"], ["mine"]))
+        );
+        Assert.Equal(ToolAuthorizationEffect.Allow, Effect(ownedAsk, Request(["shared"], [])));
+        // An owned-only allow does not match a call that also sends a secret it does not own.
+        var ownedAllow = Local(
+            """[{"secrets":{"owned":true},"action":"allow"},{"tool":{"source":"builtin","name":"set_config"},"action":"allow"},{"action":"deny"}]"""
+        );
+        var mixed = ToolAuthorizationEvaluation.Evaluate(
+            ownedAllow,
+            Request(["mine", "shared"], ["mine"])
+        );
+        Assert.Equal(ToolAuthorizationEffect.Deny, mixed.Effect);
+        Assert.NotNull(mixed.Secrets!.Fallback);
+        var matched = ToolAuthorizationEvaluation.Evaluate(ownedAllow, Request(["mine"], ["mine"]));
+        Assert.Equal(ToolAuthorizationEffect.Allow, matched.Effect);
+        Assert.NotNull(matched.Secrets!.Rule);
+    }
+
+    [Fact]
+    public void Legacy_isolation_grants_only_owned_secret_facts()
     {
         var isolation = new AgentIsolation(
             true,
@@ -415,5 +493,27 @@ public sealed class SecretAuthorizationFactsTests
             )
         );
         Assert.Contains("`provider-key`", error.Message);
+        IsolatedToolCompatibility.Check(
+            isolation,
+            request with
+            {
+                Secrets = ["own-key"],
+                OwnedSecrets = ["own-key"],
+            },
+            _ => null
+        );
+        error = Assert.Throws<ToolAuthorizationDeniedException>(() =>
+            IsolatedToolCompatibility.Check(
+                isolation,
+                request with
+                {
+                    Secrets = ["own-key", "provider-key"],
+                    OwnedSecrets = ["own-key"],
+                },
+                _ => null
+            )
+        );
+        Assert.Contains("`provider-key`", error.Message);
+        Assert.DoesNotContain("own-key", error.Message);
     }
 }

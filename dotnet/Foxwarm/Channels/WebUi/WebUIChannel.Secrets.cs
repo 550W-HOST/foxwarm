@@ -191,7 +191,13 @@ internal sealed partial class WebUIChannel
             ["retiredVersions"] = item.RetiredVersions,
             ["retainedUntil"] = item.RetainedUntil,
             ["usages"] = new JsonArray(usages.Select(usage => usage.DeepClone()).ToArray()),
+            ["owner"] = SecretOwnerJson(item.Owner),
         };
+
+    internal static JsonObject SecretOwnerJson(string? agent) =>
+        agent is null
+            ? new JsonObject { ["kind"] = "instance" }
+            : new JsonObject { ["kind"] = "agent", ["agent"] = agent };
 
     private static string TextField(JsonObject input, string key) =>
         input[key] is JsonValue value && value.TryGetValue<string>(out var text)

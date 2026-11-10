@@ -711,6 +711,8 @@ internal sealed partial class SessionToolExecutor(
                         args["filePath"]
                     ),
                     "apply_patch" or "apply_patch_memory" => SessionWait.Text(args["input"]) ?? "",
+                    // Never the value: it is not a known secret until the call has stored it.
+                    "add_secret" => Text(args["name"]),
                     "read" or "read_memory" => (SessionWait.Text(args["filePath"]) ?? "")
                         + (
                             SessionWait.Number(args["startLine"]) is > 0
@@ -1357,6 +1359,36 @@ internal sealed partial class SessionToolExecutor(
                 args,
                 token
             );
+        handlers["add_secret"] = (owner, args, token) =>
+            owner.Manager.AddSecretAsync(
+                owner.Hosted,
+                owner.Files ?? throw new NotSupportedException("This executor has no file reader."),
+                owner.ExecutionNode,
+                owner.ExecutionCwd,
+                args,
+                // Deleting the source file is an ordinary edit on that Node.
+                async (path, current) =>
+                    _ = await registry.ExecuteAsync(
+                        new(
+                            "edit",
+                            "node",
+                            "edit",
+                            SessionManager.DeletePatch(path),
+                            ExecutionNode: owner.ExecutionNode
+                        ),
+                        owner,
+                        current
+                    ),
+                token
+            );
+        handlers["list_secrets"] = (owner, args, token) =>
+            owner.Manager.ListSecretsAsync(
+                owner.Hosted,
+                owner.Files ?? throw new NotSupportedException("This executor has no file reader."),
+                owner.ExecutionNode,
+                args,
+                token
+            );
         handlers["explain_tool_authorization"] = (owner, args, token) =>
             owner.Manager.ExplainToolAuthorizationAsync(
                 owner.Hosted,
@@ -1447,6 +1479,8 @@ internal sealed partial class SessionToolExecutor(
                         or "list_mcp_servers"
                         or "delete_session"
                         or "set_config"
+                        or "add_secret"
+                        or "list_secrets"
                         or "explain_tool_authorization"
                         or "move_session"
                         or "create_timer"

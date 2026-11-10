@@ -249,6 +249,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
             definitions.Add(definition?.DeepClone());
         definitions.Add(ToolAuthorizationToolDefinition.Definition());
         definitions.Add((JsonNode?)ToolAuthorizationToolDefinition.ExplainDefinition());
+        foreach (var definition in SecretToolDefinitions.Definitions())
+            definitions.Add(definition?.DeepClone());
         foreach (var definition in FileDeliveryDefinitions.Definitions())
             definitions.Add(definition?.DeepClone());
         foreach (var definition in MainLocalToolDefinitions.Definitions())

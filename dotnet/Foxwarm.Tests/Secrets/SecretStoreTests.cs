@@ -155,6 +155,52 @@ public sealed class SecretStoreTests
         Assert.Empty(secrets.Exposures.List());
         secrets.Dispose();
     }
+
+    [Fact]
+    public void Owners_are_recorded_by_create_kept_by_replacement_and_handed_to_the_instance()
+    {
+        using var temp = new TempDirectory();
+        var secrets = new InstanceSecrets(temp.Path);
+        var store = secrets.Store;
+
+        // Setup values belong to the instance, also when written before ownership existed.
+        store.Set("setup-key", Value);
+        var legacy = JsonNode.Parse(File.ReadAllText(store.FilePath))!.AsObject();
+        legacy["entries"]!["setup-key"]!.AsObject().Remove("owner");
+        File.WriteAllText(store.FilePath, legacy.ToJsonString());
+        var reopened = new InstanceSecrets(temp.Path).Store;
+        Assert.Null(reopened.Owner("setup-key"));
+        Assert.Null(reopened.List().Single().Owner);
+
+        var created = reopened.Create("agent-key", Value + "-agent", "Synthetic", "worker");
+        Assert.Equal("worker", created.Owner);
+        Assert.Equal("worker", reopened.Owner("agent-key"));
+        Assert.Null(reopened.Owner("absent"));
+        // Create never replaces a current value; Setup replacement keeps the owner.
+        Assert.Throws<InvalidOperationException>(() =>
+            reopened.Create("agent-key", Value + "-other", null, "intruder")
+        );
+        Assert.Throws<InvalidOperationException>(() =>
+            reopened.Create("setup-key", Value + "-other", null, "intruder")
+        );
+        reopened.Set("agent-key", Value + "-replaced");
+        Assert.Equal("worker", reopened.Owner("agent-key"));
+        Assert.Equal(Value + "-replaced", reopened.Resolve("agent-key"));
+
+        // A name whose values were all deleted can be created again by its new owner.
+        reopened.Delete("setup-key");
+        Assert.Equal("other", reopened.Create("setup-key", Value + "-new", null, "other").Owner);
+
+        Assert.Equal(["agent-key"], reopened.TransferToInstance("worker"));
+        Assert.Null(reopened.Owner("agent-key"));
+        Assert.Empty(reopened.TransferToInstance("worker"));
+        Assert.Equal("other", new InstanceSecrets(temp.Path).Store.Owner("setup-key"));
+        // An owner this version does not recognize grants nothing.
+        var unknown = JsonNode.Parse(File.ReadAllText(store.FilePath))!.AsObject();
+        unknown["entries"]!["setup-key"]!["owner"] = new JsonObject { ["kind"] = "team" };
+        File.WriteAllText(store.FilePath, unknown.ToJsonString());
+        Assert.Null(new InstanceSecrets(temp.Path).Store.Owner("setup-key"));
+    }
 }
 
 public sealed class SecretReferenceTests

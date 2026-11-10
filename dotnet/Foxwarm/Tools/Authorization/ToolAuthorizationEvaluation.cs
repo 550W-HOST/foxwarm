@@ -39,7 +39,9 @@ internal sealed record ToolAuthorizationRequest(
     string? CurrentNode = null,
     Foxwarm.Nodes.NodeAuthorizationForest? NodeForest = null,
     // Stored secrets the call would send to a destination they were not sent to before.
-    IReadOnlyList<string>? Secrets = null
+    IReadOnlyList<string>? Secrets = null,
+    // Those of Secrets that the caller's Agent owns.
+    IReadOnlyList<string>? OwnedSecrets = null
 );
 
 internal enum ToolAuthorizationEffect
@@ -163,12 +165,14 @@ internal enum CreationTargetDecision
 }
 
 // How a layer decided the secret facts of a call: by the first matching rule with a `secrets`
-// selector, or otherwise by the caller's authorization for an unrestricted `exec` on master,
-// since such a caller can already read the store and its key.
+// selector; otherwise allowed when the caller's Agent owns every one of them; otherwise by the
+// caller's authorization for an unrestricted `exec` on master, since such a caller can already
+// read the store and its key.
 internal sealed record SecretsDecision(
     ToolAuthorizationEffect Effect,
     JsonObject? Rule,
-    UnrestrictedExecDecision? Fallback
+    UnrestrictedExecDecision? Fallback,
+    bool Owned = false
 );
 
 // The caller's authorization for `exec` on master with any command and cwd. Rule is the rule
@@ -481,6 +485,7 @@ internal static class ToolAuthorizationEvaluation
             SessionTarget = null,
             TaskOwnerSession = null,
             Secrets = null,
+            OwnedSecrets = null,
         };
         foreach (var rule in policy.Value["rules"]!.AsArray().OfType<JsonObject>())
         {
@@ -501,16 +506,30 @@ internal static class ToolAuthorizationEvaluation
     // decides the call itself.
     private static bool Ordinary(JsonObject match) => !match.ContainsKey("secrets");
 
-    // An allow must cover every named secret; deny and ask match any of them. External
-    // principals never send stored secrets.
-    private static bool SecretNames(JsonNode matcher, ToolAuthorizationRequest request, bool deny)
+    private static HashSet<string> OwnedSecrets(ToolAuthorizationRequest request) =>
+        new(
+            (request.OwnedSecrets ?? []).Where(name => request.Secrets?.Contains(name) == true),
+            StringComparer.Ordinal
+        );
+
+    // Deny and ask match any named secret. An allow must cover every secret the caller's Agent
+    // does not own, and at least one secret, so an unrelated allow never matches a call whose
+    // secrets are all owned. External principals never send stored secrets.
+    private static bool SecretNames(
+        JsonNode matcher,
+        ToolAuthorizationRequest request,
+        bool restrictive
+    )
     {
         if (request.Principal != "internal" || request.Secrets is not { Count: > 0 } names)
             return false;
-        var patterns = matcher["anyOf"]!;
-        return deny
-            ? names.Any(name => Pattern(patterns, name))
-            : names.All(name => Pattern(patterns, name));
+        var owned = OwnedSecrets(request);
+        bool Covers(string name) =>
+            (matcher["anyOf"] is not { } patterns || Pattern(patterns, name))
+            && (matcher["owned"]?.GetValue<bool>() != true || owned.Contains(name));
+        return restrictive
+            ? names.Any(Covers)
+            : names.Any(Covers) && names.All(name => owned.Contains(name) || Covers(name));
     }
 
     private static SecretsDecision EvaluateSecrets(
@@ -531,6 +550,9 @@ internal static class ToolAuthorizationEvaluation
             )
                 return new(RuleEffect(rule, request), rule, null);
         }
+        // A secret the caller's Agent owns needs no allow rule.
+        if (request.Secrets!.All(OwnedSecrets(request).Contains))
+            return new(ToolAuthorizationEffect.Allow, null, null, Owned: true);
         var fallback = EvaluateUnrestrictedMasterExec(policy, request);
         return new(fallback.Effect, null, fallback);
     }

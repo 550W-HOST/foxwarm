@@ -305,6 +305,29 @@ internal sealed partial class ModelConfiguration
     internal string ReadCurrentAppRaw() =>
         File.Exists(AppPath) ? File.ReadAllText(AppPath, Encoding.UTF8) : "";
 
+    // The installed models or app file as text, and whether it starts with a UTF-8 byte order
+    // mark, for edits that rewrite parts of it in place.
+    internal (string Text, bool Bom) ReadInstalledRaw(string target)
+    {
+        var path = target == "models" ? ActivePath : AppPath;
+        if (!File.Exists(path))
+            throw new InvalidOperationException(
+                target == "models"
+                    ? "No models configuration has been saved yet."
+                    : "No app configuration has been saved yet."
+            );
+        var bytes = File.ReadAllBytes(path);
+        var bom = bytes is [0xEF, 0xBB, 0xBF, ..];
+        try
+        {
+            return (new UTF8Encoding(false, true).GetString(bom ? bytes[3..] : bytes), bom);
+        }
+        catch (DecoderFallbackException)
+        {
+            throw new InvalidDataException("The configuration file is not UTF-8 text.");
+        }
+    }
+
     // The models file the catalog reads: the installed file, or the template before the first
     // save. Null when neither exists.
     internal string? ReadCurrentModelsRaw()

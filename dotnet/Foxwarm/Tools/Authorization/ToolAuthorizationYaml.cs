@@ -142,7 +142,7 @@ internal static class ToolAuthorizationYaml
                 Shape.Agent => ["sameAgent"],
                 Shape.Task => ["owned"],
                 Shape.Node => ["current", "provider", "exact"],
-                Shape.Secrets => ["anyOf"],
+                Shape.Secrets => ["anyOf", "owned"],
                 Shape.Argument when keys.Any(pair => pair.Key == "agent") => ["agent"],
                 Shape.Argument when keys.Any(pair => pair.Key == "task") => ["task"],
                 Shape.Argument when keys.Any(pair => pair.Key == "session") => ["session"],

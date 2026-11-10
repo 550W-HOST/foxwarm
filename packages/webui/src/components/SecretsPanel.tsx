@@ -12,6 +12,7 @@ type Secret = {
   retiredVersions: number
   retainedUntil?: number | null
   usages: Usage[]
+  owner?: { kind: 'instance' } | { kind: 'agent'; agent: string }
 }
 type Exposure = { label: string; count: number; lastSeenAt: number; lastSource: string; lastSessionId?: string | null }
 type Payload = {
@@ -44,6 +45,7 @@ const alertClass = 'mt-4 rounded-lg border border-fw-danger-border bg-fw-danger-
 const usageKinds: Record<Usage['kind'], string> = { provider: 'Model provider', channel: 'Channel', mcp: 'MCP server', setting: 'Setting' }
 const sources: Record<string, string> = {
   'tool-output': 'Tool output',
+  'tool-call': 'Tool call',
   input: 'Incoming message',
   history: 'Session history',
   'model-request': 'Model request',
@@ -106,6 +108,7 @@ function SecretRow({ secret, minimum, locked, refresh }: { secret: Secret; minim
   return <li className={rowClass} aria-label={`Secret ${secret.name}`} data-secret={secret.name}>
     <div className="min-w-0 flex-1 basis-64">
       <div className={nameClass}>{secret.name}</div>
+      {secret.owner?.kind === 'agent' && <p className={metaClass}>Owned by Agent {secret.owner.agent}</p>}
       {secret.description && <p className="mt-0.5 break-words text-sm text-fw-text">{secret.description}</p>}
       <p className={metaClass}>
         {secret.isSet ? `Updated ${when(secret.setAt ?? secret.updatedAt)}` : <span className="text-fw-warning">No value</span>}

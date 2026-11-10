@@ -294,8 +294,13 @@ internal static class IsolatedToolCompatibility
                 );
         }
         // Isolation has no rules that could grant secret facts, and their fallback, unrestricted
-        // exec on master, is structurally forbidden here.
-        if (request.Secrets is { Count: > 0 } secrets)
+        // exec on master, is structurally forbidden here. Secrets the Agent owns need no grant.
+        if (
+            request
+                .Secrets?.Where(name => request.OwnedSecrets?.Contains(name) != true)
+                .ToArray() is
+            { Length: > 0 } secrets
+        )
             throw new ToolAuthorizationDeniedException(
                 Foxwarm.Secrets.SecretConfigurationChanges.DeniedMessage(secrets)
             );

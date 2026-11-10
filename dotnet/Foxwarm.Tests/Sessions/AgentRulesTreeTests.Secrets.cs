@@ -42,6 +42,8 @@ public sealed partial class AgentRulesTreeTests
             );
         definitions.Add(ToolAuthorizationToolDefinition.Definition());
         definitions.Add(ToolAuthorizationToolDefinition.ExplainDefinition());
+        foreach (var item in SecretToolDefinitions.Definitions())
+            definitions.Add(item?.DeepClone());
         f.Registry = SessionToolExecutor.CreateRegistry(
             definitions,
             f.Manager.OutboundMcp,
