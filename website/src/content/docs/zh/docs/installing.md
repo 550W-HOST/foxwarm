@@ -22,14 +22,22 @@ Foxwarm 服务器支持 **Linux x64**（包括 x64 WSL）、**macOS arm64**（Ap
 
 | 安装包 | 用途 |
 | --- | --- |
-| `foxwarm-linux-x64-native.tar.gz` | Linux 服务器，编译为原生程序，不需要 .NET 运行时 |
-| `foxwarm-linux-x64.tar.gz` | Linux 服务器，使用系统已安装的 ASP.NET Core 10 运行时 |
-| `foxwarm-osx-arm64.tar.gz` | Apple Silicon Mac 服务器，使用系统已安装的 ASP.NET Core 10 运行时 |
-| `foxwarm-osx-arm64-self-contained.tar.gz` | Apple Silicon Mac 服务器，自带 .NET 运行时 |
-| `foxwarm-win-x64.zip` | Windows 服务器，使用系统已安装的 ASP.NET Core 10 运行时 |
-| `foxwarm-win-x64-self-contained.zip` | Windows 服务器，自带 .NET 运行时 |
-| `foxwarm-desktop-win-x64.zip` | Windows 桌面版，自带 .NET 运行时 |
-| `SHA256SUMS` | 以上文件的校验和 |
+| [`foxwarm-linux-x64-native.tar.gz`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-linux-x64-native.tar.gz) | Linux 服务器，编译为原生程序，不需要 .NET 运行时（Linux 默认） |
+| [`foxwarm-linux-x64.tar.gz`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-linux-x64.tar.gz) | Linux 服务器，使用系统已安装的 ASP.NET Core 10 运行时 |
+| [`foxwarm-osx-arm64.tar.gz`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-osx-arm64.tar.gz) | Apple Silicon Mac 服务器，使用系统已安装的 ASP.NET Core 10 运行时 |
+| [`foxwarm-osx-arm64-self-contained.tar.gz`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-osx-arm64-self-contained.tar.gz) | Apple Silicon Mac 服务器，自带 .NET 运行时 |
+| [`foxwarm-win-x64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-win-x64.zip) | Windows 服务器，使用系统已安装的 ASP.NET Core 10 运行时 |
+| [`foxwarm-win-x64-self-contained.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-win-x64-self-contained.zip) | Windows 服务器，自带 .NET 运行时 |
+| [`foxwarm-desktop-win-x64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-win-x64.zip) | Windows 桌面版，自带 .NET 运行时 |
+| [`SHA256SUMS`](https://github.com/550W-HOST/foxwarm/releases/latest/download/SHA256SUMS) | Release 中各文件的校验和 |
+
+每个 Release 还包含：
+
+- `foxwarm-code-<版本>.tar.gz`：服务器安装包使用的 Code 编辑器，桌面版已自带。缺少 Code 时，WebUI 的 Code 页面会给出安装命令。
+- `native-cli-node-*`：Linux、macOS 和 Windows 的独立 [Node](/docs/nodes/) 客户端，Node 的引导命令会自动下载。
+- Docker 镜像 `ghcr.io/550w-host/foxwarm`，标签有完整版本号（如 `0.9.4`）、次版本号（`0.9`）和 `latest`，见 [Docker](#docker)。
+
+旧版本见 [Releases 页面](https://github.com/550W-HOST/foxwarm/releases)；把链接里的 `latest/download` 换成 `download/v<版本>` 即可下载指定版本。
 
 Linux 上安装脚本使用原生安装包；`--framework-dependent` 选择使用系统 ASP.NET Core 10 运行时的安装包。macOS 和 Windows 上，如果 `dotnet --list-runtimes` 里有 `Microsoft.AspNetCore.App 10.x`，安装脚本会选较小的安装包，否则选自带运行时的版本。也可以用 `--self-contained` / `--framework-dependent`（macOS）或 `-SelfContained` / `-FrameworkDependent`（Windows）自己指定。
 

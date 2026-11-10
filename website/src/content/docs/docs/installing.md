@@ -24,14 +24,22 @@ Each [release](https://github.com/550W-HOST/foxwarm/releases/latest) provides:
 
 | Package | Use |
 | --- | --- |
-| `foxwarm-linux-x64-native.tar.gz` | Linux server compiled to native code; needs no .NET runtime |
-| `foxwarm-linux-x64.tar.gz` | Linux server; uses the installed ASP.NET Core 10 runtime |
-| `foxwarm-osx-arm64.tar.gz` | Apple Silicon Mac server; uses the installed ASP.NET Core 10 runtime |
-| `foxwarm-osx-arm64-self-contained.tar.gz` | Apple Silicon Mac server with the .NET runtime included |
-| `foxwarm-win-x64.zip` | Windows server; uses the installed ASP.NET Core 10 runtime |
-| `foxwarm-win-x64-self-contained.zip` | Windows server with the .NET runtime included |
-| `foxwarm-desktop-win-x64.zip` | Windows desktop app, .NET runtime included |
-| `SHA256SUMS` | Checksums of the files above |
+| [`foxwarm-linux-x64-native.tar.gz`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-linux-x64-native.tar.gz) | Linux server compiled to native code; needs no .NET runtime (default on Linux) |
+| [`foxwarm-linux-x64.tar.gz`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-linux-x64.tar.gz) | Linux server; uses the installed ASP.NET Core 10 runtime |
+| [`foxwarm-osx-arm64.tar.gz`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-osx-arm64.tar.gz) | Apple Silicon Mac server; uses the installed ASP.NET Core 10 runtime |
+| [`foxwarm-osx-arm64-self-contained.tar.gz`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-osx-arm64-self-contained.tar.gz) | Apple Silicon Mac server with the .NET runtime included |
+| [`foxwarm-win-x64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-win-x64.zip) | Windows server; uses the installed ASP.NET Core 10 runtime |
+| [`foxwarm-win-x64-self-contained.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-win-x64-self-contained.zip) | Windows server with the .NET runtime included |
+| [`foxwarm-desktop-win-x64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-win-x64.zip) | Windows desktop app, .NET runtime included |
+| [`SHA256SUMS`](https://github.com/550W-HOST/foxwarm/releases/latest/download/SHA256SUMS) | Checksums of the release files |
+
+Each release also includes:
+
+- `foxwarm-code-<version>.tar.gz`: the Code editor for server packages. The desktop app already includes it. When Code is missing, the WebUI's Code page shows the command that installs it.
+- `native-cli-node-*`: the standalone [Node](/docs/nodes/) client for Linux, macOS and Windows. Node bootstrap commands download it for you.
+- The Docker image `ghcr.io/550w-host/foxwarm`, tagged with the version (for example `0.9.4`), the minor version (`0.9`) and `latest`; see [Docker](#docker).
+
+Older versions are on the [releases page](https://github.com/550W-HOST/foxwarm/releases); replace `latest/download` in a link with `download/v<version>` to fetch a specific version.
 
 On Linux the installer uses the native package; `--framework-dependent` selects the package that uses the installed ASP.NET Core 10 runtime. On macOS and Windows the installers choose the smaller package when `dotnet --list-runtimes` shows `Microsoft.AspNetCore.App 10.x`, and the self-contained package otherwise. Use `--self-contained` / `--framework-dependent` (macOS) or `-SelfContained` / `-FrameworkDependent` (Windows) to choose yourself.
 
