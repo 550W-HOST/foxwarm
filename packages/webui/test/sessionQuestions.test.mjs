@@ -41,6 +41,20 @@ test('answer bodies pair entries with questions and trim free text and notes', (
   assert.deepEqual(questions.buildQuestionSkipBody('later'), { skip: true, note: 'later' })
 })
 
+test('secret questions send their typed value and never the shared draft text', () => {
+  const secret = { question: 'GitHub token?', secret: { name: 'github-token' } }
+  const asked = [secret, { question: 'Repository?' }]
+  const draft = [{ selected: [], text: 'ignored draft text' }, { selected: [], text: '' }]
+  assert.equal(questions.canSubmitQuestionDraft([{ selected: [], text: '' }, { selected: [], text: '' }], asked, {}), false)
+  assert.equal(questions.canSubmitQuestionDraft([{ selected: [], text: '' }, { selected: [], text: '' }], asked, { 0: 'ghp-synthetic' }), true)
+  assert.equal(questions.isQuestionAnswered(secret, draft[0], undefined), false)
+  assert.deepEqual(questions.buildQuestionAnswerBody(draft, '', asked, { 0: ' ghp-synthetic ' }), { answers: [{ value: ' ghp-synthetic ' }, {}] })
+  assert.deepEqual(questions.buildQuestionAnswerBody(draft, '', asked, {}), { answers: [{}, {}] })
+  const record = { id: 'q-3', status: 'answered', questions: asked, answer: { answers: [{ secret: 'github-token', stored: true }, { text: 'foxwarm' }] } }
+  assert.equal(questions.describeQuestionAnswer(record, 0), 'Stored as secret github-token')
+  assert.equal(questions.describeQuestionAnswer(record, 1), 'foxwarm')
+})
+
 test('resolved outcomes read the structured answer or the answering message', () => {
   const record = { id: 'q-1', status: 'answered', questions: [single, { question: 'Name?' }], answer: { answers: [{ selected: ['SQLite'] }, { text: 'svc' }] } }
   assert.equal(questions.describeQuestionAnswer(record, 0), 'SQLite')

@@ -84,7 +84,7 @@ For list access, grant `args: { action: list, scope: owned }`. `owned` includes 
 
 ### Stored secrets
 
-A `set_config` or `mcp_config` change that would send a stored secret (`${secret:NAME}`) to a new destination carries those secret names: a new reference, or a changed provider base URL or protocol, inherited `llm` base URL, text-redaction endpoint, ASR URL, channel server, or MCP URL, transport, command, arguments, working directory or environment. Model lists, limits, descriptions, timeouts and enablement carry none. `add_secret` carries its name when configuration already refers to that name, because the new value then reaches those destinations.
+A `set_config` or `mcp_config` change that would send a stored secret (`${secret:NAME}`) to a new destination carries those secret names: a new reference, or a changed provider base URL or protocol, inherited `llm` base URL, text-redaction endpoint, ASR URL, channel server, or MCP URL, transport, command, arguments, working directory or environment. Model lists, limits, descriptions, timeouts and enablement carry none. `add_secret` carries its name, and `ask_user` the names its secret questions ask for, when configuration already refers to that name, because the new value then reaches those destinations.
 
 ```yaml
 rules:
@@ -102,7 +102,7 @@ rules:
 
 - A rule with `secrets` decides only the secrets, never the call itself; the call still needs its own allow. Patterns use secret-name characters and `*`; a scalar is a one-item list.
 - An allow covers a call only if its patterns cover every named secret; a deny or ask matches any of them. The first matching `secrets` rule decides.
-- `owned: true` selects secrets the caller's Agent owns: those it added with `add_secret` from a value or a file. Alone or together with `anyOf`, it applies to each name.
+- `owned: true` selects secrets the caller's Agent owns: those it added with `add_secret` from a value or a file, or received through its own secret question. Alone or together with `anyOf`, it applies to each name.
 - Secrets the caller's Agent owns need no allow. An allow must cover the other named secrets, and when the Agent owns all of them and no `secrets` rule matches, they are allowed. A deny or ask still matches owned secrets. Secrets added by Setup or moved from configuration belong to the instance, and a deleted Agent's secrets pass to the instance.
 - Without a matching `secrets` rule, the secrets follow the caller's authorization for unrestricted `exec` on master, because such a caller can already read the secret store. Rules on `exec` scoped by arguments or paths are skipped for this; the first other rule matching `exec` on master decides, else the default. With no rules this allows; a deny or ask on master `exec` that does not depend on the command, or an Agent-local layer ending in a selector-free deny, denies (or asks), even after a command allowlist. Legacy isolated Agents are refused except for secrets they own.
 - `secrets` is a top-level selector only and cannot be combined with `externalId`.

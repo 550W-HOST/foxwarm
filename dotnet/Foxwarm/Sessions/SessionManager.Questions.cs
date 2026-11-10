@@ -56,6 +56,9 @@ internal sealed partial class SessionManager
         if (args.ContainsKey("closeNote"))
             throw new InvalidDataException("closeNote applies only with close.");
         var questions = SessionQuestions.ParseQuestions(args["questions"]);
+        RequireNewSecretNames(
+            questions.OfType<JsonObject>().Select(SessionQuestions.SecretName).OfType<string>()
+        );
         var external = ClaudeRuntimeState.IsExternal(owner.Entry.Snapshot().AuthorityEnvelope);
         var after = OptionalString(args, "afterAsk") ?? (external ? "continue" : "wait");
         if (after is not ("wait" or "continue"))
@@ -138,7 +141,8 @@ internal sealed partial class SessionManager
             throw new QuestionNotOpenException(
                 $"Question {questionId} is no longer open; it was {SessionQuestions.Status(record)}."
             );
-        var answer = SessionQuestions.ParseAnswer(record, body);
+        var entered = new List<SecretAnswer>();
+        var answer = SessionQuestions.ParseAnswer(record, body, entered);
         var text = SessionQuestions.RenderAnswer(questionId, record, answer);
         var stored = (JsonObject)answer.DeepClone();
         stored["questionId"] = questionId;
@@ -160,14 +164,26 @@ internal sealed partial class SessionManager
                 sender
             )
         );
-        await new SessionRuntime(this).SubmitExternalAsync(
-            owner,
-            item,
-            () =>
-            {
-                if (!Accepting)
-                    throw new InvalidOperationException("Host is shutting down.");
-            }
-        );
+        // Entered secrets are stored before the answer is admitted, and removed again if it is
+        // not, so the model never learns of a secret that was not kept.
+        var storedSecrets = StoreSecretAnswers(owner, entered, sender);
+        try
+        {
+            await new SessionRuntime(this).SubmitExternalAsync(
+                owner,
+                item,
+                () =>
+                {
+                    if (!Accepting)
+                        throw new InvalidOperationException("Host is shutting down.");
+                }
+            );
+        }
+        catch
+        {
+            RemoveSecretAnswers(storedSecrets);
+            throw;
+        }
+        await RestartSecretConsumersAsync(storedSecrets);
     }
 }

@@ -16,25 +16,123 @@ internal sealed partial class SessionManager
     // add_secret's secret fact: adding a value under a name configuration already references
     // lets those consumers use it. The name has no owner yet, so it needs a grant like any
     // other secret. A new, unreferenced name sends nothing anywhere.
-    private IReadOnlyList<string>? AddSecretFacts(JsonObject args)
+    private IReadOnlyList<string>? AddSecretFacts(JsonObject args) =>
+        SessionWait.Text(args["name"])?.Trim() is { } name ? UnsetReferencedSecrets([name]) : null;
+
+    // ask_user's secret facts: the names its secret questions would fill that configuration
+    // already references, as for add_secret.
+    private IReadOnlyList<string>? AskUserSecretFacts(JsonObject args) =>
+        args["questions"] is JsonArray questions
+            ? UnsetReferencedSecrets(
+                questions
+                    .OfType<JsonObject>()
+                    .Select(question => SessionWait.Text(question["secret"]?["name"])?.Trim())
+                    .OfType<string>()
+            )
+            : null;
+
+    // Of valid names without a current value, those configuration references.
+    private IReadOnlyList<string>? UnsetReferencedSecrets(IEnumerable<string> names)
     {
         if (secrets is not { } owned || models.ConfigurationOwner is not { } configuration)
             return null;
-        var name = SessionWait.Text(args["name"])?.Trim();
-        if (name is null || !SecretStore.NamePattern().IsMatch(name))
-            return null;
+        var candidates = names
+            .Where(name => SecretStore.NamePattern().IsMatch(name))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (candidates.Length == 0)
+            return [];
         try
         {
-            if (owned.Store.Contains(name))
-                return [];
+            candidates = candidates.Where(name => !owned.Store.Contains(name)).ToArray();
         }
         catch (SecretStoreLockedException)
         {
             return null;
         }
-        return configuration.SecretUsages(mcp.Configuration.Snapshot()).ContainsKey(name)
-            ? [name]
-            : [];
+        var usages = configuration.SecretUsages(mcp.Configuration.Snapshot());
+        return candidates.Where(usages.ContainsKey).Order(StringComparer.Ordinal).ToArray();
+    }
+
+    // A secret question may ask only for names that have no value yet.
+    private void RequireNewSecretNames(IEnumerable<string> names)
+    {
+        var listed = names.ToArray();
+        if (listed.Length == 0)
+            return;
+        if (secrets is not { } instance)
+            throw new NotSupportedException("The secret store is unavailable on this host.");
+        foreach (var name in listed)
+            if (instance.Store.Contains(name))
+                throw new InvalidOperationException(
+                    $"Secret `{name}` already exists. Choose another name, or ask the user to replace it in Setup."
+                );
+    }
+
+    // Stores the secrets entered in a WebUI answer, owned by the Session's Agent. Filling a
+    // name configuration already uses changes what the instance sends, which only the
+    // administrator may do.
+    private IReadOnlyList<string> StoreSecretAnswers(
+        SessionOwner owner,
+        IReadOnlyList<SecretAnswer> entered,
+        JsonObject? sender
+    )
+    {
+        if (entered.Count == 0)
+            return [];
+        if (secrets is not { } instance || models.ConfigurationOwner is not { } configuration)
+            throw new InvalidDataException("The secret store is unavailable on this host.");
+        var administrator = sender is null || SessionWait.Text(sender["kind"]) == "administrator";
+        var usages = configuration.SecretUsages(mcp.Configuration.Snapshot());
+        foreach (var answer in entered)
+            if (!administrator && usages.ContainsKey(answer.Name))
+                throw new InvalidDataException(
+                    $"Only the administrator can enter `{answer.Name}`, because configuration already uses it."
+                );
+        var stored = new List<string>();
+        try
+        {
+            foreach (var answer in entered)
+            {
+                instance.Store.Create(answer.Name, answer.Value, answer.Description, owner.Agent);
+                stored.Add(answer.Name);
+            }
+        }
+        catch (Exception error) when (error is InvalidOperationException or InvalidDataException)
+        {
+            RemoveSecretAnswers(stored);
+            throw new InvalidDataException(error.Message);
+        }
+        return stored;
+    }
+
+    // Undoes StoreSecretAnswers for an answer that was not admitted. The values never reached
+    // the model, so nothing needs to stay masked.
+    private void RemoveSecretAnswers(IReadOnlyList<string> names)
+    {
+        if (secrets is not { } instance)
+            return;
+        foreach (var name in names)
+            try
+            {
+                instance.Store.Withdraw(name);
+            }
+            catch (Exception error) when (error is InvalidOperationException or IOException)
+            {
+                MainLog.Diagnostic(
+                    $"Secret {name} from an unadmitted answer could not be removed: "
+                        + MainLog.SafeFailure(error),
+                    failure: true
+                );
+            }
+    }
+
+    private async Task RestartSecretConsumersAsync(IReadOnlyList<string> names)
+    {
+        if (models.ConfigurationOwner?.ManagedChannels is not { } channels)
+            return;
+        foreach (var name in names)
+            await channels.RestartReferencingAsync(name);
     }
 
     internal async Task<JsonObject> AddSecretAsync(

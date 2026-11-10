@@ -242,6 +242,30 @@ internal sealed partial class SecretStore
         }
     }
 
+    // Removes a value created moments ago that was never used, such as a secret answer whose
+    // message was not admitted. Unlike Delete it keeps nothing; earlier retired values stay.
+    internal void Withdraw(string name)
+    {
+        lock (gate)
+        {
+            var next = (JsonObject)Load().DeepClone();
+            if (next["entries"]![name] is not JsonObject entry)
+                return;
+            var versions = entry["versions"]!.AsArray();
+            foreach (
+                var current in versions
+                    .OfType<JsonObject>()
+                    .Where(version => SessionWait.Text(version["state"]) == "current")
+                    .ToArray()
+            )
+                versions.Remove(current);
+            entry["updatedAt"] = Now();
+            if (versions.Count == 0)
+                next["entries"]!.AsObject().Remove(name);
+            Commit(next);
+        }
+    }
+
     // Deleting retires the current value for the retention period, so text that already
     // carries it remains masked. The name stays listed until its retired values expire.
     internal void Delete(string name)
@@ -283,7 +307,7 @@ internal sealed partial class SecretStore
         }
     }
 
-    private static string? NormalizeDescription(string? description)
+    internal static string? NormalizeDescription(string? description)
     {
         if (description is null)
             return null;

@@ -76,6 +76,29 @@ internal static class AskUserToolDefinitions
                                     ["description"] =
                                         "Allow the user to choose more than one option.",
                                 },
+                                ["secret"] = new JsonObject
+                                {
+                                    ["type"] = "object",
+                                    ["description"] =
+                                        "Ask for a credential instead: the user enters it in the Foxwarm WebUI and it is stored under this new secret name, owned by your Agent. You receive only that it was stored, and configuration can refer to it as `${secret:NAME}`. A secret question takes no options.",
+                                    ["additionalProperties"] = false,
+                                    ["required"] = new JsonArray("name"),
+                                    ["properties"] = new JsonObject
+                                    {
+                                        ["name"] = new JsonObject
+                                        {
+                                            ["type"] = "string",
+                                            ["description"] =
+                                                "New secret name: 1-64 lowercase letters, digits, `.`, `_` or `-`, starting with a letter or digit.",
+                                        },
+                                        ["description"] = new JsonObject
+                                        {
+                                            ["type"] = "string",
+                                            ["description"] =
+                                                "Optional one-line description shown in Setup and `list_secrets`.",
+                                        },
+                                    },
+                                },
                             },
                         },
                     },

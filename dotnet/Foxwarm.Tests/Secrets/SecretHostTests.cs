@@ -148,7 +148,9 @@ public sealed class SecretHostTests
             {
                 Assert.DoesNotContain(ProviderKey, request.Body);
                 Assert.DoesNotContain(FileValue, request.Body);
-                Assert.DoesNotContain("${secret:", request.Body);
+                // Tool descriptions may show the reference syntax; these references never appear.
+                Assert.DoesNotContain("${secret:provider-key}", request.Body);
+                Assert.DoesNotContain("${secret:file-token}", request.Body);
             }
         );
         Assert.Contains("[[FW_SECRET:provider-key]]", requests[0].Body);

@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
-import { Check, ChevronDown, ChevronLeft, MessageCircleQuestion, ShieldAlert, X } from 'lucide-react'
+import { Check, ChevronDown, ChevronLeft, KeyRound, MessageCircleQuestion, ShieldAlert, X } from 'lucide-react'
 import {
   askUserArgs,
   askUserQuestionId,
@@ -7,9 +7,10 @@ import {
   buildQuestionSkipBody,
   canSubmitQuestionDraft,
   describeQuestionAnswer,
-  isQuestionDraftEntryAnswered,
+  isQuestionAnswered,
   QuestionAnswerError,
   questionOutcomeLabel,
+  storedSecretLabel,
   toggleQuestionOption,
   type QuestionAnswerBody,
   type QuestionDraftEntry,
@@ -26,7 +27,7 @@ import { approvalToolLabel, type ToolApprovalRecord } from '../sessionApprovals'
 import type { SendKeyMode } from '../chatPreferences'
 import { isImeComposing, isSendKey, sendShortcutLabel } from '../sendKey'
 
-const isTextEntry = (target: EventTarget | null) => target instanceof HTMLElement && (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT' && (target as HTMLInputElement).type === 'text')
+const isTextEntry = (target: EventTarget | null) => target instanceof HTMLElement && (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT' && ['text', 'password'].includes((target as HTMLInputElement).type))
 
 /**
  * Answer form for one open question set: step through the questions, then submit together.
@@ -47,13 +48,15 @@ export function QuestionAnswerForm({ sessionId, record, onSubmit, focusToken = 0
   const setStep = (change: (value: number) => number) => updateDraft(current => ({ ...current, step: change(current.step) }))
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Typed secret values stay in this form's memory only, unlike the shared draft.
+  const [secretValues, setSecretValues] = useState<Record<number, string>>({})
   const rootRef = useRef<HTMLDivElement>(null)
   const otherId = useId()
   const total = record.questions.length
   const question = record.questions[step]
   const entry = draft[step]
   const last = step === total - 1
-  useEffect(() => { setError(null) }, [sessionId, record.id])
+  useEffect(() => { setError(null); setSecretValues({}) }, [sessionId, record.id])
   useEffect(() => {
     if (!focusToken) return
     rootRef.current?.scrollIntoView({ block: 'nearest' })
@@ -64,12 +67,15 @@ export function QuestionAnswerForm({ sessionId, record, onSubmit, focusToken = 0
   const send = async (body: QuestionAnswerBody) => {
     setPending(true)
     setError(null)
-    try { await onSubmit(body) }
-    catch (cause) {
+    try {
+      await onSubmit(body)
+      setSecretValues({})
+    } catch (cause) {
       setError(cause instanceof QuestionAnswerError && cause.notOpen ? 'This question was already resolved.' : cause instanceof Error ? cause.message : 'The answer could not be sent.')
     } finally { setPending(false) }
   }
-  const submit = () => { if (canSubmitQuestionDraft(draft) && !pending) void send(buildQuestionAnswerBody(draft, note)) }
+  const canSubmit = canSubmitQuestionDraft(draft, record.questions, secretValues)
+  const submit = () => { if (canSubmit && !pending) void send(buildQuestionAnswerBody(draft, note, record.questions, secretValues)) }
   const advance = () => { if (last) submit(); else setStep(value => value + 1) }
   const shortcut = sendShortcutLabel(sendKeyMode)
   const ariaShortcut = sendKeyMode === 'enter' ? 'Enter Control+Enter Meta+Enter' : 'Control+Enter Meta+Enter'
@@ -101,11 +107,13 @@ export function QuestionAnswerForm({ sessionId, record, onSubmit, focusToken = 0
         <div className="mb-2 flex items-center gap-2 text-xs text-fw-text-muted">
           <span>Question {step + 1} of {total}</span>
           <span className="flex gap-1" aria-hidden="true">
-            {record.questions.map((_, index) => <span key={index} className={`h-1.5 w-4 rounded-full ${index === step ? 'bg-fw-accent' : isQuestionDraftEntryAnswered(draft[index]) ? 'bg-fw-accent/40' : 'bg-fw-border'}`} />)}
+            {record.questions.map((_, index) => <span key={index} className={`h-1.5 w-4 rounded-full ${index === step ? 'bg-fw-accent' : isQuestionAnswered(record.questions[index], draft[index], secretValues[index]) ? 'bg-fw-accent/40' : 'bg-fw-border'}`} />)}
           </span>
         </div>
       )}
-      <QuestionBody question={question} entry={entry} onChange={update} otherId={otherId} compact={compact} disabled={pending} />
+      {question.secret
+        ? <SecretQuestionBody question={question} value={secretValues[step] || ''} onChange={value => setSecretValues(current => ({ ...current, [step]: value }))} inputId={otherId} compact={compact} disabled={pending} />
+        : <QuestionBody question={question} entry={entry} onChange={update} otherId={otherId} compact={compact} disabled={pending} />}
       {noteOpen ? (
         <label className="mt-2 block text-xs text-fw-text-muted">
           Note
@@ -125,7 +133,7 @@ export function QuestionAnswerForm({ sessionId, record, onSubmit, focusToken = 0
         <button type="button" disabled={pending} onClick={() => void send(buildQuestionSkipBody(note))} className="rounded-md px-2.5 py-1.5 text-sm text-fw-text-muted hover:bg-fw-hover hover:text-fw-text disabled:opacity-50">Skip</button>
         <span className="flex-1" />
         {last ? (
-          <button type="button" disabled={pending || !canSubmitQuestionDraft(draft)} onClick={submit} title={shortcut} aria-keyshortcuts={ariaShortcut} className="rounded-md bg-fw-accent px-3 py-1.5 text-sm font-medium text-fw-accent-text hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50">
+          <button type="button" disabled={pending || !canSubmit} onClick={submit} title={shortcut} aria-keyshortcuts={ariaShortcut} className="rounded-md bg-fw-accent px-3 py-1.5 text-sm font-medium text-fw-accent-text hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50">
             {pending ? 'Sending…' : 'Submit'}
           </button>
         ) : (
@@ -192,6 +200,39 @@ function QuestionBody({ question, entry, onChange, otherId, compact, disabled }:
   )
 }
 
+/** A question answered with a credential, which is stored as a secret and not sent to the agent. */
+function SecretQuestionBody({ question, value, onChange, inputId, compact, disabled }: {
+  question: QuestionItem
+  value: string
+  onChange: (value: string) => void
+  inputId: string
+  compact: boolean
+  disabled: boolean
+}) {
+  const secret = question.secret!
+  return (
+    <fieldset className="min-w-0" disabled={disabled} data-question-secret={secret.name}>
+      <legend className={`mb-2 whitespace-pre-wrap break-words font-medium text-fw-text-strong ${compact ? 'text-sm' : 'text-[15px]'}`}>{question.question}</legend>
+      <div className="mb-2 flex min-w-0 items-start gap-1.5 text-xs text-fw-text-muted">
+        <KeyRound size={13} aria-hidden="true" className="mt-0.5 shrink-0" />
+        <span className="min-w-0 break-words">
+          Saved as secret <span className="font-mono text-fw-text">{secret.name}</span>{secret.description ? ` · ${secret.description}` : ''}. The agent can use it but never sees it.
+        </span>
+      </div>
+      <label htmlFor={inputId} className="block text-xs text-fw-text-muted">Value</label>
+      <input
+        id={inputId}
+        type="password"
+        value={value}
+        onChange={event => onChange(event.target.value)}
+        autoComplete="off"
+        spellCheck={false}
+        className="mt-1 block w-full rounded-md border border-fw-border bg-fw-surface px-2 py-1.5 font-mono text-sm text-fw-text-strong outline-none placeholder:text-fw-text-muted focus:border-fw-accent-border focus:ring-1 focus:ring-fw-focus-ring"
+      />
+    </fieldset>
+  )
+}
+
 /** Collapsed outcome of a resolved question set. */
 export function QuestionOutcome({ record }: { record: QuestionRecord }) {
   const [expanded, setExpanded] = useState(false)
@@ -229,6 +270,12 @@ function QuestionPreview({ questions }: { questions: QuestionItem[] }) {
       {questions.map((question, index) => (
         <div key={index} className="min-w-0">
           <div className="whitespace-pre-wrap break-words font-medium text-fw-text-strong">{question.question}</div>
+          {question.secret && (
+            <div className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-fw-text-muted">
+              <KeyRound size={13} aria-hidden="true" className="shrink-0" />
+              <span className="min-w-0 truncate">Secret <span className="font-mono">{question.secret.name}</span></span>
+            </div>
+          )}
           {!!question.options?.length && (
             <ul className="mt-1 flex flex-col gap-0.5 pl-1 text-fw-text-muted">
               {question.options.map(option => (
@@ -394,7 +441,7 @@ export interface QuestionAnswerMeta {
   questionIds?: string[]
   status?: 'answered' | 'skipped'
   questions?: string[]
-  answers?: Array<{ selected?: string[]; text?: string }>
+  answers?: Array<{ selected?: string[]; text?: string; secret?: string }>
   note?: string
   viaMessage?: boolean
 }
@@ -416,7 +463,7 @@ export function QuestionAnswerBubble({ answer }: { answer: QuestionAnswerMeta })
       {skipped && <div className="font-medium">Skipped {texts.length > 1 ? 'the questions' : 'the question'}</div>}
       {texts.map((question, index) => {
         const entry = answer.answers?.[index]
-        const value = [...(entry?.selected || []), ...(entry?.text ? [entry.text] : [])].join('; ')
+        const value = entry?.secret ? storedSecretLabel(entry.secret) : [...(entry?.selected || []), ...(entry?.text ? [entry.text] : [])].join('; ')
         return (
           <div key={index} className="min-w-0">
             <div className="text-xs opacity-75"><QuestionContent text={question} userBubble /></div>

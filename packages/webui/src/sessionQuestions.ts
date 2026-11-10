@@ -8,16 +8,32 @@ export interface QuestionOption {
   recommended?: true
 }
 
+/** A question that asks for a credential, which the answer stores as a new secret. */
+export interface QuestionSecret {
+  name: string
+  description?: string
+}
+
 export interface QuestionItem {
   question: string
   options?: QuestionOption[]
   multiSelect?: true
+  secret?: QuestionSecret
 }
 
 export interface QuestionAnswerEntry {
   selected?: string[]
   text?: string
+  /** Name of the secret the answer stored; the value itself is never kept. */
+  secret?: string
+  stored?: true
 }
+
+/**
+ * Values typed into secret questions, by question index. They live only in the answer form's
+ * memory: never in the shared draft, browser storage or Session state.
+ */
+export type SecretAnswerValues = Readonly<Record<number, string>>
 
 export type QuestionStatus = 'open' | 'answered' | 'skipped' | 'closed'
 
@@ -88,18 +104,27 @@ export function isQuestionDraftEntryAnswered(entry: QuestionDraftEntry | undefin
   return !!entry && (entry.selected.length > 0 || entry.text.trim().length > 0)
 }
 
-export function canSubmitQuestionDraft(draft: readonly QuestionDraftEntry[]): boolean {
-  return draft.some(isQuestionDraftEntryAnswered)
+/** Whether one question has an answer: a choice, text, or for a secret question a typed value. */
+export function isQuestionAnswered(question: QuestionItem | undefined, entry: QuestionDraftEntry | undefined, secretValue: string | undefined): boolean {
+  return question?.secret ? !!secretValue : isQuestionDraftEntryAnswered(entry)
 }
 
+export function canSubmitQuestionDraft(draft: readonly QuestionDraftEntry[], questions?: readonly QuestionItem[], secretValues: SecretAnswerValues = {}): boolean {
+  return draft.some((entry, index) => isQuestionAnswered(questions?.[index], entry, secretValues[index]))
+}
+
+/** One answer as sent: a secret question carries its value, which the server stores. */
+export type QuestionAnswerBodyEntry = QuestionAnswerEntry | { value?: string }
+
 export interface QuestionAnswerBody {
-  answers?: QuestionAnswerEntry[]
+  answers?: QuestionAnswerBodyEntry[]
   note?: string
   skip?: true
 }
 
-export function buildQuestionAnswerBody(draft: readonly QuestionDraftEntry[], note: string): QuestionAnswerBody {
-  const answers = draft.map(entry => {
+export function buildQuestionAnswerBody(draft: readonly QuestionDraftEntry[], note: string, questions?: readonly QuestionItem[], secretValues: SecretAnswerValues = {}): QuestionAnswerBody {
+  const answers = draft.map((entry, index): QuestionAnswerBodyEntry => {
+    if (questions?.[index]?.secret) return secretValues[index] ? { value: secretValues[index] } : {}
     const result: QuestionAnswerEntry = {}
     if (entry.selected.length) result.selected = [...entry.selected]
     if (entry.text.trim()) result.text = entry.text.trim()
@@ -107,6 +132,9 @@ export function buildQuestionAnswerBody(draft: readonly QuestionDraftEntry[], no
   })
   return note.trim() ? { answers, note: note.trim() } : { answers }
 }
+
+/** Display text of a stored secret answer. */
+export const storedSecretLabel = (name: string) => `Stored as secret ${name}`
 
 export function buildQuestionSkipBody(note: string): QuestionAnswerBody {
   return note.trim() ? { skip: true, note: note.trim() } : { skip: true }
@@ -118,6 +146,7 @@ export function describeQuestionAnswer(record: QuestionRecord, index: number): s
   if (!answer) return ''
   if (answer.viaMessage) return answer.text || ''
   const entry = answer.answers?.[index]
+  if (entry?.secret) return storedSecretLabel(entry.secret)
   return [...(entry?.selected || []), ...(entry?.text ? [entry.text] : [])].join('; ')
 }
 

@@ -405,6 +405,8 @@ internal sealed partial class SessionManager
             return mcp.SecretFacts(resolved.Args);
         if (resolved.Name == "add_secret")
             return AddSecretFacts(resolved.Args);
+        if (resolved.Name == "ask_user")
+            return AskUserSecretFacts(resolved.Args);
         if (
             resolved.Name != "set_config"
             || files is null

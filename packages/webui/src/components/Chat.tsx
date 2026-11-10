@@ -1541,7 +1541,10 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
 
   // Session-owned questions drive the answer dock and the timeline cards.
   const sessionQuestions = useSessionQuestions(sessionId, sessionRecord?.questions)
+  // A question set that asks for a secret is answered only in the dock, never by a message.
+  const waitedQuestions = sessionQuestions.open.filter(record => sessionQuestions.waitingIds.has(record.id))
   const waitingOnQuestion = sessionRecord?.runtimeState?.state === 'waiting' && sessionRecord.runtimeState.waiting?.waitingFor === 'question'
+    && !(waitedQuestions.length > 0 && waitedQuestions.every(record => record.questions.some(question => question.secret)))
 
   const renderQueuedFooter = (alignment: 'left' | 'right') => <QueuedMessageStatus
     count={queueFooterCount}

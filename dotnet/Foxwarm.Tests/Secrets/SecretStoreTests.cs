@@ -201,6 +201,29 @@ public sealed class SecretStoreTests
         File.WriteAllText(store.FilePath, unknown.ToJsonString());
         Assert.Null(new InstanceSecrets(temp.Path).Store.Owner("setup-key"));
     }
+
+    [Fact]
+    public void Withdrawing_an_unused_value_keeps_earlier_retired_values()
+    {
+        using var temp = new TempDirectory();
+        var store = new InstanceSecrets(temp.Path).Store;
+        store.Create("fresh-key", Value + "-fresh", null, "asker");
+        store.Withdraw("fresh-key");
+        Assert.Empty(store.List());
+        Assert.Empty(store.RedactionValues());
+
+        // A reused name keeps masking its deleted value for the retention period.
+        store.Set("reused-key", Value + "-old");
+        store.Delete("reused-key");
+        store.Create("reused-key", Value + "-new", null, "asker");
+        store.Withdraw("reused-key");
+        Assert.False(store.Contains("reused-key"));
+        Assert.Equal(
+            [Value + "-old"],
+            store.RedactionValues().Select(item => item.Value).ToArray()
+        );
+        store.Withdraw("absent-key");
+    }
 }
 
 public sealed class SecretReferenceTests
