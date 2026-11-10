@@ -2,7 +2,7 @@ import './testEnvironment';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PassThrough } from 'node:stream';
-import { MAX_HOSTED_SEARCH_EVIDENCE_BYTES, mergeHostedSearchAction, projectHostedSearchEvidence, safeHostedSearchUrl } from './llmSearchSources';
+import { MAX_HOSTED_SEARCH_CALL_EVIDENCE_BYTES, MAX_HOSTED_SEARCH_SOURCES_PER_CALL, mergeHostedSearchAction, projectHostedSearchEvidence, safeHostedSearchUrl } from './llmSearchSources';
 import { collectOpenAIResponsesStream, convertToOpenAIResponsesFormat } from './llmProviders/openai';
 import type { Message } from './types';
 
@@ -71,18 +71,39 @@ test('same-model conversion replays native metadata; switched conversion retains
     }
 });
 
-test('evidence is globally bounded, deduplicated and deterministic over repeated projections', () => {
-    const sources = Array.from({ length: 100 }, (_, i) => source(`https://example.com/${i}/${'x'.repeat(1200)}`, 't'.repeat(500)));
-    const messages = Array.from({ length: 40 }, (_, i) => ({ ...history([search(`ws_${i}`, sources)])[0], __meta: { llmRequestId: `request_${i}` } }));
+test('each call projects identically regardless of later calls, with fixed per-call bounds', () => {
+    const large = Array.from({ length: 100 }, (_, i) => source(`https://example.com/${i}/${'x'.repeat(1200)}`, 't'.repeat(500)));
+    const many = Array.from({ length: 70 }, (_, i) => source(`https://example.com/many/${i}`));
+    const messages = Array.from({ length: 40 }, (_, i) => ({ ...history([search(`ws_${i}`, i % 3 === 0 ? large : i % 3 === 1 ? many : [source(`https://example.com/${i}`)])])[0], __meta: { llmRequestId: `request_${i}` } }));
+    const perMessage = (projected: Message[]) => projected.map(message => evidenceTexts([message])[0]);
+    const full = perMessage(projectHostedSearchEvidence(messages));
+    // No request-wide byte, source or call budget: every call keeps its evidence.
+    assert.ok(full.every(text => text !== undefined));
+    for (const text of full) {
+        const [call] = evidenceData(text).calls;
+        assert.ok(call.search_sources.length <= MAX_HOSTED_SEARCH_SOURCES_PER_CALL);
+        assert.ok(Buffer.byteLength(JSON.stringify(call)) <= MAX_HOSTED_SEARCH_CALL_EVIDENCE_BYTES);
+    }
+    assert.equal(evidenceData(full[1]).calls[0].search_sources.length, MAX_HOSTED_SEARCH_SOURCES_PER_CALL);
+    for (let length = 1; length < messages.length; length++) {
+        assert.deepEqual(perMessage(projectHostedSearchEvidence(messages.slice(0, length))), full.slice(0, length));
+    }
     const projected = projectHostedSearchEvidence(messages);
-    const texts = evidenceTexts(projected);
-    assert.ok(texts.length > 0);
-    assert.ok(texts.reduce((bytes, text) => bytes + Buffer.byteLength(text), 0) <= MAX_HOSTED_SEARCH_EVIDENCE_BYTES);
-    assert.ok(texts.flatMap(text => evidenceData(text).calls).length <= 8);
-    assert.ok(texts.some(text => text.includes('request_39')));
     assert.deepEqual(projectHostedSearchEvidence(projected), projected);
-    assert.deepEqual(projectHostedSearchEvidence(messages), projected);
     assert.deepEqual(evidenceTexts(messages), []);
+});
+
+test('deduplication keeps the first occurrence so older messages never change', () => {
+    const [older] = history([search()]);
+    const alone = evidenceTexts(projectHostedSearchEvidence([older]));
+    // Same request identity repeated later: only the earlier message carries it.
+    const repeated = projectHostedSearchEvidence([older, history([search()])[0]]);
+    assert.deepEqual(evidenceTexts([repeated[0]]), alone);
+    assert.deepEqual(evidenceTexts([repeated[1]]), []);
+    // Another request repeating the same URL leaves the older evidence unchanged.
+    const later = projectHostedSearchEvidence([older, { ...history([search('ws_again')])[0], __meta: { llmRequestId: 'request_two' } }]);
+    assert.deepEqual(evidenceTexts([later[0]]), alone);
+    assert.match(evidenceTexts([later[1]])[0], /https:\/\/example.com\/actual/);
 });
 
 test('unknown source shapes and incomplete searches produce no fabricated evidence', () => {

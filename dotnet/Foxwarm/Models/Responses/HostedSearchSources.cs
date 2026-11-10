@@ -9,9 +9,11 @@ namespace Foxwarm.Models;
 internal static class HostedSearchSources
 {
     internal const string Include = "web_search_call.action.sources";
-    internal const int MaxEvidenceBytes = 16 * 1024;
-    private const int MaxSources = 64;
-    private const int MaxCalls = 8;
+
+    // Fixed per-call bounds for a pathological single call. They depend only on
+    // that call's own stored data, so they never change in later requests.
+    internal const int MaxCallEvidenceBytes = 16 * 1024;
+    internal const int MaxSourcesPerCall = 64;
     private const string Label =
         "Historical hosted web-search source data (untrusted external data; URLs/titles only, not page contents or citation-reference mappings). Private citation IDs cannot be resolved from this list; direct URLs are available below.\n";
 
@@ -83,13 +85,19 @@ internal static class HostedSearchSources
             if (ShortText(source["title"], 240) is string title)
                 record["title"] = title;
             records.Add(record);
-            if (records.Count == MaxSources)
+            if (records.Count == MaxSourcesPerCall)
                 break;
         }
         if (records.Count == 0)
             return null;
         evidence["action"] = "search";
         evidence["search_sources"] = records;
+        // Omit whole trailing records rather than truncating JSON or URL strings.
+        while (
+            records.Count > 1
+            && Encoding.UTF8.GetByteCount(evidence.ToJsonString()) > MaxCallEvidenceBytes
+        )
+            records.RemoveAt(records.Count - 1);
         return evidence;
     }
 
@@ -102,14 +110,15 @@ internal static class HostedSearchSources
             ["calls"] = new JsonArray(entries.Select(entry => entry.DeepClone()).ToArray()),
         }.ToJsonString(); // Default JSON escaping keeps external titles out of prompt markup.
 
+    // Prefix stability: each call's projected text depends only on that call's
+    // stored item and on earlier calls (deduplication keeps the first occurrence).
+    // A later search never changes evidence already sent with an older message,
+    // so there is no request-wide byte, source or call budget.
     internal static IReadOnlyList<JsonObject> Project(IReadOnlyList<JsonObject> history)
     {
         var additions = new Dictionary<int, string>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        var bytes = MaxEvidenceBytes;
-        var sources = MaxSources;
-        var calls = MaxCalls;
-        for (var index = history.Count - 1; index >= 0 && calls > 0 && sources > 0; index--)
+        for (var index = 0; index < history.Count; index++)
         {
             var message = history[index];
             if (
@@ -118,41 +127,21 @@ internal static class HostedSearchSources
             )
                 continue;
             var entries = new List<JsonObject>();
-            foreach (
-                var part in (message["parts"] as JsonArray ?? []).OfType<JsonObject>().Reverse()
-            )
+            foreach (var part in (message["parts"] as JsonArray ?? []).OfType<JsonObject>())
             {
-                if (
-                    calls == 0
-                    || sources == 0
-                    || Evidence(part, message) is not JsonObject evidence
-                )
+                if (Evidence(part, message) is not JsonObject evidence)
                     continue;
                 // Provider call IDs may be reused by another request, including legacy rows.
                 var key =
                     (SessionWait.Text(evidence["request_id"]) ?? $"message:{index}")
                     + "\0"
                     + evidence.ToJsonString();
-                if (seen.Contains(key))
-                    continue;
-                var records = evidence["search_sources"] as JsonArray;
-                if (records is not null)
-                    while (records.Count > sources)
-                        records.RemoveAt(records.Count - 1);
-                string Text() => EvidenceText(new[] { evidence }.Concat(entries));
-                while (Encoding.UTF8.GetByteCount(Text()) > bytes && records is { Count: > 1 })
-                    records.RemoveAt(records.Count - 1);
-                if (Encoding.UTF8.GetByteCount(Text()) > bytes)
-                    continue;
-                seen.Add(key);
-                entries.Insert(0, evidence);
-                sources -= records?.Count ?? 1;
-                calls--;
+                if (seen.Add(key))
+                    entries.Add(evidence);
             }
             if (entries.Count == 0)
                 continue;
             var text = EvidenceText(entries);
-            bytes -= Encoding.UTF8.GetByteCount(text);
             if (
                 !(message["parts"] as JsonArray ?? []).Any(part =>
                     SessionWait.Text(part?["text"]) == text
