@@ -24,15 +24,15 @@ internal sealed partial class SessionManager
             {
                 if (next[name] is not JsonObject row)
                     continue;
+                var before = row.DeepClone();
                 JsonObject? entry = null;
                 if (row["legacyIsolation"] is JsonObject marker)
                     entry = ReconcileMigratedRow(name, row, marker, next, now);
                 else if (IsolatedToolCompatibility.Metadata(row).Isolated)
                     entry = MigrateIsolatedRow(name, row, next, now);
-                if (entry is null)
-                    continue;
-                entries.Add(entry);
-                changed = true;
+                if (entry is not null)
+                    entries.Add(entry);
+                changed |= !JsonNode.DeepEquals(before, row);
             }
             return changed;
         });
@@ -123,6 +123,8 @@ internal sealed partial class SessionManager
         if (generated && !failClosed)
         {
             // An unedited generated layer always follows the current fence.
+            if (UnreadableCreatorLayer(name, snapshot) is { } unreadable)
+                return unreadable;
             var entry = UpgradeMigratedLayer(name, row, marker);
             var (plan, failure) = PlanFor(name, isolation);
             if (failure is not null)
@@ -130,8 +132,9 @@ internal sealed partial class SessionManager
             var current = row["rules"] as JsonArray;
             if (current is not null && IsolationMigrationRules.Digest(current) == plan!.Digest)
             {
-                if (entry is not null)
-                    marker["fenceDigest"] = fence;
+                // Accepted as is: record the fence it follows, so a later edit is not read
+                // as a fence change.
+                marker["fenceDigest"] = fence;
                 return entry;
             }
             row["rules"] = plan.Rules.DeepClone();
@@ -197,6 +200,36 @@ internal sealed partial class SessionManager
                 ["reason"] =
                     "The local rules were edited outside this release; they still end in a deny and are kept.",
             };
+    }
+
+    // A creator's layer that does not parse fails every call of this Agent already. Leave the
+    // row unchanged until the creator is repaired; a creator cycle is left to the plan, which
+    // fails closed.
+    private JsonObject? UnreadableCreatorLayer(string name, JsonObject snapshot)
+    {
+        string[] chain;
+        try
+        {
+            chain = agents.CreatorChainIn(name, snapshot);
+        }
+        catch (InvalidDataException)
+        {
+            return null;
+        }
+        foreach (var creator in chain)
+            if (
+                creator != name
+                && snapshot[creator]?["rules"] is JsonArray rules
+                && !Parses(rules)
+            )
+                return new JsonObject
+                {
+                    ["agent"] = name,
+                    ["outcome"] = "unreadableRules",
+                    ["reason"] =
+                        $"The local rules of creator Agent {creator} do not parse; this Agent is left unchanged until they are repaired.",
+                };
+        return null;
     }
 
     private static bool Parses(JsonArray rules)
@@ -301,6 +334,11 @@ internal sealed partial class SessionManager
     // Migrates one isolated row in place. Unsafe cases receive a layer that denies everything.
     private JsonObject MigrateIsolatedRow(string name, JsonObject row, JsonObject snapshot, long now)
     {
+        if (
+            row["rules"] is not JsonArray { Count: > 0 }
+            && UnreadableCreatorLayer(name, snapshot) is { } unreadable
+        )
+            return unreadable;
         var isolation = IsolatedToolCompatibility.Metadata(row);
         var entry = new JsonObject { ["agent"] = name, ["node"] = isolation.RecordedNode };
         string? failure = null;

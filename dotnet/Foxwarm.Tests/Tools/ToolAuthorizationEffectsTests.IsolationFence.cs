@@ -223,4 +223,84 @@ public sealed partial class ToolAuthorizationEffectsTests
         Assert.True(RegistryRestricted(manager, "alpha"));
         await Assert.ThrowsAnyAsync<Exception>(async () => await NodeExecAuthority(manager, temp.Path));
     }
+
+    [Fact]
+    public async Task An_unreadable_creator_layer_leaves_the_child_unchanged_until_it_is_repaired()
+    {
+        foreach (var migrated in new[] { true, false })
+        {
+            using var temp = new TempDirectory();
+            var layer = LegacyIsolationFixture.Layer("alpha", "bound-node");
+            var row = migrated
+                ? MarkedAlpha(layer.DeepClone().AsArray(), Digest(layer))
+                : Obj("""{"isolated":true,"isolatedNode":"bound-node"}""");
+            row["createdBy"] = "beta";
+            await Seed(temp.Path, row);
+            await EditAgents(
+                temp.Path,
+                metadata =>
+                    metadata["beta"] = Obj(
+                        """{"rules":[{"id":"x","action":"allow","match":{"futureSelector":true}}]}"""
+                    )
+            );
+            var stored = JsonNode.Parse(await File.ReadAllTextAsync(AgentsPath(temp.Path)))!["metadata"]!["alpha"]!.DeepClone();
+            await using (var manager = Manager(temp.Path))
+            {
+                await manager.LoadAsync();
+                var entries = manager.StartupIsolationMigration!["agents"]!.AsArray();
+                var child = entries.Single(entry => entry!["agent"]!.GetValue<string>() == "alpha")!;
+                Assert.Equal("unreadableRules", child["outcome"]!.GetValue<string>());
+                Assert.Equal(
+                    "The local rules of creator Agent beta do not parse; this Agent is left unchanged until they are repaired.",
+                    child["reason"]!.GetValue<string>()
+                );
+                var written = JsonNode.Parse(await File.ReadAllTextAsync(AgentsPath(temp.Path)))!["metadata"]!["alpha"];
+                Assert.True(JsonNode.DeepEquals(stored, written));
+            }
+            await EditAgents(
+                temp.Path,
+                metadata => metadata["beta"] = Obj("""{"rules":[{"id":"ok","action":"allow"}]}""")
+            );
+            await using var repaired = Manager(temp.Path);
+            await repaired.LoadAsync();
+            var marker = Row(repaired)["legacyIsolation"]!.AsObject();
+            Assert.Null(marker["failClosed"]);
+            Assert.True(JsonNode.DeepEquals(layer, Row(repaired)["rules"]));
+            if (!migrated)
+                Assert.Equal(
+                    "migrated",
+                    SingleEntry(repaired)["outcome"]!.GetValue<string>()
+                );
+            Assert.Equal(
+                IsolationMigrationRules.FenceDigest(Row(repaired)),
+                marker["fenceDigest"]!.GetValue<string>()
+            );
+        }
+    }
+
+    [Fact]
+    public async Task An_accepted_unedited_layer_records_the_current_fence()
+    {
+        using var temp = new TempDirectory();
+        var layer = LegacyIsolationFixture.Layer("alpha", "bound-node");
+        // The fence digest is stale: an older change left the generated layer identical.
+        await Seed(temp.Path, MarkedAlpha(layer.DeepClone().AsArray(), Digest(layer), "stale"));
+        await using (var manager = Manager(temp.Path))
+        {
+            await manager.LoadAsync();
+            Assert.Empty(manager.StartupIsolationMigration!["agents"]!.AsArray());
+            Assert.Equal(
+                IsolationMigrationRules.FenceDigest(Row(manager)),
+                Row(manager)["legacyIsolation"]!["fenceDigest"]!.GetValue<string>()
+            );
+        }
+        // A later edit that still ends in a deny is kept, not read as a fence change.
+        var edited = layer.DeepClone().AsArray();
+        edited.Insert(0, Obj("""{"id":"operator","action":"deny","match":{"tool":{"source":"builtin","name":"image_crop"}}}"""));
+        await EditAgents(temp.Path, metadata => metadata["alpha"]!["rules"] = edited.DeepClone());
+        await using var restarted = Manager(temp.Path);
+        await restarted.LoadAsync();
+        Assert.Equal("edited", SingleEntry(restarted)["outcome"]!.GetValue<string>());
+        Assert.True(JsonNode.DeepEquals(edited, Row(restarted)["rules"]));
+    }
 }
