@@ -605,30 +605,6 @@ internal static class SessionQuestions
         return builder.ToString();
     }
 
-    /// <summary>Request-only reminder listing open questions; null when none are open.</summary>
-    internal static string? Reminder(JsonObject meta)
-    {
-        var open = Open(meta);
-        if (open.Length == 0)
-            return null;
-        var waited = SessionWait.Strings(SessionWait.Current(meta)?["waitQuestionIds"]);
-        var lines = open.Select(record =>
-        {
-            var id = SessionWait.Text(record["id"])!;
-            var questions = record["questions"]!.AsArray().OfType<JsonObject>().ToArray();
-            var summary = Bound(
-                Regex.Replace(SessionWait.Text(questions[0]["question"]) ?? "", @"\s+", " ").Trim(),
-                120
-            );
-            if (questions.Length > 1)
-                summary += $" (+{questions.Length - 1} more)";
-            return $"{id} — {summary} ({(waited.Contains(id) ? "waiting for the answer" : "not waited on")})";
-        });
-        return "<foxwarm-system kind=\"question-reminder\">Open questions to the user. Close any that are no longer needed or that the user already answered in conversation:\n"
-            + string.Join('\n', lines)
-            + "</foxwarm-system>";
-    }
-
     // ---- Persisted validation -----------------------------------------------------------
 
     internal static void Validate(JsonObject meta)

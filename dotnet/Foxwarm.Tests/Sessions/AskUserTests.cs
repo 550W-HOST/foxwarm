@@ -278,7 +278,7 @@ public sealed class AskUserTests
     }
 
     [Fact]
-    public async Task Asynchronous_question_keeps_working_with_reminder_and_close()
+    public async Task Asynchronous_question_keeps_working_and_can_be_closed()
     {
         await using var h = await Harness.Create(
             3,
@@ -304,9 +304,9 @@ public sealed class AskUserTests
         await h.Process();
         Assert.Equal(3, h.Peer.RequestCount);
         var id = h.OnlyQuestionId();
-        Assert.Contains("question-reminder", h.Input(1));
-        Assert.Contains("not waited on", h.Input(1));
-        Assert.DoesNotContain("question-reminder", h.Input(2));
+        // The question is open while request 1 is built; open questions add no request context.
+        Assert.DoesNotContain("question-reminder", h.Input(1));
+        Assert.DoesNotContain("Open questions to the user", h.Input(1));
         var record = SessionQuestions.Find(h.Meta, id)!;
         Assert.Equal("closed", SessionQuestions.Status(record));
         Assert.Equal("Answered in conversation.", SessionWait.Text(record["closeNote"]));
@@ -336,7 +336,6 @@ public sealed class AskUserTests
             "open",
             SessionQuestions.Status(SessionQuestions.Find(h.Meta, h.OnlyQuestionId())!)
         );
-        Assert.Contains("question-reminder", h.Input(1));
     }
 
     [Fact]

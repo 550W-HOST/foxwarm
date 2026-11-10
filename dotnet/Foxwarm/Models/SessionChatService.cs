@@ -76,21 +76,12 @@ internal sealed class SessionChatService(
         var attempts = 0;
         var committedPrefix = false;
         var retainedTaskIds = new List<string>();
-        async Task<IReadOnlyList<JsonObject>> RequestContext()
+        Task<IReadOnlyList<JsonObject>> RequestContext()
         {
             var context = new List<JsonObject>();
             if (TaskReminder() is { } task)
                 context.Add(task);
-            // Open ask_user questions are request-only context, like the Task reminder.
-            if (hosted.Entry.WithState(state => SessionQuestions.Reminder(state.Meta)) is { } open)
-                context.Add(
-                    new JsonObject
-                    {
-                        ["role"] = "user",
-                        ["parts"] = new JsonArray(new JsonObject { ["system"] = open }),
-                    }
-                );
-            return context;
+            return Task.FromResult<IReadOnlyList<JsonObject>>(context);
         }
         JsonObject? TaskReminder()
         {
