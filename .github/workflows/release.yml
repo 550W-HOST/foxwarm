@@ -23,8 +23,46 @@ jobs:
     name: Build and qualify standalone Native AOT CLI packages
     uses: ./.github/workflows/native-cli-node.yml
 
+  # The LanceDB package's Linux library is linked on glibc 2.39. Both Linux packages use one
+  # built from the same pinned source on glibc 2.34, cached until that source or its build changes.
+  lancedb-linux:
+    name: Build the Linux LanceDB library on glibc 2.34
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Restore the LanceDB library
+        id: cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: lancedb-linux-x64
+          key: lancedb-linux-x64-${{ hashFiles('dotnet/Foxwarm.LanceDb/source.json', 'scripts/release/build-lancedb-linux.sh', 'scripts/release/lancedb-linux.Dockerfile') }}
+      - name: Build the LanceDB library
+        if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+        run: |
+          docker build --progress=plain -f scripts/release/lancedb-linux.Dockerfile -t foxwarm-lancedb-build scripts/release
+          mkdir -p lancedb-linux-x64
+          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/src:ro" -v "$PWD/lancedb-linux-x64:/out" \
+            -e HOME=/tmp foxwarm-lancedb-build bash /src/scripts/release/build-lancedb-linux.sh /out
+      - name: Check the LanceDB library
+        run: bash scripts/release/check-linux-libraries.sh lancedb-linux-x64
+      - name: Save the LanceDB library
+        if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: lancedb-linux-x64
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: lancedb-linux-x64
+          path: lancedb-linux-x64/
+          if-no-files-found: error
+          retention-days: 1
+
   packages:
-    needs: code-resources
+    needs: [code-resources, lancedb-linux]
     name: Build Linux and Windows server packages
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -54,9 +92,15 @@ jobs:
         with:
           name: code-resources
           path: dist
+      - name: Download the LanceDB library
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: lancedb-linux-x64
+          path: ${{ runner.temp }}/lancedb
       - name: Build Linux and Windows server packages
         run: >-
           node scripts/release/package.mjs --build-assets --output dist
+          --lancedb-library "$RUNNER_TEMP/lancedb/liblancedb_ffi.so"
           --target linux-x64 --target win-x64 --target win-x64-self-contained
       # NativeAOT links against the build system's glibc. The UBI 9 container (glibc 2.34) keeps
       # the native package runnable on Ubuntu 22.04, Debian 12 and RHEL 9; the delivery assets
@@ -68,11 +112,19 @@ jobs:
           mkdir -p "$HOME/.nuget/packages"
           docker run --rm --user "$(id -u):$(id -g)" \
             -v "$PWD:/src" -w /src -v "$node_bin:/opt/node/bin:ro" -v "$HOME/.nuget/packages:/nuget" \
+            -v "$RUNNER_TEMP/lancedb:/lancedb:ro" \
             -e HOME=/tmp -e NUGET_PACKAGES=/nuget -e PATH=/opt/node/bin:/usr/share/dotnet:/usr/bin:/bin \
-            foxwarm-native-build node scripts/release/package.mjs --output dist --target linux-x64-native
-          mkdir -p "$RUNNER_TEMP/native"
-          tar -xzf dist/foxwarm-linux-x64-native.tar.gz -C "$RUNNER_TEMP/native"
-          bash scripts/release/check-linux-libraries.sh "$(ls -d "$RUNNER_TEMP"/native/*/)"
+            foxwarm-native-build node scripts/release/package.mjs --output dist --target linux-x64-native \
+            --lancedb-library /lancedb/liblancedb_ffi.so
+      - name: Check the Linux packages' native libraries
+        run: |
+          for asset in foxwarm-linux-x64.tar.gz foxwarm-linux-x64-native.tar.gz; do
+            rm -rf "$RUNNER_TEMP/check" && mkdir -p "$RUNNER_TEMP/check"
+            tar -xzf "dist/$asset" -C "$RUNNER_TEMP/check"
+            echo "== $asset"
+            bash scripts/release/check-linux-libraries.sh "$RUNNER_TEMP"/check/*
+            cmp "$RUNNER_TEMP"/check/*/liblancedb_ffi.so "$RUNNER_TEMP/lancedb/liblancedb_ffi.so"
+          done
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-packages-linux-windows
@@ -171,6 +223,17 @@ jobs:
           test -f dist/native-cli-node-latest-v3.tar.gz
           test -f dist/native-cli-node-win-x64-latest-v3.zip
           test -f dist/native-cli-node-osx-arm64-latest-v3.tar.gz
+      # One-release transition, 0.9.4 only (user decision 2026-11-10); drop it in 0.9.5. The control
+      # script of a 0.9.3-or-earlier self-contained Linux installation updates by downloading
+      # the retired asset name and its SHA256SUMS line. The alias serves it the native package,
+      # whose release.json records the native asset, so its next update requests that directly.
+      - name: Publish the native Linux package under the retired self-contained name (0.9.4 only)
+        run: |
+          version="$(node -p 'require("./package.json").version')"
+          case "$version" in
+            0.9.3|0.9.4) cp dist/foxwarm-linux-x64-native.tar.gz dist/foxwarm-linux-x64-self-contained.tar.gz ;;
+            *) echo "::warning::$version publishes no self-contained Linux alias; remove this step." ;;
+          esac
       - name: Write one checksum list covering every platform
         run: node scripts/release/package.mjs --output dist --checksums-only
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -223,16 +286,23 @@ jobs:
           FOXWARM_PUBLISHED_CORE="$payload" node packages/webui/test/mainHostNativeExec.e2e.mjs
       - name: Switch a framework-dependent installation to the native package
         run: bash scripts/release/smoke-upgrade.sh dist/foxwarm-linux-x64.tar.gz dist/foxwarm-linux-x64-native.tar.gz 3001 --native
-      - name: Native package on Ubuntu 22.04 without .NET
+      - name: Native package, PTY, ToolScript and Vector child on Ubuntu 22.04 without .NET
         run: |
-          docker run --rm -v "$PWD:/repo:ro" ubuntu:22.04 bash -c '
+          # The runner's Node.js (glibc 2.28 floor) drives the package qualification.
+          node_bin="$(dirname "$(readlink -f "$(command -v node)")")"
+          docker run --rm -v "$PWD:/repo:ro" -v "$node_bin:/opt/node/bin:ro" ubuntu:22.04 bash -c '
             set -e
             apt-get update -qq && apt-get install -y -qq tmux curl ca-certificates libicu70 procps >/dev/null
             ! command -v dotnet
-            bash /repo/scripts/release/smoke-server.sh /repo/dist/foxwarm-linux-x64-native.tar.gz'
+            ldd --version | head -1
+            bash /repo/scripts/release/smoke-server.sh /repo/dist/foxwarm-linux-x64-native.tar.gz
+            payload="$(mktemp -d)"
+            tar -xzf /repo/dist/foxwarm-linux-x64-native.tar.gz -C "$payload"
+            PATH="/opt/node/bin:$PATH" node /repo/scripts/release/qualify-package.mjs "$payload"/* --vector'
       - name: Upgrade a self-contained installation to the native package on Ubuntu 22.04
         run: |
-          # The installed release's own control script performs the switch, as for users.
+          # The installed release's own control script performs the switch, as for users: once
+          # after an installer rerun, and once by its own update through the 0.9.4-only alias.
           mkdir -p "$RUNNER_TEMP/previous"
           base="https://github.com/$GITHUB_REPOSITORY/releases/download/$PREVIOUS_SELF_CONTAINED"
           curl -fsSL --retry 3 -o "$RUNNER_TEMP/previous/foxwarm-linux-x64-self-contained.tar.gz" "$base/foxwarm-linux-x64-self-contained.tar.gz"
@@ -242,7 +312,9 @@ jobs:
             set -e
             apt-get update -qq && apt-get install -y -qq tmux curl ca-certificates libicu70 procps >/dev/null
             ! command -v dotnet
-            bash /repo/scripts/release/smoke-upgrade.sh /previous/foxwarm-linux-x64-self-contained.tar.gz /repo/dist/foxwarm-linux-x64-native.tar.gz 3001'
+            bash /repo/scripts/release/smoke-upgrade.sh /previous/foxwarm-linux-x64-self-contained.tar.gz /repo/dist/foxwarm-linux-x64-native.tar.gz 3001
+            bash /repo/scripts/release/smoke-upgrade.sh --via-update foxwarm-linux-x64-self-contained.tar.gz \
+              /previous/foxwarm-linux-x64-self-contained.tar.gz /repo/dist/foxwarm-linux-x64-native.tar.gz 3001'
 
   windows:
     name: Build Desktop and qualify Windows packages

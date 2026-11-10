@@ -43,7 +43,8 @@
       GeneratePathProperty="true"
       Condition="'$(RuntimeIdentifier)' == 'win-x64' or ('$(RuntimeIdentifier)' == '' and '$(OS)' == 'Windows_NT')"
     />
-    <!-- The original package supplies the unchanged RID-native libraries. -->
+    <!-- The original package supplies the RID-native libraries, except a Linux library given
+         as LanceDbNativeLibrary (see UseLanceDbNativeLibrary). -->
     <PackageReference Include="LanceDB" Version="[2.5.0]" ExcludeAssets="compile;runtime" />
     <ProjectReference Include="../Foxwarm.LanceDb/Foxwarm.LanceDb.csproj" />
     <PackageReference Include="Apache.Arrow" Version="[22.1.0]" />
@@ -93,4 +94,21 @@
     </ItemGroup>
   </Target>
   <Import Project="Delivery.targets" />
+  <!-- Release builds replace the package's Linux LanceDB library, which needs glibc 2.39, with
+       one built from the same pinned source on glibc 2.34 (scripts/release/build-lancedb-linux.sh).
+       The replacement keeps the package item's metadata, so build, publish and NativeAOT treat it
+       exactly like the original. -->
+  <Target
+    Name="UseLanceDbNativeLibrary"
+    AfterTargets="ResolvePackageAssets"
+    Condition="'$(LanceDbNativeLibrary)' != '' and $(RuntimeIdentifier.StartsWith('linux-'))"
+  >
+    <Error Condition="!Exists('$(LanceDbNativeLibrary)')" Text="LanceDbNativeLibrary does not exist: $(LanceDbNativeLibrary)" />
+    <ItemGroup>
+      <_PackageLanceDbNative Include="@(NativeCopyLocalItems)" Condition="'%(Filename)%(Extension)' == 'liblancedb_ffi.so'" />
+      <NativeCopyLocalItems Remove="@(_PackageLanceDbNative)" />
+      <NativeCopyLocalItems Include="@(_PackageLanceDbNative->'$([System.IO.Path]::GetFullPath($(LanceDbNativeLibrary)))')" />
+    </ItemGroup>
+    <Error Condition="'@(_PackageLanceDbNative)' == ''" Text="The LanceDB package supplied no liblancedb_ffi.so to replace." />
+  </Target>
 </Project>

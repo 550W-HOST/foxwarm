@@ -99,11 +99,29 @@ test('only resource producers build pins; consumers require the exact validated 
   assert.equal(published[0].if, '${{ matrix.shard == 1 }}')
 })
 
+test('Both Linux packages use the cached glibc 2.34 LanceDB build', () => {
+  const producer = release.jobs['lancedb-linux']
+  const cache = restore(producer)[0]
+  for (const input of ['dotnet/Foxwarm.LanceDb/source.json', 'scripts/release/build-lancedb-linux.sh', 'scripts/release/lancedb-linux.Dockerfile']) {
+    assert.ok(cache.with.key.includes(`'${input}'`), input)
+  }
+  const build = producer.steps.find(step => step.run?.includes('build-lancedb-linux.sh'))
+  assert.equal(build.if, "${{ steps.cache.outputs.cache-hit != 'true' }}")
+  assert.ok(producer.steps.some(step => step.run?.includes('check-linux-libraries.sh')))
+  const uploaded = producer.steps.find(step => step.uses?.startsWith('actions/upload-artifact@'))
+  const packages = release.jobs.packages
+  assert.ok([packages.needs].flat().includes('lancedb-linux'))
+  assert.ok(packages.steps.some(step => step.uses?.startsWith('actions/download-artifact@') && step.with.name === uploaded.with.name))
+  const linuxBuilds = packages.steps.filter(step => /package\.mjs[\s\S]*--target linux-x64(-native)?\b/.test(step.run || ''))
+  assert.equal(linuxBuilds.length, 2)
+  for (const step of linuxBuilds) assert.match(step.run, /--lancedb-library \S+liblancedb_ffi\.so/)
+})
+
 test('Tests and Release reuse one cache-backed Code producer and consume its per-run archive', () => {
   assert.equal(jobs['code-resources'].uses, './.github/workflows/code-resources.yml')
   assert.equal(release.jobs['code-resources'].uses, jobs['code-resources'].uses)
   assert.ok(jobs.chromium.needs.includes('code-resources'))
-  assert.equal(release.jobs.packages.needs, 'code-resources')
+  assert.ok([release.jobs.packages.needs].flat().includes('code-resources'))
   const cache = restore(codeProducer)[0]
   assert.equal(cache.with['restore-keys'], undefined)
   assert.equal(cache.with['fail-on-cache-miss'], undefined)

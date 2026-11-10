@@ -3,8 +3,14 @@
 # NEW_PACKAGE (and any installer options, such as --native) to switch the installation the way
 # users do. The installation's own control script performs the update. Checks that the new
 # package runs from the same program directory and keeps its data and configuration.
-# Usage: scripts/release/smoke-upgrade.sh OLD_PACKAGE NEW_PACKAGE [PORT] [INSTALLER_OPTION...]
+# With --via-update ASSET, the installation's own `foxwarmctl update` performs the switch instead:
+# its release downloads are answered with NEW_PACKAGE published under ASSET and a SHA256SUMS
+# line for that name, as a release does for an alias asset. Control scripts have a fixed
+# release URL, so a curl wrapper on PATH serves those downloads; other requests use curl.
+# Usage: scripts/release/smoke-upgrade.sh [--via-update ASSET] OLD_PACKAGE NEW_PACKAGE [PORT] [INSTALLER_OPTION...]
 set -euo pipefail
+via_update=""
+if [ "${1:-}" = --via-update ]; then via_update="${2:?--via-update requires an asset name}"; shift 2; fi
 
 absolute() { printf '%s/%s\n' "$(cd "$(dirname "$1")" && pwd -P)" "$(basename "$1")"; }
 old="$(absolute "${1:?Usage: smoke-upgrade.sh OLD_PACKAGE NEW_PACKAGE [PORT] [INSTALLER_OPTION...]}")"
@@ -56,7 +62,38 @@ token="$(cat "$work/data/state/token")"
 config="$(cat "$work/data/state/config.yaml")"
 printf 'kept\n' > "$work/data/agents/upgrade-marker"
 
-(cd "$work" && /bin/bash "$installer" --package "$new" --dir foxwarm ${@+"$@"})
+package_field() { tar -xzOf "$new" --wildcards '*/release.json' | sed -n "s/^ *\"$1\": *\"\([^\"]*\)\".*/\1/p"; }
+if [ -n "$via_update" ]; then
+  serve="$work/release-download"
+  mkdir -p "$serve" "$work/bin"
+  cp "$new" "$serve/$via_update"
+  (cd "$serve" && sha256sum "$via_update" > SHA256SUMS)
+  real_curl="$(command -v curl)"
+  {
+    echo '#!/bin/bash'
+    echo 'url=""; out=""; args=("$@")'
+    echo 'while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift 2 ;; https://*) url="$1"; shift ;; *) shift ;; esac; done'
+    echo 'case "$url" in'
+    echo '  https://github.com/*/releases/latest/download/*)'
+    printf '    echo "$url" >> %q\n' "$work/requests"
+    printf '    file=%q/"${url##*/}"\n' "$serve"
+    echo '    [ -f "$file" ] || { echo "curl: (22) 404 $url" >&2; exit 22; }'
+    echo '    cp "$file" "$out" ;;'
+    echo '  https://*) echo "Unexpected download: $url" >&2; exit 22 ;;'
+    printf '  *) exec %q "${args[@]}" ;;\n' "$real_curl"
+    echo 'esac'
+  } > "$work/bin/curl"
+  chmod +x "$work/bin/curl"
+  # A release whose version equals the installed one needs --force; the download is the same.
+  same=()
+  [ "$(package_field version)" != "$(field version)" ] || same=(--force)
+  PATH="$work/bin:$PATH" "$control" update ${same[@]+"${same[@]}"}
+  expected="$(printf 'https://github.com/550W-HOST/foxwarm/releases/latest/download/%s\n' "$via_update" SHA256SUMS)"
+  [ "$(cat "$work/requests")" = "$expected" ] \
+    || { cat "$work/requests" >&2; echo "update did not download $via_update and its SHA256SUMS" >&2; exit 1; }
+else
+  (cd "$work" && /bin/bash "$installer" --package "$new" --dir foxwarm ${@+"$@"})
+fi
 wait_http
 second="$(running_pid)"
 [ -n "$second" ] && [ "$first" != "$second" ] || { echo "The installer did not restart Foxwarm on the new package" >&2; exit 1; }
@@ -72,6 +109,8 @@ if [ "$(field native)" = true ]; then
   case "$args" in *Foxwarm.dll*|*dotnet*) echo "The native installation runs a managed Main: $args" >&2; exit 1 ;; esac
   [ ! -e "$work/foxwarm/runtime/current/Foxwarm.dll" ] || { echo "The native package contains Foxwarm.dll" >&2; exit 1; }
 fi
+# Later updates must request the new package's own asset, not the name it arrived under.
+[ "$after" = "$(package_field asset)" ] || { echo "release.json records $after, not $(package_field asset)" >&2; exit 1; }
 [ "$(find "$work/foxwarm/runtime" -mindepth 1 -maxdepth 1 | wc -l)" -eq 2 ] || { ls -la "$work/foxwarm/runtime" >&2; echo "The old release was not removed" >&2; exit 1; }
 "$control" restart
 wait_http

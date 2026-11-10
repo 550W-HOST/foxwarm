@@ -45,7 +45,7 @@ On Linux the installer uses the native package; `--framework-dependent` selects 
 | ICU and OpenSSL libraries (present on most Linux systems) | ✓ | uses macOS system libraries | — |
 | ASP.NET Core 10 runtime | only for the framework-dependent package | only for the smaller package | only for the smaller package |
 
-Linux packages need glibc 2.34 or later (for example Ubuntu 22.04, Debian 12, RHEL 9). Semantic history search needs glibc 2.39 (for example Ubuntu 24.04 or Debian 13).
+Linux packages, including semantic history search, need glibc 2.34 or later (for example Ubuntu 22.04, Debian 12, RHEL 9).
 
 Optional tools used by some features:
 
@@ -74,13 +74,16 @@ To switch an existing installation to another package, rerun the installer with 
 
 ### Moving from the self-contained Linux package
 
-Since 0.9.4 the native package replaces `foxwarm-linux-x64-self-contained.tar.gz`. An installation of the self-contained package cannot update itself with `foxwarmctl update`; rerun the installer from the directory you originally installed from instead:
+Since 0.9.4 the native package replaces `foxwarm-linux-x64-self-contained.tar.gz`. An installation of the self-contained package switches to the native package at its next update and keeps its data and configuration. Later updates stay on the native package.
+
+- To update to 0.9.4, run `./foxwarm/foxwarmctl update` as usual. The 0.9.4 release also publishes the native package under the old name for this.
+- Later releases don't publish that name. To update such an installation directly to 0.9.5 or later, rerun the installer from the directory you originally installed from, with the same `--dir` if you used one:
 
 ```bash
 curl -fsSL https://foxwarm.net/install-foxwarm.sh | bash
 ```
 
-If you used `--dir`, pass the same `--dir`. The installer downloads the native package, checks your data with it while the old release keeps running, then switches and restarts Foxwarm. Later `foxwarmctl update` runs stay on the native package.
+The installer downloads the native package, checks your data with it while the old release keeps running, then switches and restarts Foxwarm.
 
 ## macOS (Apple Silicon)
 

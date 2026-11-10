@@ -88,9 +88,10 @@ export function archiveCode(output, source = codeAssets) {
 
 function usage(message) {
   if (message) console.error(message)
-  console.error(`Usage: node scripts/release/package.mjs --output DIR [--target NAME]... [--build-assets] [--directory-only] [--checksums-only | --code-only]
+  console.error(`Usage: node scripts/release/package.mjs --output DIR [--target NAME]... [--build-assets] [--directory-only] [--lancedb-library FILE] [--checksums-only | --code-only]
 Targets: ${Object.keys(TARGETS).join(', ')}
-(default: the published targets this host can build; native targets build only on their own platform)`)
+(default: the published targets this host can build; native targets build only on their own platform)
+--lancedb-library: Linux x64 liblancedb_ffi.so to package instead of the LanceDB package's (scripts/release/build-lancedb-linux.sh)`)
   process.exit(2)
 }
 
@@ -137,10 +138,12 @@ function removeDebugFiles(directory) {
   }
 }
 
-function publish(name, directory) {
+function publish(name, directory, lancedbLibrary) {
   const target = TARGETS[name]
   const common = ['-c', 'Release', '-r', target.rid, '--self-contained', String(target.selfContained),
     '-p:DebugType=None', '-p:DebugSymbols=false', '-o', directory]
+  // The LanceDB package's Linux library needs glibc 2.39; release builds supply one built on 2.34.
+  if (lancedbLibrary && target.rid === 'linux-x64') common.push(`-p:LanceDbNativeLibrary=${lancedbLibrary}`)
   if (target.native) common.push('-p:PublishAot=true', '-p:StripSymbols=true')
   if (target.kind === 'desktop') {
     // SDK-added transitive references must use the same global properties as the
@@ -224,6 +227,7 @@ function main(argv) {
   let directoryOnly = false
   let checksumsOnly = false
   let codeOnly = false
+  let lancedbLibrary
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
     if (arg === '--output') output = argv[++i]
@@ -232,9 +236,11 @@ function main(argv) {
     else if (arg === '--directory-only') directoryOnly = true
     else if (arg === '--checksums-only') checksumsOnly = true
     else if (arg === '--code-only') codeOnly = true
+    else if (arg === '--lancedb-library') lancedbLibrary = path.resolve(argv[++i] || usage('--lancedb-library requires a file'))
     else usage(`Unknown argument: ${arg}`)
   }
   if (!output) usage('--output is required')
+  if (lancedbLibrary && !fs.statSync(lancedbLibrary, { throwIfNoEntry: false })?.isFile()) usage(`No such file: ${lancedbLibrary}`)
   for (const name of targets) if (!TARGETS[name]) usage(`Unknown target: ${name}`)
   output = path.resolve(output)
   if (codeOnly) {
@@ -267,7 +273,7 @@ function main(argv) {
     const prefix = TARGETS[name].kind === 'desktop' ? 'foxwarm-desktop' : 'foxwarm'
     const staging = path.join(work, name, `${prefix}-${version}-${TARGETS[name].rid}`)
     fs.rmSync(path.dirname(staging), { recursive: true, force: true })
-    publish(name, staging)
+    publish(name, staging, lancedbLibrary)
     if (directoryOnly) {
       console.log(`Prepared ${staging}`)
       continue

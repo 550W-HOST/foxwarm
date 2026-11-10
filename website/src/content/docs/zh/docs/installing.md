@@ -43,7 +43,7 @@ Linux 上安装脚本使用原生安装包；`--framework-dependent` 选择使�
 | ICU 和 OpenSSL 库（多数 Linux 系统已自带） | ✓ | 使用 macOS 系统库 | — |
 | ASP.NET Core 10 运行时 | 仅 framework-dependent 安装包需要 | 仅较小的安装包需要 | 仅较小的安装包需要 |
 
-Linux 安装包需要 glibc 2.34 或更新版本（例如 Ubuntu 22.04、Debian 12、RHEL 9）；语义历史检索需要 glibc 2.39（例如 Ubuntu 24.04 或 Debian 13）。
+Linux 安装包（包括语义历史检索）需要 glibc 2.34 或更新版本（例如 Ubuntu 22.04、Debian 12、RHEL 9）。
 
 部分功能会用到的可选工具：
 
@@ -72,13 +72,16 @@ curl -fsSL https://foxwarm.net/install-foxwarm.sh | bash -s -- \
 
 ### 从自带运行时的 Linux 安装包迁移
 
-从 0.9.4 起，原生安装包取代了 `foxwarm-linux-x64-self-contained.tar.gz`。使用自带运行时安装包的安装不能用 `foxwarmctl update` 自行更新，请在当初安装时所在的目录重新运行安装脚本：
+从 0.9.4 起，原生安装包取代了 `foxwarm-linux-x64-self-contained.tar.gz`。使用自带运行时安装包的安装会在下次更新时切换到原生安装包，数据和配置保持不变，之后的更新也会继续使用原生安装包。
+
+- 更新到 0.9.4 时，照常运行 `./foxwarm/foxwarmctl update` 即可。0.9.4 版本为此也以旧文件名发布了原生安装包。
+- 之后的版本不再发布这个文件名。要把这样的安装直接更新到 0.9.5 或更高版本，请在当初安装时所在的目录重新运行安装脚本；如果安装时用了 `--dir`，请传入相同的 `--dir`：
 
 ```bash
 curl -fsSL https://foxwarm.net/install-foxwarm.sh | bash
 ```
 
-如果安装时用了 `--dir`，请传入相同的 `--dir`。安装脚本会下载原生安装包，在旧版本继续运行时用它检查数据，然后切换并重启 Foxwarm。之后的 `foxwarmctl update` 会继续使用原生安装包。
+安装脚本会下载原生安装包，在旧版本继续运行时用它检查数据，然后切换并重启 Foxwarm。
 
 ## macOS（Apple Silicon）
 

@@ -37,7 +37,7 @@ Before enabling dense searches, `VectorTable.RepairSourceTimesAsync` repairs exi
 
 The native dependency is exactly `LanceDB` NuGet `2.5.0` (community SDK/native Lance 8.0.0), with Apache Arrow 22.1.0. Managed and native Main use the same [source-built C# binding](dotnet-lancedb-binding.md), whose pinned source and focused metadata patch are maintained locally. Its builder/RecordBatch API replaces the Node binding, not the storage engine. New-table format 2.0 is explicit because the bindings' defaults differ. Existing tables remain intact.
 
-The pinned Linux x64 assets require glibc 2.39; the package has no Linux-musl or Linux-arm64 native asset. Windows x64 requires system Visual C++/Universal C runtime dependencies; qualification versions do not establish their minimum. Disabled Vector does not instantiate the native owner or create vector/FTS storage. Build success alone is not platform runtime qualification.
+The package's Linux x64 asset requires glibc 2.39; release packages replace it with a build of the same pinned source on glibc 2.34 (see [release packages](./release-packages.md#native-linux-package)), and other builds keep it; the package has no Linux-musl or Linux-arm64 native asset. Windows x64 requires system Visual C++/Universal C runtime dependencies; qualification versions do not establish their minimum. Disabled Vector does not instantiate the native owner or create vector/FTS storage. Build success alone is not platform runtime qualification.
 
 ## Tests
 
