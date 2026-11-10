@@ -127,6 +127,7 @@ internal sealed partial class AgentCatalog
                 ["migratedAt"] = migratedAt,
                 ["generator"] = IsolationMigrationRules.GeneratorVersion,
                 ["rulesDigest"] = generated.Digest,
+                ["fenceDigest"] = IsolationMigrationRules.FenceDigest(row),
             };
             try
             {

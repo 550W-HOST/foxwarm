@@ -78,7 +78,8 @@ internal sealed partial class SessionManager
 
     // Brings an already migrated row in line with its legacy fence. Older releases still
     // write that fence and the rules, so after a downgrade and upgrade the Agent must not end
-    // up less restricted than the fence it last had.
+    // up less restricted than the fence it last had. The fence is the legacy `isolated`,
+    // `isolatedNode` and `toolRules`; its digest is recorded whenever a layer is accepted.
     private JsonObject? ReconcileMigratedRow(
         string name,
         JsonObject row,
@@ -87,6 +88,10 @@ internal sealed partial class SessionManager
         long now
     )
     {
+        // A layer that does not parse already fails every call of the Agent. Leave the row
+        // unchanged; the scan after the write reports it.
+        if (row["rules"] is JsonArray stored && !Parses(stored))
+            return null;
         var isolation = IsolatedToolCompatibility.Metadata(row);
         if (!isolation.Isolated)
         {
@@ -101,6 +106,7 @@ internal sealed partial class SessionManager
                     "An older release turned legacy isolation off after migration; the local rules are kept.",
             };
         }
+        var fence = IsolationMigrationRules.FenceDigest(row);
         var original = (row["rules"] as JsonArray)?.DeepClone().AsArray();
         var digest = original is null ? null : IsolationMigrationRules.Digest(original);
         var generated = digest is not null && digest == SessionWait.Text(marker["rulesDigest"]);
@@ -108,47 +114,69 @@ internal sealed partial class SessionManager
             digest is not null && digest == SessionWait.Text(marker["confirmedDigest"]);
         var failClosed = marker.ContainsKey("failClosed");
         var markerNode = SessionWait.Text(marker["node"]);
-        if (isolation.RecordedNode != markerNode)
+        var nodeChanged = isolation.RecordedNode != markerNode;
+        // Markers written before the fence digest can only show a Node change.
+        var fenceChanged = SessionWait.Text(marker["fenceDigest"]) is { } recorded
+            ? recorded != fence
+            : nodeChanged;
+
+        if (generated && !failClosed)
         {
-            if (generated && !failClosed)
+            // An unedited generated layer always follows the current fence.
+            var entry = UpgradeMigratedLayer(name, row, marker);
+            var (plan, failure) = PlanFor(name, isolation);
+            if (failure is not null)
+                return FailClosedMigratedRow(name, row, marker, failure, markerNode, isolation, fence);
+            var current = row["rules"] as JsonArray;
+            if (current is not null && IsolationMigrationRules.Digest(current) == plan!.Digest)
             {
-                var (plan, failure) = PlanFor(name, isolation);
-                if (failure is null)
-                {
-                    row["rules"] = plan!.Rules.DeepClone();
-                    RebindMarker(row, marker, markerNode, isolation.RecordedNode);
-                    marker["rulesDigest"] = plan.Digest;
-                    marker["generator"] = IsolationMigrationRules.GeneratorVersion;
-                    marker.Remove("confirmedDigest");
-                    return new JsonObject
-                    {
-                        ["agent"] = name,
-                        ["outcome"] = "rebound",
-                        ["previousNode"] = markerNode,
-                        ["node"] = isolation.RecordedNode,
-                        ["rulesDigest"] = plan.Digest,
-                    };
-                }
-                return FailClosedMigratedRow(name, row, marker, failure, markerNode, isolation);
+                if (entry is not null)
+                    marker["fenceDigest"] = fence;
+                return entry;
             }
+            row["rules"] = plan.Rules.DeepClone();
+            if (nodeChanged)
+                RebindMarker(row, marker, markerNode, isolation.RecordedNode);
+            marker["rulesDigest"] = plan.Digest;
+            marker["generator"] = IsolationMigrationRules.GeneratorVersion;
+            marker["fenceDigest"] = fence;
+            marker.Remove("confirmedDigest");
+            var regenerated = new JsonObject
+            {
+                ["agent"] = name,
+                ["outcome"] = nodeChanged ? "rebound" : "regenerated",
+                ["node"] = isolation.RecordedNode,
+                ["rulesDigest"] = plan.Digest,
+            };
+            if (nodeChanged)
+                regenerated["previousNode"] = markerNode;
+            else
+                regenerated["reason"] =
+                    "An older release changed the Agent's legacy tool rules after migration; the layer was generated again from them.";
+            return regenerated;
+        }
+
+        if (fenceChanged)
             return FailClosedMigratedRow(
                 name,
                 row,
                 marker,
-                failClosed && generated
-                    ? SessionWait.Text(marker["failClosed"])!
-                    : "An older release changed the Agent's Node binding after migration, and its local rules had been edited; they are kept in the migration marker for a manual merge.",
+                failClosed && generated ? SessionWait.Text(marker["failClosed"])!
+                : nodeChanged
+                    ? "An older release changed the Agent's Node binding after migration, and its local rules had been edited; they are kept in the migration marker for a manual merge."
+                : "An older release changed the Agent's legacy isolation settings after migration, and its local rules had been edited; they are kept in the migration marker for a manual merge.",
                 markerNode,
-                isolation
+                isolation,
+                fence
             );
-        }
-        var entry = failClosed ? null : UpgradeMigratedLayer(name, row, marker);
         if (generated || confirmed)
-            return entry;
-        // Edited outside this release (an older release, or by hand). A layer that still ends
-        // in a deny is the administrator's; one that no longer restricts the Agent is not
-        // trusted while the legacy fence still says isolated.
-        if (!Restricted(name, snapshot))
+            return null;
+
+        // Edited outside this release (an older release, or by hand). A layer of the Agent's
+        // own that still ends in an enabled, unconditional deny is the administrator's; one
+        // that does not is not trusted while the legacy fence still says isolated.
+        var upgraded = failClosed ? null : UpgradeMigratedLayer(name, row, marker);
+        if (!OwnLayerRestricts(row["rules"] as JsonArray))
             return FailClosedMigratedRow(
                 name,
                 row,
@@ -156,11 +184,12 @@ internal sealed partial class SessionManager
                 "The local rules no longer restrict this Agent; they are kept in the migration marker for a manual merge.",
                 markerNode,
                 isolation,
+                fence,
                 original
             );
-        if (row["rules"] is JsonArray current)
-            marker["confirmedDigest"] = IsolationMigrationRules.Digest(current);
-        return entry
+        marker["confirmedDigest"] = IsolationMigrationRules.Digest(row["rules"]!.AsArray());
+        marker["fenceDigest"] = fence;
+        return upgraded
             ?? new JsonObject
             {
                 ["agent"] = name,
@@ -170,15 +199,26 @@ internal sealed partial class SessionManager
             };
     }
 
-    // Whether any local layer that applies to the Agent (its own or a creator's) ends in an
-    // unconditional deny. Unreadable creator metadata counts as unrestricted.
-    private bool Restricted(string name, JsonObject snapshot)
+    private static bool Parses(JsonArray rules)
     {
         try
         {
-            return agents
-                .CreatorChainIn(name, snapshot)
-                .Any(agent => IsolationMigrationRules.EndsInDeny(snapshot[agent]?["rules"] as JsonArray));
+            _ = AgentRulePolicy.Parse(rules);
+            return true;
+        }
+        catch (InvalidDataException)
+        {
+            return false;
+        }
+    }
+
+    // Whether the Agent's own layer ends in an enabled deny without selectors. A creator's
+    // layer does not count: its allows can still reach the Agent.
+    private static bool OwnLayerRestricts(JsonArray? rules)
+    {
+        try
+        {
+            return IsolationMigrationRules.EndsInDeny(rules);
         }
         catch (InvalidDataException)
         {
@@ -211,10 +251,12 @@ internal sealed partial class SessionManager
         string reason,
         string? markerNode,
         AgentIsolation isolation,
+        string fence,
         JsonArray? previous = null
     )
     {
         previous ??= row["rules"] as JsonArray;
+        marker["fenceDigest"] = fence;
         var rules = IsolationMigrationRules.FailClosedRules();
         var digest = IsolationMigrationRules.Digest(rules);
         if (
@@ -276,6 +318,7 @@ internal sealed partial class SessionManager
             ["generator"] = IsolationMigrationRules.GeneratorVersion,
             ["rulesDigest"] = digest,
             ["automatic"] = true,
+            ["fenceDigest"] = IsolationMigrationRules.FenceDigest(row),
         };
         if (failure is not null)
         {

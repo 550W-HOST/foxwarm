@@ -192,7 +192,7 @@ internal sealed partial class SessionManager
                         ["defaultNode"] = agents.DefaultNode(name),
                         ["defaultCwd"] = agents.DefaultCwd(name),
                         ["inheritable"] = agents.Inheritable(name),
-                        ["restricted"] = IsolationMigrationRules.EndsInDeny(
+                        ["restricted"] = RestrictedLayer(
                             agents.MetadataSnapshot()[name]?["rules"] as JsonArray
                         ),
                         ["isolationMigration"] = IsolationMigrationSummary(name),
@@ -210,6 +210,19 @@ internal sealed partial class SessionManager
             .ToArray();
     }
 
+
+    // A layer that does not parse fails every call of the Agent, so it is restricted too.
+    private static bool RestrictedLayer(JsonArray? rules)
+    {
+        try
+        {
+            return IsolationMigrationRules.EndsInDeny(rules);
+        }
+        catch (InvalidDataException)
+        {
+            return true;
+        }
+    }
 
     // What the legacy isolation migration did to this Agent, for administrators. A layer that
     // denies everything is reported only while it is still the installed one.

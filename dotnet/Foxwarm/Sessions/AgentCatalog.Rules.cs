@@ -223,7 +223,10 @@ internal sealed partial class AgentCatalog
             row["rules"] = rules.DeepClone();
             // Rules written here are the administrator's: startup reconciliation keeps them.
             if (row["legacyIsolation"] is JsonObject marker)
+            {
                 marker["confirmedDigest"] = IsolationMigrationRules.Digest(rules);
+                marker["fenceDigest"] = IsolationMigrationRules.FenceDigest(row);
+            }
             try
             {
                 AtomicIndexWrite(

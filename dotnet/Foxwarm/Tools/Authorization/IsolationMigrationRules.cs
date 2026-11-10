@@ -55,14 +55,33 @@ internal static class IsolationMigrationRules
             .ToLowerInvariant();
 
     /// <summary>
-    /// A local layer whose last rule denies every call without selectors allows only what it
-    /// lists.
+    /// SHA-256 of an Agent row's legacy isolation fence: <c>isolated</c>, <c>isolatedNode</c>
+    /// and <c>toolRules</c> as stored. Older releases still write them.
     /// </summary>
-    internal static bool EndsInDeny(JsonArray? rules) =>
-        rules?.LastOrDefault() is JsonObject last
-        && last["action"]?.GetValueKind() == System.Text.Json.JsonValueKind.String
-        && last["action"]!.GetValue<string>() == "deny"
-        && last["match"] is null or JsonObject { Count: 0 };
+    internal static string FenceDigest(JsonObject row) =>
+        Digest(
+            new JsonArray(
+                row["isolated"]?.DeepClone(),
+                row["isolatedNode"]?.DeepClone(),
+                row["toolRules"]?.DeepClone()
+            )
+        );
+
+    /// <summary>
+    /// Whether a local layer, as the policy parses it, ends in an enabled deny without
+    /// selectors, so it allows only what it lists. Throws <see cref="InvalidDataException"/>
+    /// when the layer does not parse.
+    /// </summary>
+    internal static bool EndsInDeny(JsonArray? rules)
+    {
+        if (rules is null)
+            return false;
+        var normalized = AgentRulePolicy.Parse(rules).Value["rules"] as JsonArray;
+        return normalized?.LastOrDefault() is JsonObject last
+            && last["enabled"]?.GetValue<bool>() == true
+            && last["action"]?.GetValue<string>() == "deny"
+            && last["match"] is JsonObject { Count: 0 };
+    }
 
     /// <summary>
     /// The layer installed when an Agent cannot be migrated safely: it denies every call of

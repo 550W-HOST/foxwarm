@@ -99,11 +99,15 @@ For each Agent still marked isolated without a `legacyIsolation` marker:
 
 An Agent migrated by R1 (generator 1) is upgraded: its status rules gain the current-Session limit. Its digest is updated only when the layer was unchanged since migration; an edited layer is reported. Fail-closed markers are never upgraded.
 
-Older releases still write the fence and the rules, so every startup also reconciles migrated rows with their fence (`ReconcileMigratedRow`). A formerly isolated Agent must never come out of startup less restricted than its last enforced state:
-- A layer written by this release through `set_agent_rules` records `confirmedDigest` in the marker and is the administrator's; reconciliation keeps it.
-- A layer edited elsewhere (an older release or by hand) that still ends in an unconditional deny on the Agent's creator chain is kept and reported once (`edited`), then confirmed. One that no longer restricts the Agent fails closed, with the edited rules in `previousRules`.
-- `isolatedNode` differing from `marker.node` means an older release re-bound the Agent. An unchanged generated layer is regenerated for the new Node (`rebound`), and `defaultNode` follows when it still named the old Node. An edited layer fails closed.
+Older releases still write the fence (`isolated`, `isolatedNode`, `toolRules`) and the rules, so every startup also reconciles migrated rows with it (`ReconcileMigratedRow`). A formerly isolated Agent must never come out of startup less restricted than its last enforced state. The marker records `fenceDigest`, a digest of the fence, whenever a layer is generated, accepted or written by `set_agent_rules`:
+- A layer whose own rules do not parse already fails every call; the row is left unchanged and reported as `unreadableRules`.
 - A cleared fence (`isolated: false`) keeps the layer and is reported once (`fenceCleared`); it never widens the Agent.
+- An unchanged generated layer always follows the current fence: it is regenerated from it, as `rebound` when the Node changed and `regenerated` when only `toolRules` did. `defaultNode` follows a Node change when it still named the old Node.
+- Otherwise a changed fence fails closed. A marker without `fenceDigest` (R1) can show only a Node change.
+- A layer written by this release through `set_agent_rules` records `confirmedDigest` and is the administrator's.
+- A layer edited elsewhere (an older release or by hand) is kept only when the Agent's own layer, as the policy parses it, ends in an enabled deny without selectors; it is reported once (`edited`) and confirmed. A creator's layer does not count, because its allows still reach the Agent. Otherwise the Agent fails closed with the edited rules in `previousRules`.
+
+The registry `restricted` flag uses the same parsed check; a layer that does not parse counts as restricted.
 
 Catalog writes validate only the rows they change. A layer that does not parse elsewhere is written unchanged and reported as `unreadableRules`; only that Agent's calls fail, and Main starts.
 
@@ -150,6 +154,6 @@ A catalog write raises the marker to the level its metadata requires before writ
 - the per-level reader marker;
 - the resumable backfill.
 
-`ToolAuthorizationEffectsTests.IsolationStartup.cs` covers the startup migration of a pre-R1 isolated Agent (layer, marker, retained fields, placement, report, idempotent restart), the generator 1 upgrade with edited and unedited layers, the fail-closed cases and their clearing by new rules, and global rules that name a migrated Agent. `ToolAuthorizationEffectsTests.IsolationReconcile.cs` covers reconciliation with the fence an older release left: an edited layer that no longer restricts the Agent, an edited layer that still ends in a deny, a re-bound Agent with an unchanged and an edited layer, a cleared fence, and an unreadable layer of another Agent during the startup write. `GuestTemplateTests` covers guest provisioning.
+`ToolAuthorizationEffectsTests.IsolationStartup.cs` covers the startup migration of a pre-R1 isolated Agent (layer, marker, retained fields, placement, report, idempotent restart), the generator 1 upgrade with edited and unedited layers, the fail-closed cases and their clearing by new rules, and global rules that name a migrated Agent. `ToolAuthorizationEffectsTests.IsolationFence.cs` covers the parsed restriction check (disabled, shorthand and creator denies), the registry label, real R1-written data with unchanged and changed `toolRules`, a later fence change after an accepted edit, and an unreadable migrated layer. `ToolAuthorizationEffectsTests.IsolationReconcile.cs` covers reconciliation with the fence an older release left: an edited layer that no longer restricts the Agent, an edited layer that still ends in a deny, a re-bound Agent with an unchanged and an edited layer, a cleared fence, and an unreadable layer of another Agent during the startup write. `GuestTemplateTests` covers guest provisioning.
 
 `IsolationMigrationHttpTests` covers the administrator routes. `mainHostIsolationMigration.e2e.mjs` starts a real host on a legacy catalog and checks the startup report, the registry, the recorded placement and a restart; it is part of the native smoke.
