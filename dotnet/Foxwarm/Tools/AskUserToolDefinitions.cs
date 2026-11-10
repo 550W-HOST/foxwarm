@@ -80,7 +80,7 @@ internal static class AskUserToolDefinitions
                                 {
                                     ["type"] = "object",
                                     ["description"] =
-                                        "Ask for a credential instead: the user enters it in the Foxwarm WebUI and it is stored under this new secret name, owned by your Agent. You receive only that it was stored, and configuration can refer to it as `${secret:NAME}`. A secret question takes no options.",
+                                        "Ask the user for a credential instead of offering options. The user enters it in the WebUI, where it is stored under this new secret name, owned by your Agent; you receive only confirmation that it was stored. Configuration can then refer to it as `${secret:NAME}`. Questions in the same call that include a secret question can be answered only in the WebUI, not from a channel.",
                                     ["additionalProperties"] = false,
                                     ["required"] = new JsonArray("name"),
                                     ["properties"] = new JsonObject

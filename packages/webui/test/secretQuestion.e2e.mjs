@@ -89,7 +89,7 @@ test('a secret question stores the typed value without showing it to the model',
     await until(async () => (await view(id)).questions[0].status === 'answered', 'secret answer recorded')
     await until(() => inputs.length >= 3, 'answer reached the model')
     const answerInput = inputs[2]
-    assert.match(answerInput, /entered and stored as secret/)
+    assert.match(answerInput, /stored as secret/)
     assert.match(answerInput, /ci-token/)
     assert.match(answerInput, /foxwarm/)
     assert.deepEqual((await view(id)).questions[0].answer.answers, [{ secret: 'ci-token', stored: true }, { text: 'foxwarm' }])

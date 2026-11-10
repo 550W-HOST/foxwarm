@@ -543,7 +543,7 @@ internal static class SessionQuestions
             var text = SessionWait.Text(entry?["text"]);
             builder.Append("\nA: ");
             if (SessionWait.Text(entry?["secret"]) is { } secret)
-                builder.Append("(entered and stored as secret `").Append(secret).Append("`)");
+                builder.Append("(stored as secret `").Append(secret).Append("`)");
             else if (selected.Length == 0 && text is null)
                 builder.Append("(no answer)");
             else
@@ -572,10 +572,7 @@ internal static class SessionQuestions
             builder.Append(SessionWait.Text(questions[index]["question"]));
             if (SecretName(questions[index]) is { } secret)
             {
-                builder
-                    .Append("\n(Secret `")
-                    .Append(secret)
-                    .Append("`: enter it in the Foxwarm WebUI.)");
+                builder.Append("\n(Secret `").Append(secret).Append("`: enter it in the WebUI.)");
                 continue;
             }
             if (questions[index]["options"] is not JsonArray options)
@@ -603,9 +600,7 @@ internal static class SessionQuestions
         // A secret is never entered in a channel message, so its question set is answered in
         // the WebUI as a whole.
         builder.Append(
-            SecretNames(record).Length > 0
-                ? "\n\nAnswer in the Foxwarm WebUI."
-                : "\n\nReply to answer."
+            SecretNames(record).Length > 0 ? "\n\nAnswer in the WebUI." : "\n\nReply to answer."
         );
         return builder.ToString();
     }

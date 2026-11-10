@@ -216,7 +216,7 @@ function SecretQuestionBody({ question, value, onChange, inputId, compact, disab
       <div className="mb-2 flex min-w-0 items-start gap-1.5 text-xs text-fw-text-muted">
         <KeyRound size={13} aria-hidden="true" className="mt-0.5 shrink-0" />
         <span className="min-w-0 break-words">
-          Saved as secret <span className="font-mono text-fw-text">{secret.name}</span>{secret.description ? ` · ${secret.description}` : ''}. The agent can use it but never sees it.
+          Saved as secret <span className="font-mono text-fw-text">{secret.name}</span>{secret.description ? ` · ${secret.description}` : ''}. The agent can use it without seeing it.
         </span>
       </div>
       <label htmlFor={inputId} className="block text-xs text-fw-text-muted">Value</label>

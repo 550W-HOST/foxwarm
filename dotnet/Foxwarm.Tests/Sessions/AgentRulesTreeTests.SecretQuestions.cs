@@ -91,8 +91,8 @@ public sealed partial class AgentRulesTreeTests
         );
         Assert.Equal(new[] { id }, SessionWait.Strings(asker.WaitSnapshot()!["waitQuestionIds"]));
         var channel = SessionQuestions.ChannelText(Record());
-        Assert.Contains("Secret `ci-token`: enter it in the Foxwarm WebUI.", channel);
-        Assert.EndsWith("Answer in the Foxwarm WebUI.", channel);
+        Assert.Contains("Secret `ci-token`: enter it in the WebUI.", channel);
+        Assert.EndsWith("Answer in the WebUI.", channel);
         Assert.DoesNotContain("Reply to answer", channel);
 
         // A message wakes the Session but never answers a question set that asks for a secret.
@@ -139,7 +139,7 @@ public sealed partial class AgentRulesTreeTests
             Record()["answer"]!["answers"]!.ToJsonString()
         );
         var answerText = QueuedAnswerText(asker);
-        Assert.Contains("(entered and stored as secret `ci-token`)", answerText);
+        Assert.Contains("(stored as secret `ci-token`)", answerText);
         Assert.Contains("foxwarm", answerText);
         Assert.DoesNotContain(Token, answerText);
         await Assert.ThrowsAsync<QuestionNotOpenException>(() =>
