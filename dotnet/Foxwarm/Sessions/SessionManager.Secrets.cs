@@ -469,7 +469,7 @@ internal sealed partial class SessionManager
                     );
                 }
                 foreach (var location in listed)
-                    moved.Add(location.Display);
+                    moved.Add((JsonNode?)location.Display);
             }
             catch (Exception error) when (error is not OperationCanceledException)
             {

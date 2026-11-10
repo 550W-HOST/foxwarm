@@ -166,7 +166,7 @@ try {
   // Browser tools are advertised only where the installed node and Chromium can run them.
   assert([0, 14].includes(nativeNames.filter(name => name.startsWith('browser_')).length), nativeNames.join())
   assert(!capabilities.get('source').tools.some(tool => tool.name.startsWith('browse')))
-  assert.deepEqual(capabilities.get('native').features, { unifiedEdit: true, programmaticToolData: true, execWaitCancellation: true, remoteExecBackgroundRegistration: true, externalToolOwner: 1, fileStream: 1, execPlacement: true, toolCallCancellation: true }); assert.deepEqual(capabilities.get('native').services, { 'vscode-fs': 1, 'vscode-git': 2, 'vscode-pty': 1 })
+  assert.deepEqual(capabilities.get('native').features, { unifiedEdit: true, programmaticToolData: true, execWaitCancellation: true, remoteExecBackgroundRegistration: true, externalToolOwner: 1, fileStream: 1, execPlacement: true, toolCallCancellation: true, secretEnv: true }); assert.deepEqual(capabilities.get('native').services, { 'vscode-fs': 1, 'vscode-git': 2, 'vscode-pty': 1 })
   assert.deepEqual(await nativeCorpus(connected.get('native'), native.cwd, true), await nativeCorpus(connected.get('source'), source.cwd, false))
   assert.equal((await stat(join(native.cwd, 'credentials.json'))).mode & 0o777, 0o600)
   await stop(source); await stop(native)

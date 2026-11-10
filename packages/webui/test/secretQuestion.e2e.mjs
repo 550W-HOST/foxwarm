@@ -58,6 +58,8 @@ test('a secret question stores the typed value without showing it to the model',
     const page = await fixture.openApp()
     await page.setViewport({ width: 1280, height: 860 })
     await page.evaluate(() => { location.hash = 'chat' })
+    // Switching before the chat route lands lets the route change cancel the pending navigation.
+    await page.waitForSelector('.foxwarm-chat-root')
     await page.waitForFunction(() => !!window.foxwarmTest?.switchToSession)
     await page.evaluate(sessionId => window.foxwarmTest.switchToSession(sessionId), id)
     await page.waitForSelector('[data-question-dock][data-question-dock-expanded="true"]')
