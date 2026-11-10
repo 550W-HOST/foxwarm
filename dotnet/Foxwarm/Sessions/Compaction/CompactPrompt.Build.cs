@@ -144,6 +144,7 @@ internal static partial class CompactPrompt
             "Blocks at level 5 and above keep the gist: themes, standing decisions with their msg# references, lasting constraints, a short list of items still open with their Task IDs, and where to recall details.",
             "Each operation has a token budget, shown with it. Stay well under it when the content allows; a summary over budget is returned for revision.",
             "Memory facts record only what the sources' facts don't already contain, and they count toward the operation's budget.",
+            "Facts of merged blocks leave active context with the merge and are not copied into Agent memory, so keep the decisions that still matter in the summary with their msg# reference, and point only to places that actually hold them: Agent memory, Tasks, the Code Index, documents or commits.",
             "Preserved messages inside merged blocks are removed from history by this merge; cover what still matters from them in the summary.",
             "- Reduce information volume by selecting and consolidating content, not by removing spaces, shortening ordinary words or packing fragments together. Use normal spelling, spacing, punctuation and readable sentences.",
             "- Stay within the assigned source range. Do not import later outcomes or turn an earlier proposal into a confirmed decision.",
