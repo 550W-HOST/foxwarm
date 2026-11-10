@@ -360,7 +360,7 @@ public sealed class MatrixChannelTests
             f.Manager,
             f.Router,
             null,
-            _ => { }
+            ChannelHealth.From(_ => { })
         );
         var live = ExternalProtocolPeer.MatrixText("repeated", "live");
         await adapter.ProcessTimelineAsync("!room:fixture", live, true);

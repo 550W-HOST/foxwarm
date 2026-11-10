@@ -14,7 +14,9 @@ internal sealed partial class WeWorkChannel : IManagedChannel
     private readonly SessionManager sessions;
     private readonly MessageRouter router;
     private readonly HttpClient http;
-    private readonly Action<Exception> log;
+    private readonly ChannelHealth health;
+    private const string SocketPath = "WeWork WebSocket";
+    private const string SendingPath = "WeWork sending";
     private readonly Func<TimeSpan, CancellationToken, Task> delay;
     private readonly Func<DateTimeOffset> now;
     private readonly IPAddress callbackAddress;
@@ -39,14 +41,14 @@ internal sealed partial class WeWorkChannel : IManagedChannel
         SessionManager sessions,
         MessageRouter router,
         ChannelTransportDependencies? dependencies,
-        Action<Exception> log
+        ChannelHealth health
     )
     {
         this.id = id;
         this.config = (JsonObject)config.DeepClone();
         this.sessions = sessions;
         this.router = router;
-        this.log = log;
+        this.health = health;
         http = dependencies?.CreateHttp?.Invoke() ?? DefaultHttp;
         delay = dependencies?.Delay ?? Task.Delay;
         now = dependencies?.Now ?? (() => DateTimeOffset.UtcNow);
@@ -136,7 +138,7 @@ internal sealed partial class WeWorkChannel : IManagedChannel
         catch (OperationCanceledException) when (stopped) { }
         catch (Exception error)
         {
-            log(error);
+            health.Log(error);
         }
     }
 
@@ -208,12 +210,14 @@ internal sealed partial class WeWorkChannel : IManagedChannel
                 if (response is not null)
                 {
                     await SendResponseAsync(response, text, token);
+                    health.Recover(SendingPath);
                     return;
                 }
             }
             if (explicitWebhook is null && WebSocketEnabled)
             {
                 await SendProactiveAsync(conversation, Markdown(text), options, token);
+                health.Recover(SendingPath);
                 return;
             }
             var url = explicitWebhook ?? webhook;
@@ -246,12 +250,21 @@ internal sealed partial class WeWorkChannel : IManagedChannel
             if (EffectiveChat(conversation, options) is { } chat)
                 payload["chatid"] = chat;
             await PostWebhookAsync(url, payload, token);
+            health.Recover(SendingPath);
         }
         catch (Exception error)
         {
+            if (NetworkFailure(error, token))
+                health.Fail(SendingPath, error);
             throw new IOException("Failed to send WeWork message: " + error.Message, error);
         }
     }
+
+    // WeWork send errors also report per-message rejections and local file problems; only
+    // network-level failures say the channel is not delivering.
+    private static bool NetworkFailure(Exception error, CancellationToken token) =>
+        error is HttpRequestException or OperationCanceledException
+        && ChannelFailure.ChannelLevel(error, token);
 
     private static string? EffectiveChat(string conversation, ChannelSendOptions options) =>
         Nonempty(options.ChatId) ? options.ChatId

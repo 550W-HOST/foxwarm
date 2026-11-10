@@ -25,7 +25,9 @@ internal sealed partial class MatrixChannel : IManagedChannel
     private readonly SessionManager sessions;
     private readonly MessageRouter router;
     private readonly HttpClient http;
-    private readonly Action<Exception> log;
+    private readonly ChannelHealth health;
+    private const string SyncPath = "Matrix sync";
+    private const string SendingPath = "Matrix sending";
     private readonly Func<TimeSpan, CancellationToken, Task> delay;
     private readonly CancellationTokenSource stopping = new();
     private readonly long startTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -42,13 +44,13 @@ internal sealed partial class MatrixChannel : IManagedChannel
         SessionManager sessions,
         MessageRouter router,
         ChannelTransportDependencies? dependencies,
-        Action<Exception> log
+        ChannelHealth health
     )
     {
         this.id = id;
         this.sessions = sessions;
         this.router = router;
-        this.log = log;
+        this.health = health;
         var server = SessionWait.Text(config["homeserver"])?.Trim();
         accessToken = SessionWait.Text(config["accessToken"])?.Trim() ?? "";
         user = SessionWait.Text(config["botUserId"])?.Trim() ?? "";
@@ -84,7 +86,8 @@ internal sealed partial class MatrixChannel : IManagedChannel
         }
         catch (Exception error) when (!stopping.IsCancellationRequested)
         {
-            log(error);
+            // The sync loop reports whether the homeserver is reachable.
+            health.Log(error);
         }
         var threadNotifications =
             versions is null
@@ -123,7 +126,7 @@ internal sealed partial class MatrixChannel : IManagedChannel
         catch (OperationCanceledException) when (stopping.IsCancellationRequested) { }
         catch (Exception error)
         {
-            log(error);
+            health.Log(error);
         }
     }
 
@@ -200,6 +203,7 @@ internal sealed partial class MatrixChannel : IManagedChannel
                         content,
                         token
                     );
+                    health.Recover(SendingPath);
                     break;
                 }
                 catch (MatrixApiException error)
@@ -222,6 +226,8 @@ internal sealed partial class MatrixChannel : IManagedChannel
         }
         catch (Exception error)
         {
+            if (ChannelFailure.ChannelLevel(error, token))
+                health.Fail(SendingPath, error);
             completion.TrySetException(error);
         }
         finally

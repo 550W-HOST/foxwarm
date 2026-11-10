@@ -60,11 +60,12 @@ internal sealed partial class MatrixChannel
                 {
                     if (error is MatrixApiException { Code: "M_UNKNOWN_TOKEN" })
                         throw;
-                    log(error);
+                    health.Fail(SyncPath, error);
                     await RecoverAsync();
                     reconnecting = true;
                     continue;
                 }
+                health.Recover(SyncPath);
                 cursor = SessionWait.Text(sync["next_batch"]);
                 reconnecting = false;
                 catchingUp = (sync["to_device"]?["events"] as JsonArray)?.Count > 0;
@@ -98,7 +99,8 @@ internal sealed partial class MatrixChannel
         catch (OperationCanceledException) when (stopping.IsCancellationRequested) { }
         catch (Exception error)
         {
-            log(error);
+            // The loop has ended: sync stays failed until the channel restarts.
+            health.Fail(SyncPath, error);
         }
     }
 
@@ -112,13 +114,15 @@ internal sealed partial class MatrixChannel
         {
             try
             {
-                return await RequestAsync(method, path, body, stopping.Token);
+                var result = await RequestAsync(method, path, body, stopping.Token);
+                health.Recover(SyncPath);
+                return result;
             }
             catch (Exception error) when (!stopping.IsCancellationRequested)
             {
                 if (error is MatrixApiException { Code: "M_UNKNOWN_TOKEN" })
                     throw;
-                log(error);
+                health.Fail(SyncPath, error);
                 await RecoverAsync();
             }
         }

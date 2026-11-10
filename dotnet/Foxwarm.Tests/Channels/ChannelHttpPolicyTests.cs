@@ -67,7 +67,7 @@ public sealed class ChannelHttpPolicyTests
             {
                 TelegramApiTimeout = TimeSpan.FromMilliseconds(250),
             },
-            errors.Enqueue
+            ChannelHealth.From(errors.Enqueue)
         );
         await channel.SendAsync("42", "retry deadline", default).WaitAsync(TimeSpan.FromSeconds(5));
         await aborted.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -132,7 +132,7 @@ public sealed class ChannelHttpPolicyTests
             {
                 TelegramApiTimeout = TimeSpan.FromMilliseconds(600),
             },
-            _ => { }
+            ChannelHealth.From(_ => { })
         );
         var path = Path.Combine(f.Work, "upload.txt");
         await File.WriteAllTextAsync(path, "upload bytes");
@@ -283,7 +283,7 @@ public sealed class ChannelHttpPolicyTests
             f.Manager,
             f.Router,
             peer.Dependencies,
-            _ => { }
+            ChannelHealth.From(_ => { })
         );
         var start = channel.StartAsync();
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));

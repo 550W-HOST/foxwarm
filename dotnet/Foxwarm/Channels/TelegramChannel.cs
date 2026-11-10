@@ -30,7 +30,9 @@ internal sealed class TelegramChannel : IManagedChannel
     private readonly Uri api;
     private readonly Uri files;
     private readonly Func<TimeSpan, CancellationToken, Task> delay;
-    private readonly Action<Exception> log;
+    private readonly ChannelHealth health;
+    private const string PollingPath = "Telegram polling";
+    private const string SendingPath = "Telegram sending";
     private readonly CancellationTokenSource stopping = new();
     private Task? polling;
     private string username = "";
@@ -42,13 +44,13 @@ internal sealed class TelegramChannel : IManagedChannel
         SessionManager sessions,
         MessageRouter router,
         ChannelTransportDependencies? dependencies,
-        Action<Exception> log
+        ChannelHealth health
     )
     {
         this.id = id;
         this.sessions = sessions;
         this.router = router;
-        this.log = log;
+        this.health = health;
         var token = SessionWait.Text(config["botToken"])?.Trim();
         if (string.IsNullOrEmpty(token))
             throw new InvalidDataException("Telegram botToken is missing for channel " + id);
@@ -75,7 +77,7 @@ internal sealed class TelegramChannel : IManagedChannel
 
     public async Task StartAsync()
     {
-        var stage = "command registration";
+        var stage = "Telegram command registration";
         try
         {
             await ApiAsync(
@@ -83,13 +85,13 @@ internal sealed class TelegramChannel : IManagedChannel
                 new JsonObject { ["commands"] = ExternalCommands.TelegramCommands() },
                 stopping.Token
             );
-            stage = "identity lookup";
+            stage = "Telegram identity lookup";
             username =
                 SessionWait.Text(
                     (await ApiAsync("getMe", new JsonObject(), stopping.Token))?["username"]
                 ) ?? "";
             // Launch completion is transport initialization, not a completed first poll.
-            stage = "webhook removal";
+            stage = "Telegram webhook removal";
             await ApiAsync("deleteWebhook", new JsonObject(), stopping.Token);
             polling = PollAsync();
         }
@@ -149,7 +151,7 @@ internal sealed class TelegramChannel : IManagedChannel
                         || error is TelegramApiException { Code: 429 or >= 500 }
                     )
                 {
-                    log(error);
+                    health.Fail(PollingPath, error);
                     await delay(
                         TimeSpan.FromSeconds((error as TelegramApiException)?.RetryAfter ?? 5),
                         stopping.Token
@@ -161,6 +163,7 @@ internal sealed class TelegramChannel : IManagedChannel
                     skipSync = true;
                     throw;
                 }
+                health.Recover(PollingPath);
                 if (
                     updates.LastOrDefault() is JsonObject last
                     && SessionWait.Number(last["update_id"]) is { } updateId
@@ -172,7 +175,8 @@ internal sealed class TelegramChannel : IManagedChannel
         catch (OperationCanceledException) when (stopping.IsCancellationRequested) { }
         catch (Exception error)
         {
-            log(error);
+            // The loop has ended: polling stays failed until the channel restarts.
+            health.Fail(PollingPath, error);
         }
         finally
         {
@@ -201,7 +205,8 @@ internal sealed class TelegramChannel : IManagedChannel
         catch (OperationCanceledException) when (stopping.IsCancellationRequested) { }
         catch (Exception error)
         {
-            log(error);
+            // One update that could not be handled is not a channel failure.
+            health.Log(error);
         }
     }
 
@@ -308,7 +313,7 @@ internal sealed class TelegramChannel : IManagedChannel
         }
         catch (Exception error)
         {
-            log(error);
+            health.Log(error);
         }
     }
 
@@ -398,7 +403,9 @@ internal sealed class TelegramChannel : IManagedChannel
         {
             try
             {
-                return await send();
+                var result = await send();
+                health.Recover(SendingPath);
+                return result;
             }
             catch (Exception error)
                 when (error is not OperationCanceledException
@@ -406,8 +413,12 @@ internal sealed class TelegramChannel : IManagedChannel
                 )
             {
                 if (attempt >= 3)
+                {
+                    if (ChannelFailure.ChannelLevel(error, token))
+                        health.Fail(SendingPath, error);
                     throw;
-                log(error);
+                }
+                health.Log(error);
                 await delay(TimeSpan.FromSeconds(attempt == 0 ? 5 : 10), token);
             }
         }

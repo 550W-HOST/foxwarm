@@ -10,6 +10,11 @@ using Foxwarm.Sessions;
 
 namespace Foxwarm.Channels;
 
+internal sealed class WeixinHttpException(int status, string message) : IOException(message)
+{
+    internal int Status { get; } = status;
+}
+
 internal sealed partial class WeixinApi
 {
     internal const string DefaultBaseUrl = "https://ilinkai.weixin.qq.com";
@@ -83,7 +88,8 @@ internal sealed partial class WeixinApi
         using var response = await http.SendAsync(request, timeout.Token);
         var raw = await response.Content.ReadAsStringAsync(timeout.Token);
         if (!response.IsSuccessStatusCode)
-            throw new IOException(
+            throw new WeixinHttpException(
+                (int)response.StatusCode,
                 label
                     + " "
                     + (int)response.StatusCode

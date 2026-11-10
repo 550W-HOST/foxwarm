@@ -23,6 +23,10 @@ internal sealed partial class WeWorkChannel
         TaskCompletionSource<JsonObject> Completion
     );
 
+    // The server closed the connection; the loop reconnects.
+    private sealed class SocketClosed(int code)
+        : IOException($"WeWork AIBot WebSocket closed ({code})");
+
     private readonly object socketGate = new();
     private Connection? socket;
     private readonly Dictionary<string, Pending> pending = new(StringComparer.Ordinal);
@@ -82,6 +86,7 @@ internal sealed partial class WeWorkChannel
             using var heartbeatStop = CancellationTokenSource.CreateLinkedTokenSource(
                 lifetime.Token
             );
+            var connected = false;
             try
             {
                 await current.ConnectAsync(
@@ -92,6 +97,7 @@ internal sealed partial class WeWorkChannel
                     ),
                     lifetime.Token
                 );
+                connected = true;
                 // Do not await subscription or callbacks on the receive loop: their ACKs use that same loop.
                 _ = ObserveAsync(SubscribeAsync(connection));
                 _ = ObserveAsync(HeartbeatAsync(heartbeatStop.Token));
@@ -109,9 +115,7 @@ internal sealed partial class WeWorkChannel
                         if (frame.MessageType == WebSocketMessageType.Close)
                         {
                             await CloseOutputAsync(connection);
-                            throw new IOException(
-                                $"WeWork AIBot WebSocket closed ({(int?)frame.CloseStatus ?? 1005})"
-                            );
+                            throw new SocketClosed((int?)frame.CloseStatus ?? 1005);
                         }
                         // The reference ws client uses its default 100 MiB decoded-message limit.
                         if (message.Length + frame.Count > 100L * 1024 * 1024)
@@ -135,7 +139,12 @@ internal sealed partial class WeWorkChannel
             catch (OperationCanceledException) when (stopped) { }
             catch (Exception error)
             {
-                log(error);
+                // A connection that was up and dropped reconnects by itself; one that cannot
+                // be opened is the failure to report (cleared when a subscription succeeds).
+                if (connected)
+                    health.Log(error);
+                else
+                    health.Fail(SocketPath, error);
             }
             finally
             {
@@ -173,9 +182,20 @@ internal sealed partial class WeWorkChannel
                 null,
                 CancellationToken.None
             );
+            health.Recover(SocketPath);
         }
-        catch
+        catch (Exception)
         {
+            if (!stopped)
+                health.Fail(
+                    SocketPath,
+                    new ChannelFailure(
+                        "WeWork WebSocket subscription",
+                        new ChannelProblem(
+                            "the server did not accept it; check the bot ID and secret"
+                        )
+                    )
+                );
             await CloseOutputAsync(current);
             throw;
         }

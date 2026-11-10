@@ -157,7 +157,7 @@ public sealed class WeWorkBoundedSocketTests
             null!,
             null!,
             null,
-            _ => { }
+            ChannelHealth.From(_ => { })
         );
         await channel.StartAsync();
         using var peer = await Peer.Accept(listener);
@@ -242,7 +242,7 @@ public sealed class WeWorkBoundedSocketTests
             null!,
             null!,
             null,
-            _ => { }
+            ChannelHealth.From(_ => { })
         );
         await channel.StartAsync();
         using var peer = await Peer.Accept(listener);
@@ -268,7 +268,7 @@ public sealed class WeWorkBoundedSocketTests
             null!,
             null!,
             null,
-            _ => { }
+            ChannelHealth.From(_ => { })
         );
         await channel.StartAsync();
         using var peer = await Peer.Accept(listener);

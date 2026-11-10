@@ -13,7 +13,9 @@ internal sealed class WeixinChannel : IManagedChannel
     private readonly int timeout;
     private readonly MessageRouter router;
     private readonly WeixinApi api;
-    private readonly Action<Exception> log;
+    private readonly ChannelHealth health;
+    private const string PollingPath = "Weixin polling";
+    private const string SendingPath = "Weixin sending";
     private volatile bool stopped;
     private Task? polling;
     private string cursor = "";
@@ -23,13 +25,13 @@ internal sealed class WeixinChannel : IManagedChannel
         JsonObject config,
         MessageRouter router,
         WeixinApi api,
-        Action<Exception> log
+        ChannelHealth health
     )
     {
         this.id = id;
         this.router = router;
         this.api = api;
-        this.log = log;
+        this.health = health;
         baseUrl = SessionWait.Text(config["baseUrl"])?.Trim() is { Length: > 0 } url
             ? url
             : WeixinApi.DefaultBaseUrl;
@@ -41,9 +43,24 @@ internal sealed class WeixinChannel : IManagedChannel
     public RegisteredChannel Transport =>
         new(
             "weixin",
-            (user, text, _, _) => api.SendAsync(baseUrl, token, routeTag, user, text),
+            (user, text, _, _) => SendAsync(user, text),
             Typing: (_, _) => Task.CompletedTask
         );
+
+    // A reply or tool send; a delivered message clears an earlier sending failure.
+    private async Task SendAsync(string user, string text)
+    {
+        try
+        {
+            await api.SendAsync(baseUrl, token, routeTag, user, text);
+        }
+        catch (Exception error) when (ChannelFailure.ChannelLevel(error))
+        {
+            health.Fail(SendingPath, error);
+            throw;
+        }
+        health.Recover(SendingPath);
+    }
 
     public Task StartAsync()
     {
@@ -68,18 +85,21 @@ internal sealed class WeixinChannel : IManagedChannel
         var failures = 0;
         while (!stopped)
         {
+            var polled = false;
             try
             {
                 var response = await api.UpdatesAsync(baseUrl, token, routeTag, cursor, timeout);
                 var ret = SessionWait.Number(response["ret"]) ?? 0;
                 var code = SessionWait.Number(response["errcode"]) ?? 0;
                 if (ret != 0 || code != 0)
-                    throw new IOException(
+                    throw new ChannelProblem(
                         ret == -14 || code == -14
-                            ? "Weixin session expired; re-run /channel weixin login and restart foxwarm."
-                            : $"Weixin getUpdates failed: ret={ret} errcode={code} errmsg={SessionWait.Text(response["errmsg"]) ?? ""}"
+                            ? "the Weixin login has expired; run /channel weixin login again"
+                            : $"Weixin returned error {(ret != 0 ? ret : code)}"
                     );
                 failures = 0;
+                health.Recover(PollingPath);
+                polled = true;
                 if (SessionWait.Text(response["get_updates_buf"]) is { Length: > 0 } next)
                     cursor = next;
                 foreach (var message in (response["msgs"] as JsonArray ?? []).OfType<JsonObject>())
@@ -90,7 +110,12 @@ internal sealed class WeixinChannel : IManagedChannel
                 if (stopped)
                     return;
                 failures++;
-                log(error);
+                // Only a failed poll is a polling failure; a message the router could not
+                // handle arrives after the poll succeeded.
+                if (!polled)
+                    health.Fail(PollingPath, error);
+                else
+                    health.Log(error);
                 await api.DelayAsync(failures >= 3 ? 30000 : 2000);
             }
         }

@@ -453,7 +453,7 @@ internal sealed partial class QQBotChannel
         }
         catch (Exception error)
         {
-            log(error);
+            health.Log(error);
         }
     }
 

@@ -77,7 +77,8 @@ internal sealed partial class WeWorkChannel
         }
         catch (Exception error)
         {
-            log(error);
+            // A rejected request is not a failure of the callback listener.
+            health.Log(error);
             return Results.Text(error.Message, statusCode: 500);
         }
     }
@@ -208,7 +209,7 @@ internal sealed partial class WeWorkChannel
         }
         catch (Exception error)
         {
-            log(error);
+            health.Log(error);
             return Results.Json(
                 new JsonObject
                 {
