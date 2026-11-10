@@ -24,8 +24,8 @@ Each [release](https://github.com/550W-HOST/foxwarm/releases/latest) provides:
 
 | Package | Use |
 | --- | --- |
+| `foxwarm-linux-x64-native.tar.gz` | Linux server compiled to native code; needs no .NET runtime |
 | `foxwarm-linux-x64.tar.gz` | Linux server; uses the installed ASP.NET Core 10 runtime |
-| `foxwarm-linux-x64-self-contained.tar.gz` | Linux server with the .NET runtime included |
 | `foxwarm-osx-arm64.tar.gz` | Apple Silicon Mac server; uses the installed ASP.NET Core 10 runtime |
 | `foxwarm-osx-arm64-self-contained.tar.gz` | Apple Silicon Mac server with the .NET runtime included |
 | `foxwarm-win-x64.zip` | Windows server; uses the installed ASP.NET Core 10 runtime |
@@ -33,7 +33,7 @@ Each [release](https://github.com/550W-HOST/foxwarm/releases/latest) provides:
 | `foxwarm-desktop-win-x64.zip` | Windows desktop app, .NET runtime included |
 | `SHA256SUMS` | Checksums of the files above |
 
-The installers choose the smaller package when `dotnet --list-runtimes` shows `Microsoft.AspNetCore.App 10.x`, and the self-contained package otherwise. Use `--self-contained` / `--framework-dependent` (Linux/macOS) or `-SelfContained` / `-FrameworkDependent` (Windows) to choose yourself.
+On Linux the installer uses the native package; `--framework-dependent` selects the package that uses the installed ASP.NET Core 10 runtime. On macOS and Windows the installers choose the smaller package when `dotnet --list-runtimes` shows `Microsoft.AspNetCore.App 10.x`, and the self-contained package otherwise. Use `--self-contained` / `--framework-dependent` (macOS) or `-SelfContained` / `-FrameworkDependent` (Windows) to choose yourself.
 
 ## Requirements
 
@@ -43,9 +43,9 @@ The installers choose the smaller package when `dotnet --list-runtimes` shows `M
 | curl or wget, tar | ✓ | included with macOS | — |
 | sha256sum or shasum | ✓ | shasum is included | — |
 | ICU and OpenSSL libraries (present on most Linux systems) | ✓ | uses macOS system libraries | — |
-| ASP.NET Core 10 runtime | only for the smaller package | only for the smaller package | only for the smaller package |
+| ASP.NET Core 10 runtime | only for the framework-dependent package | only for the smaller package | only for the smaller package |
 
-Linux packages need glibc 2.34 or later (for example Ubuntu 22.04, Debian 12, RHEL 9). Semantic history search needs glibc 2.39.
+Linux packages need glibc 2.34 or later (for example Ubuntu 22.04, Debian 12, RHEL 9). Semantic history search needs glibc 2.39 (for example Ubuntu 24.04 or Debian 13).
 
 Optional tools used by some features:
 
@@ -70,6 +70,18 @@ curl -fsSL https://foxwarm.net/install-foxwarm.sh | bash -s -- \
 
 `--package FILE` installs an already downloaded package, and `--no-start` installs without starting. You can read the [installer](https://github.com/550W-HOST/foxwarm/blob/main/install-foxwarm.sh) before running it.
 
+To switch an existing installation to another package, rerun the installer with `--native` or `--framework-dependent`. Its program directory, data and configuration stay the same.
+
+### Moving from the self-contained Linux package
+
+Since 0.9.4 the native package replaces `foxwarm-linux-x64-self-contained.tar.gz`. An installation of the self-contained package cannot update itself with `foxwarmctl update`; rerun the installer from the directory you originally installed from instead:
+
+```bash
+curl -fsSL https://foxwarm.net/install-foxwarm.sh | bash
+```
+
+If you used `--dir`, pass the same `--dir`. The installer downloads the native package, checks your data with it while the old release keeps running, then switches and restarts Foxwarm. Later `foxwarmctl update` runs stay on the native package.
+
 ## macOS (Apple Silicon)
 
 Requires **macOS 15 or later**, following the [.NET 10 support policy](https://github.com/dotnet/core/blob/main/release-notes/10.0/supported-os.md). Intel Macs are not supported. There is no macOS desktop package.
@@ -78,7 +90,7 @@ Requires **macOS 15 or later**, following the [.NET 10 support policy](https://g
 curl -fsSL https://foxwarm.net/install-foxwarm.sh | bash
 ```
 
-The same directory, version and package options as Linux apply. The installer chooses between the framework-dependent and self-contained arm64 packages. No Homebrew ICU or OpenSSL installation is needed. Install tmux if you want an attachable console; otherwise Foxwarm starts in the background with file logs.
+The same directory and version options as Linux apply. The installer chooses between the framework-dependent and self-contained arm64 packages; there is no native macOS package yet. No Homebrew ICU or OpenSSL installation is needed. Install tmux if you want an attachable console; otherwise Foxwarm starts in the background with file logs.
 
 The packages are tested on macOS 15 on Apple Silicon. Semantic history search and the browser tool are included but not yet verified on macOS.
 
@@ -139,13 +151,13 @@ The installer places `foxwarmctl` in the program directory:
 
 On Linux and macOS, start uses the tmux session `foxwarm` when tmux is available (`FOXWARM_TMUX_SESSION` changes the name); detach with <kbd>Ctrl</kbd>+<kbd>b</kbd>, then <kbd>d</kbd>. Without tmux, Foxwarm starts as a detached background process and keeps running when the terminal or SSH connection closes. `attach` then shows the paths of `state/logs/foxwarm.stdout.log` and `foxwarm.stderr.log` in the data directory. `status` reports the PID and launch mode. Both modes keep a `foxwarm.pid` file in the program directory; stale PID files are ignored. Stop waits up to 60 seconds for running work to finish, then ends the process.
 
-`update` downloads and checks the new release while the old one keeps running, then stops Foxwarm, switches to the new release, starts it again if it was running and removes the old release. `update 0.9.1` installs a specific version. Rerunning the installer on an existing installation does the same. See [data, updates, and backups](/docs/data-upgrades-backups/) before upgrading important data.
+`update` downloads and checks the new release while the old one keeps running, then stops Foxwarm, switches to the new release, starts it again if it was running and removes the old release. `update 0.9.1` installs a specific version. `update` keeps the installed package type. Rerunning the installer on an existing installation does the same, and can also switch the package type (see [Linux](#linux-x64-or-x64-wsl)). See [data, updates, and backups](/docs/data-upgrades-backups/) before upgrading important data.
 
 Logs are under `state/logs/` in the data directory.
 
 ## Docker
 
-The image includes the ASP.NET Core runtime, Node.js and Chromium:
+The image runs the native Linux build of Foxwarm, without a .NET runtime, and includes Node.js and Chromium:
 
 ```bash
 mkdir -p foxwarm-data && sudo chown 1000:1000 foxwarm-data

@@ -2,11 +2,17 @@
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
+import { existsSync } from 'node:fs'
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createHostFixture, until } from './mainHostFixture.mjs'
 
-const env = {}, options = { env, corePath: process.env.FOXWARM_PUBLISHED_CORE ? join(process.env.FOXWARM_PUBLISHED_CORE, 'Foxwarm.dll') : undefined }
+// FOXWARM_PUBLISHED_CORE names an extracted release package: its NativeAOT executable when
+// the package is native, otherwise its managed Foxwarm.dll.
+const published = process.env.FOXWARM_PUBLISHED_CORE
+const env = {}, options = { env }
+if (published && !existsSync(join(published, 'Foxwarm.dll'))) options.coreExecutable = join(published, 'Foxwarm')
+else if (published) options.corePath = join(published, 'Foxwarm.dll')
 const fixture = await createHostFixture('native-exec', options)
 options.cwd = fixture.root
 Object.assign(env, { FOXWARM_NATIVE_OWNED_VALUE: 'inherited ordinary value' })

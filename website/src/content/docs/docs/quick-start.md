@@ -31,7 +31,7 @@ docker run -d --name foxwarm --init -p 3001:3001 \
   -v "$PWD/foxwarm-data:/data" ghcr.io/550w-host/foxwarm:latest
 ```
 
-The installers download a prebuilt release; nothing is compiled. When the ASP.NET Core 10 runtime is not installed, they use the package that includes .NET. On Windows there is also a desktop app. See [Install Foxwarm](/docs/installing/) for packages and requirements.
+The installers download a prebuilt release; nothing is compiled. On Linux they use the native package, which needs no .NET; on macOS and Windows they use the package that includes .NET when the ASP.NET Core 10 runtime is not installed. On Windows there is also a desktop app. See [Install Foxwarm](/docs/installing/) for packages and requirements.
 
 When the installer finishes, it starts Foxwarm and prints a sign-in link such as `http://localhost:3001/#token=...`. Treat that link like a password.
 

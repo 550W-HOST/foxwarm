@@ -14,12 +14,12 @@ if [ "${3:-}" = --without-tmux ]; then
   [ "$(uname -s)" = Darwin ] || { echo "--without-tmux requires the macOS system PATH" >&2; exit 1; }
   mkdir "$work/bin"
   case "$package" in
-    *-self-contained.tar.gz) unset DOTNET_ROOT DOTNET_ROOT_ARM64 ;;
+    *-self-contained.tar.gz|*-native.tar.gz) unset DOTNET_ROOT DOTNET_ROOT_ARM64 ;;
     *) if command -v dotnet >/dev/null 2>&1; then ln -s "$(command -v dotnet)" "$work/bin/dotnet"; fi ;;
   esac
   export PATH="$work/bin:/usr/bin:/bin:/usr/sbin:/sbin"
   ! command -v tmux || { echo "tmux must be absent from the smoke PATH" >&2; exit 1; }
-  case "$package" in *-self-contained.tar.gz) ! command -v dotnet ;; esac
+  case "$package" in *-self-contained.tar.gz|*-native.tar.gz) ! command -v dotnet ;; esac
 fi
 export FOXWARM_TMUX_SESSION="foxwarm-smoke-$$"
 # Use a private tmux server, never the caller's.
@@ -65,6 +65,14 @@ if [ "${3:-}" = --without-tmux ]; then
   [ -f "$work/data/state/logs/foxwarm.stderr.log" ]
 fi
 [ -s "$work/data/state/logs/foxwarm.log" ] || { echo "No Main file log was created" >&2; exit 1; }
+
+# A native package is a NativeAOT executable: no managed assembly, and no CLR in Main.
+if grep -q '"native": true' "$work/foxwarm/runtime/current/release.json"; then
+  [ ! -e "$work/foxwarm/runtime/current/Foxwarm.dll" ] || { echo "A native package must not contain Foxwarm.dll" >&2; exit 1; }
+  if [ -r "/proc/$first/maps" ] && grep -q libcoreclr "/proc/$first/maps"; then
+    echo "The native Main loaded CoreCLR" >&2; exit 1
+  fi
+fi
 
 "$control" update --package "$package" --force
 wait_http

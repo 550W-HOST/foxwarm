@@ -12,14 +12,26 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const version = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version
 const python = process.platform === 'win32' ? 'python' : 'python3'
 
+// Native targets are NativeAOT publications: self-contained, with no .NET runtime or Foxwarm.dll.
+// They can only be compiled on their own platform. Qualification targets are built and
+// smoke-tested by the release workflow but not published.
 export const TARGETS = {
   'linux-x64': { kind: 'server', rid: 'linux-x64', selfContained: false, archive: 'tar.gz' },
-  'linux-x64-self-contained': { kind: 'server', rid: 'linux-x64', selfContained: true, archive: 'tar.gz' },
+  'linux-x64-native': { kind: 'server', rid: 'linux-x64', selfContained: true, native: true, archive: 'tar.gz' },
   'osx-arm64': { kind: 'server', rid: 'osx-arm64', selfContained: false, archive: 'tar.gz' },
   'osx-arm64-self-contained': { kind: 'server', rid: 'osx-arm64', selfContained: true, archive: 'tar.gz' },
+  'osx-arm64-native': { kind: 'server', rid: 'osx-arm64', selfContained: true, native: true, qualification: true, archive: 'tar.gz' },
   'win-x64': { kind: 'server', rid: 'win-x64', selfContained: false, archive: 'zip' },
   'win-x64-self-contained': { kind: 'server', rid: 'win-x64', selfContained: true, archive: 'zip' },
+  'win-x64-native': { kind: 'server', rid: 'win-x64', selfContained: true, native: true, qualification: true, archive: 'zip' },
   'desktop-win-x64': { kind: 'desktop', rid: 'win-x64', selfContained: true, archive: 'zip' },
+}
+
+// The RID of this build host, for targets that cannot be cross-compiled.
+export function hostRid(platform = process.platform, arch = process.arch) {
+  const os = { linux: 'linux', darwin: 'osx', win32: 'win' }[platform]
+  const cpu = { x64: 'x64', arm64: 'arm64' }[arch]
+  return os && cpu ? `${os}-${cpu}` : ''
 }
 
 // Collected artifact-runtime packages that npm installs only for the build host.
@@ -77,7 +89,8 @@ export function archiveCode(output, source = codeAssets) {
 function usage(message) {
   if (message) console.error(message)
   console.error(`Usage: node scripts/release/package.mjs --output DIR [--target NAME]... [--build-assets] [--directory-only] [--checksums-only | --code-only]
-Targets: ${Object.keys(TARGETS).join(', ')} (default: macOS targets on macOS, Linux/Windows targets elsewhere)`)
+Targets: ${Object.keys(TARGETS).join(', ')}
+(default: the published targets this host can build; native targets build only on their own platform)`)
   process.exit(2)
 }
 
@@ -115,9 +128,12 @@ function ensureTargetNatives(rid, scratch) {
   }
 }
 
+// Managed PDB/XML files and NativeAOT symbol files (.dbg on Linux, .dSYM bundles on macOS).
 function removeDebugFiles(directory) {
   for (const entry of fs.readdirSync(directory, { withFileTypes: true, recursive: true })) {
-    if (entry.isFile() && /\.(pdb|xml)$/i.test(entry.name)) fs.rmSync(path.join(entry.parentPath, entry.name))
+    const file = path.join(entry.parentPath, entry.name)
+    if (entry.isDirectory() && /\.dSYM$/i.test(entry.name)) fs.rmSync(file, { recursive: true, force: true })
+    else if (entry.isFile() && /\.(pdb|xml|dbg)$/i.test(entry.name)) fs.rmSync(file, { force: true })
   }
 }
 
@@ -125,6 +141,7 @@ function publish(name, directory) {
   const target = TARGETS[name]
   const common = ['-c', 'Release', '-r', target.rid, '--self-contained', String(target.selfContained),
     '-p:DebugType=None', '-p:DebugSymbols=false', '-o', directory]
+  if (target.native) common.push('-p:PublishAot=true', '-p:StripSymbols=true')
   if (target.kind === 'desktop') {
     // SDK-added transitive references must use the same global properties as the
     // Desktop -> Core reference, or MSBuild compiles shared outputs twice in parallel.
@@ -148,7 +165,7 @@ function publish(name, directory) {
   const commit = capture('git', ['rev-parse', 'HEAD'])
   fs.writeFileSync(path.join(directory, 'release.json'), JSON.stringify({
     version, target: name, kind: target.kind, rid: target.rid, selfContained: target.selfContained,
-    asset: assetName(name), commit,
+    native: target.native === true, asset: assetName(name), commit,
   }, null, 2) + '\n')
 }
 
@@ -231,10 +248,15 @@ function main(argv) {
     writeChecksums(output)
     return
   }
-  const selected = targets.length ? targets : Object.keys(TARGETS).filter(name =>
-    process.platform === 'darwin' ? name.startsWith('osx-') : !name.startsWith('osx-'))
+  // By default, every published target this host can build.
+  const selected = targets.length ? targets : Object.keys(TARGETS).filter(name => !TARGETS[name].qualification
+    && (TARGETS[name].native ? TARGETS[name].rid === hostRid()
+      : process.platform === 'darwin' ? name.startsWith('osx-') : !name.startsWith('osx-')))
   if (selected.some(name => name.startsWith('osx-')) && (process.platform !== 'darwin' || process.arch !== 'arm64')) {
     throw new Error('macOS packages require an arm64 macOS build host for the native PTY library and helper.')
+  }
+  for (const name of selected) {
+    if (TARGETS[name].native && TARGETS[name].rid !== hostRid()) throw new Error(`${name} is a NativeAOT package and must be built on ${TARGETS[name].rid}.`)
   }
   if (selected.some(name => TARGETS[name].kind === 'desktop')) validateCodeAssets()
   if (buildAssets) run('npm', ['run', 'build:assets'], { shell: process.platform === 'win32' })

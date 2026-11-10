@@ -1,12 +1,14 @@
-# Build Main and its delivery resources from source (default target), or package a
-# prebuilt release (target `release`). No host build output is used.
+# Build native Main and its delivery resources from source (default target), or package a
+# prebuilt native Linux release (target `release`). No host build output is used. Main is a
+# NativeAOT executable in both targets; the image contains no .NET runtime.
 FROM node:24.17.0-trixie AS build
 
+# NativeAOT links with clang against this stage's glibc, the same Debian release as the runtime base.
 RUN curl -fsSLo /tmp/packages-microsoft-prod.deb https://packages.microsoft.com/config/debian/13/packages-microsoft-prod.deb \
     && dpkg -i /tmp/packages-microsoft-prod.deb \
     && rm /tmp/packages-microsoft-prod.deb \
     && apt-get update \
-    && apt-get install -y --no-install-recommends dotnet-sdk-10.0 python3 \
+    && apt-get install -y --no-install-recommends dotnet-sdk-10.0 python3 clang zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
@@ -31,7 +33,11 @@ COPY LICENSE ./LICENSE
 
 # Delivery.targets is the only collector for runtime assets and notices.
 RUN npm run build:assets \
-    && dotnet publish dotnet/Foxwarm/Foxwarm.csproj -c Release --self-contained false -o /out
+    && case "$(dpkg --print-architecture)" in amd64) rid=linux-x64 ;; arm64) rid=linux-arm64 ;; *) exit 1 ;; esac \
+    && dotnet publish dotnet/Foxwarm/Foxwarm.csproj -c Release -r "$rid" --self-contained true \
+        -p:PublishAot=true -p:StripSymbols=true -p:DebugType=None -p:DebugSymbols=false -o /out \
+    && find /out \( -name '*.dbg' -o -name '*.pdb' -o -name '*.xml' \) -delete \
+    && test ! -e /out/Foxwarm.dll
 
 FROM node:24.17.0-trixie-slim AS base
 
@@ -64,13 +70,11 @@ RUN apt-get update \
         zip \
         build-essential \
         pkg-config \
-    && curl -fsSLo /tmp/packages-microsoft-prod.deb https://packages.microsoft.com/config/debian/13/packages-microsoft-prod.deb \
-    && dpkg -i /tmp/packages-microsoft-prod.deb \
-    && rm /tmp/packages-microsoft-prod.deb \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends aspnetcore-runtime-10.0 \
+        libicu76 \
+        libssl3t64 \
     && rm -rf /var/lib/apt/lists/*
 
+# Native Main loads ICU and OpenSSL at run time; there is no .NET runtime in the image.
 ENV NODE_ENV=production \
     ASPNETCORE_ENVIRONMENT=Production \
     PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
@@ -96,10 +100,10 @@ COPY --chmod=755 docker/entrypoint.sh /usr/local/bin/foxwarm-entrypoint
 ENV FOXWARM_DATA_DIR=/data
 EXPOSE 3001
 ENTRYPOINT ["/usr/local/bin/foxwarm-entrypoint"]
-CMD ["dotnet", "Foxwarm.dll"]
+CMD ["/app/Foxwarm"]
 
-# Published image: an extracted framework-dependent linux-x64 release package, e.g.
-#   docker build --target release --build-context package=foxwarm-0.9.0-linux-x64 .
+# Published image: an extracted native linux-x64 release package, e.g.
+#   docker build --target release --build-context package=foxwarm-0.9.4-linux-x64 .
 FROM base AS release
 COPY --from=package . ./
 

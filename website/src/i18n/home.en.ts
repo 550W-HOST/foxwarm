@@ -34,7 +34,7 @@ export const en: HomeStrings = {
     copy: 'Copy',
     copied: 'Copied',
     notes: {
-      linux: 'Linux x64 (including WSL) and macOS arm64. Downloads a prebuilt release and starts it in the background, using tmux when available. Includes .NET when no compatible runtime is installed.',
+      linux: 'Linux x64 (including WSL) and macOS arm64. Downloads a prebuilt release and starts it in the background, using tmux when available. Needs no .NET on Linux; on macOS, includes .NET when no compatible runtime is installed.',
       windows: 'Windows x64, in PowerShell. Downloads a prebuilt release and runs it in the background. A Windows desktop app is also available.',
       docker: 'Linux x64 with Docker. Runs the published image with Chromium and Node.js included; data stays in foxwarm-data.'
     },

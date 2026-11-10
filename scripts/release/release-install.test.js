@@ -52,8 +52,11 @@ function fixture(t) {
   delete env.TMUX;
   delete env.FOXWARM_DATA_DIR;
   delete env.FOXWARM_DIR;
-  function makePackage(version, { stopSeconds } = {}) {
-    const work = path.join(root, `package-${version}`);
+  // Native is the current Linux package; self-contained is the retired one older
+  // installations still use.
+  function makePackage(version, { stopSeconds, variant = 'native' } = {}) {
+    const suffix = variant === 'native' ? '-native' : '-self-contained';
+    const work = path.join(root, `package-${version}${suffix}`);
     const payload = path.join(work, `foxwarm-${version}-linux-x64`);
     fs.mkdirSync(payload, { recursive: true });
     fs.writeFileSync(path.join(payload, 'Foxwarm'), fakeMain, { mode: 0o755 });
@@ -61,10 +64,10 @@ function fixture(t) {
     if (stopSeconds) control = control.replace('STOP_SECONDS=60', `STOP_SECONDS=${stopSeconds}`);
     fs.writeFileSync(path.join(payload, 'foxwarmctl'), control, { mode: 0o755 });
     fs.writeFileSync(path.join(payload, 'release.json'), JSON.stringify({
-      version, target: 'linux-x64-self-contained', kind: 'server', rid: 'linux-x64', selfContained: true,
-      asset: 'foxwarm-linux-x64-self-contained.tar.gz',
+      version, target: `linux-x64${suffix}`, kind: 'server', rid: 'linux-x64', selfContained: true,
+      ...(variant === 'native' ? { native: true } : {}), asset: `foxwarm-linux-x64${suffix}.tar.gz`,
     }, null, 2) + '\n');
-    const file = path.join(root, `foxwarm-${version}.tar.gz`);
+    const file = path.join(root, `foxwarm-${version}${variant === 'native' ? '' : suffix}.tar.gz`);
     const tar = spawnSync('tar', ['-czf', file, '-C', work, path.basename(payload)]);
     assert.equal(tar.status, 0, String(tar.stderr));
     return file;
@@ -514,7 +517,7 @@ test('downloaded updates verify checksums with shasum when sha256sum is unavaila
   const dir = path.join(f.root, 'foxwarm');
   const next = f.makePackage('0.9.1');
   ok(f.install(['--package', f.makePackage('0.9.0'), '--no-start']));
-  const asset = 'foxwarm-linux-x64-self-contained.tar.gz';
+  const asset = 'foxwarm-linux-x64-native.tar.gz';
   const sum = require('node:crypto').createHash('sha256').update(fs.readFileSync(next)).digest('hex');
   fs.writeFileSync(path.join(f.root, 'SHA256SUMS'), `${sum}  ${asset}\n`);
   const bin = f.withoutTmux({ checksum: 'shasum' });
@@ -578,4 +581,80 @@ test('rerunning the installer on a stopped installation prints the sign-in link'
   const rerun = ok(f.install(['--package', pkg]));
   assert.match(rerun.stdout, /already installed/);
   assert.match(rerun.stdout, /WebUI: http:\/\/localhost:3001\/#token=fixture-token/);
+});
+
+// Serves release downloads from a directory of named assets and records each request.
+function releaseServer(f, assets) {
+  const bin = path.join(f.root, 'release-bin');
+  fs.mkdirSync(bin, { recursive: true });
+  fs.writeFileSync(path.join(bin, 'curl'), `#!/bin/bash
+url="\${@: -1}"; out=""
+while [ $# -gt 0 ]; do [ "$1" = -o ] && out="$2"; shift; done
+echo "$url" >> '${f.root}/downloads'
+cp '${assets}'/"\${url##*/}" "$out"
+`, { mode: 0o755 });
+  const sums = fs.readdirSync(assets).filter(name => name.endsWith('.tar.gz')).map(name =>
+    `${require('node:crypto').createHash('sha256').update(fs.readFileSync(path.join(assets, name))).digest('hex')}  ${name}`);
+  fs.writeFileSync(path.join(assets, 'SHA256SUMS'), sums.join('\n') + '\n');
+  return { env: { PATH: `${bin}:${process.env.PATH}` }, downloads: () => fs.readFileSync(path.join(f.root, 'downloads'), 'utf8').trim().split('\n') };
+}
+
+function publishedAssets(f, version) {
+  const assets = path.join(f.root, `release-${version}`);
+  fs.mkdirSync(assets);
+  fs.copyFileSync(f.makePackage(version), path.join(assets, 'foxwarm-linux-x64-native.tar.gz'));
+  return assets;
+}
+
+const installedAsset = dir => JSON.parse(fs.readFileSync(path.join(dir, 'runtime/current/release.json'), 'utf8')).asset;
+
+test('a fresh Linux install downloads the native package', linux, t => {
+  const f = fixture(t);
+  const server = releaseServer(f, publishedAssets(f, '0.9.4'));
+  const result = ok(f.install(['--no-start'], server));
+  assert.match(result.stdout, /native package/);
+  assert.deepEqual(server.downloads().map(url => url.split('/').slice(-2).join('/')),
+    ['download/foxwarm-linux-x64-native.tar.gz', 'download/SHA256SUMS']);
+  assert.equal(installedAsset(path.join(f.root, 'foxwarm')), 'foxwarm-linux-x64-native.tar.gz');
+  const legacyOption = ok(f.install(['--no-start', '--dir', 'other', '--self-contained'], server));
+  assert.match(legacyOption.stdout, /replaced by the native package/);
+  assert.equal(installedAsset(path.join(f.root, 'other')), 'foxwarm-linux-x64-native.tar.gz');
+});
+
+test('rerunning the installer moves a self-contained installation to the native package and keeps its data', linux, t => {
+  const f = fixture(t);
+  const dir = path.join(f.root, 'foxwarm');
+  ok(f.install(['--package', f.makePackage('0.9.3', { variant: 'self-contained' }), '--no-start']));
+  ok(f.control(dir, 'start'));
+  const first = mainPid(dir);
+  fs.writeFileSync(path.join(f.root, 'foxwarm-data/state/config.yaml'), 'retained: true\n');
+  const server = releaseServer(f, publishedAssets(f, '0.9.4'));
+  const result = ok(f.install([], server));
+  assert.match(result.stdout, /Switching .* from foxwarm-linux-x64-self-contained\.tar\.gz to foxwarm-linux-x64-native\.tar\.gz/);
+  assert.deepEqual(server.downloads().map(url => url.split('/').pop()), ['foxwarm-linux-x64-native.tar.gz', 'SHA256SUMS']);
+  assert.equal(fs.readlinkSync(path.join(dir, 'runtime/current')), '0.9.4');
+  assert.equal(installedAsset(dir), 'foxwarm-linux-x64-native.tar.gz');
+  assert(!alive(first));
+  assert(alive(mainPid(dir)));
+  assert.equal(fs.readFileSync(path.join(f.root, 'foxwarm-data/state/config.yaml'), 'utf8'), 'retained: true\n');
+  assert.equal(fs.readFileSync(path.join(dir, 'data_dir'), 'utf8').trim(), fs.realpathSync(path.join(f.root, 'foxwarm-data')));
+  assert.deepEqual(fs.readdirSync(path.join(dir, 'runtime')).filter(name => !name.startsWith('.')).sort(), ['0.9.4', 'current']);
+  // Later updates stay on the native package.
+  ok(f.control(dir, 'stop'));
+  const later = releaseServer(f, publishedAssets(f, '0.9.5'));
+  fs.rmSync(path.join(f.root, 'downloads'));
+  ok(f.run(path.join(dir, 'foxwarmctl'), ['update'], later));
+  assert.deepEqual(later.downloads().map(url => url.split('/').pop()), ['foxwarm-linux-x64-native.tar.gz', 'SHA256SUMS']);
+  assert.equal(fs.readlinkSync(path.join(dir, 'runtime/current')), '0.9.5');
+});
+
+test('choosing a package for an existing installation switches it even within one version', linux, t => {
+  const f = fixture(t);
+  const dir = path.join(f.root, 'foxwarm');
+  ok(f.install(['--package', f.makePackage('0.9.4', { variant: 'self-contained' }), '--no-start']));
+  ok(f.install(['--package', f.makePackage('0.9.4'), '--native', '--no-start']));
+  assert.equal(installedAsset(dir), 'foxwarm-linux-x64-native.tar.gz');
+  assert.match(fs.readlinkSync(path.join(dir, 'runtime/current')), /^0\.9\.4-\d+$/);
+  // Without a choice, an installation keeps its package type.
+  assert.match(ok(f.install(['--package', f.makePackage('0.9.4'), '--no-start'])).stdout, /already installed/);
 });

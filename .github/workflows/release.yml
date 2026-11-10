@@ -57,8 +57,22 @@ jobs:
       - name: Build Linux and Windows server packages
         run: >-
           node scripts/release/package.mjs --build-assets --output dist
-          --target linux-x64 --target linux-x64-self-contained
-          --target win-x64 --target win-x64-self-contained
+          --target linux-x64 --target win-x64 --target win-x64-self-contained
+      # NativeAOT links against the build system's glibc. The UBI 9 container (glibc 2.34) keeps
+      # the native package runnable on Ubuntu 22.04, Debian 12 and RHEL 9; the delivery assets
+      # built above, the runner's Node.js and its NuGet cache are reused.
+      - name: Build the native Linux package on glibc 2.34
+        run: |
+          docker build --progress=plain -f scripts/release/native-linux.Dockerfile -t foxwarm-native-build scripts/release
+          node_bin="$(dirname "$(readlink -f "$(command -v node)")")"
+          mkdir -p "$HOME/.nuget/packages"
+          docker run --rm --user "$(id -u):$(id -g)" \
+            -v "$PWD:/src" -w /src -v "$node_bin:/opt/node/bin:ro" -v "$HOME/.nuget/packages:/nuget" \
+            -e HOME=/tmp -e NUGET_PACKAGES=/nuget -e PATH=/opt/node/bin:/usr/share/dotnet:/usr/bin:/bin \
+            foxwarm-native-build node scripts/release/package.mjs --output dist --target linux-x64-native
+          mkdir -p "$RUNNER_TEMP/native"
+          tar -xzf dist/foxwarm-linux-x64-native.tar.gz -C "$RUNNER_TEMP/native"
+          bash scripts/release/check-linux-libraries.sh "$(ls -d "$RUNNER_TEMP"/native/*/)"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-packages-linux-windows
@@ -113,7 +127,7 @@ jobs:
             otool -L "$payload/Foxwarm" "$payload/foxwarm-pty-helper" >> "$extracted/native-libraries.txt"
             cat "$extracted/native-libraries.txt"
             if grep -E '/(opt/homebrew|usr/local)/(opt|Cellar|lib)/' "$extracted/native-libraries.txt"; then exit 1; fi
-            node scripts/release/qualify-macos-package.mjs "$payload"
+            node scripts/release/qualify-package.mjs "$payload"
             FOXWARM_PUBLISHED_CORE="$payload" node packages/webui/test/mainHostNativeExec.e2e.mjs
             rm -rf "$extracted"
           done
@@ -171,11 +185,19 @@ jobs:
     name: Qualify Linux packages
     needs: packages
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
+    env:
+      # The last release with a self-contained Linux package, for the upgrade check.
+      PREVIOUS_SELF_CONTAINED: v0.9.3
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.21.0
+          cache: npm
+          cache-dependency-path: package-lock.json
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: '10.0.x'
@@ -183,17 +205,44 @@ jobs:
         with:
           name: release-packages-linux-windows
           path: dist
-      - name: Install tmux
-        run: sudo apt-get update && sudo apt-get install -y tmux
+      - name: Install tmux and the qualification driver
+        run: |
+          sudo apt-get update && sudo apt-get install -y tmux
+          npm ci
       - name: Framework-dependent package with the installed runtime
         run: bash scripts/release/smoke-server.sh dist/foxwarm-linux-x64.tar.gz
-      - name: Self-contained package on Ubuntu 22.04 without .NET
+      - name: Native package installer and control smoke
+        run: bash scripts/release/smoke-server.sh dist/foxwarm-linux-x64-native.tar.gz
+      - name: Qualify the native Main, PTY, ToolScript, Vector child and detached exec
+        run: |
+          mkdir -p "$RUNNER_TEMP/native"
+          tar -xzf dist/foxwarm-linux-x64-native.tar.gz -C "$RUNNER_TEMP/native"
+          payload="$(ls -d "$RUNNER_TEMP"/native/*/)"
+          bash scripts/release/check-linux-libraries.sh "$payload"
+          node scripts/release/qualify-package.mjs "$payload" --vector
+          FOXWARM_PUBLISHED_CORE="$payload" node packages/webui/test/mainHostNativeExec.e2e.mjs
+      - name: Switch a framework-dependent installation to the native package
+        run: bash scripts/release/smoke-upgrade.sh dist/foxwarm-linux-x64.tar.gz dist/foxwarm-linux-x64-native.tar.gz 3001 --native
+      - name: Native package on Ubuntu 22.04 without .NET
         run: |
           docker run --rm -v "$PWD:/repo:ro" ubuntu:22.04 bash -c '
             set -e
-            apt-get update -qq && apt-get install -y -qq tmux curl ca-certificates libicu70 >/dev/null
+            apt-get update -qq && apt-get install -y -qq tmux curl ca-certificates libicu70 procps >/dev/null
             ! command -v dotnet
-            bash /repo/scripts/release/smoke-server.sh /repo/dist/foxwarm-linux-x64-self-contained.tar.gz'
+            bash /repo/scripts/release/smoke-server.sh /repo/dist/foxwarm-linux-x64-native.tar.gz'
+      - name: Upgrade a self-contained installation to the native package on Ubuntu 22.04
+        run: |
+          # The installed release's own control script performs the switch, as for users.
+          mkdir -p "$RUNNER_TEMP/previous"
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download/$PREVIOUS_SELF_CONTAINED"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/previous/foxwarm-linux-x64-self-contained.tar.gz" "$base/foxwarm-linux-x64-self-contained.tar.gz"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/previous/SHA256SUMS" "$base/SHA256SUMS"
+          (cd "$RUNNER_TEMP/previous" && grep -E '  foxwarm-linux-x64-self-contained\.tar\.gz$' SHA256SUMS | sha256sum -c -)
+          docker run --rm -v "$PWD:/repo:ro" -v "$RUNNER_TEMP/previous:/previous:ro" ubuntu:22.04 bash -c '
+            set -e
+            apt-get update -qq && apt-get install -y -qq tmux curl ca-certificates libicu70 procps >/dev/null
+            ! command -v dotnet
+            bash /repo/scripts/release/smoke-upgrade.sh /previous/foxwarm-linux-x64-self-contained.tar.gz /repo/dist/foxwarm-linux-x64-native.tar.gz 3001'
 
   windows:
     name: Build Desktop and qualify Windows packages
@@ -287,6 +336,99 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  # NativeAOT qualification for the next release's Windows and macOS packages. Their output is
+  # uploaded only as a workflow artifact and never published; a failure is reported on the job
+  # without failing the workflow or blocking aggregation and publication.
+  windows-native:
+    name: Qualify a native Windows package (not published)
+    runs-on: windows-2025
+    timeout-minutes: 45
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.21.0
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            packages/webui/package-lock.json
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.403'
+      - name: Install dependencies
+        run: npm ci && npm --prefix packages/webui ci
+      - name: Build the native Windows package
+        shell: pwsh
+        run: |
+          node scripts/release/package.mjs --build-assets --output dist --target win-x64-native
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-qualification-win-x64
+          path: dist/foxwarm-win-x64-native.zip
+          if-no-files-found: warn
+          compression-level: 0
+          retention-days: 7
+      - name: Installer and control smoke
+        shell: pwsh
+        run: ./scripts/release/smoke-server.ps1 -Package dist/foxwarm-win-x64-native.zip
+
+  macos-native:
+    name: Qualify a native macOS arm64 package (not published)
+    runs-on: macos-15
+    timeout-minutes: 55
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.21.0
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            packages/webui/package-lock.json
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.403'
+      - name: Confirm native runner and install test prerequisites
+        run: |
+          test "$(uname -m)" = arm64
+          command -v tmux || brew install tmux
+          npm ci && npm --prefix packages/webui ci
+      - name: Build the native macOS package
+        run: node scripts/release/package.mjs --build-assets --output dist --target osx-arm64-native
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-qualification-osx-arm64
+          path: dist/foxwarm-osx-arm64-native.tar.gz
+          if-no-files-found: warn
+          compression-level: 0
+          retention-days: 7
+      - name: Qualify the native Main, PTY, ToolScript, Vector child and detached exec
+        run: |
+          extracted="$(mktemp -d "$RUNNER_TEMP/macos-native.XXXXXX")"
+          tar -xzf dist/foxwarm-osx-arm64-native.tar.gz -C "$extracted"
+          payload="$(find "$extracted" -mindepth 1 -maxdepth 1 -type d -print -quit)"
+          test ! -e "$payload/Foxwarm.dll"
+          test -f "$payload/libfoxwarm-pty.dylib"
+          test -x "$payload/foxwarm-pty-helper"
+          find "$payload" -name '*.dylib' -exec otool -L {} \; > "$extracted/native-libraries.txt"
+          otool -L "$payload/Foxwarm" "$payload/foxwarm-pty-helper" >> "$extracted/native-libraries.txt"
+          cat "$extracted/native-libraries.txt"
+          if grep -E '/(opt/homebrew|usr/local)/(opt|Cellar|lib)/' "$extracted/native-libraries.txt"; then exit 1; fi
+          node scripts/release/qualify-package.mjs "$payload" --vector
+          FOXWARM_PUBLISHED_CORE="$payload" node packages/webui/test/mainHostNativeExec.e2e.mjs
+      - name: Installer and control smoke with and without tmux
+        shell: /bin/bash -e {0}
+        run: |
+          /bin/bash scripts/release/smoke-server.sh dist/foxwarm-osx-arm64-native.tar.gz
+          /bin/bash scripts/release/smoke-server.sh dist/foxwarm-osx-arm64-native.tar.gz 3001 --without-tmux
+
   image:
     name: Container image
     needs: packages
@@ -303,11 +445,14 @@ jobs:
         with:
           name: release-packages-linux-windows
           path: dist
-      - name: Build from the Linux package
+      - name: Build from the native Linux package
         run: |
           mkdir -p "$RUNNER_TEMP/package"
-          tar -xzf dist/foxwarm-linux-x64.tar.gz -C "$RUNNER_TEMP/package"
+          tar -xzf dist/foxwarm-linux-x64-native.tar.gz -C "$RUNNER_TEMP/package"
           docker build --target release --build-context "package=$(ls -d "$RUNNER_TEMP"/package/*/)" -t foxwarm:ci .
+          # The image runs native Main and carries no .NET runtime.
+          docker run --rm --entrypoint sh foxwarm:ci -c '! command -v dotnet && test ! -e /app/Foxwarm.dll && test -x /app/Foxwarm && test ! -d /usr/share/dotnet'
+          docker run --rm --entrypoint dpkg-query foxwarm:ci -W -f '${Package} ${Version}\n'
       - name: Start and serve the sign-in page
         run: |
           # The image runs as node (1000:1000) and never re-owns mounted data.
@@ -320,6 +465,9 @@ jobs:
           done
           docker logs foxwarm
           [ "${ready:-}" = 1 ]
+          # Main is the native executable, running as node (uid 1000).
+          docker exec foxwarm sh -c 'ps -o uid=,args= -C Foxwarm' | tee "$RUNNER_TEMP/main-process"
+          grep -Eq '^ *1000 +/app/Foxwarm' "$RUNNER_TEMP/main-process"
           docker stop -t 30 foxwarm
       - name: Push to GitHub Container Registry
         if: startsWith(github.ref, 'refs/tags/')

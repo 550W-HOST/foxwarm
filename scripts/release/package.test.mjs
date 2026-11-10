@@ -5,7 +5,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
-import { archive, assetName, archiveCode, codeAssetName, installCodeAssets, validateCodeAssets, writeChecksums } from './package.mjs'
+import { TARGETS, archive, assetName, archiveCode, codeAssetName, hostRid, installCodeAssets, validateCodeAssets, writeChecksums } from './package.mjs'
 
 const root = path.resolve(import.meta.dirname, '../..')
 const unix = { skip: process.platform === 'win32' }
@@ -100,6 +100,26 @@ for (const framework of [false, true]) test(`Darwin installer selects ${framewor
   assert.equal(fs.readFileSync(path.join(f.work, 'downloads'), 'utf8'), assetName(f.target) + '\nSHA256SUMS\n')
   assert.equal(fs.readFileSync(path.join(f.work, 'inspected'), 'utf8'), 'inspected')
   assert.equal(fs.realpathSync(path.join(f.work, 'foxwarm/runtime/current')), path.join(f.work, 'foxwarm/runtime/0.9.0'))
+})
+
+test('Linux publishes a native package instead of a self-contained one; other native targets only qualify', () => {
+  const published = Object.keys(TARGETS).filter(name => !TARGETS[name].qualification).map(assetName).sort()
+  assert.deepEqual(published, ['foxwarm-desktop-win-x64.zip', 'foxwarm-linux-x64-native.tar.gz', 'foxwarm-linux-x64.tar.gz',
+    'foxwarm-osx-arm64-self-contained.tar.gz', 'foxwarm-osx-arm64.tar.gz', 'foxwarm-win-x64-self-contained.zip', 'foxwarm-win-x64.zip'])
+  for (const name of ['linux-x64-native', 'win-x64-native', 'osx-arm64-native']) {
+    assert.equal(TARGETS[name].native, true)
+    assert.equal(TARGETS[name].selfContained, true, 'Older control scripts launch self-contained packages through their executable')
+  }
+  assert.equal(hostRid('linux', 'x64'), 'linux-x64')
+  assert.equal(hostRid('darwin', 'arm64'), 'osx-arm64')
+  assert.equal(hostRid('win32', 'x64'), 'win-x64')
+})
+
+test('Darwin installer refuses the Linux-only native package', unix, t => {
+  const f = installer(t), result = f.run(['--native'])
+  assert.notEqual(result.status, 0)
+  assert.match(result.stderr, /only for Linux x64/)
+  assert(!fs.existsSync(path.join(f.work, 'downloads')))
 })
 
 test('Darwin installer rejects Intel and corrupt downloads before executing a package', unix, t => {

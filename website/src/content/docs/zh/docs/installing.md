@@ -22,8 +22,8 @@ Foxwarm 服务器支持 **Linux x64**（包括 x64 WSL）、**macOS arm64**（Ap
 
 | 安装包 | 用途 |
 | --- | --- |
+| `foxwarm-linux-x64-native.tar.gz` | Linux 服务器，编译为原生程序，不需要 .NET 运行时 |
 | `foxwarm-linux-x64.tar.gz` | Linux 服务器，使用系统已安装的 ASP.NET Core 10 运行时 |
-| `foxwarm-linux-x64-self-contained.tar.gz` | Linux 服务器，自带 .NET 运行时 |
 | `foxwarm-osx-arm64.tar.gz` | Apple Silicon Mac 服务器，使用系统已安装的 ASP.NET Core 10 运行时 |
 | `foxwarm-osx-arm64-self-contained.tar.gz` | Apple Silicon Mac 服务器，自带 .NET 运行时 |
 | `foxwarm-win-x64.zip` | Windows 服务器，使用系统已安装的 ASP.NET Core 10 运行时 |
@@ -31,7 +31,7 @@ Foxwarm 服务器支持 **Linux x64**（包括 x64 WSL）、**macOS arm64**（Ap
 | `foxwarm-desktop-win-x64.zip` | Windows 桌面版，自带 .NET 运行时 |
 | `SHA256SUMS` | 以上文件的校验和 |
 
-如果 `dotnet --list-runtimes` 里有 `Microsoft.AspNetCore.App 10.x`，安装脚本会选较小的安装包，否则选自带运行时的版本。也可以用 `--self-contained` / `--framework-dependent`（Linux/macOS）或 `-SelfContained` / `-FrameworkDependent`（Windows）自己指定。
+Linux 上安装脚本使用原生安装包；`--framework-dependent` 选择使用系统 ASP.NET Core 10 运行时的安装包。macOS 和 Windows 上，如果 `dotnet --list-runtimes` 里有 `Microsoft.AspNetCore.App 10.x`，安装脚本会选较小的安装包，否则选自带运行时的版本。也可以用 `--self-contained` / `--framework-dependent`（macOS）或 `-SelfContained` / `-FrameworkDependent`（Windows）自己指定。
 
 ## 环境要求
 
@@ -41,9 +41,9 @@ Foxwarm 服务器支持 **Linux x64**（包括 x64 WSL）、**macOS arm64**（Ap
 | curl 或 wget、tar | ✓ | 系统自带 | — |
 | sha256sum 或 shasum | ✓ | 系统自带 shasum | — |
 | ICU 和 OpenSSL 库（多数 Linux 系统已自带） | ✓ | 使用 macOS 系统库 | — |
-| ASP.NET Core 10 运行时 | 仅较小的安装包需要 | 仅较小的安装包需要 | 仅较小的安装包需要 |
+| ASP.NET Core 10 运行时 | 仅 framework-dependent 安装包需要 | 仅较小的安装包需要 | 仅较小的安装包需要 |
 
-Linux 安装包需要 glibc 2.34 或更新版本（例如 Ubuntu 22.04、Debian 12、RHEL 9）；语义历史检索需要 glibc 2.39。
+Linux 安装包需要 glibc 2.34 或更新版本（例如 Ubuntu 22.04、Debian 12、RHEL 9）；语义历史检索需要 glibc 2.39（例如 Ubuntu 24.04 或 Debian 13）。
 
 部分功能会用到的可选工具：
 
@@ -68,6 +68,18 @@ curl -fsSL https://foxwarm.net/install-foxwarm.sh | bash -s -- \
 
 `--package FILE` 安装已下载的安装包，`--no-start` 只安装不启动。运行前可以先阅读[安装脚本](https://github.com/550W-HOST/foxwarm/blob/main/install-foxwarm.sh)。
 
+要把已有安装切换到另一种安装包，用 `--native` 或 `--framework-dependent` 重新运行安装脚本。程序目录、数据和配置都保持不变。
+
+### 从自带运行时的 Linux 安装包迁移
+
+从 0.9.4 起，原生安装包取代了 `foxwarm-linux-x64-self-contained.tar.gz`。使用自带运行时安装包的安装不能用 `foxwarmctl update` 自行更新，请在当初安装时所在的目录重新运行安装脚本：
+
+```bash
+curl -fsSL https://foxwarm.net/install-foxwarm.sh | bash
+```
+
+如果安装时用了 `--dir`，请传入相同的 `--dir`。安装脚本会下载原生安装包，在旧版本继续运行时用它检查数据，然后切换并重启 Foxwarm。之后的 `foxwarmctl update` 会继续使用原生安装包。
+
 ## macOS（Apple Silicon）
 
 需要 **macOS 15 或更新版本**，与 [.NET 10 支持范围](https://github.com/dotnet/core/blob/main/release-notes/10.0/supported-os.md)一致。不支持 Intel Mac，也不提供 macOS 桌面版。
@@ -76,7 +88,7 @@ curl -fsSL https://foxwarm.net/install-foxwarm.sh | bash -s -- \
 curl -fsSL https://foxwarm.net/install-foxwarm.sh | bash
 ```
 
-目录、版本和安装包参数与 Linux 相同。安装脚本会自动选择依赖已安装运行时或自带运行时的 arm64 安装包，不需要通过 Homebrew 安装 ICU 或 OpenSSL。需要可连接的控制台时可安装 tmux；没有 tmux 时，Foxwarm 会在后台启动并写入文件日志。
+目录和版本参数与 Linux 相同。安装脚本会自动选择依赖已安装运行时或自带运行时的 arm64 安装包（macOS 暂无原生安装包），不需要通过 Homebrew 安装 ICU 或 OpenSSL。需要可连接的控制台时可安装 tmux；没有 tmux 时，Foxwarm 会在后台启动并写入文件日志。
 
 安装包已在 Apple Silicon 的 macOS 15 上测试。语义历史检索和浏览器工具已包含在内，但尚未在 macOS 上验证。
 
@@ -137,13 +149,13 @@ http://localhost:3001/#token=...
 
 在 Linux 和 macOS 上，安装了 tmux 时会在 tmux 会话 `foxwarm` 中启动（可用 `FOXWARM_TMUX_SESSION` 改名）；按 <kbd>Ctrl</kbd>+<kbd>b</kbd> 再按 <kbd>d</kbd> 可以退出而不停止。没有 tmux 时会自动在后台启动，关闭终端或 SSH 连接后继续运行。此时 `attach` 会显示数据目录下 `state/logs/foxwarm.stdout.log` 和 `foxwarm.stderr.log` 的路径。`status` 会报告 PID 和启动方式。两种方式都会在程序目录写入 `foxwarm.pid`，过期的 PID 文件会被忽略。停止时最多等待 60 秒让正在进行的工作结束，之后结束进程。
 
-`update` 会在旧版本继续运行时下载并检查新版本，然后停止 Foxwarm、切换到新版本、如果之前在运行就重新启动，并删除旧版本。`update 0.9.1` 安装指定版本。对已有安装重新运行安装脚本效果相同。升级重要数据前请阅读[数据、更新与备份](/zh/docs/data-upgrades-backups/)。
+`update` 会在旧版本继续运行时下载并检查新版本，然后停止 Foxwarm、切换到新版本、如果之前在运行就重新启动，并删除旧版本。`update 0.9.1` 安装指定版本。`update` 不改变已安装的安装包类型。对已有安装重新运行安装脚本效果相同，还可以切换安装包类型（见 [Linux](#linux-x64-或-x64-wsl)）。升级重要数据前请阅读[数据、更新与备份](/zh/docs/data-upgrades-backups/)。
 
 日志在数据目录的 `state/logs/` 下。
 
 ## Docker
 
-镜像内含 ASP.NET Core 运行时、Node.js 和 Chromium：
+镜像运行 Foxwarm 的原生 Linux 版本，不含 .NET 运行时，并包含 Node.js 和 Chromium：
 
 ```bash
 mkdir -p foxwarm-data && sudo chown 1000:1000 foxwarm-data
