@@ -10,7 +10,7 @@ The observable source/adoption choices and refresh rationale are owned by [worki
 
 ### D-memory-request-prefix-stability
 
-**Governing constraint; directly requested.** Preserve reusable leading prompt content across related requests. The snapshot, planner-prefix and tool-declaration designs below serve this goal; matching their current implementations is not a reason to introduce new prefix variation. The constraint concerns local request construction, not a promise about a provider's cache accounting.
+**Derived design; serves the governing goal [D-request-prefix-stability](../overview.md#d-request-prefix-stability).** Preserve reusable leading prompt content across related requests. The snapshot, planner-prefix and tool-declaration designs below serve this goal; matching their current implementations is not a reason to introduce new prefix variation. The constraint concerns local request construction, not a promise about a provider's cache accounting.
 
 [2026-10-27] Keep memory-backed leading instructions stable so ordinary and dedicated compaction requests can share a prefix extending into older history. With unchanged base instructions and a matching concrete memory snapshot, ordinary, compact, and detached BTW requests compose the same base instructions plus snapshot bytes. Node selection, working directory, and connection status must not inject request-time text into this prefix or become snapshot inputs. Model-identity changes and the lifecycle refreshes below retain their existing effects.
 
