@@ -154,6 +154,14 @@ async function palette(frame, command) {
   }
   await page.keyboard.press('Enter')
 }
+// Root commands end by focusing their revealed root in Explorer. The root becomes
+// visible earlier, so input sent before this point races the command's own focus.
+function explorerFocusedOn(frame, label) {
+  return frame.waitForFunction(label => {
+    const list = document.activeElement
+    return !!list?.closest('.explorer-folders-view') && [...list.querySelectorAll('.monaco-list-row.focused')].some(row => row.textContent.includes(label))
+  }, {}, label)
+}
 async function codeFrame(page, nodeId = 'master') {
   return until(() => page.frames().find(frame => { const url = new URL(frame.url() || 'about:blank'); return url.pathname.endsWith('/vscode-web/') && url.searchParams.get('nodeId') === nodeId && frame.parentFrame() === page.mainFrame() }), 'actual Code iframe', 30000)
 }
@@ -263,10 +271,11 @@ try {
   stage('persistent workspace root commands')
   await palette(code, 'Foxwarm: Open Foxwarm data folder')
   await until(() => workspaceHas(owned.data), 'data workspace command')
-  code = await codeFrame(page); await code.waitForFunction(() => document.body.innerText.includes('Foxwarm Data'))
+  code = await codeFrame(page); await explorerFocusedOn(code, 'Foxwarm Data')
   await palette(code, 'Foxwarm: Open Foxwarm app folder')
   const roots = (await owned.api('GET', '/api/vscode-web/fs/workspace-roots')).body
   await until(() => workspaceHas(roots.roots.app.path), 'app workspace command')
+  await explorerFocusedOn(code, 'Foxwarm App')
   assert.equal(await page.evaluate(() => document.querySelector('iframe[src*="vscode-web"]').dataset.codeProof), 'same-frame')
   stage('commit details and immutable diffs')
   // Clicking the real marker is the commit bridge producer, not a direct test-only command.

@@ -1281,7 +1281,6 @@ async function addFoxwarmFolder(request, name) {
   return { status: covering ? "existing" : "added", uri: uri.toString(true) };
 }
 async function revealWorkspaceRoot(uri) {
-  await vscode3.commands.executeCommand("workbench.view.explorer");
   await vscode3.commands.executeCommand("revealInExplorer", uri);
 }
 async function openManagedWorkspaceRoot(kind, provider) {

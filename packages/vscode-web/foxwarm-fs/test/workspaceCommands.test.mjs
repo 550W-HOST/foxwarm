@@ -121,6 +121,7 @@ extension.activate({
 });
 
 test('app/data commands add master roots, reveal, and deduplicate repeats', async () => {
+  const executedBefore = executed.length;
   const appResult = await commands.get('foxwarm-fs.openAppFolder')();
   assert.deepEqual(appResult, { status: 'added', uri: 'foxwarm://node+master/srv/foxwarm' });
   assert.equal(workspaceFolders[0].uri.authority, 'node+master');
@@ -128,7 +129,7 @@ test('app/data commands add master roots, reveal, and deduplicate repeats', asyn
     name: 'Foxwarm App',
     uri: 'foxwarm://node+master/srv/foxwarm',
   });
-  assert.deepEqual(executed.slice(-2).map((entry) => entry.id), ['workbench.view.explorer', 'revealInExplorer']);
+  assert.deepEqual(executed.slice(executedBefore).map((entry) => entry.id), ['revealInExplorer']);
   assert.equal(executed.at(-1).args[0].toString(), 'foxwarm://node+master/srv/foxwarm');
   assert.equal(fetches.at(-1).init.credentials, 'include');
 
@@ -335,7 +336,7 @@ test('explicit file display waits for remembered editor restoration and never re
     assert.deepEqual(calls, ['foxwarm-webui.waitForEditorRestore']);
     restored.resolve();
     assert.equal((await pending).status, 'opened');
-    assert.deepEqual(calls, ['foxwarm-webui.waitForEditorRestore', 'show', 'workbench.view.explorer', 'revealInExplorer']);
+    assert.deepEqual(calls, ['foxwarm-webui.waitForEditorRestore', 'show', 'revealInExplorer']);
 
     calls.length = 0;
     const failure = new Error('editor rejected the input');

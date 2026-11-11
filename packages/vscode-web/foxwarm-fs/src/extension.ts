@@ -115,8 +115,9 @@ async function addFoxwarmFolder(request: FoxwarmOpenRequest, name?: string): Pro
   return { status: covering ? 'existing' : 'added', uri: uri.toString(true) };
 }
 
+// Code's reveal opens Explorer and focuses the revealed item itself. Opening the
+// view first would add a focus transfer and a round trip before that final focus.
 async function revealWorkspaceRoot(uri: vscode.Uri): Promise<void> {
-  await vscode.commands.executeCommand('workbench.view.explorer');
   await vscode.commands.executeCommand('revealInExplorer', uri);
 }
 
