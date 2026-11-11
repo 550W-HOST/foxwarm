@@ -41,12 +41,12 @@ internal static class ObservationToolDefinitions
         [
             Definition(
                 "session",
-                "Inspect session status, list sessions in the current Agent by default, or change a session's display name or parent. Status includes the current Node and working directory, model and effort settings, context usage, and recent children.",
+                "Inspect Session status, list Sessions (the current Agent's by default), or change a Session's display name or parent. Status includes the current Node and working directory, model and effort settings, context usage and recent children. The list shows your own Session and the Sessions your tool policy may let you use.",
                 new JsonObject
                 {
                     ["action"] = Field(
                         "string",
-                        "status (default) inspects a session; list returns a page of sessions; update-display-name sets or clears its display name; update-parent changes or removes its parent.",
+                        "status (default) inspects a Session; list returns a page of Sessions; update-display-name sets or clears its display name; update-parent changes or removes its parent.",
                         "status",
                         "list",
                         "update-display-name",
@@ -58,21 +58,21 @@ internal static class ObservationToolDefinitions
                     ),
                     ["count"] = Field(
                         "number",
-                        "Number of sessions to return for list. Defaults to 20."
+                        "Number of Sessions to return for list. Defaults to 20."
                     ),
                     ["scope"] = Field(
                         "string",
-                        "Scope for list. Defaults to current-agent; use all to include sessions from other Agents.",
+                        "Scope for list. Defaults to current-agent; use all to include Sessions from other Agents.",
                         "current-agent",
                         "all"
                     ),
                     ["query"] = Field(
                         "string",
-                        "Keyword for list. Keeps sessions whose ID, alias, display name, Agent, Node, working directory or model contains this text, ignoring case. Applied before start and count."
+                        "Keyword for list. Keeps Sessions whose ID, alias, display name, Agent, Node, working directory or model contains this text, ignoring case. Applied before start and count."
                     ),
                     ["sessionId"] = Field(
                         "string",
-                        "Target for status, update-display-name, or update-parent. Defaults to this session."
+                        "Target for status, update-display-name, or update-parent. Defaults to this Session."
                     ),
                     ["name"] = Field(
                         "string",

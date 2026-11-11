@@ -38,7 +38,7 @@ internal sealed partial class SessionToolExecutor
         if (!malformed && !args.ContainsKey("inContext"))
             return UnsupportedTurnToolExecutor.ToolError(
                 "unknown_tool",
-                "submit_compact_plan is available only to the dedicated compactor."
+                "submit_compact_plan can be used only in a compaction request, or as the in-context-compaction skill describes."
             );
         if (
             !malformed
@@ -48,7 +48,7 @@ internal sealed partial class SessionToolExecutor
         )
             return UnsupportedTurnToolExecutor.ToolError(
                 "unknown_tool",
-                "submit_compact_plan is available only to the dedicated compactor."
+                "submit_compact_plan can be used only in a compaction request, or as the in-context-compaction skill describes."
             );
         if (
             unattended

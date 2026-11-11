@@ -112,15 +112,10 @@ internal sealed partial class SessionManager
         JsonObject args
     )
     {
-        var targetAgent = SessionGoal.Trim(SessionWait.Text(args["agentName"]) ?? "");
         var targetId = SessionGoal.Trim(SessionWait.Text(args["sessionId"]) ?? "");
         var scope = SessionWait.Text(args["scope"]) ?? "current-agent";
-        if (scope is not ("all" or "current-session" or "current-agent"))
-            throw new InvalidDataException("scope must be all, current-session, or current-agent.");
-        if (targetAgent.Length > 0 && targetAgent != source.Agent)
-            throw new InvalidDataException(
-                "recall vector_query cannot access memories outside the current agent."
-            );
+        if (scope is not ("current-session" or "current-agent"))
+            throw new InvalidDataException("scope must be current-session or current-agent.");
         string? canonical = null;
         if (targetId.Length > 0)
         {

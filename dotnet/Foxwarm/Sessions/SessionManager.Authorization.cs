@@ -617,8 +617,7 @@ internal sealed partial class SessionManager
 
     internal JsonArray ModelDefinitions(
         SessionOwner owner,
-        JsonArray? explicitOverride = null,
-        bool batchControls = true
+        JsonArray? explicitOverride = null
     )
     {
         if (explicitOverride is not null)
@@ -644,17 +643,16 @@ internal sealed partial class SessionManager
                 )
                 .OrderBy(entry => entry.Source == "node")
                 .Select(entry =>
-                    (JsonNode?)ToolCallControls.ForModel(entry.Definition, batchControls)
+                    (JsonNode?)ToolCallControls.ForModel(entry.Definition)
                 )
                 .ToArray()
         );
     }
 
     // The external runtime receives the same visible model tool set as an internal Session.
-    // Each MCP request is one call, so response-wide batch controls are omitted.
     internal JsonArray RuntimeModelDefinitions(SessionOwner owner) =>
         new(
-            ModelDefinitions(owner, batchControls: false)
+            ModelDefinitions(owner)
                 .OfType<JsonObject>()
                 .Select(definition => (JsonNode)ClaudeRuntimeToolSupport.Project(definition))
                 .ToArray()

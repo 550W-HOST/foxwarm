@@ -7,26 +7,12 @@ internal static class ToolCallControls
 {
     private static readonly string[] Names = ["__cancelTool", "__cancelAllToolsThisTurn"];
 
-    internal static JsonObject ForModel(JsonObject definition, bool batchControls = true)
+    // The controls are accepted on every call but deliberately not declared: the framework prompt
+    // describes them once instead of repeating them in each of the tool schemas.
+    internal static JsonObject ForModel(JsonObject definition)
     {
         var copy = (JsonObject)definition.DeepClone();
         copy.Remove("defaultInject");
-        if (!batchControls || SessionWait.Text(copy["name"]) == "submit_compact_plan")
-            return copy;
-        var properties = copy["parameters"]!["properties"]!.AsObject();
-        properties[Names[0]] = new JsonObject
-        {
-            ["type"] = "boolean",
-            ["enum"] = new JsonArray(true),
-            ["description"] = "Set true to cancel this tool call before it runs.",
-        };
-        properties[Names[1]] = new JsonObject
-        {
-            ["type"] = "boolean",
-            ["enum"] = new JsonArray(true),
-            ["description"] =
-                "Set true to cancel every tool call in this model response before any of them runs.",
-        };
         return copy;
     }
 

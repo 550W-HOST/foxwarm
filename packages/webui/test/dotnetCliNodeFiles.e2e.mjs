@@ -98,7 +98,8 @@ for (const runtime of ['source', 'dotnet']) {
       call('to-node', 'copy_between_nodes', { sourceNode: 'master', sourcePath: 'source.bin', targetNode: 'native-files', targetPath: 'transfer.bin' }),
       call('to-main', 'copy_between_nodes', { sourceNode: 'native-files', sourcePath: 'transfer.bin', targetNode: 'master', targetPath: 'returned.bin' }),
     ]])
-    good(state, 'to-node'); good(state, 'to-main'); assert.deepEqual(await readFile(join(agent, 'transfer.bin')), binary); assert.deepEqual(await readFile(join(mainRoot, 'returned.bin')), binary)
+    good(state, 'to-node'); good(state, 'to-main'); // The retained TypeScript Main still resolves relative transfer paths against the Agent directory; the C# Main uses the Session cwd on the current Node.
+    assert.deepEqual(await readFile(join(runtime === 'source' ? agent : cwd, 'transfer.bin')), binary); assert.deepEqual(await readFile(join(mainRoot, 'returned.bin')), binary)
     state = await turn(id, 'programmatic', [[call('programmatic', 'run_script', { code: "r = call_tool('read', {'filePath': 'nested/data.txt'})\nreturn {'content': r['content'], 'truncated': r['truncated'], 'selectedBytes': r['selectedBytes']}" })]])
     assert.deepEqual(good(state, 'programmatic').result, { content: 'FIRST\r\nSECOND\r\nlast', truncated: false, selectedBytes: 19 })
     const png = await sharp({ create: { width: 3, height: 2, channels: 4, background: { r: 120, g: 25, b: 90, alpha: 1 } } }).png().toBuffer()

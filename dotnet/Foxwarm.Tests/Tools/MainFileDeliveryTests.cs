@@ -149,7 +149,6 @@ public sealed class MainFileDeliveryTests
         );
         var args = Args(" \t$fw_agentdir/ordinary.txt\n");
         args["caption"] = " first ";
-        args["text"] = "other";
         var result = await f.Call("send_file", args);
         Assert.Null(Error(result));
         Assert.Equal(path, SessionWait.Text(result["fullPath"]));
@@ -167,6 +166,10 @@ public sealed class MainFileDeliveryTests
         Assert.Equal(1, callbacks);
         Assert.Equal(history, f.Owner.History().Select(row => row.ToJsonString()));
         Assert.Empty(f.Owner.Entry.Snapshot().Queue);
+        var removed = Args(path);
+        removed["text"] = "retired caption alias";
+        Assert.NotNull(Error(await f.Call("send_file", removed)));
+        Assert.Equal(1, callbacks);
         Assert.NotNull(Error(await f.Call("send_file", Args(f.Work))));
         f.Manager.RegisterWebUiFileDelivery(null);
         Assert.NotNull(Error(await f.Call("send_file", Args(path))));
@@ -291,11 +294,10 @@ public sealed class MainFileDeliveryTests
             item =>
             {
                 var properties = item["parameters"]!["properties"]!.AsObject();
-                Assert.Equal(
-                    new[] { "__cancelTool", "__cancelAllToolsThisTurn" },
-                    properties.Select(pair => pair.Key).TakeLast(2)
-                );
+                Assert.False(properties.ContainsKey("__cancelTool"));
+                Assert.False(properties.ContainsKey("__cancelAllToolsThisTurn"));
                 Assert.False(properties.ContainsKey("confirmation"));
+                Assert.False(properties.ContainsKey("text"));
             }
         );
     }

@@ -323,10 +323,8 @@ public sealed class MainTimerToolsTests
         {
             var model = ToolCallControls.ForModel(definition);
             var properties = model["parameters"]!["properties"]!.AsObject();
-            Assert.Equal(
-                new[] { "__cancelTool", "__cancelAllToolsThisTurn" },
-                properties.Select(pair => pair.Key).TakeLast(2)
-            );
+            Assert.False(properties.ContainsKey("__cancelTool"));
+            Assert.False(properties.ContainsKey("__cancelAllToolsThisTurn"));
             Assert.DoesNotContain(
                 new[]
                 {

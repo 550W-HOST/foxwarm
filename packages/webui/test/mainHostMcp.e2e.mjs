@@ -87,8 +87,8 @@ try {
       assert(!body.tools.some(tool => tool.name === 'mcp_config' || tool.name === 'list_mcp_servers' || tool.name === 'echo_effect'))
       for (const tool of body.tools) {
         const fields = tool.parameters.properties
-        if (tool.name === 'submit_compact_plan') assert.equal(fields.__cancelTool, undefined)
-        else { assert.deepEqual(fields.__cancelTool.enum, [true]); assert.equal(Object.keys(fields).at(-1), '__cancelAllToolsThisTurn') }
+        // The cancellation controls are accepted on every call but declared in no schema.
+        assert.equal(fields.__cancelTool, undefined, tool.name); assert.equal(fields.__cancelAllToolsThisTurn, undefined, tool.name)
       }
       for (const call of body.input.filter(item => item.type === 'function_call')) assert(body.input.some(item => item.type === 'function_call_output' && item.call_id === call.call_id), call.call_id + ' historical provider pairing')
       const inputs = body.input.filter(item => item.type === 'message' && item.role === 'user').flatMap(item => item.content || []).map(part => part.text || '')

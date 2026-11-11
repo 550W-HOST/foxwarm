@@ -29,10 +29,6 @@ public sealed partial class ProviderFileConsumerTests
             var serialized = f.Manager.ModelDefinitions(f.Owner).ToJsonString();
             canonical ??= serialized;
             Assert.Equal(canonical, serialized);
-            Assert.Equal(
-                canonical,
-                f.Manager.ModelDefinitions(f.Owner, batchControls: true).ToJsonString()
-            );
             var declared = DeclaredNames(serialized);
             foreach (var name in DeliveryTools)
                 Assert.Equal(expected.Contains(name), declared.Contains(name));

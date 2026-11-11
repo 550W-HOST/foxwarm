@@ -35,7 +35,7 @@ internal sealed partial class SessionManager
     {
         ToolRegistry.Keys(
             args,
-            ["channelTargetId", "sessionId", "filePath", "node", "caption", "text"]
+            ["channelTargetId", "sessionId", "filePath", "node", "caption"]
         );
         var node = ToolRegistry.TargetNode(
             ToolRegistry.Text(args, "node"),
@@ -56,8 +56,6 @@ internal sealed partial class SessionManager
                 "At most one of sessionId or channelTargetId may be specified."
             );
         var caption = SessionGoal.Trim(ToolRegistry.Text(args, "caption") ?? "");
-        if (caption.Length == 0)
-            caption = SessionGoal.Trim(ToolRegistry.Text(args, "text") ?? "");
         token.ThrowIfCancellationRequested();
         using var admission = BeginOwnerMutation(owner);
         var bindings = deletionChannels.ReadForDelivery()["channels"]!.AsObject();

@@ -48,15 +48,10 @@ internal static class ArchiveRecallTool
                       "scope": {
                         "type": "string",
                         "enum": [
-                          "all",
                           "current-session",
                           "current-agent"
                         ],
-                        "description": "Scope for semantic search. Searches stay within this agent."
-                      },
-                      "agentName": {
-                        "type": "string",
-                        "description": "Agent for semantic search. Only this session's agent is supported."
+                        "description": "Scope for semantic search: this Session, or every Session of this Agent (default)."
                       },
                       "previewLength": {
                         "type": "number",
@@ -233,7 +228,6 @@ internal static class ArchiveRecallTool
                 "startTime",
                 "endTime",
                 "scope",
-                "agentName",
                 "preferBlocks",
                 "previewLength",
                 "contentFilter",

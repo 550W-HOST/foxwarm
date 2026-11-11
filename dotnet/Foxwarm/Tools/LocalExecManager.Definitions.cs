@@ -33,7 +33,7 @@ internal sealed partial class LocalExecManager
                         {
                             ["type"] = "string",
                             ["description"] =
-                                "Working directory for this command. Relative paths use the session working directory, or the Node's default directory if unset. When omitted, execution uses that same default chain; on master, the final default is the agent directory. On master and CLI Nodes, a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected.",
+                                "Working directory for this command; when omitted, the Session working directory, or the Node's default directory when none is set (the Agent directory on master and CLI Nodes). On master and CLI Nodes, a relative path is resolved against that same directory, and a leading $fw_agentdir or $fw_tmp is accepted (other leading $ names are rejected). Other Nodes resolve a relative path against their own default directory.",
                         },
                         ["secretEnv"] = new JsonObject
                         {

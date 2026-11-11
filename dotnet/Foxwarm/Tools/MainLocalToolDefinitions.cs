@@ -35,12 +35,12 @@ internal static class MainLocalToolDefinitions
         [
             Tool(
                 "read_memory",
-                "Read a file in this agent's memory directory on master. Use memory-relative paths such as MEMORY.md or notes/project.md.",
+                "Read a file in this Agent's memory directory on master. Use memory-relative paths such as MEMORY.md or notes/project.md.",
                 Parameters(
                     new JsonObject
                     {
                         ["filePath"] = String(
-                            "Path relative to this agent's memory directory, without a memory/ prefix."
+                            "Path relative to this Agent's memory directory, without a memory/ prefix."
                         ),
                         ["startLine"] = Number(
                             "First line to read, counting from 1. Omit or use 0 to start at the beginning."
@@ -54,12 +54,12 @@ internal static class MainLocalToolDefinitions
             ),
             Tool(
                 "write_memory",
-                "Create a file in this agent's memory directory on master. Existing files are not overwritten; use edit_memory to modify one. Top-level .md files in this directory are part of the system prompt of every Session of this agent and of agents that inherit it.",
+                "Create a file in this Agent's memory directory on master. Existing files are not overwritten; use edit_memory to modify one. Top-level .md files in this directory are part of the system prompt of every Session of this Agent and of Agents that inherit it.",
                 Parameters(
                     new JsonObject
                     {
                         ["filePath"] = String(
-                            "Path relative to this agent's memory directory, without a memory/ prefix."
+                            "Path relative to this Agent's memory directory, without a memory/ prefix."
                         ),
                         ["content"] = String("Complete file contents."),
                     },
@@ -69,12 +69,12 @@ internal static class MainLocalToolDefinitions
             ),
             Tool(
                 "edit_memory",
-                "Replace one exact occurrence of text in a file in this agent's memory directory on master. Top-level .md files in this directory are part of the system prompt of every Session of this agent and of agents that inherit it.",
+                "Replace one exact occurrence of text in a file in this Agent's memory directory on master. Top-level .md files in this directory are part of the system prompt of every Session of this Agent and of Agents that inherit it.",
                 Parameters(
                     new JsonObject
                     {
                         ["filePath"] = String(
-                            "Path relative to this agent's memory directory, without a memory/ prefix."
+                            "Path relative to this Agent's memory directory, without a memory/ prefix."
                         ),
                         ["oldText"] = String(
                             "Exact text to replace; it must identify a single occurrence."
@@ -88,12 +88,12 @@ internal static class MainLocalToolDefinitions
             ),
             Tool(
                 "delete_memory",
-                "Delete one file from this agent's memory directory on master.",
+                "Delete one file from this Agent's memory directory on master.",
                 Parameters(
                     new JsonObject
                     {
                         ["filePath"] = String(
-                            "Path relative to this agent's memory directory, without a memory/ prefix."
+                            "Path relative to this Agent's memory directory, without a memory/ prefix."
                         ),
                     },
                     "filePath"
@@ -101,7 +101,7 @@ internal static class MainLocalToolDefinitions
             ),
             Tool(
                 "apply_patch_memory",
-                "Add, modify, or delete files in this agent's memory directory on master using the apply_patch format. Paths in patch headers are relative to the memory directory; a memory/ prefix is also accepted. Top-level .md files in this directory are part of the system prompt of every Session of this agent and of agents that inherit it.",
+                "Add, modify, or delete files in this Agent's memory directory on master using the apply_patch format. Paths in patch headers are relative to the memory directory; a memory/ prefix is also accepted. Top-level .md files in this directory are part of the system prompt of every Session of this Agent and of Agents that inherit it.",
                 Parameters(
                     new JsonObject
                     {
@@ -112,11 +112,11 @@ internal static class MainLocalToolDefinitions
             ),
             Tool(
                 "image_crop",
-                "Crop an image from this session, including a generated image or one returned by a tool. Returns a new visible image/reference, which can be cropped, saved, or delivered again. GIF input uses its first frame and returns a PNG, without animation. Coordinates and dimensions refer to the original image, before resizing for model input.",
+                "Crop an image from this Session, including a generated image or one returned by a tool. Returns a new visible image/reference, which can be cropped, saved, or delivered again. GIF input uses its first frame and returns a PNG, without animation. Coordinates and dimensions refer to the original image, before resizing for model input.",
                 Parameters(
                     new JsonObject
                     {
-                        ["id"] = String("Image ID shown in this session."),
+                        ["id"] = String("Image ID shown in this Session."),
                         ["x"] = Number("Left edge of the crop, in pixels."),
                         ["y"] = Number("Top edge of the crop, in pixels."),
                         ["width"] = Number("Crop width in pixels."),
@@ -131,7 +131,7 @@ internal static class MainLocalToolDefinitions
             ),
             Tool(
                 "list_agents",
-                "List the agents and their current session counts, memory metadata, inheritance, and rule summary without hydrating every Session.",
+                "List Agents with their Session counts, memory metadata, inheritance and rule summary. The list shows your own Agent and the Agents your tool policy may let you use.",
                 Parameters(new JsonObject())
             ),
         ];
