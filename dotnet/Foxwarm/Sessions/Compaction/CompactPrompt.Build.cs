@@ -138,6 +138,7 @@ internal static partial class CompactPrompt
             "",
             "Summary writing guidance:",
             "Write each summary as a continuation brief, not a narrative. Keep the goal and current state, decisions and their reasons, constraints and user preferences, open items and commitments, and the identifiers needed to find details later: Task IDs, files, commits, Session IDs and msg# ranges.",
+            "Write each summary in the main language of its sources, as memory facts already do; keep code, identifiers and technical terms as they are.",
             "When a fact is already recorded in Agent memory, a Task, the Code Index, a document or a commit, write one line saying where it is instead of restating it.",
             "A new level-1 block is the most detailed: keep the working state of this stretch, including procedures still in progress, error signatures and exact values the next turns may need.",
             "When merging blocks, consolidate rather than concatenate. Drop finished procedures and step-by-step debugging first, then superseded decisions; keep outcomes, usually one line per finished thread. Carry forward every item that was still open at the end of the sources, with its Task ID or other locator, unless a later source shows it finished. Keep user decisions together with their msg# reference.",
