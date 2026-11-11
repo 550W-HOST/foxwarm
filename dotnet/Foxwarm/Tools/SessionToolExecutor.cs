@@ -1293,7 +1293,13 @@ internal sealed partial class SessionToolExecutor(
             handlers[name] = (owner, args, token) =>
                 owner.Manager.ExecuteTimerToolAsync(owner.Hosted, name, args, token);
         handlers["copy_between_nodes"] = (owner, args, token) =>
-            owner.Manager.CopyBetweenNodesAsync(owner.Hosted, args, token);
+            owner.Manager.CopyBetweenNodesAsync(
+                owner.Hosted,
+                args,
+                token,
+                owner.ExecutionNode,
+                owner.ExecutionCwd
+            );
         handlers["cancel_transfer"] = (owner, args, token) =>
             owner.Manager.CancelCopyTransferAsync(owner.Hosted, args, token);
         handlers["send_file"] = (owner, args, token) =>
@@ -1303,7 +1309,8 @@ internal sealed partial class SessionToolExecutor(
                     ?? throw new NotSupportedException("This executor has no file resolver."),
                 args,
                 token,
-                owner.ExecutionNode
+                owner.ExecutionNode,
+                owner.ExecutionCwd
             );
         handlers["image_write_to_file"] = (owner, args, token) =>
             owner.Manager.ExportImageAsync(
@@ -1312,7 +1319,8 @@ internal sealed partial class SessionToolExecutor(
                     ?? throw new NotSupportedException("This executor has no file resolver."),
                 args,
                 token,
-                owner.ExecutionNode
+                owner.ExecutionNode,
+                owner.ExecutionCwd
             );
         handlers["image_crop"] = (owner, args, token) =>
             owner.Manager.CropImageAsync(owner.Hosted, args, token);

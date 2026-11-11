@@ -217,7 +217,7 @@ internal sealed partial class SessionManager
             );
         var paths =
             resolved.Source == "builtin" && resolved.Name == "copy_between_nodes"
-                ? CopyAuthorizationPaths(owner, resolved.Args)
+                ? CopyAuthorizationPaths(owner, resolved.Args, files)
             : remote ? RemoteAuthorizationPaths(resolved)
             : resolved.Source == "builtin"
             && resolved.Name == "artifact"

@@ -9,12 +9,15 @@ internal sealed partial class SessionManager
     private WorkspaceTools AgentFileWorkspace(SessionOwner owner) =>
         new(AgentDirectory(owner.Agent));
 
+    // Master endpoints resolve like the invocation's own file tools: the Session working directory
+    // when master is the current Node, otherwise the Agent directory.
     private IReadOnlyList<AuthorizationPath> CopyAuthorizationPaths(
         SessionOwner owner,
-        JsonObject args
+        JsonObject args,
+        WorkspaceTools? invocationFiles
     )
     {
-        var files = AgentFileWorkspace(owner);
+        var files = invocationFiles ?? AgentFileWorkspace(owner);
         var paths = new List<AuthorizationPath>();
         foreach (var endpoint in new[] { "source", "target" })
         {
@@ -61,11 +64,12 @@ internal sealed partial class SessionManager
         string node,
         string raw,
         WorkspaceTools files,
-        CancellationToken token
+        CancellationToken token,
+        string? sessionCwd = null
     )
     {
         if (node != "master")
-            return await NodeProviders.OpenReadAsync(node, raw, owner, false, token);
+            return await NodeProviders.OpenReadAsync(node, raw, owner, false, token, sessionCwd);
         var path = files.Paths.FilePath(raw);
         if (!WorkspaceTools.RegularFile(path))
             throw new InvalidDataException("Not a regular file: " + raw);
@@ -94,7 +98,8 @@ internal sealed partial class SessionManager
         bool overwrite,
         WorkspaceTools files,
         CancellationToken token,
-        Action<long>? progress = null
+        Action<long>? progress = null,
+        string? sessionCwd = null
     )
     {
         if (node != "master")
@@ -107,7 +112,8 @@ internal sealed partial class SessionManager
                 owner,
                 false,
                 token,
-                progress
+                progress,
+                sessionCwd
             );
         var path = files.Paths.FilePath(raw);
         if (
@@ -188,7 +194,8 @@ internal sealed partial class SessionManager
         byte[] bytes,
         bool overwrite,
         WorkspaceTools files,
-        CancellationToken token
+        CancellationToken token,
+        string? sessionCwd = null
     )
     {
         if (node != "master")
@@ -200,7 +207,8 @@ internal sealed partial class SessionManager
                 overwrite,
                 owner,
                 false,
-                token
+                token,
+                sessionCwd
             );
             return SessionWait.Text(result["absolutePath"])
                 ?? SessionWait.Text(result["filePath"])

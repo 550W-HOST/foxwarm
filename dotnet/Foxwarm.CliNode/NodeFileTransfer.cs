@@ -6,9 +6,14 @@ namespace Foxwarm.CliNode;
 
 internal sealed class NodeFileTransfer(NodePaths paths)
 {
-    internal async Task<JsonObject> Read(string raw, string agent, bool restrict)
+    internal async Task<JsonObject> Read(
+        string raw,
+        string agent,
+        bool restrict,
+        string? sessionCwd = null
+    )
     {
-        var path = paths.Transfer(raw, agent, restrict);
+        var path = paths.Transfer(raw, agent, restrict, sessionCwd);
         if (NativeFileKind.Read(path) != "file")
             throw new InvalidDataException("Not a file: " + raw);
         var bytes = await File.ReadAllBytesAsync(path);
@@ -31,10 +36,11 @@ internal sealed class NodeFileTransfer(NodePaths paths)
         string agent,
         string data,
         bool overwrite,
-        bool restrict
+        bool restrict,
+        string? sessionCwd = null
     )
     {
-        var path = paths.Transfer(raw, agent, restrict);
+        var path = paths.Transfer(raw, agent, restrict, sessionCwd);
         var existed = NodeFileTools.Exists(path);
         var existsMessage = $"File already exists: {raw}. Use overwrite=true to replace it.";
         if (existed && !overwrite)

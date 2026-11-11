@@ -29,7 +29,8 @@ internal sealed partial class SessionManager
         WorkspaceTools files,
         JsonObject args,
         CancellationToken token,
-        string? selectedNode = null
+        string? selectedNode = null,
+        string? selectedCwd = null
     )
     {
         ToolRegistry.Keys(
@@ -43,6 +44,11 @@ internal sealed partial class SessionManager
         var raw = SessionGoal.Trim(ToolRegistry.Text(args, "filePath") ?? "");
         if (raw.Length == 0)
             throw new InvalidDataException("send_file requires filePath.");
+        var currentNode = selectedNode ?? CurrentNode(owner);
+        var sessionCwd =
+            node != currentNode ? null
+            : selectedNode is null ? ExecutionPlacement(owner).Cwd
+            : selectedCwd;
         var requested = SessionGoal.Trim(ToolRegistry.Text(args, "sessionId") ?? "");
         var direct = SessionGoal.Trim(ToolRegistry.Text(args, "channelTargetId") ?? "");
         if (requested.Length > 0 && direct.Length > 0)
@@ -78,7 +84,14 @@ internal sealed partial class SessionManager
         }
         else
         {
-            await using var file = await OpenNodeReadAsync(owner, node, raw, files, token);
+            await using var file = await OpenNodeReadAsync(
+                owner,
+                node,
+                raw,
+                files,
+                token,
+                sessionCwd
+            );
             mimeType = file.MimeType;
             name = Foxwarm.Nodes.NodeConnectionHub.RemoteFileName(file.Name);
             if (string.IsNullOrWhiteSpace(name) || name is "." or "..")
@@ -248,14 +261,17 @@ internal sealed partial class SessionManager
         WorkspaceTools files,
         JsonObject args,
         CancellationToken token,
-        string? selectedNode = null
+        string? selectedNode = null,
+        string? selectedCwd = null
     )
     {
         ToolRegistry.Keys(args, ["id", "filePath", "overwrite", "node"]);
-        var node = ToolRegistry.TargetNode(
-            ToolRegistry.Text(args, "node"),
-            selectedNode ?? CurrentNode(owner)
-        );
+        var currentNode = selectedNode ?? CurrentNode(owner);
+        var node = ToolRegistry.TargetNode(ToolRegistry.Text(args, "node"), currentNode);
+        var sessionCwd =
+            node != currentNode ? null
+            : selectedNode is null ? ExecutionPlacement(owner).Cwd
+            : selectedCwd;
         var id = ToolRegistry.Text(args, "id");
         var raw = ToolRegistry.Text(args, "filePath");
         if (string.IsNullOrEmpty(id) || string.IsNullOrEmpty(raw))
@@ -300,7 +316,16 @@ internal sealed partial class SessionManager
             if (identity == owner.Id)
                 break;
         }
-        var path = await WriteNodeFileAsync(owner, node, raw, bytes, overwrite, files, token);
+        var path = await WriteNodeFileAsync(
+            owner,
+            node,
+            raw,
+            bytes,
+            overwrite,
+            files,
+            token,
+            sessionCwd
+        );
         try
         {
             await FileStageAsync(owner, "after-write");

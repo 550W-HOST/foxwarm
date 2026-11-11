@@ -16,7 +16,9 @@ internal sealed partial class SessionManager
         string targetPath,
         bool overwrite,
         ToolApprovalScope? approval,
-        CancellationToken shutdown
+        CancellationToken shutdown,
+        string currentNode,
+        string? currentCwd
     )
     {
         internal readonly string Id = "transfer_" + Guid.NewGuid().ToString("N");
@@ -26,6 +28,11 @@ internal sealed partial class SessionManager
         internal readonly string Target = target;
         internal readonly string TargetPath = targetPath;
         internal readonly bool Overwrite = overwrite;
+
+        // The invocation's Node and Session working directory. A relative path on this Node
+        // resolves against the working directory; on any other Node, against its default.
+        internal readonly string CurrentNode = currentNode;
+        internal readonly string? CurrentCwd = currentCwd;
 
         // The approved invocation's grant; the transfer task does not inherit the caller's flow.
         internal readonly ToolApprovalScope? Approval = approval;
@@ -54,7 +61,9 @@ internal sealed partial class SessionManager
     internal async Task<JsonObject> CopyBetweenNodesAsync(
         SessionOwner owner,
         JsonObject args,
-        CancellationToken token
+        CancellationToken token,
+        string? currentNode = null,
+        string? currentCwd = null
     )
     {
         ToolRegistry.Keys(
@@ -72,6 +81,9 @@ internal sealed partial class SessionManager
         var overwrite = OptionalBool(args, "overwrite") ?? false;
         var (seconds, warning) = ExecOutput.Timeout(args["timeout"]);
         token.ThrowIfCancellationRequested();
+        // The tool executor supplies the invocation's captured placement; a direct caller
+        // gets the Session's live one.
+        var live = ExecutionPlacement(owner);
         var transfer = new CopyTransfer(
             owner,
             source,
@@ -80,7 +92,9 @@ internal sealed partial class SessionManager
             targetPath,
             overwrite,
             ToolApprovalScope.Detach(owner),
-            admissionStop.Token
+            admissionStop.Token,
+            currentNode ?? live.Node,
+            currentNode is null ? live.Cwd : currentCwd
         );
         var copiedArgs = (JsonObject)args.DeepClone();
         lock (copyGate)
@@ -135,7 +149,14 @@ internal sealed partial class SessionManager
         {
             using (BeginOwnerMutation(owner))
             {
-                var files = AgentFileWorkspace(owner);
+                var files = IdentityWorkspace(
+                    owner,
+                    transfer.CurrentCwd,
+                    transfer.CurrentNode,
+                    useLiveCwd: false
+                );
+                string? CwdOn(string node) =>
+                    node == transfer.CurrentNode ? transfer.CurrentCwd : null;
                 await AuthorizeToolAsync(
                     owner,
                     new("copy_between_nodes", "builtin", "copy_between_nodes", args),
@@ -147,7 +168,8 @@ internal sealed partial class SessionManager
                     transfer.Source,
                     transfer.SourcePath,
                     files,
-                    token
+                    token,
+                    CwdOn(transfer.Source)
                 );
                 Interlocked.Exchange(ref transfer.Size, source.Length);
                 start = new TransferStartStream(source.Stream);
@@ -160,7 +182,8 @@ internal sealed partial class SessionManager
                     transfer.Overwrite,
                     files,
                     token,
-                    value => Interlocked.Exchange(ref transfer.Copied, value)
+                    value => Interlocked.Exchange(ref transfer.Copied, value),
+                    CwdOn(transfer.Target)
                 );
                 var first = await Task.WhenAny(start.Ready.Task, writing);
                 if (ReferenceEquals(first, writing))

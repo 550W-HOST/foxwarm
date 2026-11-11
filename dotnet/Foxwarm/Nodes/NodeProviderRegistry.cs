@@ -470,12 +470,21 @@ internal sealed partial class NodeProviderRegistry
         SessionOwner owner,
         bool ingress,
         CancellationToken token,
-        Action<long>? beforeMaterialize = null
+        Action<long>? beforeMaterialize = null,
+        string? sessionCwd = null
     )
     {
         if (!IsProviderNode(node))
-            return await native.ReadFileAsync(node, path, owner, ingress, token, beforeMaterialize);
-        var operations = await FileOperationsAsync(node, false, null, token);
+            return await native.ReadFileAsync(
+                node,
+                path,
+                owner,
+                ingress,
+                token,
+                beforeMaterialize,
+                sessionCwd
+            );
+        var operations = await FileOperationsAsync(node, false, sessionCwd, token);
         var bytes = await TargetFileContent.ReadAsync(
             operations,
             path,
@@ -533,13 +542,23 @@ internal sealed partial class NodeProviderRegistry
         bool overwrite,
         SessionOwner owner,
         bool ingress,
-        CancellationToken token
+        CancellationToken token,
+        string? sessionCwd = null
     )
     {
         if (!IsProviderNode(node))
-            return await native.WriteFileAsync(node, path, bytes, overwrite, owner, ingress, token);
+            return await native.WriteFileAsync(
+                node,
+                path,
+                bytes,
+                overwrite,
+                owner,
+                ingress,
+                token,
+                sessionCwd
+            );
         owner.Entry.RequireIdentityAuthority();
-        var operations = await FileOperationsAsync(node, true, null, token);
+        var operations = await FileOperationsAsync(node, true, sessionCwd, token);
         await TargetFileContent.WriteAsync(operations, path, bytes, overwrite, token);
         return new JsonObject { ["filePath"] = path, ["sizeBytes"] = bytes.Length };
     }
