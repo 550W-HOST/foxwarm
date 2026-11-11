@@ -84,8 +84,8 @@ To switch an existing installation to another package, rerun the installer with 
 
 Since 0.9.4 the native package replaces `foxwarm-linux-x64-self-contained.tar.gz`. An installation of the self-contained package switches to the native package at its next update and keeps its data and configuration. Later updates stay on the native package.
 
-- To update to 0.9.4, run `./foxwarm/foxwarmctl update` as usual. The 0.9.4 release also publishes the native package under the old name for this.
-- Later releases don't publish that name. To update such an installation directly to 0.9.5 or later, rerun the installer from the directory you originally installed from, with the same `--dir` if you used one:
+- To update through 0.9.4, run `./foxwarm/foxwarmctl update 0.9.4`. The 0.9.4 release also publishes the native package under the old name for this; run `update` again afterwards to reach later releases.
+- Releases after 0.9.4 don't publish that name, so a plain `update` of such an installation fails. To update it directly to 0.9.5 or later, rerun the installer from the directory you originally installed from, with the same `--dir` if you used one:
 
 ```bash
 curl -fsSL https://foxwarm.net/install-foxwarm.sh | bash

@@ -223,17 +223,6 @@ jobs:
           test -f dist/native-cli-node-latest-v3.tar.gz
           test -f dist/native-cli-node-win-x64-latest-v3.zip
           test -f dist/native-cli-node-osx-arm64-latest-v3.tar.gz
-      # One-release transition, 0.9.4 only (user decision 2026-11-10); drop it in 0.9.5. The control
-      # script of a 0.9.3-or-earlier self-contained Linux installation updates by downloading
-      # the retired asset name and its SHA256SUMS line. The alias serves it the native package,
-      # whose release.json records the native asset, so its next update requests that directly.
-      - name: Publish the native Linux package under the retired self-contained name (0.9.4 only)
-        run: |
-          version="$(node -p 'require("./package.json").version')"
-          case "$version" in
-            0.9.3|0.9.4) cp dist/foxwarm-linux-x64-native.tar.gz dist/foxwarm-linux-x64-self-contained.tar.gz ;;
-            *) echo "::warning::$version publishes no self-contained Linux alias; remove this step." ;;
-          esac
       - name: Write one checksum list covering every platform
         run: node scripts/release/package.mjs --output dist --checksums-only
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -250,8 +239,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
-      # The last release with a self-contained Linux package, for the upgrade check.
-      PREVIOUS_SELF_CONTAINED: v0.9.3
+      # The release before this one, for the upgrade check. Move it forward with each release.
+      PREVIOUS_RELEASE: v0.9.4
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -300,22 +289,22 @@ jobs:
             payload="$(mktemp -d)"
             tar -xzf /repo/dist/foxwarm-linux-x64-native.tar.gz -C "$payload"
             PATH="/opt/node/bin:$PATH" node /repo/scripts/release/qualify-package.mjs "$payload"/* --vector'
-      - name: Upgrade a self-contained installation to the native package on Ubuntu 22.04
+      - name: Upgrade the previous release's native package on Ubuntu 22.04
         run: |
-          # The installed release's own control script performs the switch, as for users: once
-          # after an installer rerun, and once by its own update through the 0.9.4-only alias.
+          # The installed release's own control script performs the upgrade, as for users: once
+          # after an installer rerun, and once by its own update, which downloads its recorded asset.
           mkdir -p "$RUNNER_TEMP/previous"
-          base="https://github.com/$GITHUB_REPOSITORY/releases/download/$PREVIOUS_SELF_CONTAINED"
-          curl -fsSL --retry 3 -o "$RUNNER_TEMP/previous/foxwarm-linux-x64-self-contained.tar.gz" "$base/foxwarm-linux-x64-self-contained.tar.gz"
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download/$PREVIOUS_RELEASE"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/previous/foxwarm-linux-x64-native.tar.gz" "$base/foxwarm-linux-x64-native.tar.gz"
           curl -fsSL --retry 3 -o "$RUNNER_TEMP/previous/SHA256SUMS" "$base/SHA256SUMS"
-          (cd "$RUNNER_TEMP/previous" && grep -E '  foxwarm-linux-x64-self-contained\.tar\.gz$' SHA256SUMS | sha256sum -c -)
+          (cd "$RUNNER_TEMP/previous" && grep -E '  foxwarm-linux-x64-native\.tar\.gz$' SHA256SUMS | sha256sum -c -)
           docker run --rm -v "$PWD:/repo:ro" -v "$RUNNER_TEMP/previous:/previous:ro" ubuntu:22.04 bash -c '
             set -e
             apt-get update -qq && apt-get install -y -qq tmux curl ca-certificates libicu70 procps >/dev/null
             ! command -v dotnet
-            bash /repo/scripts/release/smoke-upgrade.sh /previous/foxwarm-linux-x64-self-contained.tar.gz /repo/dist/foxwarm-linux-x64-native.tar.gz 3001
-            bash /repo/scripts/release/smoke-upgrade.sh --via-update foxwarm-linux-x64-self-contained.tar.gz \
-              /previous/foxwarm-linux-x64-self-contained.tar.gz /repo/dist/foxwarm-linux-x64-native.tar.gz 3001'
+            bash /repo/scripts/release/smoke-upgrade.sh /previous/foxwarm-linux-x64-native.tar.gz /repo/dist/foxwarm-linux-x64-native.tar.gz 3001
+            bash /repo/scripts/release/smoke-upgrade.sh --via-update foxwarm-linux-x64-native.tar.gz \
+              /previous/foxwarm-linux-x64-native.tar.gz /repo/dist/foxwarm-linux-x64-native.tar.gz 3001'
 
   windows:
     name: Build Desktop and qualify Windows packages

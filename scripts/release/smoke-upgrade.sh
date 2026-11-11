@@ -5,8 +5,13 @@
 # package runs from the same program directory and keeps its data and configuration.
 # With --via-update ASSET, the installation's own `foxwarmctl update` performs the switch instead:
 # its release downloads are answered with NEW_PACKAGE published under ASSET and a SHA256SUMS
-# line for that name, as a release does for an alias asset. Control scripts have a fixed
-# release URL, so a curl wrapper on PATH serves those downloads; other requests use curl.
+# line for that name, and ASSET must be the asset the installed release records. Control
+# scripts have a fixed release URL, so a curl wrapper on PATH serves those downloads; other
+# requests use curl.
+# A control script skips a package whose version it already runs unless forced, and the
+# installer forces only a change of package type. When the installer path would upgrade to
+# the installed version (a run of an unreleased version against the previous release's
+# number), the script gives a copy of NEW_PACKAGE a distinct version in its release.json.
 # Usage: scripts/release/smoke-upgrade.sh [--via-update ASSET] OLD_PACKAGE NEW_PACKAGE [PORT] [INSTALLER_OPTION...]
 set -euo pipefail
 via_update=""
@@ -15,6 +20,7 @@ if [ "${1:-}" = --via-update ]; then via_update="${2:?--via-update requires an a
 absolute() { printf '%s/%s\n' "$(cd "$(dirname "$1")" && pwd -P)" "$(basename "$1")"; }
 old="$(absolute "${1:?Usage: smoke-upgrade.sh OLD_PACKAGE NEW_PACKAGE [PORT] [INSTALLER_OPTION...]}")"
 new="$(absolute "${2:?Usage: smoke-upgrade.sh OLD_PACKAGE NEW_PACKAGE [PORT] [INSTALLER_OPTION...]}")"
+new_name="$(basename "$new")"
 port="${3:-3001}"
 shift 2; [ $# -eq 0 ] || shift
 installer="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/install-foxwarm.sh"
@@ -55,6 +61,7 @@ printf 'bot:\n  httpPort: %s\n# retained by the upgrade\n' "$port" > "$work/data
 (cd "$work" && /bin/bash "$installer" --package "$old" --dir foxwarm --data-dir data)
 wait_http
 before="$(field asset)"
+before_release="$(field asset)/$(field version)/$(field commit)"
 first="$(running_pid)"
 [ -n "$first" ]
 token="$(cat "$work/data/state/token")"
@@ -92,14 +99,25 @@ if [ -n "$via_update" ]; then
   [ "$(cat "$work/requests")" = "$expected" ] \
     || { cat "$work/requests" >&2; echo "update did not download $via_update and its SHA256SUMS" >&2; exit 1; }
 else
+  if [ "$(package_field version)" = "$(field version)" ] && [ "$(package_field asset)" = "$before" ]; then
+    mkdir "$work/repack"
+    tar -xzpf "$new" -C "$work/repack"
+    directory="$(find "$work/repack" -mindepth 1 -maxdepth 1 -type d -print -quit)"
+    sed "s/^\( *\"version\": *\"[^\"]*\)\"/\1-upgrade-smoke\"/" "$directory/release.json" > "$work/release.json"
+    cp "$work/release.json" "$directory/release.json"
+    new="$work/package-upgrade-smoke.tar.gz"
+    tar -czf "$new" -C "$work/repack" "$(basename "$directory")"
+    echo "The package has the installed version; upgrading to $(package_field version) instead."
+  fi
   (cd "$work" && /bin/bash "$installer" --package "$new" --dir foxwarm ${@+"$@"})
 fi
 wait_http
 second="$(running_pid)"
 [ -n "$second" ] && [ "$first" != "$second" ] || { echo "The installer did not restart Foxwarm on the new package" >&2; exit 1; }
 after="$(field asset)"
-echo "Switched $before -> $after"
-[ "$after" != "$before" ] || { echo "The installation still uses $before" >&2; exit 1; }
+after_release="$after/$(field version)/$(field commit)"
+echo "Switched $before_release -> $after_release"
+[ "$after_release" != "$before_release" ] || { echo "The installation still runs $before_release" >&2; exit 1; }
 [ "$(cat "$work/data/state/token")" = "$token" ] || { echo "The sign-in token changed" >&2; exit 1; }
 [ "$(cat "$work/data/state/config.yaml")" = "$config" ] || { echo "config.yaml changed" >&2; exit 1; }
 [ "$(cat "$work/data/agents/upgrade-marker")" = kept ] || { echo "Agent data was lost" >&2; exit 1; }
@@ -116,4 +134,4 @@ fi
 wait_http
 "$control" stop
 if "$control" status; then echo "Foxwarm is still running after stop" >&2; exit 1; fi
-echo "Upgrade smoke passed: $(basename "$old") -> $(basename "$new")"
+echo "Upgrade smoke passed: $(basename "$old") -> $new_name"
