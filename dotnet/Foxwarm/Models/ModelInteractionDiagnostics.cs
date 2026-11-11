@@ -280,7 +280,7 @@ internal sealed class ModelInteractionDiagnostics(string dataRoot)
                 try
                 {
                     lock (rawGate)
-                        raw.Block(text);
+                        raw.Block(text, SafeText);
                 }
                 catch
                 {
@@ -489,6 +489,8 @@ internal sealed class ModelInteractionDiagnostics(string dataRoot)
                     return new JsonArray(array.Select(Redact).ToArray());
                 if (node is not JsonObject obj)
                     return node?.DeepClone();
+                if (HostedResponsesTools.IsGeneratedImage(obj))
+                    return HostedImageEvidence.Summary(obj, redact: SafeText);
                 var result = new JsonObject();
                 foreach (var (key, child) in obj)
                     result[SafeText(key)] =
@@ -524,6 +526,9 @@ internal sealed class ModelInteractionDiagnostics(string dataRoot)
         private readonly List<string> blocks = [];
         private readonly SortedDictionary<string, long> eventTypes = new(StringComparer.Ordinal);
         private int blockChars;
+        private readonly Dictionary<string, JsonObject> imageCalls = new(StringComparer.Ordinal);
+        private string? responseId;
+        private bool imageCallsTruncated;
         private bool omitted = imageDeclared;
         private bool truncated;
         private long chunkCount,
@@ -572,7 +577,7 @@ internal sealed class ModelInteractionDiagnostics(string dataRoot)
             return false;
         }
 
-        internal void Block(string block)
+        internal void Block(string block, Func<string, string> redact)
         {
             if (block.Length == 0)
                 return;
@@ -589,7 +594,10 @@ internal sealed class ModelInteractionDiagnostics(string dataRoot)
                     continue;
                 try
                 {
-                    var type = SessionWait.Text(JsonNode.Parse(payload)?["type"]) ?? "unknown";
+                    var frame = JsonNode.Parse(payload);
+                    var type = SessionWait.Text(frame?["type"]) ?? "unknown";
+                    if (frame is JsonObject message)
+                        ObserveImages(message, redact);
                     type = type.Length > 80 ? type[..80] : type;
                     if (!eventTypes.ContainsKey(type) && eventTypes.Count >= 1024)
                         type = "other";
@@ -613,6 +621,57 @@ internal sealed class ModelInteractionDiagnostics(string dataRoot)
             truncated |= count < block.Length;
         }
 
+        private void ObserveImages(JsonObject frame, Func<string, string> redact)
+        {
+            if (frame["response"] is JsonObject response)
+            {
+                responseId = SessionWait.Text(response["id"]) ?? responseId;
+                if (response["output"] is JsonArray output)
+                    for (var index = 0; index < output.Count; index++)
+                        if (output[index] is JsonObject item)
+                            ObserveImage(item, index.ToString(), redact);
+            }
+            if (frame["item"] is JsonObject outputItem)
+                ObserveImage(
+                    outputItem,
+                    frame["output_index"]?.ToJsonString() ?? "unknown",
+                    redact
+                );
+        }
+
+        private void ObserveImage(JsonObject item, string index, Func<string, string> redact)
+        {
+            if (!HostedResponsesTools.IsGeneratedImage(item))
+                return;
+            var summary = HostedImageEvidence.Summary(item, responseId, redact);
+            var key = SessionWait.Text(summary["id"]) ?? index;
+            if (!imageCalls.ContainsKey(key) && imageCalls.Count >= HostedImageEvidence.MaxCalls)
+            {
+                imageCallsTruncated = true;
+                return;
+            }
+            if (imageCalls.TryGetValue(key, out var previous))
+            {
+                foreach (var field in new[] { "error", "responseId" })
+                    if (summary[field] is null && previous[field] is JsonNode retained)
+                        summary[field] = retained.DeepClone();
+                if (
+                    SessionWait.Text(summary["status"])
+                        is "unknown"
+                            or "in_progress"
+                            or "generating"
+                    && SessionWait.Text(previous["status"])
+                        is "failed"
+                            or "incomplete"
+                            or "completed"
+                )
+                    summary["status"] = previous["status"]!.DeepClone();
+                if (previous["hasResult"]?.GetValue<bool>() == true)
+                    summary["hasResult"] = true;
+            }
+            imageCalls[key] = summary;
+        }
+
         internal JsonObject Snapshot()
         {
             // A stream can end before its first SSE delimiter. Inspect the
@@ -629,6 +688,10 @@ internal sealed class ModelInteractionDiagnostics(string dataRoot)
                     ["chunkCharCount"] = chunkChars,
                     ["sseBlockCount"] = blockCount,
                     ["nonJsonBlockCount"] = nonJsonBlocks,
+                    ["imageGenerationCalls"] = new JsonArray(
+                        imageCalls.Values.Select(value => (JsonNode?)value.DeepClone()).ToArray()
+                    ),
+                    ["imageGenerationCallsTruncated"] = imageCallsTruncated,
                     ["eventTypes"] = new JsonObject(
                         eventTypes.Select(pair =>
                             KeyValuePair.Create<string, JsonNode?>(

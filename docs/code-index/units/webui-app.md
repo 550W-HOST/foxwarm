@@ -135,3 +135,7 @@ Windows drive paths normalize to the existing slash-based Code URI representatio
 Code target parsing/preferences and commit markers use the shared Core Node identity grammar, preserving qualified Provider IDs through encoded workspace/file/commit URLs rather than silently selecting master. This does not add Code capabilities to primitive providers. See [generic Node namespaces](../threads/tool-dispatch-node-execution.md#d-dispatch-generic-node-providers).
 
 Empty browser startup does not invent a `main` Session. With no explicit route, restored tabs or remembered Session, the workbench stays empty; normal explicit/remembered navigation is unchanged. Covered by the fresh-browser native fixture.
+
+## Frontend build update notice
+
+`buildUpdate.ts` compares the loaded same-origin Vite module entry URLs against a no-store authenticated fetch of the same deployment root. It ignores login/error HTML and failed/offline requests; visible pages check at boot, focus, online, visibility restoration and once a minute, with a 15-second throttle and bounded fetch cancellation. `BuildUpdateNotice.tsx` offers Reload/Later without automatic navigation; dismissal is per observed build. Reload dispatches a cancelable preparation event, allowing mounted chat composers to flush drafts and block on persistence failure, attachments or ongoing recording/send, then confirms potentially unsaved edits before normal browser reload. Browser regression: `buildUpdate.e2e.mjs`. This reload updates page assets, not Android WebAPK/native system-bar state.

@@ -89,6 +89,7 @@ const openaiImageGenerationOptions = {
   description: 'Opt-in OpenAI Responses hosted image generation settings. Ignored by non-Responses providers.',
   properties: {
     enabled: { type: 'boolean', description: 'Enable the hosted image_generation tool for eligible Responses requests.' },
+    mode: { enum: ['hosted', 'isolated'], description: 'Hosted uses the conversation request. Isolated uses generate_image with a separate request that omits reasoning effort.' },
     model: { type: 'string', minLength: 1, description: 'Optional hosted image model override. Omitted uses the provider default.' },
     action: { enum: ['auto', 'generate', 'edit'], description: 'Hosted image action. Defaults to auto.' },
     size: { type: 'string', minLength: 1, description: 'Requested output size for the hosted image model.' },

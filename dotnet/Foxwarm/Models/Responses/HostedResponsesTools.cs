@@ -9,7 +9,8 @@ internal sealed record GeneratedImageNormalization(
     Dictionary<int, JsonObject> Parts,
     IReadOnlyList<string> Failures,
     int SuccessfulCount,
-    IReadOnlyDictionary<string, byte[]> ReplayBytes
+    IReadOnlyDictionary<string, byte[]> ReplayBytes,
+    Dictionary<int, JsonObject> FailureParts
 );
 
 internal sealed class GeneratedImageBudget
@@ -75,15 +76,18 @@ internal static class HostedResponsesTools
 
     internal static async Task<GeneratedImageNormalization> ExternalizeAsync(
         JsonArray output,
-        ImageBlobStore images,
+        ImageBlobStore? images,
         string sourceModelId,
         CancellationToken token,
         GeneratedImageBudget? budget = null,
-        int outputStart = 0
+        int outputStart = 0,
+        string? responseId = null,
+        Func<string, string>? redact = null
     )
     {
         var parts = new Dictionary<int, JsonObject>();
         var failures = new List<string>();
+        var failureParts = new Dictionary<int, JsonObject>();
         budget ??= new GeneratedImageBudget();
         var success = 0;
         var replayBytes = new Dictionary<string, byte[]>(StringComparer.Ordinal);
@@ -91,7 +95,22 @@ internal static class HostedResponsesTools
         {
             if (output[index] is not JsonObject item || !IsGeneratedImage(item))
                 continue;
+            var summary = HostedImageEvidence.Summary(item, responseId, redact);
             var imageId = ImageId(Text(item["id"]), outputStart + index);
+            void Fail(string reason)
+            {
+                reason =
+                    HostedImageEvidence.SafeText(reason, item, redact)
+                    ?? "Image generation failed.";
+                var part = HostedImageEvidence.FailurePart(
+                    summary,
+                    ImageId(Text(summary["id"]), outputStart + index),
+                    reason,
+                    sourceModelId
+                );
+                failureParts[index] = part;
+                failures.Add(Text(part["text"])!);
+            }
             while (!budget.UsedIds.Add(imageId))
                 imageId +=
                     "_"
@@ -100,12 +119,21 @@ internal static class HostedResponsesTools
                     );
             if (!IsCompletedGeneratedImage(item))
             {
-                failures.Add(imageId + ": image generation result was missing or incomplete.");
+                Fail(
+                    Text(item["status"]) == "failed"
+                        ? "Image generation failed."
+                        : "Image generation result was missing or incomplete."
+                );
                 continue;
             }
             if (budget.Success >= MaxImages)
             {
-                failures.Add(imageId + ": response exceeded the image limit.");
+                Fail("Response exceeded the image limit.");
+                continue;
+            }
+            if (images is null)
+            {
+                Fail("Image storage is unavailable.");
                 continue;
             }
             try
@@ -171,10 +199,10 @@ internal static class HostedResponsesTools
             }
             catch (Exception error)
             {
-                failures.Add(imageId + ": " + error.Message);
+                Fail(error.Message);
             }
         }
-        return new(parts, failures, success, replayBytes);
+        return new(parts, failures, success, replayBytes, failureParts);
     }
 
     internal static JsonObject BuildReplayItem(JsonObject metadata, byte[] bytes)

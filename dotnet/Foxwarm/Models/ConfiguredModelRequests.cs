@@ -31,7 +31,14 @@ internal static class ConfiguredModelRequests
                 "Image generation requires the OpenAI Responses protocol."
             );
         var featurePurpose = purpose is "background" or "setup-test";
-        var imageDeclared = imageEnabled && !featurePurpose;
+        var imageRequest = purpose == "image-generation";
+        var isolateImages =
+            SessionWait.Text(model.Configuration["imageGeneration"]?["mode"]) == "isolated";
+        if (imageRequest && (!imageEnabled || !responses))
+            throw new InvalidDataException(
+                "Image generation is not enabled for the selected Responses model."
+            );
+        var imageDeclared = imageEnabled && !featurePurpose && (imageRequest || !isolateImages);
         if (responses)
         {
             var extra = model.Configuration["extraFields"] as JsonObject;
@@ -92,7 +99,8 @@ internal static class ConfiguredModelRequests
             ConcreteModelId = model.Key,
             HistoryCompatibility = model.HistoryCompatibility,
             Token = model.Token,
-            Effort = effort,
+            Effort = imageRequest ? null : effort,
+            ImageGenerationOnly = imageRequest,
             Instructions = instructions,
             ProviderPromptCacheKey = responses ? cacheKey : null,
             ExtraHeaders = Expand(model.Configuration["extraHeaders"]) as JsonObject,
@@ -107,10 +115,14 @@ internal static class ConfiguredModelRequests
                 model.Configuration["disallowEmptyResponse"] is JsonValue flag
                 && flag.TryGetValue<bool>(out var forbid)
                 && forbid,
-            WebSearch = featurePurpose ? null : model.Configuration["webSearch"] as JsonObject,
-            ImageGeneration = featurePurpose
-                ? null
-                : model.Configuration["imageGeneration"] as JsonObject,
+            WebSearch =
+                featurePurpose || imageRequest
+                    ? null
+                    : model.Configuration["webSearch"] as JsonObject,
+            ImageGeneration =
+                featurePurpose || (isolateImages && !imageRequest)
+                    ? null
+                    : model.Configuration["imageGeneration"] as JsonObject,
         };
     }
 

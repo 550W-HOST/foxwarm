@@ -1,3 +1,4 @@
+import { BEFORE_UPDATE_RELOAD } from '../buildUpdate'
 import { useMobileChatViewport } from '../chatPreferences'
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
@@ -840,6 +841,18 @@ const ChatComposer = memo(function ChatComposer({
       return false
     }
   }, [])
+
+  useEffect(() => {
+    const beforeReload = (event: Event) => {
+      const saved = persistDraftSafely(sessionId, draftRef.current)
+      // Attachment bytes and ongoing capture/send are not recoverable from the
+      // text draft alone. Do not discard them through the update action.
+      if (!saved || recordingLockRef.current || submitInFlightRef.current
+        || draftRef.current.segments.some(segment => segment.type === 'attachment')) event.preventDefault()
+    }
+    window.addEventListener(BEFORE_UPDATE_RELOAD, beforeReload)
+    return () => window.removeEventListener(BEFORE_UPDATE_RELOAD, beforeReload)
+  }, [persistDraftSafely, sessionId])
 
   const commitDraft = useCallback((nextDraft: ComposerDraft, targetSessionId = sessionId) => {
     persistDraftSafely(targetSessionId, nextDraft)

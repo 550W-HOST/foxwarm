@@ -100,6 +100,24 @@ internal static class ResponsesRequestPlan
                 include.Add((System.Text.Json.Nodes.JsonNode?)(HostedSearchSources.Include));
             body["include"] = include.DeepClone();
         }
+        if (options.ImageGenerationOnly)
+        {
+            // Image complexity can inherit outer reasoning.effort upstream. Keep this
+            // dedicated request free of reasoning, even when extraFields supplies it.
+            body.Remove("reasoning");
+            body.Remove("include");
+            body.Remove("previous_response_id");
+            body.Remove("prompt_cache_key");
+            body["tools"] = new JsonArray(
+                hostedTools
+                    .OfType<JsonObject>()
+                    .Where(tool => SessionWait.Text(tool["type"]) == "image_generation")
+                    .Select(tool => (JsonNode?)tool.DeepClone())
+                    .ToArray()
+            );
+            body["tool_choice"] = new JsonObject { ["type"] = "image_generation" };
+            body["parallel_tool_calls"] = false;
+        }
         return body;
     }
 }

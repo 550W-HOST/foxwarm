@@ -278,6 +278,29 @@ internal sealed class HttpServer
                     RequestPath = "/assets",
                 }
             );
+            // Keep one manifest identity while projecting this browser's public canvas color.
+            app.Use(async (context, next) =>
+            {
+                if (context.Request.Method != "GET" || context.Request.Path != "/manifest.json")
+                {
+                    await next();
+                    return;
+                }
+                var file = Path.Combine(distRoot, "manifest.json");
+                if (!File.Exists(file)) { await next(); return; }
+                var manifest = JsonNode.Parse(await File.ReadAllTextAsync(file, context.RequestAborted))!.AsObject();
+                var color = context.Request.Cookies["foxwarm_canvas"];
+                if (color is not null && (color.Length == 6 || color.Length == 8)
+                    && color.All(Uri.IsHexDigit))
+                {
+                    manifest["theme_color"] = "#" + color;
+                    manifest["background_color"] = "#" + color;
+                }
+                context.Response.Headers.CacheControl = "private, no-store";
+                context.Response.Headers.Vary = "Cookie";
+                context.Response.ContentType = "application/manifest+json";
+                await context.Response.WriteAsync(manifest.ToJsonString(), context.RequestAborted);
+            });
             app.UseWhen(
                 context => IsBrandAsset(context.Request.Path),
                 branch =>
@@ -407,23 +430,23 @@ internal sealed class HttpServer
         )
             return true;
         foreach (var header in request.Headers.Cookie)
-        foreach (var entry in (header ?? "").Split(';'))
-        {
-            var separator = entry.IndexOf('=');
-            if (separator < 0 || entry[..separator].Trim() != "foxwarm_token")
-                continue;
-            string candidate;
-            try
+            foreach (var entry in (header ?? "").Split(';'))
             {
-                candidate = Uri.UnescapeDataString(entry[(separator + 1)..].Trim());
+                var separator = entry.IndexOf('=');
+                if (separator < 0 || entry[..separator].Trim() != "foxwarm_token")
+                    continue;
+                string candidate;
+                try
+                {
+                    candidate = Uri.UnescapeDataString(entry[(separator + 1)..].Trim());
+                }
+                catch (UriFormatException)
+                {
+                    continue;
+                }
+                if (Equal(candidate, token) || Equal(candidate, derived))
+                    return true;
             }
-            catch (UriFormatException)
-            {
-                continue;
-            }
-            if (Equal(candidate, token) || Equal(candidate, derived))
-                return true;
-        }
         return false;
     }
 

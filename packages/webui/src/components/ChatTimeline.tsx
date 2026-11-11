@@ -3,7 +3,7 @@ import { buildArtifactGroups } from '../artifacts/projection'
 import SessionMessageCard from './SessionMessageCard'
 import { AskUserToolCard, isQuestionAnswerMarker, isStructuredQuestionAnswer, QuestionAnswerBubble } from './QuestionCard'
 import SystemEventCard from './SystemEventCard'
-import { getSessionNotice } from '../sessionNotices'
+import { getImageGenerationNotice, getSessionNotice } from '../sessionNotices'
 import ReplyFileGrid from './ReplyFileGrid'
 import { buildReplyFileGroups } from './replyFiles'
 import { useMobileChatViewport, type TimelineView } from '../chatPreferences'
@@ -1107,6 +1107,10 @@ const MessageRow = memo(function MessageRow({
                   && typeof reasoningTokens === 'number' && Number.isFinite(reasoningTokens) && reasoningTokens >= 0
                     ? reasoningTokens : undefined
                 return <ReasoningCard key={`thinking-${partIndex}`} thinking={reasoningRun.map(item => item.thinking).join('\n')} parts={reasoningRun} reasoningTokens={hideMetrics ? undefined : tokens} tone="message" searchReveal={rowSearchTarget?.surface === 'reasoning' && reasoningRun.some(item => item.partIndex === rowSearchTarget.partIndex)} />
+              }
+              const imageFailure = getImageGenerationNotice(part)
+              if (imageFailure) {
+                return <SystemEventCard key={`image-failure-${partIndex}`} notice={imageFailure} searchSurface="model" searchPartIndex={partIndex} reveal={rowSearchTarget?.surface === 'model' && rowSearchTarget.partIndex === partIndex} />
               }
               if (part.system) {
                 return <InlineMetaPart key={`model-system-${partIdx}`} systemText={formatStructuredSystemText(part.system)} isUser={false} />

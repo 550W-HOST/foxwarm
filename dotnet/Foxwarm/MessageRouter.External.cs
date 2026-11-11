@@ -99,24 +99,15 @@ internal sealed partial class MessageRouter
             if (Regex.IsMatch(rest, @"^\s+"))
                 text = Regex.Replace(rest, @"^\s+", "");
         }
-        var match = Regex.Match(
-            text,
-            @"^(?:@[a-zA-Z_\-.]+\s+)?(/[a-zA-Z_\-.]+)(?:\s+(.*))?$",
-            RegexOptions.Singleline
-        );
-        if (!match.Success || whoamiOnly && match.Groups[1].Value != "/whoami")
+        if (
+            !TryReadCommand(text, out var command, out var rawArgs, allowMention: true)
+            || whoamiOnly && command != "/whoami"
+        )
             return false;
         var auth = Authorization(source);
-        if (match.Groups[1].Value != "/whoami" && auth.Override && !auth.Direct && !auth.Wildcard)
+        if (command != "/whoami" && auth.Override && !auth.Direct && !auth.Wildcard)
             return false;
-        var handled = await HandleExternalCommandAsync(
-            source,
-            match.Groups[1].Value,
-            match.Groups[2].Success ? match.Groups[2].Value : null
-        );
-        if (!handled)
-            await source.Reply("Unknown command: " + match.Groups[1].Value);
-        return true;
+        return await HandleExternalCommandAsync(source, command, rawArgs);
     }
 
     internal async Task<bool> HandleExternalCommandAsync(

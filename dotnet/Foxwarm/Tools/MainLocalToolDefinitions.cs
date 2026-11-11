@@ -111,6 +111,25 @@ internal static class MainLocalToolDefinitions
                 )
             ),
             Tool(
+                "generate_image",
+                "Generate or edit an image with the selected model's configured image service. Returns visible images that can be saved or delivered with the image tools. Use imageIds to reference images from this session for edits; describe the requested result in prompt.",
+                Parameters(
+                    new JsonObject
+                    {
+                        ["prompt"] = String("Describe the image to generate or the edit to make."),
+                        ["imageIds"] = new JsonObject
+                        {
+                            ["type"] = "array",
+                            ["maxItems"] = 8,
+                            ["items"] = String("Image ID shown in this session."),
+                            ["description"] =
+                                "Optional source images for editing or visual reference.",
+                        },
+                    },
+                    "prompt"
+                )
+            ),
+            Tool(
                 "image_crop",
                 "Crop an image from this session, including a generated image or one returned by a tool. Returns a new visible image/reference, which can be cropped, saved, or delivered again. GIF input uses its first frame and returns a PNG, without animation. Coordinates and dimensions refer to the original image, before resizing for model input.",
                 Parameters(

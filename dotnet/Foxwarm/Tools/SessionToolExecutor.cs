@@ -1340,6 +1340,8 @@ internal sealed partial class SessionToolExecutor(
                 token,
                 owner.ExecutionNode
             );
+        handlers["generate_image"] = (owner, args, token) =>
+            owner.Manager.GenerateImageAsync(owner.Hosted, args, token);
         handlers["image_crop"] = (owner, args, token) =>
             owner.Manager.CropImageAsync(owner.Hosted, args, token);
         foreach (
@@ -1463,7 +1465,8 @@ internal sealed partial class SessionToolExecutor(
                 source,
                 name
                     is not (
-                        "set_session_child_model"
+                        "generate_image"
+                        or "set_session_child_model"
                         or "set_session_compact_threshold"
                         or "refresh_session_snapshot"
                         or "compact_session"

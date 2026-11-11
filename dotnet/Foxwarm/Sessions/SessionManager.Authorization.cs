@@ -686,7 +686,11 @@ internal sealed partial class SessionManager
         return new JsonArray(
             tools
                 .Entries.Where(entry =>
-                    entry.DefaultInject
+                    (
+                        entry.DefaultInject
+                        || SessionWait.Text(entry.Definition["name"]) == "generate_image"
+                            && UsesIsolatedImageGeneration(owner)
+                    )
                     && (
                         entry.Source == "node"
                         || ToolVisible(
