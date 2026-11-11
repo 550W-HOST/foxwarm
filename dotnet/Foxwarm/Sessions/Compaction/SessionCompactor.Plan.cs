@@ -26,7 +26,11 @@ internal sealed partial class SessionCompactor
         var plannerHistoryStart = detached.Count;
         var plannerToolCalls = new List<string>();
         JsonObject? plannerUsage = null;
-        var prompt = CompactPrompt.Build(candidates, guidance);
+        var taskSource = sessions;
+        Func<IReadOnlyList<string>, IReadOnlyDictionary<string, string>>? taskStatuses = null;
+        if (taskSource is not null)
+            taskStatuses = ids => taskSource.Tasks.Statuses(ids);
+        var prompt = CompactPrompt.Build(candidates, guidance, taskStatuses);
         var promptSnapshot =
             snapshot.AuthorityEnvelope["persistentMemorySnapshot"]?.GetValue<string>() ?? "";
         var routeKey = SessionWait.Text(snapshot.AuthorityEnvelope["model"]) ?? capturedDefault;

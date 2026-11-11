@@ -852,6 +852,22 @@ internal sealed class TaskStore : IDisposable
         return result;
     }
 
+    // Status only, for surfaces that must not expose Task content. Unknown IDs are absent.
+    internal IReadOnlyDictionary<string, string> Statuses(IReadOnlyList<string> ids)
+    {
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (ids.Count == 0 || !File.Exists(path))
+            return result;
+        lock (gate)
+        {
+            var db = Open();
+            foreach (var id in ids)
+                if (Read(db, id) is { } row && Text(row["status"]) is { Length: > 0 } status)
+                    result[id] = status;
+        }
+        return result;
+    }
+
     private JsonObject? Read(SqliteConnection db, string id)
     {
         using var cmd = db.CreateCommand();

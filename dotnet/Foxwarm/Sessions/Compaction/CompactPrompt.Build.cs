@@ -46,7 +46,11 @@ internal static partial class CompactPrompt
         return TruncateGraphemes(normalized, limit, "…", includeSuffixInLimit: true);
     }
 
-    public static string Build(CompactCandidates policy, string? guidance = null)
+    public static string Build(
+        CompactCandidates policy,
+        string? guidance = null,
+        Func<IReadOnlyList<string>, IReadOnlyDictionary<string, string>>? taskStatuses = null
+    )
     {
         var recent = policy.History.Skip(policy.Split).ToArray();
         var recentSeqs = recent
@@ -102,6 +106,12 @@ internal static partial class CompactPrompt
                     $"{head}: merge {string.Join(", ", sources.Select(item => $"{item.Key} (L{item.SourceLevel}, raw{Range(item.RawStart, item.RawEnd)}{(item.FrictionScore is int score ? $", frictionScore={score}" : "")})"))} into one level-{op.Level} block. Budget: {op.Budget} tokens."
                 );
         }
+        var taskLines = TaskStatusLines(policy, taskStatuses);
+        if (taskLines.Count > 0)
+        {
+            lines.Add("");
+            lines.AddRange(taskLines);
+        }
         lines.Add("");
         if (policy.Preserved.Count > 0)
         {
@@ -141,7 +151,7 @@ internal static partial class CompactPrompt
             "Write each summary in the main language of its sources, as memory facts already do; keep code, identifiers and technical terms as they are.",
             "When a fact is already recorded in Agent memory, a Task, the Code Index, a document or a commit, write one line saying where it is instead of restating it.",
             "A new level-1 block is the most detailed: keep the working state of this stretch, including procedures still in progress, error signatures and exact values the next turns may need.",
-            "When merging blocks, consolidate rather than concatenate. Drop finished procedures and step-by-step debugging first, then superseded decisions; keep outcomes, usually one line per finished thread. Carry forward every item that was still open at the end of the sources, with its Task ID or other locator, unless a later source shows it finished. Keep user decisions together with their msg# reference.",
+            "When merging blocks, consolidate rather than concatenate. Drop finished procedures and step-by-step debugging first, then superseded decisions; keep outcomes, usually one line per finished thread. Carry forward every item that was still open at the end of the sources, with its Task ID or other locator, unless a later source shows it finished. The current status of Tasks mentioned in the sources is listed after the operations. A Task shown there as completed or cancelled is finished: don't carry it forward as open, and keep one line for its outcome only if it still matters. Keep user decisions together with their msg# reference.",
             "Blocks at level 5 and above keep the gist: themes, standing decisions with their msg# references, lasting constraints, a short list of items still open with their Task IDs, and where to recall details.",
             "Each operation has a token budget, shown with it. Stay well under it when the content allows; a summary over budget is returned for revision.",
             "Memory facts record only what the sources' facts don't already contain, and they count toward the operation's budget.",
