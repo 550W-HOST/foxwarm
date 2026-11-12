@@ -179,6 +179,145 @@ public sealed class BrowserHostTests
         Assert.Empty((await Call("browser_tabs", "{}"))["tabs"]!.AsArray());
     }
 
+    // A host connection whose answer to the cancel line is delivered inside the send itself, so
+    // the reply is already processed when the caller's cancellation callback continues.
+    private sealed class AnsweringConnection(Func<long, JsonObject> answerCancel)
+        : BrowserHost.IHostConnection
+    {
+        private readonly object gate = new();
+        private readonly Dictionary<long, TaskCompletionSource<JsonObject>> waiting = new();
+        private readonly TaskCompletionSource callSent = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+
+        internal List<JsonObject> Frames { get; } = [];
+
+        internal Task CallSent => callSent.Task;
+
+        public bool Exited => false;
+
+        // Delivers a host reply to the one call in flight.
+        internal void Reply(JsonObject reply)
+        {
+            lock (gate)
+                waiting.Values.Single().TrySetResult(reply);
+        }
+
+        public void Add(long id, TaskCompletionSource<JsonObject> pending)
+        {
+            lock (gate)
+                waiting[id] = pending;
+        }
+
+        public void Remove(long id)
+        {
+            lock (gate)
+                waiting.Remove(id);
+        }
+
+        public Task Send(JsonObject message)
+        {
+            lock (gate)
+                Frames.Add(message);
+            if (message.ContainsKey("tool"))
+                callSent.TrySetResult();
+            return Task.CompletedTask;
+        }
+
+        public Task TrySend(JsonObject message)
+        {
+            _ = Send(message);
+            if (message["cancel"]?.GetValue<long>() is long id)
+            {
+                TaskCompletionSource<JsonObject>? pending;
+                lock (gate)
+                    waiting.TryGetValue(id, out pending);
+                pending?.TrySetResult(answerCancel(id));
+            }
+            return Task.CompletedTask;
+        }
+
+        public void Kill() { }
+
+        public Task Close() => Task.CompletedTask;
+    }
+
+    [Fact]
+    public async Task A_failed_reply_that_beats_the_cancellation_still_surfaces_as_cancellation()
+    {
+        var connection = new AnsweringConnection(id =>
+            new JsonObject { ["id"] = id, ["ok"] = false, ["error"] = "Browser call canceled." }
+        );
+        await using var host = new BrowserHost("unused") { ConnectionFactory = () => connection };
+        using var stop = new CancellationTokenSource();
+        var call = host.CallAsync("browser_open", Args("""{"url":"http://127.0.0.1/"}"""), stop.Token);
+        await connection.CallSent;
+        stop.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => call);
+        // The host still gets the cancel line, after the call it belongs to.
+        var cancel = Assert.Single(connection.Frames, frame => frame.ContainsKey("cancel"));
+        Assert.Equal(connection.Frames[0]["id"]!.GetValue<long>(), cancel["cancel"]!.GetValue<long>());
+        Assert.Equal(2, connection.Frames.Count);
+    }
+
+    [Fact]
+    public async Task A_host_failure_while_cancelling_still_surfaces_as_cancellation()
+    {
+        // The host dies and its pending calls fail before the caller's cancellation completes.
+        var dying = new DyingOnCancelConnection();
+        await using var host = new BrowserHost("unused") { ConnectionFactory = () => dying };
+        using var stop = new CancellationTokenSource();
+        var call = host.CallAsync("browser_open", Args("""{"url":"http://127.0.0.1/"}"""), stop.Token);
+        await dying.CallSent;
+        stop.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => call);
+    }
+
+    private sealed class DyingOnCancelConnection : BrowserHost.IHostConnection
+    {
+        private TaskCompletionSource<JsonObject>? waiting;
+        private readonly TaskCompletionSource callSent = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+
+        internal Task CallSent => callSent.Task;
+
+        public bool Exited => false;
+
+        public void Add(long id, TaskCompletionSource<JsonObject> pending) => waiting = pending;
+
+        public void Remove(long id) { }
+
+        public Task Send(JsonObject message)
+        {
+            if (message.ContainsKey("tool"))
+                callSent.TrySetResult();
+            return Task.CompletedTask;
+        }
+
+        public Task TrySend(JsonObject message)
+        {
+            waiting?.TrySetException(new InvalidOperationException("The browser host stopped unexpectedly."));
+            return Task.CompletedTask;
+        }
+
+        public void Kill() { }
+
+        public Task Close() => Task.CompletedTask;
+    }
+
+    [Fact]
+    public async Task A_failed_reply_without_cancellation_is_still_a_failure()
+    {
+        var connection = new AnsweringConnection(_ => new JsonObject());
+        await using var host = new BrowserHost("unused") { ConnectionFactory = () => connection };
+        var call = host.CallAsync("browser_open", Args("""{"url":"http://127.0.0.1/"}"""), CancellationToken.None);
+        await connection.CallSent;
+        connection.Reply(new JsonObject { ["ok"] = false, ["error"] = "Page crashed." });
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => call);
+        Assert.Equal("Page crashed.", error.Message);
+    }
+
     [Fact]
     public async Task Cancelling_a_call_reaches_the_host_and_leaves_it_usable()
     {

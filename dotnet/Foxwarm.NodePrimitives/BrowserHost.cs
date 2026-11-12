@@ -25,9 +25,12 @@ internal sealed class BrowserHost(string bundlePath, string? nodeExecutable = nu
     > descriptions = new();
 
     private readonly object gate = new();
-    private Connection? connection;
+    private IHostConnection? connection;
     private long nextId;
     private bool disposed;
+
+    // Tests substitute the child-process connection to control the order of frames and replies.
+    internal Func<IHostConnection>? ConnectionFactory { get; init; }
 
     // The bundle sits beside the Main publish layout or beside a standalone CLI executable.
     internal static string DefaultBundlePath()
@@ -202,10 +205,13 @@ internal sealed class BrowserHost(string bundlePath, string? nodeExecutable = nu
                     ["deadlineMs"] = (long)CallDeadline.TotalMilliseconds,
                 }
             );
+            // The call is cancelled from the caller's side first. The host answers a cancel with an
+            // error reply, and that reply must never get the chance to complete the call before
+            // the cancellation does; the cancel line is still sent so the host aborts the page.
             using var stop = token.Register(() =>
             {
-                _ = active.TrySend(new JsonObject { ["cancel"] = id });
                 pending.TrySetCanceled(token);
+                _ = active.TrySend(new JsonObject { ["cancel"] = id });
             });
             // The host enforces the deadline itself; this only covers a host that stopped answering.
             using var wedged = new CancellationTokenSource(CallDeadline + Grace);
@@ -216,9 +222,20 @@ internal sealed class BrowserHost(string bundlePath, string? nodeExecutable = nu
                 );
                 active.Kill();
             });
-            var reply = await pending.Task;
+            JsonObject reply;
+            try
+            {
+                reply = await pending.Task;
+            }
+            catch (InvalidOperationException) when (token.IsCancellationRequested)
+            {
+                // The host went away while the caller was cancelling: still a cancellation.
+                throw new OperationCanceledException(token);
+            }
             if (reply["ok"]?.GetValue<bool>() == true)
                 return reply["result"]?.DeepClone();
+            // A failed reply to a caller that has been cancelled is the cancellation's echo.
+            token.ThrowIfCancellationRequested();
             throw new InvalidOperationException(
                 reply["error"]?.GetValue<string>() ?? "Browser call failed."
             );
@@ -229,25 +246,25 @@ internal sealed class BrowserHost(string bundlePath, string? nodeExecutable = nu
         }
     }
 
-    private Connection Connect()
+    private IHostConnection Connect()
     {
         lock (gate)
         {
             ObjectDisposedException.ThrowIf(disposed, this);
             if (connection is { Exited: false } live)
                 return live;
-            if (MissingRuntime() is { } missing)
+            if (ConnectionFactory is null && MissingRuntime() is { } missing)
                 throw new InvalidOperationException(missing);
             if (connection is not null)
                 _ = connection.Close();
-            connection = new Connection(Process.Start(Start())!);
+            connection = ConnectionFactory?.Invoke() ?? new Connection(Process.Start(Start())!);
             return connection;
         }
     }
 
     public async ValueTask DisposeAsync()
     {
-        Connection? last;
+        IHostConnection? last;
         lock (gate)
         {
             disposed = true;
@@ -258,7 +275,19 @@ internal sealed class BrowserHost(string bundlePath, string? nodeExecutable = nu
             await last.Close();
     }
 
-    private sealed class Connection
+    // The line-protocol connection to one host process.
+    internal interface IHostConnection
+    {
+        bool Exited { get; }
+        void Add(long id, TaskCompletionSource<JsonObject> waiting);
+        void Remove(long id);
+        Task Send(JsonObject message);
+        Task TrySend(JsonObject message);
+        void Kill();
+        Task Close();
+    }
+
+    private sealed class Connection : IHostConnection
     {
         private readonly Process process;
         private readonly object gate = new();
@@ -287,7 +316,7 @@ internal sealed class BrowserHost(string bundlePath, string? nodeExecutable = nu
             reading = Task.Run(Read);
         }
 
-        internal bool Exited { get; private set; }
+        public bool Exited { get; private set; }
 
         private async Task Read()
         {
@@ -327,19 +356,19 @@ internal sealed class BrowserHost(string bundlePath, string? nodeExecutable = nu
                 waiting.TrySetException(failure);
         }
 
-        internal void Add(long id, TaskCompletionSource<JsonObject> waiting)
+        public void Add(long id, TaskCompletionSource<JsonObject> waiting)
         {
             lock (gate)
                 pending[id] = waiting;
         }
 
-        internal void Remove(long id)
+        public void Remove(long id)
         {
             lock (gate)
                 pending.Remove(id);
         }
 
-        internal async Task Send(JsonObject message)
+        public async Task Send(JsonObject message)
         {
             await writer.WaitAsync();
             try
@@ -360,7 +389,7 @@ internal sealed class BrowserHost(string bundlePath, string? nodeExecutable = nu
             }
         }
 
-        internal async Task TrySend(JsonObject message)
+        public async Task TrySend(JsonObject message)
         {
             try
             {
@@ -369,7 +398,7 @@ internal sealed class BrowserHost(string bundlePath, string? nodeExecutable = nu
             catch (InvalidOperationException) { }
         }
 
-        internal void Kill()
+        public void Kill()
         {
             try
             {
@@ -380,7 +409,7 @@ internal sealed class BrowserHost(string bundlePath, string? nodeExecutable = nu
         }
 
         // Closing the pipe is the shutdown signal: the host closes its browser and exits.
-        internal async Task Close()
+        public async Task Close()
         {
             try
             {
