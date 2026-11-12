@@ -68,6 +68,7 @@ await writeFile(fixture.modelPath, JSON.stringify({ default: 'local/wire', provi
 const registry = async () => JSON.parse(await readFile(join(fixture.data, 'state/running-exec.json'), 'utf8').catch(() => '{"execs":[]}'))
 let route
 const history = async () => (await fixture.api('GET', route + '/history')).body
+let failed = false
 const finished = async marker => !(await history()).session.busy && JSON.stringify((await history()).messages).includes(marker)
 try {
   await fixture.start()
@@ -109,6 +110,12 @@ try {
   assert.match(await readFile(join(fixture.data, 'state/logs/foxwarm.log'), 'utf8'), /Main HTTP listening:/)
   await fixture.stop(); assert.deepEqual(failures, []); assert.equal(new Set(fixture.hostPids).size, 2)
   console.log(JSON.stringify({ result: 'Native adjacent commands, inherited environment, Stop, detached lifetime, actual Main restart, exact completion, original-path read and startup log rotation passed.', mainProcesses: fixture.hostPids.length, modelRequests: requests.length }))
+} catch (error) {
+  failed = true
+  console.error('Main output:\n' + (fixture.output ?? '') + '\nExec registry: ' + JSON.stringify(await registry().catch(() => null)))
+  throw error
 } finally {
-  await fixture.cleanup(); model.closeAllConnections(); await new Promise(done => model.close(done))
+  // A cleanup failure must not hide the failure that caused it.
+  try { await fixture.cleanup() } catch (error) { if (!failed) throw error; console.error('Cleanup also failed: ' + error.message) }
+  model.closeAllConnections(); await new Promise(done => model.close(done))
 }

@@ -136,7 +136,8 @@ export async function createHostFixture(name, options = {}) {
   async function cleanup() {
     if (browser) await browser.close().catch(() => {})
     await crash()
-    if (process.env.FOXWARM_KEEP_E2E_ROOT !== '1') await rm(root, { recursive: true, force: true }); else console.log('Retained owned root: ' + root)
+    // On Windows a command the test started can still hold its working directory for a moment.
+    if (process.env.FOXWARM_KEEP_E2E_ROOT !== '1') await rm(root, { recursive: true, force: true, maxRetries: 40, retryDelay: 250 }); else console.log('Retained owned root: ' + root)
   }
   return { root, data, work, modelPath, origin, token, port, api, start, openApp, save, stop, signalStop, waitForExit, crash, sql, cleanup, hostPids, get output() { return host?.output } }
 }
