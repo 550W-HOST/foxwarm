@@ -87,7 +87,10 @@ export async function createHostFixture(name, options = {}) {
         output = (output + bytes).slice(-20000)
         const bound = source && output.includes('HTTP server started') ? origin : /^Main HTTP listening: ([^\r\n]+)\r?\n/m.exec(output)?.[1]
         if (bound) {
-          if (bound !== (source ? origin : `http://0.0.0.0:${port}`) || child.exitCode !== null || child.signalCode !== null) finish(new Error('Owned listener address does not match fixture: ' + bound))
+          // Published Main listens on the wildcard default, or on loopback when the test's
+          // config.yaml sets bot.httpHost: 127.0.0.1.
+          const expected = source ? [origin] : [`http://0.0.0.0:${port}`, origin]
+          if (!expected.includes(bound) || child.exitCode !== null || child.signalCode !== null) finish(new Error('Owned listener address does not match fixture: ' + bound))
           else { ownedListener = true; finish() }
         }
       }

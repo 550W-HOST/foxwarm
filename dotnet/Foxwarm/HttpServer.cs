@@ -47,7 +47,7 @@ internal sealed class HttpServer
         bool triggerEnabled = true
     )
     {
-        var address = publicAddress ?? PublicWebAddress.Capture(port);
+        var address = publicAddress ?? PublicWebAddress.Capture(port, bindAddress: bindAddress);
         Downloads = new(apiToken);
         var accessConfiguration =
             sessions.Models.ConfigurationOwner?.Access ?? new AccessConfiguration(new JsonObject());
@@ -75,7 +75,7 @@ internal sealed class HttpServer
         );
         // Node authentication uses Source-compatible query credentials. Do not log request URLs.
         builder.Logging.AddFilter("Microsoft.AspNetCore.Hosting.Diagnostics", LogLevel.Warning);
-        builder.WebHost.UseUrls($"http://{bindAddress}:{port}");
+        builder.WebHost.UseUrls($"http://{HttpServerSettings.UrlHost(bindAddress)}:{port}");
         if (desktop)
             builder.WebHost.UseSockets(options =>
                 options.CreateBoundListenSocket = endpoint =>
@@ -382,12 +382,9 @@ internal sealed class HttpServer
         app.Lifetime.ApplicationStarted.Register(() =>
         {
             var bound = new Uri(app.Urls.First());
-            var localHost = bindAddress is "0.0.0.0" or "::" or "127.0.0.1"
-                ? "127.0.0.1"
-                : bindAddress;
             sessions.RuntimeMcpEndpoint = new UriBuilder(
                 "http",
-                localHost,
+                HttpServerSettings.LocalHost(bindAddress),
                 bound.Port,
                 address.Prefix.ToString() + "/runtime/mcp"
             ).Uri;

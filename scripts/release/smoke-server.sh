@@ -52,7 +52,8 @@ wait_http() {
 }
 
 mkdir -p "$work/data/state"
-printf 'bot:\n  httpPort: %s\n' "$port" > "$work/data/state/config.yaml"
+# Listen on loopback only; releases before 0.9.6 ignore the setting and listen on all addresses.
+printf 'bot:\n  httpPort: %s\n  httpHost: 127.0.0.1\n' "$port" > "$work/data/state/config.yaml"
 (cd "$work" && /bin/bash "$installer" --package "$package" --dir foxwarm --data-dir data)
 wait_http
 [ -s "$work/data/state/token" ] || { echo "No sign-in token was created" >&2; exit 1; }
@@ -65,6 +66,8 @@ if [ "${3:-}" = --without-tmux ]; then
   [ -f "$work/data/state/logs/foxwarm.stderr.log" ]
 fi
 [ -s "$work/data/state/logs/foxwarm.log" ] || { echo "No Main file log was created" >&2; exit 1; }
+grep -q "Main HTTP listening: http://127.0.0.1:$port\$" "$work/data/state/logs/foxwarm.log" \
+  || { grep 'Main HTTP listening' "$work/data/state/logs/foxwarm.log" >&2; echo "Main did not listen on its configured address" >&2; exit 1; }
 
 # A native package is a NativeAOT executable: no managed assembly, and no CLR in Main.
 if grep -q '"native": true' "$work/foxwarm/runtime/current/release.json"; then

@@ -133,7 +133,7 @@ fi
 
 # Print where to sign in once Foxwarm is running (the start command has already confirmed it).
 show_signin() {
-  local data="$1" token="" port i
+  local data="$1" token="" port host i
   for ((i = 1; i <= 120; i++)); do
     if [ -s "$data/state/token" ]; then token="$(cat "$data/state/token")"; break; fi
     [ $((i % 20)) -eq 0 ] && warn "Still waiting for startup. Inspect it with: '$FOXWARM_DIR/foxwarmctl' status"
@@ -142,14 +142,20 @@ show_signin() {
   # config.yaml may not exist yet; under pipefail the failed sed must not end the installer.
   port="$(sed -n 's/^ *httpPort: *\([0-9][0-9]*\).*/\1/p' "$data/state/config.yaml" 2>/dev/null | sed -n 1p || true)"
   port="${port:-3001}"
+  # A specific bot.httpHost is the only address Main answers on.
+  host="$(sed -n "s/^ *httpHost: *['\"]\{0,1\}\([0-9A-Fa-f:.]*\).*/\1/p" "$data/state/config.yaml" 2>/dev/null | sed -n 1p || true)"
+  case "$host" in
+    ''|0.0.0.0|::) host=localhost ;;
+    *:*) host="[$host]" ;;
+  esac
   echo
   echo "Program dir: $FOXWARM_DIR"
   echo "Data dir:    $data"
   if [ -n "$token" ]; then
-    echo "WebUI: http://localhost:${port}/#token=${token}"
+    echo "WebUI: http://${host}:${port}/#token=${token}"
   else
     warn "The sign-in token is not ready yet. When startup finishes, read it with: cat '$data/state/token'"
-    echo "WebUI: http://localhost:${port}/"
+    echo "WebUI: http://${host}:${port}/"
   fi
   echo
   echo "Control: '$FOXWARM_DIR/foxwarmctl' status | stop | restart | update | attach"

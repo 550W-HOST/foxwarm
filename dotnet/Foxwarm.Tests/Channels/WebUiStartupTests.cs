@@ -29,6 +29,9 @@ public sealed partial class WebUiStartupTests
         private bool ownedListener;
         internal HttpClient Client = null!;
 
+        // The host part of Main's reported listener, from bot.httpHost.
+        internal string ListenHost = "0.0.0.0";
+
         internal static int FreePort()
         {
             var listener = new TcpListener(IPAddress.Loopback, 0);
@@ -140,7 +143,7 @@ public sealed partial class WebUiStartupTests
             await Task.WhenAny(listening.Task, exited).WaitAsync(TimeSpan.FromSeconds(20));
             if (Process.HasExited || !listening.Task.IsCompletedSuccessfully)
                 throw new InvalidOperationException(await Output());
-            Assert.Equal("http://0.0.0.0:" + Port, await listening.Task);
+            Assert.Equal("http://" + ListenHost + ":" + Port, await listening.Task);
         }
 
         internal async Task Ready(string? token = null, bool quiet = false)
@@ -956,6 +959,18 @@ public sealed partial class WebUiStartupTests
             await File.WriteAllTextAsync(
                 h.ConfigPath,
                 $"bot: {{httpPort: {h.Port}}}\nurl: '{address}'\n"
+            );
+            h.Start();
+            await h.Failed();
+            Assert.Equal(h.Token, await File.ReadAllTextAsync(h.TokenPath));
+        }
+        foreach (
+            var invalidHost in new[] { "localhost", "127.1", "1", "'fe80::1%1'", "'[::1]'", "''", "8080" }
+        )
+        {
+            await File.WriteAllTextAsync(
+                h.ConfigPath,
+                $"bot: {{httpPort: {h.Port}, httpHost: {invalidHost}}}\n"
             );
             h.Start();
             await h.Failed();

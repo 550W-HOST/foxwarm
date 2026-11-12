@@ -57,7 +57,8 @@ field() { sed -n "s/^ *\"$1\": *\"\{0,1\}\([^\",]*\)\"\{0,1\},\{0,1\}$/\1/p" "$w
 running_pid() { "$control" status | sed -n 's/.*Running (PID \([0-9]*\)).*/\1/p'; }
 
 mkdir -p "$work/data/state"
-printf 'bot:\n  httpPort: %s\n# retained by the upgrade\n' "$port" > "$work/data/state/config.yaml"
+# Loopback only; releases before 0.9.6 ignore bot.httpHost and listen on all addresses.
+printf 'bot:\n  httpPort: %s\n  httpHost: 127.0.0.1\n# retained by the upgrade\n' "$port" > "$work/data/state/config.yaml"
 (cd "$work" && /bin/bash "$installer" --package "$old" --dir foxwarm --data-dir data)
 wait_http
 before="$(field asset)"

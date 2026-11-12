@@ -1089,6 +1089,11 @@ var APP_CONFIG_SCHEMA = {
         enableWebUI: { type: "boolean" },
         enableTrigger: { type: "boolean" },
         httpPort: { type: "integer", minimum: 1, maximum: 65535 },
+        httpHost: {
+          type: "string",
+          default: "0.0.0.0",
+          description: "IP address the server listens on, such as 127.0.0.1 for this computer only. Host names are not accepted. Requires restart."
+        },
         enableTUI: { type: "boolean" }
       }
     },

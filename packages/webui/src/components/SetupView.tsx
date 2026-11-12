@@ -69,6 +69,7 @@ const DEFAULT_CONFIG_YAML = `# Foxwarm settings.
 # bot:
 #   name: foxwarm
 #   httpPort: 3001
+#   httpHost: 0.0.0.0
 #
 # channels:
 #   telegram:

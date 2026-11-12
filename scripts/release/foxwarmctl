@@ -177,6 +177,7 @@ startup_output() {
 startup_failed() {
   case "$(startup_output)" in
     *AddressInUse*) fail "Foxwarm could not start: port $(http_port) is already in use. Stop the program that uses it, or set bot.httpPort in $CONFIG_PATH to a free port." ;;
+    *AddressNotAvailable*) fail "Foxwarm could not start: bot.httpHost in $CONFIG_PATH is not an address of this computer." ;;
   esac
   fail "Foxwarm exited during startup. Use '$ROOT/foxwarmctl' attach for the pane or log paths."
 }
@@ -307,8 +308,8 @@ cmd_attach() {
   esac
 }
 
-download() {
 # Download a release file. A release that does not publish it fails with MISSING.
+download() {
   local code=""
   if have curl; then
     code="$(curl -L --retry 3 -o "$2" -w '%{http_code}' "$1")" || fail "Could not download $1."

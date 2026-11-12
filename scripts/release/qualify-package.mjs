@@ -56,8 +56,8 @@ const peer = createServer(async (request, response) => {
 peer.listen(0, '127.0.0.1'); await once(peer, 'listening')
 const provider = `http://127.0.0.1:${peer.address().port}`
 await writeFile(join(fixture.data, 'state/config.yaml'), vector
-  ? JSON.stringify({ bot: { httpPort: fixture.port }, vector: { baseUrl: provider + '/v1' }, dbWorkers: true, vectorMaintenance: false })
-  : `bot:\n  httpPort: ${fixture.port}\nvector:\n  enabled: false\n`)
+  ? JSON.stringify({ bot: { httpPort: fixture.port, httpHost: '127.0.0.1' }, vector: { baseUrl: provider + '/v1' }, dbWorkers: true, vectorMaintenance: false })
+  : `bot:\n  httpPort: ${fixture.port}\n  httpHost: 127.0.0.1\nvector:\n  enabled: false\n`)
 await writeFile(fixture.modelPath, JSON.stringify({ default: 'local/wire', providers: {
   local: { providerType: 'openai-responses', baseUrl: provider, models: ['wire'] },
 } }))
@@ -67,6 +67,7 @@ try {
   await fixture.start()
   const mainPid = fixture.hostPids.at(-1)
   if (release.native) assert(!/libcoreclr/.test(await maps(mainPid)), 'Native Main must not load CoreCLR')
+  assert.match(fixture.output, new RegExp(`Main HTTP listening: http://127\\.0\\.0\\.1:${fixture.port}\\b`), 'Main must listen only on its configured address')
   assert.equal((await fetch(fixture.origin + '/login.html')).status, 200)
   assert.match(await readFile(join(fixture.data, 'state/logs/foxwarm.log'), 'utf8'), /Main HTTP listening:/)
 
@@ -112,7 +113,7 @@ try {
   assert.equal(await readFile(join(fixture.work, 'native-monty.txt'), 'utf8'), 'packaged Monty 🦊')
   assert.equal(requests, 2)
 
-  const summary = { target: release.target, native: release.native === true, packagedNativeToolScript: true, fileLogging: true,
+  const summary = { target: release.target, native: release.native === true, loopbackListener: true, packagedNativeToolScript: true, fileLogging: true,
     ptyInputOutput: true, ptyResize: true, ptyCancelAndReap: true }
   if (vector) {
     // The Vector owner is a child of the same executable; Main itself never loads LanceDB.

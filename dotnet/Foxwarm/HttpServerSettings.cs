@@ -1,3 +1,5 @@
+using System.Net;
+using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
@@ -44,9 +46,9 @@ internal sealed record HttpServerSettings(
             && configured == Math.Truncate(configured)
                 ? (int)configured
             : throw new InvalidDataException("bot.httpPort must be a port number.");
-        const string bindAddress = "0.0.0.0";
+        var bindAddress = ListenAddress(configuration.AppConfiguration["bot"]?["httpHost"]);
         var configuredUrl = SessionWait.Text(configuration.AppConfiguration["url"]);
-        var address = PublicWebAddress.Capture(port, configuredUrl);
+        var address = PublicWebAddress.Capture(port, configuredUrl, bindAddress);
         var enabled = Enabled(configuration);
         var trigger = Feature(configuration, "enableTrigger");
         var http =
@@ -68,6 +70,39 @@ internal sealed record HttpServerSettings(
             HttpEnabled: http
         );
     }
+
+    internal const string WildcardAddress = "0.0.0.0";
+
+    // bot.httpHost is the address Main listens on: an IPv4 or IPv6 literal, default the IPv4
+    // wildcard. Host names, including localhost, are rejected so the listener is exactly one
+    // socket that needs no name resolution; 127.0.0.1 or ::1 select loopback.
+    internal static string ListenAddress(JsonNode? value)
+    {
+        if (value is null)
+            return WildcardAddress;
+        var text = SessionWait.Text(value);
+        if (
+            text is null
+            || !IPAddress.TryParse(text, out var parsed)
+            || text.Contains('%')
+            || text.Contains('[')
+            || parsed.AddressFamily == AddressFamily.InterNetwork
+                && parsed.ToString() != text
+        )
+            throw new InvalidDataException(
+                "bot.httpHost must be an IPv4 or IPv6 address, such as 0.0.0.0, 127.0.0.1 or ::1. Host names are not accepted."
+            );
+        return parsed.ToString();
+    }
+
+    // An address in URL host form: IPv6 literals in brackets.
+    internal static string UrlHost(string address) =>
+        address.Contains(':') ? "[" + address + "]" : address;
+
+    // Where a local client reaches a listener on this address: a wildcard listener is
+    // reached through IPv4 loopback, a specific address only through itself.
+    internal static string LocalHost(string address) =>
+        address is WildcardAddress or "::" ? "127.0.0.1" : UrlHost(address);
 
     // Desktop deliberately ignores the server bind/port/public URL settings. Kestrel
     // owns the listener; its actual bound address is published after start.
@@ -138,11 +173,20 @@ internal sealed record PublicWebAddress(
     public string Origin { get; internal set; } = Origin;
     internal string BaseUrl => Origin + CookiePath;
 
-    internal static PublicWebAddress Capture(int port, string? configured = null)
+    internal static PublicWebAddress Capture(
+        int port,
+        string? configured = null,
+        string bindAddress = HttpServerSettings.WildcardAddress
+    )
     {
         var input = configured;
         if (string.IsNullOrEmpty(input))
-            return new($"http://127.0.0.1:{port}", PathString.Empty, "/", false);
+            return new(
+                $"http://{HttpServerSettings.LocalHost(bindAddress)}:{port}",
+                PathString.Empty,
+                "/",
+                false
+            );
         if (
             input != input.Trim()
             || !Uri.TryCreate(input, UriKind.Absolute, out var uri)

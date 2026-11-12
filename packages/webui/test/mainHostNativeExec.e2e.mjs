@@ -16,7 +16,7 @@ else if (published) options.corePath = join(published, 'Foxwarm.dll')
 const fixture = await createHostFixture('native-exec', options)
 options.cwd = fixture.root
 Object.assign(env, { FOXWARM_NATIVE_OWNED_VALUE: 'inherited ordinary value' })
-await writeFile(join(fixture.data, 'state/config.yaml'), JSON.stringify({ url: fixture.origin, bot: { httpPort: fixture.port }, vector: false, llm: { maxOutput: 713 } }))
+await writeFile(join(fixture.data, 'state/config.yaml'), JSON.stringify({ url: fixture.origin, bot: { httpPort: fixture.port, httpHost: '127.0.0.1' }, vector: false, llm: { maxOutput: 713 } }))
 for (const root of [join(fixture.data, 'state/logs'), join(fixture.work, '.temp/exec')])
   for (let day = 17; day <= 20; day++) {
     const date = join(root, '2026-10-' + day); await mkdir(date, { recursive: true }); await writeFile(join(date, 'retained.log'), 'owned historical output')

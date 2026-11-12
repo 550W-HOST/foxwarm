@@ -583,6 +583,11 @@ test('rerunning the installer on a stopped installation prints the sign-in link'
   const rerun = ok(f.install(['--package', pkg]));
   assert.match(rerun.stdout, /already installed/);
   assert.match(rerun.stdout, /WebUI: http:\/\/localhost:3001\/#token=fixture-token/);
+  // A specific listen address is the only one Main answers on.
+  for (const [host, shown] of [['127.0.0.1', '127.0.0.1'], ["'::1'", '[::1]'], ['0.0.0.0', 'localhost']]) {
+    fs.writeFileSync(path.join(f.root, 'foxwarm-data/state/config.yaml'), `bot:\n  httpPort: 3005\n  httpHost: ${host}\n`);
+    assert.match(ok(f.install(['--package', pkg])).stdout, new RegExp(`WebUI: http://${shown.replace(/[[\].]/g, '\\$&')}:3005/#token=fixture-token`));
+  }
 });
 
 // Serves release downloads from a directory of named assets and records each request.
