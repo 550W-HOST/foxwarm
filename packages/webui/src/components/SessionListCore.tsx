@@ -47,7 +47,6 @@ export interface Session {
   defaultModelKey?: string
   childModelDefault?: string | null
   effectiveChildModelKey?: string
-  isolated?: boolean
   questions?: SessionQuestionsProjection
   tokenUsage?: {
     cachedTokens: number

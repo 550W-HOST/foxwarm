@@ -127,6 +127,7 @@ internal sealed partial class AgentCatalog
                 ["migratedAt"] = migratedAt,
                 ["generator"] = IsolationMigrationRules.GeneratorVersion,
                 ["rulesDigest"] = generated.Digest,
+                ["fenceDigest"] = IsolationMigrationRules.FenceDigest(row),
             };
             try
             {
@@ -144,6 +145,54 @@ internal sealed partial class AgentCatalog
             lock (stateGate)
                 metadata = next;
             return conflict;
+        }
+        finally
+        {
+            createGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Publishes one metadata change of the startup isolation migration. <paramref name="mutate"/>
+    /// edits a copy of the metadata and returns whether anything changed; the copy is
+    /// validated like any other catalog write and published as one atomic write.
+    /// </summary>
+    internal async Task<bool> MigrateMetadataAsync(Func<JsonObject, bool> mutate)
+    {
+        await createGate.WaitAsync();
+        try
+        {
+            var before = MetadataSnapshot();
+            var next = MetadataSnapshot();
+            if (!mutate(next))
+                return false;
+            // Only rows this mutation changed are validated: a row it left alone is written
+            // unchanged, and an unreadable layer there fails only that Agent's calls.
+            foreach (var (name, value) in next)
+            {
+                if (JsonNode.DeepEquals(before[name], value))
+                    continue;
+                _ = IsolatedToolCompatibility.Metadata(value);
+                if (value is JsonObject row && row["rules"] is JsonArray rules)
+                    _ = AgentRulePolicy.Parse(rules);
+            }
+            EnsureReaderVersion(next);
+            try
+            {
+                AtomicIndexWrite(
+                    indexPath,
+                    Payload(List().Where(id => id != "main"), next).ToJsonString()
+                );
+            }
+            catch (AuthorityCommittedException)
+            {
+                lock (stateGate)
+                    metadata = next;
+                throw;
+            }
+            lock (stateGate)
+                metadata = next;
+            return true;
         }
         finally
         {

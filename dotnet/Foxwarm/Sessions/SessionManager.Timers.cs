@@ -16,29 +16,6 @@ internal sealed partial class SessionManager
     private static string TimerOwner(SessionOwner source, JsonObject args) =>
         ToolRegistry.Text(args, "sessionId") is { Length: > 0 } requested ? requested : source.Id;
 
-    private void CheckTimerIsolation(SessionOwner source, JsonObject args, string requested)
-    {
-        if (!AgentIsolated(source.Agent))
-            return;
-        if (requested != source.Id)
-            throw new ToolAuthorizationDeniedException(
-                "Isolated session can only manage timers for its own current session."
-            );
-        var agent = TimerArguments.Optional(args["agentName"]);
-        var prefix = TimerArguments.Optional(args["sessionPrefix"]);
-        if (MainTimers.Flag(args["newSession"]))
-        {
-            if (agent is not null && agent != source.Agent)
-                throw new ToolAuthorizationDeniedException(
-                    "Isolated session timers may only create sessions in their own Agent."
-                );
-        }
-        else if (agent is not null || prefix is not null)
-            throw new ToolAuthorizationDeniedException(
-                "Isolated timers may only specify new-session target settings together with newSession=true."
-            );
-    }
-
     internal Task<JsonObject> ExecuteTimerToolAsync(
         SessionOwner source,
         string name,
@@ -120,7 +97,6 @@ internal sealed partial class SessionManager
         };
         ToolRegistry.Keys(args, allowed);
         var requested = TimerOwner(source, args);
-        CheckTimerIsolation(source, args, requested);
         using var admitted = BeginOwnerMutation(source);
         JsonObject? creationCandidate = null;
         async Task PrepareAsync()
@@ -130,7 +106,6 @@ internal sealed partial class SessionManager
                 await WaitForIdentityMutationAsync(source.Id, token);
                 var id = source.Id;
                 var agent = source.Agent;
-                CheckTimerIsolation(source, args, requested);
                 if (authorizeTool)
                 {
                     await AuthorizeToolAsync(source, new(name, "builtin", name, args), null, token);
@@ -183,7 +158,6 @@ internal sealed partial class SessionManager
                 token
             );
             await WaitForIdentityMutationAsync(source.Id, token);
-            CheckTimerIsolation(source, args, requested);
             if (authorizeTool)
                 await AuthorizeToolAsync(source, new(name, "builtin", name, args), null, token);
             if (
@@ -227,14 +201,6 @@ internal sealed partial class SessionManager
                                 source.Agent,
                                 SessionWait.Text(row["agentName"])!
                             );
-                        if (
-                            AgentIsolated(source.Agent)
-                            && MainTimers.Flag(row["newSession"])
-                            && SessionWait.Text(row["agentName"]) != source.Agent
-                        )
-                            throw new ToolAuthorizationDeniedException(
-                                "Isolated timer target Agent is no longer the caller's Agent."
-                            );
                     }
                 )
                 : await timers.UpdateAsync(
@@ -248,14 +214,6 @@ internal sealed partial class SessionManager
                             agents.RequireSessionTarget(
                                 source.Agent,
                                 SessionWait.Text(row["agentName"])!
-                            );
-                        if (
-                            AgentIsolated(source.Agent)
-                            && MainTimers.Flag(row["newSession"])
-                            && SessionWait.Text(row["agentName"]) != source.Agent
-                        )
-                            throw new ToolAuthorizationDeniedException(
-                                "Isolated timer target Agent is no longer the caller's Agent."
                             );
                     }
                 );

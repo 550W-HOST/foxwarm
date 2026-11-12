@@ -159,4 +159,4 @@ interface QueueItem {
 - Agent 的 `defaultNode` / `defaultCwd` 决定新 session 的初始 node 与工作目录；这只是放置位置，不授予任何权限
 - 工具权限由全局 `state/tool-authorization.yaml` 与 agent 本地规则层（`create_agent` 的 `rules`、`set_agent_rules`）共同决定；本地规则作用于该 agent 以及由它创建的 agent，只能进一步收紧
 - 真正的隔离来自 node 所在的环境（容器、虚拟机或独立机器）；`node-setup` 技能提供一次性容器 Provider 的参考实现
-- 旧的 agent 级隔离（`/agent isolated <agent> <node-id|off>`、`isolatedNode`）已弃用：现有 isolated agent 仍按原规则执行，新 agent 不应再使用。迁移方法见 `agent-management` 技能
+- 旧的 agent 级隔离已移除：启动时，仍标记为 isolated 的 agent 会自动迁移为生成的本地规则层，并以原绑定 node 作为 `defaultNode`。详见 `agent-management` 技能

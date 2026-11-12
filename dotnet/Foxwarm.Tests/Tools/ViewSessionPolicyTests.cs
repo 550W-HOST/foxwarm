@@ -109,42 +109,4 @@ public sealed class ViewSessionPolicyTests
         Assert.NotNull(value["executionState"]);
     }
 
-    [Fact]
-    public void Policy_read_compatibility_is_builtin_only_and_isolation_cannot_be_overridden()
-    {
-        var builtin = JsonNode.Parse("""{"source":"builtin","name":"get_session_messages"}""");
-        var mcp = JsonNode.Parse("""{"source":"mcp","name":"get_session_messages"}""");
-        Assert.True(
-            ToolAuthorizationEvaluation.ToolMatches(builtin, "builtin", "view_session", null)
-        );
-        Assert.False(ToolAuthorizationEvaluation.ToolMatches(mcp, "mcp", "view_session", "peer"));
-        Assert.True(
-            ToolAuthorizationEvaluation.ToolMatches(mcp, "mcp", "get_session_messages", "peer")
-        );
-        var isolation = IsolatedToolCompatibility.Metadata(
-            JsonNode.Parse(
-                """
-                {"isolated":true,"toolRules":[{"effect":"allow","source":"builtin","tool":"get_session_messages"}]}
-                """
-            )
-        );
-        Assert.Equal("view_session", isolation.Rules[0]!["tool"]!.GetValue<string>());
-        Assert.False(IsolatedToolCompatibility.Visible(isolation, "builtin", "view_session", null));
-        var request = new ToolAuthorizationRequest(
-            "builtin",
-            "view_session",
-            null,
-            new JsonObject { ["sessionId"] = "main/sample" },
-            [],
-            "main",
-            "main/sample",
-            "master",
-            "/workspace/agents",
-            "/workspace/agents/main",
-            "/workspace/agents/main/memory"
-        );
-        Assert.Throws<ToolAuthorizationDeniedException>(() =>
-            IsolatedToolCompatibility.Check(isolation, request, _ => null)
-        );
-    }
 }

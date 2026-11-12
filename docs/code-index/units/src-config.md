@@ -78,7 +78,7 @@ These are selected runtime overrides, not an environment-to-YAML migration. Test
 | WebUI / trigger | enabled unless explicitly `false` |
 | TUI | disabled unless configured or `--tui` is present |
 | context limit | `200000` |
-| recent compact keep fraction (`compactKeepPercent`) | `0.3` |
+| recent raw tail kept by compaction, as a fraction of the compact threshold or of the raw region present, whichever is smaller (`compactKeepPercent`) | `0.3` |
 | automatic compact threshold fraction (`compactThresholdPercent`) | `0.85` |
 | block eligibility / force tokens | `3000` / `5000` |
 | block candidate / force-coverage fraction | `0.4` / `0.2` |

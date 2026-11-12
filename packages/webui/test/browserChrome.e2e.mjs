@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { build } from 'esbuild'
 import puppeteer from 'puppeteer-core'
+import { browserLaunchOptions } from './browserExecutable.mjs'
 
 test('browser chrome colors follow the theme without changing PWA identity or viewport layout', async () => {
   const bundle = await build({ entryPoints: ['packages/webui/src/theme/browserChrome.ts'], bundle: true, format: 'iife', globalName: 'chromeTheme', write: false })
@@ -16,7 +17,7 @@ test('browser chrome colors follow the theme without changing PWA identity or vi
     res.end('<meta name="theme-color" content="#f3f4f6"><link rel="manifest" crossorigin="use-credentials" href="./manifest.json"><div style="height:200px">Fixture</div>')
   })
   await new Promise(r => server.listen(0, '127.0.0.1', r))
-  const browser = await puppeteer.launch({ executablePath: process.env.FOXWARM_E2E_CHROMIUM || '/snap/bin/chromium', args: ['--no-sandbox'] })
+  const browser = await puppeteer.launch(browserLaunchOptions())
   try {
     const page = await browser.newPage()
     await page.goto(`http://127.0.0.1:${server.address().port}/nested/`)

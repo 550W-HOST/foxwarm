@@ -30,7 +30,8 @@ internal sealed partial class NodeConnectionHub
         SessionOwner owner,
         bool restrict,
         CancellationToken token,
-        Action<long>? beforeMaterialize = null
+        Action<long>? beforeMaterialize = null,
+        string? sessionCwd = null
     )
     {
         using var admission = owner.Entry.AdmitMutation();
@@ -46,7 +47,8 @@ internal sealed partial class NodeConnectionHub
             owner,
             restrict,
             token,
-            Charge
+            Charge,
+            sessionCwd
         );
         if (!charged)
             Charge(source.Length);
@@ -66,10 +68,20 @@ internal sealed partial class NodeConnectionHub
         SessionOwner owner,
         bool restrict,
         CancellationToken token,
-        Action<long>? beforeMaterialize = null
+        Action<long>? beforeMaterialize = null,
+        string? sessionCwd = null
     )
     {
-        var response = await TransferAsync(node, path, owner, restrict, null, false, token);
+        var response = await TransferAsync(
+            node,
+            path,
+            owner,
+            restrict,
+            null,
+            false,
+            token,
+            sessionCwd: sessionCwd
+        );
         return DecodeReadResponse(response, path, beforeMaterialize);
     }
 
@@ -121,12 +133,22 @@ internal sealed partial class NodeConnectionHub
         bool overwrite,
         SessionOwner owner,
         bool restrict,
-        CancellationToken token
+        CancellationToken token,
+        string? sessionCwd = null
     )
     {
         using var admission = owner.Entry.AdmitMutation();
         if (bytes.Length < StreamThreshold || !StreamingAvailable(node))
-            return await WriteFileLegacyAsync(node, path, bytes, overwrite, owner, restrict, token);
+            return await WriteFileLegacyAsync(
+                node,
+                path,
+                bytes,
+                overwrite,
+                owner,
+                restrict,
+                token,
+                sessionCwd: sessionCwd
+            );
         using var source = new MemoryStream(bytes, writable: false);
         var result = await WriteStreamAsync(
             node,
@@ -136,7 +158,8 @@ internal sealed partial class NodeConnectionHub
             overwrite,
             owner,
             restrict,
-            token
+            token,
+            sessionCwd: sessionCwd
         );
         return new JsonObject
         {
@@ -155,7 +178,8 @@ internal sealed partial class NodeConnectionHub
         SessionOwner owner,
         bool restrict,
         CancellationToken token,
-        bool detachAfterDispatch = false
+        bool detachAfterDispatch = false,
+        string? sessionCwd = null
     )
     {
         var response = await TransferAsync(
@@ -166,7 +190,8 @@ internal sealed partial class NodeConnectionHub
             bytes,
             overwrite,
             token,
-            detachAfterDispatch
+            detachAfterDispatch,
+            sessionCwd
         );
         var result =
             response["result"] as JsonObject
@@ -192,6 +217,14 @@ internal sealed partial class NodeConnectionHub
             );
     }
 
+    // Sent only when the target is the Session's current Node. A Node that does not know the field
+    // keeps resolving relative paths against its Agent directory.
+    internal static void AddSessionCwd(JsonObject frame, string? sessionCwd)
+    {
+        if (!string.IsNullOrWhiteSpace(sessionCwd))
+            frame["sessionCwd"] = sessionCwd;
+    }
+
     internal static string RemoteFileName(string path) => path.Replace('\\', '/').Split('/').Last();
 
     private async Task<JsonObject> TransferAsync(
@@ -202,7 +235,8 @@ internal sealed partial class NodeConnectionHub
         byte[]? bytes,
         bool overwrite,
         CancellationToken token,
-        bool detachAfterDispatch = false
+        bool detachAfterDispatch = false,
+        string? sessionCwd = null
     )
     {
         if (
@@ -256,6 +290,7 @@ internal sealed partial class NodeConnectionHub
                 ["agentName"] = owner.Agent,
                 ["restrictToAgentDir"] = restrict,
             };
+            AddSessionCwd(request, sessionCwd);
             if (bytes is not null)
             {
                 request["dataBase64"] = Convert.ToBase64String(bytes);

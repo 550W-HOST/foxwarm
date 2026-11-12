@@ -160,8 +160,7 @@ internal sealed partial class SessionManager
                     if (original.AuthorityEnvelope.ContainsKey(field))
                         envelope[field] = original.AuthorityEnvelope[field]?.DeepClone();
                 // A fork stays in its Agent, so it follows the parent's current Node.
-                envelope["currentNode"] =
-                    BoundNode(parent.Agent) ?? initialNode ?? CurrentNode(parent);
+                envelope["currentNode"] = initialNode ?? CurrentNode(parent);
                 if (
                     agents.DefaultCwdFor(parent.Agent, SessionWait.Text(envelope["currentNode"])) is
                     { } defaultCwd
@@ -264,7 +263,7 @@ internal sealed partial class SessionManager
                                 id,
                                 inherited: true,
                                 (
-                                    ResolveExecutionNode(envelope, BoundNode(parent.Agent)),
+                                    ResolveExecutionNode(envelope),
                                     SessionWait.Text(envelope["cwd"])
                                 )
                             )

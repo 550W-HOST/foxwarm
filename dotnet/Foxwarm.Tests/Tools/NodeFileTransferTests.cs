@@ -390,13 +390,10 @@ public sealed partial class NodeFileTransferTests
     }
 
     [Fact]
-    public async Task Master_copy_ignores_session_cwd_and_preserves_no_overwrite_and_binary_bytes()
+    public async Task Master_copy_preserves_no_overwrite_and_binary_bytes()
     {
         await using var f = new Fixture();
         await f.Start();
-        var project = Path.Combine(f.Temp.Path, "project");
-        Directory.CreateDirectory(project);
-        await f.Owner.Entry.SaveLane.CommitCwdAsync(project);
         byte[] bytes = [0, 1, 255];
         await File.WriteAllBytesAsync(Path.Combine(f.Work, "binary"), bytes);
         var args = new JsonObject
@@ -408,7 +405,6 @@ public sealed partial class NodeFileTransferTests
         };
         await f.Manager.CopyBetweenNodesAsync(f.Owner, args, default);
         Assert.Equal(bytes, await File.ReadAllBytesAsync(Path.Combine(f.Work, "nested/copy")));
-        Assert.False(File.Exists(Path.Combine(project, "nested/copy")));
         await Assert.ThrowsAsync<IOException>(() =>
             f.Manager.CopyBetweenNodesAsync(f.Owner, args, default)
         );

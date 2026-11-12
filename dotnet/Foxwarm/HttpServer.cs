@@ -302,7 +302,7 @@ internal sealed class HttpServer
                 await context.Response.WriteAsync(manifest.ToJsonString(), context.RequestAborted);
             });
             app.UseWhen(
-                context => IsBrandAsset(context.Request.Path),
+                context => context.Request.Path != "/manifest.json" && IsBrandAsset(context.Request.Path),
                 branch =>
                     branch.UseStaticFiles(
                         new StaticFileOptions
@@ -430,23 +430,23 @@ internal sealed class HttpServer
         )
             return true;
         foreach (var header in request.Headers.Cookie)
-            foreach (var entry in (header ?? "").Split(';'))
+        foreach (var entry in (header ?? "").Split(';'))
+        {
+            var separator = entry.IndexOf('=');
+            if (separator < 0 || entry[..separator].Trim() != "foxwarm_token")
+                continue;
+            string candidate;
+            try
             {
-                var separator = entry.IndexOf('=');
-                if (separator < 0 || entry[..separator].Trim() != "foxwarm_token")
-                    continue;
-                string candidate;
-                try
-                {
-                    candidate = Uri.UnescapeDataString(entry[(separator + 1)..].Trim());
-                }
-                catch (UriFormatException)
-                {
-                    continue;
-                }
-                if (Equal(candidate, token) || Equal(candidate, derived))
-                    return true;
+                candidate = Uri.UnescapeDataString(entry[(separator + 1)..].Trim());
             }
+            catch (UriFormatException)
+            {
+                continue;
+            }
+            if (Equal(candidate, token) || Equal(candidate, derived))
+                return true;
+        }
         return false;
     }
 

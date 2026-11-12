@@ -84,7 +84,6 @@ internal sealed partial class WebUIChannel
                                 is not (
                                     "agentId"
                                     or "inheritAgent"
-                                    or "isolatedNode"
                                     or "rules"
                                     or "defaultNode"
                                     or "defaultCwd"
@@ -126,12 +125,12 @@ internal sealed partial class WebUIChannel
                     var inherit = body["inheritAgent"] is null
                         ? null
                         : body["inheritAgent"]!.GetValue<string>()?.Trim();
-                    if (!string.IsNullOrEmpty(inherit) && sessions.AgentIsolated(inherit))
+                    if (!string.IsNullOrEmpty(inherit) && !sessions.AgentInheritable(inherit))
                         return Results.BadRequest(
                             new JsonObject
                             {
                                 ["error"] =
-                                    "An isolated Agent cannot be used as an inherit source.",
+                                    $"Agent '{inherit}' is not inheritable and cannot be used as an inherit source.",
                             }
                         );
                     if (body.ContainsKey("rules") && body["rules"] is not JsonArray)
@@ -139,7 +138,6 @@ internal sealed partial class WebUIChannel
                     var created = await sessions.CreateAgentAsync(
                         name.Trim(),
                         inherit: string.IsNullOrEmpty(inherit) ? null : inherit,
-                        isolatedNode: body["isolatedNode"]?.GetValue<string>(),
                         rules: body["rules"] as JsonArray,
                         defaultNode: body["defaultNode"]?.GetValue<string>(),
                         defaultCwd: body["defaultCwd"]?.GetValue<string>()
@@ -265,8 +263,8 @@ internal sealed partial class WebUIChannel
                 }
             }
         );
-        // Administrator-only legacy isolation migration: a read-only inventory and an
-        // explicit per-Agent apply. Neither disables legacy isolation.
+        // Administrator-only legacy isolation migration: a read-only inventory, including the
+        // last startup migration report, and an explicit per-Agent apply or placement backfill.
         app.MapGet(
             "/api/agents/isolation-migration",
             (string? agent) =>
@@ -372,7 +370,6 @@ internal sealed partial class WebUIChannel
                             item.Key
                                 is not (
                                     "inheritAgent"
-                                    or "isolatedNode"
                                     or "rules"
                                     or "defaultNode"
                                     or "defaultCwd"
@@ -382,7 +379,6 @@ internal sealed partial class WebUIChannel
                         || !new[]
                         {
                             "inheritAgent",
-                            "isolatedNode",
                             "rules",
                             "defaultNode",
                             "defaultCwd",
@@ -390,7 +386,7 @@ internal sealed partial class WebUIChannel
                         }.Any(body.ContainsKey)
                     )
                         throw new InvalidDataException(
-                            "Provide inheritAgent, isolatedNode, rules, defaultNode, defaultCwd or inheritable."
+                            "Provide inheritAgent, rules, defaultNode, defaultCwd or inheritable."
                         );
                     if (!sessions.Agents().Contains(agentId))
                         return Results.NotFound(new JsonObject { ["error"] = "Agent not found." });
@@ -415,11 +411,6 @@ internal sealed partial class WebUIChannel
                             && flag.TryGetValue<bool>(out var inheritable)
                                 ? inheritable
                                 : throw new InvalidDataException("inheritable must be a boolean.")
-                        );
-                    if (body.ContainsKey("isolatedNode"))
-                        await sessions.SetAgentNodeAsync(
-                            agentId,
-                            SessionWait.Text(body["isolatedNode"])
                         );
                     if (body.ContainsKey("inheritAgent"))
                         await sessions.SetAgentInheritAsync(
@@ -451,8 +442,6 @@ internal sealed partial class WebUIChannel
                                     sessions.AgentMetadata[agentId]?["defaultCwd"]?.DeepClone()
                                 ),
                                 ["inheritable"] = sessions.AgentInheritable(agentId),
-                                ["isolated"] = sessions.AgentIsolated(agentId),
-                                ["isolatedNode"] = sessions.RecordedIsolationNode(agentId),
                             },
                         }
                     );

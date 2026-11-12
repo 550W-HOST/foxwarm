@@ -23,7 +23,15 @@ public sealed class CompactFrictionTests
             10,
             0
         );
-        var candidates = new CompactCandidates([], 1, [candidate], [], 10, 10, null, []);
+        var candidates = new CompactCandidates(
+            [],
+            1,
+            [candidate],
+            [],
+            10,
+            10,
+            [new RetentionOperation("message", 1, 0, 0, 1, 1, CompactRetention.NewBlockBudget)]
+        );
         foreach (
             var (raw, expected) in new (JsonNode?, int?)[]
             {

@@ -247,14 +247,6 @@ internal sealed partial class SessionManager
             throw new InvalidDataException(
                 "Destination Agent already exists or its directory is reserved."
             );
-        if (
-            purpose == IdentityMovePurpose.MoveSession
-            && owner.Agent != targetAgent
-            && (Isolation(owner.Agent).Isolated || !create && Isolation(targetAgent).Isolated)
-        )
-            throw new InvalidDataException(
-                "Isolated Agents cannot move sessions across Agent boundaries."
-            );
         ValidateExecutionEnvironment(
             owner.Entry.Snapshot().AuthorityEnvelope,
             agents.SourceDirectory(targetAgent),

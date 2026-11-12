@@ -36,7 +36,7 @@ const provider = createServer(async (request, output) => {
       const properties = Object.keys(schema.parameters.properties), required = schema.parameters.required || []
       assert.equal(properties.includes('confirmation'), false)
       for (const field of ['handoffRecall', 'handoffConfirmation']) { assert.equal(properties.includes(field), mode); assert.equal(required.includes(field), mode) }
-      if (mode) { assert.equal(properties.filter(key => !key.startsWith('__cancel')).at(-1), 'handoffConfirmation'); assert.equal(required.at(-1), 'handoffConfirmation'); assert(properties.indexOf('handoffRecall') < properties.indexOf('message')) }
+      if (mode) { assert.equal(properties.at(-1), 'handoffConfirmation'); assert.equal(required.at(-1), 'handoffConfirmation'); assert(properties.indexOf('handoffRecall') < properties.indexOf('message')) }
     }
     let calls = scripts.get(key); if (calls) scripts.delete(key)
     if (!calls && ['child-report', 'fork-report'].includes(key) && !body.input.some(item => item.type === 'function_call_output' && item.call_id?.startsWith('report-'))) {

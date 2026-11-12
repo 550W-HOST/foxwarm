@@ -350,6 +350,8 @@ public sealed class WebUiAccessTests
                 (Text: "/home/example/project/file.cs\nPlease inspect this file.  ", Parts: false),
                 (Text: "\uFEFF/unknown command-like text", Parts: true),
                 (Text: "\u2007@helper-name.\uFEFF/unknown text", Parts: true),
+                (Text: "/stpo", Parts: false),
+                (Text: "/Stop", Parts: true),
                 (Text: "/session/archive", Parts: false),
                 (Text: "/stop.txt", Parts: true),
                 (Text: "/stop-extra", Parts: false),
@@ -403,8 +405,22 @@ public sealed class WebUiAccessTests
             Assert.True(SessionCatalog.Flag(runtime.Catalog.Get("outside-archive")!["archived"]));
             Assert.Equal(ordinary.Length, chat.Entry.Snapshot().Queue.Count);
             await AssertSlashUploadsAsync(http, manager, chat, scoped: false);
+            await AssertSlashUploadsAsync(
+                http,
+                manager,
+                chat,
+                scoped: false,
+                text: "/Stop inspect this image"
+            );
             http.DefaultRequestHeaders.Authorization = new("Bearer", "synthetic-alice");
             await AssertSlashUploadsAsync(http, manager, chat, scoped: true);
+            await AssertSlashUploadsAsync(
+                http,
+                manager,
+                chat,
+                scoped: true,
+                text: "/stpo inspect this image"
+            );
         }
         finally
         {
@@ -418,7 +434,8 @@ public sealed class WebUiAccessTests
         HttpClient http,
         SessionManager manager,
         SessionOwner owner,
-        bool scoped
+        bool scoped,
+        string text = "/home/example/project/asset.png\nPlease inspect this image.  "
     )
     {
         var bytes = ImageCodecTests.Raster(SkiaSharp.SKEncodedImageFormat.Png);
@@ -448,20 +465,20 @@ public sealed class WebUiAccessTests
                 Assert.True(File.Exists(path));
                 Assert.Equal(queued, owner.Entry.Snapshot().Queue.Count);
             }
-            const string text = "/home/example/project/asset.png\nPlease inspect this image.  ";
+            var clientId = "slash-image-" + Guid.NewGuid().ToString("N");
             using var accepted = await http.PostAsJsonAsync(
                 "/api/sessions/chat/message",
                 new JsonObject
                 {
                     ["text"] = text,
-                    ["clientMessageId"] = "slash-image-" + scoped,
+                    ["clientMessageId"] = clientId,
                     ["uploadedFiles"] = new JsonArray(file.DeepClone()),
                 }
             );
             Assert.Equal(HttpStatusCode.Accepted, accepted.StatusCode);
             Assert.Equal(queued + 1, owner.Entry.Snapshot().Queue.Count);
             var item = owner.Entry.Snapshot().Queue.Last();
-            Assert.Equal("slash-image-" + scoped, item.ClientMessageId);
+            Assert.Equal(clientId, item.ClientMessageId);
             Assert.Equal(text, SessionWait.Text(item.Parts![1]["text"]));
             var image = Assert.Single(item.Parts, part => part["inlineDataRef"] is not null);
             Assert.Equal(bytes, await manager.Images.ReadAsync(image["inlineDataRef"]!.AsObject()));

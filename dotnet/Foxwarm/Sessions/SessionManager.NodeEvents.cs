@@ -69,7 +69,7 @@ internal sealed partial class SessionManager
                     "Remote exec completion has no start-time authority in this host lifetime and no durable duplicate receipt."
                 );
         }
-        else if (CurrentNode(owner) != node && BoundNode(owner.Agent) != node)
+        else if (CurrentNode(owner) != node)
             throw new InvalidDataException(
                 "Authenticated Node does not own this Session's event placement."
             );

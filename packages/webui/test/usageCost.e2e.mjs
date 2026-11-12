@@ -55,7 +55,7 @@ before(async () => {
       }
       const payload = address.includes('/session-list/architecture') ? {version:1,revision:'r',roots:{sessions:[session],hasMore:false},children:[],agentCounts:[{agent:'main',count:2}],summary:{total:2,busy:0,queued:0,managed:0,...counts,cost:1.25}}
         : address.includes('/tasks') ? {total:0,tasks:[]}
-        : address.includes('/nodes') ? {nodes:[]} : address.includes('/agents') ? {agents:[{id:'main',inherit:null,inheritanceChain:['main'],isolated:false,isolatedNode:null,defaultNode:null,defaultCwd:null,sessionCount:2,activeSessionCount:0,queuedSessionCount:0,memoryRoot:'/agents/main/memory',memoryFileCount:0,memoryLastModified:null}]} : {}
+        : address.includes('/nodes') ? {nodes:[]} : address.includes('/agents') ? {agents:[{id:'main',inherit:null,inheritanceChain:['main'],defaultNode:null,defaultCwd:null,sessionCount:2,activeSessionCount:0,queuedSessionCount:0,memoryRoot:'/agents/main/memory',memoryFileCount:0,memoryLastModified:null}]} : {}
       return new Response(JSON.stringify(payload),{status:200,headers:{'Content-Type':'application/json'}})
     }
     class Socket { static CLOSED=3; constructor(){this.readyState=0;queueMicrotask(()=>{this.readyState=1;this.onopen?.({});this.onmessage?.({data:JSON.stringify({type:'connected'})})})} close(){this.readyState=3} send(){} }

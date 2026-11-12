@@ -16,23 +16,15 @@ function promptOf(input) {
     .map(content => content.text || '')
   return messages.findLast(item => item.includes('COMPACTION STARTED:')) || ''
 }
+// Submit exactly the operations the retention schedule requires.
 function plannerBlocks(prompt, index) {
-  const raw = [...prompt.matchAll(/^- M#(\d+)(?:-#(\d+))?\s/gm)]
-    .map(item => ({ start: Number(item[1]), end: Number(item[2] || item[1]) }))
-  const levelOne = [...prompt.matchAll(/^- B#(\d+) L1 raw#/gm)].map(item => Number(item[1]))
-  const plans = []
-  if (index >= 3 && levelOne.length >= 2)
-    plans.push({ level: 2, sourceKind: 'block', sourceStart: levelOne[0], sourceEnd: levelOne[1],
-      summary: 'The first two older source-bound L1 summaries were summarized into this L2 block. Continue using the later blocks and current context.',
-      memoryFacts: [{ kind: 'decision', text: 'Local synthetic scenario retained two nested blocks as source evidence.', attributedTo: 'assistant' }] })
-  const count = index <= 2 ? 3 : raw.length >= 5 ? 1 : 0
-  for (let block = 0; block < count; block++) {
-    const slice = raw.slice(block * 5, block * 5 + 5)
-    if (slice.length < 5) break
-    plans.push({ level: 1, sourceKind: 'message', sourceStart: slice[0].start,
-      sourceEnd: slice.at(-1).end, summary: largeSummary(`${index}-${block}`) })
-  }
-  return plans
+  return [...prompt.matchAll(/^\d+\. sourceKind=(message|block), sourceStart=(\d+), sourceEnd=(\d+), level=(\d+)/gm)].map(match => {
+    const operation = { level: Number(match[4]), sourceKind: match[1], sourceStart: Number(match[2]), sourceEnd: Number(match[3]) }
+    return operation.sourceKind === 'block'
+      ? { ...operation, summary: 'The two oldest source-bound L1 summaries were summarized into this L2 block. Continue using the later blocks and current context.',
+        memoryFacts: [{ kind: 'decision', text: 'Local synthetic scenario retained two nested blocks as source evidence.', attributedTo: 'assistant' }] }
+      : { ...operation, summary: largeSummary(index) }
+  })
 }
 
 export async function startScriptedProvider({ alphaToken, betaToken }) {

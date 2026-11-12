@@ -28,15 +28,16 @@ self-compaction routine.
    a recorded skill load.
 
 This mode permits middle and recent completed ranges, small sources and an
-individual existing block. Automatic selection windows, token thresholds and
-coverage quotas do not apply. Structural range checks still apply:
+individual existing block. The operations that regular compaction requires and
+its token thresholds do not apply. Structural range checks still apply:
 
 - Raw messages use `sourceKind: "message"`, `level: 1` and canonical message seq
   endpoints. Select complete call/response exchanges, not individual tool results.
-- Existing CTX blocks use `sourceKind: "block"`, block ID endpoints in active
-  history order, and a target level one above the source blocks. Rewriting one
-  block creates a new block with that one child; it does not overwrite the old
-  block. A CTX header's `raw#` range is provenance, not active raw-message input.
+- Existing CTX blocks use `sourceKind: "block"` and block ID endpoints in active
+  history order. Merging several blocks targets the level one above them.
+  Rewriting one block keeps its level (an L1 source becomes L2) and creates a
+  new block with that one child; it does not overwrite the old block. A CTX
+  header's `raw#` range is provenance, not active raw-message input.
 - Each replacement range must be continuous within one legal source segment,
   with one source kind and source level. Do not cross protected lifecycle entries
   or previously preserved raw entries. Multiple disjoint ranges use separate
@@ -47,6 +48,14 @@ coverage quotas do not apply. Structural range checks still apply:
 - `preserveMessages` keeps exact raw wording within a replacement; selecting one
   member preserves the complete exchange. `removePreservedMessages` removes only
   previously preserved active entries and must name every exchange member.
+
+Regular compaction keeps at most three blocks per level, with levels never
+increasing from older to newer blocks, and budgets of 3,000 estimated tokens
+for a new level-1 summary and 1,500 for other summaries, memory facts
+included. Here those budgets are
+advisory: an accepted plan lists any summary over its budget in `overBudget`.
+A layout this mode leaves outside that shape is normalized by the next regular
+compaction, so prefer shortening or merging the oldest blocks.
 
 A standalone submission is easier to inspect, but ordinary foreground batches
 may contain other tools. Use `submit_compact_plan` directly when it is available
@@ -73,7 +82,7 @@ The identifiers below are illustrative; confirm your own active sources first.
 }
 ```
 
-To shorten active L2 block B#48, use an entry with `level: 3`,
+To shorten active L2 block B#48, use an entry with `level: 2`,
 `sourceKind: "block"`, `sourceStart: 48`, `sourceEnd: 48` and your summary.
 The array may also be JSON-encoded as the existing tool permits. File input uses
 the same source validation and application rules as direct input. If a rejected

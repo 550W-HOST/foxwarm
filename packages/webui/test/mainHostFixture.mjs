@@ -16,6 +16,17 @@ export async function until(check, label, timeout = 22000) {
   throw new Error('Timed out: ' + label)
 }
 // With only `main` and no alternative runtime, `+` creates directly and a split options control opens the dialog.
+// The planner prompt lists the operations the retention schedule requires; scripted planners
+// submit exactly those, with a fixture summary.
+export function requiredCompactOperations(text, summary) {
+  const seen = new Map()
+  for (const match of text.matchAll(/\d+\. sourceKind=(message|block), sourceStart=(\d+), sourceEnd=(\d+), level=(\d+)/g)) {
+    const operation = { level: Number(match[4]), sourceKind: match[1], sourceStart: Number(match[2]), sourceEnd: Number(match[3]) }
+    seen.set(`${operation.sourceKind}:${operation.sourceStart}`, { ...operation, summary: typeof summary === 'function' ? summary(operation) : summary })
+  }
+  return [...seen.values()]
+}
+
 export const NEW_SESSION_DIALOG_TRIGGER = 'button[aria-haspopup="dialog"]:is([aria-label="New session"], [aria-label="New session options"])'
 // Setup opens Models in the form view when the form can represent the file; fixtures that write exact YAML switch to the editor.
 export async function openModelsYaml(page) {

@@ -1,4 +1,3 @@
-import BuildUpdateNotice from './components/BuildUpdateNotice'
 import { renewAuthenticatedBrowserCookie } from './browserAuth'
 import { Component, lazy, StrictMode, Suspense, useEffect, useState, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
@@ -7,6 +6,8 @@ import './index.css'
 import { parseFoxwarmEmbeddedTarget } from './embeddedWebUi'
 import { parseFoxwarmPopupTarget } from './popupWebUi'
 import { initializeThemeRuntime } from './theme/runtime'
+import BuildUpdateNotice from './components/BuildUpdateNotice'
+import { isStandaloneWebUi } from './updateReload'
 import { API_BASE_PATH } from './config'
 import { BootReadySignal, markBootReady } from './components/FoxLoaders'
 
@@ -75,7 +76,7 @@ function AuthenticatedWebUiRoot() {
   useEffect(() => { if (failed) markBootReady() }, [failed])
   if (failed) return <div className="foxwarm-fixed-viewport-shell flex h-full items-center justify-center text-fw-text"><a href="login.html">Sign in again</a></div>
   if (!auth) return <div className="foxwarm-fixed-viewport-shell h-full bg-fw-canvas" />
-  return <>{auth.role === 'webui' ? <WebUiIdentityApp auth={auth} /> : content}<BootReadySignal /><BuildUpdateNotice /></>
+  return <>{auth.role === 'webui' ? <WebUiIdentityApp auth={auth} /> : content}<BootReadySignal />{isStandaloneWebUi() && <BuildUpdateNotice />}</>
 }
 
 class StartupErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {

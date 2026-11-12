@@ -152,7 +152,7 @@ internal sealed record UnifiedEdit(string? FilePath, string? Patch, TextEdit[] E
                 },
                 ["apply_patch"] = Field(
                     "string",
-                    "Patch text enclosed in *** Begin Patch and *** End Patch. Use *** Update File:, *** Add File: or *** Delete File: headers. Update sections use space-prefixed context, - deletions, + additions and @@ anchors. Paths follow this Node's path rules. Do not combine with filePath or replacement arguments."
+                    "Patch text enclosed in *** Begin Patch and *** End Patch. Use *** Update File:, *** Add File: or *** Delete File: headers. Update sections use space-prefixed context, - deletions, + additions and @@ anchors. Paths follow the same rule as filePath. Do not combine with filePath or replacement arguments."
                 ),
             },
         };

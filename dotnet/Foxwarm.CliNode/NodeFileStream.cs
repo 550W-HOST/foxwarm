@@ -49,10 +49,11 @@ internal sealed class NodeFileStream(NodePaths paths, string host, string nodeId
         string raw,
         string agent,
         bool restrict,
-        CancellationToken token
+        CancellationToken token,
+        string? sessionCwd = null
     )
     {
-        var path = paths.Transfer(raw, agent, restrict);
+        var path = paths.Transfer(raw, agent, restrict, sessionCwd);
         await using var input = OpenSource(path, raw);
         var length = input.Length;
         if (length < Threshold)
@@ -171,12 +172,13 @@ internal sealed class NodeFileStream(NodePaths paths, string host, string nodeId
         bool restrict,
         bool overwrite,
         long length,
-        CancellationToken token
+        CancellationToken token,
+        string? sessionCwd = null
     )
     {
         if (length < 0)
             throw new InvalidDataException("Invalid file transfer size.");
-        var path = paths.Transfer(raw, agent, restrict);
+        var path = paths.Transfer(raw, agent, restrict, sessionCwd);
         var existed = NodeFileTools.Exists(path);
         if (existed && !overwrite)
             throw new InvalidDataException(

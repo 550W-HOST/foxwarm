@@ -90,6 +90,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         if (Directory.Exists(runtimeFiles))
             Directory.Delete(runtimeFiles, recursive: true);
         diagnostics = new(this.root);
+        RecallTargets = new(this.root);
         Nodes = new(this.root);
         Nodes.Registry.ConfigureLimits(() =>
             (
@@ -467,6 +468,9 @@ internal sealed partial class SessionManager : IAsyncDisposable
     private async Task LoadOwnersAsync(bool startMainServices)
     {
         await EnsureIdentityStartupAsync();
+        // Legacy isolation is no longer enforced: every isolated Agent gets its generated
+        // layer before any Session can run a tool.
+        await MigrateLegacyIsolationCatalogAsync();
         _ = StartVectorAsync(startMainServices);
         await timers.LoadAsync();
         var catalogRows = Catalog.List();
@@ -502,6 +506,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
         }
         var mandatory = ids.Select(RecoverOwnerAsync).ToList();
         await Task.WhenAll(mandatory);
+        // Before any Session starts processing or a timer fires.
+        await MaterializeMigratedPlacementAsync();
         foreach (var row in catalogRows)
         {
             var id = SessionCatalog.Text(row["id"])!;
@@ -618,6 +624,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
     }
 
     public string DataRoot => root;
+
+    internal RecallTargetLog RecallTargets { get; }
     public bool Accepting => accepting;
     public HostModels Models => models;
 
@@ -646,7 +654,6 @@ internal sealed partial class SessionManager : IAsyncDisposable
         {
             ResolveAncestry = CatalogMetadata,
             MainMetadata = OverlayMainMetadata,
-            ResolveBoundNode = BoundNode,
         };
         hosted.Archive = store.Archive;
         hosted.AuthorityStore = store;

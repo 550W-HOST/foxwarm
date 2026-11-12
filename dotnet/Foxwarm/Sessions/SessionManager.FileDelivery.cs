@@ -29,21 +29,26 @@ internal sealed partial class SessionManager
         WorkspaceTools files,
         JsonObject args,
         CancellationToken token,
-        string? selectedNode = null
+        string? selectedNode = null,
+        string? selectedCwd = null
     )
     {
         ToolRegistry.Keys(
             args,
-            ["channelTargetId", "sessionId", "filePath", "node", "caption", "text"]
+            ["channelTargetId", "sessionId", "filePath", "node", "caption"]
         );
         var node = ToolRegistry.TargetNode(
             ToolRegistry.Text(args, "node"),
             selectedNode ?? CurrentNode(owner)
         );
-        RequireFileNodeBoundary(owner, node);
         var raw = SessionGoal.Trim(ToolRegistry.Text(args, "filePath") ?? "");
         if (raw.Length == 0)
             throw new InvalidDataException("send_file requires filePath.");
+        var currentNode = selectedNode ?? CurrentNode(owner);
+        var sessionCwd =
+            node != currentNode ? null
+            : selectedNode is null ? ExecutionPlacement(owner).Cwd
+            : selectedCwd;
         var requested = SessionGoal.Trim(ToolRegistry.Text(args, "sessionId") ?? "");
         var direct = SessionGoal.Trim(ToolRegistry.Text(args, "channelTargetId") ?? "");
         if (requested.Length > 0 && direct.Length > 0)
@@ -51,8 +56,6 @@ internal sealed partial class SessionManager
                 "At most one of sessionId or channelTargetId may be specified."
             );
         var caption = SessionGoal.Trim(ToolRegistry.Text(args, "caption") ?? "");
-        if (caption.Length == 0)
-            caption = SessionGoal.Trim(ToolRegistry.Text(args, "text") ?? "");
         token.ThrowIfCancellationRequested();
         using var admission = BeginOwnerMutation(owner);
         var bindings = deletionChannels.ReadForDelivery()["channels"]!.AsObject();
@@ -65,7 +68,6 @@ internal sealed partial class SessionManager
                     .Where(pair => SessionCatalog.Text(pair.Value?["sessionId"]) == target)
                     .Select(pair => pair.Key)
                     .ToArray();
-        CheckFileDestinations(owner, target, direct, bindings);
         if (destinations.Length == 0)
             throw new InvalidDataException($"Session `{target}` has no attached channels.");
         string path;
@@ -80,7 +82,14 @@ internal sealed partial class SessionManager
         }
         else
         {
-            await using var file = await OpenNodeReadAsync(owner, node, raw, files, token);
+            await using var file = await OpenNodeReadAsync(
+                owner,
+                node,
+                raw,
+                files,
+                token,
+                sessionCwd
+            );
             mimeType = file.MimeType;
             name = Foxwarm.Nodes.NodeConnectionHub.RemoteFileName(file.Name);
             if (string.IsNullOrWhiteSpace(name) || name is "." or "..")
@@ -118,7 +127,6 @@ internal sealed partial class SessionManager
                     IdentityWorkspace(owner),
                     token
                 );
-                CheckFileDestinations(owner, target, direct, bindings);
             }
             catch
             {
@@ -238,25 +246,6 @@ internal sealed partial class SessionManager
         SessionCatalog.Text(Catalog.Resolve(requested)["sessionId"])
         ?? throw new InvalidDataException("Session is not available: " + requested);
 
-    private void CheckFileDestinations(
-        SessionOwner owner,
-        string? target,
-        string direct,
-        JsonObject bindings
-    )
-    {
-        if (!Isolation(owner.Agent).Isolated)
-            return;
-        if (target is not null && target != owner.Id)
-            throw new ToolAuthorizationDeniedException(
-                "Isolated Session can only send files via its own current Session attachments."
-            );
-        if (direct.Length > 0 && SessionCatalog.Text(bindings[direct]?["sessionId"]) != owner.Id)
-            throw new ToolAuthorizationDeniedException(
-                "Isolated Session can only send files to its own attached destination."
-            );
-    }
-
     internal Func<string, string, Task>? BeforeFileStage { get; set; }
 
     private async Task FileStageAsync(SessionOwner owner, string stage)
@@ -270,15 +259,17 @@ internal sealed partial class SessionManager
         WorkspaceTools files,
         JsonObject args,
         CancellationToken token,
-        string? selectedNode = null
+        string? selectedNode = null,
+        string? selectedCwd = null
     )
     {
         ToolRegistry.Keys(args, ["id", "filePath", "overwrite", "node"]);
-        var node = ToolRegistry.TargetNode(
-            ToolRegistry.Text(args, "node"),
-            selectedNode ?? CurrentNode(owner)
-        );
-        RequireFileNodeBoundary(owner, node);
+        var currentNode = selectedNode ?? CurrentNode(owner);
+        var node = ToolRegistry.TargetNode(ToolRegistry.Text(args, "node"), currentNode);
+        var sessionCwd =
+            node != currentNode ? null
+            : selectedNode is null ? ExecutionPlacement(owner).Cwd
+            : selectedCwd;
         var id = ToolRegistry.Text(args, "id");
         var raw = ToolRegistry.Text(args, "filePath");
         if (string.IsNullOrEmpty(id) || string.IsNullOrEmpty(raw))
@@ -323,7 +314,16 @@ internal sealed partial class SessionManager
             if (identity == owner.Id)
                 break;
         }
-        var path = await WriteNodeFileAsync(owner, node, raw, bytes, overwrite, files, token);
+        var path = await WriteNodeFileAsync(
+            owner,
+            node,
+            raw,
+            bytes,
+            overwrite,
+            files,
+            token,
+            sessionCwd
+        );
         try
         {
             await FileStageAsync(owner, "after-write");

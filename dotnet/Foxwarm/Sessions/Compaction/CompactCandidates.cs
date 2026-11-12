@@ -18,7 +18,6 @@ internal sealed record CompactCandidate(
     string Preview,
     int Tokens,
     int Segment,
-    bool Stranded = false,
     int? FrictionScore = null
 )
 {
@@ -30,18 +29,6 @@ internal sealed record CompactCandidate(
             : $"B#{Start}";
     public int TargetLevel => Kind == "message" ? 1 : SourceLevel + 1;
 }
-
-internal sealed record BlockPolicy(
-    int SourceLevel,
-    int TotalCount,
-    int TotalTokens,
-    int ForcedKeep,
-    int CandidateCount,
-    int RequestedMin,
-    int FeasibleMax,
-    int EffectiveMin,
-    string? Skipped
-);
 
 internal sealed record PreservedCompactMessage(long Seq, long BlockId, string Preview)
 {
@@ -55,32 +42,15 @@ internal sealed record CompactCandidates(
     IReadOnlyList<PreservedCompactMessage> Preserved,
     int EligibleRawTokens,
     int RequiredRawTokens,
-    string? RawSkipped,
-    IReadOnlyList<BlockPolicy> BlockPolicies,
+    IReadOnlyList<RetentionOperation> Retention,
     bool InContext = false
 )
 {
-    public IReadOnlyList<IReadOnlyList<CompactCandidate>> Segments()
-    {
-        var segments = new List<IReadOnlyList<CompactCandidate>>();
-        List<CompactCandidate>? current = null;
-        foreach (var item in Items)
-        {
-            if (
-                current is null
-                || current.Count == 0
-                || item.Segment != current[^1].Segment
-                || item.Kind != current[^1].Kind
-                || item.SourceLevel != current[^1].SourceLevel
-            )
-            {
-                current = [];
-                segments.Add(current);
-            }
-            current.Add(item);
-        }
-        return segments;
-    }
+    /// <summary>
+    /// Whether summaries can be written: any candidate in in-context mode, otherwise at least
+    /// one operation required by the retention policy.
+    /// </summary>
+    public bool HasWork => InContext ? Items.Count > 0 : Retention.Count > 0;
 }
 
 internal static class CompactCandidateBuilder
@@ -93,18 +63,61 @@ internal static class CompactCandidateBuilder
         return (int)Math.Ceiling(count);
     }
 
-    public static int Split(IReadOnlyList<JsonObject> history, double keepPercent = .3) =>
-        Split(history, keepPercent, RawSequenceCounts(history));
+    /// <summary>
+    /// Start of the force-kept recent raw tail: the newest rows whose estimated tokens fit within
+    /// <paramref name="keepTokens"/>, moved back to the start of a complete tool exchange. The
+    /// newest row is always kept, and the tail never extends over a summary block. Zero keeps
+    /// nothing.
+    /// </summary>
+    public static int Split(IReadOnlyList<JsonObject> history, double keepTokens) =>
+        Split(history, keepTokens, RawSequenceCounts(history));
+
+    /// <summary>
+    /// Raw-tail token budget: the keep fraction of the effective compact threshold or of the raw
+    /// region after the newest summary block, whichever is smaller. Automatic compaction runs at or
+    /// above the threshold; a manual compaction of a shorter history keeps the same share of what
+    /// is present.
+    /// </summary>
+    public static double KeepTokens(
+        double keepFraction,
+        double threshold,
+        IReadOnlyList<JsonObject> history
+    )
+    {
+        if (keepFraction <= 0 || threshold <= 0)
+            return 0;
+        var raw = 0d;
+        for (var index = history.Count - 1; index >= 0; index--)
+        {
+            if (Meta(history[index])?["contextBlock"] is not null)
+                break;
+            raw += RowTokens(history[index]);
+        }
+        return Math.Max(1, Math.Floor(keepFraction * Math.Min(threshold, raw)));
+    }
+
+    public static int RowTokens(JsonObject row) =>
+        Visible(row) && !Completion(row) ? Tokens(Preview(row, true)) : 0;
 
     private static int Split(
         IReadOnlyList<JsonObject> history,
-        double keepPercent,
+        double keepTokens,
         IReadOnlyDictionary<long, int> seqCounts
     )
     {
-        var split =
-            keepPercent > 0 ? (int)Math.Floor(history.Count * (1 - keepPercent)) : history.Count;
-        if (keepPercent > 0 && split < history.Count)
+        var split = history.Count;
+        if (keepTokens > 0)
+        {
+            var total = 0d;
+            while (split > 0 && Meta(history[split - 1])?["contextBlock"] is null)
+            {
+                total += RowTokens(history[split - 1]);
+                if (total > keepTokens && split < history.Count)
+                    break;
+                split--;
+            }
+        }
+        if (keepTokens > 0 && split < history.Count)
         {
             var cursor = split;
             while (cursor > 0 && (Role(history[cursor]) == "tool" || Transparent(history[cursor])))
@@ -121,13 +134,13 @@ internal static class CompactCandidateBuilder
 
     public static CompactCandidates Build(
         IReadOnlyList<JsonObject> history,
-        double keepPercent = .3,
+        double keepTokens = 0,
         bool inContext = false
     )
     {
         var seqCounts = RawSequenceCounts(history);
         var unsequencedExchanges = UnsequencedExchangeMembers(history);
-        var split = inContext ? history.Count : Split(history, keepPercent, seqCounts);
+        var split = inContext ? history.Count : Split(history, keepTokens, seqCounts);
         var older = history.Take(split).ToArray();
         var blockCounts = new Dictionary<long, int>();
         for (var index = 0; index < older.Length; index++)
@@ -139,46 +152,6 @@ internal static class CompactCandidateBuilder
                 && id > 0
             )
                 blockCounts[id] = blockCounts.GetValueOrDefault(id) + 1;
-        }
-        var blocksByLevel = older
-            .Select(message => Meta(message)?["contextBlock"] as JsonObject)
-            .Where(block =>
-                block is not null
-                && ValidBlock(block)
-                && blockCounts[Number(block["id"])!.Value] == 1
-            )
-            .GroupBy(block => (int)Number(block!["level"])!.Value)
-            .ToDictionary(group => group.Key, group => group.ToArray());
-        var prelim =
-            new Dictionary<
-                int,
-                (int Count, int Tokens, int Keep, int Candidate, int Minimum, HashSet<long> Ids)
-            >();
-        foreach (var (level, blocks) in blocksByLevel)
-        {
-            var tokens = blocks.Sum(block =>
-                Tokens(
-                    Preview(
-                        older.First(message =>
-                            Number(Meta(message)?["contextBlock"]?["id"]) == Number(block!["id"])
-                        ),
-                        false
-                    )
-                )
-            );
-            var candidateCount =
-                inContext ? blocks.Length
-                : tokens < 3000 ? 0
-                : (int)Math.Floor(blocks.Length * .4);
-            var minimum = !inContext && tokens >= 5000 ? (int)Math.Ceiling(blocks.Length * .2) : 0;
-            prelim[level] = (
-                blocks.Length,
-                tokens,
-                blocks.Length - candidateCount,
-                candidateCount,
-                minimum,
-                blocks.Take(candidateCount).Select(block => Number(block!["id"])!.Value).ToHashSet()
-            );
         }
         var entries = new List<CompactCandidate>();
         var preserved = new List<PreservedCompactMessage>();
@@ -249,8 +222,6 @@ internal static class CompactCandidateBuilder
                     || rawEnd < rawStart
                     || !ValidBlock(block)
                     || blockCounts.GetValueOrDefault(id.Value) != 1
-                    || !prelim.TryGetValue((int)level.Value, out var policy)
-                    || !policy.Ids.Contains(id.Value)
                     || Role(message) != "model"
                 )
                 {
@@ -263,11 +234,6 @@ internal static class CompactCandidateBuilder
                     segment++;
                 if (previousBlockEnd is not null && rawStart <= previousBlockEnd)
                     segment++;
-                var stranded =
-                    index > 0
-                    && index + 1 < older.Length
-                    && Number(Meta(older[index - 1])?["contextBlock"]?["level"]) > level
-                    && Number(Meta(older[index + 1])?["contextBlock"]?["level"]) > level;
                 var summary = Preview(message, false);
                 entries.Add(
                     new CompactCandidate(
@@ -284,7 +250,6 @@ internal static class CompactCandidateBuilder
                         summary,
                         Tokens(summary),
                         segment,
-                        stranded,
                         CompactPlanValidator.Friction(block["frictionScore"])
                     )
                 );
@@ -366,39 +331,15 @@ internal static class CompactCandidateBuilder
             previousSeq = endSeq;
             index = endIndex;
         }
-        var rawTokens = entries.Where(item => item.Kind == "message").Sum(item => item.Tokens);
+        // A regular compaction writes its new level-1 block from the raw messages after the
+        // newest block; older raw messages left between blocks are not part of that source.
+        var newestBlock = entries.FindLastIndex(item => item.Kind == "block");
+        var rawTokens = entries
+            .Where((item, index) => item.Kind == "message" && (inContext || index > newestBlock))
+            .Sum(item => item.Tokens);
         var eligible = inContext || rawTokens > 2000;
         if (!eligible)
             entries.RemoveAll(item => item.Kind == "message");
-        var policies = new List<BlockPolicy>();
-        foreach (var (level, policy) in prelim)
-        {
-            var group = entries
-                .Where(item => item.Kind == "block" && item.SourceLevel == level)
-                .ToArray();
-            var feasible = group
-                .GroupBy(item => item.Segment)
-                .Sum(segmentItems => segmentItems.Count() >= 2 ? segmentItems.Count() : 0);
-            policies.Add(
-                new BlockPolicy(
-                    level,
-                    policy.Count,
-                    policy.Tokens,
-                    policy.Keep,
-                    policy.Candidate,
-                    policy.Minimum,
-                    feasible,
-                    Math.Min(policy.Minimum, feasible),
-                    !inContext && policy.Tokens < 3000
-                            ? "below the 3000-token block eligibility threshold"
-                        : policy.Candidate == 0
-                            ? "the strict oldest-candidate window is empty at this level size"
-                        : policy.Minimum > 0 && feasible == 0
-                            ? "no legal contiguous multi-block candidate segment is available"
-                        : null
-                )
-            );
-        }
         foreach (var (_, items, _) in preservedExchanges)
         foreach (var item in items)
             item.Exchange = items.Select(member => member.Seq).ToArray();
@@ -409,11 +350,7 @@ internal static class CompactCandidateBuilder
             preserved,
             eligible ? rawTokens : 0,
             eligible && !inContext ? (int)Math.Ceiling(rawTokens * .2) : 0,
-            eligible ? null
-                : rawTokens > 0
-                    ? $"~{rawTokens} raw-message tokens do not exceed the 2000-token eligibility threshold"
-                : "no eligible model-visible raw message candidates",
-            policies,
+            inContext ? [] : CompactRetention.Plan(entries),
             inContext
         );
     }

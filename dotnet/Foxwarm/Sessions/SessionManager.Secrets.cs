@@ -581,11 +581,6 @@ internal sealed partial class SessionManager
             .Layers.Select(layer => layer.Decision.Secrets?.Effect ?? ToolAuthorizationEffect.Allow)
             .DefaultIfEmpty(ToolAuthorizationEffect.Allow)
             .Max();
-        if (
-            Isolation(owner.Agent).Isolated
-            && assessment.Request.OwnedSecrets?.Contains(name) != true
-        )
-            effect = ToolAuthorizationEffect.Deny;
         return AuthorizationDecision.Name(effect);
     }
 }

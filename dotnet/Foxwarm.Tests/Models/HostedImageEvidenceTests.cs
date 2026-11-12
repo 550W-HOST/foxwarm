@@ -68,6 +68,46 @@ public sealed class HostedImageEvidenceTests
     }
 
     [Fact]
+    public void Evidence_reuses_diagnostic_masking_for_short_and_escaped_credentials()
+    {
+        const string token = "short";
+        const string header = "fixture-header-secret";
+        var options = new ResponsesClientOptions(
+            new Uri("http://unused.invalid"),
+            "m",
+            "a/m",
+            token,
+            "",
+            1000
+        )
+        {
+            ExtraHeaders = new JsonObject { ["X-Fixture"] = header },
+        };
+        var redact = new ModelCredentialRedactor(options);
+        var item = new JsonObject
+        {
+            ["type"] = "image_generation_call",
+            ["id"] = token,
+            ["status"] = "failed",
+            ["error"] = new JsonObject
+            {
+                ["code"] = header,
+                ["message"] = "Failed " + token + " " + header + " \"\\u0073hort\"",
+            },
+        };
+        var summary = HostedImageEvidence.Summary(item, token, redact.SafeText);
+        var serialized = summary.ToJsonString();
+        Assert.DoesNotContain(token, serialized);
+        Assert.DoesNotContain(header, serialized);
+        Assert.DoesNotContain("u0073", serialized);
+        Assert.Contains("redacted", serialized);
+        Assert.Equal(
+            serialized,
+            HostedImageEvidence.Summary(summary, redact: redact.SafeText).ToJsonString()
+        );
+    }
+
+    [Fact]
     public async Task Omitted_raw_stream_keeps_bounded_credential_safe_image_errors_before_terminal_response()
     {
         using var temp = new TempDirectory();
@@ -163,6 +203,46 @@ public sealed class HostedImageEvidenceTests
         Assert.DoesNotContain("private image description", json.ToJsonString());
         Assert.DoesNotContain(new string('A', 80), json.ToJsonString());
         Assert.True(raw.ToJsonString().Length < 24000);
+    }
+
+    [Theory]
+    [InlineData("failed")]
+    [InlineData("incomplete")]
+    public void Image_failure_activity_events_emit_terminal_progress(string status)
+    {
+        var progress = new List<ResponsesStreamProgress>();
+        var accumulator = new ResponsesEventAccumulator(
+            new ResponsesStreamCallbacks { OnProgress = progress.Add }
+        );
+        accumulator.Consume(
+            new JsonObject
+            {
+                ["type"] = "response.output_item.added",
+                ["output_index"] = 0,
+                ["item"] = new JsonObject
+                {
+                    ["type"] = "image_generation_call",
+                    ["id"] = "image_activity",
+                    ["status"] = "in_progress",
+                },
+            }
+        );
+        accumulator.Consume(
+            new JsonObject
+            {
+                ["type"] = "response.image_generation_call." + status,
+                ["output_index"] = 0,
+            }
+        );
+        Assert.Equal(status, Assert.Single(progress[^1].Parts).Status);
+        accumulator.Consume(
+            new JsonObject
+            {
+                ["type"] = "response.image_generation_call.completed",
+                ["output_index"] = 0,
+            }
+        );
+        Assert.Equal(status, Assert.Single(progress[^1].Parts).Status);
     }
 
     [Theory]

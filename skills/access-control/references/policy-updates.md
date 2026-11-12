@@ -44,7 +44,7 @@ Use that with `search_tools`, then invoke with `call_tool`:
 }
 ```
 
-These examples require the existing permissions; they do not authorize changing live policy. `set_config` has no Node selector and always reads the candidate on `master`. Current isolated path restrictions still apply. Writing the candidate requires its own write permission, separate from the setter's candidate-read check.
+These examples require the existing permissions; they do not authorize changing live policy. `set_config` has no Node selector and always reads the candidate on `master`. The caller's own rules still apply. Writing the candidate requires its own write permission, separate from the setter's candidate-read check.
 
 ## Migration from the former setter
 
@@ -58,7 +58,7 @@ Identity edits use `set_config` with `target: config` or WebUI Setup Config and 
 
 ## Explain a decision before or without calling
 
-`explain_tool_authorization` is a hidden builtin found through `search_tools`. Each probe names an existing caller Session and the concrete tool in `call_tool` form; the call is resolved at that Session's current Node and evaluated with its real Agent layers, paths, relations and isolation, without running it. The result shows the final `decision` (`allow`, `ask` or `deny`; `allowed` is true only for allow), per layer its `decision` and the matching rule (position, ID, action, reason, match, and `approval` for ask) or the default, the isolation outcome and the facts used. An ask result adds the combined `approval` options. Pre-policy Node/path boundary denials appear as `precheck`; tool-local validation is not evaluated.
+`explain_tool_authorization` is a hidden builtin found through `search_tools`. Each probe names an existing caller Session and the concrete tool in `call_tool` form; the call is resolved at that Session's current Node and evaluated with its real Agent layers, paths and relations, without running it. The result shows the final `decision` (`allow`, `ask` or `deny`; `allowed` is true only for allow), per layer its `decision` and the matching rule (position, ID, action, reason, match, and `approval` for ask) or the default, and the facts used. An ask result adds the combined `approval` options. Denials raised before policy evaluation appear as `precheck`; tool-local validation is not evaluated.
 
 ```json
 {
@@ -81,12 +81,12 @@ Without `policyFilePath` it explains the active policy. A candidate replaces onl
 2. Resolve the concrete source/name/server and actual Node from the tool descriptor/call path. Inspect normalized arguments and source-specific path facts, not just the wrapper name.
 3. Walk enabled rules from the beginning. Check all conditions in the first matching rule; later entries are irrelevant once it matches.
 4. If no rule matches, apply the internal default or external deny fallback.
-5. If policy allows the call, examine legacy Agent isolation, Node readiness/capabilities, own-attachment restrictions, and tool-local validation. Generic allow cannot override them.
+5. If policy allows the call, examine Agent-local layers, Node readiness/capabilities, own-attachment restrictions, and tool-local validation. Generic allow cannot override them.
 6. For a recent replacement in a Worker, distinguish its bounded cache window from a policy error.
 
 | Symptom | Checks |
 | --- | --- |
-| Setter denied | Current setter permission, current master read permission for the exact candidate, and isolated path restrictions |
+| Setter denied | Current setter permission and current master read permission for the exact candidate |
 | Candidate rejected | Strict field names, version, duplicate IDs, bounded sizes, scalar operators, supported path variables, registered Session-target family |
 | Call waits or returns `tool_approval_*` | An `ask` rule or default matched: decide in the WebUI dock, or check `approvers`, the identity's Session scope and `timeoutSeconds`. `tool_approval_unavailable` means the ask applied to an internal step, the call's targets kept changing while it waited, or the Session's pending limit was reached |
 | Tool is visible but call denied | Discovery is conservative; argument/path/target conditions are checked strictly at invocation |

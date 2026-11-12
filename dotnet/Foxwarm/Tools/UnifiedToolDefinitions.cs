@@ -12,7 +12,7 @@ internal static class UnifiedToolDefinitions
   {
     "name": "search_tools",
     "defaultInject": true,
-    "description": "Find tools and their calling schemas. Results include a toolId or explicit source fields you can pass to call_tool. Search builtin for session and management tools, node for file and shell tools, or mcp for connected servers. Use limit=1 when looking up one known tool.",
+    "description": "Find tools and their calling schemas. Results include a toolId or explicit source fields you can pass to call_tool. Search builtin for Session and management tools, node for file and shell tools, or mcp for connected servers. Use limit=1 when looking up one known tool.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -38,7 +38,7 @@ internal static class UnifiedToolDefinitions
         },
         "nodeId": {
           "type": "string",
-          "description": "Node to search. Omit or use current to search this session's execution Node."
+          "description": "Node to search. Omit or use current to search this Session's execution Node."
         },
         "limit": {
           "type": "integer",
@@ -59,7 +59,7 @@ internal static class UnifiedToolDefinitions
   {
     "name": "call_tool",
     "defaultInject": true,
-    "description": "Call a tool found with search_tools. Supply its toolId, or identify it with source and name plus server or nodeId when needed. Put the tool's arguments in args. File and shell tools use source=node; session and management tools use builtin. Calling through this tool applies the target tool's normal checks.",
+    "description": "Call a tool found with search_tools. Supply its toolId, or identify it with source and name plus server or nodeId when needed. Put the tool's arguments in args. File and shell tools use source=node; Session and management tools use builtin. Calling through this tool applies the target tool's normal checks.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -86,7 +86,7 @@ internal static class UnifiedToolDefinitions
         },
         "nodeId": {
           "type": "string",
-          "description": "Node for source=node. Omit or use current to select master, the local execution Node."
+          "description": "Node for source=node. Omit or use current for this Session's current Node."
         },
         "args": {
           "type": "object",
@@ -122,7 +122,7 @@ internal static class UnifiedToolDefinitions
     "strict": false,
     "name": "send_to_channel",
     "defaultInject": true,
-    "description": "Send a message to a specific channel destination. The destination does not need a Session attachment. For a normal-mode channel attached to this session, reply directly instead: your assistant text is delivered automatically. Use this tool for send-only channels or when the task requires delivery to a different destination.",
+    "description": "Send a message to a specific channel destination. The destination does not need a Session attachment. For a normal-mode channel attached to this Session, reply directly instead: your assistant text is delivered automatically. Use this tool for send-only channels or when the task requires delivery to a different destination.",
     "parameters": {
       "type": "object",
       "properties": {

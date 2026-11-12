@@ -8,16 +8,16 @@ internal static class FileDeliveryDefinitions
         new(
             Definition(
                 "copy_between_nodes",
-                "Copy a file between Nodes, including master. Both paths are checked against the applicable permissions. Relative paths use the Agent directory on master and CLI Nodes, or the environment's default directory on other Nodes, not the Session working directory. If the copy outlasts timeout, it continues in the background and returns a transferId; a later event reports completion. Stop or Run queued ends the wait without cancelling the copy; use cancel_transfer to stop it.",
+                "Copy a file between Nodes, including master. Both paths are checked against the applicable permissions. If the copy outlasts timeout, it continues in the background and returns a transferId; a later event reports completion. Stop or Run queued ends the wait without cancelling the copy; use cancel_transfer to stop it.",
                 new JsonObject
                 {
                     ["sourceNode"] = String("Node containing the source file."),
                     ["sourcePath"] = String(
-                        "Source file path on sourceNode. Relative paths use the Agent directory on master and CLI Nodes, or the environment's default directory on other Nodes. On master and CLI Nodes, ~/ paths are accepted and a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected."
+                        "Source file path on sourceNode. A relative path uses the Session working directory when the Node is this Session's current Node and a working directory is set, otherwise the Node's default directory (the Agent directory on master and CLI Nodes). On master and CLI Nodes, ~/ and a leading $fw_agentdir or $fw_tmp are accepted; other leading $ names are rejected."
                     ),
                     ["targetNode"] = String("Node that will receive the file."),
                     ["targetPath"] = String(
-                        "Destination file path on targetNode. Relative paths use the Agent directory on master and CLI Nodes, or the environment's default directory on other Nodes. On master and CLI Nodes, ~/ paths are accepted and a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected."
+                        "Destination file path on targetNode. Relative paths follow the same rule as sourcePath."
                     ),
                     ["overwrite"] = new JsonObject
                     {
@@ -40,7 +40,7 @@ internal static class FileDeliveryDefinitions
             ),
             Definition(
                 "cancel_transfer",
-                "Cancel a background copy started by copy_between_nodes in this session. Already transferred bytes are not undone: an unfinished copy publishes nothing on master and CLI Nodes, while other Nodes may keep a partial destination file.",
+                "Cancel a background copy started by copy_between_nodes in this Session. Already transferred bytes are not undone: an unfinished copy publishes nothing on master and CLI Nodes, while other Nodes may keep a partial destination file.",
                 new JsonObject
                 {
                     ["transferId"] = String("Transfer ID returned by copy_between_nodes."),
@@ -49,34 +49,33 @@ internal static class FileDeliveryDefinitions
             ),
             Definition(
                 "send_file",
-                "Deliver a file or image from a Node to users. Choose either one channelTargetId or a sessionId whose attached channels should receive it. With neither, delivery uses the current session.",
+                "Deliver a file or image from a Node to users. Choose either one channelTargetId or a sessionId whose attached channels should receive it. With neither, delivery uses the current Session.",
                 new JsonObject
                 {
                     ["channelTargetId"] = String(
                         "One destination in the form <channel-instance-id>:<conversation-id>. Do not combine with sessionId."
                     ),
                     ["sessionId"] = String(
-                        "Session whose attached channels should receive the file. Defaults to the current session; do not combine with channelTargetId."
+                        "Session whose attached channels should receive the file. Defaults to the current Session; do not combine with channelTargetId."
                     ),
                     ["filePath"] = String(
-                        "File path on the selected Node. On master, relative paths use the current Session working directory or its Agent directory if unset. On CLI Nodes they use the Agent directory; other Nodes use their environment's default directory. On master and CLI Nodes, ~/ paths are accepted and a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected."
+                        "File path on the selected Node. A relative path uses the Session working directory when the Node is this Session's current Node and a working directory is set, otherwise the Node's default directory (the Agent directory on master and CLI Nodes). On master and CLI Nodes, ~/ and a leading $fw_agentdir or $fw_tmp are accepted; other leading $ names are rejected."
                     ),
                     ["node"] = String("Node containing the file. Defaults to the current Node."),
                     ["caption"] = String(
                         "Text to accompany the file, where the destination supports captions."
                     ),
-                    ["text"] = String("Alternative name for caption."),
                 },
                 "filePath"
             ),
             Definition(
                 "image_write_to_file",
-                "Save an image from this session, including a generated image or one returned by a tool. The saved file can be reused or delivered with send_file.",
+                "Save an image from this Session, including a generated image or one returned by a tool. The saved file can be reused or delivered with send_file.",
                 new JsonObject
                 {
-                    ["id"] = String("Image ID shown in this session."),
+                    ["id"] = String("Image ID shown in this Session."),
                     ["filePath"] = String(
-                        "File path on the selected Node. On master, relative paths use the current Session working directory or its Agent directory if unset. On CLI Nodes they use the Agent directory; other Nodes use their environment's default directory. On master and CLI Nodes, ~/ paths are accepted and a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected."
+                        "File path on the selected Node. A relative path uses the Session working directory when the Node is this Session's current Node and a working directory is set, otherwise the Node's default directory (the Agent directory on master and CLI Nodes). On master and CLI Nodes, ~/ and a leading $fw_agentdir or $fw_tmp are accepted; other leading $ names are rejected."
                     ),
                     ["overwrite"] = new JsonObject
                     {

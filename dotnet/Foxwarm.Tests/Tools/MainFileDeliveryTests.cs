@@ -149,7 +149,6 @@ public sealed class MainFileDeliveryTests
         );
         var args = Args(" \t$fw_agentdir/ordinary.txt\n");
         args["caption"] = " first ";
-        args["text"] = "other";
         var result = await f.Call("send_file", args);
         Assert.Null(Error(result));
         Assert.Equal(path, SessionWait.Text(result["fullPath"]));
@@ -167,6 +166,10 @@ public sealed class MainFileDeliveryTests
         Assert.Equal(1, callbacks);
         Assert.Equal(history, f.Owner.History().Select(row => row.ToJsonString()));
         Assert.Empty(f.Owner.Entry.Snapshot().Queue);
+        var removed = Args(path);
+        removed["text"] = "retired caption alias";
+        Assert.NotNull(Error(await f.Call("send_file", removed)));
+        Assert.Equal(1, callbacks);
         Assert.NotNull(Error(await f.Call("send_file", Args(f.Work))));
         f.Manager.RegisterWebUiFileDelivery(null);
         Assert.NotNull(Error(await f.Call("send_file", Args(path))));
@@ -291,11 +294,10 @@ public sealed class MainFileDeliveryTests
             item =>
             {
                 var properties = item["parameters"]!["properties"]!.AsObject();
-                Assert.Equal(
-                    new[] { "__cancelTool", "__cancelAllToolsThisTurn" },
-                    properties.Select(pair => pair.Key).TakeLast(2)
-                );
+                Assert.False(properties.ContainsKey("__cancelTool"));
+                Assert.False(properties.ContainsKey("__cancelAllToolsThisTurn"));
                 Assert.False(properties.ContainsKey("confirmation"));
+                Assert.False(properties.ContainsKey("text"));
             }
         );
     }
@@ -345,12 +347,14 @@ public sealed class MainFileDeliveryTests
     }
 
     [Fact]
-    public async Task Exact_isolated_allow_does_not_bypass_own_path_Main_shared_agents_self_or_attached_destination()
+    public async Task Migrated_exact_allow_does_not_bypass_own_path_self_or_attached_destination()
     {
+        // The generated layer for a master-only isolated Agent with exact delivery allows.
+        // (An isolated main in this shared layout fails closed at startup instead, because a
+        // layer cannot exclude the nested Agent directories.)
         var isolation = new JsonObject
         {
-            ["isolated"] = true,
-            ["toolRules"] = new JsonArray(
+            ["rules"] = LegacyIsolationFixture.Layer("main", null, new JsonArray(
                 new JsonObject
                 {
                     ["source"] = "builtin",
@@ -363,7 +367,7 @@ public sealed class MainFileDeliveryTests
                     ["effect"] = "allow",
                     ["tool"] = "image_write_to_file",
                 }
-            ),
+            )),
         };
         await using var f = await Fixture.Create(isolation);
         f.Manager.AttachWebUi(f.Owner.Id, f.Owner);
@@ -374,14 +378,6 @@ public sealed class MainFileDeliveryTests
         var outside = Path.Combine(f.Temp.Path, "outside");
         await File.WriteAllTextAsync(outside, "x");
         Assert.Equal("tool_authorization_denied", Error(await f.Call("send_file", Args(outside))));
-        var shared = Path.Combine(f.Work, "agents", "other");
-        Directory.CreateDirectory(Path.GetDirectoryName(shared)!);
-        await File.WriteAllTextAsync(shared, "x");
-        File.CreateSymbolicLink(Path.Combine(f.Work, "alias"), shared);
-        Assert.Equal(
-            "tool_authorization_denied",
-            Error(await f.Call("send_file", Args(Path.Combine(f.Work, "alias"))))
-        );
         var other = await f.Manager.CreateNamedAsync("main", "other", null, null);
         var args = Args(own);
         args["sessionId"] = other.Id;

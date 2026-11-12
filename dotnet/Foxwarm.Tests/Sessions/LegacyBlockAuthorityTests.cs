@@ -169,9 +169,9 @@ public sealed class LegacyBlockAuthorityTests
             Assert.Null(
                 Assert.Single(archive.ReadEffectiveBlocksNumericRange(3, 3)).SourceBlockIds
             );
-            var candidates = CompactCandidateBuilder.Build([loaded], keepPercent: 0);
+            var candidates = CompactCandidateBuilder.Build([loaded], keepTokens: 0);
             Assert.Empty(candidates.Items);
-            Assert.Empty(candidates.BlockPolicies);
+            Assert.Empty(candidates.Retention);
             var current = Enumerable
                 .Range(0, 5)
                 .Select(index =>
@@ -188,10 +188,12 @@ public sealed class LegacyBlockAuthorityTests
                     return row;
                 })
                 .ToArray();
-            Assert.Equal(
-                expected["currentCandidates"]!.GetValue<int>(),
-                CompactCandidateBuilder.Build(current, keepPercent: 0).Items.Count
-            );
+            // Every current explicit-ID block is a candidate (the reference's oldest-40% window
+            // was replaced by the retention schedule); three slots per level merge the oldest two.
+            var currentCandidates = CompactCandidateBuilder.Build(current, keepTokens: 0);
+            Assert.Equal(5, currentCandidates.Items.Count);
+            var merge = Assert.Single(currentCandidates.Retention);
+            Assert.Equal((10L, 11L, 3), (merge.SourceStart, merge.SourceEnd, merge.Level));
             var admission = await owner.Compactor.StartManualAsync();
             Assert.True(admission.Started);
             await owner.Compactor.DrainAsync().WaitAsync(TimeSpan.FromSeconds(30));

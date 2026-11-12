@@ -19,9 +19,8 @@ Agents use tools. If a tool is not in your tool list, look for it with `search_t
 | `refresh_session_snapshot` | Rebuild one Session's system prompt now |
 | `read_memory`, `write_memory`, `edit_memory`, `apply_patch_memory`, `delete_memory` | The current Agent's memory |
 | `task`, `node` | Assignments and execution environments |
-| `set_agent_isolated` | Legacy isolation only; see [Legacy isolated Agents](#legacy-isolated-agents) |
 
-Users have commands: `/agent list|create|delete|isolated|inherit`, `/session ...` (including `move`, `parent`, `unparent`, `delete` and `refresh-snapshot`) and `/node ...`. When a step needs a command, tell the user exactly what to run. Do not simulate a user request to run a command yourself.
+Users have commands: `/agent list|create|delete|inherit`, `/session ...` (including `move`, `parent`, `unparent`, `delete` and `refresh-snapshot`) and `/node ...`. When a step needs a command, tell the user exactly what to run. Do not simulate a user request to run a command yourself.
 
 ## What an Agent's Sessions see
 
@@ -66,7 +65,6 @@ A `memory/00_SYSTEM.md` inside an ordinary Agent has no special effect. Use `MEM
 | `convertSession` | Turn the source Session into the new Agent's main Session |
 | `rules` | Initial [local rule layer](#restrict-an-agent) |
 | `defaultNode`, `defaultCwd` | [Placement](#placement) defaults for new Sessions |
-| `isolatedNode`, `toolRules` | Legacy isolation; do not use for new Agents |
 
 Session names use ASCII letters, digits, `_` and `-`. Display names are separate.
 
@@ -120,11 +118,13 @@ The [node-setup development workflow](../../node-setup/references/development-wo
 
 For an Agent that answers a chat channel, reserve one long-lived Node for it (an `ensure`d container or a paired machine), then create the Agent with `defaultNode` set to that Node and the rules from `channel-assistant.rules.json`. Channel Sessions start on the default Node. The template allows tools on the current Node, file delivery to the same conversation, its own history and skills.
 
-Files people send to an Agent without legacy isolation are saved on `master` in its directory under `.temp/channel-files`, not on its Node; the template's first rule allows reading only that directory there. All conversations of the Agent share its Node and these files. Use one Agent and Node per group of people who may see each other's material.
+Files people send to an Agent are saved on `master` in its directory under `.temp/channel-files`, not on its Node; the template's first rule allows reading only that directory there. All conversations of the Agent share its Node and these files. Use one Agent and Node per group of people who may see each other's material.
+
+A channel's `guestAgent` configuration gives unknown users their own guest Agent, and `guestAgent.template` names the Agent whose rules apply to them. Create the template with local rules, for example from the channel-assistant template. In `inherited` mode, each guest Agent is created by the template, so its rules apply; it inherits memory from `agentId`, which must be the template or an Agent above it on its creator chain, and uses `node` as its `defaultNode`. In `single` mode, `agentId` must be the template or an Agent created by it, with `node` as its `defaultNode`. Without a template, new guests are refused unless the configuration sets `isolated: false` to allow unrestricted guests.
 
 ## Placement
 
-A new Session's Node is, in order: a legacy isolation binding; the explicit `node` given at creation; for `create_child_session` in the same Agent, the parent's current Node; the Agent's `defaultNode`; the installation's `agentDefaultNode`; then `master`. `defaultCwd` applies only when the Session starts on that default Node.
+A new Session's Node is, in order: the explicit `node` given at creation; for `create_child_session` in the same Agent, the parent's current Node; the Agent's `defaultNode`; the installation's `agentDefaultNode`; then `master`. `defaultCwd` applies only when the Session starts on that default Node.
 
 Set defaults with `create_agent` or in the WebUI's Agent settings. Changing them does not move existing Sessions, and a default Node need not be online. Placement grants nothing: what a Session can do on a Node is decided by policy.
 
@@ -176,14 +176,14 @@ A multi-step setup that fails partway is not rolled back. Report exactly which A
 
 ## Legacy isolated Agents
 
-An isolated Agent is bound to one non-master Node. All its Sessions run there; on `master` they may use only their own Agent directory and memory; optional exact `toolRules` apply; and its Sessions may send to or wait on only themselves, their direct parent and their direct children. These checks still run after the generic policy. Existing isolated Agents keep working, but do not create new ones.
+Isolation is no longer enforced and can no longer be set. At startup, before it accepts work, Main migrates every Agent still marked isolated:
 
-The replacement is the pattern above: an Agent-local rule layer plus a Node, with `defaultNode` for placement. To migrate an isolated Agent:
+- it installs a generated local layer that reproduces the old limits: the bound Node, the Agent's own directory and memory on `master`, the old exact `toolRules`, and messages only to the Session itself, its parent and its children;
+- it sets `defaultNode` to the bound Node when none is set, marks the Agent not inheritable, and records the bound Node on Sessions that had no Node;
+- when it cannot do this safely, for example because the Agent already has local rules, it installs a layer that blocks every call instead.
 
-1. Inventory what it uses: its bound Node, timers, channel attachments, Sessions that message it, and files it keeps in its Agent directory.
-2. Write a local layer, starting from the closest template, and set `defaultNode` to the bound Node. The [offline generator](../../access-control/references/isolated-rules.md) produces a conservative global-policy baseline instead; its documented differences apply to both approaches.
-3. Apply the rules. A model can only do this for an Agent created from its own Agent; top-level Agents need an administrator.
-4. Test with `explain_tool_authorization` while isolation is still on, using a non-isolated test Agent with the same rules where isolation would hide gaps.
-5. With approval, clear isolation: `set_agent_isolated({agentName, nodeId:""})` or `/agent isolated <agent> off`.
+The System view and the Main log list each migrated Agent. A blocked Agent stays blocked until an administrator replaces its rules. Review a generated layer like any other local layer; `explain_tool_authorization` shows which rule decided a call.
 
-Clearing isolation also removes its outgoing-message and own-directory guards, and legacy isolation allowed own-memory writes that the templates deny. It also moves inbound channel files from the bound Node to `master` in the Agent's directory, so the local layer must allow reading them there, as the channel-assistant template does. Review those differences explicitly; do not clear isolation to work around a denied call.
+Inbound channel files now always land on `master` in the Agent's directory, and channel sends from migrated Agents are denied. Channel guests take their rules from `guestAgent.template`.
+
+The retained `isolated`, `isolatedNode` and `toolRules` fields are no longer used except to keep older releases enforcing isolation after a downgrade. Foxwarm 0.9.4 enforces both those fields and the converted rules; earlier releases can't read the converted rules and refuse every call by these Agents and the Agents they created. Saved scripts or ToolScripts that call `set_agent_isolated` or pass `isolatedNode`/`toolRules` must switch to `set_agent_rules` plus `defaultNode`.

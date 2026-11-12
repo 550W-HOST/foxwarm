@@ -66,6 +66,12 @@ internal sealed partial class AgentCatalog
         return parent;
     }
 
+    /// <summary>The Agent's creator ancestors, root first, ending with the Agent itself.</summary>
+    internal string[] CreatorChainOf(string name) => CreatorChain(name, MetadataSnapshot());
+
+    internal string[] CreatorChainIn(string name, JsonObject snapshot) =>
+        CreatorChain(name, snapshot);
+
     private string[] CreatorChain(string name, JsonObject snapshot)
     {
         var chain = new List<string>();
@@ -108,17 +114,33 @@ internal sealed partial class AgentCatalog
 
     internal void RequireSessionTarget(string caller, string target)
     {
+        if (!SessionTargetAllowed(caller, target))
+            throw new ToolAuthorizationDeniedException(
+                "This operation requires a Session in the delegated Agent or its creator descendants."
+            );
+    }
+
+    // A delegated Agent may place Sessions only in itself or its creator descendants. An invalid
+    // caller chain throws; an invalid target chain throws as well, as it does for the requirement.
+    internal bool SessionTargetAllowed(string caller, string target)
+    {
         lock (stateGate)
         {
             var snapshot = MetadataSnapshot();
             _ = CreatorChain(caller, snapshot);
-            if (Creator(snapshot, caller) is null)
-                return;
-            if (!CreatorChain(target, snapshot).Contains(caller, StringComparer.Ordinal))
-                throw new ToolAuthorizationDeniedException(
-                    "This operation requires a Session in the delegated Agent or its creator descendants."
-                );
+            return Creator(snapshot, caller) is null
+                || CreatorChain(target, snapshot).Contains(caller, StringComparer.Ordinal);
         }
+    }
+
+    // Only strict creator ancestors may replace an Agent's local rules.
+    private bool StrictCreatorAncestor(string caller, string name, JsonObject snapshot) =>
+        caller != name && CreatorChain(name, snapshot).Contains(caller, StringComparer.Ordinal);
+
+    internal bool RulesTargetAllowed(string caller, string name)
+    {
+        lock (stateGate)
+            return Exists(name) && StrictCreatorAncestor(caller, name, MetadataSnapshot());
     }
 
     internal void RequireCreationSource(
@@ -148,7 +170,13 @@ internal sealed partial class AgentCatalog
         }
     }
 
-    private void ValidateCreatorAdmission(string? creator, JsonObject snapshot)
+    // Channel guests created from a template are not limited by the direct-child limit: the
+    // administrator's channel configuration, not a model, decides how many there are.
+    private void ValidateCreatorAdmission(
+        string? creator,
+        JsonObject snapshot,
+        bool unlimitedChildren = false
+    )
     {
         if (creator is null)
             return;
@@ -157,8 +185,9 @@ internal sealed partial class AgentCatalog
         if (chain.Length > limits.MaxDepth)
             throw new InvalidDataException("Agent tree depth limit exceeded.");
         if (
-            snapshot.Count(pair => Exists(pair.Key) && Creator(snapshot, pair.Key) == creator)
-            >= limits.MaxChildren
+            !unlimitedChildren
+            && snapshot.Count(pair => Exists(pair.Key) && Creator(snapshot, pair.Key) == creator)
+                >= limits.MaxChildren
         )
             throw new InvalidDataException("Agent direct-child limit exceeded.");
     }
@@ -195,19 +224,19 @@ internal sealed partial class AgentCatalog
             if (authorize is not null)
                 await authorize();
             var callerAgent = caller?.Invoke();
-            if (
-                callerAgent is not null
-                && (
-                    callerAgent == name
-                    || !CreatorChain(name, next).Contains(callerAgent, StringComparer.Ordinal)
-                )
-            )
+            if (callerAgent is not null && !StrictCreatorAncestor(callerAgent, name, next))
                 throw new ToolAuthorizationDeniedException(
                     "Only strict creator ancestors may replace an Agent's rules."
                 );
             var row = next[name] as JsonObject ?? new JsonObject();
             next[name] = row;
             row["rules"] = rules.DeepClone();
+            // Rules written here are the administrator's: startup reconciliation keeps them.
+            if (row["legacyIsolation"] is JsonObject marker)
+            {
+                marker["confirmedDigest"] = IsolationMigrationRules.Digest(rules);
+                marker["fenceDigest"] = IsolationMigrationRules.FenceDigest(row);
+            }
             try
             {
                 AtomicIndexWrite(

@@ -13,12 +13,9 @@ internal sealed record AgentMemoryFile(
 internal sealed record AgentListEntry(
     string Id,
     string? Inherit,
-    string? IsolatedNode,
-    bool Isolated,
     int SessionCount,
     int ActiveSessionCount,
     int QueuedSessionCount,
-    int ToolRuleCount,
     string? CreatedBy,
     int RuleCount,
     string? DefaultNode,
@@ -86,9 +83,25 @@ internal sealed partial class AgentMemory
 
 internal sealed partial class SessionManager
 {
-    internal string ListAgentsText()
+    // The model-facing Agent list: Agents that own a listed Session or that an Agent-targeted
+    // action might address, with counts of listed Sessions only. The caller's Agent is always
+    // listed. Administrator surfaces use AgentListEntries unfiltered.
+    internal string ListAgentsText(SessionOwner caller)
     {
-        var rows = AgentListEntries();
+        var visibility = SessionVisibilityFor(caller);
+        var rows = AgentListEntries()
+            .Select(row =>
+                row with
+                {
+                    SessionCount = visibility.ListedCount(row.Id, row.SessionCount),
+                }
+            )
+            .Where(row =>
+                row.Id == caller.Agent
+                || row.SessionCount > 0
+                || visibility.AgentAddressable(row.Id)
+            )
+            .ToArray();
         if (rows.Length == 0)
             return "No agents found.";
         var result = $"Found {rows.Length} agent(s):\n\n";
@@ -102,12 +115,6 @@ internal sealed partial class SessionManager
                         : ""
                 )
                 + (row.Inherit is null ? "" : $" [inherits: {row.Inherit}]")
-                + (
-                    row.Isolated
-                        ? $" [isolated{(row.IsolatedNode is null ? "" : ":" + row.IsolatedNode)}]"
-                        : ""
-                )
-                + $" [tool rules:{row.ToolRuleCount}]"
                 + (row.CreatedBy is null ? "" : $" [created by: {row.CreatedBy}]")
                 + $" [local rules:{row.RuleCount}]"
                 + (row.DefaultNode is null ? "" : $" [default Node: {row.DefaultNode}]")
@@ -144,16 +151,12 @@ internal sealed partial class SessionManager
             .Select(name =>
             {
                 var owned = counts.GetValueOrDefault(name);
-                var isolation = IsolatedToolCompatibility.Metadata(agents.MetadataSnapshot()[name]);
                 return new AgentListEntry(
                     name,
                     AgentInherit(name),
-                    isolation.RecordedNode,
-                    isolation.Isolated,
                     owned.Total,
                     owned.Active,
                     owned.Queued,
-                    isolation.Rules.Count,
                     agents.CreatedBy(name),
                     (agents.MetadataSnapshot()[name]?["rules"] as JsonArray)?.Count ?? 0,
                     agents.DefaultNode(name),
@@ -205,10 +208,10 @@ internal sealed partial class SessionManager
                         ["defaultNode"] = agents.DefaultNode(name),
                         ["defaultCwd"] = agents.DefaultCwd(name),
                         ["inheritable"] = agents.Inheritable(name),
-                        ["isolated"] = AgentIsolated(name),
-                        ["isolatedNode"] = RecordedIsolationNode(name),
-                        ["isolationMigrated"] =
-                            agents.MetadataSnapshot()[name]?["legacyIsolation"] is not null,
+                        ["restricted"] = RestrictedLayer(
+                            agents.MetadataSnapshot()[name]?["rules"] as JsonArray
+                        ),
+                        ["isolationMigration"] = IsolationMigrationSummary(name),
                         ["sessionCount"] = owned.Total,
                         ["activeSessionCount"] = owned.Active,
                         ["queuedSessionCount"] = owned.Queued,
@@ -218,11 +221,45 @@ internal sealed partial class SessionManager
                             manifest.Files.Count == 0
                                 ? (double?)null
                                 : manifest.Files.Max(file => file.ModifiedAt),
-                        ["toolRuleCount"] = IsolatedToolCompatibility
-                            .Metadata(agents.MetadataSnapshot()[name])
-                            .Rules.Count,
                     };
             })
             .ToArray();
+    }
+
+
+    // A layer that does not parse fails every call of the Agent, so it is restricted too.
+    private static bool RestrictedLayer(JsonArray? rules)
+    {
+        try
+        {
+            return IsolationMigrationRules.EndsInDeny(rules);
+        }
+        catch (InvalidDataException)
+        {
+            return true;
+        }
+    }
+
+    // What the legacy isolation migration did to this Agent, for administrators. A layer that
+    // denies everything is reported only while it is still the installed one.
+    private JsonObject? IsolationMigrationSummary(string name)
+    {
+        var row = agents.MetadataSnapshot()[name] as JsonObject;
+        if (row?["legacyIsolation"] is not JsonObject marker)
+            return null;
+        var summary = new JsonObject
+        {
+            ["migratedAt"] = marker["migratedAt"]?.DeepClone(),
+            ["automatic"] = marker["automatic"]?.GetValue<bool>() == true,
+            ["node"] = marker["node"]?.DeepClone(),
+        };
+        if (
+            SessionWait.Text(marker["failClosed"]) is { } reason
+            && row["rules"] is JsonArray rules
+            && new IsolationMigrationPlan(rules, [], []).Digest
+                == SessionWait.Text(marker["rulesDigest"])
+        )
+            summary["failClosed"] = reason;
+        return summary;
     }
 }

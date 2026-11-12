@@ -48,15 +48,10 @@ internal static class ArchiveRecallTool
                       "scope": {
                         "type": "string",
                         "enum": [
-                          "all",
                           "current-session",
                           "current-agent"
                         ],
-                        "description": "Scope for semantic search. Searches stay within this agent; legacy isolated agents are further limited to the current session."
-                      },
-                      "agentName": {
-                        "type": "string",
-                        "description": "Agent for semantic search. Only this session's agent is supported."
+                        "description": "Scope for semantic search: this Session, or every Session of this Agent (default)."
                       },
                       "previewLength": {
                         "type": "number",
@@ -233,7 +228,6 @@ internal static class ArchiveRecallTool
                 "startTime",
                 "endTime",
                 "scope",
-                "agentName",
                 "preferBlocks",
                 "previewLength",
                 "contentFilter",
@@ -557,6 +551,13 @@ internal static class ArchiveRecallTool
                             renderer.Budget
                         )
                     );
+                await manager.RecallTargets.BlockAsync(
+                    source.Id,
+                    id,
+                    target.Kind == "raw-block" ? "msg:B#" : "B#",
+                    block,
+                    DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                );
                 if (target.Kind == "raw-block")
                     target = new("messages", block.RawStartSeq, block.RawEndSeq);
             }
@@ -601,6 +602,14 @@ internal static class ArchiveRecallTool
                     )
                 );
             }
+            if (block is null)
+                await manager.RecallTargets.MessagesAsync(
+                    source.Id,
+                    id,
+                    target.First,
+                    target.Last,
+                    DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                );
             var records = reader.Messages(target.First, target.Last);
             var available = reader.Stats();
             if (programmatic)

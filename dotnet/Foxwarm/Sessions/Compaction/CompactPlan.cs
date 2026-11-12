@@ -11,11 +11,12 @@ internal sealed record CompactOperation(
     int CandidateEnd,
     string Summary,
     JsonArray? MemoryFacts,
-    int? FrictionScore = null
+    int? FrictionScore = null,
+    int? RequiredLevel = null
 )
 {
     public string Kind => First.Kind;
-    public int Level => First.TargetLevel;
+    public int Level => RequiredLevel ?? First.TargetLevel;
     public int HistoryStart => First.HistoryStart;
     public int HistoryEnd => Last.HistoryEnd;
     public long RawStart => First.RawStart;
@@ -29,9 +30,16 @@ internal sealed record CompactPlan(
 )
 {
     internal CompactionPlannerDebug? Planner { get; init; }
+
+    /// <summary>Accepted summaries above their budget tolerance, recorded for diagnostics.</summary>
+    internal JsonArray? OverBudget { get; init; }
 }
 
-internal sealed class CompactPlanInvalidException(string message) : Exception(message);
+internal class CompactPlanInvalidException(string message) : Exception(message);
+
+/// <summary>A plan whose only problems are summaries above their budget tolerance.</summary>
+internal sealed class CompactPlanBudgetException(string message)
+    : CompactPlanInvalidException(message);
 
 internal static class CompactPlanValidator
 {
@@ -45,7 +53,11 @@ internal static class CompactPlanValidator
     ];
     private static readonly HashSet<string> Attributions = ["user", "assistant", "both"];
 
-    public static CompactPlan Validate(JsonObject args, CompactCandidates candidates)
+    public static CompactPlan Validate(
+        JsonObject args,
+        CompactCandidates candidates,
+        bool acceptOverBudget = false
+    )
     {
         if (args.ContainsKey("createBlocksJson") || args.ContainsKey("createBlocks"))
             throw new CompactPlanInvalidException(
@@ -127,47 +139,10 @@ internal static class CompactPlanValidator
                 throw new CompactPlanInvalidException(
                     $"replaceAsBlocks[{blockIndex}] has invalid level/sourceKind/sourceStart/sourceEnd/summary."
                 );
-            var firstIndex = candidates
-                .Items.ToList()
-                .FindIndex(candidate =>
-                    candidate.Kind == kind
-                    && candidate.TargetLevel == level
-                    && candidate.Start == start
-                );
-            if (firstIndex < 0)
-                throw new CompactPlanInvalidException(
-                    $"replaceAsBlocks[{blockIndex}] sourceStart is not a listed candidate."
-                );
+            var (firstIndex, endIndex, requiredLevel) = candidates.InContext
+                ? Selected(candidates, blockIndex, kind, level.Value, start.Value, end.Value)
+                : Required(candidates, blockIndex, kind, level.Value, start.Value, end.Value);
             var first = candidates.Items[firstIndex];
-            var endIndex = -1;
-            for (var i = firstIndex; i < candidates.Items.Count; i++)
-            {
-                var candidate = candidates.Items[i];
-                if (
-                    candidate.Kind != kind
-                    || candidate.TargetLevel != level
-                    || candidate.Segment != first.Segment
-                )
-                    break;
-                if (candidate.End == end)
-                {
-                    endIndex = i;
-                    break;
-                }
-            }
-            if (endIndex < firstIndex)
-                throw new CompactPlanInvalidException(
-                    $"replaceAsBlocks[{blockIndex}] does not match a continuous candidate range in current older context."
-                );
-            if (
-                !candidates.InContext
-                && kind == "block"
-                && endIndex == firstIndex
-                && !first.Stranded
-            )
-                throw new CompactPlanInvalidException(
-                    $"replaceAsBlocks[{blockIndex}] uses a single block source, which is allowed only for a stranded block immediately surrounded by higher-level blocks."
-                );
             for (var i = firstIndex; i <= endIndex; i++)
                 if (!used.Add(i))
                     throw new CompactPlanInvalidException(
@@ -182,9 +157,27 @@ internal static class CompactPlanValidator
                     endIndex,
                     summary,
                     facts,
-                    Friction(item["frictionScore"])
+                    Friction(item["frictionScore"]),
+                    requiredLevel
                 )
             );
+        }
+        if (!candidates.InContext)
+        {
+            var missing = candidates
+                .Retention.Where(required =>
+                    operations.All(op =>
+                        op.CandidateStart != required.CandidateStart
+                        || op.CandidateEnd != required.CandidateEnd
+                    )
+                )
+                .ToArray();
+            if (missing.Length > 0)
+                throw new CompactPlanInvalidException(
+                    "replaceAsBlocks is missing required operation(s): "
+                        + string.Join("; ", missing.Select(Describe))
+                        + "."
+                );
         }
         foreach (var seq in preserve.ToArray())
         {
@@ -240,25 +233,147 @@ internal static class CompactPlanValidator
             throw new CompactPlanInvalidException(
                 $"Raw-message hard quota requires message-source replaceAsBlocks entries to actually replace at least ~{candidates.RequiredRawTokens} eligible estimated tokens, but this plan replaces only ~{coveredTokens} after excluding preserveMessages (deficit ~{candidates.RequiredRawTokens - coveredTokens})."
             );
-        foreach (var block in candidates.BlockPolicies.Where(policy => policy.EffectiveMin > 0))
-        {
-            var covered = operations
-                .Where(op =>
-                    op.Kind == "block"
-                    && op.First.SourceLevel == block.SourceLevel
-                    && op.CandidateEnd > op.CandidateStart
-                )
-                .Sum(op => op.CandidateEnd - op.CandidateStart + 1);
-            if (covered < block.EffectiveMin)
-                throw new CompactPlanInvalidException(
-                    $"Source L{block.SourceLevel} block hard quota requires valid multi-block operations to compact at least {block.EffectiveMin} candidate block(s), but this plan compacts only {covered}; stranded single-block lifts do not count (deficit {block.EffectiveMin - covered})."
-                );
-        }
+        var overBudget = OverBudget(operations, candidates);
+        // In-context budgets are advisory: overruns are reported with the accepted plan.
+        if (overBudget.Count > 0 && !acceptOverBudget && !candidates.InContext)
+            throw new CompactPlanBudgetException(
+                "Summary over budget (memory facts included); shorten it and resubmit the complete plan: "
+                    + string.Join(
+                        "; ",
+                        overBudget
+                            .OfType<JsonObject>()
+                            .Select(entry =>
+                                $"{entry["sourceKind"]} {entry["sourceStart"]}-{entry["sourceEnd"]} has ~{entry["tokens"]} estimated tokens, budget {entry["budget"]}"
+                            )
+                    )
+                    + "."
+            );
         return new CompactPlan(
             operations.OrderBy(op => op.HistoryStart).ToArray(),
             preserve,
             remove
+        )
+        {
+            OverBudget = overBudget.Count > 0 ? overBudget : null,
+        };
+    }
+
+    /// <summary>Resolves an entry to the exact retention operation it must match.</summary>
+    private static (int First, int End, int? Level) Required(
+        CompactCandidates candidates,
+        int blockIndex,
+        string kind,
+        long level,
+        long start,
+        long end
+    )
+    {
+        var required = candidates.Retention.FirstOrDefault(op =>
+            op.Kind == kind && op.SourceStart == start && op.SourceEnd == end
         );
+        if (required is null)
+            throw new CompactPlanInvalidException(
+                $"replaceAsBlocks[{blockIndex}] (sourceKind={kind}, sourceStart={start}, sourceEnd={end}) is not a required operation. Submit exactly these: "
+                    + (
+                        candidates.Retention.Count == 0
+                            ? "none"
+                            : string.Join("; ", candidates.Retention.Select(Describe))
+                    )
+                    + "."
+            );
+        if (level != required.Level)
+            throw new CompactPlanInvalidException(
+                $"replaceAsBlocks[{blockIndex}] must use level {required.Level}: {Describe(required)}."
+            );
+        return (required.CandidateStart, required.CandidateEnd, required.Level);
+    }
+
+    /// <summary>Resolves an entry to a continuous range of same-level candidates in one segment.</summary>
+    private static (int First, int End, int? Level) Selected(
+        CompactCandidates candidates,
+        int blockIndex,
+        string kind,
+        long level,
+        long start,
+        long end
+    )
+    {
+        var firstIndex = candidates
+            .Items.ToList()
+            .FindIndex(candidate => candidate.Kind == kind && candidate.Start == start);
+        if (firstIndex < 0)
+            throw new CompactPlanInvalidException(
+                $"replaceAsBlocks[{blockIndex}] sourceStart is not a listed candidate."
+            );
+        var first = candidates.Items[firstIndex];
+        // A single-block rewrite shortens a block without widening its time span, so it keeps the
+        // source level. Block summaries start at level 2, so a level-1 source still becomes level 2.
+        if (kind == "block" && first.End == end)
+        {
+            var single = Math.Max(2, first.SourceLevel);
+            if (level != single)
+                throw new CompactPlanInvalidException(
+                    $"replaceAsBlocks[{blockIndex}] must use level {single} for a single-block rewrite."
+                );
+            return (firstIndex, firstIndex, single);
+        }
+        if (first.TargetLevel != level)
+            throw new CompactPlanInvalidException(
+                $"replaceAsBlocks[{blockIndex}] sourceStart is not a listed candidate."
+            );
+        for (var i = firstIndex; i < candidates.Items.Count; i++)
+        {
+            var candidate = candidates.Items[i];
+            if (
+                candidate.Kind != kind
+                || candidate.TargetLevel != level
+                || candidate.Segment != first.Segment
+            )
+                break;
+            if (candidate.End == end)
+                return (firstIndex, i, null);
+        }
+        throw new CompactPlanInvalidException(
+            $"replaceAsBlocks[{blockIndex}] does not match a continuous candidate range in current older context."
+        );
+    }
+
+    internal static string Describe(RetentionOperation op) =>
+        $"sourceKind={op.Kind}, sourceStart={op.SourceStart}, sourceEnd={op.SourceEnd}, level={op.Level}";
+
+    private static JsonArray OverBudget(
+        IEnumerable<CompactOperation> operations,
+        CompactCandidates candidates
+    )
+    {
+        var result = new JsonArray();
+        foreach (var op in operations)
+        {
+            var budget = candidates.InContext
+                ? op.Kind == "message"
+                    ? CompactRetention.NewBlockBudget
+                    : CompactRetention.MergedBlockBudget
+                : candidates
+                    .Retention.First(required => required.CandidateStart == op.CandidateStart)
+                    .Budget;
+            // The budget covers the stored summary, including its memory facts section.
+            var tokens = CompactCandidateBuilder.Tokens(
+                SessionCompactor.FormatSummary(op.Summary, op.MemoryFacts)
+            );
+            if (tokens > CompactRetention.Limit(budget))
+                result.Add(
+                    new JsonObject
+                    {
+                        ["sourceKind"] = op.Kind,
+                        ["sourceStart"] = op.First.Start,
+                        ["sourceEnd"] = op.Last.End,
+                        ["level"] = op.Level,
+                        ["tokens"] = tokens,
+                        ["budget"] = budget,
+                    }
+                );
+        }
+        return result;
     }
 
     private static HashSet<long> PositiveIds(JsonNode? raw, string label)

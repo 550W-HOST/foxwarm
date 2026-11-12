@@ -97,7 +97,7 @@ Foxwarm 会为每个 session 生成 `persistentMemorySnapshot`。当前 prompt �
 - 维护 channel attachment
 - 持久化 session metadata 与 history
 - child session / parent session 关系
-- alias / archive / isolated / current node 管理
+- alias / archive / current node 管理
 
 ### LLM Engine
 实现位置：`src/llm.ts`

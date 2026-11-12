@@ -1207,31 +1207,6 @@ internal sealed partial class SessionToolExecutor(
         }
     }
 
-    // Source behavior: broad MCP discovery for an isolated Agent connects only to
-    // servers named by its exact MCP allow rules; null means all enabled servers.
-    private static string[]? IsolatedMcpServers(SessionManager manager, string agent)
-    {
-        try
-        {
-            var isolation = manager.Isolation(agent);
-            return !isolation.Isolated
-                ? null
-                : isolation
-                    .Rules.OfType<JsonObject>()
-                    .Where(rule =>
-                        SessionWait.Text(rule["effect"]) == "allow"
-                        && SessionWait.Text(rule["source"]) == "mcp"
-                    )
-                    .Select(rule => SessionWait.Text(rule["server"])!)
-                    .Distinct(StringComparer.Ordinal)
-                    .ToArray();
-        }
-        catch (InvalidDataException)
-        {
-            return [];
-        }
-    }
-
     // One caller snapshot for every server of a single broad search.
     private static Func<string, bool> BroadMcpServerVisible(
         SessionManager manager,
@@ -1284,7 +1259,6 @@ internal sealed partial class SessionToolExecutor(
                 "move_session",
                 "delete_session",
                 "create_agent",
-                "set_agent_isolated",
                 "create_session",
                 "create_child_session",
                 "send_to_session",
@@ -1319,7 +1293,13 @@ internal sealed partial class SessionToolExecutor(
             handlers[name] = (owner, args, token) =>
                 owner.Manager.ExecuteTimerToolAsync(owner.Hosted, name, args, token);
         handlers["copy_between_nodes"] = (owner, args, token) =>
-            owner.Manager.CopyBetweenNodesAsync(owner.Hosted, args, token);
+            owner.Manager.CopyBetweenNodesAsync(
+                owner.Hosted,
+                args,
+                token,
+                owner.ExecutionNode,
+                owner.ExecutionCwd
+            );
         handlers["cancel_transfer"] = (owner, args, token) =>
             owner.Manager.CancelCopyTransferAsync(owner.Hosted, args, token);
         handlers["send_file"] = (owner, args, token) =>
@@ -1329,7 +1309,8 @@ internal sealed partial class SessionToolExecutor(
                     ?? throw new NotSupportedException("This executor has no file resolver."),
                 args,
                 token,
-                owner.ExecutionNode
+                owner.ExecutionNode,
+                owner.ExecutionCwd
             );
         handlers["image_write_to_file"] = (owner, args, token) =>
             owner.Manager.ExportImageAsync(
@@ -1338,7 +1319,8 @@ internal sealed partial class SessionToolExecutor(
                     ?? throw new NotSupportedException("This executor has no file resolver."),
                 args,
                 token,
-                owner.ExecutionNode
+                owner.ExecutionNode,
+                owner.ExecutionCwd
             );
         handlers["generate_image"] = (owner, args, token) =>
             owner.Manager.GenerateImageAsync(owner.Hosted, args, token);
@@ -1357,7 +1339,9 @@ internal sealed partial class SessionToolExecutor(
             handlers[name] = (owner, args, token) =>
                 MemoryTools.ExecuteAsync(owner.Hosted, owner.Manager, name, args, token);
         handlers["list_agents"] = (owner, _, _) =>
-            Task.FromResult(new JsonObject { ["output"] = owner.Manager.ListAgentsText() });
+            Task.FromResult(
+                new JsonObject { ["output"] = owner.Manager.ListAgentsText(owner.Hosted) }
+            );
         handlers["set_config"] = (owner, args, token) =>
             owner.Manager.InstallConfigAsync(
                 owner.Hosted,
@@ -1429,7 +1413,6 @@ internal sealed partial class SessionToolExecutor(
                     ),
                 owner.ScriptBudget,
                 owner.Hosted,
-                IsolatedMcpServers(owner.Manager, owner.Hosted.Agent),
                 BroadMcpServerVisible(owner.Manager, owner.Hosted)
             );
         handlers["call_tool"] = (_, _, _) =>
@@ -1477,7 +1460,6 @@ internal sealed partial class SessionToolExecutor(
                         or "artifact"
                         or "mcp_config"
                         or "mcp_notifications"
-                        or "set_agent_isolated"
                         or "node_create_auth_token"
                         or "node_remove"
                         or "node_bootstrap_info"

@@ -202,21 +202,9 @@ internal sealed partial class SessionManager
         {
             if (!agents.Exists(agent))
                 throw new InvalidDataException("Guest agent source does not exist: " + agent);
-            var isolated = config!["isolated"]?.GetValue<bool>() != false;
-            var node = SessionWait.Text(config["node"])?.Trim();
-            if (isolated && string.IsNullOrEmpty(node))
-                throw new InvalidDataException("Guest isolated Agent requires a Node.");
-            if (SessionWait.Text(config["mode"]) != "inherited")
-            {
-                if (
-                    AgentIsolated(agent) != isolated
-                    || isolated && RecordedIsolationNode(agent) != node
-                )
-                    throw new InvalidDataException(
-                        "Guest single-mode Agent isolation/Node does not match its configuration."
-                    );
+            var (template, node) = GuestPolicy(config!, agent);
+            if (SessionWait.Text(config!["mode"]) != "inherited")
                 return await CreateNamedAsync(agent, null, null, null);
-            }
             string AllocateName()
             {
                 for (var attempt = 0; attempt < 32; attempt++)
@@ -240,7 +228,8 @@ internal sealed partial class SessionManager
                     var created = await CreateAgentAsync(
                         name,
                         inherit: agent,
-                        isolatedNode: isolated ? node : null
+                        defaultNode: node,
+                        guestTemplate: template
                     );
                     return await RequiredAsync(created.MainSessionId!);
                 }
@@ -361,5 +350,47 @@ internal sealed partial class SessionManager
         var legacy = channelId.Groups[1].Value;
         var split = legacy.IndexOf(':');
         return split > 0 && split < legacy.Length - 1 ? legacy : null;
+    }
+
+    // Guests take their authorization policy from the template Agent: an inherited guest is
+    // created by the template, a single-mode guest Agent must already descend from it. Only an
+    // explicit `isolated: false` admits guests without one.
+    private (string? Template, string? Node) GuestPolicy(JsonObject config, string agent)
+    {
+        var node = SessionWait.Text(config["node"])?.Trim();
+        node = string.IsNullOrEmpty(node) ? null : node;
+        var template = SessionWait.Text(config["template"])?.Trim();
+        template = string.IsNullOrEmpty(template) ? null : template;
+        var inherited = SessionWait.Text(config["mode"]) == "inherited";
+        if (template is null)
+        {
+            if (config["isolated"]?.GetValue<bool>() == false)
+                return (null, node);
+            throw new InvalidDataException(
+                "Set guestAgent.template to an Agent whose rules apply to guests."
+            );
+        }
+        if (!agents.Exists(template))
+            throw new InvalidDataException("Guest template Agent does not exist: " + template);
+        var metadata = agents.MetadataSnapshot();
+        if (
+            !agents
+                .CreatorChainOf(template)
+                .Any(name => metadata[name]?["rules"] is JsonArray { Count: > 0 })
+        )
+            throw new InvalidDataException("Guest template Agent has no rules: " + template);
+        if (!inherited)
+        {
+            var chain = agents.CreatorChainOf(agent);
+            if (!chain.Contains(template, StringComparer.Ordinal))
+                throw new InvalidDataException(
+                    "Guest single-mode Agent is not the template or created by it."
+                );
+            if (node is not null && agents.DefaultNode(agent) != node)
+                throw new InvalidDataException(
+                    "Guest single-mode Agent default Node does not match its configuration."
+                );
+        }
+        return (template, node);
     }
 }

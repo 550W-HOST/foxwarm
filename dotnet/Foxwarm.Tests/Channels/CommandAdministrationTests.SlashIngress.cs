@@ -14,6 +14,8 @@ public sealed partial class CommandAdministrationTests
     [InlineData("/stop.txt")]
     [InlineData("/stop-extra")]
     [InlineData("/STOP")]
+    [InlineData("/Stop")]
+    [InlineData("/stpo")]
     [InlineData("\u0085/stop")]
     [InlineData("/stop\u0085compact")]
     [InlineData("/session\u0085move renamed")]
@@ -180,5 +182,56 @@ public sealed partial class CommandAdministrationTests
         );
         Assert.Contains("Unauthorized", replies.Single());
         Assert.Equal(queued, f.Owner.Entry.Snapshot().Queue.Count);
+    }
+
+    [Theory]
+    [InlineData("telegram")]
+    [InlineData("matrix")]
+    [InlineData("weixin")]
+    [InlineData("wework")]
+    [InlineData("qq")]
+    public async Task Unknown_slash_guest_admission_uses_the_ordinary_channel_policy(string type)
+    {
+        var channel = ExternalChannelFixture.Channel();
+        channel["type"] = type;
+        channel["guestAgent"] = new JsonObject { ["agentId"] = "guest", ["isolated"] = false };
+        await using var f = await ExternalChannelFixture.CreateAsync(
+            new JsonObject { ["alpha"] = channel }
+        );
+        await f.Manager.CreateAgentAsync("guest", createMainSession: false);
+        var replies = new List<string>();
+        var source = Source(replies) with { Type = type, Sender = "999" };
+        // Even direct command callers (Telegram) must decline unknown catalog heads
+        // before command authorization, leaving ordinary guest admission to the Router.
+        foreach (var text in new[] { "/stpo", "/Stop", "/unknown" })
+            Assert.False(await f.Router.HandleExternalCommandAsync(source, text, null));
+        Assert.Empty(replies);
+        Assert.Null(f.Manager.ChannelBinding(source.Target));
+        Assert.True(await f.Router.HandleExternalCommandAsync(source, "/stop", null));
+        Assert.Contains("Unauthorized", Assert.Single(replies));
+        Assert.Null(f.Manager.ChannelBinding(source.Target));
+        replies.Clear();
+        var materialized = false;
+        await f.Router.HandleExternalMessageAsync(
+            source,
+            new ExternalChannelMessage(
+                [new JsonObject { ["text"] = "/stpo" }],
+                MaterializeParts: _ =>
+                {
+                    materialized = true;
+                    return Task.FromResult<IReadOnlyList<JsonObject>>([]);
+                }
+            )
+        );
+        var id = f.Manager.ChannelBinding(source.Target)!["sessionId"]!.GetValue<string>();
+        var guest = await f.Manager.RequiredAsync(id);
+        Assert.Equal("guest", guest.Agent);
+        Assert.Contains(
+            "/stpo",
+            SessionWait.Text(Assert.Single(guest.Entry.Snapshot().Queue).Parts![0]["system"])
+        );
+        Assert.False(materialized);
+        Assert.Empty(replies);
+        Assert.Empty(f.Owner.Entry.Snapshot().Queue);
     }
 }

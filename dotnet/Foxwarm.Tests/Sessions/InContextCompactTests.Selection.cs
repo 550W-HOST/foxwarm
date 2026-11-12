@@ -63,7 +63,7 @@ public sealed partial class InContextCompactTests
             block.ToMessage(),
             Row("user", 6, new JsonObject { ["text"] = "recent small" }),
         ];
-        Assert.Empty(CompactCandidateBuilder.Build(history, keepPercent: 0).Items);
+        Assert.False(CompactCandidateBuilder.Build(history, keepTokens: 0).HasWork);
         var candidates = CompactCandidateBuilder.Build(history, inContext: true);
         var args = Plan(6);
         args["replaceAsBlocks"]!
@@ -255,5 +255,71 @@ public sealed partial class InContextCompactTests
         );
         Assert.Equal(0, fixture.Owner.Entry.Snapshot().HistoryVersion);
         Assert.False(fixture.Owner.Compactor.Active);
+    }
+
+    [Fact]
+    public void Single_block_rewrite_keeps_its_level_and_budgets_are_advisory()
+    {
+        JsonObject Merged(long id, long raw) =>
+            new ArchiveBlockRecord(
+                "s",
+                "main",
+                id,
+                2,
+                "block",
+                id - 10,
+                id - 10,
+                new JsonArray(id - 10),
+                raw,
+                raw + 1,
+                raw,
+                raw + 1,
+                "Merged source block.",
+                null,
+                id
+            ).ToMessage();
+        JsonObject Entry(int level, long start, long end, string summary = "Shorter.") =>
+            new()
+            {
+                ["level"] = level,
+                ["sourceKind"] = "block",
+                ["sourceStart"] = start,
+                ["sourceEnd"] = end,
+                ["summary"] = summary,
+            };
+        JsonObject Args(params JsonObject[] entries) =>
+            new() { ["inContext"] = true, ["replaceAsBlocks"] = new JsonArray(entries) };
+        var candidates = CompactCandidateBuilder.Build(
+            [Merged(21, 1), Merged(22, 3)],
+            inContext: true
+        );
+        // D6: one level-2 block stays at level 2; several level-2 blocks merge into level 3.
+        Assert.Equal(
+            2,
+            Assert
+                .Single(
+                    CompactPlanValidator.Validate(Args(Entry(2, 21, 21)), candidates).Operations
+                )
+                .Level
+        );
+        Assert.Throws<CompactPlanInvalidException>(() =>
+            CompactPlanValidator.Validate(Args(Entry(3, 21, 21)), candidates)
+        );
+        Assert.Equal(
+            3,
+            Assert
+                .Single(
+                    CompactPlanValidator.Validate(Args(Entry(3, 21, 22)), candidates).Operations
+                )
+                .Level
+        );
+        // Budgets are advisory in this mode: the plan is accepted and the overrun reported.
+        var plan = CompactPlanValidator.Validate(
+            Args(Entry(2, 21, 21, new string('y', 6000))),
+            candidates
+        );
+        var over = Assert.Single(plan.OverBudget!).AsObject();
+        Assert.Equal(1500, over["budget"]!.GetValue<int>());
+        Assert.Null(CompactPlanValidator.Validate(Args(Entry(2, 22, 22)), candidates).OverBudget);
     }
 }

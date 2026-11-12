@@ -51,15 +51,23 @@ internal sealed partial class NodeProviderRegistry
         string path,
         SessionOwner owner,
         bool ingress,
-        CancellationToken token
+        CancellationToken token,
+        string? sessionCwd = null
     )
     {
         if (!IsProviderNode(node))
         {
-            return await native.OpenReadStreamAsync(node, path, owner, ingress, token);
+            return await native.OpenReadStreamAsync(
+                node,
+                path,
+                owner,
+                ingress,
+                token,
+                sessionCwd: sessionCwd
+            );
         }
         TargetFileContent.RequirePath(path);
-        var operations = await FileOperationsAsync(node, false, null, token);
+        var operations = await FileOperationsAsync(node, false, sessionCwd, token);
         var stat = await operations.StatAsync(path, token);
         if (stat.Kind != "file" || stat.Size < 0)
             throw new IOException("Source path is not a regular file.");
@@ -82,7 +90,8 @@ internal sealed partial class NodeProviderRegistry
         SessionOwner owner,
         bool ingress,
         CancellationToken token,
-        Action<long>? progress = null
+        Action<long>? progress = null,
+        string? sessionCwd = null
     )
     {
         if (!IsProviderNode(node))
@@ -96,12 +105,13 @@ internal sealed partial class NodeProviderRegistry
                 owner,
                 ingress,
                 token,
-                progress
+                progress,
+                sessionCwd
             );
         }
         owner.Entry.RequireIdentityAuthority();
         TargetFileContent.RequirePath(path);
-        var operations = await FileOperationsAsync(node, true, null, token);
+        var operations = await FileOperationsAsync(node, true, sessionCwd, token);
         try
         {
             _ = await operations.StatAsync(path, token);

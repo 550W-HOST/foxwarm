@@ -66,8 +66,8 @@ The operator-facing deployment/configuration workflow is documented by the singl
 - Master-side WebSocket heartbeat sends protocol ping frames every 30 seconds and requires liveness within 10 seconds.
 - Pre-authentication messages are queued and replayed after authentication.
 - Authenticated registration negotiates the shared 1-3 core Node protocol before capability admission. Missing metadata selects executable legacy generation 1, the current CLI selects generation 3, and only malformed/disjoint clients remain connected and visible as upgrade-required without executable capabilities, dispatch, selection, or application events. Canonical contract: [D-node-thread-core-protocol-compatibility](../threads/node-communication.md#d-node-thread-core-protocol-compatibility).
-- Ordinary node-to-session `session_event` is allowed only when the target session's `currentNode` equals the authenticated node ID, or the target belongs to an isolated agent bound to that node. Remote exec completion instead requires the scoped start-time capability, correlated ACK, deterministic mailbox identity, and newest-32 authoritative Session receipt contract defined by [D-node-thread-remote-exec-completion](../threads/node-communication.md#d-node-thread-remote-exec-completion).
-- Agent isolation is an agent-level permission boundary. Selecting a session `currentNode` routes execution but does not create isolation or an exclusive lease.
+- Ordinary node-to-session `session_event` is allowed only when the target session's `currentNode` equals the authenticated node ID. Remote exec completion instead requires the scoped start-time capability, correlated ACK, deterministic mailbox identity, and newest-32 authoritative Session receipt contract defined by [D-node-thread-remote-exec-completion](../threads/node-communication.md#d-node-thread-remote-exec-completion).
+- Agent-local rule layers are the agent-level permission boundary. Selecting a session `currentNode` routes execution but does not create a permission boundary or an exclusive lease.
 - Backend services are versioned fixed protocols and do not pass through model-tool approval.
 - Generic Node capability execution resolves the exact non-master provider in Main; unsupported capabilities never fall back to master.
 - Executable providers are startup-only trusted configuration and advertise remote- or sandbox-kind Nodes through fixed filesystem (`read` or `read-write`) and optional process start/poll backends. Exec requires readable same-Node logs; the existing Core exec manager owns waiting, output and completion. Core derives canonical file tools over parent/stat/ranged-read/readdir/replace/exclusive-create/append-write/mkdir/remove primitives; provider path and restriction semantics remain authoritative. Authenticated remote Nodes retain their resident complete-tool adapter internally.
@@ -91,13 +91,13 @@ Persist approved authentication tokens only as hashes on the master; return plai
 
 ### D-node-session-event-scope
 
-The authenticated node ID is mandatory input to master-side session-event authorization. Client-provided target data cannot bypass current-node or isolated-agent binding checks; the only remote-exec exception is the signed, exec-scoped grant owned by [D-node-thread-remote-exec-completion](../threads/node-communication.md#d-node-thread-remote-exec-completion).
+The authenticated node ID is mandatory input to master-side session-event authorization. Client-provided target data cannot bypass current-node checks; the only remote-exec exception is the signed, exec-scoped grant owned by [D-node-thread-remote-exec-completion](../threads/node-communication.md#d-node-thread-remote-exec-completion).
 
 ### D-node-isolation-boundary
 
 **Governing distinction; directly selected.** Environment isolation and [tool authorization](../behaviors/nodes-workspaces-and-permissions.md#authority-has-several-independent-boundaries) solve different problems. A Node/Provider supplies the execution environment; an Agent flag, role label or selected Node alone cannot prove an OS/network sandbox.
 
-`currentNode` is execution routing. `agent.isolatedNode` is the isolation boundary inherited by that agent's sessions. Pairing/binding does not imply node exclusivity or environment virtualization.
+`currentNode` is execution routing. An Agent's `defaultNode` only places new sessions; the legacy `agent.isolatedNode` binding was retired in R2 ([isolation migration](../units/isolation-migration.md#r2-startup-migration)). Pairing/binding does not imply node exclusivity or environment virtualization.
 
 ### D-node-bootstrap-bundle
 

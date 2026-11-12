@@ -183,10 +183,10 @@ try {
   state = await turn(second, 'close', [[tool('close', 'browser_close', { tabId }), tool('after-close', 'browser_tabs'), tool('reopen', 'browser_open', { url: origin + '/' })]])
   assert.equal(good(state, 'close').closed, true); assert.deepEqual(good(state, 'after-close').tabs, []); assert.equal(good(state, 'reopen').title, 'One')
 
-  // Generic Node-capability authorization: an isolated Agent bound to another Node cannot reach master's browser.
+  // Generic Node-capability authorization: an Agent whose rules deny master Node tools cannot reach master's browser.
   await launchRemote()
   assert.equal((await fixture.api('POST', '/api/agents', { agentId: 'bound' })).status, 201)
-  assert.equal((await fixture.api('PUT', '/api/agents/bound', { isolatedNode: 'remote' })).status, 200)
+  assert.equal((await fixture.api('PUT', '/api/agents/bound', { defaultNode: 'remote', rules: [{ id: 'no-master-node-tools', action: 'deny', match: { tool: { source: 'node' }, targetNode: 'master' } }] })).status, 200)
   const bound = await create('browser-bound', 'bound')
   state = await turn(bound, 'isolated', [[tool('isolated-denied', 'browser_tabs', {}, 'master')]])
   assert(pair(state, 'isolated-denied').error)

@@ -40,6 +40,7 @@ internal sealed partial class SessionCompactor
                         candidates
                             .Items.Skip(op.CandidateStart)
                             .Take(op.CandidateEnd - op.CandidateStart + 1)
+                            .Where(item => item.Kind == "block")
                             .Select(item => (JsonNode?)JsonValue.Create(item.Start))
                             .ToArray()
                     )
@@ -65,6 +66,20 @@ internal sealed partial class SessionCompactor
             );
             operations.Add((op, record));
         }
+        // Preserved raw rows retire when a regular compaction merges the block that kept them;
+        // they remain in the Archive.
+        var retired = candidates.InContext
+            ? new HashSet<long>()
+            : plan
+                .Operations.Where(op => op.Kind == "block")
+                .SelectMany(op =>
+                    candidates
+                        .Items.Skip(op.CandidateStart)
+                        .Take(op.CandidateEnd - op.CandidateStart + 1)
+                        .Where(item => item.Kind == "block")
+                        .Select(item => item.Start)
+                )
+                .ToHashSet();
         var history = new List<HistoryMessage>();
         var cursor = 0;
         foreach (var (op, record) in operations)
@@ -72,26 +87,42 @@ internal sealed partial class SessionCompactor
             AppendRetained(
                 original.History.Skip(cursor).Take(op.HistoryStart - cursor),
                 plan.Remove,
+                retired,
                 history,
                 candidates.InContext
             );
             history.Add(HistoryMessage.FromJson(record.ToMessage()));
-            foreach (
-                var row in original
-                    .History.Skip(op.HistoryStart)
-                    .Take(op.HistoryEnd - op.HistoryStart + 1)
-            )
+            var sources = candidates
+                .Items.Skip(op.CandidateStart)
+                .Take(op.CandidateEnd - op.CandidateStart + 1)
+                .Where(item => item.Kind == op.Kind)
+                .SelectMany(item =>
+                    Enumerable.Range(item.HistoryStart, item.HistoryEnd - item.HistoryStart + 1)
+                )
+                .ToHashSet();
+            for (var index = op.HistoryStart; index <= op.HistoryEnd; index++)
+            {
+                var row = original.History[index];
+                if (!sources.Contains(index))
+                {
+                    // Rows inside the range that are not sources of this block, such as
+                    // lifecycle boundaries or preserved rows, keep their order after it.
+                    AppendRetained([row], plan.Remove, retired, history, false);
+                    continue;
+                }
                 if (row.Sequence is long seq && plan.Preserve.Contains(seq))
                 {
                     var preserved = row.ToJson();
                     ((JsonObject)preserved["__meta"]!)["preservedFromBlockId"] = record.Id;
                     history.Add(HistoryMessage.FromJson(preserved));
                 }
+            }
             cursor = op.HistoryEnd + 1;
         }
         AppendRetained(
             original.History.Skip(cursor).Take(candidates.Split - cursor),
             plan.Remove,
+            retired,
             history,
             candidates.InContext
         );
@@ -167,6 +198,7 @@ internal sealed partial class SessionCompactor
     private static void AppendRetained(
         IEnumerable<HistoryMessage> source,
         IReadOnlySet<long> removed,
+        IReadOnlySet<long> retired,
         List<HistoryMessage> output,
         bool retainDisplayOnly
     )
@@ -190,20 +222,23 @@ internal sealed partial class SessionCompactor
             )
                 continue;
             var seq = record.Sequence;
+            var preservedFrom = CompactCandidateBuilder.Number(
+                CompactCandidateBuilder.Meta(row)?["preservedFromBlockId"]
+            );
             if (
-                seq is not null
-                && removed.Contains(seq.Value)
-                && CompactCandidateBuilder.Number(
-                    CompactCandidateBuilder.Meta(row)?["preservedFromBlockId"]
+                preservedFrom is > 0
+                && (
+                    seq is not null && removed.Contains(seq.Value)
+                    || retired.Contains(preservedFrom.Value)
                 )
-                    is > 0
             )
                 continue;
             output.Add(record);
         }
     }
 
-    private static string FormatSummary(string summary, JsonArray? facts)
+    /// <summary>The stored block summary: the summary text followed by its memory facts.</summary>
+    internal static string FormatSummary(string summary, JsonArray? facts)
     {
         if (facts is not { Count: > 0 })
             return summary;

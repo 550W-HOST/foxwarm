@@ -301,7 +301,7 @@ public sealed class MainNativePathTests
     }
 
     [Fact]
-    public async Task Isolated_Main_cannot_enter_shared_agent_namespace_even_through_a_symlink_but_root_listing_is_not_hidden()
+    public async Task Isolated_Main_in_the_shared_layout_fails_closed_at_startup()
     {
         using var temp = new TempDirectory();
         var data = Path.Combine(temp.Path, "data");
@@ -325,6 +325,7 @@ public sealed class MainNativePathTests
                 "agents/00_SYSTEM.md",
                 "shortcut/00_SYSTEM.md",
                 "$fw_agentdir/agents/00_SYSTEM.md",
+                ".",
             }
         )
             Assert.NotNull(
@@ -335,13 +336,12 @@ public sealed class MainNativePathTests
                     )
                 )!["error"]
             );
-        Assert.Null(
-            (
-                await tools.ExecuteAsync(
-                    Call("read", new JsonObject { ["filePath"] = "." }),
-                    default
-                )
-            )!["error"]
+        // A local layer cannot express the nested-Agent exclusion of this layout, so the
+        // migration installs a deny-everything layer instead of widening access.
+        Assert.False(
+            string.IsNullOrEmpty(
+                SessionWait.Text(manager.AgentMetadata["main"]!["legacyIsolation"]!["failClosed"])
+            )
         );
     }
 

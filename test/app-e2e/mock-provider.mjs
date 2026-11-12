@@ -341,7 +341,10 @@ export async function startMockProvider({ toolFile, log, readyDelayMs = 0, enfor
       })
       if (marker === 'COMPACT_SYNC' || marker === 'COMPACT_BACKGROUND') {
         const callId = marker === 'COMPACT_SYNC' ? 'compact-sync-plan' : 'compact-background-plan'
-        const argumentsText = JSON.stringify({ replaceAsBlocks: [{ level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 4, summary: `${marker.toLowerCase()} summary` }] })
+        // Submit exactly the operations the planner prompt requires.
+        const replaceAsBlocks = [...wire.matchAll(/\d+\. sourceKind=(message|block), sourceStart=(\d+), sourceEnd=(\d+), level=(\d+)/g)]
+          .map(match => ({ level: Number(match[4]), sourceKind: match[1], sourceStart: Number(match[2]), sourceEnd: Number(match[3]), summary: `${marker.toLowerCase()} summary` }))
+        const argumentsText = JSON.stringify({ replaceAsBlocks })
         socket.send(JSON.stringify({
           type: 'response.completed',
           response: {

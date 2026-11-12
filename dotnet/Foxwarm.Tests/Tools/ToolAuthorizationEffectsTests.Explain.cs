@@ -32,7 +32,7 @@ public sealed partial class ToolAuthorizationEffectsTests
     }
 
     [Fact]
-    public async Task Explain_reports_shared_layer_decisions_facts_isolation_and_probe_errors()
+    public async Task Explain_reports_shared_layer_decisions_facts_migrated_layer_and_probe_errors()
     {
         using var temp = new TempDirectory();
         await Seed(temp.Path, Obj("""{"isolated":true}"""));
@@ -74,7 +74,7 @@ public sealed partial class ToolAuthorizationEffectsTests
         Assert.Equal("no exec for beta", rule["reason"]!.GetValue<string>());
         Assert.Equal("beta", exec["facts"]!["agent"]!.GetValue<string>());
         Assert.Equal("master", exec["facts"]!["currentNode"]!.GetValue<string>());
-        Assert.False(exec["isolation"]!["isolated"]!.GetValue<bool>());
+        Assert.Null(exec["isolation"]);
 
         var read = probes[1]!["active"]!;
         Assert.True(read["allowed"]!.GetValue<bool>());
@@ -88,14 +88,18 @@ public sealed partial class ToolAuthorizationEffectsTests
             path["resolved"]!.GetValue<string>()
         );
 
-        // Generic default allow passes; the isolated Agent's legacy check still denies master exec.
+        // Generic default allow passes; the migrated Agent's generated layer denies master exec.
         var isolated = probes[2]!["active"]!;
         Assert.Equal("opaque", probes[2]!["sessionId"]!.GetValue<string>());
         Assert.Null(isolated["layers"]![0]!["rule"]);
         Assert.Equal("allow", isolated["layers"]![0]!["default"]!.GetValue<string>());
-        Assert.True(isolated["isolation"]!["isolated"]!.GetValue<bool>());
-        Assert.False(isolated["isolation"]!["allowed"]!.GetValue<bool>());
-        Assert.Equal("isolation", isolated["deniedBy"]!.GetValue<string>());
+        Assert.Equal("agent:alpha", isolated["layers"]![1]!["layer"]!.GetValue<string>());
+        Assert.Equal(
+            "isolation-master-exec",
+            isolated["layers"]![1]!["rule"]!["id"]!.GetValue<string>()
+        );
+        Assert.Null(isolated["isolation"]);
+        Assert.Equal("policy", isolated["deniedBy"]!.GetValue<string>());
         Assert.False(isolated["allowed"]!.GetValue<bool>());
 
         Assert.Contains("not found", probes[3]!["error"]!.GetValue<string>());

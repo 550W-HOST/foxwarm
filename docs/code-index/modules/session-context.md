@@ -28,10 +28,9 @@ Session context owns model-context budgeting, layered compaction and direct acti
 ## Current defaults
 
 - Automatic compact threshold: 85% of the resolved model context window (`llm.compactThresholdPercent`, default `0.85`).
-- Recent rendered history kept by default: 30% (`llm.compactKeepPercent`, default `0.3`).
-- Raw eligibility: more than 2,000 estimated tokens; default required replacement: 20%.
-- Block level eligibility: 3,000 summary tokens; high-backlog force threshold: 5,000.
-- Candidate block window: oldest 40%; default high-backlog required source-block coverage: 20%.
+- Recent raw history kept by default: the newest raw rows within 30% of the compact threshold (or of the raw region present, when smaller), by estimated tokens (`llm.compactKeepPercent`, default `0.3`; [D-context-recent-raw-tail](../threads/context-compaction.md#d-context-recent-raw-tail)).
+- New level-1 block: from more than 2,000 estimated raw tokens after the newest block; budget 3,000 tokens.
+- Block retention: at most 3 blocks per level, levels non-increasing from oldest to newest, merged budget 1,500 tokens, 24,000-token region backstop, at most 3 merges per compaction ([D-context-log-retention](../threads/context-compaction.md#d-context-log-retention)).
 - Planning budget: 15 total rounds, including invalid-tool and plan-fix feedback.
 - Archive-index batch threshold: 50 pending messages or 8,000 estimated tokens.
 
@@ -42,7 +41,7 @@ Session context owns model-context budgeting, layered compaction and direct acti
 - A compaction job applies only to a compatible live prefix snapshot.
 - Lineage caps prevent post-fork parent content from reaching a child.
 - Vector is an optional derived layer that defaults disabled. Optional memory facts and startup vector backfill are best-effort and never block a compact commit or service readiness; raw messages and full block summaries archived while disabled remain pending for later checkpoint-based backfill. Dedicated fact rows are not reconstructed, though fact text remains in block summaries.
-- Display-only messages are excluded from model context, candidate quota denominators, and embeddings.
+- Display-only messages are excluded from model context, candidate token counts, and embeddings.
 - Ordinary archive, recall, expansion, image-source, and vector-lineage reads are pure with respect to archive branches and session-ID reservations; explicit lifecycle/write/migration paths alone establish branch ownership. Canonical semantics: [D-archive-read-purity](../units/src-session-archive-store.md#d-archive-read-purity).
 - Exact range retrieval and incremental vector indexing use covering archive stats plus bounded SQLite source reads; they do not materialize unrelated message prefixes merely to discover counts or maxima.
 - Retained branch/log discovery plus the committed moved-ID alias ledger supplies the archive side of exact internal session-ID reservation and canonical historical reads; lifecycle semantics are canonical in [D-lifecycle-archived-id-reservation](../threads/session-lifecycle.md#d-lifecycle-archived-id-reservation).
@@ -69,4 +68,4 @@ Archive durability does not depend on vector availability. Backfill and compact-
 
 ## Open questions
 
-- None recorded for the current module boundary. Product changes to quotas or recall semantics belong in the canonical context thread.
+- None recorded for the current module boundary. Product changes to retention or recall semantics belong in the canonical context thread.

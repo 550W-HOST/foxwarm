@@ -16,7 +16,6 @@ export default function NodePicker({ sessionId, currentNode = 'master', disabled
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [lockedReason, setLockedReason] = useState<string | null>(null)
   const [popupStyle, setPopupStyle] = useState<React.CSSProperties>({ position: 'fixed' })
   const buttonRef = useRef<HTMLButtonElement>(null)
   const popupRef = useRef<HTMLDivElement>(null)
@@ -73,7 +72,6 @@ export default function NodePicker({ sessionId, currentNode = 'master', disabled
         if (!response.ok) throw new Error(data.error || 'Could not load nodes.')
         if (controller.signal.aborted) return
         setNodes(data.nodes)
-        setLockedReason(data.lockedReason)
       } catch (error) {
         if (!controller.signal.aborted) setError(error instanceof Error ? error.message : 'Could not load nodes.')
       } finally {
@@ -151,7 +149,6 @@ export default function NodePicker({ sessionId, currentNode = 'master', disabled
             setNodes([])
             setLoading(true)
             setError(null)
-            setLockedReason(null)
             positionPopup()
           }
           setOpen(value => !value)
@@ -172,7 +169,6 @@ export default function NodePicker({ sessionId, currentNode = 'master', disabled
         >
           <div className="shrink-0 border-b border-fw-border px-3 py-2 font-medium">Execution node</div>
           {loading && <div className="px-3 py-2 text-fw-text-muted">Loading nodes...</div>}
-          {lockedReason && <div className="px-3 py-2 text-fw-text-muted">{lockedReason}</div>}
           {error && <div role="alert" className="px-3 py-2 text-fw-danger">{error}</div>}
           <div ref={listRef} className="min-h-0 overflow-y-auto">
             {options.map(node => (

@@ -466,7 +466,7 @@ public sealed partial class ToolAuthorizationEffectsTests
     }
 
     [Fact]
-    public async Task Isolated_read_old_metadata_exact_allow_is_not_structural_or_handler_permission_and_current_default_status_stays_usable()
+    public async Task Migrated_old_metadata_exact_allow_is_not_structural_or_handler_permission_and_current_default_status_stays_usable()
     {
         using var temp = new TempDirectory();
         await Seed(
@@ -480,8 +480,9 @@ public sealed partial class ToolAuthorizationEffectsTests
         var owner = await manager.RequiredAsync("opaque");
         var execution = Executor(manager, owner, temp.Path);
         await using var mcp = execution.Mcp;
-        Assert.True(manager.AgentIsolated("alpha"));
-        Assert.Equal("future-node", manager.RecordedIsolationNode("alpha"));
+        Assert.True(manager.Isolation("alpha").Isolated);
+        Assert.Equal("future-node", manager.Isolation("alpha").RecordedNode);
+
         Assert.Equal(
             "tool_authorization_denied",
             Error(
@@ -527,8 +528,9 @@ public sealed partial class ToolAuthorizationEffectsTests
                 )
             )
         );
+        // The migrated layer limits status to the current Session.
         Assert.Equal(
-            "agent_tool_error",
+            "tool_authorization_denied",
             Error(
                 await Call(
                     execution.Tools,
@@ -551,7 +553,8 @@ public sealed partial class ToolAuthorizationEffectsTests
             "tool_authorization_denied",
             Error(await Call(execution.Tools, "recall", Obj("""{"sessionId":"outside"}""")))
         );
-        Assert.Single(manager.Owners());
+        // Startup placement loaded the migrated Agent's Sessions; denied calls loaded nothing else.
+        Assert.DoesNotContain(manager.Owners(), loaded => loaded.Agent != "alpha");
         Assert.Equal(
             "tool_authorization_denied",
             Error(await Call(execution.Tools, "view_session", Obj("""{"sessionId":"opaque"}""")))

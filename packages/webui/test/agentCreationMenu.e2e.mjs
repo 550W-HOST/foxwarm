@@ -259,16 +259,16 @@ test('New agent stays in one modal and cancel returns to the preserved session d
   await clickButtonByText('Create')
   await page.waitForSelector('[role="dialog"]', { hidden: true })
   assert.deepEqual(await page.evaluate(() => window.fixtureCalls), [
-    { type: 'agent', agentId: 'new_workspace', inheritAgent: 'main', defaultNode: null, defaultCwd: null, isolatedNode: null },
+    { type: 'agent', agentId: 'new_workspace', inheritAgent: 'main', defaultNode: null, defaultCwd: null },
   ])
 })
 
-test('New agent uses the shared Agent settings: start location, and isolation that decides the Node', async () => {
+test('New agent uses the shared Agent settings and names the start location', async () => {
   await resetFixture()
   await openSessionDialog()
   await page.click('button[aria-label="New agent"]')
   await page.waitForSelector('[data-agent-settings]')
-  assert.equal(await page.$eval('[data-agent-settings-isolation-section]', details => details.open), false, 'isolation starts collapsed')
+  assert.equal(await page.$('[data-agent-settings-isolation-section]'), null, 'no isolation settings')
   await page.waitForSelector('select[data-agent-default-node] option[value="build-box"]')
   assert.equal(await page.$eval('select[data-agent-default-node] option[value=""]', option => option.textContent), 'master (default)')
   assert.equal(await page.$eval('input[data-agent-default-cwd]', input => input.placeholder), 'Absolute path on master')
@@ -277,23 +277,19 @@ test('New agent uses the shared Agent settings: start location, and isolation th
   assert.equal(await page.$eval('input[data-agent-default-cwd]', input => input.placeholder), 'Absolute path on Build box')
   await page.type('input[data-agent-default-cwd]', ' /srv/build ')
 
-  await page.click('[data-agent-settings-isolation-section] summary')
-  await page.select('select[data-agent-settings-isolation]', 'build-box')
-  assert.equal(await page.$eval('select[data-agent-default-node]', select => select.disabled), true, 'isolation sets the Node')
-  await page.select('select[data-agent-settings-isolation]', '')
   assert.equal(await page.$eval('select[data-agent-default-node]', select => [select.disabled, select.value].join()), 'false,build-box')
 
   await clickButtonByText('Create')
   await page.waitForSelector('[role="dialog"]', { hidden: true })
   assert.deepEqual(await page.evaluate(() => window.fixtureCalls), [
-    { type: 'agent', agentId: 'builder', inheritAgent: null, defaultNode: 'build-box', defaultCwd: '/srv/build', isolatedNode: null },
+    { type: 'agent', agentId: 'builder', inheritAgent: null, defaultNode: 'build-box', defaultCwd: '/srv/build' },
   ])
 
   // New session names where the selected Agent starts.
   await page.evaluate(() => window.fixture.setAgents([
     { id: 'main' },
     { id: 'research', defaultNode: 'build-box', defaultCwd: '/srv/research' },
-    { id: 'release_ops', isolated: true, isolatedNode: 'build-box', defaultCwd: '/srv/ops' },
+    { id: 'release_ops', defaultNode: 'build-box' },
     { id: 'notes', defaultCwd: '/srv/notes' },
   ]))
   await openSessionDialog()
@@ -301,7 +297,7 @@ test('New agent uses the shared Agent settings: start location, and isolation th
   await page.click('button[title="main"]')
   assert.equal(await page.$('[data-creation-start-location]'), null, 'no line without placement settings')
   await page.click('button[title="release_ops"]')
-  assert.equal(await page.$eval('[data-creation-start-location]', line => line.textContent), 'Starts on Build box', 'the working directory belongs to the default Node only')
+  assert.equal(await page.$eval('[data-creation-start-location]', line => line.textContent), 'Starts on Build box', 'a Node without a working directory')
   await page.click('button[title="notes"]')
   assert.equal(await page.$eval('[data-creation-start-location]', line => line.textContent), 'Starts on master · /srv/notes')
 })
@@ -321,7 +317,7 @@ test('an installation default Node separates unset from an explicit master', asy
     await clickButtonByText('Create')
     await page.waitForSelector('[role="dialog"]', { hidden: true })
     assert.deepEqual(await page.evaluate(() => window.fixtureCalls), [
-      { type: 'agent', agentId: 'local', inheritAgent: null, defaultNode: 'master', defaultCwd: null, isolatedNode: null },
+      { type: 'agent', agentId: 'local', inheritAgent: null, defaultNode: 'master', defaultCwd: null },
     ])
   } finally {
     agentDefaultNode = null

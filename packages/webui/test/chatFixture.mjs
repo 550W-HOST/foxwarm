@@ -130,7 +130,7 @@ async function buildFixtureBundle() {
         { id: 'exec-only-remote', label: 'Shell node', selectable: true, reason: null },
         { id: 'offline-node', label: 'offline-node', selectable: false, reason: 'Offline' },
         { id: 'upgrade-node', label: 'upgrade-node', selectable: false, reason: 'Update this node to connect.' },
-      ], lockedReason: null }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      ] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
       if (url.endsWith('/node')) {
         window.fixtureNodePosts.push({ url, body: JSON.parse(init.body) })
         return new Promise((resolve, reject) => {

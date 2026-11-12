@@ -161,6 +161,9 @@ internal sealed class SessionChatService(
                 async (leaf, effort, failover, token) =>
                 {
                     token.ThrowIfCancellationRequested();
+                    // Tool declarations and dispatch use the same captured concrete leaf as
+                    // this attempt, including virtual routes and automatic failover.
+                    hosted.ToolModel = new(captured.Catalog, leaf, selectedRawModel);
                     var current = new EffectiveRequestSelection(
                         leaf.Key,
                         hosted.Entry.WithState(state =>

@@ -82,8 +82,8 @@ curl -fsSL https://foxwarm.net/install-foxwarm.sh | bash -s -- \
 
 从 0.9.4 起，原生安装包取代了 `foxwarm-linux-x64-self-contained.tar.gz`。使用自带运行时安装包的安装会在下次更新时切换到原生安装包，数据和配置保持不变，之后的更新也会继续使用原生安装包。
 
-- 更新到 0.9.4 时，照常运行 `./foxwarm/foxwarmctl update` 即可。0.9.4 版本为此也以旧文件名发布了原生安装包。
-- 之后的版本不再发布这个文件名。要把这样的安装直接更新到 0.9.5 或更高版本，请在当初安装时所在的目录重新运行安装脚本；如果安装时用了 `--dir`，请传入相同的 `--dir`：
+- 要经由 0.9.4 更新，运行 `./foxwarm/foxwarmctl update 0.9.4`。0.9.4 版本为此也以旧文件名发布了原生安装包；之后再运行一次 `update` 即可更新到最新版本。
+- 0.9.4 之后的版本不再发布这个文件名，直接运行 `update` 会失败。要把这样的安装直接更新到 0.9.5 或更高版本，请在当初安装时所在的目录重新运行安装脚本；如果安装时用了 `--dir`，请传入相同的 `--dir`：
 
 ```bash
 curl -fsSL https://foxwarm.net/install-foxwarm.sh | bash

@@ -8,7 +8,7 @@ import { join, resolve } from 'node:path'
 import puppeteer from 'puppeteer-core'
 import WebSocket from 'ws'
 import sharp from 'sharp'
-import { createHostFixture, until } from './mainHostFixture.mjs'
+import { createHostFixture, requiredCompactOperations, until } from './mainHostFixture.mjs'
 
 const options = { env: {} }, host = await createHostFixture('scoped-access', options)
 options.cwd = host.root
@@ -29,12 +29,7 @@ const peer = createServer(async (request, response) => {
     let output
     if (text.includes('COMPACTION STARTED:')) {
       const prompt = body.input.filter(row => row.role === 'user').flatMap(row => row.content || []).map(part => part.text || '').join('\n')
-      const segments = [...prompt.matchAll(/^Segment \d+: raw message candidates[^\n]*\n([\s\S]*?)(?=^Segment \d+:|^Review the older candidate items)/gm)]
-      const blocks = segments.map(segment => {
-        const ranges = [...segment[1].matchAll(/^- M#(\d+)(?:-#(\d+))?\s/gm)].map(match => [Number(match[1]), Number(match[2] || match[1])])
-        assert(ranges.length)
-        return { level: 1, sourceKind: 'message', sourceStart: ranges[0][0], sourceEnd: ranges.at(-1)[1], summary: 'Original records remain in effective Archive.' }
-      })
+      const blocks = requiredCompactOperations(prompt, 'Original records remain in effective Archive.')
       assert(blocks.length); output = [call('compact-plan', 'submit_compact_plan', { replaceAsBlocks: blocks })]
     } else if (text.includes('INSTALL-ACCESS') && !body.input.some(row => row.type === 'function_call_output')) {
       output = [call('install-access', 'set_config', { target: 'config', filePath: candidatePath })]

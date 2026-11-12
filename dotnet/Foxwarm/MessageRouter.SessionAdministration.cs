@@ -76,7 +76,6 @@ internal sealed partial class MessageRouter
                                 : ""
                         )
                         + $" - {row["messageCount"]} msgs - node: `{SessionWait.Text(row["currentNode"]) ?? "master"}`"
-                        + (SessionCatalog.Flag(row["isolated"]) ? " isolated" : "")
                         + "\n";
                     var channels = bindings
                         .Where(pair =>
@@ -267,11 +266,8 @@ internal sealed partial class MessageRouter
                 );
                 return;
             case "isolated":
-                var bound = manager.BoundNode(owner.Agent);
                 await source.Reply(
-                    bound is null
-                        ? "ℹ️ Session-level isolated mode has been removed. Use `currentNode` for ordinary node selection, or `/agent isolated <agent> <node-id|off>` for agent-level isolation."
-                        : $"🔒 Session-level isolated mode has been removed. This session inherits agent isolation on node `{bound}`. Use `/agent isolated` to change it."
+                    "ℹ️ Session-level isolated mode has been removed. Use `currentNode` for ordinary node selection."
                 );
                 return;
             case "index":

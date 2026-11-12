@@ -1,4 +1,4 @@
-import { BEFORE_UPDATE_RELOAD } from '../buildUpdate'
+import { BEFORE_UPDATE_RELOAD } from '../updateReload'
 import { useMobileChatViewport } from '../chatPreferences'
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
@@ -844,11 +844,12 @@ const ChatComposer = memo(function ChatComposer({
 
   useEffect(() => {
     const beforeReload = (event: Event) => {
-      const saved = persistDraftSafely(sessionId, draftRef.current)
-      // Attachment bytes and ongoing capture/send are not recoverable from the
-      // text draft alone. Do not discard them through the update action.
+      // Flush DOM/IME edits before persisting; the React draft can lag composition.
+      const current = editorRef.current?.flushForSubmit() || draftRef.current
+      const saved = persistDraftSafely(sessionId, current)
+      // Text persistence cannot recover file bytes or an active capture/send.
       if (!saved || recordingLockRef.current || submitInFlightRef.current
-        || draftRef.current.segments.some(segment => segment.type === 'attachment')) event.preventDefault()
+        || current.segments.some(segment => segment.type === 'attachment')) event.preventDefault()
     }
     window.addEventListener(BEFORE_UPDATE_RELOAD, beforeReload)
     return () => window.removeEventListener(BEFORE_UPDATE_RELOAD, beforeReload)

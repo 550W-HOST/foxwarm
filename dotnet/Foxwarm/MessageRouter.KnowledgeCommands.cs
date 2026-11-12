@@ -101,18 +101,13 @@ internal sealed partial class MessageRouter
                 {
                     var count = rows.Count(row => SessionWait.Text(row["agent"]) == agent);
                     var inherit = SessionWait.Text(metadata[agent]?["inherit"]);
-                    var isolation = manager.Isolation(agent);
+                    var ruleCount = (metadata[agent]?["rules"] as JsonArray)?.Count ?? 0;
                     output +=
                         $"`{agent}`"
                         + (count > 0 ? $" - {count} session{(count > 1 ? "s" : "")}" : "")
                         + (inherit is null ? "" : $" - inherits `{inherit}`")
-                        + (
-                            isolation.Isolated
-                                ? " - isolated"
-                                    + (isolation.RecordedNode is { } node ? $" on `{node}`" : "")
-                                : ""
-                        )
-                        + $" - {isolation.Rules.Count} tool rule(s)\n";
+                        + (ruleCount > 0 ? $" - {ruleCount} rule(s)" : "")
+                        + "\n";
                 }
                 await source.Reply(names.Length == 0 ? "No agents found." : output);
                 return;
@@ -120,21 +115,18 @@ internal sealed partial class MessageRouter
                 if (args.Length < 2)
                 {
                     await source.Reply(
-                        "Usage: /agent create <name> [--no-main] [--isolated <node-id>]"
+                        "Usage: /agent create <name> [--no-main]"
                     );
                     return;
                 }
                 var name = args[1];
                 var createMain = !args.Contains("--no-main");
-                var isolatedIndex = Array.IndexOf(args, "--isolated");
-                var nodeId = isolatedIndex >= 0 ? args.ElementAtOrDefault(isolatedIndex + 1) : null;
                 AgentCatalog.ValidateName(name);
                 var soul =
                     $"# SOUL.md - Who You Are\n\n*You are {name}, an AI assistant.*\n\n## Core Identity\n- Helpful and precise\n- Focus on your assigned tasks\n\n## Working Style\n- Think before acting\n- Collaborate using send_to_session when needed\n";
                 var created = await manager.CreateAgentAsync(
                     name,
                     createMain,
-                    isolatedNode: nodeId,
                     initialSoul: soul
                 );
                 await source.Reply(
@@ -144,7 +136,6 @@ internal sealed partial class MessageRouter
                                 ? $"\nMain session: `{created.MainSessionId}`"
                                 : "\nMain session: not created (`--no-main`)"
                         )
-                        + (nodeId is null ? "" : $"\nIsolation: enabled on `{nodeId}`")
                 );
                 return;
             case "delete":
@@ -180,24 +171,6 @@ internal sealed partial class MessageRouter
                     );
                 }
                 return;
-            case "isolated":
-                if (args.Length < 3)
-                {
-                    await source.Reply("Usage: /agent isolated <agent> <node-id|off>");
-                    return;
-                }
-                var before = manager
-                    .Catalog.List()
-                    .Count(row => SessionWait.Text(row["agent"]) == args[1]);
-                await manager.SetAgentNodeAsync(args[1], args[2] == "off" ? null : args[2]);
-                await source.Reply(
-                    (
-                        args[2] == "off"
-                            ? $"✅ Agent \"{args[1]}\" isolation cleared."
-                            : $"✅ Agent \"{args[1]}\" is now isolated on node `{args[2]}`."
-                    ) + (before > 0 ? $"\nUpdated {before} session(s)." : "")
-                );
-                return;
             case "inherit":
                 if (args.Length < 3)
                 {
@@ -205,10 +178,6 @@ internal sealed partial class MessageRouter
                     return;
                 }
                 var parent = args[2] == "none" ? null : args[2];
-                if (parent is not null && manager.AgentIsolated(parent))
-                    throw new InvalidDataException(
-                        $"Agent \"{parent}\" is isolated and cannot be used as an inherit source."
-                    );
                 await manager.SetAgentInheritAsync(args[1], parent);
                 await source.Reply(
                     (

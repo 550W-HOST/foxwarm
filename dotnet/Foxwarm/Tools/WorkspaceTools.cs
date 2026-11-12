@@ -39,7 +39,7 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
                         {
                             ["type"] = "string",
                             ["description"] =
-                                "File or directory path on the current Node. Relative paths follow that Node's working-directory rules. On master, they use the Session working directory or the Agent directory when unset. On master and CLI Nodes, ~/ and a leading $fw_agentdir or $fw_tmp are supported; other Nodes use their own path syntax.",
+                                "File or directory path on the current Node. A relative path uses the Session working directory, or the Node's default directory when none is set (the Agent directory on master and CLI Nodes). On master and CLI Nodes, ~/ and a leading $fw_agentdir or $fw_tmp are accepted; other leading $ names are rejected.",
                         },
                         ["startLine"] = new JsonObject
                         {
@@ -74,7 +74,7 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
                         {
                             ["type"] = "string",
                             ["description"] =
-                                "Destination path on the current Node. Relative paths follow that Node's working-directory rules. On master, they use the Session working directory or the Agent directory when unset. On master and CLI Nodes, ~/ and a leading $fw_agentdir or $fw_tmp are supported; other Nodes use their own path syntax.",
+                                "Destination path on the current Node. A relative path uses the Session working directory, or the Node's default directory when none is set (the Agent directory on master and CLI Nodes). On master and CLI Nodes, ~/ and a leading $fw_agentdir or $fw_tmp are accepted; other leading $ names are rejected.",
                         },
                         ["content"] = new JsonObject
                         {
@@ -92,7 +92,7 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
                         {
                             ["type"] = "string",
                             ["description"] =
-                                "Reference returned by a write that failed because the file existed or its parent directory was missing. Reuse it with overwrite=true to write the same cached text to this or another permitted path in the same session and agent. Set createDirs=true if needed. To change the text, supply content instead. References are short-lived.",
+                                "Reference returned by a write that failed because the file existed or its parent directory was missing. Reuse it with overwrite=true to write the same cached text to this or another permitted path in the same Session and Agent. Set createDirs=true if needed. To change the text, supply content instead. References are short-lived.",
                         },
                         ["createDirs"] = new JsonObject
                         {

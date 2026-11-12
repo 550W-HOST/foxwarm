@@ -20,6 +20,14 @@ internal sealed partial class SessionOwner
     internal Func<string, SessionMetadata?>? ResolveAncestry { get; set; }
     internal string? SnapshotRefreshWarning { get; set; }
 
+    internal sealed record ToolModelSelection(
+        HostModels Catalog,
+        ConcreteHostModel Model,
+        string? RawModel
+    );
+
+    internal ToolModelSelection? ToolModel { get; set; }
+
     private sealed record OwnerIdentity(string Id, string Agent);
 
     private long mcpGeneration;

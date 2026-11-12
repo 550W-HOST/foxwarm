@@ -252,83 +252,6 @@ public sealed partial class ToolAuthorizationEffectsTests
     }
 
     [Fact]
-    public async Task Isolation_migration_layer_matches_legacy_decisions_alone_and_with_legacy_enforcement()
-    {
-        using var legacy = new TempDirectory();
-        await Seed(legacy.Path, Obj(MigrationIsolation));
-        JsonArray generated;
-        await using (var manager = Manager(legacy.Path))
-        {
-            await manager.LoadAsync();
-            await AssertParity(manager, legacy.Path, "legacy");
-
-            var inventory = manager.IsolationMigrationInventory();
-            var report = inventory["agents"]!.AsArray().Single()!.AsObject();
-            Assert.Equal("alpha", report["agent"]!.GetValue<string>());
-            Assert.True(report["applicable"]!.GetValue<bool>());
-            Assert.Equal(2, report["placementReview"]!.AsArray().Count);
-            generated = report["candidate"]!["rules"]!.AsArray();
-            Assert.Null(manager.AgentMetadata["alpha"]?["rules"]);
-
-            var applied = await manager.ApplyIsolationMigrationAsync("alpha");
-            Assert.Equal(
-                report["candidate"]!["rulesDigest"]!.GetValue<string>(),
-                applied["rulesDigest"]!.GetValue<string>()
-            );
-            Assert.Equal(
-                new[] { "direct", "opaque" },
-                applied["materializedSessions"]!
-                    .AsArray()
-                    .Select(id => id!.GetValue<string>())
-                    .Order()
-            );
-            var row = manager.AgentMetadata["alpha"]!.AsObject();
-            Assert.True(row["isolated"]!.GetValue<bool>());
-            Assert.Equal("bound-node", row["isolatedNode"]!.GetValue<string>());
-            Assert.Equal(6, row["toolRules"]!.AsArray().Count);
-            Assert.True(JsonNode.DeepEquals(generated, row["rules"]));
-            Assert.False(row["inheritable"]!.GetValue<bool>());
-            Assert.Equal("bound-node", row["defaultNode"]!.GetValue<string>());
-            Assert.Equal(1, row["legacyIsolation"]!["generator"]!.GetValue<int>());
-            Assert.Equal(
-                "bound-node",
-                (await manager.RequiredAsync("opaque")).Entry.WithState(state =>
-                    SessionWait.Text(state.AuthorityEnvelope["currentNode"])
-                )
-            );
-            var marker = JsonNode.Parse(
-                await File.ReadAllTextAsync(
-                    Path.Combine(legacy.Path, "data", "state", AgentCatalog.InstallationFileName)
-                )
-            )!;
-            Assert.Equal(
-                AgentCatalog.ReaderVersion,
-                marker["minimumReaderVersion"]!.GetValue<int>()
-            );
-
-            // Dual enforcement is not narrower than legacy for authorization-time decisions.
-            await AssertParity(manager, legacy.Path, "dual");
-
-            // A repeated apply only reruns the placement backfill; nothing is left to do.
-            var again = await manager.ApplyIsolationMigrationAsync("alpha");
-            Assert.False(again["applied"]!.GetValue<bool>());
-            Assert.Empty(again["materializedSessions"]!.AsArray());
-            var after = manager.IsolationMigrationInventory("alpha")["agents"]![0]!.AsObject();
-            Assert.False(after["applicable"]!.GetValue<bool>());
-            Assert.NotNull(after["migrated"]);
-            Assert.Null(after["candidate"]);
-        }
-
-        // The generated layer alone, with legacy isolation removed, makes the same decisions.
-        using var local = new TempDirectory();
-        await Seed(local.Path, new JsonObject { ["rules"] = generated.DeepClone() });
-        await using var layered = Manager(local.Path);
-        await layered.LoadAsync();
-        Assert.False(layered.AgentIsolated("alpha"));
-        await AssertParity(layered, local.Path, "local layer");
-    }
-
-    [Fact]
     public async Task Isolation_migration_layer_keeps_handler_local_limits_as_policy()
     {
         using var temp = new TempDirectory();
@@ -363,9 +286,8 @@ public sealed partial class ToolAuthorizationEffectsTests
         // Archives and status stay within the Agent and the caller.
         Assert.True(await Builtin(opaque, "get_archived_messages", """{"sessionId":"kid"}"""));
         Assert.False(await Builtin(opaque, "get_archived_messages", """{"sessionId":"outside"}"""));
-        // The current-Session status selector waits for R2 so the layer stays readable by the
-        // previous release; meanwhile the retained legacy check limits status targets.
-        Assert.True(
+        // Status is limited to the current Session.
+        Assert.False(
             await Builtin(opaque, "session", """{"action":"status","sessionId":"outside"}""")
         );
         Assert.True(await Builtin(opaque, "session", """{"action":"status","sessionId":"self"}"""));

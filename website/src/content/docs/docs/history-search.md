@@ -19,7 +19,7 @@ llm:
   compactKeepPercent: 0.3
 ```
 
-`compactThresholdPercent` sets the automatic trigger relative to the selected model's context window. `compactKeepPercent` controls the fraction of recent rendered history kept by default during compaction. Both take a number greater than 0 and at most 1. A Session-specific threshold-token override takes precedence over the global trigger.
+`compactThresholdPercent` sets the automatic trigger relative to the selected model's context window. `compactKeepPercent` sets how much recent history stays unsummarized after a compaction, in estimated tokens, as a share of the automatic compaction threshold, or of the unsummarized history when that is smaller. Both take a number greater than 0 and at most 1. A Session-specific threshold-token override takes precedence over the global trigger.
 
 ## Enable semantic search
 

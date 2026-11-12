@@ -64,7 +64,6 @@ internal sealed partial class SessionManager
                 throw new ToolAuthorizationDeniedException(
                     "MCP notification reception is not permitted."
                 );
-            IsolatedToolCompatibility.Check(Isolation(owner.Agent), request, AuthorizationTarget);
         }
         async Task Authorize(CancellationToken current)
         {

@@ -188,7 +188,6 @@ public sealed partial class CompactLifecycleTests
         owner.Registry.TriggerOverride = _ => Task.CompletedTask;
         if (remote)
         {
-            await manager.SetAgentIsolationAsync("main", "fixture/target", true, new JsonArray());
             await manager.SelectNodeAsync(owner, "fixture/target");
             await owner.UpdateCwdAsync("opaque://root/plans");
         }

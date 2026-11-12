@@ -97,7 +97,13 @@ public sealed partial class CompactRetentionTests
         async Task EnqueuePassive(QueueItem item)
         {
             Assert.True(
-                await owner.Entry.SaveLane.AdmitAsync(item with { Trigger = false }, SaveKind.Strict)
+                await owner.Entry.SaveLane.AdmitAsync(
+                    item with
+                    {
+                        Trigger = false,
+                    },
+                    SaveKind.Strict
+                )
             );
             Assert.False(owner.Registry.HasRunnableWork(owner.Entry));
         }
@@ -140,14 +146,17 @@ public sealed partial class CompactRetentionTests
         for (var index = 0; index < 10; index++)
             inputs.Add(await Append("user", Text()));
         var call = await Append("model", Call("first"), Call("second"));
-        await Compact(inputs[0], inputs[6], .3);
+        // 35% of the raw tokens keeps the last three inputs and the call; the required new
+        // level-1 block covers every raw row before them.
+        await Compact(inputs[0], inputs[6], .35);
         var removedCompletion = owner.Entry.Snapshot().History.Last().Sequence!.Value;
         var firstResponse = await Append("tool", Response("first"));
         var secondResponse = await Append("tool", Response("second"));
         var archiveBefore = owner
             .Archive.ReadMessages()
             .ToDictionary(row => row.Seq, row => row.Message.ToJsonString());
-        await Compact(inputs[7], inputs[9], .5);
+        // A share of the remaining raw tokens that keeps the exchange but none of the inputs.
+        await Compact(inputs[7], inputs[9], .3);
         Assert.Equal(2, peer.RequestCount);
         var sparse = owner.History();
         Assert.DoesNotContain(
@@ -163,13 +172,19 @@ public sealed partial class CompactRetentionTests
             CompactCandidateBuilder.Number(sparse[callIndex + 1]["__meta"]?["seq"])
         );
         // The ordinary recent-tail split lands inside the now-sparse exchange and retreats to its call.
-        Assert.Equal(callIndex, CompactCandidateBuilder.Split(sparse, .4));
+        Assert.Equal(
+            callIndex,
+            CompactCandidateBuilder.Split(
+                sparse,
+                CompactCandidateBuilder.RowTokens(sparse[callIndex + 2])
+            )
+        );
 
         await Append("user", Text());
         var end = await Append("user", Text());
         var candidates = CompactCandidateBuilder.Build(
             owner.History(),
-            keepPercent: 0,
+            keepTokens: 0,
             inContext: deliberate
         );
         var exchange = Assert.Single(candidates.Items, item => item.Start == call);
@@ -245,7 +260,7 @@ public sealed partial class CompactRetentionTests
             retained["__meta"]!.AsObject().Remove("preservedFromBlockId");
             Assert.Equal(archiveBefore[seq], retained.ToJsonString());
         }
-        var preserved = CompactCandidateBuilder.Build(owner.History(), keepPercent: 0);
+        var preserved = CompactCandidateBuilder.Build(owner.History(), keepTokens: 0);
         Assert.All(preserved.Preserved, item => Assert.Equal(actualMembers, item.Exchange));
         pending = new JsonObject
         {

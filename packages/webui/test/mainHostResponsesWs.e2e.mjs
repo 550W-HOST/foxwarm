@@ -133,7 +133,8 @@ try {
   await fixture.api('POST', route(parallelA) + '/stop'); held.get('parallel-b').complete(final('VISIBLE-DONE-parallel-b')); await until(async () => !(await history(parallelB)).session.busy, 'other lease finished'); assert((await history(parallelB)).messages.some(row => row.parts?.some(part => part.text?.includes('DONE-parallel-b'))))
   async function compact(mode) {
     compactMode = mode; held.delete('compact'); for (let i = 0; i < 12; i++) await send(main, `seed-${mode}-${i} ${('ordered-prefix-' + mode + '-' + i + '-').repeat(110)}`, `DONE-seed-${mode}-${i}`)
-    const snapshot = await history(main), original = snapshot.messages; let split = Math.floor(original.length * .7); if (original[split]?.role === 'tool') { while (split > 0 && original[split].role === 'tool') split--; if (original[split]?.role !== 'model') throw new Error('unexpected atomic split') }
+    // The force-kept tail is a token share of the raw history; it always covers the last two of these equal seed exchanges.
+    const snapshot = await history(main), original = snapshot.messages; const split = original.findIndex(row => row.role === 'user' && row.parts?.some(part => (part.system ?? part.text)?.includes(`CASE:seed-${mode}-10 `))); assert(split > 0, 'seed exchange found')
     const tail = original.slice(split), tailTexts = tail.flatMap(row => row.parts?.map(part => part.text).filter(Boolean) || []); const firstPrefixText = original[0].parts.find(part => typeof part.text === 'string')?.text || original[0].parts.find(part => typeof part.system === 'string')?.system
     const persisted = (await authority(main)).persistentMemorySnapshot; assert.equal((await fixture.api('POST', route(main) + '/message', { text: '/compact' })).status, 200)
     await until(() => held.has('compact'), 'planner prefix held'); const first = held.get('compact'); assert(!first.body.previous_response_id); assert.equal(first.body.max_output_tokens, 713)

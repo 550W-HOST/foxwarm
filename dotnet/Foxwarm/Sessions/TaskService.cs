@@ -117,6 +117,9 @@ internal sealed class TaskService : IDisposable
 
     internal JsonObject Summaries(IReadOnlyList<string> ids) => store.Summaries(ids);
 
+    internal IReadOnlyDictionary<string, string> Statuses(IReadOnlyList<string> ids) =>
+        store.Statuses(ids);
+
     internal async Task<TaskStoreResult> ExecuteAsync(
         JsonObject args,
         string? actor,

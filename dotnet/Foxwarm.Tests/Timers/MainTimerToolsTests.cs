@@ -323,10 +323,8 @@ public sealed class MainTimerToolsTests
         {
             var model = ToolCallControls.ForModel(definition);
             var properties = model["parameters"]!["properties"]!.AsObject();
-            Assert.Equal(
-                new[] { "__cancelTool", "__cancelAllToolsThisTurn" },
-                properties.Select(pair => pair.Key).TakeLast(2)
-            );
+            Assert.False(properties.ContainsKey("__cancelTool"));
+            Assert.False(properties.ContainsKey("__cancelAllToolsThisTurn"));
             Assert.DoesNotContain(
                 new[]
                 {
@@ -460,7 +458,7 @@ public sealed class MainTimerToolsTests
     }
 
     [Fact]
-    public async Task Independent_isolated_exact_self_and_same_Agent_bounds_survive_explicit_allow_rules()
+    public async Task Migrated_exact_self_and_same_Agent_bounds_survive_explicit_allow_rules()
     {
         var rules = new JsonArray(
             new JsonObject
@@ -471,7 +469,7 @@ public sealed class MainTimerToolsTests
             }
         );
         await using var f = await Fixture.Create(
-            new JsonObject { ["isolated"] = true, ["toolRules"] = rules }
+            new JsonObject { ["rules"] = LegacyIsolationFixture.Layer("main", null, rules) }
         );
         var args = Future();
         args["sessionId"] = "main";

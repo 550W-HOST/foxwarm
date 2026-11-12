@@ -197,7 +197,8 @@ internal sealed partial class AgentCatalog
         string? defaultCwd = null,
         string? preparationName = null,
         bool restoreRetained = false,
-        Action<bool>? publication = null
+        Action<bool>? publication = null,
+        bool unlimitedChildren = false
     )
     {
         ValidateName(name);
@@ -257,7 +258,7 @@ internal sealed partial class AgentCatalog
                 throw new InvalidDataException(
                     "This name has retained Agent authority. Use administrator restoration or explicit retained-record cleanup."
                 );
-            ValidateCreatorAdmission(createdBy, MetadataSnapshot());
+            ValidateCreatorAdmission(createdBy, MetadataSnapshot(), unlimitedChildren);
             _ = Foxwarm.Tools.AgentRulePolicy.Parse(rules ?? new JsonArray());
             ValidateDefaultNode(defaultNode ?? DefaultNode(name));
             ValidateDefaultCwd(defaultCwd ?? DefaultCwd(name));

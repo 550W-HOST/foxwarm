@@ -1,4 +1,4 @@
-export const BEFORE_UPDATE_RELOAD = 'foxwarm-before-update-reload'
+import { isStandaloneWebUi } from './updateReload'
 
 /** Vite's hashed entry URLs identify actual delivered frontend assets, including
  * untagged rebuilds. Login/error HTML is not a build and must never trigger reload. */
@@ -12,6 +12,7 @@ export function frontendBuild(document: Document, base: string): string | null {
 }
 
 export function watchFrontendBuild(onUpdate: (build: string | null) => void) {
+  if (!isStandaloneWebUi()) return () => {}
   const url = new URL('./', location.href).href
   const current = frontendBuild(document, url)
   if (!current) return () => {}

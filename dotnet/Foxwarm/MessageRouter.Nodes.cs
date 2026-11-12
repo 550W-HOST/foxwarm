@@ -15,16 +15,10 @@ internal sealed partial class MessageRouter
         try
         {
             string reply;
-            var bound = manager.BoundNode(owner.Agent);
             if (args.Length == 0 || args[0] == "list")
             {
                 reply =
-                    $"📋 **Nodes**\n\n💡 Current node: `{bound ?? manager.CurrentNode(owner)}`\n"
-                    + (
-                        bound is null
-                            ? ""
-                            : $"🔒 Runtime is bound by agent isolation to `{bound}`.\n"
-                    )
+                    $"📋 **Nodes**\n\n💡 Current node: `{manager.CurrentNode(owner)}`\n"
                     + "\n**Nodes**\n";
                 foreach (var node in (await manager.NodeSummariesAsync()).OfType<JsonObject>())
                     reply += NodeRow(node) + "\n";
@@ -141,9 +135,6 @@ internal sealed partial class MessageRouter
                     + summary.ToJsonString(new JsonSerializerOptions { WriteIndented = true })
                     + "\n```";
             }
-            else if (bound is not null)
-                reply =
-                    $"🔒 Current session belongs to an isolated agent bound to node `{bound}`. Changing `currentNode` here would not affect runtime execution. Use `/agent isolated <agent> off` first if you really want to unbind it.";
             else
             {
                 var selected = await manager.SelectNodeAsync(owner, args[0]);

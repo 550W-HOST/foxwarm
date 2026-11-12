@@ -478,6 +478,18 @@ internal sealed partial class SessionCompactor
         }
     }
 
+    private static double KeepTokens(
+        SessionSnapshot snapshot,
+        IReadOnlyList<JsonObject> history,
+        HostModels catalog,
+        double keepFraction
+    ) =>
+        CompactCandidateBuilder.KeepTokens(
+            keepFraction,
+            SessionModelSettings.EffectiveThreshold(snapshot.AuthorityEnvelope, catalog),
+            history
+        );
+
     private static bool SupportsBackground(SessionSnapshot snapshot, HostModels catalog) =>
         !ModelRoutingFingerprint.False(
             catalog.Resolve(SessionWait.Text(snapshot.AuthorityEnvelope["model"])).Configuration[
@@ -493,14 +505,15 @@ internal sealed partial class SessionCompactor
         token.ThrowIfCancellationRequested();
         run.CacheKey = await hosted.Entry.SaveLane.EnsurePromptCacheKeyAsync();
         token.ThrowIfCancellationRequested();
+        var rows = run.Snapshot.History.Materialize();
         var candidates = CompactCandidateBuilder.Build(
-            run.Snapshot.History.Materialize(),
-            run.Keep
+            rows,
+            KeepTokens(run.Snapshot, rows, run.Catalog, run.Keep)
         );
         run.Candidates = candidates;
         if (
             candidates.Split <= 0
-            || candidates.Items.Count == 0
+            || !candidates.HasWork
                 && candidates.Preserved.Count == 0
                 && !candidates
                     .History.Take(candidates.Split)
@@ -512,7 +525,7 @@ internal sealed partial class SessionCompactor
         )
             return;
         run.Plan =
-            candidates.Items.Count == 0 && candidates.Preserved.Count == 0
+            !candidates.HasWork && candidates.Preserved.Count == 0
                 ? new CompactPlan([], new HashSet<long>(), new HashSet<long>())
                 : await PlanAsync(
                     run.Snapshot,

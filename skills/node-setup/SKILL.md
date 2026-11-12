@@ -106,8 +106,6 @@ Run untrusted or risky work, such as code from an unreviewed repository or an Ag
 - for a long-lived assistant, one reserved Node (an `ensure`d container, VM or dedicated machine) set as its Agent's `defaultNode`;
 - in both cases, an Agent-local allowlist that keeps the Agent's tools on its current Node. `agent-management` has restricted-worker and channel-assistant templates.
 
-Agents bound with legacy isolation (`isolatedNode`) keep working, but new setups should use the pattern above.
-
 ## Base URL principle
 
 Foxwarm cannot infer one globally correct external base URL for every node bootstrap unless the operator supplies a public URL in top-level config:
@@ -454,7 +452,7 @@ Inside `<dir>/data/`, the most important persisted files are:
 
 ## Legacy isolated Agents
 
-Agents bound to a Node with `isolatedNode`, `set_agent_isolated` or `/agent isolated` still work, but isolation is deprecated. See [agent-management: Legacy isolated Agents](../agent-management/references/OPERATIONS.md#legacy-isolated-agents) for what it enforces and how to migrate to local rules and `defaultNode`.
+Agents that were bound to a Node with legacy isolation are migrated at startup to a local rule layer with that Node as `defaultNode`. See [agent-management: Legacy isolated Agents](../agent-management/references/OPERATIONS.md#legacy-isolated-agents).
 
 ## Verification checklist
 

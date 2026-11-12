@@ -53,8 +53,10 @@ export async function renderBootHtml(html: string): Promise<string> {
   // load handler enables each sheet and includes it in the existing ready gate.
   const nonBlockingHtml = ownedHtml.replace(/<link\b[^>]*\brel="stylesheet"[^>]*>/g,
     tag => tag.replace(/>$/, ' media="not all" data-foxwarm-boot-style>'))
-  return nonBlockingHtml.replace('<!-- foxwarm-boot-head -->', `<style>${loaderCss}\n${recoveryCss}</style><script>${script}</script>`)
-    .replace('<!-- foxwarm-boot-screen -->', screen)
+  // A minified identifier can be `$` before `&&`; replacement strings would
+  // interpret `$&` (and other replacement tokens) inside the JavaScript.
+  return nonBlockingHtml.replace('<!-- foxwarm-boot-head -->', () => `<style>${loaderCss}\n${recoveryCss}</style><script>${script}</script>`)
+    .replace('<!-- foxwarm-boot-screen -->', () => screen)
 }
 
 export function bootHtmlPlugin(): Plugin {

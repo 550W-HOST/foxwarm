@@ -1,0 +1,690 @@
+{
+  "version": 2,
+  "agents": [
+    "alpha",
+    "beta"
+  ],
+  "metadata": {
+    "alpha": {
+      "isolated": true,
+      "isolatedNode": "bound-node",
+      "toolRules": [
+        {
+          "effect": "deny",
+          "source": "builtin",
+          "tool": "image_crop"
+        },
+        {
+          "effect": "allow",
+          "source": "mcp",
+          "server": "srv+ü<x>&'",
+          "tool": "t\"1é"
+        },
+        {
+          "effect": "deny",
+          "source": "node",
+          "node": "bound-node",
+          "tool": "exec"
+        }
+      ],
+      "rules": [
+        {
+          "id": "isolation-exact-deny",
+          "action": "deny",
+          "match": {
+            "tool": {
+              "source": "builtin",
+              "name": "image_crop"
+            }
+          }
+        },
+        {
+          "id": "isolation-own-agent-sessions",
+          "action": "allow",
+          "match": {
+            "tool": {
+              "source": "builtin",
+              "name": "create_session"
+            },
+            "args": {
+              "agentName": {
+                "agent": {
+                  "sameAgent": true
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "isolation-structural",
+          "action": "deny",
+          "match": {
+            "tool": {
+              "source": "builtin",
+              "name": [
+                "create_agent",
+                "list_agents",
+                "set_agent_inherit",
+                "set_agent_rules",
+                "set_agent_isolated",
+                "move_session",
+                "create_session",
+                "create_child_session",
+                "delete_session",
+                "view_session"
+              ]
+            }
+          }
+        },
+        {
+          "id": "isolation-master-exec",
+          "action": "deny",
+          "match": {
+            "tool": {
+              "source": "node",
+              "name": "exec"
+            },
+            "targetNode": "master"
+          }
+        },
+        {
+          "id": "isolation-node-lifecycle",
+          "action": "deny",
+          "match": {
+            "tool": {
+              "source": "builtin",
+              "name": "node"
+            },
+            "args": {
+              "action": [
+                "select",
+                "create",
+                "ensure",
+                "destroy"
+              ]
+            }
+          }
+        },
+        {
+          "id": "isolation-node",
+          "action": "allow",
+          "match": {
+            "tool": {
+              "source": "node"
+            },
+            "targetNode": "bound-node"
+          }
+        },
+        {
+          "id": "isolation-master-files",
+          "action": "allow",
+          "match": {
+            "tool": {
+              "source": "node",
+              "name": [
+                "read",
+                "write",
+                "edit"
+              ]
+            },
+            "targetNode": "master",
+            "path": {
+              "allWithin": "${agent.dir}"
+            }
+          }
+        },
+        {
+          "id": "isolation-memory",
+          "action": "allow",
+          "match": {
+            "tool": {
+              "source": "builtin",
+              "name": [
+                "read_memory",
+                "write_memory",
+                "edit_memory",
+                "delete_memory",
+                "apply_patch_memory"
+              ]
+            },
+            "path": {
+              "allWithin": "${agent.memoryDir}"
+            }
+          }
+        },
+        {
+          "id": "isolation-copy",
+          "action": "allow",
+          "match": {
+            "tool": {
+              "source": "builtin",
+              "name": "copy_between_nodes"
+            },
+            "args": {
+              "sourceNode": "master",
+              "targetNode": "master"
+            },
+            "path": {
+              "allWithin": "${agent.dir}",
+              "arg": [
+                "sourcePath",
+                "targetPath"
+              ]
+            }
+          }
+        },
+        {
+          "id": "isolation-copy-2",
+          "action": "allow",
+          "match": {
+            "tool": {
+              "source": "builtin",
+              "name": "copy_between_nodes"
+            },
+            "args": {
+              "sourceNode": "master",
+              "targetNode": "bound-node"
+            },
+            "path": {
+              "allWithin": "${agent.dir}",
+              "arg": [
+                "sourcePath"
+              ]
+            }
+          }
+        },
+        {
+          "id": "isolation-copy-3",
+          "action": "allow",
+          "match": {
+            "tool": {
+              "source": "builtin",
+              "name": "copy_between_nodes"
+            },
+            "args": {
+              "sourceNode": "bound-node",
+              "targetNode": "master"
+            },
+            "path": {
+              "allWithin": "${agent.dir}",
+              "arg": [
+                "targetPath"
+              ]
+            }
+          }
+        },
+        {
+          "id": "isolation-copy-4",
+          "action": "allow",
+          "match": {
+            "tool": {
+              "source": "builtin",
+              "name": "copy_between_nodes"
+            },
+            "args": {
+              "sourceNode": "bound-node",
+              "targetNode": "bound-node"
+            }
+          }
+        },
+        {
+          "id": "isolation-save-image",
+          "action": "allow",
+          "match": {
+            "tool": {
+              "source": "builtin",
+              "name": "image_write_to_file"
+            },
+            "targetNode": "bound-node"
+          }
+        },
+        {
+          "id": "isolation-send-file",
+          "action": "allow",
+          "match": {
+            "tool": {
+              "source": "builtin",
+              "name": "send_file"
+            },
+            "targetNode": "bound-node",
+            "args": {
+              "sessionId": {
+                "session": {
+                  "self": true
+                }
+              },
+              "channelTargetId": {
+                "exists": false
+              }
+            }
+          }
+        },
+        {
+          "id": "isolation-send-relation",
+          "action": "allow",
+          "match": {
+            "tool": {
+              "source": "builtin",
+              "name": "send_to_session"
+            },
+            "args": {
+              "sessionId": {
+                "session": {
+                  "relation": [
+                    "parent",
+                    "child"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "isolation-send-self",
+          "action": "allow",
+          "match": {
+            "tool": {
+              "source": "builtin",
+              "name": "send_to_session"
+            },
+            "args": {
+              "sessionId": {
+                "session": {
+                  "self": true
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "isolation-archives",
+          "action": "allow",
+          "match": {
+            "tool": {
+              "source": "builtin",
+              "name": [
+                "get_archived_messages",
+                "get_archived_blocks"
+              ]
+            },
+            "args": {
+              "sessionId": {
+                "session": {
+                  "sameAgent": true
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "isolation-recall-exact",
+          "action": "allow",
+          "match": {
+            "tool": {
+              "source": "builtin",
+              "name": "recall"
+            },
+            "args": {
+              "vector_query": {
+                "exists": false
+              },
+              "sessionId": {
+                "session": {
+                  "sameAgent": true
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "isolation-recall-vector",
+          "action": "allow",
+          "match": {
+            "tool": {
+              "source": "builtin",
+              "name": "recall"
+            },
+            "args": {
+              "vector_query": {
+                "exists": true
+              },
+              "sessionId": {
+                "session": {
+                  "self": true
+                }
+              },
+              "agentName": {
+                "exists": false
+              }
+            }
+          }
+        },
+        {
+          "id": "isolation-skill",
+          "action": "allow",
+          "match": {
+            "tool": {
+              "source": "builtin",
+              "name": "skill"
+            },
+            "args": {
+              "action": [
+                "list",
+                "load"
+              ],
+              "agentName": {
+                "exists": false
+              }
+            }
+          }
+        },
+        {
+          "id": "isolation-recall-vector-2",
+          "action": "allow",
+          "match": {
+            "tool": {
+              "source": "builtin",
+              "name": "recall"
+            },
+            "args": {
+              "vector_query": {
+                "exists": true
+              },
+              "sessionId": {
+                "session": {
+                  "self": true
+                }
+              },
+              "agentName": "alpha"
+            }
+          }
+        },
+        {
+          "id": "isolation-skill-2",
+          "action": "allow",
+          "match": {
+            "tool": {
+              "source": "builtin",
+              "name": "skill"
+            },
+            "args": {
+              "action": [
+                "list",
+                "load"
+              ],
+              "agentName": "alpha"
+            }
+          }
+        },
+        {
+          "id": "isolation-session-status",
+          "action": "allow",
+          "match": {
+            "tool": {
+              "source": "builtin",
+              "name": "session"
+            },
+            "args": {
+              "action": {
+                "exists": false
+              }
+            }
+          }
+        },
+        {
+          "id": "isolation-session-status-2",
+          "action": "allow",
+          "match": {
+            "tool": {
+              "source": "builtin",
+              "name": "session"
+            },
+            "args": {
+              "action": "status"
+            }
+          }
+        },
+        {
+          "id": "isolation-timer-read-delete",
+          "action": "allow",
+          "match": {
+            "tool": {
+              "source": "builtin",
+              "name": [
+                "list_timers",
+                "delete_timer"
+              ]
+            },
+            "args": {
+              "sessionId": {
+                "session": {
+                  "self": true
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "isolation-timer-create",
+          "action": "allow",
+          "match": {
+            "tool": {
+              "source": "builtin",
+              "name": "create_timer"
+            },
+            "args": {
+              "sessionId": {
+                "session": {
+                  "self": true
+                }
+              },
+              "newSession": {
+                "exists": false
+              },
+              "agentName": {
+                "exists": false
+              },
+              "sessionPrefix": {
+                "exists": false
+              }
+            }
+          }
+        },
+        {
+          "id": "isolation-timer-create-2",
+          "action": "allow",
+          "match": {
+            "tool": {
+              "source": "builtin",
+              "name": "create_timer"
+            },
+            "args": {
+              "sessionId": {
+                "session": {
+                  "self": true
+                }
+              },
+              "newSession": false,
+              "agentName": {
+                "exists": false
+              },
+              "sessionPrefix": {
+                "exists": false
+              }
+            }
+          }
+        },
+        {
+          "id": "isolation-timer-create-new",
+          "action": "allow",
+          "match": {
+            "tool": {
+              "source": "builtin",
+              "name": "create_timer"
+            },
+            "args": {
+              "sessionId": {
+                "session": {
+                  "self": true
+                }
+              },
+              "newSession": true,
+              "agentName": {
+                "exists": false
+              }
+            }
+          }
+        },
+        {
+          "id": "isolation-timer-create-new-2",
+          "action": "allow",
+          "match": {
+            "tool": {
+              "source": "builtin",
+              "name": "create_timer"
+            },
+            "args": {
+              "sessionId": {
+                "session": {
+                  "self": true
+                }
+              },
+              "newSession": true,
+              "agentName": "alpha"
+            }
+          }
+        },
+        {
+          "id": "isolation-timer-update",
+          "action": "allow",
+          "match": {
+            "tool": {
+              "source": "builtin",
+              "name": "update_timer"
+            },
+            "args": {
+              "sessionId": {
+                "session": {
+                  "self": true
+                }
+              },
+              "newSession": {
+                "exists": false
+              },
+              "agentName": {
+                "exists": false
+              }
+            }
+          }
+        },
+        {
+          "id": "isolation-timer-update-2",
+          "action": "allow",
+          "match": {
+            "tool": {
+              "source": "builtin",
+              "name": "update_timer"
+            },
+            "args": {
+              "sessionId": {
+                "session": {
+                  "self": true
+                }
+              },
+              "newSession": false,
+              "agentName": {
+                "exists": false
+              }
+            }
+          }
+        },
+        {
+          "id": "isolation-timer-update-new",
+          "action": "allow",
+          "match": {
+            "tool": {
+              "source": "builtin",
+              "name": "update_timer"
+            },
+            "args": {
+              "sessionId": {
+                "session": {
+                  "self": true
+                }
+              },
+              "newSession": {
+                "exists": false
+              },
+              "agentName": "alpha"
+            }
+          }
+        },
+        {
+          "id": "isolation-timer-update-new-2",
+          "action": "allow",
+          "match": {
+            "tool": {
+              "source": "builtin",
+              "name": "update_timer"
+            },
+            "args": {
+              "sessionId": {
+                "session": {
+                  "self": true
+                }
+              },
+              "newSession": true,
+              "agentName": "alpha"
+            }
+          }
+        },
+        {
+          "id": "isolation-local-tools",
+          "action": "allow",
+          "match": {
+            "tool": {
+              "source": "builtin",
+              "name": [
+                "image_crop",
+                "wait",
+                "ask_user",
+                "cancel_transfer",
+                "submit_compact_plan",
+                "search_tools",
+                "run_script",
+                "start_toolscript_run",
+                "continue_script",
+                "list_toolscript_runs",
+                "get_toolscript_run",
+                "cancel_toolscript_run"
+              ]
+            }
+          }
+        },
+        {
+          "id": "isolation-exact-allow",
+          "action": "allow",
+          "match": {
+            "tool": {
+              "source": "mcp",
+              "server": "srv+ü<x>&'",
+              "name": "t\"1é"
+            }
+          }
+        },
+        {
+          "id": "isolation-deny-other",
+          "action": "deny"
+        }
+      ],
+      "inheritable": false,
+      "defaultNode": "bound-node",
+      "legacyIsolation": {
+        "node": "bound-node",
+        "migratedAt": 1794331802508,
+        "generator": 1,
+        "rulesDigest": "26360a081afb653966bd7241434e9b6361627520e9896be5d4ad13024574604b"
+      }
+    }
+  }
+}

@@ -96,7 +96,7 @@ public sealed partial class SessionCreationParityTests
     }
 
     [Fact]
-    public async Task Invalid_creation_inputs_do_not_allocate_or_deliver_and_an_isolated_target_keeps_its_binding()
+    public async Task Invalid_creation_inputs_do_not_allocate_or_deliver()
     {
         await using var f = await ExternalChannelFixture.CreateAsync();
         RegisterAgentTools(f);
@@ -127,36 +127,6 @@ public sealed partial class SessionCreationParityTests
                 f.Manager.Catalog.List().Select(row => SessionWait.Text(row["id"])).ToArray()
             );
         }
-        f.Manager.Nodes.Registry.Create("bound");
-        await f.Manager.CreateAgentAsync("isolated", false, isolatedNode: "bound");
-        var named = await f.ToolAsync(
-            "create_session",
-            new JsonObject
-            {
-                ["agentName"] = "isolated",
-                ["sessionName"] = "named",
-                ["node"] = "master",
-            }
-        );
-        Assert.True(named is JsonObject && named["error"] is null, named?.ToJsonString());
-        Assert.Equal(
-            "bound",
-            f.Manager.CurrentNode(await f.Manager.RequiredAsync("isolated/named"))
-        );
-        var child = await f.ToolAsync(
-            "create_child_session",
-            new JsonObject
-            {
-                ["agentName"] = "isolated",
-                ["suffix"] = "child",
-                ["node"] = "master",
-            }
-        );
-        Assert.True(child is JsonObject && child["error"] is null, child?.ToJsonString());
-        Assert.Equal(
-            "bound",
-            f.Manager.CurrentNode(await f.Manager.RequiredAsync("isolated/child"))
-        );
     }
 
     [Fact]

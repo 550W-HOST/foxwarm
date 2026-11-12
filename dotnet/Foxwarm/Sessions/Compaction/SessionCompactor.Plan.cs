@@ -26,7 +26,11 @@ internal sealed partial class SessionCompactor
         var plannerHistoryStart = detached.Count;
         var plannerToolCalls = new List<string>();
         JsonObject? plannerUsage = null;
-        var prompt = CompactPrompt.Build(candidates, guidance);
+        var taskSource = sessions;
+        Func<IReadOnlyList<string>, IReadOnlyDictionary<string, string>>? taskStatuses = null;
+        if (taskSource is not null)
+            taskStatuses = ids => taskSource.Tasks.Statuses(ids);
+        var prompt = CompactPrompt.Build(candidates, guidance, taskStatuses);
         var promptSnapshot =
             snapshot.AuthorityEnvelope["persistentMemorySnapshot"]?.GetValue<string>() ?? "";
         var routeKey = SessionWait.Text(snapshot.AuthorityEnvelope["model"]) ?? capturedDefault;
@@ -48,6 +52,9 @@ internal sealed partial class SessionCompactor
                 ? promptSnapshot
                 : baseOptions.Instructions + "\n\n" + promptSnapshot;
         }
+        // A plan rejected only for over-budget summaries is accepted, and the overrun recorded,
+        // after this many budget repair rounds.
+        var budgetRejections = 0;
         try
         {
             for (var round = 0; round < 15; round++)
@@ -253,7 +260,11 @@ internal sealed partial class SessionCompactor
                         repairInput = new JsonObject { ["rawArgsText"] = text };
                         args = CompactPlanInput.ParseFile(text);
                     }
-                    var plan = CompactPlanValidator.Validate(args, candidates);
+                    var plan = CompactPlanValidator.Validate(
+                        args,
+                        candidates,
+                        acceptOverBudget: budgetRejections >= 2
+                    );
                     var messages = new JsonArray();
                     foreach (var message in detached.Skip(plannerHistoryStart))
                     {
@@ -265,12 +276,15 @@ internal sealed partial class SessionCompactor
                             round + 1,
                             plannerToolCalls.ToArray(),
                             plannerUsage,
-                            messages
+                            messages,
+                            plan.OverBudget
                         ),
                     };
                 }
                 catch (CompactPlanInvalidException error)
                 {
+                    if (error is CompactPlanBudgetException)
+                        budgetRejections++;
                     prompt = PlanRejected(error.Message, repairFile);
                     if (!submittedPendingFile)
                     {

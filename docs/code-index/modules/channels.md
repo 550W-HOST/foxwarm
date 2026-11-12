@@ -41,7 +41,7 @@ Observable bindings, triggers, reply selection, progress and adapter limits are 
 - Registry IDs are unique across adapter types.
 - Internal WebUI/TUI pass channel authorization; external sources require allowlist or explicit per-attachment allow-all-users.
 - `/whoami` is the source-only discovery exception, available without authorization or an attachment; see [D-pipeline-channel-identity-query](../threads/message-processing-pipeline.md#d-pipeline-channel-identity-query).
-- Inbound files go to the agent's master `.temp/channel-files` area unless an isolated session targets its bound remote node. Descriptors report node and path without prescribing a file tool.
+- Inbound files go to the agent's master `.temp/channel-files` area. Descriptors report node and path without prescribing a file tool.
 - Session broadcast is fire-and-forget; platform send failures are logged. `turnFinal` is a generic completion option that platform adapters may consume.
 - Managed ordinary-text channel instances may opt into bounded in-memory tool progress with `channelProgress.intervalMs`; WebUI and the active WeWork stream-card target are excluded.
 
@@ -53,9 +53,8 @@ Observable bindings, triggers, reply selection, progress and adapter limits are 
 - Weixin context tokens are in-memory per user; a new inbound message is required after token loss. QR login sessions expire after five minutes.
 - WebUI `sendFile` is intentionally a no-op because the browser uses authenticated downloads/tool metadata.
 - QQ Bot C2C/group attachments use an authorization-gated, bounded inbound
-  spool/materializer. Main-hosted saves use the path boundary; isolated or
-  bound-node saves reuse the existing whole-buffer node boundary only up to a
-  fixed 10 MiB attachment cap. Direct video/voice are generic saved
+  spool/materializer. Saves are always Main-hosted and use the path boundary.
+  Direct video/voice are generic saved
   descriptors and nested attachments remain deferred. C2C/group `sendFile`
   uses the destination-specific direct-small or streamed-large official upload
   flow. C2C/group text, media, and typing share one process-local outbound

@@ -81,14 +81,12 @@ internal sealed partial class SessionToolExecutor
                 ExecutionNode: node
             ),
             files,
-            token,
-            toolScriptSourceRead: true
+            token
         );
         byte[] bytes;
         if (node == "master")
         {
             var actual = AuthorizationPaths.CanonicalPotential(files.Paths.FilePath(file));
-            sessions.RequireMainFileSourcePath(hosted, actual);
             if (!WorkspaceTools.RegularFile(actual))
                 throw new InvalidDataException("Artifact source must be a regular file");
             await using var stream = new FileStream(

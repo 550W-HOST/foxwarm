@@ -294,23 +294,42 @@ try {
   assert(provider.requests.some(item => item.planner && item.input.includes('compact_plan_invalid')),
     'Planner saw source-derived invalid-plan feedback and retried')
   await until(() => compactIdle(hostPort, layeredId), 'automatic compaction idle')
-  await startCompact(hostPort, layeredId)
-  await until(async () => provider.layerPlanCount >= 2 && (await history(hostPort, layeredId)).messages.filter(
-    row => row.__meta?.contextBlock?.level === 1).length >= 6, 'manual second L1 plan', 40000)
-  await until(() => compactIdle(hostPort, layeredId), 'manual L1 idle')
+  // Each compaction writes one new L1 block; the fourth leaves four L1 blocks, more than the
+  // three slots per level, so it also merges the oldest two into an L2 block.
+  let extraSeed = 0
+  async function seedMore(turns) {
+    for (let index = 0; index < turns; index++, extraSeed++) {
+      const marker = `seed-l1-more-${extraSeed} `
+      await send(hostPort, layeredId, marker + `more-${extraSeed}-`.repeat(125))
+      await until(async () => {
+        const rows = (await history(hostPort, layeredId)).messages
+        return rows.at(-1)?.parts?.[0]?.text === 'synthetic response' && rows.some(row => JSON.stringify(row).includes(marker))
+      }, `seed layered extra turn ${extraSeed}`, 25000)
+    }
+  }
+  const levelOneCount = async () => (await history(hostPort, layeredId)).messages.filter(
+    row => row.__meta?.contextBlock?.level === 1).length
+  for (const plans of [2, 3]) {
+    await seedMore(8)
+    await startCompact(hostPort, layeredId)
+    await until(async () => provider.layerPlanCount >= plans && await levelOneCount() >= plans, `manual L1 plan ${plans}`, 40000)
+    await until(() => compactIdle(hostPort, layeredId), `manual L1 idle ${plans}`)
+  }
+  await seedMore(8)
   const beforeL2 = await history(hostPort, layeredId)
+  const toolPairBlock = beforeL2.messages.find(row => row.__meta?.contextBlock?.level === 1
+    && row.__meta.contextBlock.rawStartSeq <= 18 && row.__meta.contextBlock.rawEndSeq >= 19)
+  assert(toolPairBlock, 'One actual L1 operation covered the whole call+tool candidate')
   await startCompact(hostPort, layeredId)
-  await until(async () => provider.layerPlanCount >= 3 && (await history(hostPort, layeredId)).messages.some(
+  await until(async () => provider.layerPlanCount >= 4 && (await history(hostPort, layeredId)).messages.some(
     row => row.__meta?.contextBlock?.level === 2), 'manual L2 plan', 40000)
   await until(() => compactIdle(hostPort, layeredId), 'manual L2 idle')
   const layered = await history(hostPort, layeredId)
   const l2 = layered.messages.find(row => row.__meta?.contextBlock?.level === 2)?.__meta?.contextBlock
-  assert(l2?.sourceBlockIds?.length >= 2, 'Actual L2 has two archived L1 children')
+  assert.equal(l2?.sourceBlockIds?.length, 2, 'Actual L2 has two archived L1 children')
+  assert(l2.sourceBlockIds.includes(toolPairBlock.__meta.contextBlock.id), 'The oldest L1 blocks merged')
   assert(layered.messages.length < beforeL2.messages.length, 'L2 reduced the active history')
   assert(layered.historyVersion >= 3 && layered.nextMessageSeq > 54)
-  const toolPairBlock = layered.messages.find(row => row.__meta?.contextBlock?.level === 1
-    && row.__meta.contextBlock.rawStartSeq <= 18 && row.__meta.contextBlock.rawEndSeq >= 19)
-  assert(toolPairBlock, 'One actual L1 operation covered the whole call+tool candidate')
   assert.equal(layered.messages.filter(row => [18, 19].includes(row.__meta?.seq)).length, 0,
     'No orphan call or tool response remained active')
   const pairExpansion = await json(hostPort, 'GET', `/api/sessions/${layeredId}/context-blocks/${toolPairBlock.__meta.contextBlock.id}/expand?previewLength=6000`)

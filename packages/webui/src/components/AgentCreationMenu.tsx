@@ -283,7 +283,7 @@ export default function AgentCreationMenu({
                   <input ref={agentIdInputRef} value={agentId} onChange={event => setAgentId(event.target.value)} autoComplete="off" placeholder="my-agent" className="mt-1 w-full rounded-lg border border-fw-border-strong bg-fw-surface px-3 py-2 text-fw-text-strong outline-none focus:border-fw-accent-border focus:ring-2 focus:ring-fw-focus-ring/20 dark:border-fw-border-strong dark:bg-fw-canvas dark:text-fw-text-strong" />
                   <span className="mt-1 block text-xs font-normal text-fw-text-muted">Letters, numbers, hyphens, and underscores.</span>
                 </label>
-                <AgentSettingsFields value={agentSettings} onChange={setAgentSettings} agentId={agentId} agents={agents} nodes={nodes} installDefaultNode={installDefaultNode} disabled={loading} isolationCollapsed />
+                <AgentSettingsFields value={agentSettings} onChange={setAgentSettings} agentId={agentId} agents={agents} nodes={nodes} installDefaultNode={installDefaultNode} disabled={loading} />
               </div>
             ) : (
               <div className="space-y-4">

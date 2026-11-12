@@ -37,7 +37,7 @@ internal static class WaitToolDefinitions
             ["name"] = "wait",
             ["strict"] = false,
             ["description"] =
-                "End the current turn and wait for more information before continuing. This tool registers the wait and returns; it does not remain running until messages arrive or work completes. It requests that the Session pause after the current tool batch. Specify what you are waiting for using at least one of the options below. Incoming messages or other events can resume the session even while the specified work is still pending. If another tool in the same batch returns an error, this wait is canceled so you can handle the error.",
+                "End the current turn and wait for more information before continuing. This tool registers the wait and returns; it does not remain running until messages arrive or work completes. It requests that the Session pause after the current tool batch. Specify what you are waiting for using at least one of the options below. Incoming messages or other events can resume the Session even while the specified work is still pending. If another tool in the same batch returns an error, this wait is canceled so you can handle the error.",
             ["parameters"] = new JsonObject
             {
                 ["type"] = "object",
@@ -55,10 +55,10 @@ internal static class WaitToolDefinitions
                         ["type"] = new JsonArray("number", "null"),
                         ["exclusiveMinimum"] = 0,
                         ["description"] =
-                            "Resume after this many seconds if nothing else has resumed the session. Set to null to disable the automatic 600-second fallback for waitExecIds.",
+                            "Resume after this many seconds if nothing else has resumed the Session. Set to null to disable the automatic 600-second fallback for waitExecIds.",
                     },
                     ["waitAllSessions"] = Array(
-                        "Session IDs from which you need responses before continuing the dependent work. Use this only when every listed session must respond. Empty lists are treated as omitted. Cannot be combined with a nonempty waitAnySessions list.",
+                        "Session IDs from which you need responses before continuing the dependent work. Use this only when every listed Session must respond. Empty lists are treated as omitted. Cannot be combined with a nonempty waitAnySessions list.",
                         2,
                         "Session ID.",
                         true
@@ -70,7 +70,7 @@ internal static class WaitToolDefinitions
                         true
                     ),
                     ["waitExecIds"] = Array(
-                        "Background executions or copies whose completion you are waiting for. Use an active execId from exec or transferId from copy_between_nodes, owned by this session or agent, or one whose completion is already queued, not a process ID or file path. Empty lists are treated as omitted. If wakeIfNoActivityAfterSeconds is omitted and waitForInput is not true, a nonempty list adds a 600-second fallback wake. Set wakeIfNoActivityAfterSeconds to null to disable that default.",
+                        "Background executions or copies whose completion you are waiting for. Use an active execId from exec or transferId from copy_between_nodes, owned by this Session or Agent, or one whose completion is already queued, not a process ID or file path. Empty lists are treated as omitted. If wakeIfNoActivityAfterSeconds is omitted and waitForInput is not true, a nonempty list adds a 600-second fallback wake. Set wakeIfNoActivityAfterSeconds to null to disable that default.",
                         1,
                         "Execution ID returned by exec, or transfer ID returned by copy_between_nodes."
                     ),
@@ -84,7 +84,7 @@ internal static class WaitToolDefinitions
                         ["type"] = "boolean",
                         ["enum"] = new JsonArray(true),
                         ["description"] =
-                            "Set to true when waiting for a user message or another external event that is not covered by the session or execution options. When combined with waitExecIds, this keeps the wait input-driven without adding the automatic exec fallback.",
+                            "Set to true when waiting for a user message or another external event that is not covered by the Session or execution options. When combined with waitExecIds, this keeps the wait input-driven without adding the automatic exec fallback.",
                     },
                 },
             },

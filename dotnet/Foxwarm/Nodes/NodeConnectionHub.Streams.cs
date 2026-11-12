@@ -103,9 +103,11 @@ internal sealed partial class NodeConnectionHub
         string path,
         SessionOwner owner,
         bool restrict,
-        bool read
-    ) =>
-        new()
+        bool read,
+        string? sessionCwd
+    )
+    {
+        var control = new JsonObject
         {
             ["type"] = read ? "file_stream_read_request" : "file_stream_write_request",
             ["transferId"] = id,
@@ -114,6 +116,9 @@ internal sealed partial class NodeConnectionHub
             ["agentName"] = owner.Agent,
             ["restrictToAgentDir"] = restrict,
         };
+        AddSessionCwd(control, sessionCwd);
+        return control;
+    }
 
     private static async Task<object> WaitForTransferStartAsync(
         StreamInvocation invocation,
@@ -139,7 +144,8 @@ internal sealed partial class NodeConnectionHub
         SessionOwner owner,
         bool restrict,
         CancellationToken token,
-        Action<long>? beforeMaterialize = null
+        Action<long>? beforeMaterialize = null,
+        string? sessionCwd = null
     )
     {
         if (!StreamingAvailable(node))
@@ -150,7 +156,8 @@ internal sealed partial class NodeConnectionHub
                 owner,
                 restrict,
                 token,
-                beforeMaterialize
+                beforeMaterialize,
+                sessionCwd
             );
             return new(
                 new MemoryStream(file.Bytes, writable: false),
@@ -165,7 +172,7 @@ internal sealed partial class NodeConnectionHub
         {
             await SendAsync(
                 invocation.Connection,
-                StreamControl(id, path, owner, restrict, true),
+                StreamControl(id, path, owner, restrict, true, sessionCwd),
                 token,
                 () => RequireCurrentFileConnection(node, invocation.Connection)
             );
@@ -210,7 +217,8 @@ internal sealed partial class NodeConnectionHub
         SessionOwner owner,
         bool restrict,
         CancellationToken token,
-        Action<long>? progress = null
+        Action<long>? progress = null,
+        string? sessionCwd = null
     )
     {
         if (length < StreamThreshold || !StreamingAvailable(node))
@@ -225,7 +233,8 @@ internal sealed partial class NodeConnectionHub
                 owner,
                 restrict,
                 token,
-                detachAfterDispatch: true
+                detachAfterDispatch: true,
+                sessionCwd: sessionCwd
             );
             progress?.Invoke(length);
             return (
@@ -241,7 +250,7 @@ internal sealed partial class NodeConnectionHub
         invocation.Progress = progress;
         try
         {
-            var control = StreamControl(id, path, owner, restrict, false);
+            var control = StreamControl(id, path, owner, restrict, false, sessionCwd);
             control["overwrite"] = overwrite;
             control["sizeBytes"] = length;
             await SendAsync(

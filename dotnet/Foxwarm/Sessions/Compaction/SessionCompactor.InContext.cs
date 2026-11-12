@@ -42,7 +42,7 @@ internal sealed partial class SessionCompactor
         run.PlanningSettled.TrySetResult();
         run.PipelineDone.TrySetResult();
         PublishRuntime(run);
-        return new JsonObject
+        var result = new JsonObject
         {
             ["accepted"] = true,
             ["applied"] = false,
@@ -50,6 +50,10 @@ internal sealed partial class SessionCompactor
             ["output"] =
                 "Plan accepted for application after this complete tool batch is recorded. Acceptance does not mean it applied; cancellation or changed history can prevent application. Inspect the resulting active history and compaction boundary.",
         };
+        // Budgets are advisory here; regular compaction returns such summaries for revision.
+        if (plan.OverBudget is { } overBudget)
+            result["overBudget"] = overBudget.DeepClone();
+        return result;
     }
 
     internal bool PairInContextSubmission(JsonObject canonicalToolMessage)

@@ -11,7 +11,7 @@ namespace Foxwarm.Tests;
 public sealed class ExternalChannelNodeTests
 {
     [Fact]
-    public async Task Real_repository_CLI_Node_receives_isolated_inbound_bytes_while_nonisolated_selected_Node_and_named_helper_keep_Source_placement()
+    public async Task Inbound_channel_files_stay_on_master_while_the_Session_runs_on_a_real_CLI_Node()
     {
         await using var peer = await WeWorkPeer.StartAsync();
         await using var qq = await QQBotPeer.StartAsync();
@@ -78,12 +78,6 @@ public sealed class ExternalChannelNodeTests
             Assert.False(
                 Directory.Exists(Path.Combine(nodeRoot, "agents", "main", ".temp", "channel-files"))
             );
-            await f.Manager.SetAgentIsolationAsync(
-                "main",
-                "owned-channel-node",
-                true,
-                new JsonArray()
-            );
             var remote = await f.Manager.SaveInboundChannelFileAsync(
                 "telegram",
                 "42",
@@ -94,15 +88,11 @@ public sealed class ExternalChannelNodeTests
                 default
             );
             var descriptor = SessionWait.Text(remote.Single()["text"])!;
-            Assert.Contains("node=\"owned-channel-node\"", descriptor);
+            Assert.Contains("node=\"master\"", descriptor);
             var path = Regex.Match(descriptor, " path=\"([^\"]+)\"").Groups[1].Value;
-            Assert.StartsWith(
-                Path.Combine(nodeRoot, "agents", "main"),
-                path,
-                StringComparison.Ordinal
-            );
+            Assert.StartsWith(f.Manager.AgentDirectory("main"), path, StringComparison.Ordinal);
             Assert.Equal(bytes, await File.ReadAllBytesAsync(path));
-            // The configured WeWork callback actually materializes through that same isolated Node owner.
+            // The configured WeWork callback also stores on master.
             var callbackPort = WeWorkPeer.Port();
             await f.Configuration.SaveAppAsync(
                 new JsonObject
@@ -128,7 +118,7 @@ public sealed class ExternalChannelNodeTests
             };
             await WeWorkCallbackTests.Post(callback, inbound);
             var remoteFiles = Directory.GetFiles(
-                Path.Combine(nodeRoot, "agents", "main", ".temp/channel-files/wework")
+                Path.Combine(f.Manager.AgentDirectory("main"), ".temp/channel-files/wework")
             );
             Assert.Single(remoteFiles);
             Assert.Equal("WeWork Node bytes", await File.ReadAllTextAsync(remoteFiles.Single()));
@@ -136,14 +126,14 @@ public sealed class ExternalChannelNodeTests
                 f.Owner.Entry.WithState(state => state.Queue.Count) == 1
             );
             Assert.Contains(
-                "node=\"owned-channel-node\"",
+                "node=\"master\"",
                 string.Join(
                     "",
                     f.Owner.Entry.WithState(state => state.Queue.Single().Parts!)
                         .Select(part => SessionWait.Text(part["text"] ?? part["system"]))
                 )
             );
-            // QQ resolves the actual authorized Session before its bounded Node materializer runs.
+            // QQ resolves the actual authorized Session before its bounded materializer runs.
             qq.Assets["/small"] = "QQ Node bytes"u8.ToArray();
             await f.Configuration.SaveAppAsync(
                 new JsonObject
@@ -162,7 +152,7 @@ public sealed class ExternalChannelNodeTests
             );
             await TelegramChannelTests.Until(() => f.Owner.Entry.Snapshot().Queue.Count == 2);
             var qqFiles = Directory.GetFiles(
-                Path.Combine(nodeRoot, "agents", "main", ".temp/channel-files/qqbot")
+                Path.Combine(f.Manager.AgentDirectory("main"), ".temp/channel-files/qqbot")
             );
             Assert.Single(qqFiles);
             Assert.Equal("QQ Node bytes", await File.ReadAllTextAsync(qqFiles.Single()));
@@ -173,7 +163,7 @@ public sealed class ExternalChannelNodeTests
                     "QQ cap",
                     attachments: QQBotPeer.Attachment(
                         "/must-not-fetch",
-                        size: 10L * 1024 * 1024 + 1
+                        size: 50L * 1024 * 1024 + 1
                     )
                 )
             );
@@ -181,7 +171,7 @@ public sealed class ExternalChannelNodeTests
             Assert.DoesNotContain(qq.Calls, call => call.Path == "/must-not-fetch");
             Assert.Single(
                 Directory.GetFiles(
-                    Path.Combine(nodeRoot, "agents", "main", ".temp/channel-files/qqbot")
+                    Path.Combine(f.Manager.AgentDirectory("main"), ".temp/channel-files/qqbot")
                 )
             );
             // The eagerly called helper receives the adapter TYPE, not this named instance's binding.

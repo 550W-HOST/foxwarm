@@ -48,12 +48,6 @@ internal sealed partial class SessionManager
         {
             if (args is null)
                 throw new InvalidDataException("Tool arguments must be an object.");
-            if (name == "delete_session" && AgentIsolated(source.Agent))
-                throw new SessionDeletionException(
-                    "Isolated session cannot use delete_session tool.",
-                    "SESSION_DELETE_ISOLATED",
-                    403
-                );
             await AuthorizeToolAsync(
                 source,
                 new(name, "builtin", name, args),
@@ -83,15 +77,6 @@ internal sealed partial class SessionManager
                             "SESSION_DELETE_SOURCE_NOT_FOUND",
                             404
                         );
-                    if (
-                        agents.MetadataSnapshot()[source.Agent] is JsonObject metadata
-                        && SessionCatalog.Flag(metadata["isolated"])
-                    )
-                        throw new SessionDeletionException(
-                            "Isolated session cannot use delete_session tool.",
-                            "SESSION_DELETE_ISOLATED",
-                            403
-                        );
                     var result = await DeleteAsync(
                         RequiredString(args, "sessionId"),
                         source: source
@@ -113,33 +98,6 @@ internal sealed partial class SessionManager
                     );
                     return (Output("Agent rules replaced."), false);
                 }
-                case "set_agent_isolated":
-                {
-                    Keys(args, ["agentName", "nodeId", "toolRules"], ["agentName"]);
-                    var agent = RequiredString(args, "agentName");
-                    var node = OptionalString(args, "nodeId")?.Trim();
-                    if (node == "")
-                        node = null;
-                    if (args.ContainsKey("toolRules") && args["toolRules"] is not JsonArray)
-                        throw new InvalidDataException("toolRules must be an array.");
-                    await SetAgentIsolationAsync(
-                        agent,
-                        node,
-                        args.ContainsKey("nodeId"),
-                        args["toolRules"] as JsonArray
-                    );
-                    var isolation = agents.MetadataSnapshot()[agent] as JsonObject;
-                    return (
-                        new JsonObject
-                        {
-                            ["success"] = true,
-                            ["isolated"] = AgentIsolated(agent),
-                            ["node"] = RecordedIsolationNode(agent),
-                            ["toolRuleCount"] = (isolation?["toolRules"] as JsonArray)?.Count ?? 0,
-                        },
-                        false
-                    );
-                }
                 case "create_agent":
                 {
                     Keys(
@@ -151,8 +109,6 @@ internal sealed partial class SessionManager
                             "inheritMemory",
                             "sourceSessionId",
                             "convertSession",
-                            "isolatedNode",
-                            "toolRules",
                             "rules",
                             "defaultNode",
                             "defaultCwd",
@@ -178,13 +134,6 @@ internal sealed partial class SessionManager
                     var copyMemory = OptionalBool(args, "inheritMemory") ?? false;
                     var sourceId = OptionalString(args, "sourceSessionId");
                     sourceId = string.IsNullOrEmpty(sourceId) ? null : sourceId;
-                    JsonArray? rules = null;
-                    if (args.ContainsKey("toolRules"))
-                        rules = IsolatedToolCompatibility
-                            .Metadata(
-                                new JsonObject { ["toolRules"] = args["toolRules"]?.DeepClone() }
-                            )
-                            .Rules;
                     var inherit = OptionalString(args, "inherit");
                     inherit = string.IsNullOrWhiteSpace(inherit) ? null : inherit.Trim();
                     if (inherit is not null && !agents.Exists(inherit))
@@ -202,8 +151,8 @@ internal sealed partial class SessionManager
                         var selectedSource = sourceId is null
                             ? source
                             : await ResolveAgentCreationSourceAsync(sourceId, source);
-                        // Agent conversion is authorized for a nonisolated caller above. Source
-                        // enters identity rename directly, not ordinary move_session isolation policy.
+                        // Agent conversion is authorized above. Source enters identity rename
+                        // directly, not ordinary move_session policy.
                         await RenameIdentityAsync(
                             source,
                             new JsonObject
@@ -240,21 +189,9 @@ internal sealed partial class SessionManager
                         );
                         mainId = created.MainSessionId;
                     }
-                    var isolatedNode = OptionalString(args, "isolatedNode");
-                    isolatedNode = string.IsNullOrWhiteSpace(isolatedNode)
-                        ? null
-                        : isolatedNode.Trim();
-                    if (isolatedNode is not null || rules is not null)
-                        await SetAgentIsolationAsync(
-                            nameValue,
-                            isolatedNode,
-                            isolatedNode is not null,
-                            rules
-                        );
-
                     if (inherit is not null)
                         await SetAgentInheritAsync(nameValue, inherit);
-                    if (mainId is not null && (inherit is not null || isolatedNode is not null))
+                    if (mainId is not null && inherit is not null)
                         await RefreshSnapshotAsync(await RequiredAsync(mainId));
                     return (
                         Output(

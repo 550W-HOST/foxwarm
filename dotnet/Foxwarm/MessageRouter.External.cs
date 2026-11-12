@@ -119,6 +119,12 @@ internal sealed partial class MessageRouter
     {
         if (!runtime.Manager.Accepting)
             return true;
+        // Unknown slash text is ordinary input, including at Telegram's pre-Router hook.
+        // Catalog classification must precede command authorization; ordinary admission
+        // still checks authorization and guest provisioning in HandleExternalMessageAsync.
+        var definition = ExternalCommands.Find(command);
+        if (definition is null)
+            return false;
         if (command == "/whoami")
         {
             try
@@ -145,9 +151,6 @@ internal sealed partial class MessageRouter
             return true;
         }
         // Telegram enters here before the generic Router's override-only gate.
-        var definition = ExternalCommands.Find(command);
-        if (definition is null)
-            return false;
         var args = string.IsNullOrWhiteSpace(rawArgs) ? [] : Regex.Split(rawArgs.Trim(), @"\s+");
         try
         {
@@ -230,7 +233,14 @@ internal sealed partial class MessageRouter
                 case "/status":
                     await source.Reply(
                         SessionWait.Text(
-                            (await runtime.Manager.ObserveAsync(owner!, "session", new()))["output"]
+                            (
+                                await runtime.Manager.ObserveAsync(
+                                    owner!,
+                                    "session",
+                                    new(),
+                                    administrator: true
+                                )
+                            )["output"]
                         )!
                     );
                     break;
@@ -258,7 +268,6 @@ internal sealed partial class MessageRouter
                 "/agent" => args.FirstOrDefault() switch
                 {
                     "create" => "❌ Failed to create agent: ",
-                    "isolated" => "❌ Failed to update agent isolation: ",
                     "inherit" => "❌ Failed to update inherit: ",
                     _ => "Command error: ",
                 },

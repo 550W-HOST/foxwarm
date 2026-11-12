@@ -194,37 +194,16 @@ public sealed partial class CommandAdministrationTests
                 "Selected official client effect.",
                 await File.ReadAllTextAsync(remotePath)
             );
-            await f.Manager.CreateAgentAsync(
-                "isolated",
-                createMainSession: false,
-                isolatedNode: "command-node"
-            );
-            var isolated = await f.Manager.CreateNamedAsync("isolated", "chat", null, null);
-            await f.Manager.SelectNodeAsync(isolated, "command-node"); // Valid lower-level selection remains valid.
-            replies.Clear();
-            await f.Router.HandleExternalCommandAsync(source, "/node", "command-node", isolated);
-            Assert.Contains("isolated agent", replies.Single());
+            // A migrated isolated Agent is not inheritable; the command reports the refusal.
+            await f.Manager.CreateAgentAsync("isolated", createMainSession: false);
+            await f.Manager.SetAgentInheritableAsync("isolated", false);
             replies.Clear();
             await f.Router.HandleExternalMessageAsync(
                 source,
                 Message("/agent inherit main isolated")
             );
             Assert.Null(f.Manager.AgentInherit("main"));
-            Assert.Contains("isolated", replies.Single());
-            replies.Clear();
-            await f.Router.HandleExternalMessageAsync(
-                source,
-                Message("/timer after 3600 --new-session --agent main -- forbidden")
-            );
-            // The ordinary owner is not isolated; use the actual selected isolated owner for the boundary.
-            var before = f.Manager.Timers.List(isolated.Id).Count;
-            await f.Router.HandleExternalCommandAsync(
-                source,
-                "/timer",
-                "after 3600 --new-session --agent main -- forbidden",
-                isolated
-            );
-            Assert.Equal(before, f.Manager.Timers.List(isolated.Id).Count);
+            Assert.Contains("not inheritable", replies.Single());
             await f.Router.HandleExternalMessageAsync(
                 source,
                 Message("/node move command-node renamed-node")

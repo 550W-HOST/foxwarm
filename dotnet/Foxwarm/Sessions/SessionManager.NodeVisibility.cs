@@ -59,13 +59,11 @@ internal sealed partial class SessionManager
             ExternalRuntime = externalRuntime;
             try
             {
-                Isolation = manager.Isolation(agent);
                 Layers = manager.agents.RuleLayers(agent);
             }
             catch (InvalidDataException)
             {
-                // Unreadable isolation or rule metadata makes nothing visible.
-                Isolation = new(true, null, []);
+                // Unreadable rule metadata makes nothing visible.
                 Layers = null;
             }
         }
@@ -74,7 +72,6 @@ internal sealed partial class SessionManager
         internal string Session { get; }
         internal string CurrentNode { get; }
         internal bool ExternalRuntime { get; }
-        internal AgentIsolation Isolation { get; }
 
         // Null when the Agent's rule chain is invalid: nothing is visible then.
         internal ToolAuthorizationPolicy[]? Layers { get; }
@@ -115,7 +112,7 @@ internal sealed partial class SessionManager
             return null;
         var current = SessionCatalog.Text(row["currentNode"]) is { Length: > 0 } node
             ? node
-            : BoundNode(agent) ?? "master";
+            : "master";
         return new(this, agent, id, current, externalRuntime: false);
     }
 
@@ -152,12 +149,6 @@ internal sealed partial class SessionManager
                     ? context.CurrentNode
                     : "master"
             );
-        if (
-            source == "node"
-            && context.Isolation.Isolated
-            && targetNode != (context.Isolation.RecordedNode ?? "master")
-        )
-            return false;
         var unknownNodeTargets =
             source == "builtin"
             && name
@@ -232,7 +223,9 @@ internal sealed partial class SessionManager
         IReadOnlyList<string>? targets,
         bool unknownNode,
         bool unknownNodeTargets,
-        IReadOnlySet<string>? knownArgs
+        IReadOnlySet<string>? knownArgs,
+        AuthorizationTarget? sessionTarget = null,
+        string? sourceParent = null
     )
     {
         if (context.Layers is null)
@@ -251,27 +244,21 @@ internal sealed partial class SessionManager
                 toolWorkspace,
                 agents.AgentDirectory(context.Agent),
                 agents.MemoryDirectory(context.Agent),
+                SourceParent: sourceParent,
+                SessionTarget: sessionTarget,
                 NodeTargets: targets,
                 CurrentNode: context.CurrentNode,
                 NodeForest: targets is { Count: > 0 } ? context.Forest : null
             );
             return context.Policies.All(policy =>
-                    ToolAuthorizationEvaluation.Visible(
-                        policy,
-                        request,
-                        unknownNode,
-                        unknownNodeTargets,
-                        knownArgs
-                    )
-                )
-                && IsolatedToolCompatibility.Visible(
-                    context.Isolation,
-                    source,
-                    name,
-                    server,
+                ToolAuthorizationEvaluation.Visible(
+                    policy,
+                    request,
                     unknownNode,
-                    targetNode
-                );
+                    unknownNodeTargets,
+                    knownArgs
+                )
+            );
         }
         catch (InvalidDataException)
         {
@@ -315,16 +302,8 @@ internal sealed partial class SessionManager
         if (names.Length == 0)
             names = CanonicalNodeTools;
         var tools = names.Where(name => ToolVisible(context, "node", name, node: id)).ToArray();
-        var isolation = context.Isolation;
-        var isolatedEndpoint =
-            !isolation.Isolated
-            || id == "master"
-            || id == context.CurrentNode
-            || id == isolation.RecordedNode;
         // The other copy endpoint is the caller's choice, so only this Node's facts can hide it.
-        var transfer =
-            isolatedEndpoint
-            && TransferTools.Any(name =>
+        var transfer = TransferTools.Any(name =>
                 (!context.ExternalRuntime || ClaudeRuntimeToolSupport.Visible("builtin", name))
                 && VisibleRequest(
                     context,
@@ -339,17 +318,13 @@ internal sealed partial class SessionManager
                     null
                 )
             );
-        var select =
-            !isolation.Isolated
-            && NodeActionVisible(
+        var select = NodeActionVisible(
                 context,
                 new JsonObject { ["action"] = "select", ["nodeId"] = id },
                 [id],
                 NodeTargetArgs
             );
-        var inspect =
-            (!isolation.Isolated || id == (isolation.RecordedNode ?? "master"))
-            && NodeActionVisible(
+        var inspect = NodeActionVisible(
                 context,
                 new JsonObject { ["action"] = "inspect", ["nodeId"] = id },
                 [id],
@@ -357,7 +332,6 @@ internal sealed partial class SessionManager
             );
         var destroy =
             providerDestroy
-            && !isolation.Isolated
             && NodeActionVisible(
                 context,
                 new JsonObject
@@ -407,16 +381,14 @@ internal sealed partial class SessionManager
                     null,
                     NodeTargetArgs
                 ),
-                "create" => !context.Isolation.Isolated
-                    && !(delegated && parent is null)
+                "create" => !(delegated && parent is null)
                     && NodeActionVisible(
                         context,
                         new JsonObject { ["action"] = "create", ["providerId"] = providerId },
                         parentTargets,
                         new HashSet<string>(StringComparer.Ordinal) { "action", "providerId" }
                     ),
-                "ensure" => !context.Isolation.Isolated
-                    && NodeActionVisible(
+                "ensure" => NodeActionVisible(
                         context,
                         new JsonObject { ["action"] = "ensure", ["providerId"] = providerId },
                         parentTargets,

@@ -3,8 +3,7 @@ export type SessionRuntimeKind = 'foxwarm' | 'claude-code'
 export type AgentSummary = {
   id: string
   inherit?: string | null
-  isolated?: boolean
-  isolatedNode?: string | null
+  inheritable?: boolean
   defaultNode?: string | null
   defaultCwd?: string | null
 }
@@ -14,13 +13,12 @@ export type AgentSettingsChanges = {
   inheritAgent: string | null
   defaultNode: string | null
   defaultCwd: string | null
-  isolatedNode: string | null
 }
 
 /** Creation sends only the settings that were chosen. */
 export function buildAgentCreationBody(agentId: string, settings?: Partial<AgentSettingsChanges>): { agentId: string } & Partial<Record<keyof AgentSettingsChanges, string>> {
   const body: { agentId: string } & Partial<Record<keyof AgentSettingsChanges, string>> = { agentId: agentId.trim() }
-  for (const key of ['inheritAgent', 'defaultNode', 'defaultCwd', 'isolatedNode'] as const) {
+  for (const key of ['inheritAgent', 'defaultNode', 'defaultCwd'] as const) {
     const value = settings?.[key]?.trim()
     if (value) body[key] = value
   }
@@ -28,15 +26,14 @@ export function buildAgentCreationBody(agentId: string, settings?: Partial<Agent
 }
 
 /**
- * Where a new Session of this Agent starts according to its saved settings: the isolation
- * Node, else the default Node, else the installation default (Main when neither is set). The
- * working directory applies only on that default Node. Null when nothing chooses placement.
+ * Where a new Session of this Agent starts according to its saved settings: the default Node,
+ * else the installation default (master when neither is set). The working directory applies
+ * on that Node. Null when nothing chooses placement.
  */
 export function agentStartLocation(agent: AgentSummary | undefined, installDefaultNode: string | null = null): { node: string; cwd: string | null } | null {
   const defaultNode = agent?.defaultNode || installDefaultNode
-  if (!agent || !(agent.isolatedNode || defaultNode || agent.defaultCwd)) return null
-  const node = agent.isolatedNode || defaultNode || 'master'
-  return { node, cwd: agent.defaultCwd && node === (defaultNode || 'master') ? agent.defaultCwd : null }
+  if (!agent || !(defaultNode || agent.defaultCwd)) return null
+  return { node: defaultNode || 'master', cwd: agent.defaultCwd || null }
 }
 
 export const RANDOM_SESSION_ID_PLACEHOLDER = 'Random ID (for example, 0712_ab123)'

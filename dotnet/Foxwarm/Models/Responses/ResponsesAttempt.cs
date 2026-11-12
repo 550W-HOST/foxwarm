@@ -8,6 +8,7 @@ namespace Foxwarm.Models;
 internal sealed class ResponsesAttempt : IDisposable
 {
     private readonly ResponsesClientOptions options;
+    private readonly ModelCredentialRedactor credentials;
     private readonly CancellationToken caller;
     private readonly CancellationTokenSource attempt;
     private readonly object gate = new();
@@ -29,6 +30,7 @@ internal sealed class ResponsesAttempt : IDisposable
     )
     {
         this.options = options;
+        credentials = new ModelCredentialRedactor(options);
         this.caller = caller;
         attempt = CancellationTokenSource.CreateLinkedTokenSource(caller);
         Callbacks = new ResponsesStreamCallbacks
@@ -282,7 +284,7 @@ internal sealed class ResponsesAttempt : IDisposable
                     imageBudget,
                     start,
                     SessionWait.Text(response["id"]),
-                    HostedImageEvidence.Redactor(options)
+                    credentials.SafeText
                 )
                 .ConfigureAwait(false);
             foreach (var (id, bytes) in generated.ReplayBytes)

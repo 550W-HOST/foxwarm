@@ -171,10 +171,9 @@ public sealed partial class HandoffConfirmationTests
                     .AsObject()
                     .Select(pair => pair.Key)
                     .ToArray();
-                Assert.Equal(
-                    new[] { "handoffConfirmation", "__cancelTool", "__cancelAllToolsThisTurn" },
-                    modelKeys.TakeLast(3)
-                );
+                Assert.Equal("handoffConfirmation", modelKeys.Last());
+                Assert.DoesNotContain("__cancelTool", modelKeys);
+                Assert.DoesNotContain("__cancelAllToolsThisTurn", modelKeys);
             }
         }
     }

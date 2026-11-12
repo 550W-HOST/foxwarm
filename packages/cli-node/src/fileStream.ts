@@ -15,7 +15,7 @@ const NO_PROGRESS_MS = 60_000;
 const RESPONSE_MS = 30_000;
 
 type Connection = { host: string; nodeId: string; authToken: string; signal: AbortSignal };
-type FileRequest = { transferId: string; filePath: string; agentName: string; restrictToAgentDir: boolean };
+type FileRequest = { transferId: string; filePath: string; agentName: string; restrictToAgentDir: boolean; sessionCwd?: string };
 
 function transferRequest(connection: Connection, transferId: string, method: 'GET' | 'PUT', length?: number): http.ClientRequest {
   const url = new URL(connection.host.replace(/\/$/, '') + '/node/transfer/' + encodeURIComponent(transferId));
@@ -83,7 +83,7 @@ function ensureSuccess(reply: http.IncomingMessage): void {
 
 export async function streamReadFile(connection: Connection, input: FileRequest): Promise<NodeTransferFilePayload | undefined> {
   connection.signal.throwIfAborted();
-  const fullPath = resolveNodeTransferPath(input.filePath, input.agentName, input.restrictToAgentDir);
+  const fullPath = resolveNodeTransferPath(input.filePath, input.agentName, input.restrictToAgentDir, input.sessionCwd);
   const file = await open(fullPath, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
   try {
     const stats = await file.stat();
@@ -128,7 +128,7 @@ export async function streamReadFile(connection: Connection, input: FileRequest)
 
 export async function streamWriteFile(connection: Connection, input: FileRequest & { overwrite: boolean; sizeBytes: number }): Promise<NodeTransferWriteResult> {
   connection.signal.throwIfAborted();
-  const fullPath = resolveNodeTransferPath(input.filePath, input.agentName, input.restrictToAgentDir);
+  const fullPath = resolveNodeTransferPath(input.filePath, input.agentName, input.restrictToAgentDir, input.sessionCwd);
   if (!Number.isSafeInteger(input.sizeBytes) || input.sizeBytes < 0) throw new Error('Invalid file transfer size.');
   const existed = await fs.pathExists(fullPath);
   if (existed && !input.overwrite) throw new Error(`File already exists: ${input.filePath}. Use overwrite=true to replace it.`);

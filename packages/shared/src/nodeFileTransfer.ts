@@ -68,9 +68,9 @@ export function resolveNodePath(filePath: string, agentName = 'main', sessionCwd
   return path.resolve(base, expandedPath);
 }
 
-export function resolveNodeTransferPath(filePath: string, agentName: string, restrictToAgentDir = true): string {
+export function resolveNodeTransferPath(filePath: string, agentName: string, restrictToAgentDir = true, sessionCwd?: string): string {
   const agentDir = getNodeAgentDir(agentName);
-  const resolved = resolveNodePath(filePath, agentName);
+  const resolved = resolveNodePath(filePath, agentName, sessionCwd);
   if (restrictToAgentDir && !(resolved === agentDir || resolved.startsWith(agentDir + path.sep))) {
     throw new Error('Path traversal detected: cannot access files outside agent folder');
   }
@@ -121,17 +121,17 @@ export async function writePrimitiveTransferFile(filePath: string, bytes: Buffer
   return buildNodeTransferWriteResult(filePath, bytes, existed);
 }
 
-export async function readNodeTransferFile(filePath: string, agentName: string, restrictToAgentDir = true): Promise<NodeTransferFilePayload> {
-  const fullPath = resolveNodeTransferPath(filePath, agentName, restrictToAgentDir);
+export async function readNodeTransferFile(filePath: string, agentName: string, restrictToAgentDir = true, sessionCwd?: string): Promise<NodeTransferFilePayload> {
+  const fullPath = resolveNodeTransferPath(filePath, agentName, restrictToAgentDir, sessionCwd);
   const stats = await fs.stat(fullPath);
   if (!stats.isFile()) throw new Error(`Not a file: ${filePath}`);
   const buffer = await fs.readFile(fullPath);
   return buildNodeTransferFilePayload(filePath, buffer);
 }
 
-export async function writeNodeTransferFile(filePath: string, agentName: string, dataBase64: string, overwrite = false, restrictToAgentDir = true): Promise<NodeTransferWriteResult> {
+export async function writeNodeTransferFile(filePath: string, agentName: string, dataBase64: string, overwrite = false, restrictToAgentDir = true, sessionCwd?: string): Promise<NodeTransferWriteResult> {
   if (typeof dataBase64 !== 'string') throw new Error('dataBase64 is required');
-  const fullPath = resolveNodeTransferPath(filePath, agentName, restrictToAgentDir);
+  const fullPath = resolveNodeTransferPath(filePath, agentName, restrictToAgentDir, sessionCwd);
   const exists = await fs.pathExists(fullPath);
   if (exists && !overwrite) throw new Error(`File already exists: ${filePath}. Use overwrite=true to replace it.`);
   const buffer = Buffer.from(dataBase64, 'base64');

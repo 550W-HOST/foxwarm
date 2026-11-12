@@ -186,3 +186,17 @@ test('streaming file transfer uses authenticated HTTP, exact lengths and atomic 
     await fs.remove(root);
   }
 });
+
+test('small streamed reads resolve a relative path against the Session cwd when the frame supplies one', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cli-file-cwd-'));
+  try {
+    await fs.writeFile(path.join(root, 'in.txt'), 'from cwd');
+    const connection = { host: 'http://127.0.0.1:1', nodeId: 'test-node', authToken: 'test-token', signal: new AbortController().signal };
+    const base = { transferId: 'cwd', filePath: 'in.txt', agentName: 'main', restrictToAgentDir: false };
+    const file = await streamReadFile(connection, { ...base, sessionCwd: root });
+    assert.equal(Buffer.from(file!.dataBase64, 'base64').toString(), 'from cwd');
+    await assert.rejects(streamReadFile(connection, base), /ENOENT|no such file/i);
+  } finally {
+    await fs.remove(root);
+  }
+});

@@ -162,7 +162,7 @@ SessionRuntime/catalog projection merge and Main-owned lifecycle handoff are now
 
 ## Open questions
 
-- Managed-session control remains intentionally low priority. Identity move/rename and agent-wide snapshot-affecting inheritance/isolation changes remain pre-effect fenced until a closed lifecycle boundary exists.
+- Managed-session control remains intentionally low priority. Identity move/rename and agent-wide snapshot-affecting inheritance/rule changes remain pre-effect fenced until a closed lifecycle boundary exists.
 - Direct Unix-domain connections among future session, vector, and master-node services may replace the initial parent/child transport when avoiding a main-process payload hop becomes relevant.
 
 ### Worker ingress durability ordering

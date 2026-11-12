@@ -7,12 +7,22 @@ namespace Foxwarm.Sessions;
 
 internal sealed partial class SessionManager
 {
-    private bool UsesIsolatedImageGeneration(SessionOwner owner)
+    private SessionOwner.ToolModelSelection? ImageGenerationModel(SessionOwner owner)
     {
-        var selected = models.Capture().Select(owner.Entry.Snapshot()).Model;
-        return selected.Configuration["imageGeneration"]?["enabled"]?.GetValue<bool>() == true
-            && SessionWait.Text(selected.Configuration["imageGeneration"]?["mode"]) == "isolated";
+        var catalog = models.Capture();
+        var selected = catalog.Select(owner.Entry.Snapshot());
+        if (
+            owner.Processing
+            && owner.ToolModel is { } current
+            && current.RawModel == selected.RawModel
+        )
+            return current;
+        return selected.Model.IsVirtual ? null : new(catalog, selected.Model, selected.RawModel);
     }
+
+    private bool UsesSeparateImageGeneration(SessionOwner owner) =>
+        ImageGenerationModel(owner) is { } selected
+        && ImageGenerationRequests.UsesSeparateRequest(selected.Model);
 
     internal async Task<JsonObject> GenerateImageAsync(
         SessionOwner owner,
@@ -42,15 +52,10 @@ internal sealed partial class SessionManager
             throw new InvalidOperationException(
                 "Image generation caller is no longer the current Session owner."
             );
-        var catalog = models.Capture();
-        var selection = catalog.Select(owner.Entry.Snapshot());
-        if (selection.Model.IsVirtual)
+        var selection = ImageGenerationModel(owner);
+        if (selection is null || !ImageGenerationRequests.UsesSeparateRequest(selection.Model))
             throw new InvalidDataException(
-                "Select a concrete Responses model for image generation."
-            );
-        if (selection.Model.Configuration["imageGeneration"]?["enabled"]?.GetValue<bool>() != true)
-            throw new InvalidDataException(
-                "Image generation is not enabled for the selected model."
+                "Separate image generation is not enabled for the selected concrete model."
             );
 
         var inputParts = new JsonArray(new JsonObject { ["text"] = prompt });
@@ -90,28 +95,15 @@ internal sealed partial class SessionManager
             retryIntervals: models.GetRetryIntervals,
             secrets: secrets
         );
-        var request = requests.Capture(catalog, selection.Model.Key, null);
-        var result = await requests.RequestAsync(
+        var result = await ImageGenerationRequests.RequestAsync(
+            requests,
+            selection.Catalog,
+            selection.Model,
             owner.Id,
-            request,
-            "image-" + Guid.NewGuid().ToString("N"),
             owner.LogicalTurnId,
-            [new JsonObject { ["role"] = "user", ["parts"] = inputParts }],
-            (_, _) =>
-                Task.FromResult(
-                    "Generate or edit the requested image. Use the image generation tool and return the image. Follow the user's visual requirements."
-                ),
-            null,
-            null,
-            null,
+            inputParts,
             owner.Entry.RecordBestEffortFailure,
-            token,
-            ModelRequestScope.LowLevel,
-            () => new JsonArray(),
-            null,
-            "image-generation",
-            0,
-            maxAttempts: 1
+            token
         );
         result.FinalizeHistory(null);
         token.ThrowIfCancellationRequested();
@@ -128,19 +120,7 @@ internal sealed partial class SessionManager
                 .ToArray()
         );
         if (images.Count == 0)
-        {
-            var evidence = parts
-                .OfType<JsonObject>()
-                .Where(part =>
-                    part["providerMeta"]?["openaiResponses"]?["imageGenerationFailure"] is not null
-                )
-                .Select(part => SessionWait.Text(part["text"]))
-                .Where(text => !string.IsNullOrEmpty(text));
-            var detail = string.Join("\n", evidence);
-            throw new InvalidDataException(
-                detail.Length > 0 ? detail : "Image generation returned no usable image."
-            );
-        }
+            throw new InvalidDataException("Image generation returned no usable image.");
         return new JsonObject
         {
             ["output"] =

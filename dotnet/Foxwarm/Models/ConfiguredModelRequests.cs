@@ -31,14 +31,13 @@ internal static class ConfiguredModelRequests
                 "Image generation requires the OpenAI Responses protocol."
             );
         var featurePurpose = purpose is "background" or "setup-test";
-        var imageRequest = purpose == "image-generation";
-        var isolateImages =
-            SessionWait.Text(model.Configuration["imageGeneration"]?["mode"]) == "isolated";
-        if (imageRequest && (!imageEnabled || !responses))
+        var imageRequest = purpose == ImageGenerationRequests.Purpose;
+        var separateImages = ImageGenerationRequests.UsesSeparateRequest(model);
+        if (imageRequest && !separateImages)
             throw new InvalidDataException(
-                "Image generation is not enabled for the selected Responses model."
+                "Separate image generation is not enabled for the selected model."
             );
-        var imageDeclared = imageEnabled && !featurePurpose && (imageRequest || !isolateImages);
+        var imageDeclared = imageEnabled && !featurePurpose && (imageRequest || !separateImages);
         if (responses)
         {
             var extra = model.Configuration["extraFields"] as JsonObject;
@@ -85,7 +84,7 @@ internal static class ConfiguredModelRequests
             }
             return node?.DeepClone();
         }
-        return defaults with
+        var options = defaults with
         {
             TextRedaction = TextRedactionOptions.FromResolved(
                 model.Configuration["textRedaction"] as JsonObject
@@ -99,8 +98,7 @@ internal static class ConfiguredModelRequests
             ConcreteModelId = model.Key,
             HistoryCompatibility = model.HistoryCompatibility,
             Token = model.Token,
-            Effort = imageRequest ? null : effort,
-            ImageGenerationOnly = imageRequest,
+            Effort = effort,
             Instructions = instructions,
             ProviderPromptCacheKey = responses ? cacheKey : null,
             ExtraHeaders = Expand(model.Configuration["extraHeaders"]) as JsonObject,
@@ -115,15 +113,13 @@ internal static class ConfiguredModelRequests
                 model.Configuration["disallowEmptyResponse"] is JsonValue flag
                 && flag.TryGetValue<bool>(out var forbid)
                 && forbid,
-            WebSearch =
-                featurePurpose || imageRequest
-                    ? null
-                    : model.Configuration["webSearch"] as JsonObject,
+            WebSearch = featurePurpose ? null : model.Configuration["webSearch"] as JsonObject,
             ImageGeneration =
-                featurePurpose || (isolateImages && !imageRequest)
+                featurePurpose || (separateImages && !imageRequest)
                     ? null
                     : model.Configuration["imageGeneration"] as JsonObject,
         };
+        return imageRequest ? ImageGenerationRequests.Prepare(options) : options;
     }
 
     internal static IChatService CreateService(

@@ -7,26 +7,6 @@ namespace Foxwarm.Sessions;
 
 internal sealed partial class SessionManager
 {
-    internal void RequireMainFileSourcePath(SessionOwner owner, string path)
-    {
-        if (!AgentIsolated(owner.Agent))
-            return;
-        var own = AuthorizationPaths.CanonicalPotential(agents.AgentDirectory(owner.Agent));
-        var actual = AuthorizationPaths.CanonicalPotential(path);
-        if (
-            !ToolAuthorizationEvaluation.Within(actual, own)
-            || owner.Agent == "main"
-                && agents.AgentDirectory("main") == toolWorkspace
-                && ToolAuthorizationEvaluation.Within(
-                    actual,
-                    AuthorizationPaths.CanonicalPotential(Path.Combine(own, "agents"))
-                )
-        )
-            throw new ToolAuthorizationDeniedException(
-                "Isolated Agent can only read source files within its own directory."
-            );
-    }
-
     internal async Task<JsonNode?> NormalizeToolScriptResultAsync(
         JsonNode? value,
         string name,

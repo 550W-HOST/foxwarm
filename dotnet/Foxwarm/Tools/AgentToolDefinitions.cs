@@ -14,7 +14,7 @@ internal static class AgentToolDefinitions
         };
 
     private const string ForceModelDescription =
-        "Only use when the user explicitly requests a model or effort for this task or session. Takes precedence over `model` and this Session's child settings. Same fields as `model`.";
+        "Only use when the user explicitly requests a model or effort for this task or Session. Takes precedence over `model` and this Session's child settings. Same fields as `model`.";
 
     private const string ModelDescription =
         "Model or effort suited to this task. This Session's child settings, which the user may have chosen, take precedence. Choose from the available models in your instructions by their descriptions; omit to use the normal defaults.";
@@ -105,7 +105,7 @@ internal static class AgentToolDefinitions
     private static JsonObject TaskDefinition() =>
         Tool(
             "task",
-            "Create, list, inspect, claim, update, complete, or cancel a shared task. Prefer combining task bookkeeping with related work rather than spending a separate model turn on it. Put independent calls in the same tool batch; use run_script for dependencies, especially creating a task and passing its returned taskId to create_child_session. The current Session supplies the actor identity and is the creator of new tasks; ownerSessionId selects the assignee, not the caller. Set ownerSessionId during create for immediate assignment; use assign to transfer or release an existing owner.",
+            "Create, list, inspect, claim, assign, update, complete, or cancel a shared Task. Prefer combining Task bookkeeping with related work rather than spending a separate model turn on it. Put independent calls in the same tool batch; use run_script for dependencies, especially creating a Task and passing its returned taskId to create_child_session. For a long description or result, compose the call in ToolScript so you don't regenerate text you already have. The current Session supplies the actor identity and is the creator of new Tasks; ownerSessionId selects the assignee, not the caller. Set ownerSessionId during create for immediate assignment; use assign to transfer or release an existing owner.",
             Parameters(
                 new JsonObject
                 {
@@ -124,33 +124,33 @@ internal static class AgentToolDefinitions
                         "Task title. Required for create; optional for update. Up to 200 characters."
                     ),
                     ["description"] = String(
-                        "Problem or scope description for a new task, or replacement description when updating. Any Session may update the description of an open or active task, subject to tool permissions. For long description or result text, use ToolScript to compose the operation so you do not regenerate duplicate content."
+                        "Problem or scope description for a new Task, or replacement description when updating. Any Session may update the description of an open or active Task, subject to tool permissions."
                     ),
                     ["parentTaskId"] = String(
-                        "Existing parent task ID for a simple child task. Set only when creating."
+                        "Existing parent Task ID for a simple child Task. Set only when creating."
                     ),
                     ["taskId"] = String(
-                        "Existing task ID. Required for get, claim, update, complete, and cancel."
+                        "Existing Task ID. Required for get, claim, update, complete, and cancel."
                     ),
                     ["status"] = Choice(
-                        "For list, filter by task status. For update, set only open or active.",
+                        "For list, filter by Task status. For update, set only open or active.",
                         "open",
                         "active",
                         "completed",
                         "cancelled"
                     ),
                     ["scope"] = Choice(
-                        "For list, choose tasks created by or assigned to the current Session (default), tasks owned by the current Session, tasks in the current Agent, or all tasks.",
+                        "For list, choose Tasks created by or assigned to the current Session (default), Tasks owned by the current Session, Tasks in the current Agent, or all Tasks.",
                         "current-session",
                         "owned",
                         "current-agent",
                         "all"
                     ),
                     ["note"] = String(
-                        "Progress note to append when updating a task, up to 2,000 characters."
+                        "Progress note to append when updating a Task, up to 2,000 characters."
                     ),
                     ["result"] = String(
-                        "Completion summary for a completed task. For long description or result text, use ToolScript to compose the operation so you do not regenerate duplicate content."
+                        "Completion summary for a completed Task."
                     ),
                     ["notifySession"] = Boolean(
                         "When true, create/assign notify the new owner and, on transfer or release, the previous owner after the change is saved. For update with a note, notify the current owner unless it is the caller. Omitted or false saves without these notifications."
@@ -159,95 +159,16 @@ internal static class AgentToolDefinitions
                     {
                         ["type"] = new JsonArray("string", "null"),
                         ["description"] =
-                            "For create, the optional existing Session ID to receive the task. For assign, the existing Session ID to receive the task, or null to release the current owner.",
+                            "For create, the optional existing Session ID to receive the Task. For assign, the existing Session ID to receive the Task, or null to release the current owner.",
                     },
-                    ["reason"] = String("Short reason for cancelling a task."),
+                    ["reason"] = String("Short reason for cancelling a Task."),
                 },
                 "action"
             )
         );
 
-    private static JsonObject CreationIsolationRules()
-    {
-        var rules = IsolationRules();
-        rules["description"] =
-            "Replace this agent's legacy isolated-tool rules. Use an empty array to clear them. These rules apply only while the agent is isolated, alongside the instance-wide authorization policy.";
-        return rules;
-    }
-
-    private static JsonObject IsolationRules() =>
-        new()
-        {
-            ["type"] = "array",
-            ["maxItems"] = 256,
-            ["description"] =
-                "Replace this agent's legacy isolated-tool rules. Use an empty array to clear them. These rules apply only while the agent is isolated.",
-            ["items"] = new JsonObject
-            {
-                ["oneOf"] = new JsonArray(
-                    new[] { "builtin", "node", "mcp" }
-                        .Select(source =>
-                        {
-                            var properties = new JsonObject
-                            {
-                                ["effect"] = new JsonObject
-                                {
-                                    ["type"] = "string",
-                                    ["enum"] = new JsonArray("allow", "deny"),
-                                },
-                                ["source"] = new JsonObject
-                                {
-                                    ["type"] = "string",
-                                    ["enum"] = new JsonArray(source),
-                                },
-                                ["tool"] = new JsonObject
-                                {
-                                    ["type"] = "string",
-                                    ["maxLength"] = 128,
-                                },
-                            };
-                            var required = new JsonArray("effect", "source", "tool");
-                            if (source != "builtin")
-                            {
-                                var key = source == "node" ? "node" : "server";
-                                properties[key] = new JsonObject
-                                {
-                                    ["type"] = "string",
-                                    ["maxLength"] = 128,
-                                };
-                                required.Add((System.Text.Json.Nodes.JsonNode?)(key));
-                            }
-                            return (JsonNode?)
-                                new JsonObject
-                                {
-                                    ["type"] = "object",
-                                    ["additionalProperties"] = false,
-                                    ["properties"] = properties,
-                                    ["required"] = required,
-                                };
-                        })
-                        .ToArray()
-                ),
-            },
-        };
-
     public static IReadOnlyList<JsonObject> Definitions() =>
         [
-            Tool(
-                "set_agent_isolated",
-                "Set or clear legacy agent-level isolation and its non-master Node binding. These restrictions apply to all sessions in the agent, in addition to any instance-wide tool authorization policy.",
-                Parameters(
-                    new JsonObject
-                    {
-                        ["agentName"] = String("Agent to update."),
-                        ["nodeId"] = String(
-                            "Non-master Node to bind. An empty string clears isolation; omission leaves the current binding unchanged."
-                        ),
-                        ["toolRules"] = IsolationRules(),
-                    },
-                    "agentName"
-                )
-            ),
             Tool(
                 "move_session",
                 "Rename a session or move it to another agent, optionally creating the destination agent. The old session ID remains an alias.",
@@ -315,10 +236,6 @@ internal static class AgentToolDefinitions
                         ["convertSession"] = Boolean(
                             "Convert an existing session into this agent's main session. Requires createMainSession=true."
                         ),
-                        ["isolatedNode"] = String(
-                            "Non-master Node to bind when creating an isolated agent."
-                        ),
-                        ["toolRules"] = CreationIsolationRules(),
                         ["rules"] = LocalRules(
                             "Initial local authorization rules for the new Agent, evaluated in order. Calls that match no rule pass this layer, so end with {\"action\":\"deny\"} to allow only the listed capabilities. Omit for an empty layer; ancestor rules still apply."
                         ),
@@ -367,7 +284,7 @@ internal static class AgentToolDefinitions
                             "Existing session to record as the new session's parent."
                         ),
                         ["node"] = String(
-                            "Node for the new Session. If omitted, use the target Agent's default Node, then the installation default, then master; a recorded parent does not affect placement. An isolated target Agent uses its bound Node."
+                            "Node for the new Session. If omitted, use the target Agent's default Node, then the installation default, then master; a recorded parent does not affect placement."
                         ),
                         ["systemPromptFiles"] = new JsonObject
                         {
@@ -387,37 +304,37 @@ internal static class AgentToolDefinitions
             ),
             Tool(
                 "create_child_session",
-                "Create a child Session under the current Session. With taskId, assign or transfer the task to the child, deliver its full description and any message as one assignment, and start work. Complete the task with the task tool. Completion notifies a Session creator automatically; do not send a separate routine completion report. Without taskId, message is optional and normal completion reporting applies. With fork, this call returns in two Sessions: here as the parent and in the new child, both continuing from the same context; each result says which one you are.",
+                "Create a child Session under the current Session. With taskId, assign or transfer the Task to the child, deliver its full description and any message as one assignment, and start work; the Task's creator is notified when it is completed. Without taskId, message is optional and the child reports by message. With fork, this call returns in two Sessions: here as the parent and in the new child, both continuing from the same context; each result says which one you are.",
                 Parameters(
                     new JsonObject
                     {
                         ["runtime"] = Choice(
-                            "Model loop for the new Session: foxwarm (default), or claude-code using the installed Claude Code configuration. Choose the runtime when creating the Session.",
+                            "Model loop for the new Session: foxwarm (default), or claude-code using the installed Claude Code configuration.",
                             "foxwarm",
                             "claude-code"
                         ),
                         ["agentName"] = String(
-                            "Existing agent that will own the child. Omit to use this session's agent."
+                            "Existing Agent that will own the child. Omit to use this Session's Agent."
                         ),
                         ["taskId"] = String(
-                            "Existing task to assign or transfer to the new Session. The child receives the full task description and starts work. Completed or cancelled tasks cannot be assigned."
+                            "Existing Task to assign or transfer to the new Session. The child receives the full Task description and starts work. Completed or cancelled Tasks cannot be assigned."
                         ),
                         ["suffix"] = String(
-                            "Name for the child. Within the same agent, it replaces a main leaf or is appended to the parent ID. Under a different agent, it becomes that agent's session name. A numeric suffix is added when needed to avoid an existing ID."
+                            "Name for the child. In the same Agent, a child of the main Session is named <agent>/<suffix>, and a child of another Session gets the suffix appended to its parent's ID. In a different Agent, the suffix is that Agent's Session name. A number is added when the ID already exists."
                         ),
                         ["fork"] = new JsonObject
                         {
                             ["type"] = "boolean",
                             ["default"] = false,
                             ["description"] =
-                                "Fork this Session: the child receives a copy of the current context and continues from this call, while this Session continues as the parent. The child sees this call, including message, so give the child its part there; without message or taskId the child stays idle until it receives a message. Same agent only. Defaults to false.",
+                                "Fork this Session: the child receives a copy of the current context and continues from this call, while this Session continues as the parent. The child sees this call, including message, so give the child its part there; without message or taskId the child stays idle until it receives a message. Same Agent only. Defaults to false.",
                         },
                         ["displayName"] = String(
-                            "Display name for the new child session. This does not change its session ID."
+                            "Display name for the new child Session. This does not change its Session ID."
                         ),
                         ["handoffRecall"] = String(HandoffConfirmation.RecallDescription),
                         ["message"] = String(
-                            "Optional initial instruction. A forked child reads it from this call and starts work; it can rely on the shared context. With taskId, add only information not already in the task; a fresh child receives it with the assignment."
+                            "Optional initial instruction. A forked child reads it from this call and starts work; it can rely on the shared context. With taskId, add only information not already in the Task; a fresh child receives it with the assignment."
                         ),
                         ["currentSessionTurnAction"] = Choice(
                             "Controls the current Session's turn after creation and any initial delivery: continue (default) if you still have work to do, end_turn to end this turn without waiting, or wait for a reply. With fork, it applies only to the parent. Waiting requires taskId or a nonempty message; other incoming activity can also resume the current Session. If any tool in the same batch returns an error, the current Session continues instead of waiting or ending its turn.",
@@ -426,7 +343,7 @@ internal static class AgentToolDefinitions
                             "wait"
                         ),
                         ["node"] = String(
-                            "Node for the new child Session. If omitted, a child in this Session's Agent uses this Session's current Node; a child in another Agent uses that Agent's default Node, then the installation default, then master. An isolated target Agent uses its bound Node."
+                            "Node for the new child Session. If omitted, a child in this Session's Agent uses this Session's current Node; a child in another Agent uses that Agent's default Node, then the installation default, then master."
                         ),
                         ["model"] = ModelRequest(),
                         ["forceModel"] = ForceModel(),
@@ -442,7 +359,7 @@ internal static class AgentToolDefinitions
                     new JsonObject
                     {
                         ["sessionId"] = String(
-                            "Target Session ID. <main> selects this agent's main session; <parent> selects this session's direct parent and requires one to exist. Access is subject to session permissions."
+                            "Target Session ID. <main> selects this Agent's main Session; <parent> selects this Session's direct parent and requires one to exist. Access is subject to Session permissions."
                         ),
                         ["handoffRecall"] = String(HandoffConfirmation.RecallDescription),
                         ["message"] = String("Message to deliver."),

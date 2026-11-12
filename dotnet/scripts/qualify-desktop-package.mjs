@@ -1,6 +1,6 @@
 // Windows-only acceptance against an extracted ZIP. No checkout or user state is used.
 import assert from 'node:assert/strict'
-import { spawn, execFileSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { createServer } from 'node:http'
 import { mkdtemp, mkdir, readFile, writeFile, rm, access } from 'node:fs/promises'
@@ -9,6 +9,7 @@ import { join, resolve } from 'node:path'
 import { createRequire } from 'node:module'
 import puppeteer from 'puppeteer-core'
 import { validateDesktopPackage } from './validate-desktop-package.mjs'
+import { killProcessTree, runCleanup } from './desktop-cleanup.mjs'
 import { waitForWebUiReady } from '../../packages/webui/test/webuiReadiness.mjs'
 
 assert.equal(process.platform, 'win32', 'Desktop runtime qualification requires Windows and WebView2')
@@ -29,7 +30,7 @@ env.FOXWARM_DATA_DIR = data
 // Elevated Windows runners set the equivalent app-specific HKLM test policy because
 // WebView2 ignores environment overrides at high integrity. Neither is shipped.
 env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--remote-debugging-port=0'
-let child, exited, browser, origin, token, stage = 'package validation', requests = 0
+let child, exited, browser, origin, token, stage = 'package validation', requests = 0, acceptanceFailed = false
 const peer = createServer(async (request, response) => {
   try {
     if (request.method === 'GET') { response.writeHead(204).end(); return }
@@ -181,16 +182,24 @@ try {
   await writeFile(report, JSON.stringify({ result: 'passed', extractedDesktop: true, nativeWebView2Cookie: true, setup: true, nativeToolScript: true, nativeExecHelper: true, canonicalAgentRoot: true, configuredAgentRoot: true, webSocketCookie: true, artifactDependencies: true, extensionBundles: 4, restartPreserved: true, vectorEnabled: false }, null, 2) + '\n')
   console.log('Extracted Desktop startup, WebView2, native ToolScript and restart acceptance passed.')
 } catch (error) {
+  acceptanceFailed = true
   // Keep diagnostics useful without uploading tokens, state, profiles or request bodies.
   await writeFile(report, JSON.stringify({ result: 'failed', stage }, null, 2) + '\n')
   throw error
 } finally {
-  browser?.disconnect()
-  if (child?.pid && child.exitCode === null && child.signalCode === null) {
-    execFileSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' })
-    await exited
-  }
-  peer.closeAllConnections()
-  await new Promise(done => peer.close(done))
-  await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 1000 })
+  // Each step runs even if another fails, and none replaces the acceptance error.
+  await runCleanup([
+    ['disconnect the browser', () => browser?.disconnect()],
+    ['end Desktop', async () => {
+      if (child?.pid && child.exitCode === null && child.signalCode === null) {
+        killProcessTree(child)
+        await exited
+      }
+    }],
+    ['close the model fixture', async () => {
+      peer.closeAllConnections()
+      await new Promise(done => peer.close(done))
+    }],
+    ['remove the temporary directory', () => rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 1000 })],
+  ], acceptanceFailed)
 }

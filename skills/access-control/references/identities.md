@@ -69,7 +69,7 @@ The identity uses the normal WebUI login flow but receives a restricted chat roo
 
 Exact bindings resolve through committed old-to-current Session aliases. A completed move preserves exact-bound access through the old/new IDs when both resolve to the same live Session, including a move to another Agent. Agent scopes instead use the resolved Session's actual current Agent: a move out removes that scope's access, and an old ID prefix does not retain it. Missing or ambiguous references grant nothing. Binding one exact Session does not bind its siblings. Image access also requires a reference in the selected Session's committed history; arbitrary filesystem downloads are not granted.
 
-A WebUI binding is not a safe substitute for limiting the bound Agent's tool policy or environment. If a visitor should not see a secret, do not send it to that Session or let its tools return it. Creating a dedicated Agent/Session or changing its Node isolation is an [agent-management](../../agent-management/SKILL.md) workflow.
+A WebUI binding is not a safe substitute for limiting the bound Agent's tool policy or environment. If a visitor should not see a secret, do not send it to that Session or let its tools return it. Creating a dedicated Agent/Session or restricting its rules and default Node is an [agent-management](../../agent-management/SKILL.md) workflow.
 
 ## Troubleshooting
 

@@ -69,7 +69,7 @@ Ordinary assistant output uses the Session's eligible attachments; it is not add
 | Intended output | Correct path and observable effect |
 | --- | --- |
 | Reply in the current normal conversation | Ordinary assistant text. No extra `send_to_channel` is needed; using both can send duplicate text. |
-| Explicitly send to one other target or a send-only attachment | `send_to_channel` addresses that registered instance/conversation. It need not be attached, subject to caller authorization and isolated own-attachment restrictions. |
+| Explicitly send to one other target or a send-only attachment | `send_to_channel` addresses that registered instance/conversation. It need not be attached, subject to caller authorization. |
 | Send a file to the current/selected Session's normal attachments | `send_file` with the default current Session or explicit Session selection. It reports delivered/skipped/failed targets; send-only or unsupported targets are skipped. |
 | Send a file to one exact target | `send_file` with `channelTargetId`, not also `sessionId`. The adapter must support that delivery; [source-file preparation](files-images-and-attachments.md#preview-download-and-delivery-have-separate-authority) is separate. |
 | Reply to a command or report authorization failure | Request-level `ChannelContext.reply`, which can retain the native request's reply context. It is not a source-targeted exception for automatic model output. |
@@ -101,7 +101,7 @@ A generic final signal can close native presentation without sending blank platf
 
 The common Channel interface is not capability parity:
 
-- **QQ Bot:** scoped C2C/group/guild/DM text targets differ. Current inbound/outbound media support is C2C/group, not guild/DM media or arbitrary remote-URL send. Typing is C2C-only with current passive context. Local outgoing files are capped at 100 MiB; bound/isolated-node inbound transfers have a separate 10 MiB cap. [QQ media and delivery](../units/src-channels-qqbot.md) owns format, upload, and configuration bounds.
+- **QQ Bot:** scoped C2C/group/guild/DM text targets differ. Current inbound/outbound media support is C2C/group, not guild/DM media or arbitrary remote-URL send. Typing is C2C-only with current passive context. Local outgoing files are capped at 100 MiB. [QQ media and delivery](../units/src-channels-qqbot.md) owns format, upload, and configuration bounds.
 - **WeWork:** stream aggregation is opt-in and bounded to the adapter's frame size/expiry; process text and answer use different folded regions. Proactive WebSocket media has bounded chunking. A selected WebSocket error does not trigger a webhook fallback because the outcome can be ambiguous. Follow [WeWork](../units/src-channels-wework.md), not a generic retry assumption.
 - **Weixin:** replies require a cached per-user context token. It is in memory, so token loss requires a new inbound message before reply. Typing also needs a ticket. The adapter lacks generic `sendFile` support. [Weixin transport](../units/src-weixin.md) owns token/polling details.
 - **Telegram/Matrix:** existing Markdown fallback, API retry, upload and media paths differ. There is no common long-text splitter or media capability guarantee merely because both implement `sendMessage`. Their [adapter unit](../units/src-channels-misc.md) is the change entry point.

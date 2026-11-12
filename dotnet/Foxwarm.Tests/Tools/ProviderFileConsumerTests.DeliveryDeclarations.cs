@@ -29,10 +29,6 @@ public sealed partial class ProviderFileConsumerTests
             var serialized = f.Manager.ModelDefinitions(f.Owner).ToJsonString();
             canonical ??= serialized;
             Assert.Equal(canonical, serialized);
-            Assert.Equal(
-                canonical,
-                f.Manager.ModelDefinitions(f.Owner, batchControls: true).ToJsonString()
-            );
             var declared = DeclaredNames(serialized);
             foreach (var name in DeliveryTools)
                 Assert.Equal(expected.Contains(name), declared.Contains(name));
@@ -145,13 +141,12 @@ public sealed partial class ProviderFileConsumerTests
     }
 
     [Fact]
-    public async Task Delivery_calls_outside_an_isolated_Agents_Nodes_fail_while_declarations_remain()
+    public async Task Delivery_calls_outside_a_migrated_Agents_Nodes_fail_while_declarations_remain()
     {
         if (!OperatingSystem.IsLinux())
             return;
         await using var f = await Fixture.Create();
-        await f.Manager.SetAgentIsolationAsync(f.Owner.Agent, f.Node, true, null);
-        Assert.True(f.Manager.AgentIsolated(f.Owner.Agent));
+        await LegacyIsolationFixture.RestrictAsync(f.Manager, f.Owner.Agent, f.Node);
         Assert.Subset(
             DeclaredNames(f.Manager.ModelDefinitions(f.Owner).ToJsonString()).ToHashSet(),
             DeliveryTools.ToHashSet()
@@ -166,7 +161,6 @@ public sealed partial class ProviderFileConsumerTests
             }
         );
         Assert.Equal("tool_authorization_denied", send["error"]!["type"]!.GetValue<string>());
-        Assert.Contains("bound/current Node", send["error"]!["message"]!.GetValue<string>());
         var image = await f.Call(
             "image_write_to_file",
             new JsonObject

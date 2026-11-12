@@ -419,7 +419,8 @@ internal sealed partial class NodeClient
                         path,
                         agent,
                         restrict,
-                        connection.ApprovalStop.Token
+                        connection.ApprovalStop.Token,
+                        Text(frame, "sessionCwd")
                     );
                     if (file is null)
                         return;
@@ -448,7 +449,8 @@ internal sealed partial class NodeClient
                             restrict,
                             NodeFileTools.Flag(frame, "overwrite"),
                             length,
-                            connection.ApprovalStop.Token
+                            connection.ApprovalStop.Token,
+                            Text(frame, "sessionCwd")
                         ),
                     };
                 }
@@ -461,7 +463,8 @@ internal sealed partial class NodeClient
                     ["file"] = await transfers.Read(
                         Text(frame, "filePath") ?? "",
                         agent,
-                        NodeFileTools.Flag(frame, "restrictToAgentDir")
+                        NodeFileTools.Flag(frame, "restrictToAgentDir"),
+                        Text(frame, "sessionCwd")
                     ),
                 };
             else
@@ -474,7 +477,8 @@ internal sealed partial class NodeClient
                         agent,
                         Text(frame, "dataBase64") ?? "",
                         NodeFileTools.Flag(frame, "overwrite"),
-                        NodeFileTools.Flag(frame, "restrictToAgentDir")
+                        NodeFileTools.Flag(frame, "restrictToAgentDir"),
+                        Text(frame, "sessionCwd")
                     ),
                 };
             await connection.Send(response);

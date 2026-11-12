@@ -27,7 +27,7 @@ await writeFile(entryPath, `
   window.fetch = async (url, init) => {
     if (!url.endsWith('/nodes')) return { ok: true, json: async () => ({ commands: [] }) }
     window.directoryRequests.push({ url, signal: init.signal })
-    return new Promise(resolve => { window.resolveDirectory = () => resolve({ ok: true, json: async () => ({ nodes, lockedReason: null }) }) })
+    return new Promise(resolve => { window.resolveDirectory = () => resolve({ ok: true, json: async () => ({ nodes }) }) })
   }
   function Fixture() {
     const [state, setState] = useState({

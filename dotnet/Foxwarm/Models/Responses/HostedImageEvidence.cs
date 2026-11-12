@@ -11,27 +11,6 @@ internal static class HostedImageEvidence
     internal const int MaxCalls = 32;
     internal const int MaxText = 400;
 
-    internal static Func<string, string> Redactor(ResponsesClientOptions options)
-    {
-        var secrets = new[] { options.Token }
-            .Concat(
-                (options.ExtraHeaders ?? new JsonObject()).Select(pair =>
-                    SessionWait.Text(pair.Value) ?? ""
-                )
-            )
-            .Where(value => value.Length > 0)
-            .SelectMany(value => new[] { value, JsonData.Serialize(value)[1..^1] })
-            .Distinct(StringComparer.Ordinal)
-            .OrderByDescending(value => value.Length)
-            .ToArray();
-        return text =>
-        {
-            foreach (var secret in secrets)
-                text = text.Replace(secret, "[redacted]", StringComparison.Ordinal);
-            return text;
-        };
-    }
-
     internal static JsonObject Summary(
         JsonObject item,
         string? responseId = null,

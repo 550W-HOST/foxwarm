@@ -26,7 +26,6 @@ internal static partial class UnifiedTools
         Func<string, string, string?, bool>? visible = null,
         Foxwarm.ToolScript.ToolScriptDataBudget? budget = null,
         SessionOwner? owner = null,
-        IReadOnlyList<string>? broadServers = null,
         Func<string, bool>? broadServerVisible = null
     )
     {
@@ -147,7 +146,6 @@ internal static partial class UnifiedTools
             {
                 servers =
                     !string.IsNullOrEmpty(filter) ? new[] { filter }
-                    : broadServers is not null ? broadServers.ToArray()
                     : registry
                         .Mcp.Summaries()
                         .OfType<JsonObject>()

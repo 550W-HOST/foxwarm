@@ -16,8 +16,6 @@ internal sealed partial class WebUIChannel
                 var row = canonical is null ? null : sessions.Catalog.Get(canonical);
                 if (row is null)
                     return Results.NotFound(new JsonObject { ["error"] = "Session not found" });
-                var bound = sessions.BoundNode(SessionWait.Text(row["agent"]) ?? "main");
-                var locked = bound is null ? null : $"This agent is bound to node {bound}.";
                 var choices = new JsonArray();
                 // Administrator selection is not limited by the Session's tool policy; the hint
                 // only shows where this Session's tools could not work. No hints without a policy.
@@ -32,8 +30,6 @@ internal sealed partial class WebUIChannel
                 )
                 {
                     var nodeId = SessionWait.Text(node["id"])!;
-                    if (bound is not null && nodeId != bound)
-                        continue;
                     var ready = node["executable"]!.GetValue<bool>();
                     var online = node["online"]!.GetValue<bool>();
                     string? hint = null;
@@ -54,25 +50,20 @@ internal sealed partial class WebUIChannel
                                 SessionWait.Text(node["displayName"])
                                 ?? SessionWait.Text(node["requestedName"])
                                 ?? nodeId,
-                            ["selectable"] = bound is null && ready,
+                            ["selectable"] = ready,
                             ["reason"] =
-                                locked
-                                ?? (
-                                    ready ? null
-                                    : online
-                                    && SessionWait.Text(node["protocolCompatibility"]?["status"])
-                                        == "upgrade-required"
-                                        ? "Update this node to connect."
-                                    : !online ? "Offline"
-                                    : "Unavailable"
-                                ),
+                                ready ? null
+                                : online
+                                && SessionWait.Text(node["protocolCompatibility"]?["status"])
+                                    == "upgrade-required"
+                                    ? "Update this node to connect."
+                                : !online ? "Offline"
+                                : "Unavailable",
                             ["hint"] = hint,
                         }
                     );
                 }
-                return Results.Ok(
-                    new JsonObject { ["nodes"] = choices, ["lockedReason"] = locked }
-                );
+                return Results.Ok(new JsonObject { ["nodes"] = choices });
             }
         );
         app.MapPost(
@@ -94,11 +85,6 @@ internal sealed partial class WebUIChannel
                     var node = SessionWait.Text(body?["nodeId"])?.Trim();
                     if (string.IsNullOrEmpty(node))
                         throw new InvalidDataException("nodeId is required.");
-                    var bound = sessions.BoundNode(owner.Agent);
-                    if (bound is not null)
-                        throw new InvalidOperationException(
-                            $"This agent is bound to node {bound}."
-                        );
                     await sessions.SelectNodeAsync(
                         owner,
                         node,
