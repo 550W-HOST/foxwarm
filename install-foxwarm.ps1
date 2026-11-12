@@ -224,7 +224,13 @@ try {
   }
   if ($LASTEXITCODE -ne 0) { throw 'Upgrade inspection found a blocking problem; nothing was installed.' }
   $target = Join-Path $RuntimeDir $release
-  Move-Item $staging.FullName $target
+  # As in the control script: another process can briefly hold a file of the release that was
+  # just extracted and run for inspection.
+  for ($attempt = 1; ; $attempt++) {
+    try { Move-Item -LiteralPath $staging.FullName -Destination $target; break }
+    catch { if ($attempt -ge 20) { throw } }
+    Start-Sleep -Milliseconds 250
+  }
   New-Item -ItemType Junction -Path (Join-Path $RuntimeDir 'current') -Target $target | Out-Null
   foreach ($file in 'foxwarmctl.ps1', 'foxwarmctl.cmd') { Copy-Item (Join-Path $target $file) (Join-Path $Dir $file) -Force }
   Write-Step "Installed Foxwarm $release in $Dir"

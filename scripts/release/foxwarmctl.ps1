@@ -91,7 +91,14 @@ function Invoke-Control($Request) {
   } finally { $pipe.Dispose() }
 }
 
+# Whether a pipe of this name exists. Connecting to a missing pipe would wait out its whole
+# timeout, which made every start spend two seconds checking for a running instance.
+function Test-ControlPipe {
+  try { return [System.IO.Directory]::GetFiles('\\.\pipe\') -contains "\\.\pipe\$PipeName" } catch { return $true }
+}
+
 function Get-Status {
+  if (-not (Test-ControlPipe)) { return $null }
   try {
     $status = Invoke-Control 'status'
     if ($status.ok) { return $status }
@@ -323,6 +330,18 @@ function Get-ReleaseFile($Url, $OutFile, $Missing) {
   }
 }
 
+# Another process can briefly hold a file of a release that was just extracted and run for
+# inspection (an indexer or scanner, for example), which makes the move fail with access
+# denied; retry for a few seconds before giving up.
+function Move-ExtractedRelease($Source, $Destination) {
+  for ($attempt = 1; ; $attempt++) {
+    try { Move-Item -LiteralPath $Source -Destination $Destination; return }
+    catch [System.IO.IOException] { if ($attempt -ge 20) { throw } }
+    catch [System.UnauthorizedAccessException] { if ($attempt -ge 20) { throw } }
+    Start-Sleep -Milliseconds 250
+  }
+}
+
 function Update-Foxwarm {
   $installed = Read-Release $Current
   $scratch = Join-Path $RuntimeDir ('.staging-' + [guid]::NewGuid().ToString('N').Substring(0, 12))
@@ -365,7 +384,7 @@ function Update-Foxwarm {
     $name = $next.version
     if (Test-Path (Join-Path $RuntimeDir $name)) { $name = "$name-$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())" }
     $selected = Join-Path $RuntimeDir $name
-    Move-Item -LiteralPath $staging.FullName -Destination $selected
+    Move-ExtractedRelease $staging.FullName $selected
     Set-Current $selected
     foreach ($file in 'foxwarmctl.ps1', 'foxwarmctl.cmd') { Copy-Item (Join-Path $Current $file) (Join-Path $Root $file) -Force }
     Write-Step "Installed $($next.version) (was $($installed.version))."

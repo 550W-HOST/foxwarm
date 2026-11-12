@@ -66,6 +66,10 @@ try {
   if (-not (Get-Content -LiteralPath (Join-Path $Data 'state\token') -Raw).Trim()) { throw 'No sign-in token was created' }
   $log = Get-Content -LiteralPath (Join-Path $Data 'state\logs\foxwarm.log') -Raw -Encoding UTF8
   if ($log -notmatch "Main HTTP listening: http://127\.0\.0\.1:$Port\r?\n") { throw 'Main did not listen on its configured address in the data directory' }
+  # The control script must resolve the same directory: it writes Main's console logs there.
+  if (-not (Test-Path -LiteralPath (Join-Path $Data 'state\logs\foxwarm.stdout.log'))) { throw 'The control script did not use the data directory' }
+  $created = @(Get-ChildItem -LiteralPath $Work -Directory | Where-Object { $_.FullName -ne $Dir -and $_.FullName -ne $Data })
+  if ($created) { throw "Unexpected directories beside the installation: $($created.Name -join ', ')" }
   $first = Get-RunningPid
 
   & $Control update -Package $Package -Force | Out-Host

@@ -84,13 +84,14 @@ try {
     Copy-Item -LiteralPath $New -Destination (Join-Path $serve $ViaUpdate)
     $hash = (Get-FileHash (Join-Path $serve $ViaUpdate) -Algorithm SHA256).Hash.ToLowerInvariant()
     [System.IO.File]::WriteAllText((Join-Path $serve 'SHA256SUMS'), "$hash  $ViaUpdate`n")
-    $script:Requests = @()
+    # The function runs in the control script's scope, so it records requests in a file.
+    $requestLog = Join-Path $Work 'requests'
     # Command lookup prefers functions to cmdlets, so the control script run below in this
     # session downloads the release files from $serve.
     function Invoke-WebRequest {
       param([Parameter(Position = 0)][string]$Uri, [string]$OutFile, [switch]$UseBasicParsing, [int]$TimeoutSec)
       if ($Uri -match '^https://github\.com/[^/]+/[^/]+/releases/latest/download/([^/]+)$') {
-        $script:Requests += $Uri
+        Add-Content -LiteralPath $requestLog -Value $Uri
         $file = Join-Path $serve $Matches[1]
         if (-not (Test-Path -LiteralPath $file)) { throw "404 $Uri" }
         Copy-Item -LiteralPath $file -Destination $OutFile
@@ -103,14 +104,14 @@ try {
       Microsoft.PowerShell.Utility\Invoke-WebRequest @forwarded
     }
     # A release whose version equals the installed one needs -Force; the download is the same.
-    $update = @('update')
-    if ($next.version -eq $before.version) { $update += '-Force' }
-    & (Join-Path $Dir 'foxwarmctl.ps1') @update | Out-Host
+    $script = Join-Path $Dir 'foxwarmctl.ps1'
+    if ($next.version -eq $before.version) { & $script update -Force | Out-Host } else { & $script update | Out-Host }
     if ($LASTEXITCODE -ne 0) { throw "update failed with exit code $LASTEXITCODE" }
     Remove-Item Function:\Invoke-WebRequest
+    $requests = @(Get-Content -LiteralPath $requestLog -ErrorAction SilentlyContinue)
     $expected = @("releases/latest/download/$ViaUpdate", 'releases/latest/download/SHA256SUMS')
-    if ($script:Requests.Count -ne 2 -or -not $script:Requests[0].EndsWith($expected[0]) -or -not $script:Requests[1].EndsWith($expected[1])) {
-      $script:Requests | Write-Host
+    if ($requests.Count -ne 2 -or -not $requests[0].EndsWith($expected[0]) -or -not $requests[1].EndsWith($expected[1])) {
+      $requests | Write-Host
       throw "update did not download $ViaUpdate and its SHA256SUMS"
     }
   } else {
