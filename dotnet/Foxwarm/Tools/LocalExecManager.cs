@@ -306,12 +306,25 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
             recent.RemoveRange(0, recent.Count - 1024);
     }
 
-    private Task FinalizeForegroundAsync(ExecRecord record) => MutateAsync(() => Remove(record));
+    // Once its command has started, an exec's in-memory record is its tracking authority. A save
+    // that still fails (on Windows, a reader that does not allow deletion holds the registry)
+    // stays pending for reconciliation. It must not turn the started command's receipt into a
+    // tool error, or leave the record outside foreground finalization and completion delivery.
+    private async Task TrackAsync(Action action)
+    {
+        try
+        {
+            await MutateAsync(action);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+    }
+
+    private Task FinalizeForegroundAsync(ExecRecord record) => TrackAsync(() => Remove(record));
 
     private async Task<ExecRecord> BackgroundAsync(ExecRecord record)
     {
         var updated = record with { Notify = true };
-        await MutateAsync(() => pending[record.Id] = updated);
+        await TrackAsync(() => pending[record.Id] = updated);
         return updated;
     }
 
@@ -491,7 +504,7 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
                     },
                     hardCancellation
                 );
-            await MutateAsync(() => pending[record.Id] = record);
+            await TrackAsync(() => pending[record.Id] = record);
         }
         finally
         {

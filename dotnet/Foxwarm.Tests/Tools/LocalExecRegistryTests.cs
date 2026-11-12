@@ -149,7 +149,7 @@ public sealed class LocalExecRegistryTests
     }
 
     [Fact]
-    public async Task A_reader_holding_the_registry_does_not_leave_a_completed_entry_on_Windows()
+    public async Task A_reader_that_allows_deletion_does_not_block_the_registry_save_on_Windows()
     {
         if (!OperatingSystem.IsWindows())
             return;
@@ -166,14 +166,159 @@ public sealed class LocalExecRegistryTests
                     FileShare.ReadWrite | FileShare.Delete
                 )
             )
+            {
                 await manager.ReconcileNowAsync();
+                Assert.Equal(1, notified());
+                Assert.Empty(manager.Tracked);
+                // Written by this reconciliation, while the reader still holds the old file.
+                Assert.Empty(
+                    JsonNode.Parse(await File.ReadAllTextAsync(Registry(temp.Path)))![
+                        "execs"
+                    ]!.AsArray()
+                );
+            }
+        }
+    }
+
+    private static string Echo(string text) =>
+        OperatingSystem.IsWindows() ? $"[Console]::Out.Write('{text}')" : $"printf {text}";
+
+    private static async Task<(JsonObject Result, LocalExecManager Manager)> LaunchWhileBlocked(
+        string root,
+        Func<IDisposable> block
+    )
+    {
+        var manager = new LocalExecManager(root, _ => root, (_, _, _) => Task.CompletedTask);
+        using (block())
+        {
+            var result = await manager.ExecuteAsync(
+                "owner",
+                new JsonObject { ["command"] = Echo("launched"), ["timeout"] = 20 },
+                default
+            );
+            return (result, manager);
+        }
+    }
+
+    [Fact]
+    public async Task A_registry_save_that_fails_at_launch_does_not_strand_the_command_tracking()
+    {
+        if (!LocalExecManager.IsSupported)
+            return;
+        using var temp = new TempDirectory();
+        // Owned deterministic stand-in for a registry that cannot be replaced at that moment.
+        var (result, manager) = await LaunchWhileBlocked(
+            temp.Path,
+            () =>
+            {
+                Directory.CreateDirectory(Registry(temp.Path));
+                return new DirectoryRemoval(Registry(temp.Path));
+            }
+        );
+        await using (manager)
+        {
+            Assert.Contains("launched", result["output"]!.GetValue<string>());
             Assert.Empty(manager.Tracked);
             await manager.ReconcileNowAsync();
-            Assert.Equal(1, notified());
             Assert.Empty(
-                JsonNode.Parse(await File.ReadAllTextAsync(Registry(temp.Path)))!["execs"]!.AsArray()
+                JsonNode.Parse(await File.ReadAllTextAsync(Registry(temp.Path)))![
+                    "execs"
+                ]!.AsArray()
             );
         }
+    }
+
+    [Fact]
+    public async Task A_registry_reader_at_launch_does_not_strand_the_command_tracking_on_Windows()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+        using var temp = new TempDirectory();
+        await Seed(temp.Path);
+        // The sharing an ordinary reader such as Node's fs.readFile uses, held for the whole call.
+        var (result, manager) = await LaunchWhileBlocked(
+            temp.Path,
+            () =>
+                new FileStream(
+                    Registry(temp.Path),
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete
+                )
+        );
+        await using (manager)
+        {
+            Assert.Contains("launched", result["output"]!.GetValue<string>());
+            Assert.Empty(manager.Tracked);
+            Assert.Empty(
+                JsonNode.Parse(await File.ReadAllTextAsync(Registry(temp.Path)))![
+                    "execs"
+                ]!.AsArray()
+            );
+        }
+    }
+
+    private sealed class DirectoryRemoval(string path) : IDisposable
+    {
+        public void Dispose() => Directory.Delete(path);
+    }
+
+    [Fact]
+    public async Task A_tracking_save_that_fails_after_Stop_keeps_the_background_receipt_and_delivers_completion()
+    {
+        if (!LocalExecManager.IsSupported)
+            return;
+        using var temp = new TempDirectory();
+        var release = Path.Combine(temp.Path, "release");
+        // The command waits for the test, so Stop always arrives while it is still running.
+        var command = OperatingSystem.IsWindows()
+            ? "while (-not (Test-Path -LiteralPath '"
+                + release.Replace("'", "''", StringComparison.Ordinal)
+                + "')) { Start-Sleep -Milliseconds 25 }"
+            : "while [ ! -e '"
+                + release.Replace("'", "'\\''", StringComparison.Ordinal)
+                + "' ]; do sleep 0.025; done";
+        var completed = new TaskCompletionSource<string>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        await using var manager = new LocalExecManager(
+            temp.Path,
+            _ => temp.Path,
+            (_, id, _) =>
+            {
+                completed.TrySetResult(id);
+                return Task.CompletedTask;
+            }
+        );
+        using var stop = new CancellationTokenSource();
+        var execution = manager.ExecuteAsync(
+            "owner",
+            new JsonObject { ["command"] = command, ["timeout"] = 30 },
+            stop.Token
+        );
+        using (var launch = new CancellationTokenSource(TimeSpan.FromSeconds(20)))
+            while (!(File.Exists(Registry(temp.Path)) && manager.Tracked.Length == 1))
+                await Task.Delay(10, launch.Token);
+        // Owned deterministic stand-in for a registry that cannot be replaced at that moment.
+        File.Delete(Registry(temp.Path));
+        Directory.CreateDirectory(Registry(temp.Path));
+        stop.Cancel();
+        var output = (await execution)["output"]!.GetValue<string>();
+        Assert.Contains("ended this call's wait", output);
+        var tracked = Assert.Single(manager.Tracked);
+        Assert.True(tracked["notifyOnCompletion"]!.GetValue<bool>());
+        Directory.Delete(Registry(temp.Path));
+        await File.WriteAllTextAsync(release, "");
+        using (var finish = new CancellationTokenSource(TimeSpan.FromSeconds(20)))
+            while (!completed.Task.IsCompleted || manager.Tracked.Length != 0)
+            {
+                await manager.ReconcileNowAsync();
+                await Task.Delay(25, finish.Token);
+            }
+        Assert.Equal(tracked["id"]!.GetValue<string>(), await completed.Task);
+        Assert.Empty(
+            JsonNode.Parse(await File.ReadAllTextAsync(Registry(temp.Path)))!["execs"]!.AsArray()
+        );
     }
 
     [Fact]

@@ -151,7 +151,7 @@ internal sealed partial class NodeExecManager(
                     ),
                 }.ToJsonString(new() { WriteIndented = true })
             );
-            File.Move(temporary, registryPath, true);
+            AtomicFileReplace.Replace(temporary, registryPath);
         }
         finally
         {
@@ -451,7 +451,7 @@ internal sealed partial class NodeExecManager(
         Directory.CreateDirectory(Path.GetDirectoryName(file)!);
         var temporary = file + ".tmp." + Environment.ProcessId + "." + Guid.NewGuid().ToString("N");
         await File.WriteAllTextAsync(temporary, fallback.ToJsonString());
-        File.Move(temporary, file, true);
+        AtomicFileReplace.Replace(temporary, file);
         return fallback;
     }
 

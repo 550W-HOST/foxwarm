@@ -276,7 +276,7 @@ internal sealed partial class LocalExecManager
         try
         {
             await File.WriteAllTextAsync(temporary, text);
-            File.Move(temporary, path, true);
+            AtomicFileReplace.Replace(temporary, path);
         }
         finally
         {
