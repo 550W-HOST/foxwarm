@@ -225,9 +225,62 @@ jobs:
         shell: /bin/bash -e {0}
         run: /bin/bash scripts/release/smoke-upgrade.sh dist/foxwarm-osx-arm64.tar.gz dist/foxwarm-osx-arm64-native.tar.gz 3001 --native
 
+  # The Desktop app is a NativeAOT build of the AppKit host, published as its ad-hoc signed bundle.
+  macos-desktop:
+    name: Build and qualify the macOS Desktop app
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      # The Xcode release the pinned macos workload below is built for; the image's default differs.
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.21.0
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            packages/webui/package-lock.json
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.403'
+      - name: Confirm native runner and install the pinned macOS workload
+        run: |
+          test "$(uname -m)" = arm64
+          xcodebuild -version
+          printf '{"microsoft.net.sdk.macos":"26.2.10233/10.0.100"}' > "$RUNNER_TEMP/macos-workload.json"
+          dotnet workload config --update-mode manifests
+          dotnet workload install macos --from-rollback-file "$RUNNER_TEMP/macos-workload.json"
+          dotnet workload list
+          npm ci && npm --prefix packages/webui ci
+      - name: Build the Desktop app natively
+        run: node scripts/release/package.mjs --build-assets --output dist --target desktop-osx-arm64
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-packages-macos-desktop
+          path: dist/foxwarm-desktop-osx-arm64.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+      - name: Extract the Desktop package
+        run: ditto -x -k dist/foxwarm-desktop-osx-arm64.zip "$RUNNER_TEMP/desktop-extracted"
+      - name: Validate and launch the extracted Desktop app
+        run: node dotnet/scripts/qualify-desktop-mac-package.mjs "$RUNNER_TEMP/desktop-extracted/Foxwarm.app" "$RUNNER_TEMP/desktop-mac-acceptance.json"
+      - name: Upload Desktop acceptance summary
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-mac-acceptance
+          path: ${{ runner.temp }}/desktop-mac-acceptance.json
+          if-no-files-found: ignore
+          retention-days: 7
+
   aggregate:
     name: Aggregate release assets and checksums
-    needs: [packages, macos, native-cli, windows]
+    needs: [packages, macos, macos-desktop, native-cli, windows]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -560,7 +613,7 @@ jobs:
   release:
     name: Publish GitHub release
     if: startsWith(github.ref, 'refs/tags/')
-    needs: [linux, windows, image, macos, aggregate]
+    needs: [linux, windows, image, macos, macos-desktop, aggregate]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:

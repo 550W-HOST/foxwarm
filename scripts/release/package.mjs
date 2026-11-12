@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Publish prebuilt release packages from built delivery assets.
 // Prerequisites: root and WebUI npm dependencies, `npm run build:assets` (or --build-assets),
-// the .NET 10 SDK and Python 3. macOS packages must be built on macOS arm64.
+// the .NET 10 SDK and Python 3. macOS packages must be built on macOS arm64; the macOS Desktop
+// also needs the .NET `macos` workload and the Xcode it supports.
 import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -16,6 +17,7 @@ const python = process.platform === 'win32' ? 'python' : 'python3'
 // Native targets are NativeAOT publications: self-contained, with no .NET runtime or Foxwarm.dll.
 // They can only be compiled on their own platform. A target marked `qualification` would be
 // built and smoke-tested by the release workflow but not published; none is at present.
+// A `bundle` target archives the signed macOS application bundle itself, unchanged.
 export const TARGETS = {
   'linux-x64': { kind: 'server', rid: 'linux-x64', selfContained: false, archive: 'tar.gz' },
   'linux-x64-native': { kind: 'server', rid: 'linux-x64', selfContained: true, native: true, archive: 'tar.gz' },
@@ -24,7 +26,11 @@ export const TARGETS = {
   'win-x64': { kind: 'server', rid: 'win-x64', selfContained: false, archive: 'zip' },
   'win-x64-native': { kind: 'server', rid: 'win-x64', selfContained: true, native: true, archive: 'zip' },
   'desktop-win-x64': { kind: 'desktop', rid: 'win-x64', selfContained: true, archive: 'zip' },
+  'desktop-osx-arm64': { kind: 'desktop', rid: 'osx-arm64', selfContained: true, native: true, bundle: 'Foxwarm.app', archive: 'zip' },
 }
+
+// Only the Windows Desktop carries the Code workbench.
+const includesCode = name => TARGETS[name].kind === 'desktop' && !TARGETS[name].bundle
 
 // The RID of this build host, for targets that cannot be cross-compiled.
 export function hostRid(platform = process.platform, arch = process.arch) {
@@ -158,6 +164,19 @@ function publish(name, directory, lancedbLibrary, vcRuntimeDirectory) {
   // The LanceDB package's Linux library needs glibc 2.39; release builds supply one built on 2.34.
   if (lancedbLibrary && target.rid === 'linux-x64') common.push(`-p:LanceDbNativeLibrary=${lancedbLibrary}`)
   if (target.native) common.push('-p:PublishAot=true', '-p:StripSymbols=true')
+  if (target.bundle) {
+    // The Apple SDK builds and ad-hoc signs the bundle in the project's output directory; the
+    // publish directory stays empty. The bundle is copied whole, so its signature stays valid,
+    // and it receives no release.json or other later change.
+    const project = 'dotnet/Foxwarm.Desktop.Mac'
+    const built = path.join(root, project, 'bin/Release/net10.0-macos', target.rid, target.bundle)
+    fs.rmSync(built, { recursive: true, force: true })
+    run('dotnet', ['publish', `${project}/Foxwarm.Desktop.Mac.csproj`, ...common, '-p:FoxwarmConsoleEntry=false',
+      `-p:ArtifactTargetRid=${target.rid}`])
+    if (!fs.existsSync(path.join(built, 'Contents/Info.plist'))) throw new Error(`The Apple SDK did not produce ${built}`)
+    run('ditto', [built, directory])
+    return
+  }
   if (target.kind === 'desktop') {
     // SDK-added transitive references must use the same global properties as the
     // Desktop -> Core reference, or MSBuild compiles shared outputs twice in parallel.
@@ -178,7 +197,7 @@ function publish(name, directory, lancedbLibrary, vcRuntimeDirectory) {
     }
   }
   removeDebugFiles(directory)
-  if (target.kind === 'desktop') installCodeAssets(directory)
+  if (includesCode(name)) installCodeAssets(directory)
   const commit = capture('git', ['rev-parse', 'HEAD'])
   fs.writeFileSync(path.join(directory, 'release.json'), JSON.stringify({
     version, target: name, kind: target.kind, rid: target.rid, selfContained: target.selfContained,
@@ -190,7 +209,10 @@ export function archive(name, staging, output) {
   const file = path.join(output, assetName(name))
   fs.rmSync(file, { force: true })
   const top = path.basename(staging)
-  if (TARGETS[name].archive === 'zip') {
+  if (TARGETS[name].bundle) {
+    // ditto keeps the bundle's signature, extended attributes and modes.
+    run('ditto', ['-c', '-k', '--keepParent', staging, file])
+  } else if (TARGETS[name].archive === 'zip') {
     run(python, ['-c', `
 import os, sys, zipfile
 base, top, out = sys.argv[1:4]
@@ -275,21 +297,21 @@ function main(argv) {
   const selected = targets.length ? targets : Object.keys(TARGETS).filter(name => !TARGETS[name].qualification
     && (TARGETS[name].native ? TARGETS[name].rid === hostRid()
       : process.platform === 'darwin' ? name.startsWith('osx-') : !name.startsWith('osx-')))
-  if (selected.some(name => name.startsWith('osx-')) && (process.platform !== 'darwin' || process.arch !== 'arm64')) {
+  if (selected.some(name => TARGETS[name].rid.startsWith('osx-')) && (process.platform !== 'darwin' || process.arch !== 'arm64')) {
     throw new Error('macOS packages require an arm64 macOS build host for the native PTY library and helper.')
   }
   for (const name of selected) {
     if (TARGETS[name].native && TARGETS[name].rid !== hostRid()) throw new Error(`${name} is a NativeAOT package and must be built on ${TARGETS[name].rid}.`)
     if (TARGETS[name].kind === 'server' && TARGETS[name].rid === 'win-x64' && !vcRuntimeDirectory) usage(`${name} needs --vc-runtime DIR`)
   }
-  if (selected.some(name => TARGETS[name].kind === 'desktop')) validateCodeAssets()
+  if (selected.some(includesCode)) validateCodeAssets()
   if (buildAssets) run('npm', ['run', 'build:assets'], { shell: process.platform === 'win32' })
   fs.mkdirSync(output, { recursive: true })
   const work = path.join(output, '.work')
   for (const name of selected) {
     ensureTargetNatives(TARGETS[name].rid, path.join(work, 'natives'))
     const prefix = TARGETS[name].kind === 'desktop' ? 'foxwarm-desktop' : 'foxwarm'
-    const staging = path.join(work, name, `${prefix}-${version}-${TARGETS[name].rid}`)
+    const staging = path.join(work, name, TARGETS[name].bundle ?? `${prefix}-${version}-${TARGETS[name].rid}`)
     fs.rmSync(path.dirname(staging), { recursive: true, force: true })
     publish(name, staging, lancedbLibrary, vcRuntimeDirectory)
     if (directoryOnly) {

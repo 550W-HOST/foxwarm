@@ -109,7 +109,7 @@ for (const framework of [false, true]) test(`Darwin installer ${framework ? 'ins
 
 test('every server platform publishes a native package instead of a self-contained one', () => {
   const published = Object.keys(TARGETS).filter(name => !TARGETS[name].qualification).map(assetName).sort()
-  assert.deepEqual(published, ['foxwarm-desktop-win-x64.zip', 'foxwarm-linux-x64-native.tar.gz', 'foxwarm-linux-x64.tar.gz',
+  assert.deepEqual(published, ['foxwarm-desktop-osx-arm64.zip', 'foxwarm-desktop-win-x64.zip', 'foxwarm-linux-x64-native.tar.gz', 'foxwarm-linux-x64.tar.gz',
     'foxwarm-osx-arm64-native.tar.gz', 'foxwarm-osx-arm64.tar.gz', 'foxwarm-win-x64-native.zip', 'foxwarm-win-x64.zip'])
   for (const name of ['linux-x64-native', 'win-x64-native', 'osx-arm64-native']) {
     assert.equal(TARGETS[name].native, true)
@@ -118,6 +118,16 @@ test('every server platform publishes a native package instead of a self-contain
   assert.equal(hostRid('linux', 'x64'), 'linux-x64')
   assert.equal(hostRid('darwin', 'arm64'), 'osx-arm64')
   assert.equal(hostRid('win32', 'x64'), 'win-x64')
+})
+
+test('the macOS Desktop is a NativeAOT application bundle built only on macOS arm64', t => {
+  assert.deepEqual(TARGETS['desktop-osx-arm64'], { kind: 'desktop', rid: 'osx-arm64', selfContained: true, native: true, bundle: 'Foxwarm.app', archive: 'zip' })
+  if (hostRid() === 'osx-arm64') return t.skip('this host can build the bundle')
+  const output = scratch(t)
+  const result = spawnSync(process.execPath, [path.join(root, 'scripts/release/package.mjs'), '--output', output, '--target', 'desktop-osx-arm64'], { encoding: 'utf8' })
+  assert.equal(result.status, 1)
+  assert.match(result.stderr, /macOS packages require an arm64 macOS build host/)
+  assert.deepEqual(fs.readdirSync(output), [])
 })
 
 test('Darwin installer accepts --native and maps the retired --self-contained option to it', unix, t => {
