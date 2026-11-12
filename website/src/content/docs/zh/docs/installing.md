@@ -3,7 +3,7 @@ title: 安装 Foxwarm
 description: 在 Linux、WSL、macOS、Windows 或 Docker 上安装 Foxwarm，以及启动、停止、更新和定位实例。
 ---
 
-Foxwarm 服务器支持 **Linux x64**（包括 x64 WSL）、**macOS arm64**（Apple Silicon）和 **Windows x64**，也可以在 Linux x64 上用 Docker 运行。Windows 上还可以使用[桌面版](#windows-桌面版)。
+Foxwarm 服务器支持 **Linux x64**（包括 x64 WSL）、**macOS arm64**（Apple Silicon）和 **Windows x64**，也可以在 Linux x64 上用 Docker 运行。Windows 和 Apple Silicon Mac 上还可以使用桌面版（[Windows](#windows-桌面版)、[macOS](#macos-桌面版)）。
 
 | 平台 | 命令 |
 | --- | --- |
@@ -29,11 +29,12 @@ Foxwarm 服务器支持 **Linux x64**（包括 x64 WSL）、**macOS arm64**（Ap
 | [`foxwarm-win-x64-native.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-win-x64-native.zip) | Windows 服务器，编译为原生程序，不需要 .NET 运行时（Windows 默认） |
 | [`foxwarm-win-x64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-win-x64.zip) | Windows 服务器，使用系统已安装的 ASP.NET Core 10 运行时 |
 | [`foxwarm-desktop-win-x64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-win-x64.zip) | Windows 桌面版，自带 .NET 运行时 |
+| [`foxwarm-desktop-osx-arm64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-osx-arm64.zip) | Apple Silicon Mac 桌面版，编译为原生代码，不需要 .NET 运行时 |
 | [`SHA256SUMS`](https://github.com/550W-HOST/foxwarm/releases/latest/download/SHA256SUMS) | Release 中各文件的校验和 |
 
 每个 Release 还包含：
 
-- `foxwarm-code-<版本>.tar.gz`：服务器安装包使用的 Code 编辑器，桌面版已自带。缺少 Code 时，WebUI 的 Code 页面会给出安装命令。
+- `foxwarm-code-<版本>.tar.gz`：服务器安装包使用的 Code 编辑器，Windows 桌面版已自带。缺少 Code 时，WebUI 的 Code 页面会给出安装命令。
 - `native-cli-node-*`：Linux、macOS 和 Windows 的独立 [Node](/docs/nodes/) 客户端，Node 的引导命令会自动下载。
 - Docker 镜像 `ghcr.io/550w-host/foxwarm`，标签有完整版本号（如 `0.9.4`）、次版本号（`0.9`）和 `latest`，见 [Docker](#docker)。
 
@@ -93,7 +94,7 @@ curl -fsSL https://foxwarm.net/install-foxwarm.sh | bash
 
 ## macOS（Apple Silicon）
 
-需要 **macOS 15 或更新版本**，与 [.NET 10 支持范围](https://github.com/dotnet/core/blob/main/release-notes/10.0/supported-os.md)一致。不支持 Intel Mac，也不提供 macOS 桌面版。
+需要 **macOS 15 或更新版本**，与 [.NET 10 支持范围](https://github.com/dotnet/core/blob/main/release-notes/10.0/supported-os.md)一致。不支持 Intel Mac。[macOS 桌面版](#macos-桌面版)需单独下载。
 
 ```bash
 curl -fsSL https://foxwarm.net/install-foxwarm.sh | bash
@@ -135,6 +136,19 @@ Invoke-WebRequest https://foxwarm.net/install-foxwarm.ps1 -OutFile install-foxwa
 ## Windows 桌面版
 
 从[最新 Release](https://github.com/550W-HOST/foxwarm/releases/latest)下载 [`foxwarm-desktop-win-x64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-win-x64.zip)，解压后打开 **Foxwarm.Desktop.exe**。它在窗口中运行 Foxwarm，带托盘图标，数据保存在 `%LOCALAPPDATA%\Foxwarm\Desktop`。需要 Microsoft Edge WebView2 Runtime，Windows 10 和 11 通常已自带。桌面版只在本机监听；需要其他设备访问时请安装服务器版。
+
+## macOS 桌面版
+
+从[最新 Release](https://github.com/550W-HOST/foxwarm/releases/latest)下载 [`foxwarm-desktop-osx-arm64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-osx-arm64.zip)。需要 Apple Silicon 上的 macOS 15 或更新版本。应用未做发行签名或公证，浏览器下载的归档会带有 Gatekeeper 隔离标记。先用 Release 的 `SHA256SUMS` 校验归档，确认信任后，仅移除该归档的隔离标记，再把 **Foxwarm.app** 解压到“应用程序”：
+
+```bash
+xattr -d com.apple.quarantine foxwarm-desktop-osx-arm64.zip
+ditto -x -k foxwarm-desktop-osx-arm64.zip /Applications
+```
+
+如果已经解压且 Gatekeeper 阻止打开，只对该应用执行 `xattr -dr com.apple.quarantine /Applications/Foxwarm.app`。
+
+Foxwarm.app 在窗口中运行 Foxwarm，数据保存在 `~/Library/Application Support/Foxwarm/Desktop`。关闭窗口后 Foxwarm 继续运行；在其菜单中选择 **Quit Foxwarm** 才会退出。与 Windows 桌面版一样，它只在本机监听。
 
 ## 打开 WebUI
 

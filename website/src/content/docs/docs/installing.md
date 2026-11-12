@@ -5,7 +5,7 @@ sidebar:
   order: 1
 ---
 
-The Foxwarm server runs on **Linux x64** (including x64 WSL), **macOS arm64** (Apple Silicon) and **Windows x64**, or in Docker on Linux x64. On Windows you can also use the [desktop app](#windows-desktop-app).
+The Foxwarm server runs on **Linux x64** (including x64 WSL), **macOS arm64** (Apple Silicon) and **Windows x64**, or in Docker on Linux x64. On Windows and Apple Silicon Macs you can also use a desktop app ([Windows](#windows-desktop-app), [macOS](#macos-desktop-app)).
 
 | Platform | Command |
 | --- | --- |
@@ -31,11 +31,12 @@ Each [release](https://github.com/550W-HOST/foxwarm/releases/latest) provides:
 | [`foxwarm-win-x64-native.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-win-x64-native.zip) | Windows server compiled to native code; needs no .NET runtime (default on Windows) |
 | [`foxwarm-win-x64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-win-x64.zip) | Windows server; uses the installed ASP.NET Core 10 runtime |
 | [`foxwarm-desktop-win-x64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-win-x64.zip) | Windows desktop app, .NET runtime included |
+| [`foxwarm-desktop-osx-arm64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-osx-arm64.zip) | Apple Silicon Mac desktop app compiled to native code; needs no .NET runtime |
 | [`SHA256SUMS`](https://github.com/550W-HOST/foxwarm/releases/latest/download/SHA256SUMS) | Checksums of the release files |
 
 Each release also includes:
 
-- `foxwarm-code-<version>.tar.gz`: the Code editor for server packages. The desktop app already includes it. When Code is missing, the WebUI's Code page shows the command that installs it.
+- `foxwarm-code-<version>.tar.gz`: the Code editor for server packages. The Windows desktop app already includes it. When Code is missing, the WebUI's Code page shows the command that installs it.
 - `native-cli-node-*`: the standalone [Node](/docs/nodes/) client for Linux, macOS and Windows. Node bootstrap commands download it for you.
 - The Docker image `ghcr.io/550w-host/foxwarm`, tagged with the version (for example `0.9.4`), the minor version (`0.9`) and `latest`; see [Docker](#docker).
 
@@ -95,7 +96,7 @@ The installer downloads the native package, checks your data with it while the o
 
 ## macOS (Apple Silicon)
 
-Requires **macOS 15 or later**, following the [.NET 10 support policy](https://github.com/dotnet/core/blob/main/release-notes/10.0/supported-os.md). Intel Macs are not supported. There is no macOS desktop package.
+Requires **macOS 15 or later**, following the [.NET 10 support policy](https://github.com/dotnet/core/blob/main/release-notes/10.0/supported-os.md). Intel Macs are not supported. The [macOS desktop app](#macos-desktop-app) is a separate download.
 
 ```bash
 curl -fsSL https://foxwarm.net/install-foxwarm.sh | bash
@@ -137,6 +138,19 @@ Since 0.9.6 the native package replaces `foxwarm-win-x64-self-contained.zip`, th
 ## Windows desktop app
 
 Download [`foxwarm-desktop-win-x64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-win-x64.zip) from the [latest release](https://github.com/550W-HOST/foxwarm/releases/latest), extract it and open **Foxwarm.Desktop.exe**. It runs Foxwarm inside a window with a tray icon and keeps its data under `%LOCALAPPDATA%\Foxwarm\Desktop`. It needs the Microsoft Edge WebView2 Runtime, which Windows 10 and 11 normally include. The desktop app listens only on this computer; install the server if other devices should connect.
+
+## macOS desktop app
+
+Download [`foxwarm-desktop-osx-arm64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-osx-arm64.zip) from the [latest release](https://github.com/550W-HOST/foxwarm/releases/latest). It requires macOS 15 or later on Apple Silicon. The app is not signed or notarized for distribution, so a browser download is quarantined by Gatekeeper. After verifying the archive against the release's `SHA256SUMS` and deciding to trust it, remove quarantine from that archive and extract **Foxwarm.app** into Applications:
+
+```bash
+xattr -d com.apple.quarantine foxwarm-desktop-osx-arm64.zip
+ditto -x -k foxwarm-desktop-osx-arm64.zip /Applications
+```
+
+If you already extracted the app and Gatekeeper blocks it, clear quarantine only on the app with `xattr -dr com.apple.quarantine /Applications/Foxwarm.app`.
+
+Foxwarm.app runs Foxwarm inside a window and keeps its data under `~/Library/Application Support/Foxwarm/Desktop`. Closing the window keeps Foxwarm running; **Quit Foxwarm** in its menu stops it. Like the Windows app, it listens only on this computer.
 
 ## Open the WebUI
 

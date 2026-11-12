@@ -34,7 +34,7 @@ export const zh: HomeStrings = {
     copy: '复制',
     copied: '已复制',
     notes: {
-      linux: '支持 Linux x64（包括 WSL）和 macOS arm64。下载预编译版本并在后台启动，有 tmux 时优先使用；不需要 .NET。',
+      linux: '支持 Linux x64（包括 WSL）和 macOS arm64。下载预编译版本并在后台启动，有 tmux 时优先使用；不需要 .NET。另有 macOS 桌面版。',
       windows: '支持 Windows x64，在 PowerShell 中运行。下载预编译版本并在后台运行；另有 Windows 桌面版。',
       docker: '适用于装有 Docker 的 Linux x64。运行已发布的镜像，内含 Chromium 和 Node.js；数据保存在 foxwarm-data。'
     },
