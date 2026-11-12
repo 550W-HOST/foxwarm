@@ -69,12 +69,17 @@ token="$(cat "$work/data/state/token")"
 config="$(cat "$work/data/state/config.yaml")"
 printf 'kept\n' > "$work/data/agents/upgrade-marker"
 
-package_field() { tar -xzOf "$new" --wildcards '*/release.json' | sed -n "s/^ *\"$1\": *\"\([^\"]*\)\".*/\1/p"; }
+# bsdtar has no --wildcards: name the release.json member of the package's top-level directory.
+package_field() {
+  tar -xzOf "$new" "$(tar -tzf "$new" | sed -n 's#^\([^/]*/release\.json\)$#\1#p' | sed -n 1p)" \
+    | sed -n "s/^ *\"$1\": *\"\([^\"]*\)\".*/\1/p"
+}
 if [ -n "$via_update" ]; then
   serve="$work/release-download"
   mkdir -p "$serve" "$work/bin"
   cp "$new" "$serve/$via_update"
-  (cd "$serve" && sha256sum "$via_update" > SHA256SUMS)
+  if command -v sha256sum >/dev/null; then sum=(sha256sum); else sum=(shasum -a 256); fi
+  (cd "$serve" && "${sum[@]}" "$via_update" > SHA256SUMS)
   real_curl="$(command -v curl)"
   {
     echo '#!/bin/bash'

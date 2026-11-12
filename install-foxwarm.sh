@@ -96,6 +96,13 @@ asset_for() {
     *) printf 'foxwarm-%s.tar.gz' "$RID" ;;
   esac
 }
+# Asset name recorded in a package archive's release.json (bsdtar has no --wildcards).
+package_asset() {
+  local member
+  member="$(tar -tzf "$1" | sed -n 's#^\([^/]*/release\.json\)$#\1#p' | sed -n 1p)"
+  [ -n "$member" ] || fail "$1 is not a Foxwarm server package."
+  tar -xzOf "$1" "$member" | sed -n 's/^ *"asset": *"\([^"]*\)".*/\1/p' | sed -n 1p
+}
 # Linux needs system ICU and OpenSSL even for native and self-contained .NET. macOS
 # uses its system ICU and Apple cryptography libraries; it does not use ldconfig.
 if [ "$RID" = linux-x64 ]; then
@@ -151,6 +158,9 @@ if [ -e "$FOXWARM_DIR/runtime/current/release.json" ]; then
   wanted="$installed"
   if [ -n "$VARIANT" ]; then
     wanted="$(asset_for "$VARIANT")"
+  elif [ -n "$PACKAGE" ]; then
+    # A package file of another type is a choice of that package.
+    wanted="$(package_asset "$PACKAGE")"
   elif [ "$installed" = "$RETIRED_ASSET" ]; then
     wanted="$(asset_for native)"
   fi

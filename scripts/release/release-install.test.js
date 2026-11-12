@@ -657,4 +657,8 @@ test('choosing a package for an existing installation switches it even within on
   assert.match(fs.readlinkSync(path.join(dir, 'runtime/current')), /^0\.9\.4-\d+$/);
   // Without a choice, an installation keeps its package type.
   assert.match(ok(f.install(['--package', f.makePackage('0.9.4'), '--no-start'])).stdout, /already installed/);
+  // A package file of the other type is that choice.
+  const back = ok(f.install(['--package', f.makePackage('0.9.4', { variant: 'self-contained' }), '--no-start']));
+  assert.match(back.stdout, /Switching .* to foxwarm-linux-x64-self-contained\.tar\.gz/);
+  assert.equal(installedAsset(dir), 'foxwarm-linux-x64-self-contained.tar.gz');
 });
