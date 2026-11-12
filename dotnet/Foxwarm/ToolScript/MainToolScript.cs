@@ -157,7 +157,12 @@ internal sealed partial class MainToolScript : IAsyncDisposable
     {
         if (closing)
             throw new InvalidOperationException("ToolScript host is closing.");
+        var requestedTimeout = args["timeoutSecs"];
         args = NormalizeStartArgs(args, background);
+        // The compatibility starter keeps the slice contract of existing automation.
+        var detachable =
+            !background && context.Detach is not null && Text(args["mode"]) == "background";
+        string? warning = null;
         var supplied = Text(args["code"]);
         var file = Text(args["filePath"]) is { } filePath ? SessionGoal.Trim(filePath) : null;
         var sourceNode = Foxwarm.Tools.ToolRegistry.ToolScriptSourceNode(
@@ -187,6 +192,8 @@ internal sealed partial class MainToolScript : IAsyncDisposable
         if (Regex.IsMatch(code, @"^\s*def\s+main\s*\(\s*args\b", RegexOptions.Multiline))
             code = code.TrimEnd() + "\n\nmain(args)\n";
         var seconds = Number(args["timeoutSecs"], 30);
+        if (detachable)
+            (seconds, warning) = DetachWait(requestedTimeout, DefaultDetachWait);
         var mode = Text(args["mode"])!;
         while (true)
         {
@@ -197,9 +204,12 @@ internal sealed partial class MainToolScript : IAsyncDisposable
                 + System
                     .Security.Cryptography.RandomNumberGenerator.GetHexString(8)
                     .ToLowerInvariant();
-            using var lane = await store.AcquireAsync(id, token);
+            var lane = await store.AcquireAsync(id, token);
             if (store.Exists(id))
+            {
+                lane.Dispose();
                 continue;
+            }
             var now = Now();
             var record = new JsonObject
             {
@@ -223,7 +233,13 @@ internal sealed partial class MainToolScript : IAsyncDisposable
             };
             if (sourceNode is not null)
                 record["sourceNode"] = sourceNode;
-            return await RunAsync(record, context, token, code, input, resume: null);
+            if (detachable)
+            {
+                record["detachable"] = true;
+                return await RunDetachableAsync(record, lane, context, token, warning, code, input);
+            }
+            using (lane)
+                return await RunAsync(record, context, token, code, input, resume: null);
         }
     }
 
@@ -279,54 +295,96 @@ internal sealed partial class MainToolScript : IAsyncDisposable
         var id = Required(args, "runId");
         if (active.ContainsKey(id))
             throw new InvalidOperationException("ToolScript run is already executing.");
-        using var lane = await store.AcquireAsync(id, token);
-        var record = await RequiredAsync(id, context, token);
-        ToolScriptRunStore.RequireUnmanaged(record);
-        var waiting = record["waiting"] as JsonObject;
-        if (
-            Text(record["status"]) != "waiting"
-            || waiting is null
-            || Text(record["snapshotBase64"]) is not { Length: > 0 }
-        )
-            throw new InvalidDataException("ToolScript run is not waiting for continue_script.");
-        if (Required(args, "continuationId") != Text(waiting["continuationId"]))
-            throw new InvalidDataException(
-                "continuationId does not match the pending ToolScript continuation."
+        var lane = await store.AcquireAsync(id, token);
+        var handedOff = false;
+        try
+        {
+            var record = await RequiredAsync(id, context, token);
+            ToolScriptRunStore.RequireUnmanaged(record);
+            var waiting = record["waiting"] as JsonObject;
+            if (
+                Text(record["status"]) != "waiting"
+                || waiting is null
+                || Text(record["snapshotBase64"]) is not { Length: > 0 }
+            )
+                throw new InvalidDataException(
+                    "ToolScript run is not waiting for continue_script."
+                );
+            if (Required(args, "continuationId") != Text(waiting["continuationId"]))
+                throw new InvalidDataException(
+                    "continuationId does not match the pending ToolScript continuation."
+                );
+            var identity = record["vmRuntime"] as JsonObject;
+            if (
+                identity is null
+                || Text(identity["engine"]) != "@pydantic/monty"
+                || Text(identity["version"]) != MontyWorker.Version
+                || Text(identity["snapshotFormat"]) != "monty-pool-snapshot-v0.0.19"
+            )
+                throw new NotSupportedException(
+                    "ToolScript snapshot runtime is incompatible. The historical record and snapshot were retained."
+                );
+            _ = new ToolScriptStdout(Text(record["stdout"]) ?? ""); // Reject over-budget old output before record mutation.
+            JsonObject resume;
+            if (Text(waiting["reason"]) == "agent")
+                resume = new JsonObject
+                {
+                    ["mode"] = "return",
+                    ["value"] = args["input"]?.DeepClone(),
+                };
+            else if (
+                Text(waiting["reason"]) == "timeout"
+                && waiting["timeout"]?["pendingResume"] is JsonObject pending
+            )
+                resume = (JsonObject)pending.DeepClone();
+            else
+                throw new InvalidDataException(
+                    "ToolScript waiting record has no supported pending resume payload."
+                );
+            var snapshotText = Required(record, "snapshotBase64");
+            var budget = new ToolScriptDataBudget();
+            budget.Retain(
+                System.Text.Encoding.UTF8.GetByteCount(Text(record["stdout"]) ?? ""),
+                snapshotText.Length * 3L / 4
             );
-        var identity = record["vmRuntime"] as JsonObject;
-        if (
-            identity is null
-            || Text(identity["engine"]) != "@pydantic/monty"
-            || Text(identity["version"]) != MontyWorker.Version
-            || Text(identity["snapshotFormat"]) != "monty-pool-snapshot-v0.0.19"
-        )
-            throw new NotSupportedException(
-                "ToolScript snapshot runtime is incompatible. The historical record and snapshot were retained."
-            );
-        _ = new ToolScriptStdout(Text(record["stdout"]) ?? ""); // Reject over-budget old output before record mutation.
-        JsonObject resume;
-        if (Text(waiting["reason"]) == "agent")
-            resume = new JsonObject { ["mode"] = "return", ["value"] = args["input"]?.DeepClone() };
-        else if (
-            Text(waiting["reason"]) == "timeout"
-            && waiting["timeout"]?["pendingResume"] is JsonObject pending
-        )
-            resume = (JsonObject)pending.DeepClone();
-        else
-            throw new InvalidDataException(
-                "ToolScript waiting record has no supported pending resume payload."
-            );
-        var snapshotText = Required(record, "snapshotBase64");
-        var budget = new ToolScriptDataBudget();
-        budget.Retain(
-            System.Text.Encoding.UTF8.GetByteCount(Text(record["stdout"]) ?? ""),
-            snapshotText.Length * 3L / 4
-        );
-        budget.JsonValue(record, "stdout", "snapshotBase64");
-        budget.Charge(4L * snapshotText.Length * 3 / 4);
-        var snapshot = Convert.FromBase64String(snapshotText); // Invalid old encoding must not enter the write lane as running.
-        record["timeoutSecs"] = Timeout(args["timeoutSecs"], Number(record["timeoutSecs"], 30));
-        return await RunAsync(record, context, token, null, null, resume, snapshot);
+            budget.JsonValue(record, "stdout", "snapshotBase64");
+            budget.Charge(4L * snapshotText.Length * 3 / 4);
+            var snapshot = Convert.FromBase64String(snapshotText); // Invalid old encoding must not enter the write lane as running.
+            // A run started under the detach contract keeps it for every attended continuation.
+            if (
+                context.Detach is not null
+                && record["detachable"] is JsonValue flag
+                && flag.TryGetValue<bool>(out var detachable)
+                && detachable
+            )
+            {
+                string? warning = null;
+                if (args["timeoutSecs"] is not null && Text(args["timeoutSecs"]) != "")
+                {
+                    (var seconds, warning) = DetachWait(args["timeoutSecs"], DefaultDetachWait);
+                    record["timeoutSecs"] = seconds;
+                }
+                handedOff = true;
+                return await RunDetachableAsync(
+                    record,
+                    lane,
+                    context,
+                    token,
+                    warning,
+                    null,
+                    null,
+                    resume,
+                    snapshot
+                );
+            }
+            record["timeoutSecs"] = Timeout(args["timeoutSecs"], Number(record["timeoutSecs"], 30));
+            return await RunAsync(record, context, token, null, null, resume, snapshot);
+        }
+        finally
+        {
+            if (!handedOff)
+                lane.Dispose();
+        }
     }
 
     /// <summary>Returns a run's inspection projection, as get_toolscript_run does.</summary>

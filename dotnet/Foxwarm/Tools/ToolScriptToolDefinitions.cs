@@ -12,7 +12,7 @@ internal static class ToolScriptToolDefinitions
   {
     "type": "function",
     "name": "run_script",
-    "description": "Run Python-subset ToolScript to combine related tool calls without extra model turns. Use sequential call_tool calls to pass results to dependent steps, branch on results, or stop after a failed prerequisite. Keep independent calls in one outer tool batch instead; adjacent exec calls may run concurrently. Supply code or filePath; args is the input dictionary. call_tool is synchronous (no await); its first argument can be a tool name or tool ID. Example: code='created = call_tool(\"task\", args[\"task\"])\nreturn call_tool(\"create_child_session\", dict(args[\"child\"], taskId=created[\"taskId\"]))', with complete Task and child arguments in args. Tools return native values, not a common response envelope. Use call_tool for filesystem/process access rather than Python OS APIs. A defined main(args) is called automatically. Use return for the result. Returns status and runId; resume time-budget or agent-input pauses with continue_script using runId and continuationId. Return an object with top-level inlineData, inlineDataItems, or image-bearing parts to pass one or more images to the model. A nested wait takes effect in the calling Session only if it remains the last host call when the script completes normally.",
+    "description": "Run Python-subset ToolScript to combine related tool calls without extra model turns. Use sequential call_tool calls to pass results to dependent steps, branch on results, or stop after a failed prerequisite. Keep independent calls in one outer tool batch instead; adjacent exec calls may run concurrently. Supply code or filePath; args is the input dictionary. call_tool is synchronous (no await); its first argument can be a tool name or tool ID. Example: code='created = call_tool(\"task\", args[\"task\"])\nreturn call_tool(\"create_child_session\", dict(args[\"child\"], taskId=created[\"taskId\"]))', with complete Task and child arguments in args. Tools return native values, not a common response envelope. Use call_tool for filesystem/process access rather than Python OS APIs. A defined main(args) is called automatically. Use return for the result. Returns status and runId; resume time-budget or agent-input pauses with continue_script using runId and continuationId. In background mode, a run that outlasts timeoutSecs continues on its own and a background-script-finished event reports its outcome; wait for it with waitExecIds and the runId, or stop it with cancel_toolscript_run. Return an object with top-level inlineData, inlineDataItems, or image-bearing parts to pass one or more images to the model. A nested wait takes effect in the calling Session only if it remains the last host call when the script completes normally.",
     "parameters": {
       "type": "object",
       "additionalProperties": false,
@@ -49,11 +49,11 @@ internal static class ToolScriptToolDefinitions
             "foreground",
             "background"
           ],
-          "description": "foreground (default) runs until a result or pause; background starts a run that can continue independently."
+          "description": "foreground (default) runs until a result or pause. background waits like exec: if the run outlasts timeoutSecs, the call returns and the run continues on its own. Stop or Run queued ends that wait without stopping the run."
         },
         "timeoutSecs": {
           "type": "number",
-          "description": "Time budget in seconds for this run segment. Defaults to 30. At a safe pause point after the budget is reached, the run pauses for continue_script rather than failing."
+          "description": "Foreground: time budget in seconds for this run segment, default 30; at a safe pause point after the budget is reached, the run pauses for continue_script rather than failing. Background: seconds to wait before returning while the run continues, default 15, at most 60."
         }
       }
     }
@@ -124,7 +124,7 @@ internal static class ToolScriptToolDefinitions
         },
         "timeoutSecs": {
           "type": "number",
-          "description": "Time budget for this continuation, in seconds. Defaults to the previous segment's budget."
+          "description": "Time budget for this continuation, in seconds. Defaults to the previous segment's budget. For a background run, seconds to wait before returning while the run continues, at most 60."
         }
       },
       "required": [

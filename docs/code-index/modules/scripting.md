@@ -13,7 +13,7 @@ Scripting owns ToolScript: a constrained Python-like automation runtime implemen
 ## Public interfaces
 
 - `run_script` — start a foreground ToolScript run.
-- `run_script({ mode: "background" })` — use the persisted background mode required for managed-event auto-wake; the initial slice still executes in the initiating tool call.
+- `run_script({ mode: "background" })` — wait up to `timeoutSecs`, then let the run continue on its own and report its outcome as an event ([background mode](../behaviors/automation-and-scheduled-work.md#pause-and-resume-the-run)). The TypeScript reference still executes only the initial slice in the call; managed-event auto-wake requires this persisted mode.
 - `continue_script` — resume a run waiting for agent input or a timeout checkpoint.
 - Hidden, discoverable management tools list, inspect, and cancel persisted runs.
 - Hidden `start_toolscript_run` remains callable only for documented user-automation compatibility.
@@ -33,7 +33,7 @@ Scripting owns ToolScript: a constrained Python-like automation runtime implemen
 - Nested read/exec/search calls opt into producer-owned script data without widening ordinary outputs; see [programmatic data](../threads/tool-dispatch-node-execution.md#d-dispatch-programmatic-tool-data).
 - Nested tool calls use the normal tool layer; run diagnostics and model-invisible presentation metadata retain their activity without separate outer-session tool history. See [lean execution results](../threads/tool-dispatch-node-execution.md#d-dispatch-toolscript-execution-projection).
 - Managed-session leases are released explicitly by controllers or best-effort during cancellation and incompatible-snapshot terminalization; failed cleanup remains retryable from the terminal run record under [D-toolscript-versioned-snapshot-runtime](../units/src-toolscript.md#d-toolscript-versioned-snapshot-runtime).
-- Only background managed-event waits auto-wake. Agent-input and timeout waits require `continue_script` in either mode.
+- Only background managed-event waits auto-wake. Agent-input and timeout waits require `continue_script` in either mode. A detached background run is not a wait: it keeps executing and has no timeout checkpoint.
 
 ## Compatibility
 

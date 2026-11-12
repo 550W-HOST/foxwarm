@@ -10,12 +10,16 @@ internal sealed partial class SessionToolExecutor
         string LiteralOwner,
         ToolScriptDataBudget Budget,
         ToolScriptWaitScope WaitScope,
-        string? RunId
+        string? RunId,
+        ToolScriptDetach? Detach = null
     );
 
     private readonly AsyncLocal<ScriptScope?> scriptScope = new();
     internal bool Programmatic => scriptScope.Value is not null;
     internal ToolScriptDataBudget? ScriptBudget => scriptScope.Value?.Budget;
+
+    // A detached run's calls no longer belong to the turn that started it.
+    private bool ScriptDetached => scriptScope.Value?.Detach?.Detached == true;
 
     private async Task<JsonObject> ExecuteToolScriptAsync(
         string name,
@@ -27,6 +31,24 @@ internal sealed partial class SessionToolExecutor
         var nested = Programmatic;
         var literal = scriptScope.Value?.LiteralOwner ?? hosted.Id;
         var waitScope = scriptScope.Value?.WaitScope ?? new ToolScriptWaitScope();
+        // Only an attended top-level call can hand a background run off; timer, webhook and
+        // nested runs keep the slice contract.
+        var detach =
+            !nested && !unattended && name is "run_script" or "continue_script"
+                ? new ToolScriptDetach
+                {
+                    // One event identity per detached segment; a run can detach again after
+                    // an ask_agent continuation.
+                    Finished = outcome =>
+                        sessions.DeliverToolScriptRunEventAsync(
+                            hosted,
+                            outcome,
+                            Guid.NewGuid().ToString("N")
+                        ),
+                }
+                : null;
+        // A run nested in a detached run is detached from the turn as well.
+        var effectiveDetach = detach ?? scriptScope.Value?.Detach;
         ToolScriptContext context = null!;
         context = new ToolScriptContext(
             hosted,
@@ -34,15 +56,23 @@ internal sealed partial class SessionToolExecutor
             async (wrapper, budget, currentToken) =>
             {
                 // seq.k.n below a model call (each slice has its own anchor); ts:runId.n for
-                // slices without one (for example a timer), numbered across the whole run.
-                var parentDelivery = rootCall?.DeliverySeq(script: true);
+                // slices without one (for example a timer or a detached run), numbered across
+                // the whole run.
+                var detached = effectiveDetach?.Detached == true;
+                var parentDelivery = detached ? null : rootCall?.DeliverySeq(script: true);
                 var subCallDelivery = SessionManager.SubCallDeliverySeq(
                     parentDelivery,
                     context.ToolScriptRunId,
                     parentDelivery is null ? context.RunSubCallOrdinal : context.SubCallOrdinal
                 );
                 var previous = scriptScope.Value;
-                scriptScope.Value = new(literal, budget, waitScope, context.ToolScriptRunId);
+                scriptScope.Value = new(
+                    literal,
+                    budget,
+                    waitScope,
+                    context.ToolScriptRunId,
+                    effectiveDetach
+                );
                 try
                 {
                     var resolved = await registry.ResolveAsync(
@@ -79,13 +109,13 @@ internal sealed partial class SessionToolExecutor
                         context.ExecPlacementObserved?.Invoke(placement);
                     if (execution.Target is { } target)
                         context.TargetObserved?.Invoke(target);
-                    // Unattended slices have no Session tool row; their calls are recorded directly.
-                    if (unattended)
+                    // Unattended and detached calls have no Session tool row; they are recorded directly.
+                    if (unattended || detached)
                         sessions.Activity.RecordDirect(() =>
                             ArchiveToolEffects.FromDirectCall(
                                 hosted.Id,
                                 hosted.Agent,
-                                unattendedOrigin + "-script",
+                                unattended ? unattendedOrigin + "-script" : "model",
                                 effectStarted,
                                 execution.Target,
                                 resolved.Name,
@@ -98,7 +128,7 @@ internal sealed partial class SessionToolExecutor
                                         resolved.Args,
                                         hosted.Id
                                     ),
-                                new(0, unattendedOrigin, unattendedOriginId),
+                                unattended ? new(0, unattendedOrigin, unattendedOriginId) : null,
                                 context.ToolScriptRunId,
                                 execution.SessionMessages?.OfType<JsonObject>().FirstOrDefault()
                             )
@@ -111,6 +141,7 @@ internal sealed partial class SessionToolExecutor
                             || execution.Receipt.CompletedTaskId is not null
                         )
                         && rootCall is not null
+                        && effectiveDetach?.Detached != true
                     )
                         rootCall.Receipt = execution.Receipt;
                     if (PolicyUnavailable)
@@ -225,22 +256,35 @@ internal sealed partial class SessionToolExecutor
                 ? null
                 : calls =>
                 {
-                    if (rootCall is not null)
-                        rootCall.ToolScriptSubCalls = (JsonArray)calls.DeepClone();
-                    hosted.Emit(
-                        SessionEventKind.ModelStream,
-                        new JsonObject
-                        {
-                            ["type"] = "toolscript-progress",
-                            ["toolUseId"] = rootCall?.CallId,
-                            ["subCalls"] = calls.DeepClone(),
-                        }
-                    );
+                    void Present()
+                    {
+                        if (rootCall is not null)
+                            rootCall.ToolScriptSubCalls = (JsonArray)calls.DeepClone();
+                        hosted.Emit(
+                            SessionEventKind.ModelStream,
+                            new JsonObject
+                            {
+                                ["type"] = "toolscript-progress",
+                                ["toolUseId"] = rootCall?.CallId,
+                                ["subCalls"] = calls.DeepClone(),
+                            }
+                        );
+                    }
+                    if (detach is null)
+                    {
+                        Present();
+                        return;
+                    }
+                    // The tool row keeps the calls made before the run detached.
+                    lock (detach.Gate)
+                        if (!detach.Detached)
+                            Present();
                 },
             rootCall?.ScriptSource?.Node
         )
         {
             WaitScope = waitScope,
+            Detach = detach,
         };
         try
         {

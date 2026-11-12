@@ -63,29 +63,34 @@ internal sealed class MontyWorker : IAsyncDisposable
 
     internal Task<ChildEvent> ConfigureAsync(
         string name,
-        double seconds,
+        double? seconds,
         ToolScriptDataBudget budget,
         CancellationToken token
-    ) =>
-        TurnAsync(
+    )
+    {
+        var limits = new ResourceLimits
+        {
+            MaxMemoryBytes = 64 * 1024 * 1024,
+            MaxRecursionDepth = 200,
+        };
+        // An absent duration limit means unlimited execution time.
+        if (seconds is double limit)
+            limits.MaxDurationMicros = checked((ulong)(limit * 1_000_000));
+        return TurnAsync(
             new ParentRequest
             {
                 Configure = new Configure
                 {
                     ScriptName = name,
                     MontyVersion = Version,
-                    Limits = new ResourceLimits
-                    {
-                        MaxMemoryBytes = 64 * 1024 * 1024,
-                        MaxRecursionDepth = 200,
-                        MaxDurationMicros = checked((ulong)(seconds * 1_000_000)),
-                    },
+                    Limits = limits,
                 },
             },
             budget,
             _ => { },
             token
         );
+    }
 
     internal async Task<ChildEvent> TurnAsync(
         ParentRequest request,
@@ -98,7 +103,9 @@ internal sealed class MontyWorker : IAsyncDisposable
             throw new ObjectDisposedException(nameof(MontyWorker));
         if (request.Configure is not null)
         {
-            duration = request.Configure.Limits.MaxDurationMicros;
+            duration = request.Configure.Limits.HasMaxDurationMicros
+                ? request.Configure.Limits.MaxDurationMicros
+                : null;
             used = 0;
         }
         var executing =
