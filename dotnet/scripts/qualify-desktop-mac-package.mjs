@@ -102,7 +102,7 @@ for (const key of Object.keys(env)) {
   if (key.startsWith('FOXWARM_') || ['CONFIG_PATH', 'MCP_CONFIG_PATH', 'ASPNETCORE_URLS', 'NODE_OPTIONS', 'DOTNET_ROOT'].includes(key)) delete env[key]
 }
 Object.assign(env, { FOXWARM_DATA_DIR: data, TMPDIR: join(root, 'tmp') + '/', SHELL: '/bin/bash' })
-let child, exited, origin, token, executable, stage = 'bundle validation', requests = 0, embeddings = 0, acceptanceFailed = false
+let child, second, exited, origin, token, executable, stage = 'bundle validation', requests = 0, embeddings = 0, acceptanceFailed = false
 const sockets = [], failures = []
 const peer = createServer(async (request, response) => {
   try {
@@ -303,12 +303,15 @@ try {
   await closeWindow(child.pid)
   await until(async () => (await readWindow(child.pid)).windows === 0, 'window closed while Main keeps running')
   assert.equal((await api('GET', '/health')).body.status, 'ready')
-  const second = spawn(executable, [], { cwd, env, stdio: 'ignore' })
+  const listening = async () => (await readFile(join(data, 'state/logs/foxwarm.log'), 'utf8')).split('Main HTTP listening:').length
+  const mains = await listening()
+  second = spawn(executable, [], { cwd, env, stdio: 'ignore' })
   const [secondExit] = await Promise.race([
     once(second, 'exit'),
     new Promise((_, reject) => { const timer = setTimeout(() => reject(new Error('A second launch kept running')), 30_000); timer.unref() }),
   ])
   assert.equal(secondExit, 0)
+  assert.equal(await listening(), mains, 'A second launch started another Main')
   await until(async () => (await readWindow(child.pid)).windows === 1, 'running instance reopened its window', 30_000)
 
   stage = 'Main shutdown'
@@ -341,6 +344,7 @@ try {
         await exited
       }
     }],
+    ['end a second launch', () => { if (second && second.exitCode === null && second.signalCode === null) second.kill('SIGKILL') }],
     ['close the model fixture', async () => {
       peer.closeAllConnections()
       await new Promise(done => peer.close(done))

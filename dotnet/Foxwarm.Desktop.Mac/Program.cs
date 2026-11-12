@@ -24,30 +24,42 @@ internal static class Program
             return;
         if (Foxwarm.Terminal.NativeHelperEntry.TryRunAsync(args).GetAwaiter().GetResult())
             return;
-        using var instance = new Mutex(false, "Foxwarm.Desktop." + Environment.UserName);
-        bool acquired;
-        try
-        {
-            acquired = instance.WaitOne(0);
-        }
-        catch (AbandonedMutexException)
-        {
-            acquired = true;
-        }
-        if (!acquired)
+        using var instance = AcquireInstance();
+        if (instance is null)
         {
             ActivateRunningInstance();
             return;
         }
+        NSApplication.Init();
+        NSApplication.SharedApplication.Delegate = new DesktopApplication();
+        NSApplication.Main(args);
+    }
+
+    // One instance per user. NativeAOT's named Mutex is process-local on Unix, so the
+    // instance holds an exclusive advisory lock (flock) instead; the system releases it
+    // when the process exits, also after a crash.
+    private static FileStream? AcquireInstance()
+    {
+        var directory = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            "Library",
+            "Application Support",
+            "Foxwarm",
+            "Desktop"
+        );
+        Directory.CreateDirectory(directory);
         try
         {
-            NSApplication.Init();
-            NSApplication.SharedApplication.Delegate = new DesktopApplication();
-            NSApplication.Main(args);
+            return new FileStream(
+                Path.Combine(directory, "instance.lock"),
+                FileMode.OpenOrCreate,
+                FileAccess.ReadWrite,
+                FileShare.None
+            );
         }
-        finally
+        catch (IOException)
         {
-            instance.ReleaseMutex();
+            return null;
         }
     }
 
