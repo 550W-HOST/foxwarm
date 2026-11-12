@@ -46,6 +46,7 @@ internal sealed class VectorService : IAsyncDisposable
         }
     }
     internal bool Ready => ready;
+    internal bool Stopping => stopping;
     internal bool Initializing
     {
         get

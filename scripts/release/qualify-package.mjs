@@ -55,19 +55,21 @@ const peer = createServer(async (request, response) => {
 })
 peer.listen(0, '127.0.0.1'); await once(peer, 'listening')
 const provider = `http://127.0.0.1:${peer.address().port}`
+// The packaged Main listens only on loopback, through its own setting.
 await writeFile(join(fixture.data, 'state/config.yaml'), vector
   ? JSON.stringify({ bot: { httpPort: fixture.port, httpHost: '127.0.0.1' }, vector: { baseUrl: provider + '/v1' }, dbWorkers: true, vectorMaintenance: false })
   : `bot:\n  httpPort: ${fixture.port}\n  httpHost: 127.0.0.1\nvector:\n  enabled: false\n`)
 await writeFile(fixture.modelPath, JSON.stringify({ default: 'local/wire', providers: {
   local: { providerType: 'openai-responses', baseUrl: provider, models: ['wire'] },
 } }))
-// Linux only: whether a process has mapped a library, from /proc.
-const maps = async pid => process.platform === 'linux' ? readFile(`/proc/${pid}/maps`, 'utf8') : ''
+// The images a process has mapped: /proc on Linux, vmmap on macOS (own processes need no root).
+const maps = async pid => process.platform === 'linux' ? readFile(`/proc/${pid}/maps`, 'utf8')
+  : execFileSync('vmmap', ['-w', String(pid)], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 })
 try {
   await fixture.start()
+  assert.match(fixture.output, new RegExp(`Main HTTP listening: http://127\\.0\\.0\\.1:${fixture.port}\\b`), 'Main must listen only on its configured address')
   const mainPid = fixture.hostPids.at(-1)
   if (release.native) assert(!/libcoreclr/.test(await maps(mainPid)), 'Native Main must not load CoreCLR')
-  assert.match(fixture.output, new RegExp(`Main HTTP listening: http://127\\.0\\.0\\.1:${fixture.port}\\b`), 'Main must listen only on its configured address')
   assert.equal((await fetch(fixture.origin + '/login.html')).status, 200)
   assert.match(await readFile(join(fixture.data, 'state/logs/foxwarm.log'), 'utf8'), /Main HTTP listening:/)
 
@@ -136,10 +138,8 @@ try {
       assert(childArgs.startsWith(join(payload, 'Foxwarm') + ' --foxwarm-vector-child'), 'The Vector child must be the packaged executable: ' + childArgs)
       assert(!/libcoreclr/.test(await maps(children[0][1])), 'The native Vector child must not load CoreCLR')
     }
-    if (process.platform === 'linux') {
-      assert(/lancedb_ffi/.test(await maps(children[0][1])), 'The Vector child must own LanceDB')
-      assert(!/lancedb_ffi/.test(await maps(mainPid)), 'Main must not load LanceDB')
-    }
+    assert(/lancedb_ffi/.test(await maps(children[0][1])), 'The Vector child must own LanceDB')
+    assert(!/lancedb_ffi/.test(await maps(mainPid)), 'Main must not load LanceDB')
     Object.assign(summary, { vectorChild: true, vectorIndexAndSearch: true })
   }
   await fixture.stop()

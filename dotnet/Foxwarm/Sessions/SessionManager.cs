@@ -455,6 +455,14 @@ internal sealed partial class SessionManager : IAsyncDisposable
                 Console.WriteLine($"Vector startup: mode={Vector.Mode}, ready={Vector.Ready}.");
         }
         catch (Exception error)
+            when (Vector.Stopping
+                && error is OperationCanceledException or Foxwarm.Vector.VectorUnavailableException
+            )
+        {
+            // Main stopped while the Vector owner was still starting; nothing failed.
+            Console.WriteLine("Vector startup stopped because Main is shutting down.");
+        }
+        catch (Exception error)
         {
             Console.Error.WriteLine(
                 "Vector initialization failed; Main will continue without semantic search: "
