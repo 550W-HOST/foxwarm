@@ -11,6 +11,10 @@ on:
 permissions:
   contents: read
 
+env:
+  # The release before this one, for the upgrade checks. Move it forward with each release.
+  PREVIOUS_RELEASE: v0.9.5
+
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
@@ -137,7 +141,7 @@ jobs:
     name: Build and qualify macOS arm64 packages
     # The standard macos-15 label is arm64; macos-15-intel is a different image.
     runs-on: macos-15
-    timeout-minutes: 55
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -151,14 +155,14 @@ jobs:
             packages/webui/package-lock.json
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
-          dotnet-version: '10.0.x'
+          dotnet-version: '10.0.403'
       - name: Confirm native runner and install test prerequisites
         run: |
           test "$(uname -m)" = arm64
           command -v tmux || brew install tmux
           npm ci && npm --prefix packages/webui ci
       - name: Build both macOS packages natively
-        run: node scripts/release/package.mjs --build-assets --output dist --target osx-arm64 --target osx-arm64-self-contained
+        run: node scripts/release/package.mjs --build-assets --output dist --target osx-arm64 --target osx-arm64-native
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-packages-macos
@@ -166,9 +170,10 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
-      - name: Qualify the archived Main, detached exec, PTY and native ToolScript
+      - name: Qualify the archived Main, detached exec, PTY, native ToolScript and the Vector child
         run: |
-          for package in dist/foxwarm-osx-arm64*.tar.gz; do
+          for package in dist/foxwarm-osx-arm64.tar.gz dist/foxwarm-osx-arm64-native.tar.gz; do
+            echo "== $package"
             extracted="$(mktemp -d "$RUNNER_TEMP/macos-package.XXXXXX")"
             tar -xzf "$package" -C "$extracted"
             payload="$(find "$extracted" -mindepth 1 -maxdepth 1 -type d -print -quit)"
@@ -179,7 +184,12 @@ jobs:
             otool -L "$payload/Foxwarm" "$payload/foxwarm-pty-helper" >> "$extracted/native-libraries.txt"
             cat "$extracted/native-libraries.txt"
             if grep -E '/(opt/homebrew|usr/local)/(opt|Cellar|lib)/' "$extracted/native-libraries.txt"; then exit 1; fi
-            node scripts/release/qualify-package.mjs "$payload"
+            case "$package" in
+              *-native.tar.gz)
+                test ! -e "$payload/Foxwarm.dll"
+                node scripts/release/qualify-package.mjs "$payload" --vector ;;
+              *) node scripts/release/qualify-package.mjs "$payload" ;;
+            esac
             FOXWARM_PUBLISHED_CORE="$payload" node packages/webui/test/mainHostNativeExec.e2e.mjs
             rm -rf "$extracted"
           done
@@ -195,6 +205,25 @@ jobs:
           for package in dist/foxwarm-osx-arm64*.tar.gz; do
             /bin/bash scripts/release/smoke-server.sh "$package" 3001 --without-tmux
           done
+      - name: Upgrade the previous release's self-contained package to the native package
+        shell: /bin/bash -e {0}
+        run: |
+          # The installed release's own control script performs the switch, as for users: once
+          # after an installer rerun with the new package file, and once by its own update,
+          # which downloads its recorded asset; for 0.9.6 the release publishes the native
+          # package under that name.
+          mkdir -p "$RUNNER_TEMP/previous"
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download/$PREVIOUS_RELEASE"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/previous/foxwarm-osx-arm64-self-contained.tar.gz" "$base/foxwarm-osx-arm64-self-contained.tar.gz"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/previous/SHA256SUMS" "$base/SHA256SUMS"
+          (cd "$RUNNER_TEMP/previous" && grep -E '  foxwarm-osx-arm64-self-contained\.tar\.gz$' SHA256SUMS | shasum -a 256 -c -)
+          previous="$RUNNER_TEMP/previous/foxwarm-osx-arm64-self-contained.tar.gz"
+          /bin/bash scripts/release/smoke-upgrade.sh "$previous" dist/foxwarm-osx-arm64-native.tar.gz 3001
+          /bin/bash scripts/release/smoke-upgrade.sh --via-update foxwarm-osx-arm64-self-contained.tar.gz \
+            "$previous" dist/foxwarm-osx-arm64-native.tar.gz 3001
+      - name: Switch a framework-dependent installation to the native package
+        shell: /bin/bash -e {0}
+        run: /bin/bash scripts/release/smoke-upgrade.sh dist/foxwarm-osx-arm64.tar.gz dist/foxwarm-osx-arm64-native.tar.gz 3001 --native
 
   aggregate:
     name: Aggregate release assets and checksums
@@ -223,6 +252,17 @@ jobs:
           test -f dist/native-cli-node-latest-v3.tar.gz
           test -f dist/native-cli-node-win-x64-latest-v3.zip
           test -f dist/native-cli-node-osx-arm64-latest-v3.tar.gz
+      # One-release transition, 0.9.6 only (user decision 2026-11-12); drop it in 0.9.7. The control
+      # script of a 0.9.5-or-earlier self-contained macOS installation updates by downloading the
+      # retired asset name and its SHA256SUMS line. The alias serves it the native package, whose
+      # release.json records the native asset, so its next update requests that directly.
+      - name: Publish the native macOS package under the retired self-contained name (0.9.6 only)
+        run: |
+          version="$(node -p 'require("./package.json").version')"
+          case "$version" in
+            0.9.5|0.9.6) cp dist/foxwarm-osx-arm64-native.tar.gz dist/foxwarm-osx-arm64-self-contained.tar.gz ;;
+            *) echo "::warning::$version publishes no self-contained macOS alias; remove this step." ;;
+          esac
       - name: Write one checksum list covering every platform
         run: node scripts/release/package.mjs --output dist --checksums-only
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -238,9 +278,6 @@ jobs:
     needs: packages
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    env:
-      # The release before this one, for the upgrade check. Move it forward with each release.
-      PREVIOUS_RELEASE: v0.9.4
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -398,9 +435,9 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-  # NativeAOT qualification for the next release's Windows and macOS packages. Their output is
-  # uploaded only as a workflow artifact and never published; a failure is reported on the job
-  # without failing the workflow or blocking aggregation and publication.
+  # NativeAOT qualification for the next release's Windows package. Its output is uploaded only
+  # as a workflow artifact and never published; a failure is reported on the job without
+  # failing the workflow or blocking aggregation and publication.
   windows-native:
     name: Qualify a native Windows package (not published)
     runs-on: windows-2025
@@ -437,59 +474,6 @@ jobs:
       - name: Installer and control smoke
         shell: pwsh
         run: ./scripts/release/smoke-server.ps1 -Package dist/foxwarm-win-x64-native.zip
-
-  macos-native:
-    name: Qualify a native macOS arm64 package (not published)
-    runs-on: macos-15
-    timeout-minutes: 55
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24.21.0
-          cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            packages/webui/package-lock.json
-      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
-        with:
-          dotnet-version: '10.0.403'
-      - name: Confirm native runner and install test prerequisites
-        run: |
-          test "$(uname -m)" = arm64
-          command -v tmux || brew install tmux
-          npm ci && npm --prefix packages/webui ci
-      - name: Build the native macOS package
-        run: node scripts/release/package.mjs --build-assets --output dist --target osx-arm64-native
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: native-qualification-osx-arm64
-          path: dist/foxwarm-osx-arm64-native.tar.gz
-          if-no-files-found: warn
-          compression-level: 0
-          retention-days: 7
-      - name: Qualify the native Main, PTY, ToolScript, Vector child and detached exec
-        run: |
-          extracted="$(mktemp -d "$RUNNER_TEMP/macos-native.XXXXXX")"
-          tar -xzf dist/foxwarm-osx-arm64-native.tar.gz -C "$extracted"
-          payload="$(find "$extracted" -mindepth 1 -maxdepth 1 -type d -print -quit)"
-          test ! -e "$payload/Foxwarm.dll"
-          test -f "$payload/libfoxwarm-pty.dylib"
-          test -x "$payload/foxwarm-pty-helper"
-          find "$payload" -name '*.dylib' -exec otool -L {} \; > "$extracted/native-libraries.txt"
-          otool -L "$payload/Foxwarm" "$payload/foxwarm-pty-helper" >> "$extracted/native-libraries.txt"
-          cat "$extracted/native-libraries.txt"
-          if grep -E '/(opt/homebrew|usr/local)/(opt|Cellar|lib)/' "$extracted/native-libraries.txt"; then exit 1; fi
-          node scripts/release/qualify-package.mjs "$payload" --vector
-          FOXWARM_PUBLISHED_CORE="$payload" node packages/webui/test/mainHostNativeExec.e2e.mjs
-      - name: Installer and control smoke with and without tmux
-        shell: /bin/bash -e {0}
-        run: |
-          /bin/bash scripts/release/smoke-server.sh dist/foxwarm-osx-arm64-native.tar.gz
-          /bin/bash scripts/release/smoke-server.sh dist/foxwarm-osx-arm64-native.tar.gz 3001 --without-tmux
 
   image:
     name: Container image

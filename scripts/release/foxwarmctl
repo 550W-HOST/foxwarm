@@ -308,7 +308,20 @@ cmd_attach() {
 }
 
 download() {
-  if have curl; then curl -fL --retry 3 -o "$2" "$1"; elif have wget; then wget -q -O "$2" "$1"; else fail "curl or wget is required."; fi
+# Download a release file. A release that does not publish it fails with MISSING.
+  local code=""
+  if have curl; then
+    code="$(curl -L --retry 3 -o "$2" -w '%{http_code}' "$1")" || fail "Could not download $1."
+  elif have wget; then
+    wget -q -O "$2" "$1" || fail "Could not download $1."
+  else
+    fail "curl or wget is required."
+  fi
+  case "$code" in
+    ''|2??) ;;
+    404) fail "$3" ;;
+    *) fail "Could not download $1 (HTTP $code)." ;;
+  esac
 }
 
 prune() {
@@ -323,7 +336,7 @@ prune() {
 }
 
 cmd_update() {
-  local package="" version="" force=false asset base staging new old name was_running=false
+  local package="" version="" force=false asset base release staging new old name was_running=false
   while [ $# -gt 0 ]; do
     case "$1" in
       --package) package="${2:?--package requires a file}"; shift 2 ;;
@@ -339,8 +352,12 @@ cmd_update() {
   if [ -z "$package" ]; then
     if [ -n "$version" ]; then base="$RELEASES/download/v$version"; else base="$RELEASES/latest/download"; fi
     log "Downloading $asset"
-    download "$base/$asset" "$scratch/$asset"
-    download "$base/SHA256SUMS" "$scratch/SHA256SUMS"
+    release="The latest release"
+    [ -z "$version" ] || release="Release $version"
+    # A release can retire a package type; rerunning the installer switches to a current one.
+    download "$base/$asset" "$scratch/$asset" \
+      "$release has no $asset. To switch this installation to a package it publishes, rerun the installer: curl -fsSL https://foxwarm.net/install-foxwarm.sh | bash -s -- --dir '$ROOT'"
+    download "$base/SHA256SUMS" "$scratch/SHA256SUMS" "$release has no SHA256SUMS."
     if have sha256sum; then
       (cd "$scratch" && awk -v asset="$asset" '$2 == asset' SHA256SUMS | sha256sum -c --quiet -) || fail "Checksum verification failed for $asset."
     else

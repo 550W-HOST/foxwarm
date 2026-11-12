@@ -22,21 +22,31 @@ Usage: install-foxwarm.sh [options]
   --dir PATH             Program directory (default: ./foxwarm)
   --data-dir PATH        Data directory (default: saved selection, otherwise ./foxwarm-data)
   --version VERSION      Install this release instead of the latest
-  --native               Linux: use the native package, which needs no .NET (default)
-  --self-contained       macOS: use the package that includes the .NET runtime
+  --native               Use the native package, which needs no .NET (default)
   --framework-dependent  Use the package that needs the installed ASP.NET Core 10 runtime
   --package FILE         Install a downloaded package instead of downloading one
   --no-start             Install without starting Foxwarm
 
-Linux uses the native package unless chosen. macOS selects its package from the
-installed .NET runtimes unless chosen. Choosing a package for an existing
-installation switches it to that package and keeps its data.
+A new installation uses the native package unless chosen. Choosing a package for
+an existing installation, or passing a package file of another type, switches it
+to that package and keeps its data.
 Environment: FOXWARM_DIR, FOXWARM_DATA_DIR, FOXWARM_TMUX_SESSION.
 EOF
 }
 
+# Download a release file; a release that does not publish it fails with that message.
 download() {
-  if have curl; then curl -fL --retry 3 -o "$2" "$1"; else wget -q -O "$2" "$1"; fi
+  local code=""
+  if have curl; then
+    code="$(curl -L --retry 3 -o "$2" -w '%{http_code}' "$1")" || fail "Could not download $1."
+  else
+    wget -q -O "$2" "$1" || fail "Could not download $1."
+  fi
+  case "$code" in
+    ''|2??) ;;
+    404) if [ -n "$VERSION" ]; then fail "Release $VERSION has no ${1##*/}."; else fail "The latest release has no ${1##*/}."; fi ;;
+    *) fail "Could not download $1 (HTTP $code)." ;;
+  esac
 }
 
 value() { [ $# -ge 2 ] || { echo "$1 requires a value" >&2; exit 2; }; printf '%s' "$2"; }
@@ -82,12 +92,13 @@ esac
 have tar || fail "tar is required."
 if have sha256sum; then checksum=(sha256sum); elif have shasum; then checksum=(shasum -a 256); else fail "sha256sum or shasum is required."; fi
 [ -n "$PACKAGE" ] || have curl || have wget || fail "curl or wget is required."
-# Linux replaced its self-contained package with the native one, which also needs no .NET.
-RETIRED_ASSET="foxwarm-linux-x64-self-contained.tar.gz"
-case "$RID-$VARIANT" in
-  linux-x64-self-contained) log "Linux self-contained packages were replaced by the native package; using it."; VARIANT=native ;;
-  osx-arm64-native) fail "Native packages are available only for Linux x64. Use --self-contained or --framework-dependent." ;;
-esac
+# The native package replaced the self-contained one, which also needed no .NET: on
+# Linux in 0.9.4, on macOS in 0.9.6.
+RETIRED_ASSET="foxwarm-$RID-self-contained.tar.gz"
+if [ "$VARIANT" = self-contained ]; then
+  log "Self-contained packages were replaced by the native package; using it."
+  VARIANT=native
+fi
 # Asset name of a package variant for this platform.
 asset_for() {
   case "$1" in
@@ -203,16 +214,8 @@ else
 fi
 
 if [ -z "$VARIANT" ] && [ -z "$PACKAGE" ]; then
-  if [ "$RID" = linux-x64 ]; then
-    VARIANT=native
-    log "Using the native package, which needs no .NET runtime."
-  elif have dotnet && grep -q '^Microsoft.AspNetCore.App 10\.' <<<"$(dotnet --list-runtimes 2>/dev/null || true)"; then
-    VARIANT=framework-dependent
-    log "Found the ASP.NET Core 10 runtime; using the framework-dependent package."
-  else
-    VARIANT=self-contained
-    log "No ASP.NET Core 10 runtime found; using the self-contained package."
-  fi
+  VARIANT=native
+  log "Using the native package, which needs no .NET runtime."
 fi
 ASSET="$(asset_for "$VARIANT")"
 
@@ -244,7 +247,7 @@ log "Checking existing data in $FOXWARM_DATA_DIR"
 if grep -q '"selfContained": true' "$STAGING/release.json"; then
   inspect=("$STAGING/Foxwarm")
 else
-  have dotnet || fail "This package needs the ASP.NET Core 10 runtime and dotnet on PATH; use the $([ "$RID" = linux-x64 ] && echo native || echo self-contained) package otherwise."
+  have dotnet || fail "This package needs the ASP.NET Core 10 runtime and dotnet on PATH; use the native package otherwise."
   inspect=(dotnet "$STAGING/Foxwarm.dll")
 fi
 "${inspect[@]}" --installation-root "$FOXWARM_DIR" --inspect-upgrade || fail "Upgrade inspection found a blocking problem; nothing was installed."

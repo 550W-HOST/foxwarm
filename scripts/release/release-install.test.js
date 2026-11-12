@@ -523,9 +523,11 @@ test('downloaded updates verify checksums with shasum when sha256sum is unavaila
   const bin = f.withoutTmux({ checksum: 'shasum' });
   // Replace network transport only; the control script runs the real checksum tools.
   fs.writeFileSync(path.join(bin, 'curl'), `#!/bin/bash
-case "$6" in
-  */SHA256SUMS) cp '${f.root}/SHA256SUMS' "$5" ;;
-  *) cp '${next}' "$5" ;;
+url="\${@: -1}"; out=""
+while [ $# -gt 0 ]; do [ "$1" = -o ] && out="$2"; shift; done
+case "$url" in
+  */SHA256SUMS) cp '${f.root}/SHA256SUMS' "$out" ;;
+  *) cp '${next}' "$out" ;;
 esac
 `, { mode: 0o755 });
   ok(f.control(dir, 'update'));
@@ -591,7 +593,7 @@ function releaseServer(f, assets) {
 url="\${@: -1}"; out=""
 while [ $# -gt 0 ]; do [ "$1" = -o ] && out="$2"; shift; done
 echo "$url" >> '${f.root}/downloads'
-cp '${assets}'/"\${url##*/}" "$out"
+if [ -f '${assets}'/"\${url##*/}" ]; then cp '${assets}'/"\${url##*/}" "$out"; printf 200; else printf 404; fi
 `, { mode: 0o755 });
   const sums = fs.readdirSync(assets).filter(name => name.endsWith('.tar.gz')).map(name =>
     `${require('node:crypto').createHash('sha256').update(fs.readFileSync(path.join(assets, name))).digest('hex')}  ${name}`);
@@ -661,4 +663,20 @@ test('choosing a package for an existing installation switches it even within on
   const back = ok(f.install(['--package', f.makePackage('0.9.4', { variant: 'self-contained' }), '--no-start']));
   assert.match(back.stdout, /Switching .* to foxwarm-linux-x64-self-contained\.tar\.gz/);
   assert.equal(installedAsset(dir), 'foxwarm-linux-x64-self-contained.tar.gz');
+});
+
+test('a release without the recorded asset fails with that reason and leaves the installation unchanged', linux, t => {
+  const f = fixture(t);
+  const dir = path.join(f.root, 'foxwarm');
+  ok(f.install(['--package', f.makePackage('0.9.4'), '--no-start']));
+  const empty = path.join(f.root, 'release-empty');
+  fs.mkdirSync(empty);
+  const server = releaseServer(f, empty);
+  const update = f.run(path.join(dir, 'foxwarmctl'), ['update'], server);
+  assert.equal(update.status, 1);
+  assert.match(update.stderr, /The latest release has no foxwarm-linux-x64-native\.tar\.gz\. .*rerun the installer: .*--dir '/);
+  assert.equal(fs.readlinkSync(path.join(dir, 'runtime/current')), '0.9.4');
+  const fresh = f.install(['--no-start', '--dir', 'other', '--version', '0.9.9'], server);
+  assert.equal(fresh.status, 1);
+  assert.match(fresh.stderr, /Release 0\.9\.9 has no foxwarm-linux-x64-native\.tar\.gz\./);
 });

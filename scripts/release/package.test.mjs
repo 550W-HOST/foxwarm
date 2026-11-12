@@ -59,7 +59,7 @@ with tarfile.open(sys.argv[1]) as archive:
 
 test('checksum aggregation replaces partial lists and covers all platform assets', unix, t => {
   const work = scratch(t)
-  const files = ['foxwarm-linux-x64.tar.gz', 'foxwarm-win-x64.zip', 'foxwarm-osx-arm64.tar.gz', 'foxwarm-osx-arm64-self-contained.tar.gz', codeAssetName]
+  const files = ['foxwarm-linux-x64.tar.gz', 'foxwarm-win-x64.zip', 'foxwarm-osx-arm64.tar.gz', 'foxwarm-osx-arm64-native.tar.gz', codeAssetName]
   for (const name of files) fs.writeFileSync(path.join(work, name), name)
   fs.writeFileSync(path.join(work, 'SHA256SUMS'), 'partial build list\n')
   writeChecksums(work)
@@ -67,6 +67,7 @@ test('checksum aggregation replaces partial lists and covers all platform assets
     `${createHash('sha256').update(name).digest('hex')}  ${name}\n`).join(''))
 })
 
+// framework: the package is framework-dependent and an ASP.NET Core 10 runtime is installed.
 function installer(t, framework = false) {
   const work = scratch(t), bin = path.join(work, 'bin'), assets = path.join(work, 'assets'), payload = path.join(work, 'payload')
   fs.mkdirSync(bin); fs.mkdirSync(assets); fs.mkdirSync(payload)
@@ -85,8 +86,9 @@ cp "$TEST_WORK/assets/\${url##*/}" "$out"`)
   if (framework) executable(path.join(bin, 'dotnet'), 'if [ "$1" = --list-runtimes ]; then echo "Microsoft.AspNetCore.App 10.0.0 [/owned]"; else printf inspected > "$TEST_WORK/inspected"; fi')
   executable(path.join(payload, 'Foxwarm'), 'printf inspected > "$TEST_WORK/inspected"')
   executable(path.join(payload, 'foxwarmctl'), 'exit 0')
-  const target = framework ? 'osx-arm64' : 'osx-arm64-self-contained'
-  fs.writeFileSync(path.join(payload, 'release.json'), JSON.stringify({ version: '0.9.0', rid: 'osx-arm64', target, selfContained: !framework, asset: assetName(target) }, null, 2) + '\n')
+  const target = framework ? 'osx-arm64' : 'osx-arm64-native'
+  fs.writeFileSync(path.join(payload, 'release.json'), JSON.stringify({ version: '0.9.0', rid: 'osx-arm64', target, selfContained: !framework,
+    ...(framework ? {} : { native: true }), asset: assetName(target) }, null, 2) + '\n')
   const packagePath = archive(target, payload, assets)
   writeChecksums(assets)
   const env = { PATH: bin, HOME: work, TEST_WORK: work, TMPDIR: work }
@@ -94,18 +96,21 @@ cp "$TEST_WORK/assets/\${url##*/}" "$out"`)
   return { work, packagePath, run, target }
 }
 
-for (const framework of [false, true]) test(`Darwin installer selects ${framework ? 'framework-dependent' : 'self-contained'} asset and verifies it with shasum`, unix, t => {
-  const f = installer(t, framework), result = f.run()
+// Like Linux, macOS uses the native package unless the framework-dependent one is chosen,
+// also when an ASP.NET Core runtime is installed.
+for (const framework of [false, true]) test(`Darwin installer ${framework ? 'installs the chosen framework-dependent' : 'defaults to the native'} asset and verifies it with shasum`, unix, t => {
+  const f = installer(t, framework), result = f.run(framework ? ['--framework-dependent'] : [])
   assert.equal(result.status, 0, result.stdout + result.stderr)
+  if (!framework) assert.match(result.stdout, /native package/)
   assert.equal(fs.readFileSync(path.join(f.work, 'downloads'), 'utf8'), assetName(f.target) + '\nSHA256SUMS\n')
   assert.equal(fs.readFileSync(path.join(f.work, 'inspected'), 'utf8'), 'inspected')
   assert.equal(fs.realpathSync(path.join(f.work, 'foxwarm/runtime/current')), path.join(f.work, 'foxwarm/runtime/0.9.0'))
 })
 
-test('Linux publishes a native package instead of a self-contained one; other native targets only qualify', () => {
+test('Linux and macOS publish a native package instead of a self-contained one; Windows native only qualifies', () => {
   const published = Object.keys(TARGETS).filter(name => !TARGETS[name].qualification).map(assetName).sort()
   assert.deepEqual(published, ['foxwarm-desktop-win-x64.zip', 'foxwarm-linux-x64-native.tar.gz', 'foxwarm-linux-x64.tar.gz',
-    'foxwarm-osx-arm64-self-contained.tar.gz', 'foxwarm-osx-arm64.tar.gz', 'foxwarm-win-x64-self-contained.zip', 'foxwarm-win-x64.zip'])
+    'foxwarm-osx-arm64-native.tar.gz', 'foxwarm-osx-arm64.tar.gz', 'foxwarm-win-x64-self-contained.zip', 'foxwarm-win-x64.zip'])
   for (const name of ['linux-x64-native', 'win-x64-native', 'osx-arm64-native']) {
     assert.equal(TARGETS[name].native, true)
     assert.equal(TARGETS[name].selfContained, true, 'Older control scripts launch self-contained packages through their executable')
@@ -115,11 +120,14 @@ test('Linux publishes a native package instead of a self-contained one; other na
   assert.equal(hostRid('win32', 'x64'), 'win-x64')
 })
 
-test('Darwin installer refuses the Linux-only native package', unix, t => {
-  const f = installer(t), result = f.run(['--native'])
-  assert.notEqual(result.status, 0)
-  assert.match(result.stderr, /only for Linux x64/)
-  assert(!fs.existsSync(path.join(f.work, 'downloads')))
+test('Darwin installer accepts --native and maps the retired --self-contained option to it', unix, t => {
+  const f = installer(t)
+  assert.equal(f.run(['--native']).status, 0)
+  const legacy = f.run(['--self-contained', '--dir', 'other'])
+  assert.equal(legacy.status, 0, legacy.stdout + legacy.stderr)
+  assert.match(legacy.stdout, /replaced by the native package/)
+  assert.equal(fs.readFileSync(path.join(f.work, 'downloads'), 'utf8'), `${assetName(f.target)}\nSHA256SUMS\n`.repeat(2))
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.work, 'other/runtime/current/release.json'), 'utf8')).asset, 'foxwarm-osx-arm64-native.tar.gz')
 })
 
 test('Darwin installer rejects Intel and corrupt downloads before executing a package', unix, t => {
