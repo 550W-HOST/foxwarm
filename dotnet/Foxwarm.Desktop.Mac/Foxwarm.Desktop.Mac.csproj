@@ -11,6 +11,8 @@
     <ApplicationTitle>Foxwarm</ApplicationTitle>
     <ApplicationDisplayVersion>$(Version)</ApplicationDisplayVersion>
     <ApplicationVersion>1</ApplicationVersion>
+    <!-- The Apple SDK would otherwise add an unsigned installer package to Release publishes. -->
+    <CreatePackage>false</CreatePackage>
   </PropertyGroup>
   <ItemGroup>
     <BundleResource Include="Foxwarm.icns" />
@@ -24,7 +26,11 @@
     />
   </ItemGroup>
   <!-- Keep Main's resource-relative paths beneath AppContext.BaseDirectory. The
-       Apple SDK cannot infer locations for Content inherited through project references. -->
+       Apple SDK cannot infer locations for Content inherited through project references.
+       It also links every bundled dylib into the executable unless it is a PluginLibrary,
+       which is copied to the same place. Main loads its own and its packages' libraries
+       at run time (by path or by DllImport name), and sharp loads libvips through its
+       addon's rpath, so only the .NET and Apple runtime libraries stay linked. -->
   <Target Name="PrepareMacBundleResources" BeforeTargets="_ComputePublishLocation">
     <ItemGroup>
       <ResolvedFileToPublish
@@ -43,6 +49,12 @@
         Condition="'%(ResolvedFileToPublish.MSBuildSourceProjectFile)' != '' and '%(ResolvedFileToPublish.PublishFolderType)' == '' and '%(ResolvedFileToPublish.Extension)' != '.dylib'"
       >
         <PublishFolderType>Assembly</PublishFolderType>
+      </ResolvedFileToPublish>
+      <ResolvedFileToPublish
+        Update="@(ResolvedFileToPublish)"
+        Condition="'%(ResolvedFileToPublish.Extension)' == '.dylib' and '%(ResolvedFileToPublish.PublishFolderType)' == '' and !$([System.String]::Copy('%(ResolvedFileToPublish.NuGetPackageId)').StartsWith('Microsoft.NETCore.App.Runtime.')) and !$([System.String]::Copy('%(ResolvedFileToPublish.NuGetPackageId)').StartsWith('Microsoft.macOS.Runtime.'))"
+      >
+        <PublishFolderType>PluginLibrary</PublishFolderType>
       </ResolvedFileToPublish>
     </ItemGroup>
   </Target>

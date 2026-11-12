@@ -35,7 +35,10 @@ internal static class Program
             acquired = true;
         }
         if (!acquired)
+        {
+            ActivateRunningInstance();
             return;
+        }
         try
         {
             NSApplication.Init();
@@ -46,5 +49,27 @@ internal static class Program
         {
             instance.ReleaseMutex();
         }
+    }
+
+    // Hand a second launch, such as `open -n`, to the running instance the way a Finder or
+    // Dock launch does: LaunchServices activates it and its reopen handler shows the window.
+    private static void ActivateRunningInstance()
+    {
+        NSApplication.Init();
+        var running = NSRunningApplication
+            .GetRunningApplications(Foundation.NSBundle.MainBundle.BundleIdentifier)
+            .FirstOrDefault(application =>
+                application.ProcessIdentifier != Environment.ProcessId
+                && !application.Terminated
+            );
+        if (running?.BundleUrl is not { } bundle)
+            return;
+        using var opened = new ManualResetEventSlim();
+        NSWorkspace.SharedWorkspace.OpenApplication(
+            bundle,
+            NSWorkspaceOpenConfiguration.Create(),
+            (_, _) => opened.Set()
+        );
+        opened.Wait(TimeSpan.FromSeconds(10));
     }
 }
