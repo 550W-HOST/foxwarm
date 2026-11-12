@@ -76,7 +76,7 @@ Renders a hierarchical, interactive session list for the Foxwarm web UI. `Sessio
 - `../config` — `API_BASE_PATH` for API requests
 - `./SessionListCore` — re-exported `Session` type and core component used by `SessionList`
 - `./CreateTabButton` — button for creating terminal tabs
-- `./GlobalUiSettingsMenu` — settings dropdown in the sidebar's top brand row (collapsed rail: below the expand button)
+- `./GlobalUiSettingsMenu` — Setup gear split button with its settings dropdown in the sidebar's top brand row (collapsed rail: stacked variant below the expand button)
 
 ## Behavior
 
@@ -165,12 +165,12 @@ Renders a hierarchical, interactive session list for the Foxwarm web UI. `Sessio
 
 ### D-sidebar-navigation
 
-[2026-11-03] User decision. The expanded desktop sidebar has, top to bottom: a brand row with the settings menu (`GlobalUiSettingsMenu`, Setup/Logs, opening downward) and the collapse button; compact 32px icon + text navigation rows `System`, `Tasks`, `Search`, `Code ▾`, `Terminal ▾` (`SidebarNavItem`, `data-sidebar-nav=<id>`; the focused tab's entry is highlighted; the Code and Terminal Node/path options stay at the row end); then the Session list. There is no sidebar footer. `Search` opens the History search tab (reusing a blank one); its icon is a magnifier, while the workbench tab keeps the History icon. `Terminal` here creates a new terminal tab, while the status bar's `Terminal panel` toggles the bottom panel.
+[2026-11-03] User decision. The expanded desktop sidebar has, top to bottom: a brand row with the settings split button (`GlobalUiSettingsMenu`: gear opens Setup, attached dropdown opens the menu downward; [2026-11-12]) and the collapse button; compact 32px icon + text navigation rows `System`, `Tasks`, `Search`, `Code ▾`, `Terminal ▾` (`SidebarNavItem`, `data-sidebar-nav=<id>`; the focused tab's entry is highlighted; the Code and Terminal Node/path options stay at the row end); then the Session list. There is no sidebar footer. `Search` opens the History search tab (reusing a blank one); its icon is a magnifier, while the workbench tab keeps the History icon. `Terminal` here creates a new terminal tab, while the status bar's `Terminal panel` toggles the bottom panel.
 
 - Session list toolbar: `[Search sessions] [+ New session] [display options]`. The `+` is `AgentCreationMenu` (per-group `New session in X` stays). One display-options menu (`SlidersHorizontal`) holds `View` (Default/Time/Flat radio), `Group by` (None/Agent/Node radio, desktop only) and `Rows` (`Detailed rows` toggle); the mobile header uses the same menu without grouping. There is no cycling mode button.
 - While the Session filter has text, the end of the filtered list offers `Search messages for ‘…’`, which opens the History search tab with that query prefilled but not submitted. Session filtering and message search stay separate features.
 - An empty, unfiltered list shows `No sessions yet.` with a `Start a conversation` action (`onStartSession`) that creates a Session in `main` and opens it; filtering retains the plain no-match text.
-- The collapsed rail keeps the same entries at the top: expand, settings, then System, Tasks and Search icons; `New session` leads the Session rail. Mobile keeps its own shell contract.
+- The collapsed rail keeps the same entries at the top: expand, the stacked Setup gear/settings dropdown, then System, Tasks and Search icons; `New session` leads the Session rail. Mobile keeps its own shell contract.
 
 ### D-webui-session-list-density
 

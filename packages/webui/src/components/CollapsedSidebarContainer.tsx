@@ -10,6 +10,7 @@ interface CollapsedSidebarContainerProps {
   activeView?: 'system' | 'tasks' | 'search'
   onSelectSetup: () => void
   onSelectLogs: () => void
+  setupActive?: boolean
   onSelectTasks?: () => void
   onToggleCollapsed: () => void
   unreadSessionIds?: ReadonlySet<string>

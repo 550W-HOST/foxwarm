@@ -12,7 +12,7 @@ A collection of small, reusable React UI components and utility functions for th
 - `MobilePageHeader` — Transparent progressive-blur mobile heading with positive-height parent-local measurement.
 - `ContentHeader` — Page/section header with icon, title, optional back button and actions; its sole-tab Workbench close/icon controls and empty-header pane drag entry are owned by [Single-tab headers](./webui-workbench.md#single-tab-headers)
 - `ContextMenu` — Portal-based positioned context menu with keyboard/click-outside dismissal, section headers, separators and checked radio/toggle items
-- `CollapsedSidebar` — Fixed-width collapsed sidebar rail: expand, settings, System/Tasks/Search icons, then New session and root-session avatar buttons
+- `CollapsedSidebar` — Fixed-width collapsed sidebar rail: expand, stacked Setup gear/settings dropdown, System/Tasks/Search icons, then New session and root-session avatar buttons
 - `AgentCreationMenu` — Shared Agents `+` control and single new-session/new-agent modal flow, including Agent tags plus inline validation/loading/error states
 - `agentCreation` helpers — Client validation and request-body helpers that omit an empty session ID so the backend generates the existing random name
 - `CreateTabButton` — Split button (or, with `variant="nav"`, a sidebar navigation row) for creating terminal tabs with custom node/path options
@@ -71,7 +71,7 @@ A collection of small, reusable React UI components and utility functions for th
 
 - `./chatShared` — `MessagePart` type, `getCollapsedReasoningPreview`, `handleMarkdownLinkClick`, `renderMarkdown`, `ToolTag`
 - `./SessionListCore` — `SessionListCore` component and `Session` type
-- `./GlobalUiSettingsMenu` — Settings menu component used in Sidebar
+- `./GlobalUiSettingsMenu` — Setup gear split button and settings menu used in Sidebar
 - `./AgentCreationMenu` / `../agentCreation` — Shared creation menu/modals and request validation helpers
 - `../utils/languages` — `inferSimpleLanguage`, `SimpleLanguage` type
 - `../config` — deployment-relative `makeApiUrl` for authenticated blob delivery
@@ -98,7 +98,7 @@ A collection of small, reusable React UI components and utility functions for th
 - Selecting a different node in either main launcher dropdown updates the local draft node and resets its draft path to `/`; switching again resets again, while rerenders, node-list refreshes, same-node selections, and external default synchronization do not trigger this reset or persist the draft. Code also clears its local path error on an actual node change.
 - `CodeLaunchButton` validates absolute POSIX paths before opening, shows inline errors for invalid input, and exposes controlled node/path/open-mode callbacks so `App` owns global persistence.
 
-Sidebar and collapsed-rail settings delegate Setup and Logs actions to App; mobile delegation belongs to SessionList. The Logs contract is documented in [WebUI Logs](./webui-logs.md).
+Sidebar and collapsed-rail settings delegate Setup (gear) and Logs actions to App, which also supplies `setupActive` to both; mobile delegation belongs to SessionList. The Logs contract is documented in [WebUI Logs](./webui-logs.md).
 
 ## Integration
 

@@ -15,6 +15,8 @@ interface CollapsedSidebarProps {
   activeView?: 'system' | 'tasks' | 'search'
   onSelectSetup: () => void
   onSelectLogs: () => void
+  /** Highlights the Setup gear while Setup or Logs is the current view. */
+  setupActive?: boolean
   onSelectTasks?: () => void
   onToggleCollapsed: () => void
   unreadSessionIds?: ReadonlySet<string>
@@ -38,6 +40,7 @@ export default function CollapsedSidebar({
   activeView,
   onSelectSetup,
   onSelectLogs,
+  setupActive = false,
   onSelectTasks,
   onToggleCollapsed,
   unreadSessionIds = new Set(),
@@ -57,7 +60,7 @@ export default function CollapsedSidebar({
         >
           <PanelLeftOpen className="h-4 w-4" />
         </button>
-        <GlobalUiSettingsMenu menuAlign="start" menuSide="bottom" onOpenSetup={onSelectSetup} onOpenLogs={onSelectLogs} />
+        <GlobalUiSettingsMenu variant="rail" menuAlign="start" menuSide="bottom" onOpenSetup={onSelectSetup} onOpenLogs={onSelectLogs} setupActive={setupActive} />
         <div className="my-1 h-px w-6 bg-fw-border" aria-hidden="true" />
         {onSelectArchitecture && <RailButton label="System" active={activeView === 'system'} onClick={onSelectArchitecture}><Network className="h-4 w-4" /></RailButton>}
         {onSelectTasks && <RailButton label="Tasks" active={activeView === 'tasks'} onClick={onSelectTasks}><ClipboardList className="h-4 w-4" aria-hidden="true" /></RailButton>}

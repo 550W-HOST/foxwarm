@@ -2232,6 +2232,7 @@ function App() {
           onSelectSearch={() => openSearchTab()}
           onSelectSetup={openSetupView}
           onSelectLogs={openLogsTab}
+          setupActive={currentView === 'setup' || currentView === 'logs'}
           onSelectTasks={openTasksTab}
           onCreateSession={handleQuickCreateSession}
           onToggleCollapsed={() => setSidebarCollapsed(false)}

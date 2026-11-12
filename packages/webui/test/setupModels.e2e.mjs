@@ -2639,13 +2639,8 @@ test('model picker Models focus is one-shot per request; later ordinary Setup op
         !!document.activeElement?.closest('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-models.yaml"]')
       ), { timeout: 15_000 })
     }
-    const openSetupFromSettingsMenu = async () => {
-      await normalPage.click('button[aria-label="Open UI settings"]')
-      await normalPage.waitForSelector('[data-global-ui-settings-menu]')
-      await normalPage.evaluate(() => {
-        const button = [...document.querySelectorAll('[data-global-ui-settings-menu] button')].find((candidate) => candidate.textContent?.includes('Open setup'))
-        button?.click()
-      })
+    const openSetupFromSidebarGear = async () => {
+      await normalPage.click('[data-sidebar-brand] button[aria-label="Open setup"]')
       await normalPage.waitForSelector('[data-tab-id="system:setup"]', { timeout: 15_000 })
     }
 
@@ -2661,7 +2656,7 @@ test('model picker Models focus is one-shot per request; later ordinary Setup op
     await normalPage.click('[data-tab-id="system:setup"] button[title="Close tab"]')
     await normalPage.waitForFunction(() => !document.querySelector('[data-tab-id="system:setup"]'), { timeout: 15_000 })
 
-    await openSetupFromSettingsMenu()
+    await openSetupFromSidebarGear()
     await normalPage.waitForSelector('[data-setup-tab="appearance"][aria-selected="true"]', { timeout: 15_000 })
     await normalPage.waitForSelector('[data-setup-section="models"] [data-editor-ready="true"]', { timeout: 15_000 })
     assert.equal(await modelsEditorFocused(), false, 'a reopened Setup must not reclaim Models focus from an old request')
@@ -2669,7 +2664,7 @@ test('model picker Models focus is one-shot per request; later ordinary Setup op
 
     await normalPage.click('[data-setup-tab="config"]')
     await normalPage.waitForSelector('[data-setup-tab="config"][aria-selected="true"]')
-    await openSetupFromSettingsMenu()
+    await openSetupFromSidebarGear()
     await normalPage.waitForSelector('[data-setup-tab="config"][aria-selected="true"]', { timeout: 15_000 })
     assert.equal(await modelsEditorFocused(), false, 'ordinary activation of an open Setup keeps its tab and does not move focus')
 
