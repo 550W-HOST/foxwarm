@@ -2605,6 +2605,12 @@ html .foxwarm-inline-file-ref:focus-visible { outline: 2px solid currentColor; o
 .mobile-header-circle[data-filtered]::after { content: ""; width: 5px; height: 5px; position: absolute; top: 6px; right: 6px; border-radius: 50%; background: var(--foxwarm-color-accent); }
 
 .mobile-page-root [data-session-section="sessions"] > h3 { display: none; }
+/* The question hint floats below the overlaying mobile header, where the list's content starts. */
+.mobile-page-root .session-question-hint-layer { padding-top: calc(var(--mobile-page-header-height, 64px) + 4px); }
+@media (pointer: coarse) { .session-question-hint { height: 2.25rem; padding-inline: 1rem; font-size: 0.875rem; } }
+@media (prefers-reduced-motion: no-preference) { .session-question-hint { animation: session-question-hint-in 140ms ease-out; } }
+@keyframes session-question-hint-in { from { opacity: 0; transform: translateY(-4px); } }
+@media (forced-colors: active) { .session-question-hint { border-color: ButtonText; } }
 @supports not ((backdrop-filter: blur(5px)) or (-webkit-backdrop-filter: blur(5px))) {
   .mobile-top-fade::before { background: linear-gradient(var(--foxwarm-color-canvas) calc(100% - 8px), transparent); -webkit-mask-image: none; mask-image: none; }
   .mobile-top-fade::after { display: none; }
