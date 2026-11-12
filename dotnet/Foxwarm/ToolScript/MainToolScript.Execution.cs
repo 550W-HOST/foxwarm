@@ -316,7 +316,7 @@ internal sealed partial class MainToolScript
                     {
                         ["timeoutSecs"] = record["timeoutSecs"]!.DeepClone(),
                         ["pendingResume"] = pending,
-                        ["elapsedMs"] = Elapsed().TotalMilliseconds,
+                        ["elapsedMs"] = WholeMilliseconds(Elapsed()),
                         ["pausedAtFunctionName"] = "call_tool",
                         ["pausedAtSummaryName"] = record["lastHostCall"]
                             ?["functionName"]?.DeepClone(),

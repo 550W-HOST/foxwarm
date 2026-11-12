@@ -24,6 +24,12 @@ Callers: `SessionToolExecutor.ToolScript`, `ToolScriptToolDefinitions`, `Session
 
 These budgets account for allocations Foxwarm materializes or retains; they do not claim to bound the whole OS process. Completed host effects and durable records remain when a later budget/cancellation failure occurs.
 
+## Record numbers and timings
+
+[2026-11-12] ToolScript JSON values carry the [Archive number contract](./session-authority-json.md): integers that fit Int64 stay integers, and every other number is a finite binary64 value, as `JSON.parse` reads it. `ToolScriptDataBudget.ParseJson`/`ReadRecordAsync` therefore never produce CLR decimals. Stored run records reach tool results through `get_toolscript_run`, `list_toolscript_runs`, cancellation of a finished run and timer run inspection, and `argsJson` reaches script timer rows, so a decimal there would make the Session's canonical tool-row append fail.
+
+Recorded durations are whole milliseconds (rounded half away from zero) where they are produced: `subCalls[].durationMs`, `lastHostCall.durationMs` and `waiting.timeout.elapsedMs`, matching the integer timings of the retained TypeScript runtime. Existing stored records keep their earlier fractional values; they are read as binary64.
+
 ## Waiting, restart, and cancellation
 
 `ask_agent` and timeout-safe host-call suspension write `waiting`, `snapshotBase64`, continuation metadata, and VM identity into the owner record. `ContinueAsync` requires the exact owner, continuation ID, `@pydantic/monty` version `0.0.19`, and snapshot format `monty-pool-snapshot-v0.0.19`; it loads the snapshot into a fresh worker and retains incompatible historical record/snapshot instead of converting it. Completed/current-runtime failed/cancelled records remove resumable snapshot state. Main-managed wait records are rejected by `RequireUnmanaged`, while unsupported managed-session functions fail without importing child state.
@@ -56,7 +62,7 @@ Calls of unattended slices (timer and webhook runs) have no Session tool row, so
 
 ## Tests
 
-`dotnet/Foxwarm.Tests/ToolScript/MainToolScriptTests.cs`; `ToolScriptBudgetTests.cs`; `ToolScriptHostTests.cs`; `ToolScriptSourceTests.cs` covers captured Main source authorization during a real policy retry, live nested cwd under a captured batch, source-selector validation, target-unknown discovery, and the bundled ordinary automation example through explicit Main file source and ask/continue; `ToolScriptNativeExceptionTests.cs` qualifies actual native 0.0.19 uncaught single/multiline host errors, caught errors followed by independent VM failures, and persisted pending exceptions resumed by a fresh runtime without replay or stale-diagnostic attribution. `ToolScriptLifecycleTests.cs`; `ToolScriptOwnershipTests.cs`; `ToolScriptRecordJson`/snapshot/cancellation coverage.
+`dotnet/Foxwarm.Tests/ToolScript/MainToolScriptTests.cs`; `ToolScriptBudgetTests.cs`; `ToolScriptNumberHistoryTests.cs` (stored records with fractional values and whole-millisecond timings committed into Session history through the real turn host); `ToolScriptHostTests.cs`; `ToolScriptSourceTests.cs` covers captured Main source authorization during a real policy retry, live nested cwd under a captured batch, source-selector validation, target-unknown discovery, and the bundled ordinary automation example through explicit Main file source and ask/continue; `ToolScriptNativeExceptionTests.cs` qualifies actual native 0.0.19 uncaught single/multiline host errors, caught errors followed by independent VM failures, and persisted pending exceptions resumed by a fresh runtime without replay or stale-diagnostic attribution. `ToolScriptLifecycleTests.cs`; `ToolScriptOwnershipTests.cs`; `ToolScriptRecordJson`/snapshot/cancellation coverage.
 
 `ToolScriptTerminalWaitTests` qualifies real Monty call forms, invalidation/pause/failure, nested completion, Task receipts, existing batch cleanup, explicit/old checkpoints, complete Session/Monty reopening, reauthorization and deleted-source validation. Normal controlled-provider turns cover terminal stop without another request and extensionless image return plus real owned exec completion/wake. `ToolScriptImageReturnTests` covers actual native read, all three top-level image carriers, preserved business data, outer blob externalization and Responses serialization.
 

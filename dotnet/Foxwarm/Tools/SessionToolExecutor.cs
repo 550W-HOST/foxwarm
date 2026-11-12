@@ -837,9 +837,9 @@ internal sealed partial class SessionToolExecutor(
                     {
                         ["startedAt"] = startedAt,
                         ["completedAt"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                        ["durationMs"] = System
-                            .Diagnostics.Stopwatch.GetElapsedTime(monotonic)
-                            .TotalMilliseconds,
+                        ["durationMs"] = Foxwarm.ToolScript.MainToolScript.WholeMilliseconds(
+                            System.Diagnostics.Stopwatch.GetElapsedTime(monotonic)
+                        ),
                     };
                 if (runtimeLease is not null)
                     hosted.EndTool(runtimeLease);

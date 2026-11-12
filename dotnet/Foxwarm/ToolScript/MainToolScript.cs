@@ -444,10 +444,12 @@ internal sealed partial class MainToolScript : IAsyncDisposable
                     ? integer
                     : value.TryGetValue<int>(out var int32)
                         ? int32
-                        : value.TryGetValue<decimal>(out var decimalValue)
-                            ? (double)decimalValue
-                            : fallback
+                        : fallback
             : fallback;
+
+    /// <summary>Whole milliseconds for recorded ToolScript and tool timings.</summary>
+    internal static long WholeMilliseconds(TimeSpan elapsed) =>
+        (long)Math.Round(elapsed.TotalMilliseconds, MidpointRounding.AwayFromZero);
 
     private static double Timeout(JsonNode? node, double fallback)
     {

@@ -60,8 +60,6 @@ internal static class MontyValues
             return new() { Int = uint32 };
         if (scalar.TryGetValue<ulong>(out var uint64) && uint64 <= long.MaxValue)
             return new() { Int = (long)uint64 };
-        if (scalar.TryGetValue<decimal>(out var decimalValue))
-            return new() { Float = (double)decimalValue };
         if (scalar.TryGetValue<float>(out var floatValue) && float.IsFinite(floatValue))
             return new() { Float = floatValue };
         if (scalar.TryGetValue<double>(out var number) && double.IsFinite(number))

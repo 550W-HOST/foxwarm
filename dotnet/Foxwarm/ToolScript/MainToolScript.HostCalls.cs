@@ -147,12 +147,13 @@ internal sealed partial class MainToolScript
         }
         finally
         {
-            last["durationMs"] = watch.Elapsed.TotalMilliseconds;
+            var durationMs = WholeMilliseconds(watch.Elapsed);
+            last["durationMs"] = durationMs;
             if (Text(last["status"]) == "running")
                 last["status"] = "completed";
             if (subcall is not null)
             {
-                subcall["durationMs"] = watch.Elapsed.TotalMilliseconds;
+                subcall["durationMs"] = durationMs;
                 if (Text(subcall["status"]) == "running")
                     subcall["status"] = "completed";
                 Emit();
