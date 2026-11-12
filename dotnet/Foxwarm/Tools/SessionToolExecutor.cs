@@ -1141,9 +1141,9 @@ internal sealed partial class SessionToolExecutor(
         if (
             response.Remove("__waitTarget", out var target) && SessionWait.Text(target) is string id
         )
-            if (!unattended)
+            if (!unattended && !ScriptDetached)
                 handoffTargets.Add(id);
-        if (finish && !unattended)
+        if (finish && !unattended && !ScriptDetached)
             Interlocked.Exchange(ref finishPending, 1);
         return response;
     }

@@ -36,7 +36,7 @@ These control the current Session turn, not all work launched by the Agent:
 
 | Action | Current turn | Queued input | Already-started external work |
 | --- | --- | --- | --- |
-| Stop (`/stop`) | Interrupts the current provider request/foreground tool batch and ends the main run. | Commits queued message/event inputs as ordinary history without running another provider turn for them. Later input can start a new turn. | Exec and copy stop waiting, not the underlying operation. Other tools use their supported cancellation path; effects may already have occurred. |
+| Stop (`/stop`) | Interrupts the current provider request/foreground tool batch and ends the main run. | Commits queued message/event inputs as ordinary history without running another provider turn for them. Later input can start a new turn. | Exec, copy and background ToolScript stop waiting, not the underlying operation. Other tools use their supported cancellation path; effects may already have occurred. |
 | Run queued (`/dequeue`) | Stops current work when necessary, then continues through the ordinary runner. | Runs queued work rather than passively committing it and stopping. | Same foreground cancellation boundary as Stop; no background-work sweep. |
 | Continue (`/continue`) | Resumes an interrupted idle turn using current committed context. It is not regenerate/retry-the-previous-answer. | New compatible input joins at normal safe points. | Does not replay an uncertain external operation automatically. |
 | Cancel compaction (`/stop compact`) | Cancels active/pending compaction, independently of the main run. | Does not itself apply Stop's passive-input behavior. | Not a shell-process control. |
@@ -79,7 +79,7 @@ Use a wait when no useful reply or tool work remains, and declare where progress
 | --- | --- |
 | `waitAnySessions: [id, ...]` | At least one accessible, non-self Session is an expected source. This is not a filter excluding ordinary incoming activity. |
 | `waitAllSessions: [a, b, ...]` | At least two distinct accessible, non-self Sessions must each send a new message after the wait starts. Listed messages are deferred and released together after all report; duplicates from one do not satisfy another. |
-| `waitExecIds: [execId, transferId, ...]` | Names actual accessible active executions or background copies owned by this Session/Agent, or already-queued completions. PIDs, log paths, and command strings are not identities. |
+| `waitExecIds: [execId, transferId, runId, ...]` | Names actual accessible active executions, background copies or detached background ToolScript runs owned by this Session/Agent, or already-queued completions. PIDs, log paths, and command strings are not identities. |
 | `waitForInput: true` | Declares external/user input as a real progress source. It does not prevent other ordinary activity from waking the Session. |
 | `waitQuestionIds: [id, ...]` | Open `ask_user` questions of this Session whose answers the Agent needs. A real progress source like `waitForInput`, with no automatic deadline. While the wait lists them, any ordinary user message answers them. Validated against the Session's open questions. |
 | `wakeIfNoActivityAfterSeconds: n` | A positive, one-shot fallback wake, not a polling interval and not cancellation of the dependency. Can accompany a source or stand alone. |
@@ -94,7 +94,7 @@ Declared Session dependencies also support a quiescence diagnostic: a closed dep
 
 ### Example: long command, one completion wake
 
-An exec returns `execId` after its foreground budget; a background copy returns `transferId`. The Agent can then call `wait` with `waitExecIds` containing that exact ID. Completion is ordinary Session input; a fallback wake merely asks the Agent to reassess while the command may still run. Neither wake authorizes replaying the launch.
+An exec returns `execId` after its foreground budget; a background copy returns `transferId`; a detached background ToolScript run returns its `runId` ([background mode](automation-and-scheduled-work.md#pause-and-resume-the-run)). The Agent can then call `wait` with `waitExecIds` containing that exact ID. Completion is ordinary Session input; a fallback wake merely asks the Agent to reassess while the command may still run. Neither wake authorizes replaying the launch.
 
 A terminal handoff can also end a turn, with or without a Session activity wait. It does not mean the target Task completed. Keep delivery/terminal behavior at the adjacent [handoff contract](../threads/message-processing-pipeline.md#d-pipeline-handoff-wait), including `currentSessionTurnAction`, sibling errors, coalescing and fast replies.
 

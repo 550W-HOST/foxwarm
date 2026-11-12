@@ -514,10 +514,10 @@ internal sealed partial class SessionManager : IAsyncDisposable
             if (
                 SessionWait
                     .Strings(CatalogMetadata(id)?.Wait?["waitExecIds"])
-                    .Any(value => value.StartsWith("transfer_", StringComparison.Ordinal))
+                    .Any(SessionSaveLane.LostAfterRestart)
                 && await GetExistingAsync(id) is { } owner
             )
-                await owner.Entry.SaveLane.ClearLostCopyWaitsAsync();
+                await owner.Entry.SaveLane.ClearLostBackgroundWaitsAsync();
         }
         if (startMainServices)
             Console.WriteLine($"Session startup: loadedOwners={sessions.Count}.");
@@ -831,6 +831,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
         RuntimeCredentials.Close();
         mcp.StopNotificationProducer();
         timers.StopFuture();
+        // Detached runs do not survive the process; end them before draining their owners.
+        ToolScript.CancelDetached();
         lock (lifecycle)
         {
             accepting = false;

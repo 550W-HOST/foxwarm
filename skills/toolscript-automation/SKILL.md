@@ -265,15 +265,23 @@ Returned images become tool-result images that the session can display and acces
 
 ### Foreground and background
 
-`run_script(...)` executes the first slice inside the initiating tool call in both modes. `mode:"background"` does not turn an ordinary script into a detached job.
+Foreground mode (the default) runs a slice inside the call and pauses at its time budget, described below.
 
-Use foreground mode for ordinary automation. Use `run_script({filePath, args, mode:"background"})` for managed-session controllers that wait on `wait_for_managed_event(...)`; those managed-event waits can wake automatically. Agent-input and timeout waits require `continue_script(...)` in either mode.
+`mode:"background"` waits like `exec`: the call waits up to `timeoutSecs` (default 15, at most 60). A run that finishes or pauses within that time returns its ordinary result. Otherwise the call returns `status: "running"` with the `runId`, and the run continues on its own without a time budget. Its outcome arrives later as a `background-script-finished` event, or `background-script-waiting` when it pauses at `ask_agent(...)`. Stop or Run queued ends only the call's wait.
+
+Follow-up tool calls after `status: "running"`:
+
+- `wait({"waitExecIds": [runId]})` to end the turn until the event arrives; the event also wakes an idle Session.
+- `get_toolscript_run({"runId": runId})` for the full output and result.
+- `cancel_toolscript_run({"runId": runId})` to stop a detached run.
+
+Background mode detaches only when a model turn calls `run_script` or `continue_script` itself. Timer and webhook scripts, scripts started from another script, and `start_toolscript_run` keep the foreground slice contract. Agent-input pauses require `continue_script(...)` in either mode.
 
 The managed controller APIs are documented in the `toolscript-managed-controller` skill.
 
 ### Safe-checkpoint timeout
 
-Each `run_script` or `continue_script` slice has a 30-second timeout budget unless `timeoutSecs` is provided. Foxwarm checks this budget at host-call boundaries:
+Each foreground `run_script` or `continue_script` slice has a 30-second timeout budget unless `timeoutSecs` is provided. Foxwarm checks this budget at host-call boundaries:
 
 - an in-progress tool or model call is not interrupted when the budget expires;
 - after that host call returns, the run pauses with `waitingReason: "timeout"`;

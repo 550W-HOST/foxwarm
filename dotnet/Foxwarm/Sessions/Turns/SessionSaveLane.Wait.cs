@@ -334,7 +334,12 @@ public sealed partial class SessionSaveLane
             }
         );
 
-    internal Task<string?> ClearLostCopyWaitsAsync() =>
+    // Copies and detached ToolScript runs end with the process that ran them.
+    internal static bool LostAfterRestart(string id) =>
+        id.StartsWith("transfer_", StringComparison.Ordinal)
+        || id.StartsWith("tsr_", StringComparison.Ordinal);
+
+    internal Task<string?> ClearLostBackgroundWaitsAsync() =>
         MutateWaitAsync(
             (meta, queue, _) =>
             {
@@ -344,9 +349,7 @@ public sealed partial class SessionSaveLane
                     .Select(item => SessionWait.Text(item.OpenFields?["execId"]))
                     .OfType<string>()
                     .ToHashSet(StringComparer.Ordinal);
-                var retained = ids.Where(id =>
-                        !id.StartsWith("transfer_", StringComparison.Ordinal) || queued.Contains(id)
-                    )
+                var retained = ids.Where(id => !LostAfterRestart(id) || queued.Contains(id))
                     .ToArray();
                 if (wait is null || retained.Length == ids.Length)
                     return null;

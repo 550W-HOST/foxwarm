@@ -251,31 +251,7 @@ internal sealed partial class SessionManager
                 "<foxwarm-system kind=\"event\" type=\"background-transfer-finished\">\n"
                 + details.ToJsonString()
                 + "\n</foxwarm-system>";
-            try
-            {
-                while (Accepting && !IsDeletionClaimed(transfer.Owner.Id))
-                {
-                    await WaitForIdentityMutationAsync(transfer.Owner.Id);
-                    try
-                    {
-                        using var admission = BeginOwnerMutation(transfer.Owner);
-                        var admitted =
-                            await transfer.Owner.Entry.SaveLane.CommitBackgroundExecCompletionAsync(
-                                transfer.Id,
-                                message
-                            );
-                        if (admitted)
-                            WakeNodeEventOwner(transfer.Owner);
-                        break;
-                    }
-                    catch (InvalidOperationException) when (IdentityMovePending(transfer.Owner.Id))
-                    { }
-                }
-            }
-            catch (Exception error)
-            {
-                transfer.Owner.Entry.RecordBackgroundProcessorFailure(error);
-            }
+            await CommitBackgroundEventAsync(transfer.Owner, transfer.Id, message);
         }
         lock (copyGate)
         {
@@ -301,6 +277,49 @@ internal sealed partial class SessionManager
             }
         }
         transfer.Stop.Dispose();
+    }
+
+    /// <summary>
+    /// Queues the completion event of Main-owned background work (a copy or a detached
+    /// ToolScript run) for its owner, keyed by its wait ID, and wakes an idle owner. Nothing is
+    /// queued during shutdown or deletion; an identity move in progress is waited out.
+    /// </summary>
+    private async Task CommitBackgroundEventAsync(
+        SessionOwner owner,
+        string id,
+        string message,
+        string? eventId = null
+    )
+    {
+        try
+        {
+            while (Accepting && !IsDeletionClaimed(owner.Id))
+            {
+                await WaitForIdentityMutationAsync(owner.Id);
+                try
+                {
+                    using var admission = BeginOwnerMutation(owner);
+                    var admitted = eventId is null
+                        ? await owner.Entry.SaveLane.CommitBackgroundExecCompletionAsync(
+                            id,
+                            message
+                        )
+                        : await owner.Entry.SaveLane.CommitRemoteExecCompletionAsync(
+                            id,
+                            message,
+                            eventId
+                        );
+                    if (admitted)
+                        WakeNodeEventOwner(owner);
+                    break;
+                }
+                catch (InvalidOperationException) when (IdentityMovePending(owner.Id)) { }
+            }
+        }
+        catch (Exception error)
+        {
+            owner.Entry.RecordBackgroundProcessorFailure(error);
+        }
     }
 
     private bool IdentityMovePending(string id)

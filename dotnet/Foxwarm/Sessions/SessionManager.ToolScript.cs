@@ -47,6 +47,72 @@ internal sealed partial class SessionManager
         return result;
     }
 
+    /// <summary>
+    /// Reports the end of a detached background ToolScript segment to its owner Session, once,
+    /// like a background exec completion. The run ID is the wait source.
+    /// </summary>
+    internal Task DeliverToolScriptRunEventAsync(
+        SessionOwner owner,
+        JsonObject outcome,
+        string segment
+    )
+    {
+        var runId = SessionWait.Text(outcome["runId"]) ?? "";
+        return CommitBackgroundEventAsync(
+            owner,
+            runId,
+            ToolScriptRunEvent(outcome),
+            "toolscript-run:" + runId + ":" + segment
+        );
+    }
+
+    private const int ToolScriptEventValueLimit = 1000;
+
+    internal static string ToolScriptRunEvent(JsonObject outcome)
+    {
+        static string Bounded(string text) =>
+            text.Length <= ToolScriptEventValueLimit
+                ? text
+                : text[..ToolScriptEventValueLimit] + "… [truncated]";
+        static string Line(string text) => Bounded(text).Replace("\r", "").Replace("\n", "\n  ");
+        var status = SessionWait.Text(outcome["status"]) ?? "failed";
+        var waiting = status == "waiting";
+        var text = new System.Text.StringBuilder()
+            .Append("<foxwarm-system kind=\"event\" type=\"")
+            .Append(waiting ? "background-script-waiting" : "background-script-finished")
+            .Append("\">\n")
+            .Append("runId: ")
+            .Append(SessionWait.Text(outcome["runId"]))
+            .Append("\nstatus: ")
+            .Append(status);
+        if (waiting)
+        {
+            text.Append("\ncontinuationId: ").Append(SessionWait.Text(outcome["continuationId"]));
+            if (SessionWait.Text(outcome["question"]) is { } question)
+                text.Append("\nquestion: ").Append(Line(question));
+            text.Append("\nResume it with continue_script using runId, continuationId and input.");
+        }
+        else
+        {
+            if (outcome.ContainsKey("result"))
+                text.Append("\nresult: ")
+                    .Append(
+                        Line(
+                            SessionWait.Text(outcome["result"])
+                                ?? (
+                                    outcome["result"] is { } value
+                                        ? EcmaJson.Stringify(value)
+                                        : "null"
+                                )
+                        )
+                    );
+            if (SessionWait.Text(outcome["error"]) is { } error)
+                text.Append("\nerror: ").Append(Line(error));
+            text.Append("\nget_toolscript_run returns the full output and result.");
+        }
+        return text.Append("\n</foxwarm-system>").ToString();
+    }
+
     internal async Task<JsonObject> RequestToolScriptModelAsync(
         SessionOwner owner,
         string prompt,

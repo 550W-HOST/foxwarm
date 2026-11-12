@@ -17,7 +17,8 @@ internal sealed partial class MainToolScript
         string? code,
         JsonNode? input,
         JsonObject? resume,
-        byte[]? restoredSnapshot = null
+        byte[]? restoredSnapshot = null,
+        ToolScriptDetach? detach = null
     )
     {
         var id = Required(record, "runId");
@@ -38,6 +39,18 @@ internal sealed partial class MainToolScript
         MontyWorker? worker = null;
         var stdout = new ToolScriptStdout(Text(record["stdout"]) ?? "");
         var offset = stdout.Count;
+        // A detachable segment's output so far is read by its waiting call when it detaches.
+        Action<string> print = stdout.Append;
+        if (detach is not null)
+        {
+            print = text =>
+            {
+                lock (detach.Gate)
+                    stdout.Append(text);
+            };
+            lock (detach.Gate)
+                detach.Output = () => stdout.Delta(offset);
+        }
         var oldSnapshot = Text(record["snapshotBase64"]);
         var persistenceFailure = false;
         var slice = Stopwatch.StartNew();
@@ -96,9 +109,10 @@ internal sealed partial class MainToolScript
             ToolScriptDataBudget progressBudget;
             if (resume is null)
             {
+                // A detachable run has no execution-time budget, like a background exec.
                 var configured = await worker.ConfigureAsync(
                     Required(record, "scriptName"),
-                    Number(record["timeoutSecs"], 30),
+                    detach is null ? Number(record["timeoutSecs"], 30) : null,
                     Budget(),
                     run.Cancel.Token
                 );
@@ -116,7 +130,7 @@ internal sealed partial class MainToolScript
                 progress = await worker.TurnAsync(
                     new() { Feed = feed },
                     progressBudget,
-                    stdout.Append,
+                    print,
                     run.Cancel.Token
                 );
                 code = null;
@@ -131,7 +145,7 @@ internal sealed partial class MainToolScript
                 progress = await worker.TurnAsync(
                     new() { Load = new Load { State = ByteString.CopyFrom(snapshot) } },
                     progressBudget,
-                    stdout.Append,
+                    print,
                     run.Cancel.Token
                 );
                 if (progress.KindCase != ChildEvent.KindOneofCase.FunctionCall)
@@ -152,7 +166,7 @@ internal sealed partial class MainToolScript
                     progress.FunctionCall.CallId,
                     resume,
                     progressBudget,
-                    stdout,
+                    print,
                     run.Cancel.Token
                 );
                 resume = null;
@@ -191,7 +205,7 @@ internal sealed partial class MainToolScript
                             },
                         },
                         progressBudget,
-                        stdout.Append,
+                        print,
                         run.Cancel.Token
                     );
                     continue;
@@ -210,7 +224,7 @@ internal sealed partial class MainToolScript
                             },
                         },
                         progressBudget,
-                        stdout.Append,
+                        print,
                         run.Cancel.Token
                     );
                     continue;
@@ -280,7 +294,8 @@ internal sealed partial class MainToolScript
                 }
                 run.Cancel.Token.ThrowIfCancellationRequested();
                 context.Owner.Entry.RequireIdentityAuthority();
-                if (Elapsed().TotalSeconds >= Number(record["timeoutSecs"], 30))
+                // Detachable segments do not pause at the time limit; only their caller's wait ends.
+                if (detach is null && Elapsed().TotalSeconds >= Number(record["timeoutSecs"], 30))
                 {
                     await WaitAsync("timeout", null, outcome);
                     return ProjectSlice();
@@ -291,7 +306,7 @@ internal sealed partial class MainToolScript
                     call.CallId,
                     outcome,
                     progressBudget,
-                    stdout,
+                    print,
                     run.Cancel.Token
                 );
             }
@@ -301,7 +316,7 @@ internal sealed partial class MainToolScript
                 var dump = await worker.TurnAsync(
                     new() { Dump = new Dump() },
                     budget,
-                    stdout.Append,
+                    print,
                     run.Cancel.Token
                 );
                 if (dump.KindCase != ChildEvent.KindOneofCase.DumpResult)
@@ -334,7 +349,10 @@ internal sealed partial class MainToolScript
             if (!persistenceFailure)
             {
                 record["status"] = error is OperationCanceledException ? "cancelled" : "failed";
-                record["error"] = error.Message;
+                record["error"] =
+                    error is OperationCanceledException && detach is not null && detachedClosing
+                        ? ShutdownCancellation
+                        : error.Message;
                 record.Remove("lastResult");
                 record.Remove("waiting");
                 record.Remove("snapshotBase64");
@@ -374,7 +392,7 @@ internal sealed partial class MainToolScript
         uint id,
         JsonObject outcome,
         ToolScriptDataBudget budget,
-        ToolScriptStdout stdout,
+        Action<string> print,
         CancellationToken token
     )
     {
@@ -395,7 +413,7 @@ internal sealed partial class MainToolScript
                 ResumeCall = new ResumeCall { CallId = id, Result = result },
             },
             budget,
-            stdout.Append,
+            print,
             token
         );
     }
