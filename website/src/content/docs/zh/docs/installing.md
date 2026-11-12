@@ -24,10 +24,10 @@ Foxwarm 服务器支持 **Linux x64**（包括 x64 WSL）、**macOS arm64**（Ap
 | --- | --- |
 | [`foxwarm-linux-x64-native.tar.gz`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-linux-x64-native.tar.gz) | Linux 服务器，编译为原生程序，不需要 .NET 运行时（Linux 默认） |
 | [`foxwarm-linux-x64.tar.gz`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-linux-x64.tar.gz) | Linux 服务器，使用系统已安装的 ASP.NET Core 10 运行时 |
+| [`foxwarm-osx-arm64-native.tar.gz`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-osx-arm64-native.tar.gz) | Apple Silicon Mac 服务器，编译为原生程序，不需要 .NET 运行时（macOS 默认） |
 | [`foxwarm-osx-arm64.tar.gz`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-osx-arm64.tar.gz) | Apple Silicon Mac 服务器，使用系统已安装的 ASP.NET Core 10 运行时 |
-| [`foxwarm-osx-arm64-self-contained.tar.gz`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-osx-arm64-self-contained.tar.gz) | Apple Silicon Mac 服务器，自带 .NET 运行时 |
+| [`foxwarm-win-x64-native.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-win-x64-native.zip) | Windows 服务器，编译为原生程序，不需要 .NET 运行时（Windows 默认） |
 | [`foxwarm-win-x64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-win-x64.zip) | Windows 服务器，使用系统已安装的 ASP.NET Core 10 运行时 |
-| [`foxwarm-win-x64-self-contained.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-win-x64-self-contained.zip) | Windows 服务器，自带 .NET 运行时 |
 | [`foxwarm-desktop-win-x64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-win-x64.zip) | Windows 桌面版，自带 .NET 运行时 |
 | [`SHA256SUMS`](https://github.com/550W-HOST/foxwarm/releases/latest/download/SHA256SUMS) | Release 中各文件的校验和 |
 
@@ -39,7 +39,7 @@ Foxwarm 服务器支持 **Linux x64**（包括 x64 WSL）、**macOS arm64**（Ap
 
 旧版本见 [Releases 页面](https://github.com/550W-HOST/foxwarm/releases)；把链接里的 `latest/download` 换成 `download/v<版本>` 即可下载指定版本。
 
-Linux 上安装脚本使用原生安装包；`--framework-dependent` 选择使用系统 ASP.NET Core 10 运行时的安装包。macOS 和 Windows 上，如果 `dotnet --list-runtimes` 里有 `Microsoft.AspNetCore.App 10.x`，安装脚本会选较小的安装包，否则选自带运行时的版本。也可以用 `--self-contained` / `--framework-dependent`（macOS）或 `-SelfContained` / `-FrameworkDependent`（Windows）自己指定。
+安装脚本使用原生安装包；`--framework-dependent`（Windows 上为 `-FrameworkDependent`）选择使用系统 ASP.NET Core 10 运行时的安装包。原生安装包取代了同样不需要安装 .NET 的自带运行时安装包：Linux 从 0.9.4 起，macOS 和 Windows 从 0.9.6 起。
 
 ## 环境要求
 
@@ -49,7 +49,7 @@ Linux 上安装脚本使用原生安装包；`--framework-dependent` 选择使�
 | curl 或 wget、tar | ✓ | 系统自带 | — |
 | sha256sum 或 shasum | ✓ | 系统自带 shasum | — |
 | ICU 和 OpenSSL 库（多数 Linux 系统已自带） | ✓ | 使用 macOS 系统库 | — |
-| ASP.NET Core 10 运行时 | 仅 framework-dependent 安装包需要 | 仅较小的安装包需要 | 仅较小的安装包需要 |
+| ASP.NET Core 10 运行时 | 仅 framework-dependent 安装包需要 | 仅 framework-dependent 安装包需要 | 仅 framework-dependent 安装包需要 |
 
 Linux 安装包（包括语义历史检索）需要 glibc 2.34 或更新版本（例如 Ubuntu 22.04、Debian 12、RHEL 9）。
 
@@ -76,7 +76,7 @@ curl -fsSL https://foxwarm.net/install-foxwarm.sh | bash -s -- \
 
 `--package FILE` 安装已下载的安装包，`--no-start` 只安装不启动。运行前可以先阅读[安装脚本](https://github.com/550W-HOST/foxwarm/blob/main/install-foxwarm.sh)。
 
-要把已有安装切换到另一种安装包，用 `--native` 或 `--framework-dependent` 重新运行安装脚本。程序目录、数据和配置都保持不变。
+要把已有安装切换到另一种安装包，用 `--native` 或 `--framework-dependent`，或用另一种类型的 `--package FILE` 重新运行安装脚本。程序目录、数据和配置都保持不变。
 
 ### 从自带运行时的 Linux 安装包迁移
 
@@ -99,16 +99,18 @@ curl -fsSL https://foxwarm.net/install-foxwarm.sh | bash
 curl -fsSL https://foxwarm.net/install-foxwarm.sh | bash
 ```
 
-目录和版本参数与 Linux 相同。安装脚本会自动选择依赖已安装运行时或自带运行时的 arm64 安装包（macOS 暂无原生安装包），不需要通过 Homebrew 安装 ICU 或 OpenSSL。需要可连接的控制台时可安装 tmux；没有 tmux 时，Foxwarm 会在后台启动并写入文件日志。
+参数与 Linux 相同，包括 `--native` 和 `--framework-dependent`。不需要通过 Homebrew 安装 ICU 或 OpenSSL。需要可连接的控制台时可安装 tmux；没有 tmux 时，Foxwarm 会在后台启动并写入文件日志。
 
 安装包已在 Apple Silicon 的 macOS 15 上测试。语义历史检索和浏览器工具已包含在内，但尚未在 macOS 上验证。
+
+从 0.9.6 起，原生安装包取代了 `foxwarm-osx-arm64-self-contained.tar.gz`。使用自带运行时安装包的安装会在下次更新时切换到原生安装包，数据和配置保持不变；0.9.6 版本为此也以旧文件名发布了原生安装包。0.9.6 之后，这样的安装直接运行 `update` 会失败，请改为重新运行安装脚本；如果安装时用了 `--dir`，请传入相同的 `--dir`。
 
 安装包未做发行签名或公证。curl 安装脚本不会添加隔离标记；浏览器下载的归档可能带有 Gatekeeper 隔离标记。先用 Release 的 `SHA256SUMS` 校验归档，确认信任后，仅移除该归档的隔离标记再安装：
 
 ```bash
-xattr -d com.apple.quarantine foxwarm-osx-arm64-self-contained.tar.gz
+xattr -d com.apple.quarantine foxwarm-osx-arm64-native.tar.gz
 curl -fsSLO https://foxwarm.net/install-foxwarm.sh
-bash install-foxwarm.sh --package foxwarm-osx-arm64-self-contained.tar.gz
+bash install-foxwarm.sh --package foxwarm-osx-arm64-native.tar.gz
 ```
 
 如果已经解压且 Gatekeeper 阻止运行，可以对该解压目录执行 `xattr -dr com.apple.quarantine /path/to/extracted-package`。不要关闭系统全局的 Gatekeeper。
@@ -126,7 +128,9 @@ Invoke-WebRequest https://foxwarm.net/install-foxwarm.ps1 -OutFile install-foxwa
 .\install-foxwarm.ps1 -InstallDir .\foxwarm -DataDir .\foxwarm-data
 ```
 
-脚本还支持 `-Version`、`-Package FILE` 和 `-NoStart`。如果系统禁止运行脚本，用 `powershell -ExecutionPolicy Bypass -File .\install-foxwarm.ps1` 运行下载的文件。
+脚本还支持 `-Version`、`-Package FILE`、`-Native`、`-FrameworkDependent` 和 `-NoStart`。与 Linux 一样，用 `-Native`、`-FrameworkDependent` 或另一种类型的 `-Package` 重新运行脚本，会切换已有安装并保留数据。如果系统禁止运行脚本，用 `powershell -ExecutionPolicy Bypass -File .\install-foxwarm.ps1` 运行下载的文件。
+
+从 0.9.6 起，原生安装包取代了 `foxwarm-win-x64-self-contained.zip`，方式与 [macOS](#macosapple-silicon) 相同：使用自带运行时安装包的安装在更新到 0.9.6 时，或重新运行安装脚本后，会切换到原生安装包。
 
 ## Windows 桌面版
 
@@ -141,6 +145,16 @@ http://localhost:3001/#token=...
 ```
 
 如果找不到链接，读取数据目录下的 `state/token`，例如 `cat foxwarm-data/state/token` 或 `Get-Content .\foxwarm-data\state\token`。请像对待密码一样保管 token 和链接。
+
+Foxwarm 默认在所有网络地址的 3001 端口上监听。要修改，在 `state/config.yaml` 中设置 `bot.httpPort` 和 `bot.httpHost`，然后重启：
+
+```yaml
+bot:
+  httpPort: 3001
+  httpHost: 127.0.0.1   # 只允许本机访问；默认的 0.0.0.0 允许其他设备访问
+```
+
+`httpHost` 填写本机的 IPv4 或 IPv6 地址，例如 `127.0.0.1`、`::1` 或某个局域网地址，不接受主机名（包括 `localhost`）。桌面版忽略这两项设置。
 
 新安装的 Foxwarm 会打开 **Setup → Models**。按照[配置第一个模型](/zh/docs/model-setup/)连接模型服务商。
 
@@ -190,7 +204,7 @@ sudo chown -R 1000:1000 foxwarm-data
 docker compose up -d foxwarm
 ```
 
-如果修改了 `bot.httpPort`，也要同步修改端口映射和健康检查。要访问 Docker 宿主机上的模型或 embedding 服务，请使用宿主机可达的地址；容器内的 `localhost` 指的是 Foxwarm 容器本身。
+如果修改了 `bot.httpPort`，也要同步修改端口映射和健康检查。容器中请保持 `bot.httpHost` 的默认值；设为回环地址后，通过端口映射将无法访问。要访问 Docker 宿主机上的模型或 embedding 服务，请使用宿主机可达的地址；容器内的 `localhost` 指的是 Foxwarm 容器本身。
 
 ## 可选组件
 

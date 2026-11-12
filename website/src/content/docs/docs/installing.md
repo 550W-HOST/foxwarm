@@ -26,10 +26,10 @@ Each [release](https://github.com/550W-HOST/foxwarm/releases/latest) provides:
 | --- | --- |
 | [`foxwarm-linux-x64-native.tar.gz`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-linux-x64-native.tar.gz) | Linux server compiled to native code; needs no .NET runtime (default on Linux) |
 | [`foxwarm-linux-x64.tar.gz`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-linux-x64.tar.gz) | Linux server; uses the installed ASP.NET Core 10 runtime |
+| [`foxwarm-osx-arm64-native.tar.gz`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-osx-arm64-native.tar.gz) | Apple Silicon Mac server compiled to native code; needs no .NET runtime (default on macOS) |
 | [`foxwarm-osx-arm64.tar.gz`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-osx-arm64.tar.gz) | Apple Silicon Mac server; uses the installed ASP.NET Core 10 runtime |
-| [`foxwarm-osx-arm64-self-contained.tar.gz`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-osx-arm64-self-contained.tar.gz) | Apple Silicon Mac server with the .NET runtime included |
+| [`foxwarm-win-x64-native.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-win-x64-native.zip) | Windows server compiled to native code; needs no .NET runtime (default on Windows) |
 | [`foxwarm-win-x64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-win-x64.zip) | Windows server; uses the installed ASP.NET Core 10 runtime |
-| [`foxwarm-win-x64-self-contained.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-win-x64-self-contained.zip) | Windows server with the .NET runtime included |
 | [`foxwarm-desktop-win-x64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-win-x64.zip) | Windows desktop app, .NET runtime included |
 | [`SHA256SUMS`](https://github.com/550W-HOST/foxwarm/releases/latest/download/SHA256SUMS) | Checksums of the release files |
 
@@ -41,7 +41,7 @@ Each release also includes:
 
 Older versions are on the [releases page](https://github.com/550W-HOST/foxwarm/releases); replace `latest/download` in a link with `download/v<version>` to fetch a specific version.
 
-On Linux the installer uses the native package; `--framework-dependent` selects the package that uses the installed ASP.NET Core 10 runtime. On macOS and Windows the installers choose the smaller package when `dotnet --list-runtimes` shows `Microsoft.AspNetCore.App 10.x`, and the self-contained package otherwise. Use `--self-contained` / `--framework-dependent` (macOS) or `-SelfContained` / `-FrameworkDependent` (Windows) to choose yourself.
+The installers use the native package; `--framework-dependent` (`-FrameworkDependent` on Windows) selects the package that uses the installed ASP.NET Core 10 runtime. The native packages replaced the self-contained ones, which also included .NET: on Linux in 0.9.4, on macOS and Windows in 0.9.6.
 
 ## Requirements
 
@@ -51,7 +51,7 @@ On Linux the installer uses the native package; `--framework-dependent` selects 
 | curl or wget, tar | ✓ | included with macOS | — |
 | sha256sum or shasum | ✓ | shasum is included | — |
 | ICU and OpenSSL libraries (present on most Linux systems) | ✓ | uses macOS system libraries | — |
-| ASP.NET Core 10 runtime | only for the framework-dependent package | only for the smaller package | only for the smaller package |
+| ASP.NET Core 10 runtime | only for the framework-dependent package | only for the framework-dependent package | only for the framework-dependent package |
 
 Linux packages, including semantic history search, need glibc 2.34 or later (for example Ubuntu 22.04, Debian 12, RHEL 9).
 
@@ -78,7 +78,7 @@ curl -fsSL https://foxwarm.net/install-foxwarm.sh | bash -s -- \
 
 `--package FILE` installs an already downloaded package, and `--no-start` installs without starting. You can read the [installer](https://github.com/550W-HOST/foxwarm/blob/main/install-foxwarm.sh) before running it.
 
-To switch an existing installation to another package, rerun the installer with `--native` or `--framework-dependent`. Its program directory, data and configuration stay the same.
+To switch an existing installation to another package, rerun the installer with `--native` or `--framework-dependent`, or with `--package FILE` of the other type. Its program directory, data and configuration stay the same.
 
 ### Moving from the self-contained Linux package
 
@@ -101,16 +101,18 @@ Requires **macOS 15 or later**, following the [.NET 10 support policy](https://g
 curl -fsSL https://foxwarm.net/install-foxwarm.sh | bash
 ```
 
-The same directory and version options as Linux apply. The installer chooses between the framework-dependent and self-contained arm64 packages; there is no native macOS package yet. No Homebrew ICU or OpenSSL installation is needed. Install tmux if you want an attachable console; otherwise Foxwarm starts in the background with file logs.
+The same options as Linux apply, including `--native` and `--framework-dependent`. No Homebrew ICU or OpenSSL installation is needed. Install tmux if you want an attachable console; otherwise Foxwarm starts in the background with file logs.
 
 The packages are tested on macOS 15 on Apple Silicon. Semantic history search and the browser tool are included but not yet verified on macOS.
+
+Since 0.9.6 the native package replaces `foxwarm-osx-arm64-self-contained.tar.gz`. A self-contained installation switches to the native package at its next update and keeps its data and configuration; the 0.9.6 release publishes the native package under the old name for this. After 0.9.6, a plain `update` of a self-contained installation fails; rerun the installer instead, with the same `--dir` if you used one.
 
 These packages are not signed or notarized for distribution. The curl installer does not add quarantine, but archives downloaded with a browser can be quarantined by Gatekeeper. After verifying the archive against the release's `SHA256SUMS` and deciding to trust it, remove quarantine from that archive before installing it:
 
 ```bash
-xattr -d com.apple.quarantine foxwarm-osx-arm64-self-contained.tar.gz
+xattr -d com.apple.quarantine foxwarm-osx-arm64-native.tar.gz
 curl -fsSLO https://foxwarm.net/install-foxwarm.sh
-bash install-foxwarm.sh --package foxwarm-osx-arm64-self-contained.tar.gz
+bash install-foxwarm.sh --package foxwarm-osx-arm64-native.tar.gz
 ```
 
 If you already extracted the archive and Gatekeeper blocks its executables, clear quarantine only on that extracted package with `xattr -dr com.apple.quarantine /path/to/extracted-package`. Do not disable Gatekeeper system-wide.
@@ -128,7 +130,9 @@ Invoke-WebRequest https://foxwarm.net/install-foxwarm.ps1 -OutFile install-foxwa
 .\install-foxwarm.ps1 -InstallDir .\foxwarm -DataDir .\foxwarm-data
 ```
 
-It also accepts `-Version`, `-Package FILE` and `-NoStart`. If script execution is blocked, run the downloaded file with `powershell -ExecutionPolicy Bypass -File .\install-foxwarm.ps1`.
+It also accepts `-Version`, `-Package FILE`, `-Native`, `-FrameworkDependent` and `-NoStart`. As on Linux, rerunning it with `-Native`, `-FrameworkDependent` or a `-Package` of the other type switches an existing installation and keeps its data. If script execution is blocked, run the downloaded file with `powershell -ExecutionPolicy Bypass -File .\install-foxwarm.ps1`.
+
+Since 0.9.6 the native package replaces `foxwarm-win-x64-self-contained.zip`, the same way as on [macOS](#macos-apple-silicon): a self-contained installation moves to the native package with its next update to 0.9.6, or by rerunning the installer.
 
 ## Windows desktop app
 
@@ -143,6 +147,16 @@ http://localhost:3001/#token=...
 ```
 
 If you no longer have it, read `state/token` in your data directory, for example `cat foxwarm-data/state/token` or `Get-Content .\foxwarm-data\state\token`. Treat the token and the link like a password.
+
+Foxwarm listens on port 3001 on all network addresses. To change this, set `bot.httpPort` and `bot.httpHost` in `state/config.yaml` and restart:
+
+```yaml
+bot:
+  httpPort: 3001
+  httpHost: 127.0.0.1   # only this computer; the default 0.0.0.0 accepts other devices
+```
+
+`httpHost` takes an IPv4 or IPv6 address of this computer, such as `127.0.0.1`, `::1` or one of its LAN addresses. Host names, including `localhost`, are not accepted. The desktop app ignores both settings.
 
 On a new installation, Foxwarm opens **Setup → Models**. Follow [Set up your first model](/docs/model-setup/) to connect a provider.
 
@@ -192,7 +206,7 @@ sudo chown -R 1000:1000 foxwarm-data
 docker compose up -d foxwarm
 ```
 
-If you change `bot.httpPort`, update the port mapping and healthcheck as well. For a model or embedding service on the Docker host, use a host-reachable address; `localhost` inside Foxwarm's container refers to that container.
+If you change `bot.httpPort`, update the port mapping and healthcheck as well. Leave `bot.httpHost` at its default in the container; a loopback address there is unreachable through the port mapping. For a model or embedding service on the Docker host, use a host-reachable address; `localhost` inside Foxwarm's container refers to that container.
 
 ## Optional components
 
