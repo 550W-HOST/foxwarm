@@ -4,7 +4,7 @@ This AppKit application hosts the original WebUI in WKWebView and runs the compl
 
 ## Build
 
-Use a patched .NET 10 SDK and the `macos` workload compatible with the installed Xcode. The application targets macOS 15 or later, following the existing .NET 10 platform support policy. The product resource target is `osx-arm64`, matching the precompiled LanceDB assets supplied by the existing NuGet dependency. An Intel build does not establish Apple Silicon runtime qualification.
+Use a patched .NET 10 SDK and the `macos` workload compatible with the installed Xcode. The application targets macOS 15 or later, following the existing .NET 10 platform support policy. The product resource target is `osx-arm64`, matching the precompiled LanceDB assets supplied by the existing NuGet dependency. The same project also builds on Intel, but Vector there needs a locally built native library.
 
 Prepare the normal repository dependencies and shared resources, then build:
 
@@ -23,7 +23,9 @@ For NativeAOT, use `dotnet publish` with the same arguments, `-c Release`, and `
 
 Managed and NativeAOT builds were executed on Intel x64 with macOS 15.8.1, .NET SDK 10.0.403 / runtime 10.0.14, macOS workload 26.2.10233 (workload set 10.0.202), and Xcode 26.3. The runs exercised the original WebUI and Setup, native HttpOnly/SameSite cookies, WebSockets, off-origin resource blocking, native alert/confirmation sheets, menu/window lifecycle, ToolScript and exec helpers, canonical Agent paths, persistence/restart, and local/child Vector indexing, search and recall. NativeAOT Main and its Vector child ran without CoreCLR. The packaged Darwin PTY helper and Node artifact dependencies were also exercised.
 
-Intel Vector qualification used a temporary native library built from the existing LanceDB binding source pin. That library and its build procedure are not a product acquisition path. The committed project uses the precompiled NuGet macOS arm64 native assets. An arm64 NativeAOT app was cross-published on Intel but was **not run on Apple Silicon**. Minimum-OS execution and all optional services remain outside this qualification.
+Managed and NativeAOT `osx-arm64` builds were also executed on Apple Silicon with macOS 26.5.2 and the same SDK, workload and Xcode. Those runs covered first-run Setup and model connection test through the WebUI, a WebUI turn against a scripted local model, ToolScript, exec in the Agent directory, PTY input/output/resize/cancel and a WebUI terminal tab, close-to-hide, reopen through the application and the menu, Quit with Main drain, restart with the remembered port and data retained, and Vector indexing and search through the WebUI and API with the precompiled NuGet arm64 LanceDB library. NativeAOT Main and its Vector child ran without CoreCLR.
+
+Intel Vector qualification used a temporary native library built from the existing LanceDB binding source pin. That library and its build procedure are not a product acquisition path. Minimum-OS execution and all optional services remain outside this qualification.
 
 This is a source/build integration only: there is **no macOS Desktop release package or release-pipeline target**. Local `.app` bundles use SDK ad-hoc signatures for development; Developer ID signing and notarization are not provided or qualified. No installer or updater is supplied. The optional full Code workbench was not included in these runs, and interactive file picking/download behaviors were not fully qualified.
 
