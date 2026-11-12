@@ -6,6 +6,7 @@ import { SlidersHorizontal, MoreVertical, Plus, Settings, Archive, ArchiveRestor
 import RuntimeBusySpinner from './RuntimeBusySpinner'
 import MobilePageHeader from './MobilePageHeader'
 import ContextMenu, { type ContextMenuAnchorRect, type ContextMenuEntry } from './ContextMenu'
+import SessionListQuestionHint from './SessionListQuestionHint'
 import SessionListSectionHeader, { SESSION_ROW_PADDING_PX } from './SessionListSectionHeader'
 import { copyTextToClipboard } from './chatShared'
 import { getSessionRuntimeSummary, getSessionRuntimeStateName, type SessionRuntimeState } from '../sessionRuntimeState'
@@ -736,6 +737,8 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
 
   // Open questions lift a Session above Pinned; the Agent is waiting on the strongest of them.
   const questionRoots = useMemo(() => orderQuestionSessions(rootSessions), [rootSessions])
+  const [listScroller, setListScroller] = useState<HTMLDivElement | null>(null)
+  const [questionSection, setQuestionSection] = useState<HTMLElement | null>(null)
   const listedRootSessions = useMemo(() => rootSessions.filter(session => !getSessionQuestionAttention(session)), [rootSessions])
   const visibleRootSessions = bounded ? listedRootSessions : listedRootSessions.slice(0, visibleRootCount)
   const hiddenRootCount = bounded ? (bounded.hasMoreRoots ? MORE_VISIBLE_ROOTS_STEP : 0) : listedRootSessions.length - visibleRootSessions.length
@@ -1239,7 +1242,8 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     </section>
   )
   const renderQuestionSection = () => questionRoots.length > 0 && (
-    <section aria-label="Needs your answer" data-session-section="questions" className="mb-2">
+    // Focusable only programmatically: the scroll-back hint moves focus here.
+    <section ref={setQuestionSection} tabIndex={-1} aria-label="Needs your answer" data-session-section="questions" className="mb-2 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-fw-focus-ring/40">
       <SessionListSectionHeader label="Needs your answer" disclosureColumn={disclosureColumn} />
       {questionRoots.map(session => renderSession(session))}
     </section>
@@ -1798,58 +1802,61 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
         )}
         <ContextMenu open={!!displayAnchor} entries={displayEntries} anchorRect={displayAnchor} preferredPlacement="bottom-end" onClose={() => { setDisplayAnchor(null); displayButtonRef.current?.focus({ preventScroll: true }) }} />
         <ContextMenu open={!!mobileViewAnchor} entries={displayEntries} anchorRect={mobileViewAnchor} preferredPlacement="bottom-end" onClose={() => {setMobileViewAnchor(null); mobileViewRef.current?.focus({preventScroll:true})}} />
-        <div className="min-h-0 flex-1 touch-pan-y overflow-y-auto" data-session-list-scroll-container>
-          <div className={listContainerClassName}>
-            {rootSessions.length > 0 || (groupedRoots && groupView!.groups.length > 0) ? (
-              <>
-                {renderQuestionSection()}
-                {groupedRoots ? renderGroups(groupedRoots) : [
-                  { label: 'Pinned', pinned: true },
-                  { label: 'Sessions', pinned: false },
-                ].map(({ label, pinned }) => {
-                  // Partition existing visible roots only: pinned descendants are already
-                  // elevated by visibleParentMap, and each root retains its subtree.
-                  const sectionRoots = visibleRootSessions.filter(session => !!session.pinned === pinned)
-                  return sectionRoots.length > 0 ? (
-                    <section key={label} aria-label={label} data-session-section={pinned ? 'pinned' : 'sessions'} className="mb-2 last:mb-0">
-                      {pinned
-                        ? <SessionListSectionHeader label={label} disclosureColumn={disclosureColumn} collapsed={pinnedCollapsed} onToggle={togglePinnedCollapsed} toggleLabel={`${pinnedCollapsed ? 'Expand' : 'Collapse'} pinned sessions`} count={pinnedCollapsed ? sectionRoots.length : undefined} />
-                        : <SessionListSectionHeader label={label} disclosureColumn={disclosureColumn} />}
-                      {!(pinned && pinnedCollapsed) && sectionRoots.map(session => renderSession(session))}
-                    </section>
-                  ) : null
-                })}
-                {!groupedRoots && hiddenRootCount > 0 && (
-                  continuationRow({ onClick: toggleShowMoreRoots, label: `Show ${Math.min(hiddenRootCount, MORE_VISIBLE_ROOTS_STEP)} more`, contentX: SESSION_ROW_PADDING_PX, owner: 'roots' })
-                )}
-                {!bounded && hiddenRootCount <= 0 && rootSessions.length > DEFAULT_VISIBLE_ROOTS && (
-                  continuationRow({ onClick: toggleShowMoreRoots, label: 'Show less', less: true, contentX: SESSION_ROW_PADDING_PX, owner: 'roots' })
-                )}
-              </>
-            ) : (
-              <div className="px-2 py-6 text-center text-sm text-fw-text-muted">
-                {isFiltering ? 'No sessions match your search.' : 'No sessions yet.'}
-                {!isFiltering && onStartSession && (
-                  <button type="button" data-session-list-start onClick={onStartSession}
-                    className="mt-2 block w-full rounded-md px-2 py-1 text-sm font-medium text-fw-accent hover:bg-fw-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-fw-focus-ring/40">
-                    Start a conversation
-                  </button>
-                )}
-              </div>
-            )}
-            {/* Names filter live here; message contents need the submitted history search. */}
-            {isFiltering && onSearchMessages && (
-              <button
-                type="button"
-                onClick={() => onSearchMessages(filterText.trim())}
-                className="mt-1 flex w-full min-w-0 items-center gap-2 rounded px-3 py-2 text-left text-sm text-fw-text-muted hover:bg-fw-hover hover:text-fw-text-strong"
-                data-session-list-search-messages
-              >
-                <Search className="h-4 w-4 shrink-0" aria-hidden="true" />
-                <span className="min-w-0 truncate">Search messages for ‘{filterText.trim()}’</span>
-              </button>
-            )}
-          </div>
+        <div className="relative flex min-h-0 flex-1 flex-col">
+          <SessionListQuestionHint scroller={listScroller} section={questionSection} count={questionRoots.length} />
+          <div ref={setListScroller} className="min-h-0 flex-1 touch-pan-y overflow-y-auto" data-session-list-scroll-container>
+            <div className={listContainerClassName}>
+              {rootSessions.length > 0 || (groupedRoots && groupView!.groups.length > 0) ? (
+                <>
+                  {renderQuestionSection()}
+                  {groupedRoots ? renderGroups(groupedRoots) : [
+                    { label: 'Pinned', pinned: true },
+                    { label: 'Sessions', pinned: false },
+                  ].map(({ label, pinned }) => {
+                    // Partition existing visible roots only: pinned descendants are already
+                    // elevated by visibleParentMap, and each root retains its subtree.
+                    const sectionRoots = visibleRootSessions.filter(session => !!session.pinned === pinned)
+                    return sectionRoots.length > 0 ? (
+                      <section key={label} aria-label={label} data-session-section={pinned ? 'pinned' : 'sessions'} className="mb-2 last:mb-0">
+                        {pinned
+                          ? <SessionListSectionHeader label={label} disclosureColumn={disclosureColumn} collapsed={pinnedCollapsed} onToggle={togglePinnedCollapsed} toggleLabel={`${pinnedCollapsed ? 'Expand' : 'Collapse'} pinned sessions`} count={pinnedCollapsed ? sectionRoots.length : undefined} />
+                          : <SessionListSectionHeader label={label} disclosureColumn={disclosureColumn} />}
+                        {!(pinned && pinnedCollapsed) && sectionRoots.map(session => renderSession(session))}
+                      </section>
+                    ) : null
+                  })}
+                  {!groupedRoots && hiddenRootCount > 0 && (
+                    continuationRow({ onClick: toggleShowMoreRoots, label: `Show ${Math.min(hiddenRootCount, MORE_VISIBLE_ROOTS_STEP)} more`, contentX: SESSION_ROW_PADDING_PX, owner: 'roots' })
+                  )}
+                  {!bounded && hiddenRootCount <= 0 && rootSessions.length > DEFAULT_VISIBLE_ROOTS && (
+                    continuationRow({ onClick: toggleShowMoreRoots, label: 'Show less', less: true, contentX: SESSION_ROW_PADDING_PX, owner: 'roots' })
+                  )}
+                </>
+              ) : (
+                <div className="px-2 py-6 text-center text-sm text-fw-text-muted">
+                  {isFiltering ? 'No sessions match your search.' : 'No sessions yet.'}
+                  {!isFiltering && onStartSession && (
+                    <button type="button" data-session-list-start onClick={onStartSession}
+                      className="mt-2 block w-full rounded-md px-2 py-1 text-sm font-medium text-fw-accent hover:bg-fw-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-fw-focus-ring/40">
+                      Start a conversation
+                    </button>
+                  )}
+                </div>
+              )}
+              {/* Names filter live here; message contents need the submitted history search. */}
+              {isFiltering && onSearchMessages && (
+                <button
+                  type="button"
+                  onClick={() => onSearchMessages(filterText.trim())}
+                  className="mt-1 flex w-full min-w-0 items-center gap-2 rounded px-3 py-2 text-left text-sm text-fw-text-muted hover:bg-fw-hover hover:text-fw-text-strong"
+                  data-session-list-search-messages
+                >
+                  <Search className="h-4 w-4 shrink-0" aria-hidden="true" />
+                  <span className="min-w-0 truncate">Search messages for ‘{filterText.trim()}’</span>
+                </button>
+              )}
+            </div>
+  </div>
         </div>
       </div>
 
