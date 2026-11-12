@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
-import { existsSync } from 'node:fs'
+import { existsSync, realpathSync } from 'node:fs'
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createHostFixture, until } from './mainHostFixture.mjs'
@@ -92,7 +92,9 @@ try {
   await until(async () => restartId && !(await history()).session.busy && (await registry()).execs.length === 1, 'native background and persisted wait')
   const before = (await registry()).execs[0]
   assert.equal(before.id, restartId); assert.equal(before.logPath, restartLog); assert.equal(before.nodeId, 'master')
-  assert(before.logPath.startsWith(join(fixture.work, '.temp/exec/')), before.logPath)
+  // Main records the long path; the temporary directory can be an 8.3 short name on Windows.
+  const execRoot = join(realpathSync.native(fixture.work), '.temp/exec/')
+  assert(windows ? before.logPath.toLowerCase().startsWith(execRoot.toLowerCase()) : before.logPath.startsWith(execRoot), before.logPath + ' outside ' + execRoot)
   await fixture.stop()
   assert.equal(await readFile(join(fixture.work, 'restart-effect'), 'utf8').catch(() => ''), '')
   process.kill(before.pid, 0) // The shell, not its exited Main, owns its lifetime and descriptors.
