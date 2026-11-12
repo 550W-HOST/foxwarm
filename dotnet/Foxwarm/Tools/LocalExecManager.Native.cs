@@ -222,7 +222,7 @@ internal sealed partial class LocalExecManager
                             ? JsonValue.Create(exit)
                             : null,
                     ["finishedAt"] = Text(raw, "finishedAt") is { Length: > 0 } finished
-                        ? finished
+                        ? ExecOutput.WrapperFinishedAt(finished, path)
                         : DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture),
                 };
                 if (

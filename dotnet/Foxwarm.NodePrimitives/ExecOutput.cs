@@ -216,6 +216,41 @@ internal static class ExecOutput
         }
     }
 
+    // The completion time a Unix exec wrapper wrote to its status file. BSD date, as on
+    // macOS, has no sub-second format, so there the wrapper writes whole seconds; the status
+    // file's modification time, set by that same write, then supplies the milliseconds.
+    // Without them a sub-second command would appear to finish before it started.
+    internal static string WrapperFinishedAt(string written, string statusPath)
+    {
+        if (
+            written.Length != 20
+            || !DateTimeOffset.TryParseExact(
+                written,
+                "yyyy-MM-dd'T'HH:mm:ss'Z'",
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal,
+                out var seconds
+            )
+        )
+            return written;
+        DateTime modified;
+        try
+        {
+            modified = File.GetLastWriteTimeUtc(statusPath);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            return written;
+        }
+        var offset = modified - seconds.UtcDateTime;
+        return offset >= TimeSpan.Zero && offset < TimeSpan.FromSeconds(2)
+            ? new DateTimeOffset(modified, TimeSpan.Zero).ToString(
+                "yyyy-MM-dd'T'HH:mm:ss.fff'Z'",
+                CultureInfo.InvariantCulture
+            )
+            : written;
+    }
+
     internal static string CompletedDuration(JsonObject entry, JsonObject status)
     {
         var duration = Number(status["durationMs"]);

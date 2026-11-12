@@ -426,7 +426,7 @@ internal sealed partial class NodeExecManager(
                     ? raw["exitCode"]!.DeepClone()
                     : null,
                 ["finishedAt"] = Text(raw, "finishedAt") is { Length: > 0 } finished
-                    ? finished
+                    ? ExecOutput.WrapperFinishedAt(finished, file)
                     : DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture),
             };
             if (Text(raw, "finishedAt") is not { Length: > 0 })
