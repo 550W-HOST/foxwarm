@@ -161,6 +161,9 @@ internal sealed partial class DesktopApplication : NSApplicationDelegate
             if (exiting)
                 return;
             window.ContentView.AddSubview(view);
+            // Hidden beneath the web view, the startup label would otherwise remain in the
+            // accessibility tree.
+            status.RemoveFromSuperview();
             view.LoadRequest(new NSUrlRequest(new NSUrl(endpoint.AbsoluteUri)));
         }
         catch (Exception error)
