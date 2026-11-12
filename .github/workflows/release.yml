@@ -67,7 +67,7 @@ jobs:
 
   packages:
     needs: [code-resources, lancedb-linux]
-    name: Build Linux and Windows server packages
+    name: Build Linux server packages
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -101,11 +101,11 @@ jobs:
         with:
           name: lancedb-linux-x64
           path: ${{ runner.temp }}/lancedb
-      - name: Build Linux and Windows server packages
+      - name: Build the framework-dependent Linux package
         run: >-
           node scripts/release/package.mjs --build-assets --output dist
           --lancedb-library "$RUNNER_TEMP/lancedb/liblancedb_ffi.so"
-          --target linux-x64 --target win-x64 --target win-x64-self-contained
+          --target linux-x64
       # NativeAOT links against the build system's glibc. The UBI 9 container (glibc 2.34) keeps
       # the native package runnable on Ubuntu 22.04, Debian 12 and RHEL 9; the delivery assets
       # built above, the runner's Node.js and its NuGet cache are reused.
@@ -131,7 +131,7 @@ jobs:
           done
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: release-packages-linux-windows
+          name: release-packages-linux
           path: dist/
           if-no-files-found: error
           compression-level: 0
@@ -252,16 +252,19 @@ jobs:
           test -f dist/native-cli-node-latest-v3.tar.gz
           test -f dist/native-cli-node-win-x64-latest-v3.zip
           test -f dist/native-cli-node-osx-arm64-latest-v3.tar.gz
-      # One-release transition, 0.9.6 only (user decision 2026-11-12); drop it in 0.9.7. The control
+      # One-release transition, 0.9.6 only (user decisions 2026-11-12); drop it in 0.9.7. The control
       # script of a 0.9.5-or-earlier self-contained macOS installation updates by downloading the
       # retired asset name and its SHA256SUMS line. The alias serves it the native package, whose
       # release.json records the native asset, so its next update requests that directly.
-      - name: Publish the native macOS package under the retired self-contained name (0.9.6 only)
+      # The same holds for a self-contained Windows installation.
+      - name: Publish the native macOS and Windows packages under the retired self-contained names (0.9.6 only)
         run: |
           version="$(node -p 'require("./package.json").version')"
           case "$version" in
-            0.9.5|0.9.6) cp dist/foxwarm-osx-arm64-native.tar.gz dist/foxwarm-osx-arm64-self-contained.tar.gz ;;
-            *) echo "::warning::$version publishes no self-contained macOS alias; remove this step." ;;
+            0.9.5|0.9.6)
+              cp dist/foxwarm-osx-arm64-native.tar.gz dist/foxwarm-osx-arm64-self-contained.tar.gz
+              cp dist/foxwarm-win-x64-native.zip dist/foxwarm-win-x64-self-contained.zip ;;
+            *) echo "::warning::$version publishes no self-contained macOS or Windows alias; remove this step." ;;
           esac
       - name: Write one checksum list covering every platform
         run: node scripts/release/package.mjs --output dist --checksums-only
@@ -292,7 +295,7 @@ jobs:
           dotnet-version: '10.0.x'
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: release-packages-linux-windows
+          name: release-packages-linux
           path: dist
       - name: Install tmux and the qualification driver
         run: |
@@ -344,10 +347,10 @@ jobs:
               /previous/foxwarm-linux-x64-native.tar.gz /repo/dist/foxwarm-linux-x64-native.tar.gz 3001'
 
   windows:
-    name: Build Desktop and qualify Windows packages
+    name: Build and qualify Windows packages
     needs: packages
     runs-on: windows-2025
-    timeout-minutes: 35
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -361,14 +364,14 @@ jobs:
             packages/webui/package-lock.json
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
-          dotnet-version: '10.0.x'
+          dotnet-version: '10.0.403'
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: release-packages-linux-windows
+          name: release-packages-linux
           path: dist
-      - name: Install Desktop build and acceptance dependencies
+      - name: Install build and acceptance dependencies
         run: npm ci && npm --prefix packages/webui ci
-      - name: Prepare shared Code resources and build Desktop on Windows
+      - name: Prepare shared Code resources
         shell: pwsh
         run: |
           # The server artifact forwards the shared code-resources archive unchanged.
@@ -379,21 +382,87 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node scripts/test/prepare-browser.mjs --check-code
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          node scripts/release/package.mjs --build-assets --output dist --target desktop-win-x64
+      # NativeAOT links with the image's Visual Studio C++ tools; the server packages ship the
+      # Visual C++ runtime of the same installation beside the binaries that import it.
+      - name: Locate the Visual C++ runtime
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          $version = (Get-Content "$vs\VC\Auxiliary\Build\Microsoft.VCRedistVersion.default.txt" -Raw).Trim()
+          $crt = @(Get-ChildItem "$vs\VC\Redist\MSVC\$version\x64" -Directory -Filter 'Microsoft.VC*.CRT')
+          if ($crt.Count -ne 1) { throw "Expected one Visual C++ runtime directory for $version" }
+          Write-Host "Visual C++ runtime $version from $($crt[0].FullName)"
+          Get-ChildItem $crt[0].FullName | Format-Table Name, Length | Out-String | Write-Host
+          "VC_RUNTIME=$($crt[0].FullName)" >> $env:GITHUB_ENV
+      - name: Build the Windows server packages and Desktop
+        shell: pwsh
+        run: |
+          node scripts/release/package.mjs --build-assets --output dist --vc-runtime $env:VC_RUNTIME --target win-x64 --target win-x64-native --target desktop-win-x64
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: release-packages-desktop
-          path: dist/foxwarm-desktop-win-x64.zip
+          name: release-packages-windows
+          path: |
+            dist/foxwarm-win-x64.zip
+            dist/foxwarm-win-x64-native.zip
+            dist/foxwarm-desktop-win-x64.zip
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
+      - name: Check that every imported DLL is in the server packages or part of Windows
+        shell: pwsh
+        run: |
+          foreach ($package in 'foxwarm-win-x64.zip', 'foxwarm-win-x64-native.zip') {
+            $extracted = Join-Path $env:RUNNER_TEMP "imports-$package"
+            Expand-Archive -LiteralPath "dist/$package" -DestinationPath $extracted
+            $payload = (Get-ChildItem $extracted -Directory | Select-Object -First 1).FullName
+            node scripts/release/windows-imports.mjs $payload
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            if (-not (Test-Path (Join-Path $payload 'VC-RUNTIME-NOTICE.txt'))) { throw "$package has no Visual C++ runtime notice" }
+            if ($package -like '*-native.zip' -and (Test-Path (Join-Path $payload 'Foxwarm.dll'))) { throw 'The native package must not contain Foxwarm.dll' }
+          }
+      - name: Qualify the archived Main, detached exec, PTY, native ToolScript and the Vector child
+        shell: pwsh
+        run: |
+          foreach ($package in 'foxwarm-win-x64.zip', 'foxwarm-win-x64-native.zip') {
+            Write-Host "== $package"
+            $extracted = Join-Path $env:RUNNER_TEMP "qualify-$package"
+            Expand-Archive -LiteralPath "dist/$package" -DestinationPath $extracted
+            $payload = (Get-ChildItem $extracted -Directory | Select-Object -First 1).FullName
+            $qualify = @($payload)
+            if ($package -like '*-native.zip') { $qualify += '--vector' }
+            node scripts/release/qualify-package.mjs @qualify
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $env:FOXWARM_PUBLISHED_CORE = $payload
+            node packages/webui/test/mainHostNativeExec.e2e.mjs
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
       - name: Framework-dependent server package
         shell: pwsh
         run: ./scripts/release/smoke-server.ps1 -Package dist/foxwarm-win-x64.zip
-      - name: Self-contained server package
+      - name: Native server package
         shell: pwsh
-        run: ./scripts/release/smoke-server.ps1 -Package dist/foxwarm-win-x64-self-contained.zip -Port 3002
+        run: ./scripts/release/smoke-server.ps1 -Package dist/foxwarm-win-x64-native.zip -Port 3002
+      - name: Upgrade the previous release's self-contained package to the native package
+        shell: pwsh
+        run: |
+          # As on Linux and macOS: once by rerunning the installer with the new package file,
+          # once through the installed release's own update, which downloads its recorded asset;
+          # for 0.9.6 the release publishes the native package under that name.
+          $previous = Join-Path $env:RUNNER_TEMP 'previous'
+          New-Item -ItemType Directory -Force $previous | Out-Null
+          $base = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$env:PREVIOUS_RELEASE"
+          Invoke-WebRequest "$base/foxwarm-win-x64-self-contained.zip" -OutFile "$previous/foxwarm-win-x64-self-contained.zip" -UseBasicParsing
+          Invoke-WebRequest "$base/SHA256SUMS" -OutFile "$previous/SHA256SUMS" -UseBasicParsing
+          $expected = Get-Content "$previous/SHA256SUMS" | Where-Object { $_ -match '^([0-9a-f]{64})  foxwarm-win-x64-self-contained\.zip$' } | ForEach-Object { $Matches[1] }
+          if (-not $expected -or (Get-FileHash "$previous/foxwarm-win-x64-self-contained.zip" -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected) { throw 'Checksum verification failed for the previous release' }
+          ./scripts/release/smoke-upgrade.ps1 -Old "$previous/foxwarm-win-x64-self-contained.zip" -New dist/foxwarm-win-x64-native.zip
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./scripts/release/smoke-upgrade.ps1 -Old "$previous/foxwarm-win-x64-self-contained.zip" -New dist/foxwarm-win-x64-native.zip -ViaUpdate foxwarm-win-x64-self-contained.zip
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Switch a framework-dependent installation to the native package
+        shell: pwsh
+        run: ./scripts/release/smoke-upgrade.ps1 -Old dist/foxwarm-win-x64.zip -New dist/foxwarm-win-x64-native.zip -Native
       - name: Prepare WebView2 Evergreen runtime for acceptance
         shell: pwsh
         run: |
@@ -435,46 +504,6 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-  # NativeAOT qualification for the next release's Windows package. Its output is uploaded only
-  # as a workflow artifact and never published; a failure is reported on the job without
-  # failing the workflow or blocking aggregation and publication.
-  windows-native:
-    name: Qualify a native Windows package (not published)
-    runs-on: windows-2025
-    timeout-minutes: 45
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24.21.0
-          cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            packages/webui/package-lock.json
-      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
-        with:
-          dotnet-version: '10.0.403'
-      - name: Install dependencies
-        run: npm ci && npm --prefix packages/webui ci
-      - name: Build the native Windows package
-        shell: pwsh
-        run: |
-          node scripts/release/package.mjs --build-assets --output dist --target win-x64-native
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: native-qualification-win-x64
-          path: dist/foxwarm-win-x64-native.zip
-          if-no-files-found: warn
-          compression-level: 0
-          retention-days: 7
-      - name: Installer and control smoke
-        shell: pwsh
-        run: ./scripts/release/smoke-server.ps1 -Package dist/foxwarm-win-x64-native.zip
-
   image:
     name: Container image
     needs: packages
@@ -489,7 +518,7 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: release-packages-linux-windows
+          name: release-packages-linux
           path: dist
       - name: Build from the native Linux package
         run: |

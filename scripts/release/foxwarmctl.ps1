@@ -50,7 +50,8 @@ function Resolve-DataRoot {
   if ($env:FOXWARM_DATA_DIR -and $env:FOXWARM_DATA_DIR.Trim()) { $value = $env:FOXWARM_DATA_DIR.Trim() }
   else {
     $pointer = Join-Path $Root 'data_dir'
-    $value = if (Test-Path $pointer) { ([string](Get-Content $pointer -Raw)).Trim() } else { '' }
+    # The installer writes the pointer as UTF-8, which Main reads; Windows PowerShell's default is ANSI.
+    $value = if (Test-Path -LiteralPath $pointer) { ([string](Get-Content -LiteralPath $pointer -Raw -Encoding UTF8)).Trim() } else { '' }
     if (-not $value) { return [System.IO.Path]::GetFullPath($Root) }
   }
   if ($value -eq '~') { $value = $HOME } elseif ($value.StartsWith('~/')) { $value = Join-Path $HOME $value.Substring(2) }
@@ -138,14 +139,15 @@ function Test-OwnedMain($ProcessId) {
 }
 
 # State is none (nothing answers), running (this installation's Main answers) or foreign
-# (something else answers on the pipe name).
-function Get-Instance {
+# (something else answers on the pipe name). $Owned is a PID already verified as this
+# installation's Main, so a caller polling one start does not repeat the slow process query.
+function Get-Instance($Owned = 0) {
   $status = Get-Status
   if (-not $status) { return [pscustomobject]@{ State = 'none'; Status = $null; Pid = 0 } }
   $processId = [int]$status.pid
   # A reply from a process that has just exited (a Main that failed while starting) is not an instance.
   if (-not (Test-Pid $processId)) { return [pscustomobject]@{ State = 'none'; Status = $null; Pid = 0 } }
-  $state = if (Test-OwnedMain $processId) { 'running' } else { 'foreign' }
+  $state = if ($processId -eq $Owned -or (Test-OwnedMain $processId)) { 'running' } else { 'foreign' }
   return [pscustomobject]@{ State = $state; Status = $status; Pid = $processId }
 }
 
@@ -191,6 +193,9 @@ function Fail-Startup($Offset) {
     $by = if ($holder) { " by $holder" } else { '' }
     Fail "Foxwarm could not start: port $port is already in use$by. Stop that program, or set bot.httpPort in $(Join-Path $DataRoot 'state\config.yaml') to a free port."
   }
+  if ($errors -match 'AddressNotAvailable') {
+    Fail "Foxwarm could not start: bot.httpHost in $(Join-Path $DataRoot 'state\config.yaml') is not an address of this computer."
+  }
   if ($errors -match 'ControlPipeUnavailable') {
     Fail "Foxwarm could not start: the control pipe '$PipeName' is already in use by another process. Close the program that holds the pipe."
   }
@@ -234,11 +239,13 @@ function Start-Foxwarm {
   $deadline = (Get-Date).AddSeconds(60)
   $started = $null
   $instance = $null
+  $owned = 0
   while ((Get-Date) -lt $deadline) {
-    Start-Sleep -Milliseconds 300
-    $instance = Get-Instance
+    Start-Sleep -Milliseconds 100
+    $instance = Get-Instance $owned
     if ($instance.State -eq 'foreign' -and (Test-Pid $instance.Pid)) { Fail-Foreign $instance }
     if ($instance.State -eq 'running') {
+      $owned = $instance.Pid
       # Main versions without the field are treated as ready once they answer.
       $ready = $instance.Status.PSObject.Properties['ready']
       if (-not $ready -or $ready.Value) { $started = $instance; break }
@@ -267,7 +274,7 @@ function Stop-Foxwarm {
   $processId = $instance.Pid
   try { Invoke-Control 'stop' | Out-Null } catch { Write-Warning "Stop request failed: $_" }
   $deadline = (Get-Date).AddSeconds($StopSeconds)
-  while ((Test-Pid $processId) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 200 }
+  while ((Test-Pid $processId) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 100 }
   if (Test-Pid $processId) {
     # Only this installation's Main is ever terminated, never a PID that merely came over the pipe.
     if (-not (Test-OwnedMain $processId)) {
@@ -306,6 +313,16 @@ function Set-Current($Target) {
   if ($selected -ne $Target -or -not (Test-Path (Join-Path $Current 'release.json'))) { throw "Could not select $Target (runtime\current points to $selected)" }
 }
 
+# Download a release file. A release that does not publish it fails with $Missing.
+function Get-ReleaseFile($Url, $OutFile, $Missing) {
+  try { Invoke-WebRequest $Url -OutFile $OutFile -UseBasicParsing }
+  catch {
+    $response = $_.Exception.Response
+    if ($response -and [int]$response.StatusCode -eq 404) { Fail $Missing }
+    throw
+  }
+}
+
 function Update-Foxwarm {
   $installed = Read-Release $Current
   $scratch = Join-Path $RuntimeDir ('.staging-' + [guid]::NewGuid().ToString('N').Substring(0, 12))
@@ -317,8 +334,10 @@ function Update-Foxwarm {
       $archive = Join-Path $scratch $installed.asset
       Write-Step "Downloading $($installed.asset)"
       $ProgressPreference = 'SilentlyContinue'
-      Invoke-WebRequest "$base/$($installed.asset)" -OutFile $archive -UseBasicParsing
-      Invoke-WebRequest "$base/SHA256SUMS" -OutFile (Join-Path $scratch 'SHA256SUMS') -UseBasicParsing
+      # A release can retire a package type; rerunning the installer switches to a current one.
+      $release = if ($Version) { "Release $($Version.TrimStart('v'))" } else { 'The latest release' }
+      Get-ReleaseFile "$base/$($installed.asset)" $archive "$release has no $($installed.asset). To switch this installation to a package it publishes, rerun the installer with -InstallDir '$Root'."
+      Get-ReleaseFile "$base/SHA256SUMS" (Join-Path $scratch 'SHA256SUMS') "$release has no SHA256SUMS."
       $expected = Get-Content (Join-Path $scratch 'SHA256SUMS') | Where-Object { $_ -match "^([0-9a-f]{64})  $([regex]::Escape($installed.asset))$" } | ForEach-Object { $Matches[1] }
       if (-not $expected -or (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected) {
         throw "Checksum verification failed for $($installed.asset)."

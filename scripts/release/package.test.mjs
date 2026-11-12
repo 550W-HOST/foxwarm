@@ -107,10 +107,10 @@ for (const framework of [false, true]) test(`Darwin installer ${framework ? 'ins
   assert.equal(fs.realpathSync(path.join(f.work, 'foxwarm/runtime/current')), path.join(f.work, 'foxwarm/runtime/0.9.0'))
 })
 
-test('Linux and macOS publish a native package instead of a self-contained one; Windows native only qualifies', () => {
+test('every server platform publishes a native package instead of a self-contained one', () => {
   const published = Object.keys(TARGETS).filter(name => !TARGETS[name].qualification).map(assetName).sort()
   assert.deepEqual(published, ['foxwarm-desktop-win-x64.zip', 'foxwarm-linux-x64-native.tar.gz', 'foxwarm-linux-x64.tar.gz',
-    'foxwarm-osx-arm64-native.tar.gz', 'foxwarm-osx-arm64.tar.gz', 'foxwarm-win-x64-self-contained.zip', 'foxwarm-win-x64.zip'])
+    'foxwarm-osx-arm64-native.tar.gz', 'foxwarm-osx-arm64.tar.gz', 'foxwarm-win-x64-native.zip', 'foxwarm-win-x64.zip'])
   for (const name of ['linux-x64-native', 'win-x64-native', 'osx-arm64-native']) {
     assert.equal(TARGETS[name].native, true)
     assert.equal(TARGETS[name].selfContained, true, 'Older control scripts launch self-contained packages through their executable')

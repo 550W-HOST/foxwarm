@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Exercise native features from an extracted release, never a source build output:
-// file logging, PTY input/output/resize/cancellation and the packaged ToolScript worker.
+// file logging, PTY input/output/resize/cancellation and the packaged ToolScript worker, on
+// Linux x64, macOS arm64 and Windows x64.
 // --vector additionally indexes and searches history through the packaged Vector child.
 // Usage: qualify-package.mjs EXTRACTED_PACKAGE [--vector]
 import assert from 'node:assert/strict'
@@ -18,16 +19,19 @@ assert(packageArgument && flags.every(flag => flag === '--vector'), 'Usage: qual
 const vector = flags.includes('--vector')
 const payload = resolve(packageArgument)
 const release = JSON.parse(await readFile(join(payload, 'release.json'), 'utf8'))
-const hostRid = { 'linux-x64': 'linux-x64', 'darwin-arm64': 'osx-arm64' }[`${process.platform}-${process.arch}`]
+const hostRid = { 'linux-x64': 'linux-x64', 'darwin-arm64': 'osx-arm64', 'win32-x64': 'win-x64' }[`${process.platform}-${process.arch}`]
 assert.equal(release.rid, hostRid, `A ${release.rid} package must be qualified natively on ${release.rid}`)
+const windows = process.platform === 'win32'
+const executable = join(payload, windows ? 'Foxwarm.exe' : 'Foxwarm')
 // Native packages run their NativeAOT executable; managed ones run Foxwarm.dll with dotnet.
 const options = release.native
-  ? { coreExecutable: join(payload, 'Foxwarm'), env: { SHELL: '/bin/bash' } }
-  : { corePath: join(payload, 'Foxwarm.dll'), env: { SHELL: '/bin/bash' } }
+  ? { coreExecutable: executable, env: windows ? {} : { SHELL: '/bin/bash' } }
+  : { corePath: join(payload, 'Foxwarm.dll'), env: windows ? {} : { SHELL: '/bin/bash' } }
 if (release.native) assert(!existsSync(join(payload, 'Foxwarm.dll')), 'A native package must not contain Foxwarm.dll')
 const fixture = await createHostFixture('package', options)
 options.cwd = fixture.root
 options.env.HOME = join(fixture.root, 'home')
+if (windows) options.env.USERPROFILE = options.env.HOME
 await mkdir(options.env.HOME)
 const failures = [], sockets = []
 let requests = 0, embeddings = 0
@@ -62,14 +66,24 @@ await writeFile(join(fixture.data, 'state/config.yaml'), vector
 await writeFile(fixture.modelPath, JSON.stringify({ default: 'local/wire', providers: {
   local: { providerType: 'openai-responses', baseUrl: provider, models: ['wire'] },
 } }))
-// The images a process has mapped: /proc on Linux, vmmap on macOS (own processes need no root).
+const powershell = script => execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8' })
+// The images a process has mapped: /proc on Linux, vmmap on macOS (own processes need no
+// root), the loaded modules on Windows.
 const maps = async pid => process.platform === 'linux' ? readFile(`/proc/${pid}/maps`, 'utf8')
+  : windows ? powershell(`(Get-Process -Id ${pid}).Modules | ForEach-Object { $_.ModuleName }`)
   : execFileSync('vmmap', ['-w', String(pid)], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 })
+// Processes started by `parent`, as [pid, command line].
+const childProcesses = parent => windows
+  ? JSON.parse(powershell(`ConvertTo-Json -Compress -InputObject @(Get-CimInstance Win32_Process -Filter "ParentProcessId=${parent}" | ForEach-Object { @{ pid = [string]$_.ProcessId; args = [string]$_.CommandLine } })`) || '[]')
+    .map(child => [child.pid, child.args])
+  : execFileSync('ps', ['-ww', '-o', 'pid=,ppid=,args=', '-A'], { encoding: 'utf8' }).split('\n')
+    .map(line => line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/)).filter(match => match && Number(match[2]) === parent).map(match => [match[1], match[3]])
+const coreclr = /coreclr/i
 try {
   await fixture.start()
   assert.match(fixture.output, new RegExp(`Main HTTP listening: http://127\\.0\\.0\\.1:${fixture.port}\\b`), 'Main must listen only on its configured address')
   const mainPid = fixture.hostPids.at(-1)
-  if (release.native) assert(!/libcoreclr/.test(await maps(mainPid)), 'Native Main must not load CoreCLR')
+  if (release.native) assert(!coreclr.test(await maps(mainPid)), 'Native Main must not load CoreCLR')
   assert.equal((await fetch(fixture.origin + '/login.html')).status, 200)
   assert.match(await readFile(join(fixture.data, 'state/logs/foxwarm.log'), 'utf8'), /Main HTTP listening:/)
 
@@ -89,10 +103,16 @@ try {
   })
   await once(socket, 'open'); await until(() => ready, 'packaged terminal ready')
   socket.send(JSON.stringify({ type: 'resize', cols: 95, rows: 39 }))
-  // Split the marker in the printf command so echoed input cannot satisfy it.
-  socket.send(JSON.stringify({ type: 'input', data: "stty -echo; printf 'PACKAGE_%s_🦊\\n' PTY; stty size\n" }))
-  await until(() => output.includes('PACKAGE_PTY_🦊') && output.includes('39 95'), 'packaged PTY input, Unicode output and resize')
-  socket.send(JSON.stringify({ type: 'input', data: "printf 'BLOCKED_%s\\n' READ; sleep 120\n" }))
+  // Split the markers in the commands so echoed input cannot satisfy them. Windows terminals
+  // run PowerShell, whose console size reports the resize.
+  if (windows) {
+    socket.send(JSON.stringify({ type: 'input', data: "Write-Output ('PACKAGE_{0}_' -f 'PTY' + [char]0x00e9 + [char]0x4e2d); 'SIZE=' + $Host.UI.RawUI.WindowSize.Width + 'x' + $Host.UI.RawUI.WindowSize.Height\r" }))
+    await until(() => output.includes('PACKAGE_PTY_\u00e9\u4e2d') && output.includes('SIZE=95x39'), 'packaged PTY input, Unicode output and resize')
+  } else {
+    socket.send(JSON.stringify({ type: 'input', data: "stty -echo; printf 'PACKAGE_%s_🦊\\n' PTY; stty size\n" }))
+    await until(() => output.includes('PACKAGE_PTY_🦊') && output.includes('39 95'), 'packaged PTY input, Unicode output and resize')
+  }
+  socket.send(JSON.stringify({ type: 'input', data: windows ? "Write-Output ('BLOCKED_{0}' -f 'READ'); Start-Sleep 120\r" : "printf 'BLOCKED_%s\\n' READ; sleep 120\n" }))
   await until(() => output.includes('BLOCKED_READ'), 'PTY waiting with a blocked native read')
   assert.equal((await fixture.api('DELETE', '/api/terminals/' + encodeURIComponent(terminal.id))).status, 200)
   await until(() => {
@@ -130,15 +150,14 @@ try {
       return found.status === 200 && found.body.results.length > 0
     }, 'indexed history search results', 60000)
     assert(embeddings > 0, 'The Vector child must request embeddings')
-    const children = execFileSync('ps', ['-ww', '-o', 'pid=,ppid=,args=', '-A'], { encoding: 'utf8' }).split('\n')
-      .map(line => line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/)).filter(match => match && Number(match[2]) === mainPid && match[3].includes('--foxwarm-vector-child'))
+    const children = childProcesses(mainPid).filter(([, args]) => args.includes('--foxwarm-vector-child'))
     assert.equal(children.length, 1, 'Main must run exactly one Vector child')
-    const childArgs = children[0][3]
+    const childArgs = children[0][1].replace(/^"([^"]*)"/, '$1')
     if (release.native) {
-      assert(childArgs.startsWith(join(payload, 'Foxwarm') + ' --foxwarm-vector-child'), 'The Vector child must be the packaged executable: ' + childArgs)
-      assert(!/libcoreclr/.test(await maps(children[0][1])), 'The native Vector child must not load CoreCLR')
+      assert(childArgs.startsWith(executable + ' --foxwarm-vector-child'), 'The Vector child must be the packaged executable: ' + childArgs)
+      assert(!coreclr.test(await maps(children[0][0])), 'The native Vector child must not load CoreCLR')
     }
-    assert(/lancedb_ffi/.test(await maps(children[0][1])), 'The Vector child must own LanceDB')
+    assert(/lancedb_ffi/.test(await maps(children[0][0])), 'The Vector child must own LanceDB')
     assert(!/lancedb_ffi/.test(await maps(mainPid)), 'Main must not load LanceDB')
     Object.assign(summary, { vectorChild: true, vectorIndexAndSearch: true })
   }

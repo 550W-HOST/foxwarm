@@ -10,8 +10,9 @@ import { createHostFixture, until } from './mainHostFixture.mjs'
 // FOXWARM_PUBLISHED_CORE names an extracted release package: its NativeAOT executable when
 // the package is native, otherwise its managed Foxwarm.dll.
 const published = process.env.FOXWARM_PUBLISHED_CORE
+const windows = process.platform === 'win32'
 const env = {}, options = { env }
-if (published && !existsSync(join(published, 'Foxwarm.dll'))) options.coreExecutable = join(published, 'Foxwarm')
+if (published && !existsSync(join(published, 'Foxwarm.dll'))) options.coreExecutable = join(published, windows ? 'Foxwarm.exe' : 'Foxwarm')
 else if (published) options.corePath = join(published, 'Foxwarm.dll')
 const fixture = await createHostFixture('native-exec', options)
 options.cwd = fixture.root
@@ -24,6 +25,18 @@ for (const root of [join(fixture.data, 'state/logs'), join(fixture.work, '.temp/
 let phase = 'parallel', restartId, restartLog
 const failures = [], requests = []
 const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
+// exec runs Bash on Unix and PowerShell on Windows.
+const commands = windows ? {
+  parallel: 'Start-Sleep -Milliseconds 200; [Console]::Out.Write($env:FOXWARM_NATIVE_OWNED_VALUE); Set-Content -NoNewline -Path parallel-one -Value x',
+  two: 'Set-Content -NoNewline -Path parallel-two -Value x',
+  stop: 'Start-Sleep 2; Add-Content -NoNewline -Path stop-effect -Value x',
+  restart: 'Start-Sleep 8; Add-Content -NoNewline -Path restart-effect -Value x; [Console]::Out.Write("  native finished`n")',
+} : {
+  parallel: 'sleep .2; printf "$FOXWARM_NATIVE_OWNED_VALUE"; printf x > parallel-one',
+  two: 'printf x > parallel-two',
+  stop: 'sleep 2; printf x >> stop-effect',
+  restart: 'sleep 8; printf x >> restart-effect; printf "  native finished\\n"',
+}
 const message = text => ({ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] })
 const model = createServer(async (request, response) => {
   try {
@@ -33,8 +46,8 @@ const model = createServer(async (request, response) => {
     let output
     if (!result) {
       output = phase === 'parallel'
-        ? [call('parallel-command', 'exec', { command: 'sleep .2; printf "$FOXWARM_NATIVE_OWNED_VALUE"; printf x > parallel-one' }), call('parallel-two', 'exec', { command: 'printf x > parallel-two' })]
-        : [call(phase + '-command', 'exec', { command: phase === 'stop' ? 'sleep 2; printf x >> stop-effect' : 'sleep 8; printf x >> restart-effect; printf "  native finished\\n"', timeout: phase === 'stop' ? 15 : 1 })]
+        ? [call('parallel-command', 'exec', { command: commands.parallel }), call('parallel-two', 'exec', { command: commands.two })]
+        : [call(phase + '-command', 'exec', { command: commands[phase], timeout: phase === 'stop' ? 15 : 1 })]
     } else if (phase === 'restart') {
       const text = typeof result.output === 'string' ? result.output : result.output.map(part => part.text).join('\n')
       restartId = /execId: ([a-z]+-[a-z]+)/.exec(text)?.[1]
@@ -78,7 +91,7 @@ try {
   await until(async () => restartId && !(await history()).session.busy && (await registry()).execs.length === 1, 'native background and persisted wait')
   const before = (await registry()).execs[0]
   assert.equal(before.id, restartId); assert.equal(before.logPath, restartLog); assert.equal(before.nodeId, 'master')
-  assert(before.logPath.startsWith(join(fixture.work, '.temp/exec/')))
+  assert(before.logPath.startsWith(join(fixture.work, '.temp/exec/')), before.logPath)
   await fixture.stop()
   assert.equal(await readFile(join(fixture.work, 'restart-effect'), 'utf8').catch(() => ''), '')
   process.kill(before.pid, 0) // The shell, not its exited Main, owns its lifetime and descriptors.

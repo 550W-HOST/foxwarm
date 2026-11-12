@@ -7,22 +7,22 @@ import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { addVcRuntime, missingImports, vcRuntime } from './windows-imports.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const version = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version
 const python = process.platform === 'win32' ? 'python' : 'python3'
 
 // Native targets are NativeAOT publications: self-contained, with no .NET runtime or Foxwarm.dll.
-// They can only be compiled on their own platform. Qualification targets are built and
-// smoke-tested by the release workflow but not published.
+// They can only be compiled on their own platform. A target marked `qualification` would be
+// built and smoke-tested by the release workflow but not published; none is at present.
 export const TARGETS = {
   'linux-x64': { kind: 'server', rid: 'linux-x64', selfContained: false, archive: 'tar.gz' },
   'linux-x64-native': { kind: 'server', rid: 'linux-x64', selfContained: true, native: true, archive: 'tar.gz' },
   'osx-arm64': { kind: 'server', rid: 'osx-arm64', selfContained: false, archive: 'tar.gz' },
   'osx-arm64-native': { kind: 'server', rid: 'osx-arm64', selfContained: true, native: true, archive: 'tar.gz' },
   'win-x64': { kind: 'server', rid: 'win-x64', selfContained: false, archive: 'zip' },
-  'win-x64-self-contained': { kind: 'server', rid: 'win-x64', selfContained: true, archive: 'zip' },
-  'win-x64-native': { kind: 'server', rid: 'win-x64', selfContained: true, native: true, qualification: true, archive: 'zip' },
+  'win-x64-native': { kind: 'server', rid: 'win-x64', selfContained: true, native: true, archive: 'zip' },
   'desktop-win-x64': { kind: 'desktop', rid: 'win-x64', selfContained: true, archive: 'zip' },
 }
 
@@ -90,7 +90,8 @@ function usage(message) {
   console.error(`Usage: node scripts/release/package.mjs --output DIR [--target NAME]... [--build-assets] [--directory-only] [--lancedb-library FILE] [--checksums-only | --code-only]
 Targets: ${Object.keys(TARGETS).join(', ')}
 (default: the published targets this host can build; native targets build only on their own platform)
---lancedb-library: Linux x64 liblancedb_ffi.so to package instead of the LanceDB package's (scripts/release/build-lancedb-linux.sh)`)
+--lancedb-library: Linux x64 liblancedb_ffi.so to package instead of the LanceDB package's (scripts/release/build-lancedb-linux.sh)
+--vc-runtime: the x64 Microsoft.VC14x.CRT directory whose DLLs Windows server packages ship`)
   process.exit(2)
 }
 
@@ -137,7 +138,20 @@ function removeDebugFiles(directory) {
   }
 }
 
-function publish(name, directory, lancedbLibrary) {
+// Windows server packages carry the Visual C++ runtime DLLs their native binaries import
+// (the ToolScript worker and LanceDB), beside each importer, with Microsoft's notice.
+function addWindowsRuntime(directory, runtime) {
+  if (!runtime) throw new Error('Windows server packages need --vc-runtime DIR: the x64 Microsoft.VC14x.CRT redistributable directory of the Visual Studio build tools.')
+  const copied = addVcRuntime(directory, runtime)
+  const missing = missingImports(directory, name => !vcRuntime.test(name))
+  if (missing.length) throw new Error(`${path.basename(directory)} imports Visual C++ runtime DLLs that ${runtime} does not provide: ${missing.join(', ')}`)
+  if (copied.length) {
+    fs.copyFileSync(path.join(root, 'scripts/release/vc-runtime-notice.txt'), path.join(directory, 'VC-RUNTIME-NOTICE.txt'))
+    console.log(`Added the Visual C++ runtime: ${copied.join(', ')}`)
+  }
+}
+
+function publish(name, directory, lancedbLibrary, vcRuntimeDirectory) {
   const target = TARGETS[name]
   const common = ['-c', 'Release', '-r', target.rid, '--self-contained', String(target.selfContained),
     '-p:DebugType=None', '-p:DebugSymbols=false', '-o', directory]
@@ -157,6 +171,7 @@ function publish(name, directory, lancedbLibrary) {
     const control = path.join(root, 'scripts/release')
     if (target.rid.startsWith('win-')) {
       for (const file of ['foxwarmctl.ps1', 'foxwarmctl.cmd']) fs.copyFileSync(path.join(control, file), path.join(directory, file))
+      addWindowsRuntime(directory, vcRuntimeDirectory)
     } else {
       fs.copyFileSync(path.join(control, 'foxwarmctl'), path.join(directory, 'foxwarmctl'))
       fs.chmodSync(path.join(directory, 'foxwarmctl'), 0o755)
@@ -227,6 +242,7 @@ function main(argv) {
   let checksumsOnly = false
   let codeOnly = false
   let lancedbLibrary
+  let vcRuntimeDirectory
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
     if (arg === '--output') output = argv[++i]
@@ -236,10 +252,12 @@ function main(argv) {
     else if (arg === '--checksums-only') checksumsOnly = true
     else if (arg === '--code-only') codeOnly = true
     else if (arg === '--lancedb-library') lancedbLibrary = path.resolve(argv[++i] || usage('--lancedb-library requires a file'))
+    else if (arg === '--vc-runtime') vcRuntimeDirectory = path.resolve(argv[++i] || usage('--vc-runtime requires a directory'))
     else usage(`Unknown argument: ${arg}`)
   }
   if (!output) usage('--output is required')
   if (lancedbLibrary && !fs.statSync(lancedbLibrary, { throwIfNoEntry: false })?.isFile()) usage(`No such file: ${lancedbLibrary}`)
+  if (vcRuntimeDirectory && !fs.statSync(vcRuntimeDirectory, { throwIfNoEntry: false })?.isDirectory()) usage(`No such directory: ${vcRuntimeDirectory}`)
   for (const name of targets) if (!TARGETS[name]) usage(`Unknown target: ${name}`)
   output = path.resolve(output)
   if (codeOnly) {
@@ -262,6 +280,7 @@ function main(argv) {
   }
   for (const name of selected) {
     if (TARGETS[name].native && TARGETS[name].rid !== hostRid()) throw new Error(`${name} is a NativeAOT package and must be built on ${TARGETS[name].rid}.`)
+    if (TARGETS[name].kind === 'server' && TARGETS[name].rid === 'win-x64' && !vcRuntimeDirectory) usage(`${name} needs --vc-runtime DIR`)
   }
   if (selected.some(name => TARGETS[name].kind === 'desktop')) validateCodeAssets()
   if (buildAssets) run('npm', ['run', 'build:assets'], { shell: process.platform === 'win32' })
@@ -272,7 +291,7 @@ function main(argv) {
     const prefix = TARGETS[name].kind === 'desktop' ? 'foxwarm-desktop' : 'foxwarm'
     const staging = path.join(work, name, `${prefix}-${version}-${TARGETS[name].rid}`)
     fs.rmSync(path.dirname(staging), { recursive: true, force: true })
-    publish(name, staging, lancedbLibrary)
+    publish(name, staging, lancedbLibrary, vcRuntimeDirectory)
     if (directoryOnly) {
       console.log(`Prepared ${staging}`)
       continue

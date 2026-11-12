@@ -129,7 +129,7 @@ export async function createHostFixture(name, options = {}) {
     await afterAdmission?.()
     assert.deepEqual(await waitForExit(), { code: 0, signal: null }, host.output)
   }
-  const sql = (statement, parameters = []) => JSON.parse(execFileSync('python3', ['-c', 'import sqlite3,json,sys; c=sqlite3.connect("file:"+sys.argv[1]+"?mode=ro",uri=True); print(json.dumps(c.execute(sys.argv[2],json.loads(sys.argv[3])).fetchall()))', join(data, 'state/archive-store.sqlite'), statement, JSON.stringify(parameters)], { encoding: 'utf8' }))
+  const sql = (statement, parameters = []) => JSON.parse(execFileSync(process.platform === 'win32' ? 'python' : 'python3', ['-c', 'import sqlite3,json,sys; c=sqlite3.connect("file:"+sys.argv[1]+"?mode=ro",uri=True); print(json.dumps(c.execute(sys.argv[2],json.loads(sys.argv[3])).fetchall()))', join(data, 'state/archive-store.sqlite'), statement, JSON.stringify(parameters)], { encoding: 'utf8' }))
   async function crash() {
     if (host && host.child.exitCode === null && host.child.signalCode === null) { const exited = once(host.child, 'exit').catch(() => {}); host.child.kill('SIGKILL'); await exited }
   }

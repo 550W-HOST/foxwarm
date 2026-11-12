@@ -1,0 +1,12 @@
+Microsoft Visual C++ runtime
+
+The vcruntime*.dll, msvcp*.dll and related files in this package are the Microsoft Visual C++
+runtime libraries, copied unmodified from the redistributable files of Microsoft Visual Studio.
+They are needed by the ToolScript worker (ToolScript\native\monty.exe) and by semantic history
+search (lancedb_ffi.dll), and are redistributed as Distributable Code under the Microsoft
+Visual Studio license terms:
+
+  https://visualstudio.microsoft.com/license-terms/
+  https://learn.microsoft.com/visualstudio/releases/2022/redistribution
+
+Copyright (c) Microsoft Corporation. All rights reserved.
