@@ -264,8 +264,8 @@ internal sealed partial class ContextPreviewRenderer
                 );
 
     internal static string ArchiveDrill(string sessionId, string target) =>
-        "recall("
-        + EcmaJson.Stringify(
+        CtlCommandText.For(
+            "recall",
             new JsonObject
             {
                 ["sessionId"] = sessionId,
@@ -273,8 +273,7 @@ internal sealed partial class ContextPreviewRenderer
                 ["toolDetail"] = "full",
                 ["previewLength"] = 20000,
             }
-        )
-        + ")";
+        );
 
     private static string JoinBody(string text, string summary) =>
         text.Length == 0 ? summary : text + "\n" + summary;

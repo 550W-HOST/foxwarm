@@ -74,7 +74,7 @@ public sealed class InboundMcpSessionReadTests
             Preview(page).IndexOf("line-5", StringComparison.Ordinal)
                 < Preview(page).IndexOf("line-14", StringComparison.Ordinal)
         );
-        Assert.DoesNotContain("view_session(", Preview(page));
+        Assert.DoesNotContain("ctl session view", Preview(page));
         var older = Navigation(page, "Older");
         Assert.Equal(4, older["before"]!.GetValue<int>());
         Assert.Null(older["start"]);
@@ -115,7 +115,7 @@ public sealed class InboundMcpSessionReadTests
         );
         Assert.Equal(0, stale["count"]!.GetValue<int>());
         Assert.Contains("foxwarm_session(", Preview(stale));
-        Assert.DoesNotContain("view_session(", Preview(stale));
+        Assert.DoesNotContain("ctl session view", Preview(stale));
         var refresh = Preview(stale).Split("foxwarm_session(", 2)[1];
         var refreshed = Value(await Call(client, JsonNode.Parse(refresh[..^1])!.AsObject()));
         Assert.Equal(14, refreshed["total"]!.GetValue<int>());
@@ -244,7 +244,7 @@ public sealed class InboundMcpSessionReadTests
         var tools = Value(await Read(client, f.Target, new() { ["start"] = 1, ["count"] = 2 }));
         Assert.Contains("read", Preview(tools));
         Assert.Contains("argument needle", Preview(tools));
-        Assert.DoesNotContain("recall(", Preview(tools));
+        Assert.DoesNotContain("ctl history recall", Preview(tools));
         Assert.Contains("Archive originals are not available", Preview(tools));
         foreach (var detail in new[] { "snippets", "full" })
         {
@@ -265,7 +265,7 @@ public sealed class InboundMcpSessionReadTests
         }
         var partial = Value(await Read(client, f.Target, new() { ["start"] = 2, ["count"] = 1 }));
         Assert.Contains("result only", Preview(partial));
-        Assert.DoesNotContain("recall(", Preview(partial));
+        Assert.DoesNotContain("ctl history recall", Preview(partial));
         const string authored =
             "Authored text: recall({target: 'msg#1'}) and view_session({count: 1}).";
         await ForkClearLifecycleTests.AppendAsync(
@@ -296,7 +296,7 @@ public sealed class InboundMcpSessionReadTests
         Assert.Equal(200, bounded["count"]!.GetValue<int>());
         Assert.True(Preview(bounded).Length <= 1000);
         Assert.Contains("not displayed", Preview(bounded));
-        Assert.DoesNotContain("recall(", Preview(bounded));
+        Assert.DoesNotContain("ctl history recall", Preview(bounded));
         Assert.Contains("Archive originals are not available", Preview(bounded));
         options["count"] = 9007199254740991L;
         var all = Value(await Read(client, f.Target, options));

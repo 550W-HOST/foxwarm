@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using Foxwarm.Tools;
 using System.Text.RegularExpressions;
 using Foxwarm.Sessions;
 
@@ -237,7 +238,7 @@ internal sealed partial class ContextPreviewRenderer
     internal string LiveCall(JsonObject args)
     {
         if (!externalRead)
-            return "view_session(" + EcmaJson.Stringify(args) + ")";
+            return CtlCommandText.For("view_session", args);
         var external = (JsonObject)args.DeepClone();
         external["action"] = "read";
         return "foxwarm_session(" + EcmaJson.Stringify(external) + ")";
@@ -376,8 +377,11 @@ internal sealed partial class ContextPreviewRenderer
             {
                 var remaining = available - used - titleReserve;
                 var action =
+                    // Persisted notices keep the former call form.
                     notice.Contains("recall(", StringComparison.Ordinal)
                     || notice.Contains("view_session(", StringComparison.Ordinal)
+                    || notice.Contains(CtlCommandText.Prefix("recall"), StringComparison.Ordinal)
+                    || notice.Contains(CtlCommandText.Prefix("view_session"), StringComparison.Ordinal)
                     || notice.Contains("foxwarm_session(", StringComparison.Ordinal);
                 if (action && notice.Length + 1 > remaining)
                     Append(

@@ -6,6 +6,21 @@ namespace Foxwarm.Tests;
 // commands with the descriptor and search fields the former unified tools took.
 internal static class CtlTestArgs
 {
+    // The target arguments of a ctl command hint in tool output, such as an older-page link.
+    internal static JsonObject Hint(string text, string builtin)
+    {
+        var parsed = Foxwarm.Tools.CtlParser.Parse(new JsonObject { ["command"] = text });
+        if (parsed is Foxwarm.Tools.CtlError error)
+            Xunit.Assert.Fail(text + ": " + error.Message);
+        var target = Xunit.Assert.IsType<Foxwarm.Tools.CtlTarget>(parsed);
+        Xunit.Assert.Equal(builtin, target.Name);
+        // Reparse so numbers read as any integer type, like JSON arguments.
+        var args = JsonNode.Parse(target.Args.ToJsonString())!.AsObject();
+        foreach (var key in target.Command.Fixed?.Select(pair => pair.Key) ?? [])
+            args.Remove(key);
+        return args;
+    }
+
     private static string Quote(string text) =>
         "'" + text.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
 

@@ -6,7 +6,8 @@ using Foxwarm.Sessions;
 namespace Foxwarm.Tools;
 
 // One typed parameter of a ctl command. Name is the spelling users see (and the default
-// argument key of the target); Arg overrides the target argument key.
+// argument key of the target); Arg overrides the target argument key, and a dotted Arg such as
+// `model.modelId` sets a field of an object argument.
 internal sealed record CtlParameter(
     string Name,
     string Arg,

@@ -23,13 +23,7 @@ internal sealed partial class SessionToolExecutor
             case CtlHelpRequest request:
                 return CtlHelp.Render(request, visible) is { } help
                     ? new JsonObject { ["output"] = help }
-                    : CtlFailure(
-                        new CtlError(
-                            $"Unknown command `{request.Noun}{(request.Verb is null ? "" : " " + request.Verb)}`.",
-                            Noun: request.Verb is null ? null : request.Noun
-                        ),
-                        visible
-                    );
+                    : CtlFailure(UnknownHelp(request), visible);
             case CtlError error:
                 return CtlFailure(error, visible);
             case CtlSearch search:
@@ -53,6 +47,16 @@ internal sealed partial class SessionToolExecutor
                 // Commands naming a capability resolve to it before dispatch.
                 throw new InvalidOperationException("ctl command was not resolved to its target.");
         }
+    }
+
+    private static CtlError UnknownHelp(CtlHelpRequest request)
+    {
+        var typed = request.Verb is null ? request.Noun! : request.Noun + " " + request.Verb;
+        return new(
+            CtlParser.Unknown(typed),
+            Noun: request.Verb is null ? null : request.Noun,
+            Unknown: typed
+        );
     }
 
     private JsonObject CtlFailure(CtlError error, Func<CtlCommand, bool> visible)

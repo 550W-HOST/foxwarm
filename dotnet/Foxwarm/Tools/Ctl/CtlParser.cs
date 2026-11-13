@@ -18,9 +18,15 @@ internal sealed record CtlDescription(
 // Help for the overview (both null), a noun, or one command.
 internal sealed record CtlHelpRequest(string? Noun, string? Verb) : CtlInvocation;
 
-// A command that could not be parsed. Command or Noun select the usage shown with it.
-internal sealed record CtlError(string Message, CtlCommand? Command = null, string? Noun = null)
-    : CtlInvocation;
+// A command that could not be parsed. Command or Noun select the usage shown with it. Unknown
+// is the noun or `noun verb` that names no command; suggestions are chosen when the error is
+// presented, from the commands the caller may see.
+internal sealed record CtlError(
+    string Message,
+    CtlCommand? Command = null,
+    string? Noun = null,
+    string? Unknown = null
+) : CtlInvocation;
 
 internal sealed record CtlSearch(CtlCommand Command, JsonObject Args) : CtlInvocation;
 
@@ -46,7 +52,7 @@ internal static partial class CtlParser
         }
         catch (CtlUsageException error)
         {
-            return new CtlError(error.Message, error.Command, error.Noun);
+            return new CtlError(error.Message, error.Command, error.Noun, error.Unknown);
         }
         catch (InvalidDataException error)
         {
@@ -63,6 +69,117 @@ internal static partial class CtlParser
             CtlCall call => DescribeCall(call.Descriptor),
             _ => null,
         };
+
+    // Whether a ctl call is an attempt to select a Node: `node select`, or `tool call` naming
+    // builtin `node` with action select. Judged from the command words, so a call whose values,
+    // envelope or arguments are invalid still counts. When `tool call builtin:node` arguments
+    // can't be read, the call counts as a selection attempt.
+    internal static bool SelectsNode(JsonObject args)
+    {
+        switch (Parse(args))
+        {
+            case CtlTarget target:
+                return target is { Source: "builtin", Name: "node" } && IsSelect(target.Args);
+            case CtlCall call:
+                return DescribeCall(call.Descriptor) is { Source: "builtin", Name: "node" } described
+                    && IsSelect(described.Args);
+            case CtlError { Command.Path: "node select" }:
+                return true;
+            case CtlError:
+                break;
+            default:
+                return false;
+        }
+        if (SessionWait.Text(args["command"]) is not { } command)
+            return false;
+        var words = Words(command);
+        if (words.Count > 0 && words[0] == "ctl")
+            words.RemoveAt(0);
+        if (words.Count < 2)
+            return false;
+        if (words[0] == "node" && words[1] == "select")
+            return true;
+        if (words[0] != "tool" || words[1] != "call")
+            return false;
+        string? toolId = null, source = null, name = null, argsText = null;
+        for (var index = 2; index < words.Count; index++)
+        {
+            var word = words[index];
+            if (!word.StartsWith("--", StringComparison.Ordinal))
+            {
+                toolId ??= word;
+                continue;
+            }
+            var equals = word.IndexOf('=');
+            var flag = equals < 0 ? word[2..] : word[2..equals];
+            var value =
+                equals >= 0 ? word[(equals + 1)..]
+                : index + 1 < words.Count ? words[++index]
+                : null;
+            switch (flag)
+            {
+                case "tool-id" or "toolId":
+                    toolId = value;
+                    break;
+                case "source":
+                    source = value;
+                    break;
+                case "name":
+                    name = value;
+                    break;
+                case "args":
+                    argsText = value;
+                    break;
+            }
+        }
+        var names =
+            toolId is not null ? toolId.Trim() == "builtin:node"
+            : source?.Trim() == "builtin" && name == "node";
+        if (!names)
+            return false;
+        if (argsText is null)
+            return false;
+        JsonNode? toolArgs = null;
+        try
+        {
+            if (argsText.StartsWith('@') && !argsText.StartsWith("@@", StringComparison.Ordinal))
+            {
+                var values =
+                    args["values"] as JsonObject
+                    ?? (
+                        SessionWait.Text(args["valuesJson"]) is { } json
+                            ? JsonNode.Parse(json) as JsonObject
+                            : null
+                    );
+                toolArgs = values?[argsText[1..]];
+            }
+            else
+                toolArgs = JsonNode.Parse(argsText);
+        }
+        catch (System.Text.Json.JsonException) { }
+        return toolArgs is not JsonObject known || IsSelect(known);
+    }
+
+    private static bool IsSelect(JsonObject args) =>
+        SessionWait.Text(args["action"])?.Trim().Equals("select", StringComparison.OrdinalIgnoreCase)
+        == true;
+
+    // Command words for intent checks: lexed when possible, otherwise split on whitespace.
+    private static List<string> Words(string command)
+    {
+        try
+        {
+            var lexer = new CtlLexer(command);
+            var words = new List<string>();
+            while (lexer.Next() is { } token)
+                words.Add(token.Text);
+            return words;
+        }
+        catch (InvalidDataException)
+        {
+            return command.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).ToList();
+        }
+    }
 
     // A unified-call descriptor (toolId, or source/name/server/nodeId, plus args).
     internal static CtlDescription? DescribeCall(JsonObject descriptor)
@@ -109,11 +226,13 @@ internal static partial class CtlParser
     private sealed class CtlUsageException(
         string message,
         CtlCommand? command = null,
-        string? noun = null
+        string? noun = null,
+        string? unknown = null
     ) : Exception(message)
     {
         internal CtlCommand? Command => command;
         internal string? Noun => noun;
+        internal string? Unknown => unknown;
     }
 
     private sealed class Values(JsonObject? values)
@@ -212,7 +331,7 @@ internal static partial class CtlParser
         }
         var nounName = first.Text;
         if (CtlRegistry.Noun(nounName) is null || !Visible(nounName, ingress))
-            throw new CtlUsageException(Unknown(nounName, null, ingress));
+            throw new CtlUsageException(Unknown(nounName), unknown: nounName);
 
         var second = lexer.Next();
         if (second is null || second is { Quoted: false, Text: "--help" })
@@ -223,7 +342,11 @@ internal static partial class CtlParser
         }
         var found = CtlRegistry.Find(nounName, second.Text);
         if (found is null || !found.Available(ingress))
-            throw new CtlUsageException(Unknown(nounName, second.Text, ingress), noun: nounName);
+            throw new CtlUsageException(
+                Unknown(nounName + " " + second.Text),
+                noun: nounName,
+                unknown: nounName + " " + second.Text
+            );
         try
         {
             return Arguments(found, lexer, bound);
@@ -249,45 +372,7 @@ internal static partial class CtlParser
     private static bool Visible(string noun, string ingress) =>
         CtlRegistry.ForNoun(noun).Any(command => command.Available(ingress));
 
-    private static string Unknown(string noun, string? verb, string ingress)
-    {
-        var typed = verb is null ? noun : noun + " " + verb;
-        var candidates = (
-            verb is null
-                ? CtlRegistry
-                    .Nouns.Where(entry => Visible(entry.Name, ingress))
-                    .Select(entry => entry.Name)
-                : CtlRegistry
-                    .Commands.Where(command => command.Available(ingress))
-                    .Select(command => command.Path)
-        )
-            .Select(path => (Path: path, Distance: Distance(typed, path)))
-            .Where(pair => pair.Distance <= Math.Max(2, typed.Length / 3))
-            .OrderBy(pair => pair.Distance)
-            .ThenBy(pair => pair.Path, StringComparer.Ordinal)
-            .Take(3)
-            .Select(pair => "`" + pair.Path + "`")
-            .ToArray();
-        return $"Unknown command `{typed}`."
-            + (candidates.Length > 0 ? " Did you mean " + string.Join(", ", candidates) + "?" : "");
-    }
-
-    private static int Distance(string left, string right)
-    {
-        var previous = Enumerable.Range(0, right.Length + 1).ToArray();
-        for (var row = 1; row <= left.Length; row++)
-        {
-            var current = new int[right.Length + 1];
-            current[0] = row;
-            for (var column = 1; column <= right.Length; column++)
-                current[column] = Math.Min(
-                    Math.Min(current[column - 1] + 1, previous[column] + 1),
-                    previous[column - 1] + (left[row - 1] == right[column - 1] ? 0 : 1)
-                );
-            previous = current;
-        }
-        return previous[right.Length];
-    }
+    internal static string Unknown(string typed) => $"Unknown command `{typed}`.";
 
     private static CtlInvocation Arguments(CtlCommand command, CtlLexer lexer, Values bound)
     {
@@ -299,6 +384,13 @@ internal static partial class CtlParser
         var help = false;
         while (!lexer.AtEnd)
         {
+            // A positional already given as an option is filled; use the next one.
+            while (
+                nextPositional < positionals.Count
+                && !positionals[nextPositional].Variadic
+                && assigned.ContainsKey(positionals[nextPositional].Name)
+            )
+                nextPositional++;
             if (
                 rest is not null
                 && nextPositional >= positionals.Count
@@ -319,12 +411,8 @@ internal static partial class CtlParser
                 help = true;
                 continue;
             }
-            if (!flagsEnded && !token.Quoted && token.Text.StartsWith("--", StringComparison.Ordinal))
+            if (!flagsEnded && token.IsOption(out var flag, out var inline))
             {
-                var body = token.Text[2..];
-                var equals = body.IndexOf('=');
-                var flag = equals < 0 ? body : body[..equals];
-                string? inline = equals < 0 ? null : body[(equals + 1)..];
                 var parameter = command.FindFlag(flag);
                 var negated = false;
                 if (
@@ -366,13 +454,6 @@ internal static partial class CtlParser
                     Assign(assigned, parameter, Text(inline), bound);
                 continue;
             }
-            // A positional already given as an option is filled; use the next one.
-            while (
-                nextPositional < positionals.Count
-                && !positionals[nextPositional].Variadic
-                && assigned.ContainsKey(positionals[nextPositional].Name)
-            )
-                nextPositional++;
             if (nextPositional >= positionals.Count)
                 throw new InvalidDataException($"Unexpected argument `{token.Text}`.");
             var slot = positionals[nextPositional];
@@ -400,13 +481,26 @@ internal static partial class CtlParser
         var mapped = command.Fixed is { } fixedArgs ? (JsonObject)fixedArgs.DeepClone() : [];
         foreach (var parameter in command.Parameters)
             if (assigned.TryGetPropertyValue(parameter.Name, out var value))
-                mapped[parameter.Arg] = value?.DeepClone();
+                SetPath(mapped, parameter.Arg, value?.DeepClone());
         return command.Local switch
         {
             "tool-search" => new CtlSearch(command, mapped),
             "tool-call" => new CtlCall(command, Descriptor(mapped)),
             _ => new CtlTarget(command, command.Source!, command.Name!, mapped),
         };
+    }
+
+    // Sets a target argument; a dotted path such as `model.modelId` builds nested objects.
+    private static void SetPath(JsonObject target, string path, JsonNode? value)
+    {
+        var parts = path.Split('.');
+        for (var index = 0; index < parts.Length - 1; index++)
+        {
+            if (target[parts[index]] is not JsonObject inner)
+                target[parts[index]] = inner = new JsonObject();
+            target = inner;
+        }
+        target[parts[^1]] = value;
     }
 
     private static JsonObject Descriptor(JsonObject mapped)

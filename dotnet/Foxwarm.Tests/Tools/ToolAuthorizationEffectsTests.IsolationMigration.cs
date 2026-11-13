@@ -94,7 +94,6 @@ public sealed partial class ToolAuthorizationEffectsTests
         ("builtin", "wait", "{}", "master", null, true),
         ("builtin", "ask_user", "{}", "master", null, true),
         ("builtin", "continue_script", "{}", "master", null, true),
-        ("builtin", "search_tools", "{}", "master", null, true),
     ];
 
     private static async Task AssertParity(SessionManager manager, string root, string label)

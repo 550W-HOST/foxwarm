@@ -136,7 +136,7 @@ export function projectSessionSearchFields(messages: Message[], timelineView: Ti
     if (row.pairedToolResponse) {
       getGroupedToolEntries(msg, row.pairedToolResponse, rowKey).forEach((entry, toolIndex) => {
         if (entry.call) add('call', toolIndex, getToolCallSearchText(entry.call), toolIndex)
-        entry.responses.forEach((response, responseIndex) => add('response', responseIndex, getToolResponseSearchText(response), toolIndex, responseIndex))
+        entry.responses.forEach((response, responseIndex) => add('response', responseIndex, getToolResponseSearchText(response, entry.call), toolIndex, responseIndex))
       })
     } else {
       msg.parts.flatMap(part => part.functionCall ? [part.functionCall] : []).forEach((call, index) => {

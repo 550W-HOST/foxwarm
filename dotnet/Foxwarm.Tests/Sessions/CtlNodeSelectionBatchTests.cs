@@ -33,8 +33,13 @@ public sealed class CtlNodeSelectionBatchTests
             )
         );
 
-    // A failed `node select` through ctl skips the rest of the batch exactly like the builtin.
+    // A failed `node select` through ctl skips the rest of the batch exactly like the builtin,
+    // including a selection whose values or envelope are invalid before the command is parsed.
     [Theory]
+    [InlineData("values-json")]
+    [InlineData("values-type")]
+    [InlineData("extra-key")]
+    [InlineData("generic-unused-values")]
     [InlineData("command")]
     [InlineData("malformed")]
     [InlineData("tool-call")]
@@ -45,6 +50,34 @@ public sealed class CtlNodeSelectionBatchTests
         var selection = form switch
         {
             "command" => Call("select", "ctl", new() { ["command"] = "node select missing-node" }),
+            "values-json" => Call(
+                "select",
+                "ctl",
+                new() { ["command"] = "node select missing-node", ["valuesJson"] = "{" }
+            ),
+            "values-type" => Call(
+                "select",
+                "ctl",
+                new() { ["command"] = "node select missing-node", ["values"] = "not-an-object" }
+            ),
+            "extra-key" => Call(
+                "select",
+                "ctl",
+                new() { ["command"] = "node select missing-node", ["unexpected"] = true }
+            ),
+            "generic-unused-values" => Call(
+                "select",
+                "ctl",
+                new()
+                {
+                    ["command"] = "tool call builtin:node --args @a",
+                    ["values"] = new JsonObject
+                    {
+                        ["a"] = new JsonObject { ["action"] = "select", ["nodeId"] = "missing-node" },
+                        ["unused"] = 1,
+                    },
+                }
+            ),
             "malformed" => Call(
                 "select",
                 "ctl",

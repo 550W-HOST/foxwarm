@@ -220,7 +220,7 @@ try {
   assert(!value(pages, 'prose-page').output.includes('HIDDEN_TOOL_NEEDLE'))
   assert(value(pages, 'literal-archive').output.includes('FOLLOW-6'))
   assert(value(pages, 'literal-archive').output.includes('Examined'))
-  assert(value(pages, 'literal-archive').output.includes('Older literal search: recall('))
+  assert(value(pages, 'literal-archive').output.includes('Older literal search: ctl history recall '))
 
   await turn(actor, 'EXPAND-ORIGINALS', drilldowns)
   const originals = await history(actor)
