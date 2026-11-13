@@ -238,8 +238,9 @@ function browserGroup() {
       ...files.map(file => ({
         ...nodeTestStep(path.basename(file), [file], {
           concurrency: 1,
-          // Workbench exercises many complete application mounts and navigation paths.
-          timeoutMs: path.basename(file) === 'workbenchPreview.e2e.mjs' ? 360_000 : 240_000,
+          // Workbench exercises many complete application mounts and navigation paths. Its serial tests take
+          // about 340 s on a CI runner and a loaded shard is a few percent slower, so the budget is about twice that.
+          timeoutMs: path.basename(file) === 'workbenchPreview.e2e.mjs' ? 720_000 : 240_000,
         }),
         // This fixture rebuilds the WebUI dist consumed by its peers.
         exclusive: path.basename(file) === 'setupModels.e2e.mjs',
