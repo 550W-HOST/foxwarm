@@ -14,7 +14,7 @@ public sealed partial class WebUiStartupTests
         await using var h = new Host();
         await File.WriteAllTextAsync(h.TokenPath, h.Token);
         await File.WriteAllTextAsync(Path.Combine(h.Dist, "manifest.json"),
-            """{"name":"Foxwarm","start_url":"./","scope":"./","theme_color":"#f3f4f6","background_color":"#f3f4f6","icons":[{"src":"./icon-192.png"}]}""");
+            """{"name":"Foxwarm","start_url":"./","scope":"./","display":"standalone","display_override":["window-controls-overlay"],"theme_color":"#f3f4f6","background_color":"#f3f4f6","icons":[{"src":"./icon-192.png"}]}""");
         h.Start();
         await h.Ready();
         using var request = new HttpRequestMessage(HttpMethod.Get, "/manifest.json");
@@ -31,6 +31,9 @@ public sealed partial class WebUiStartupTests
         Assert.Equal("./", json["start_url"]!.GetValue<string>());
         Assert.Equal("./", json["scope"]!.GetValue<string>());
         Assert.Equal("./icon-192.png", json["icons"]![0]!["src"]!.GetValue<string>());
+        // The window-controls overlay opt-in is static and survives the colour projection.
+        Assert.Equal("window-controls-overlay", json["display_override"]![0]!.GetValue<string>());
+        Assert.Equal("standalone", json["display"]!.GetValue<string>());
         using var clean = new HttpRequestMessage(HttpMethod.Get, "/manifest.json");
         clean.Headers.Authorization = new("Bearer", h.Token);
         using var cleanResponse = await h.Client.SendAsync(clean);

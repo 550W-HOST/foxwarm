@@ -89,3 +89,20 @@ test('edge fills extend through gutter and padding, but never across interactive
     assert.deepEqual(result.fills.filter(f => f.x >= strip.left), [{ x: strip.right, y: strip.top, w: 800 - strip.right, h: strip.height }])
   })
 })
+
+test('the overlay surface colour is the page under the controls, composited and ignoring frame fills', async () => {
+  await withFixture(`
+    <div class="foxwarm-frame-fills"><div class="foxwarm-frame-fill" style="position:fixed;left:600px;top:0;width:200px;height:40px;background:transparent"></div></div>
+    <div class="shell">
+      <div class="panel" style="flex:1;background:rgb(40, 40, 40)">
+        <div id="strip" style="height:40px;background:rgba(255, 255, 255, 0.5)"></div>
+      </div>
+    </div>`, async page => {
+    const color = zones => page.evaluate(z => windowFrame.frameSurfaceColor(document, z), zones)
+    // Right-hand controls over the half-transparent strip on the dark panel.
+    assert.equal(await color({ left: 0, right: 140, top: 30, width: 800 }), '#949494')
+    // Left-hand controls over the gutter, whose colour is opaque.
+    assert.equal(await color({ left: 4, right: 0, top: 4, width: 800 }), '#dddddd')
+    assert.equal(await color({ left: 0, right: 0, top: 30, width: 800 }), null)
+  })
+})

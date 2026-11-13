@@ -283,7 +283,21 @@ test('PWA window-controls overlay maps the insets to app-region and switches off
       fills: [...document.querySelectorAll('.foxwarm-frame-fill')].map(fill => getComputedStyle(fill).appRegion),
       endGap: [...document.querySelectorAll('[data-frame-edge="end"]')].map(edge => edge.getBoundingClientRect().width).filter(Boolean),
       messages: window.__frameMessages.length,
+      themeColor: document.querySelector('meta[name="theme-color"]')?.content ?? null,
+      // The surface the overlay controls sit on: the end of the first pane's tab strip.
+      under: (() => {
+        const [r, g, b] = getComputedStyle(document.querySelector('[data-frame-row="inline"]')).backgroundColor.match(/\d+/g).map(Number)
+        return '#' + [r, g, b].map(c => c.toString(16).padStart(2, '0')).join('')
+      })(),
+      canvas: document.cookie.split('; ').find(part => part.startsWith('foxwarm_canvas='))?.slice(15) ?? null,
     }))
+    // The built-in light theme paints the strip on the canvas colour; give it its own.
+    await page.addStyleTag({ content: '[data-frame-row="inline"] { background: #123456 !important }' })
+    // A theme change (here the system switching to dark) re-reads the surface.
+    const before = await page.evaluate(() => document.cookie)
+    await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: 'dark' }])
+    await settle(page)
+    assert.notEqual(await page.evaluate(() => document.cookie), before, 'the canvas cookie followed the theme change')
     const on = await state()
     assert.equal(on.frame, 'overlay')
     assert.equal(on.brand, 'drag')
@@ -291,10 +305,15 @@ test('PWA window-controls overlay maps the insets to app-region and switches off
     assert.ok(on.fills.length > 0 && on.fills.every(value => value === 'drag'))
     assert.ok(on.endGap.length === 1 && on.endGap[0] > 186, 'tab strip reserves the overlay controls plus the gap')
     assert.equal(on.messages, 0)
+    // Chromium paints the overlay controls on theme-color; the manifest cookie keeps the canvas.
+    assert.equal(on.themeColor, on.under)
+    assert.equal(on.under, '#123456')
+    assert.ok(on.canvas && `#${on.canvas}` !== on.under)
     await page.evaluate(() => window.__setOverlay(false))
     await settle(page)
     const off = await state()
     assert.equal(off.frame, null)
+    assert.equal(off.themeColor, `#${on.canvas}`)
     assert.equal(off.brand, 'none')
     assert.deepEqual(off.fills, [])
     assert.deepEqual(errors, [])

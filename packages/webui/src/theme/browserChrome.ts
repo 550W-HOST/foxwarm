@@ -1,8 +1,32 @@
+let canvasColor = ''
+let frameColor: (() => string | null) | null = null
+
+function applyThemeColor() {
+  const color = frameColor?.() || canvasColor
+  if (color) document.querySelector('meta[name="theme-color"]')?.setAttribute('content', color)
+}
+
+/**
+ * Under the PWA window-controls overlay the browser paints the window controls on
+ * theme-color, so the live theme-color follows the surface beneath them. The manifest
+ * keeps the canvas, which is also the launch background. Pass null to return to the canvas.
+ */
+export function setFrameChromeColor(source: (() => string | null) | null): void {
+  frameColor = source
+  applyThemeColor()
+}
+
+/** Re-reads the frame colour after the layout under the window controls changed. */
+export function refreshFrameChromeColor(): void {
+  if (frameColor) applyThemeColor()
+}
+
 /** Keep installed-app metadata and the live page on the same canvas color.
  * This cookie contains only a validated public color, never a credential/theme document.
  */
 export function syncBrowserChrome(canvas: string): void {
-  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', canvas)
+  canvasColor = canvas
+  applyThemeColor()
   if (!/^#[\da-f]{6}(?:[\da-f]{2})?$/i.test(canvas)) return
   const color = canvas.slice(1).toLowerCase()
   const manifest = document.querySelector<HTMLLinkElement>('link[rel="manifest"]')

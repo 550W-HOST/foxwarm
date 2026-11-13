@@ -44,6 +44,8 @@ export const FRAME_EDGE_REACH = 24
 /** Rectangles per `frame-regions` report. */
 export const FRAME_REGION_LIMIT = 128
 
+import { refreshFrameChromeColor, setFrameChromeColor } from './theme/browserChrome'
+
 const OVERLAY_QUERY = '(display-mode: window-controls-overlay)'
 const NARROW_QUERY = '(max-width: 767px)'
 const HOST_PLATFORMS = new Set(['windows', 'macos'])
@@ -194,6 +196,43 @@ export function computeFrameEdgeFills(doc: Document = document): FrameRect[] {
 
 type HostChannel = { postMessage(message: unknown): void }
 
+type Rgba = [number, number, number, number]
+
+function parseColor(value: string): Rgba | null {
+  const rgb = /^rgba?\(([\d.]+),\s*([\d.]+),\s*([\d.]+)(?:,\s*([\d.]+))?\)$/.exec(value)
+  if (rgb) return [Number(rgb[1]), Number(rgb[2]), Number(rgb[3]), rgb[4] === undefined ? 1 : Number(rgb[4])]
+  // color-mix() and relative colours compute to color(srgb r g b / a) with 0..1 channels.
+  const srgb = /^color\(srgb ([\d.e-]+) ([\d.e-]+) ([\d.e-]+)(?: \/ ([\d.]+))?\)$/.exec(value)
+  if (srgb) return [Number(srgb[1]) * 255, Number(srgb[2]) * 255, Number(srgb[3]) * 255, srgb[4] === undefined ? 1 : Number(srgb[4])]
+  return null
+}
+
+/**
+ * Opaque colour of the surface the window controls sit on, as #rrggbb: the topmost page
+ * element under the middle of the larger control zone, composited over its ancestors'
+ * backgrounds. Null without a control zone or an opaque background.
+ */
+export function frameSurfaceColor(doc: Document, zones: FrameZones): string | null {
+  if (!zones.top || (!zones.left && !zones.right)) return null
+  const x = zones.left >= zones.right ? zones.left / 2 : zones.width - zones.right / 2
+  const target = doc.elementsFromPoint(x, zones.top / 2).find(element => !element.closest('.foxwarm-frame-fills'))
+  const layers: Rgba[] = []
+  for (let element: Element | null = target ?? null; element; element = element.parentElement) {
+    const color = parseColor(getComputedStyle(element).backgroundColor)
+    if (!color || color[3] === 0) continue
+    layers.push(color)
+    if (color[3] >= 1) break
+  }
+  if (!layers.length || layers[layers.length - 1][3] < 1) return null
+  let [r, g, b] = layers.pop()!
+  for (const [lr, lg, lb, la] of layers.reverse()) {
+    r = lr * la + r * (1 - la)
+    g = lg * la + g * (1 - la)
+    b = lb * la + b * (1 - la)
+  }
+  return '#' + [r, g, b].map(channel => Math.round(Math.min(255, Math.max(0, channel))).toString(16).padStart(2, '0')).join('')
+}
+
 /** Page-to-host channel; present only inside a Desktop host's top-level document. */
 function hostChannel(): HostChannel | undefined {
   const w = window as Window & {
@@ -327,11 +366,16 @@ function startFrameRuntime(root: HTMLElement, hosted: boolean): FrameRuntime {
     channel.postMessage({ type: 'frame-regions', regions, colorScheme })
   }
 
+  const overlay = root.dataset.foxwarmFrame === 'overlay'
+  // The theme runtime re-reads this on every theme change; layout changes refresh it below.
+  if (overlay) setFrameChromeColor(() => frameSurfaceColor(document, readZones()))
+
   const run = () => {
     frame = 0
     if (layoutDirty) {
       layoutDirty = false
       layout()
+      if (overlay) refreshFrameChromeColor()
     }
     if (hosted) report()
   }
@@ -376,6 +420,7 @@ function startFrameRuntime(root: HTMLElement, hosted: boolean): FrameRuntime {
       narrow?.removeEventListener('change', relayout)
       overlayGeometry?.removeEventListener('geometrychange', relayout)
       document.querySelectorAll<HTMLElement>('[data-frame-row]').forEach(clearRow)
+      if (overlay) setFrameChromeColor(null)
       root.removeAttribute('data-foxwarm-frame-narrow')
       probe.remove()
       fills.remove()

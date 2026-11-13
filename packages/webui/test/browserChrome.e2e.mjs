@@ -28,6 +28,15 @@ test('browser chrome colors follow the theme without changing PWA identity or vi
       assert.equal(state.meta, color); assert.equal(state.href, './manifest.json'); assert.equal(state.height, 200)
       assert(state.cookie.includes('foxwarm_canvas=' + color.slice(1)))
     }
+    // The window-controls overlay overrides only the live theme-color; the cookie keeps the canvas.
+    await page.evaluate(() => chromeTheme.setFrameChromeColor(() => '#101820'))
+    assert.equal(await page.$eval('meta[name="theme-color"]', e => e.content), '#101820')
+    await page.evaluate(() => chromeTheme.syncBrowserChrome('#252629'))
+    assert.equal(await page.$eval('meta[name="theme-color"]', e => e.content), '#101820')
+    assert(await page.evaluate(() => document.cookie.includes('foxwarm_canvas=252629')))
+    await page.evaluate(() => chromeTheme.setFrameChromeColor(null))
+    assert.equal(await page.$eval('meta[name="theme-color"]', e => e.content), '#252629')
+    await page.evaluate(() => chromeTheme.syncBrowserChrome('#184052'))
     const cookies = await page.cookies(); assert.equal(cookies.find(c=>c.name==='foxwarm_canvas').path, '/nested/')
     assert.equal(await page.evaluate(()=>{const link=document.querySelector('link[rel="manifest"]');chromeTheme.syncBrowserChrome('#184052');return link===document.querySelector('link[rel="manifest"]')}),true)
     await page.evaluate(()=>{Object.defineProperty(document,'cookie',{get(){throw Error('disabled')},set(){throw Error('disabled')}});chromeTheme.syncBrowserChrome('#ffffff')})
