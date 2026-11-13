@@ -22,6 +22,7 @@ internal sealed partial class DesktopWindow : Window
     };
     private readonly WebView2 view = new() { Visibility = Visibility.Collapsed };
     private readonly DesktopNative native;
+    private readonly DesktopFrame frame;
     private MainHost? host;
     private Task startup = Task.CompletedTask;
     private bool exiting;
@@ -35,6 +36,7 @@ internal sealed partial class DesktopWindow : Window
         content.Children.Add(status);
         Content = content;
         native = new DesktopNative(this, OpenWindow, ExitApplication, Shutdown);
+        frame = new DesktopFrame(this, view, IsAppUri);
         AppWindow.Closing += (_, e) =>
         {
             e.Cancel = true;
@@ -106,7 +108,10 @@ internal sealed partial class DesktopWindow : Window
                 return;
             var core = view.CoreWebView2;
             core.Settings.AreHostObjectsAllowed = false;
-            core.Settings.IsWebMessageEnabled = false;
+            // The frame's one-way frame-regions message is the only page-to-host channel.
+            await frame.InstallAsync(core, endpoint);
+            if (exiting)
+                return;
             core.NavigationStarting += (_, e) =>
             {
                 if (!IsAppUri(e.Uri))
@@ -145,6 +150,7 @@ internal sealed partial class DesktopWindow : Window
                     view.Visibility = Visibility.Collapsed;
                     status.Visibility = Visibility.Visible;
                     status.Text = "Foxwarm could not open. Exit from the tray and try again.";
+                    frame.Reset();
                 }
             };
             await AuthenticateAsync(core, http.Token);
