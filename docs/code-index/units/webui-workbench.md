@@ -149,6 +149,8 @@ Pane `collapsed` state is saved in the existing v4 layout. Normalization default
 
 Pane dragging uses the existing DND context, sensor, overlay, pane edge highlights, and layout-tree removal/split helpers. Header blank-area presses do not navigate the old active tab. Divider-resize handling retains priority at its boundary. Left/right/top/bottom edges dock the intact pane beside the target; center and tab-row targets do not merge or swap panes. Self-drops and cancellation leave the layout unchanged. A moved collapsed pane derives its chrome direction from its new direct parent split.
 
+With a [window frame provider](./webui-window-frame.md#d-window-frame), pane drag keeps this blank space ([2026-11-13] user decision). A tab strip or sole-tab header without pane drag (a lone pane) moves the window instead, and the strip nearest the window controls reserves their overlap plus a 40 px window-drag gap; `WorkbenchPaneDragArea` marks these rows with `frameRow`.
+
 [Pane movement consequences](../behaviors/workbench-and-chat.md#tabs-select-surfaces-panes-arrange-them) differ from ordinary tab/Sidebar reorder, Keep and center/edge actions; the existing DND dispatch keeps those paths separate.
 
 ### D-workbench-terminal-panel
