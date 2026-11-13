@@ -1,3 +1,4 @@
+import { isStandaloneWebUi, requestUpdateReload } from './updateReload'
 import { DEFAULT_THEME_ID } from './theme/builtins'
 import { readThemeRegistry, readThemeSelection } from './theme/storage'
 import { parseFoxwarmEmbeddedTarget } from './embeddedWebUi'
@@ -31,6 +32,9 @@ let contentReady = false
 let ready = false
 let failure: string | null = null
 let resourceFailure: string | null = null
+let availableBuild: string | null = null
+let dismissedBuild: string | null = null
+let reloadBlocked = false
 let leaveTimer: number | undefined
 let removeTimer: number | undefined
 let screen: HTMLElement | null = null
@@ -51,17 +55,29 @@ function showRecovery(message: string, state: 'error' | 'notice') {
   screen.removeAttribute('aria-label')
   screen.setAttribute('aria-labelledby', 'foxwarm-boot-title')
   screen.setAttribute('aria-describedby', 'foxwarm-boot-description')
-  document.getElementById('foxwarm-boot-title')!.textContent = state === 'error' ? 'Foxwarm couldn’t load' : 'Some features couldn’t load'
-  document.getElementById('foxwarm-boot-description')!.textContent = state === 'error'
+  document.getElementById('foxwarm-boot-title')!.textContent = state === 'error' ? 'Foxwarm couldn’t load'
+    : availableBuild && availableBuild !== dismissedBuild ? 'A new version is available' : 'Some features couldn’t load'
+  document.getElementById('foxwarm-boot-description')!.textContent = reloadBlocked
+    ? 'Finish sending or save your draft before reloading.'
+    : state === 'error'
     ? 'Reload to try again.'
     : 'You can keep working, or reload to try again.'
   document.getElementById('foxwarm-boot-error')!.textContent = message
   document.getElementById('foxwarm-boot-recovery')!.hidden = false
-  document.getElementById('foxwarm-boot-reload')!.onclick = () => location.reload()
+  document.getElementById('foxwarm-boot-details')!.hidden = !message
+  document.getElementById('foxwarm-boot-reload')!.onclick = () => {
+    const blocked = !requestUpdateReload(contentReady)
+    if (blocked !== reloadBlocked) {
+      reloadBlocked = blocked
+      showRecovery(message, state)
+    }
+  }
   const dismiss = document.getElementById('foxwarm-boot-dismiss')!
   dismiss.hidden = state !== 'notice'
   dismiss.onclick = () => {
     resourceFailure = null
+    dismissedBuild = availableBuild
+    reloadBlocked = false
     screen!.remove()
   }
 }
@@ -70,9 +86,24 @@ function showFailure() {
   if (failure !== null) showRecovery(failure, 'error')
 }
 
+function showNotice() {
+  if (!isStandaloneWebUi() || failure !== null || !ready) return
+  if (resourceFailure !== null || (availableBuild && availableBuild !== dismissedBuild)) {
+    showRecovery(resourceFailure || '', 'notice')
+  } else if (screen?.dataset.state === 'notice') screen.remove()
+}
+
+function updateBuild(build: string | null) {
+  if (availableBuild === build) return
+  availableBuild = build
+  reloadBlocked = false
+  // Let the startup animation finish before presenting a live notice.
+  if (screen && (!screen.isConnected || screen.dataset.state === 'notice')) showNotice()
+}
+
 function finishSplash() {
   screen!.remove()
-  if (resourceFailure !== null) showRecovery(resourceFailure, 'notice')
+  showNotice()
 }
 
 function reportResourceFailure(error: unknown) {
@@ -84,7 +115,7 @@ function reportResourceFailure(error: unknown) {
   resourceFailure ||= errorMessage(error)
   // Mounted content may already have a supported local fallback. Keep it usable;
   // the specific module-load error remains visible without taking over the app.
-  if (ready && screen && !screen.isConnected) showRecovery(resourceFailure, 'notice')
+  if (ready && screen && (!screen.isConnected || screen.dataset.state === 'notice')) showNotice()
 }
 
 function fail(error: unknown) {
@@ -153,4 +184,4 @@ window.addEventListener('vite:preloadError', event => {
   // Preserve Vite's throw/console diagnostics. No automatic reload or data reset.
 })
 document.addEventListener('DOMContentLoaded', showFailure, { once: true })
-window.foxwarmBoot = { ready: markReady, fail }
+window.foxwarmBoot = { ready: markReady, fail, update: updateBuild }

@@ -278,8 +278,31 @@ internal sealed class HttpServer
                     RequestPath = "/assets",
                 }
             );
+            // Keep one manifest identity while projecting this browser's public canvas color.
+            app.Use(async (context, next) =>
+            {
+                if (context.Request.Method != "GET" || context.Request.Path != "/manifest.json")
+                {
+                    await next();
+                    return;
+                }
+                var file = Path.Combine(distRoot, "manifest.json");
+                if (!File.Exists(file)) { await next(); return; }
+                var manifest = JsonNode.Parse(await File.ReadAllTextAsync(file, context.RequestAborted))!.AsObject();
+                var color = context.Request.Cookies["foxwarm_canvas"];
+                if (color is not null && (color.Length == 6 || color.Length == 8)
+                    && color.All(Uri.IsHexDigit))
+                {
+                    manifest["theme_color"] = "#" + color;
+                    manifest["background_color"] = "#" + color;
+                }
+                context.Response.Headers.CacheControl = "private, no-store";
+                context.Response.Headers.Vary = "Cookie";
+                context.Response.ContentType = "application/manifest+json";
+                await context.Response.WriteAsync(manifest.ToJsonString(), context.RequestAborted);
+            });
             app.UseWhen(
-                context => IsBrandAsset(context.Request.Path),
+                context => context.Request.Path != "/manifest.json" && IsBrandAsset(context.Request.Path),
                 branch =>
                     branch.UseStaticFiles(
                         new StaticFileOptions

@@ -2150,3 +2150,60 @@ test('Chromium shows the CLI model and estimate without a Foxwarm current-model 
   assert.ok(await page.evaluate(() => document.body.innerText.includes('$1.2500')))
   assert.equal(await page.$('[role="textbox"]') !== null, true)
 }))
+
+for (const spec of browsers) {
+  test(`${spec.name} update reload flushes text and blocks storage failure, attachments and in-flight sends`, async () => withBrowser(spec, async page => {
+    const prepare = () => page.evaluate(() => window.dispatchEvent(new Event('foxwarm-before-update-reload', { cancelable: true })))
+    await page.type('[role="textbox"][aria-label="Message"]', 'Keep this draft')
+    assert.equal(await prepare(), true)
+    assert.equal(await page.evaluate(() => window.fixtureDraft), 'Keep this draft')
+    await page.evaluate(() => {
+      window.restoreDraftStorage = Storage.prototype.setItem
+      Storage.prototype.setItem = () => { throw new Error('Storage unavailable') }
+    })
+    assert.equal(await prepare(), false)
+    await page.evaluate(() => { Storage.prototype.setItem = window.restoreDraftStorage })
+    assert.equal(await prepare(), true)
+
+    await page.evaluate(() => { window.fixtureHoldSend = true; window.fixtureAccept = false })
+    await page.click('button[aria-label="Send message"]')
+    await page.waitForFunction(() => !!window.fixtureReleaseSend)
+    assert.equal(await prepare(), false)
+    await page.evaluate(() => window.fixtureReleaseSend())
+    await settleSend(page)
+    assert.equal(await prepare(), true)
+
+    await page.$eval('#file-upload', input => {
+      const data = new DataTransfer(); data.items.add(new File(['bytes'], 'keep.txt', { type: 'text/plain' }))
+      Object.defineProperty(input, 'files', { configurable: true, value: data.files })
+      input.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    await page.waitForSelector('.foxwarm-composer-attachment-chip')
+    assert.equal(await prepare(), false)
+    assert.match(await page.evaluate(() => localStorage.getItem('composer_draft_v1_fixture/main')), /keep\.txt/)
+  }))
+
+  test(`${spec.name} update reload blocks microphone capture and final transcription`, async () => withBrowser(spec, async page => {
+    const prepare = () => page.evaluate(() => window.dispatchEvent(new Event('foxwarm-before-update-reload', { cancelable: true })))
+    await page.click('button[aria-label="Start recording"]')
+    await page.waitForFunction(() => window.fixtureStreamSessions.length === 1)
+    assert.equal(await prepare(), false)
+    await page.click('button[aria-label="Stop recording and transcribe"]')
+    await page.waitForFunction(() => window.fixtureStreamSessions[0].stopped)
+    assert.equal(await prepare(), false)
+    await page.evaluate(() => window.fixtureStreamSessions[0].callbacks.onFinal('Saved transcript'))
+    await page.waitForFunction(() => window.fixtureEditor()?.contentEditable === 'true')
+    assert.equal(await prepare(), true)
+    assert.equal(await page.evaluate(() => window.fixtureDraft), 'Saved transcript')
+  }))
+}
+
+test('Chromium update reload saves pending DOM composition before leaving', async () => withBrowser(browsers[0], async page => {
+  const client = await page.createCDPSession()
+  await page.click('[role="textbox"][aria-label="Message"]')
+  await client.send('Input.imeSetComposition', { text: '保存', selectionStart: 2, selectionEnd: 2 })
+  assert.equal(await page.evaluate(() => window.fixtureDraft || ''), '')
+  assert.equal(await page.evaluate(() => window.dispatchEvent(new Event('foxwarm-before-update-reload', { cancelable: true }))), true)
+  assert.equal(await page.evaluate(() => window.fixtureDraft), '保存')
+  await client.detach()
+}))

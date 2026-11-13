@@ -399,3 +399,30 @@ test('caption candidates respect output order and the per-item first-line headin
   draft.parts[2].text = 'Plain first line\n**Not a heading caption**'
   assert.equal(getStreamingReasoningTitle(draft), 'Earlier')
 })
+
+for (const [status, label] of [
+  ['in_progress', 'Generating image…'],
+  ['generating', 'Generating image…'],
+  ['completed', 'Image ready'],
+  ['failed', 'Image generation failed'],
+  ['incomplete', 'Image generation incomplete'],
+]) {
+  test(`hosted image ${status} has an explicit live and reconnect status`, () => {
+    let draft = applyModelStreamEvent(null, { type: 'model-stream-reset', streamId: 'image-status', iteration: 0 })
+    draft = applyModelStreamEvent(draft, {
+      type: 'model-stream-update', streamVersion: 2, streamId: 'image-status', sequence: 1,
+      partDeltas: [{ outputIndex: 0, kind: 'image-generation', added: true, status: 'in_progress' }],
+    })
+    draft = applyModelStreamEvent(draft, {
+      type: 'model-stream-update', streamVersion: 2, streamId: 'image-status', sequence: 2,
+      partDeltas: [{ outputIndex: 0, kind: 'image-generation', status }],
+    })
+    assert.equal(buildStreamingAssistantMessage(draft).parts[0].system, label)
+    const reconnected = applyModelStreamSnapshot({ ...draft })
+    assert.equal(buildStreamingAssistantMessage(reconnected).parts[0].system, label)
+    if (status === 'failed' || status === 'incomplete') {
+      assert.equal(buildStreamingAssistantMessage(reconnected).parts[0].providerMeta.openaiResponses.imageGenerationFailure.status, status)
+      assert.doesNotMatch(JSON.stringify(buildStreamingAssistantMessage(reconnected)), /Generating image|Image ready/)
+    }
+  })
+}

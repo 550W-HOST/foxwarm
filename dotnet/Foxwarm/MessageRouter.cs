@@ -26,7 +26,8 @@ internal sealed partial class MessageRouter(SessionRuntime runtime)
         Action? beforeAdmission = null
     )
     {
-        if (IsPresentationCommand(message.Text))
+        var isCommand = TryReadCommand(message.Text, out var commandName, out var rawArgs);
+        if (isCommand && IsPresentationCommand(message.Text))
         {
             var canonical = SessionCatalog.Text(
                 runtime.Catalog.Resolve(context.SessionId)["sessionId"]
@@ -40,51 +41,40 @@ internal sealed partial class MessageRouter(SessionRuntime runtime)
             ?? await runtime.GetOwnerAsync(context.SessionId)
             ?? throw new InvalidDataException("Session not found.");
         var command = SessionCatalog.Trim(message.Text);
-        if (IsDeleteCommand(message.Text))
+        if (isCommand && IsDeleteCommand(message.Text))
             return await HandleDeleteCommandAsync(context, message.Text, owner);
-        if (IsIdentityMoveCommand(message.Text))
+        if (isCommand && IsIdentityMoveCommand(message.Text))
             return await HandleIdentityMoveCommandAsync(context, message.Text, owner);
         if (
-            context.Platform == "webui"
+            isCommand
+            && context.Platform == "webui"
             && message.ControlRequestId is { } requestId
             && ControlAction(command) is { } action
         )
             return await HandleControlAsync(owner, command, requestId, action);
-        if (context.Platform == "webui")
+        if (isCommand && context.Platform == "webui")
         {
-            var match = System.Text.RegularExpressions.Regex.Match(
-                message.Text,
-                @"^(/[a-zA-Z_\-.]+)(?:\s+([\s\S]*))?$"
+            var source = new Foxwarm.Channels.ExternalChannelContext(
+                "webui",
+                "webui",
+                context.SessionId,
+                null,
+                null,
+                text =>
+                {
+                    runtime.ReplyToCommand(context.SessionId, text);
+                    return Task.CompletedTask;
+                }
             );
-            if (
-                match.Success
-                && Foxwarm.Channels.ExternalCommands.Find(match.Groups[1].Value) is not null
-            )
-            {
-                var source = new Foxwarm.Channels.ExternalChannelContext(
-                    "webui",
-                    "webui",
-                    context.SessionId,
-                    null,
-                    null,
-                    text =>
-                    {
-                        runtime.ReplyToCommand(context.SessionId, text);
-                        return Task.CompletedTask;
-                    }
-                );
-                await HandleExternalCommandAsync(
-                    source,
-                    match.Groups[1].Value,
-                    match.Groups[2].Success ? match.Groups[2].Value : null,
-                    owner
-                );
-                return new(200, new JsonObject { ["success"] = true });
-            }
+            await HandleExternalCommandAsync(source, commandName, rawArgs, owner);
+            return new(200, new JsonObject { ["success"] = true });
         }
-        if (command == "/node" || command.StartsWith("/node ", StringComparison.Ordinal))
+        if (
+            isCommand
+            && (command == "/node" || command.StartsWith("/node ", StringComparison.Ordinal))
+        )
             return await HandleNodeCommandAsync(command, owner);
-        if (command.StartsWith("/", StringComparison.Ordinal))
+        if (isCommand)
         {
             if (command == "/session index")
             {

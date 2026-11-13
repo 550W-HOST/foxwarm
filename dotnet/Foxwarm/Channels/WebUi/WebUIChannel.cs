@@ -334,22 +334,16 @@ internal sealed partial class WebUIChannel(
                                 ["error"] = "WebUI identity messages may only include text parts.",
                             }
                         );
-                    bool Slash(string value) =>
-                        System.Text.RegularExpressions.Regex.IsMatch(
-                            value,
-                            "^"
-                                + MessageRouter.CommandSpace
-                                + "*(?:@[a-zA-Z_\\-.]+"
-                                + MessageRouter.CommandSpace
-                                + "+)?/"
-                        );
                     var partsText = string.Join(
                         "\n",
                         (input["parts"] as JsonArray ?? [])
                             .OfType<JsonObject>()
                             .Select(part => SessionWait.Text(part["text"]) ?? "")
                     );
-                    if (Slash(text) || Slash(partsText))
+                    if (
+                        MessageRouter.IsKnownCommand(text, allowMention: true)
+                        || MessageRouter.IsKnownCommand(partsText, allowMention: true)
+                    )
                         return Results.Json(
                             new JsonObject
                             {
@@ -380,7 +374,7 @@ internal sealed partial class WebUIChannel(
                         canonical = owner.Id;
                         ingressOwner = owner;
                     }
-                    if (hasUploads && text.TrimStart().StartsWith("/", StringComparison.Ordinal))
+                    if (hasUploads && MessageRouter.IsKnownCommand(text, allowMention: true))
                         return Results.BadRequest(
                             new JsonObject
                             {

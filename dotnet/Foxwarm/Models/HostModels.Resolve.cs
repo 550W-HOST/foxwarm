@@ -351,6 +351,7 @@ internal sealed partial class HostModels
                 ? new Dictionary<string, string[]>
                 {
                     ["action"] = ["auto", "generate", "edit"],
+                    ["mode"] = ["hosted", "separate", "isolated"],
                     ["quality"] = ["auto", "low", "medium", "high", "xhigh", "max"],
                     ["background"] = ["auto", "opaque", "transparent"],
                     ["outputFormat"] = ["png", "jpeg", "webp"],

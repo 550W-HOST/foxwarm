@@ -31,7 +31,13 @@ internal static class ConfiguredModelRequests
                 "Image generation requires the OpenAI Responses protocol."
             );
         var featurePurpose = purpose is "background" or "setup-test";
-        var imageDeclared = imageEnabled && !featurePurpose;
+        var imageRequest = purpose == ImageGenerationRequests.Purpose;
+        var separateImages = ImageGenerationRequests.UsesSeparateRequest(model);
+        if (imageRequest && !separateImages)
+            throw new InvalidDataException(
+                "Separate image generation is not enabled for the selected model."
+            );
+        var imageDeclared = imageEnabled && !featurePurpose && (imageRequest || !separateImages);
         if (responses)
         {
             var extra = model.Configuration["extraFields"] as JsonObject;
@@ -78,7 +84,7 @@ internal static class ConfiguredModelRequests
             }
             return node?.DeepClone();
         }
-        return defaults with
+        var options = defaults with
         {
             TextRedaction = TextRedactionOptions.FromResolved(
                 model.Configuration["textRedaction"] as JsonObject
@@ -108,10 +114,12 @@ internal static class ConfiguredModelRequests
                 && flag.TryGetValue<bool>(out var forbid)
                 && forbid,
             WebSearch = featurePurpose ? null : model.Configuration["webSearch"] as JsonObject,
-            ImageGeneration = featurePurpose
-                ? null
-                : model.Configuration["imageGeneration"] as JsonObject,
+            ImageGeneration =
+                featurePurpose || (separateImages && !imageRequest)
+                    ? null
+                    : model.Configuration["imageGeneration"] as JsonObject,
         };
+        return imageRequest ? ImageGenerationRequests.Prepare(options) : options;
     }
 
     internal static IChatService CreateService(

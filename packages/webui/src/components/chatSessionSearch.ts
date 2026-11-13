@@ -1,4 +1,4 @@
-import { getSessionNotice } from '../sessionNotices'
+import { getImageGenerationNotice, getSessionNotice } from '../sessionNotices'
 import type { TimelineView } from '../chatPreferences'
 import type { Message } from './chatShared'
 import { formatStructuredSystemText, isInternalTimelineMessage, getLlmErrorMessageDetails, getSystemMessagePreviewDescriptor, isSystemLikeText, renderAssistantMarkdownSegments, renderMarkdownSegments } from './chatShared'
@@ -121,6 +121,11 @@ export function projectSessionSearchFields(messages: Message[], timelineView: Ti
       ? msg.parts.findIndex(part => typeof part.text === 'string' && part.text.trim()) : -1
     msg.parts.forEach((part, index) => {
       if (row.conversationPartIndex !== undefined && index !== row.conversationPartIndex) return
+      const imageFailure = msg.role === 'model' ? getImageGenerationNotice(part) : null
+      if (imageFailure) {
+        add('model', index, [imageFailure.title + ': ' + imageFailure.summary, imageFailure.details || ''].join('\u0000'))
+        return
+      }
       if (timelineView !== 'conversation' && isReasoningPart(part)) add('reasoning', index, markdownText(getReasoningText(part), false))
       if (!row.conversationImageOnly && msg.role === 'model' && part.text && (timelineView !== 'conversation' || (!part.toolUseId && !part.functionResponse))) {
         add(index === ctxIndex ? 'ctx' : 'model', index,

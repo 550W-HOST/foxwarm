@@ -240,22 +240,18 @@ internal sealed class TelegramChannel : IManagedChannel
                 return;
             if (text.StartsWith('/'))
             {
-                var commandToken = text.Split(' ')[0];
+                var commandText = text;
+                var commandToken = Regex.Match(text, @"^\S+").Value;
                 var at = commandToken.IndexOf('@');
                 if (
                     at >= 0
                     && username.Length > 0
                     && commandToken[(at + 1)..].Equals(username, StringComparison.OrdinalIgnoreCase)
                 )
-                    text = commandToken[..at] + text[commandToken.Length..];
-                var command = Regex.Match(text, @"^(\S+)(?:\s+([\s\S]*))?$");
+                    commandText = commandToken[..at] + text[commandToken.Length..];
                 if (
-                    command.Success
-                    && await router.HandleExternalCommandAsync(
-                        context,
-                        command.Groups[1].Value,
-                        command.Groups[2].Success ? command.Groups[2].Value : null
-                    )
+                    MessageRouter.TryReadCommand(commandText, out var command, out var rawArgs)
+                    && await router.HandleExternalCommandAsync(context, command, rawArgs)
                 )
                     return;
             }

@@ -201,6 +201,14 @@ internal sealed partial class SessionManager
             throw new InvalidOperationException(
                 "Tool source is no longer the current Session owner."
             );
+        if (
+            resolved.Source == "builtin"
+            && resolved.Name == "generate_image"
+            && !UsesSeparateImageGeneration(owner)
+        )
+            throw new ToolAuthorizationDeniedException(
+                "Separate image generation is not enabled for the selected concrete model."
+            );
         var remote =
             resolved.ExecutionNode != "master"
             && (
@@ -613,12 +621,11 @@ internal sealed partial class SessionManager
         string? server = null,
         bool unknownNode = false,
         string? node = null
-    ) => ToolVisible(VisibilityFor(owner), source, name, server, unknownNode, node);
+    ) =>
+        (source != "builtin" || name != "generate_image" || UsesSeparateImageGeneration(owner))
+        && ToolVisible(VisibilityFor(owner), source, name, server, unknownNode, node);
 
-    internal JsonArray ModelDefinitions(
-        SessionOwner owner,
-        JsonArray? explicitOverride = null
-    )
+    internal JsonArray ModelDefinitions(SessionOwner owner, JsonArray? explicitOverride = null)
     {
         if (explicitOverride is not null)
             return (JsonArray)explicitOverride.DeepClone();
@@ -631,7 +638,10 @@ internal sealed partial class SessionManager
         return new JsonArray(
             tools
                 .Entries.Where(entry =>
-                    entry.DefaultInject
+                    (
+                        entry.DefaultInject
+                        || SessionWait.Text(entry.Definition["name"]) == "generate_image"
+                    )
                     && (
                         entry.Source == "node"
                         || ToolVisible(
@@ -642,9 +652,7 @@ internal sealed partial class SessionManager
                     )
                 )
                 .OrderBy(entry => entry.Source == "node")
-                .Select(entry =>
-                    (JsonNode?)ToolCallControls.ForModel(entry.Definition)
-                )
+                .Select(entry => (JsonNode?)ToolCallControls.ForModel(entry.Definition))
                 .ToArray()
         );
     }

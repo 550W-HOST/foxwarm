@@ -8,6 +8,7 @@ import { pathToFileURL } from 'node:url'
 import { build as bundle } from 'esbuild'
 import { build as viteBuild, loadConfigFromFile } from 'vite'
 import puppeteer from 'puppeteer-core'
+import { browserLaunchOptions } from './browserExecutable.mjs'
 
 const webui = new URL('..', import.meta.url).pathname
 const dist = path.join(webui, 'dist')
@@ -110,9 +111,7 @@ before(async () => {
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   baseUrl = `http://127.0.0.1:${server.address().port}`
-  browser = await puppeteer.launch(firefox
-    ? { browser: 'firefox', executablePath: process.env.FOXWARM_E2E_FIREFOX || '/usr/bin/firefox-esr', headless: true }
-    : { executablePath: process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium', headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] })
+  browser = await puppeteer.launch(browserLaunchOptions())
   if (artifacts) await mkdir(artifacts, { recursive: true })
 })
 
@@ -126,6 +125,7 @@ after(async () => {
 
 async function newPage({ selection, custom, dark = false, reduced = false, blockAssets = false } = {}) {
   const page = await browser.newPage()
+  page.on('dialog', dialog => dialog.accept())
   page.on('pageerror', error => diagnostics.push({ kind: 'pageerror', message: error?.message ?? String(error) }))
   page.on('requestfailed', request => diagnostics.push({ kind: 'requestfailed', url: request.url(), reason: request.failure()?.errorText }))
   page.on('response', response => { if (response.status() >= 400) diagnostics.push({ kind: 'http', status: response.status(), url: response.url() }) })
