@@ -1,5 +1,6 @@
 import { useId, type HTMLAttributes } from 'react'
 import { useDraggable } from '@dnd-kit/core'
+import { FrameEdges } from './WindowFrameEdges'
 
 export function isWorkbenchPaneDragBlankTarget(target: EventTarget | null) {
   return target instanceof HTMLElement
@@ -7,9 +8,11 @@ export function isWorkbenchPaneDragBlankTarget(target: EventTarget | null) {
     && target.matches('[data-workbench-pane-drag-area], [data-workbench-pane-drag-blank]')
 }
 
-export default function WorkbenchPaneDragArea({ paneId, enabled, onPointerDown, onMouseDown, ...props }: HTMLAttributes<HTMLDivElement> & {
+export default function WorkbenchPaneDragArea({ paneId, enabled, frameRow = false, onPointerDown, onMouseDown, children, ...props }: HTMLAttributes<HTMLDivElement> & {
   paneId: string | null
   enabled: boolean
+  /** The header may be a window title row (tab strip or sole-tab content header). */
+  frameRow?: boolean
 }) {
   const fallbackId = useId()
   const { setNodeRef, listeners } = useDraggable({
@@ -19,6 +22,9 @@ export default function WorkbenchPaneDragArea({ paneId, enabled, onPointerDown, 
   })
   return <div {...props} ref={setNodeRef}
     data-workbench-pane-drag-area={enabled && paneId ? paneId : undefined}
+    data-frame-row={frameRow ? 'inline' : undefined}
+    // Blank header space moves the window unless it already moves the pane.
+    data-frame-drag={frameRow && !(enabled && paneId) ? '' : undefined}
     onPointerDown={event => {
       onPointerDown?.(event)
       if (!event.defaultPrevented && isWorkbenchPaneDragBlankTarget(event.target)) listeners?.onPointerDown?.(event)
@@ -26,5 +32,8 @@ export default function WorkbenchPaneDragArea({ paneId, enabled, onPointerDown, 
     onMouseDown={event => {
       if (isWorkbenchPaneDragBlankTarget(event.target)) event.stopPropagation()
       else onMouseDown?.(event)
-    }} />
+    }}>
+    {frameRow && <FrameEdges />}
+    {children}
+  </div>
 }

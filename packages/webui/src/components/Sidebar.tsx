@@ -6,6 +6,7 @@ import type { SessionIdleNotificationMode } from '../sessionIdleNotifications'
 import CreateTabButton from './CreateTabButton'
 import { FoxwarmMark } from './FoxwarmMark'
 import CodeLaunchButton from './CodeLaunchButton'
+import { FrameBand } from './WindowFrameEdges'
 import GlobalUiSettingsMenu from './GlobalUiSettingsMenu'
 import { useState } from 'react'
 import AgentCreationMenu, { type SessionCreationRequest } from './AgentCreationMenu'
@@ -95,9 +96,10 @@ export default function Sidebar({
 
   // Brand row with settings, then navigation rows (icon + text), then the Session list.
   return (
-    <div className="foxwarm-sidebar-panel h-full bg-fw-sidebar-surface border-r border-fw-border flex flex-col">
+    <div className="foxwarm-sidebar-panel h-full bg-fw-sidebar-surface border-r border-fw-border flex flex-col" data-frame-row="stack">
+      <FrameBand />
       <div className="shrink-0 px-3 pb-2 pt-3 border-b border-fw-border">
-        <div className="mb-2 flex items-center justify-between gap-2 pl-1" data-sidebar-brand>
+        <div className="mb-2 flex items-center justify-between gap-2 pl-1" data-sidebar-brand data-frame-drag>
           <h1 className="flex items-center gap-2 text-xl font-bold text-fw-text-strong"><FoxwarmMark className="h-6 w-6 shrink-0" />Foxwarm</h1>
           <div className="flex items-center gap-1">
             <GlobalUiSettingsMenu

@@ -2167,7 +2167,8 @@ html .foxwarm-composer-attachment-chip[data-composer-block-selected] {
   border: 1px solid var(--foxwarm-color-border);
   border-radius: 10px;
 }
-.foxwarm-desktop-workbench-shell .foxwarm-sidebar-panel > :first-child { border-radius: 10px 10px 0 0; }
+.foxwarm-desktop-workbench-shell .foxwarm-sidebar-panel > :first-child,
+.foxwarm-desktop-workbench-shell .foxwarm-sidebar-panel > .foxwarm-frame-edge:first-child + * { border-radius: 10px 10px 0 0; }
 .foxwarm-desktop-workbench-shell .foxwarm-sidebar-panel > :last-child { border-radius: 0 0 10px 10px; }
 .foxwarm-desktop-workbench-shell .foxwarm-workbench-panel {
   border-radius: 10px;
@@ -2653,3 +2654,48 @@ html .foxwarm-inline-file-ref:focus-visible { outline: 2px solid currentColor; o
 .image-preview-loading { position: absolute; color: var(--foxwarm-color-text-muted); font-size: 14px; }
 .image-preview-error { flex: none; padding: 8px max(16px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); color: var(--foxwarm-color-warning); font-size: 12px; }
 @media (forced-colors: active) { .image-preview-dialog, .image-preview-header { background: Canvas; color: CanvasText; } .image-preview-action { border: 1px solid ButtonText; } }
+
+/* Window frame (windowFrame.ts). Inputs: html[data-foxwarm-frame] and
+ * --foxwarm-frame-left/right/top, set by a Desktop host or, in an installed PWA's
+ * window-controls overlay, derived from env(titlebar-area-*). Title-band rows move
+ * their content clear of the controls and expose drag surfaces. Nothing applies
+ * without a provider. */
+@media (display-mode: window-controls-overlay) {
+  html[data-foxwarm-frame="overlay"] {
+    --foxwarm-frame-left: env(titlebar-area-x, 0px);
+    --foxwarm-frame-right: max(0px, calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw)));
+    --foxwarm-frame-top: env(titlebar-area-height, 0px);
+  }
+}
+html[data-foxwarm-frame] [data-frame-row] { position: relative; }
+/* Inline rows keep their own padding and overflow: the first and last real children
+ * step aside, and the spacers (rendered first) cover the freed space. */
+html[data-foxwarm-frame] [data-frame-row="inline"] > .foxwarm-frame-edge + .foxwarm-frame-edge + * { margin-left: var(--foxwarm-frame-pad-left, 0px); }
+html[data-foxwarm-frame] [data-frame-row="inline"] > :last-child:not(.foxwarm-frame-edge) { margin-right: var(--foxwarm-frame-pad-right, 0px); }
+/* Stack rows (sidebar, rail) start with 0.75rem of blank header padding (pt-3/py-3); it overlaps the controls band. */
+html[data-foxwarm-frame] [data-frame-row="stack"] { padding-top: max(0px, calc(var(--foxwarm-frame-pad-top, 0px) - 0.75rem)); }
+.foxwarm-frame-edge { display: none; }
+html[data-foxwarm-frame] .foxwarm-frame-edge { display: block; position: absolute; }
+html[data-foxwarm-frame] .foxwarm-frame-edge[data-frame-edge="start"] { top: 0; bottom: 0; left: 0; width: var(--foxwarm-frame-pad-left, 0px); }
+html[data-foxwarm-frame] .foxwarm-frame-edge[data-frame-edge="end"] { top: 0; bottom: 0; right: 0; width: var(--foxwarm-frame-pad-right, 0px); }
+html[data-foxwarm-frame] .foxwarm-frame-edge[data-frame-edge="top"] { top: 0; left: 0; right: 0; height: max(var(--foxwarm-frame-pad-top, 0px), 0.75rem); }
+/* Fills carry title-row drag surfaces through the shell gutter and panel padding to the window edges. */
+.foxwarm-frame-fill { position: fixed; }
+/* Narrow layouts keep their mobile shell under a plain draggable strip. */
+html[data-foxwarm-frame][data-foxwarm-frame-narrow] { --foxwarm-safe-area-top: var(--foxwarm-frame-top, 0px); }
+.foxwarm-frame-strip {
+  position: fixed; z-index: 40; top: 0; left: 0; right: 0;
+  height: var(--foxwarm-frame-top, 0px);
+  background: var(--foxwarm-color-canvas);
+}
+/* Drag surfaces for the PWA overlay; the Desktop hosts get the same surfaces as
+ * rectangles. Since Chromium 152 app-region inherits into descendants, so every
+ * interactive descendant and floating layer opts out. */
+html[data-foxwarm-frame] :is([data-frame-row][data-frame-in-band] [data-frame-drag], [data-frame-row][data-frame-in-band][data-frame-drag], .foxwarm-frame-fill, .foxwarm-frame-strip) {
+  app-region: drag; -webkit-app-region: drag; user-select: none; -webkit-user-select: none;
+}
+html[data-foxwarm-frame] [data-frame-drag] :is(button, a[href], input, select, textarea, summary, label, iframe, [contenteditable], [role="button"], [role="tab"], [role="menuitem"], [tabindex]:not([tabindex="-1"]), [data-tab-id], [data-frame-no-drag]),
+html[data-foxwarm-frame] :is([role="menu"], [role="dialog"], [role="listbox"], [role="tooltip"], [aria-modal="true"], [data-frame-no-drag]) {
+  app-region: no-drag; -webkit-app-region: no-drag;
+}
+@media (forced-colors: active) { .foxwarm-frame-strip { background: Canvas; } }

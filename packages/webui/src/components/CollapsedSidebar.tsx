@@ -3,6 +3,7 @@ import GlobalUiSettingsMenu from './GlobalUiSettingsMenu'
 import { PanelLeftOpen, Plus, Search, ClipboardList, Network } from 'lucide-react'
 import type { Session } from './SessionListCore'
 import { getSessionRuntimeStateName, isSessionRuntimeActive, getSessionRuntimeSummary } from '../sessionRuntimeState'
+import { FrameBand } from './WindowFrameEdges'
 
 interface CollapsedSidebarProps {
   sessions: Session[]
@@ -49,7 +50,8 @@ export default function CollapsedSidebar({
     .filter((s) => (s.pinned || !s.parentSessionId) && !s.archived)
 
   return (
-    <div className="foxwarm-sidebar-panel h-full w-12 flex flex-col items-center bg-fw-sidebar-surface border-r border-fw-border">
+    <div className="foxwarm-sidebar-panel h-full w-12 flex flex-col items-center bg-fw-sidebar-surface border-r border-fw-border" data-frame-row="stack">
+      <FrameBand />
       {/* Header and navigation, as in the expanded sidebar */}
       <div className="flex w-full flex-col items-center gap-1 border-b border-fw-border py-3" data-sidebar-nav-list>
         <button

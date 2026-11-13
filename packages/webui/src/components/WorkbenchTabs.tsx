@@ -337,7 +337,7 @@ export default function WorkbenchTabs({
   const { openContextMenu, menu } = useWorkbenchTabMenu({ tabs, onCloseTab, onKeepTab, onMoveTabToNewWindow, canMoveTabToNewWindow, onCloseOtherTabs, onCloseAllTabs })
 
   return (
-    <WorkbenchPaneDragArea paneId={paneId} enabled={paneDragEnabled} className="foxwarm-workbench-tab-strip overflow-hidden border-b border-fw-border bg-fw-neutral-surface px-3 pt-2 dark:border-fw-border dark:bg-fw-canvas">
+    <WorkbenchPaneDragArea paneId={paneId} enabled={paneDragEnabled} frameRow className="foxwarm-workbench-tab-strip overflow-hidden border-b border-fw-border bg-fw-neutral-surface px-3 pt-2 dark:border-fw-border dark:bg-fw-canvas">
       <div data-workbench-pane-drag-blank className="flex items-start justify-between gap-3">
         <div data-workbench-pane-drag-blank className="min-w-0 flex-1">
           <TabStripRow

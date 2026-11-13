@@ -8,6 +8,7 @@ import { parseFoxwarmPopupTarget } from './popupWebUi'
 import { initializeThemeRuntime } from './theme/runtime'
 import BuildUpdateNotice from './components/BuildUpdateNotice'
 import { isStandaloneWebUi } from './updateReload'
+import { initializeWindowFrame } from './windowFrame'
 import { API_BASE_PATH } from './config'
 import { BootReadySignal, markBootReady } from './components/FoxLoaders'
 
@@ -30,6 +31,7 @@ function syncViewportHeight() {
 
 syncViewportHeight()
 initializeThemeRuntime()
+initializeWindowFrame()
 
 window.visualViewport?.addEventListener('resize', syncViewportHeight)
 window.visualViewport?.addEventListener('scroll', syncViewportHeight)
