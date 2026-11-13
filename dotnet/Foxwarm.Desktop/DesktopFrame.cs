@@ -110,11 +110,12 @@ internal sealed class DesktopFrame
     {
         var bar = window.AppWindow.TitleBar;
         var scale = Scale;
+        // JsonNode items: the generic Add<string> needs reflection metadata, which NativeAOT lacks.
         var tokens = new JsonArray();
         if (!active)
-            tokens.Add("inactive");
+            tokens.Add((JsonNode)"inactive");
         if (window.AppWindow.Presenter is OverlappedPresenter { State: OverlappedPresenterState.Maximized })
-            tokens.Add("maximized");
+            tokens.Add((JsonNode)"maximized");
         return new JsonObject
         {
             ["platform"] = "windows",

@@ -25,7 +25,7 @@ export const TARGETS = {
   'osx-arm64-native': { kind: 'server', rid: 'osx-arm64', selfContained: true, native: true, archive: 'tar.gz' },
   'win-x64': { kind: 'server', rid: 'win-x64', selfContained: false, archive: 'zip' },
   'win-x64-native': { kind: 'server', rid: 'win-x64', selfContained: true, native: true, archive: 'zip' },
-  'desktop-win-x64': { kind: 'desktop', rid: 'win-x64', selfContained: true, archive: 'zip' },
+  'desktop-win-x64': { kind: 'desktop', rid: 'win-x64', selfContained: true, native: true, archive: 'zip' },
   'desktop-osx-arm64': { kind: 'desktop', rid: 'osx-arm64', selfContained: true, native: true, bundle: 'Foxwarm.app', archive: 'zip' },
 }
 
@@ -97,7 +97,7 @@ function usage(message) {
 Targets: ${Object.keys(TARGETS).join(', ')}
 (default: the published targets this host can build; native targets build only on their own platform)
 --lancedb-library: Linux x64 liblancedb_ffi.so to package instead of the LanceDB package's (scripts/release/build-lancedb-linux.sh)
---vc-runtime: the x64 Microsoft.VC14x.CRT directory whose DLLs Windows server packages ship`)
+--vc-runtime: the x64 Microsoft.VC14x.CRT directory whose DLLs Windows packages ship`)
   process.exit(2)
 }
 
@@ -144,10 +144,10 @@ function removeDebugFiles(directory) {
   }
 }
 
-// Windows server packages carry the Visual C++ runtime DLLs their native binaries import
+// Windows packages carry the Visual C++ runtime DLLs their native binaries import
 // (the ToolScript worker and LanceDB), beside each importer, with Microsoft's notice.
 function addWindowsRuntime(directory, runtime) {
-  if (!runtime) throw new Error('Windows server packages need --vc-runtime DIR: the x64 Microsoft.VC14x.CRT redistributable directory of the Visual Studio build tools.')
+  if (!runtime) throw new Error('Windows packages need --vc-runtime DIR: the x64 Microsoft.VC14x.CRT redistributable directory of the Visual Studio build tools.')
   const copied = addVcRuntime(directory, runtime)
   const missing = missingImports(directory, name => !vcRuntime.test(name))
   if (missing.length) throw new Error(`${path.basename(directory)} imports Visual C++ runtime DLLs that ${runtime} does not provide: ${missing.join(', ')}`)
@@ -182,9 +182,10 @@ function publish(name, directory, lancedbLibrary, vcRuntimeDirectory) {
     // Desktop -> Core reference, or MSBuild compiles shared outputs twice in parallel.
     run('dotnet', ['publish', 'dotnet/Foxwarm.Desktop', ...common, '-p:FoxwarmConsoleEntry=false',
       `-p:ArtifactTargetRid=${target.rid}`, '-p:EnableWindowsTargeting=true'])
-    // Desktop references the host assembly; it does not launch the console apphost.
+    // Desktop compiles the host in; it does not launch the console apphost.
     fs.rmSync(path.join(directory, 'Foxwarm.exe'), { force: true })
     fs.rmSync(path.join(directory, 'Foxwarm.runtimeconfig.json'), { force: true })
+    addWindowsRuntime(directory, vcRuntimeDirectory)
   } else {
     run('dotnet', ['publish', 'dotnet/Foxwarm/Foxwarm.csproj', ...common])
     const control = path.join(root, 'scripts/release')
@@ -302,7 +303,7 @@ function main(argv) {
   }
   for (const name of selected) {
     if (TARGETS[name].native && TARGETS[name].rid !== hostRid()) throw new Error(`${name} is a NativeAOT package and must be built on ${TARGETS[name].rid}.`)
-    if (TARGETS[name].kind === 'server' && TARGETS[name].rid === 'win-x64' && !vcRuntimeDirectory) usage(`${name} needs --vc-runtime DIR`)
+    if (TARGETS[name].rid === 'win-x64' && !vcRuntimeDirectory) usage(`${name} needs --vc-runtime DIR`)
   }
   if (selected.some(includesCode)) validateCodeAssets()
   if (buildAssets) run('npm', ['run', 'build:assets'], { shell: process.platform === 'win32' })

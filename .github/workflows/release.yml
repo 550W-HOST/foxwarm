@@ -435,8 +435,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node scripts/test/prepare-browser.mjs --check-code
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      # NativeAOT links with the image's Visual Studio C++ tools; the server packages ship the
-      # Visual C++ runtime of the same installation beside the binaries that import it.
+      # NativeAOT links with the image's Visual Studio C++ tools; the server and Desktop packages
+      # ship the Visual C++ runtime of the same installation beside the binaries that import it.
       - name: Locate the Visual C++ runtime
         shell: pwsh
         run: |
@@ -450,8 +450,16 @@ jobs:
       - name: Build the Windows server packages and Desktop
         shell: pwsh
         run: |
-          node scripts/release/package.mjs --build-assets --output dist --vc-runtime $env:VC_RUNTIME --target win-x64 --target win-x64-native --target desktop-win-x64
+          node scripts/release/package.mjs --build-assets --output dist --vc-runtime $env:VC_RUNTIME --target win-x64 --target win-x64-native --target desktop-win-x64 | Tee-Object -FilePath "$env:RUNNER_TEMP/windows-publish.log"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # Main's NativeAOT warnings are gated by the Tests workflow's native lane. The Desktop's own
+      # code has none; release publications carry no symbols, so warnings name only the caller.
+      - name: Check that the Desktop's own code has no NativeAOT warnings
+        shell: pwsh
+        run: |
+          $desktop = @(Select-String -Path "$env:RUNNER_TEMP/windows-publish.log" -Pattern 'analysis warning IL\d+: Foxwarm\.Desktop\.')
+          $desktop | ForEach-Object { Write-Host $_.Line }
+          if ($desktop.Count) { throw "The Desktop has $($desktop.Count) NativeAOT warnings" }
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-packages-windows
@@ -462,17 +470,17 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
-      - name: Check that every imported DLL is in the server packages or part of Windows
+      - name: Check that every imported DLL is in the packages or part of Windows
         shell: pwsh
         run: |
-          foreach ($package in 'foxwarm-win-x64.zip', 'foxwarm-win-x64-native.zip') {
+          foreach ($package in 'foxwarm-win-x64.zip', 'foxwarm-win-x64-native.zip', 'foxwarm-desktop-win-x64.zip') {
             $extracted = Join-Path $env:RUNNER_TEMP "imports-$package"
             Expand-Archive -LiteralPath "dist/$package" -DestinationPath $extracted
             $payload = (Get-ChildItem $extracted -Directory | Select-Object -First 1).FullName
             node scripts/release/windows-imports.mjs $payload
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             if (-not (Test-Path (Join-Path $payload 'VC-RUNTIME-NOTICE.txt'))) { throw "$package has no Visual C++ runtime notice" }
-            if ($package -like '*-native.zip' -and (Test-Path (Join-Path $payload 'Foxwarm.dll'))) { throw 'The native package must not contain Foxwarm.dll' }
+            if ($package -ne 'foxwarm-win-x64.zip' -and (Test-Path (Join-Path $payload 'Foxwarm.dll'))) { throw "The native package $package must not contain Foxwarm.dll" }
           }
       - name: Qualify the archived Main, detached exec, PTY, native ToolScript and the Vector child
         shell: pwsh

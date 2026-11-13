@@ -120,6 +120,17 @@ test('every server platform publishes a native package instead of a self-contain
   assert.equal(hostRid('win32', 'x64'), 'win-x64')
 })
 
+test('the Windows Desktop is a NativeAOT package built only on Windows x64', t => {
+  assert.deepEqual(TARGETS['desktop-win-x64'], { kind: 'desktop', rid: 'win-x64', selfContained: true, native: true, archive: 'zip' })
+  if (hostRid() === 'win-x64') return t.skip('this host can build the package')
+  const output = scratch(t)
+  const script = path.join(root, 'scripts/release/package.mjs')
+  const elsewhere = spawnSync(process.execPath, [script, '--output', output, '--vc-runtime', output, '--target', 'desktop-win-x64'], { encoding: 'utf8' })
+  assert.equal(elsewhere.status, 1)
+  assert.match(elsewhere.stderr, /desktop-win-x64 is a NativeAOT package and must be built on win-x64/)
+  assert.deepEqual(fs.readdirSync(output), [])
+})
+
 test('the macOS Desktop is a NativeAOT application bundle built only on macOS arm64', t => {
   assert.deepEqual(TARGETS['desktop-osx-arm64'], { kind: 'desktop', rid: 'osx-arm64', selfContained: true, native: true, bundle: 'Foxwarm.app', archive: 'zip' })
   if (hostRid() === 'osx-arm64') return t.skip('this host can build the bundle')

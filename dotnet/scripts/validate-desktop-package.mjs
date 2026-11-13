@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { readFile, readdir, stat } from 'node:fs/promises'
 import { resolve, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { peImports } from '../../scripts/release/windows-imports.mjs'
 
 export async function validateDesktopPackage(directory) {
   const root = resolve(directory)
@@ -18,11 +19,13 @@ export async function validateDesktopPackage(directory) {
     const pe = bytes.readUInt32LE(0x3c)
     assert.equal(bytes.toString('ascii', pe, pe + 4), 'PE\0\0', `Invalid PE binary: ${file}`)
     assert.equal(bytes.readUInt16LE(pe + 4), 0x8664, `Not Windows x64: ${file}`)
+    return bytes
   }
+  const release = JSON.parse(await required('release.json'))
+  assert.equal(release.target, 'desktop-win-x64')
+  assert.equal(release.native, true, 'The Windows Desktop is a NativeAOT package')
   for (const file of [
-    'Foxwarm.Desktop.dll', 'Foxwarm.Desktop.deps.json', 'Foxwarm.dll',
-    'Microsoft.Web.WebView2.Core.Projection.dll', 'Microsoft.WinUI.dll',
-    'Foxwarm.ico', 'WindowsAppSDK-LICENSE.txt', 'WindowsAppSDK-NOTICE.txt',
+    'Foxwarm.ico', 'VC-RUNTIME-NOTICE.txt', 'Microsoft.UI.Xaml.Controls.pri', 'WindowsAppSDK-LICENSE.txt', 'WindowsAppSDK-NOTICE.txt',
     'webui-dist/index.html', 'packages/webui/login.html',
     'templates/agents/00_SYSTEM.md', 'templates/models.example.yaml',
     'templates/node/run.ps1', 'templates/node/run.sh',
@@ -58,7 +61,7 @@ export async function validateDesktopPackage(directory) {
   }
   assert((await readdir(join(root, 'webui-dist/assets'))).some(file => file.endsWith('.js')), 'Built WebUI JavaScript is missing')
   for (const file of [
-    'Foxwarm.Desktop.exe', 'ToolScript/native/monty.exe',
+    'Foxwarm.Desktop.exe', 'ToolScript/native/monty.exe', 'vcruntime140.dll', 'ToolScript/native/vcruntime140.dll',
     'Microsoft.UI.Xaml.dll', 'Microsoft.WindowsAppRuntime.dll', 'Microsoft.Web.WebView2.Core.dll',
     'e_sqlite3.dll', 'libSkiaSharp.dll', 'lancedb_ffi.dll',
     'node_modules/@esbuild/win32-x64/esbuild.exe',
@@ -69,26 +72,22 @@ export async function validateDesktopPackage(directory) {
   const loader = files.find(file => /(^|[\\/])WebView2Loader\.dll$/.test(file) && !/win-(?:x86|arm64)/.test(file))
   assert(loader, 'WebView2 x64 loader is missing')
   await native(loader)
-  const runtime = JSON.parse(await required('Foxwarm.Desktop.runtimeconfig.json')).runtimeOptions
-  assert.equal(runtime.tfm, 'net10.0')
-  // Released Desktop packages embed the two shared frameworks; framework-dependent builds reference them.
-  const selfContained = runtime.includedFrameworks !== undefined
-  const frameworks = runtime.includedFrameworks ?? runtime.frameworks ?? [runtime.framework]
-  for (const name of ['Microsoft.NETCore.App', 'Microsoft.AspNetCore.App']) {
-    assert(frameworks.some(item => item?.name === name && /^10\./.test(item.version)), `Missing .NET 10 shared framework: ${name}`)
-  }
-  if (selfContained) for (const file of ['coreclr.dll', 'hostfxr.dll', 'hostpolicy.dll']) await native(file)
-  const runtimeFiles = selfContained ? '' : '|coreclr\\.dll|hostfxr\\.dll|hostpolicy\\.dll|System\\.Private\\.CoreLib\\.dll'
-  const excluded = new RegExp(`^(?:Foxwarm(?:\\.exe|\\.runtimeconfig\\.json)?|data_dir|package(?:-lock)?\\.json|dotnet\\.exe${runtimeFiles})$`, 'i')
+  // NativeAOT compiles Main, Desktop and the WinRT projections into the executable: the package
+  // has no .NET runtime, host configuration or managed assembly.
+  const excluded = /^(?:Foxwarm(?:\.exe)?|data_dir|package(?:-lock)?\.json|dotnet\.exe|coreclr\.dll|hostfxr\.dll|hostpolicy\.dll|clrjit\.dll|System\.Private\.CoreLib\.dll|.*\.runtimeconfig\.json|.*\.deps\.json)$/i
   for (const file of files) {
     const normalized = file.replaceAll('\\', '/')
+    if (/\.(?:dll|exe)$/i.test(normalized) && !normalized.startsWith('node_modules/')) {
+      // peImports reads native PE images and returns null for managed assemblies.
+      assert(peImports(await readFile(join(root, file))) !== null, `Managed assembly in the NativeAOT package: ${file}`)
+    }
     assert(!/^(?:state|agents|workspace|logs|\.git|\.github|src|dotnet|test|obj|bin|runtime|shared|host)(?:\/|$)/i.test(normalized), `Installation/build data in package: ${file}`)
     assert(!excluded.test(normalized), `Console entry, source cache or runtime in package: ${file}`)
     assert(!/(?:^|\/)(?:\.env|token|config\.yaml|models\.yaml|\.npm|\.cache)(?:\/|$)/i.test(normalized), `Private state or cache in package: ${file}`)
     assert(!/^node_modules\/(?:\.package-lock\.json|\.bin)(?:\/|$)/.test(normalized), `Source dependency tree in package: ${file}`)
     assert(normalized.startsWith('packages/vscode-web/assets/') || !/\.(?:pdb|xml)$/i.test(normalized), `Debug/reference artifact in package: ${file}`)
   }
-  return { platform: 'win-x64', selfContained, entries: files.length }
+  return { platform: 'win-x64', native: true, entries: files.length }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

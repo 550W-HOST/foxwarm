@@ -1,11 +1,12 @@
 # Foxwarm Desktop for Windows
 
-The separate [macOS AppKit host](../Foxwarm.Desktop.Mac/README.md) has source-build instructions and platform qualification notes. It has no macOS Desktop release package or release-pipeline target.
+The macOS Desktop is the separate [AppKit host](../Foxwarm.Desktop.Mac/README.md), with its own build and release notes.
 
 ## Install and run
 
-This is an unsigned **Windows x64** desktop app. The release package includes the
-.NET runtime; no installer is needed.
+This is an unsigned **Windows x64** desktop app compiled to native code
+(NativeAOT). It needs no .NET installation, Visual C++ redistributable or
+installer: the package carries the Visual C++ runtime DLLs its components import.
 
 1. Install the **Microsoft Edge WebView2 Evergreen Runtime (x64)** if it is not
    already installed (Windows 10 and 11 normally include it). Microsoft Edge alone
@@ -35,9 +36,10 @@ Settings and data stay in the user profile (see below).
 ## WinUI build qualification
 
 Desktop hosts the existing WebUI in WinUI 3 using the Windows App SDK WinUI component **2.6.5**
-and WebView2 SDK **1.0.4258.31**. Main remains in the same process. Managed
-publication is the default; `-p:PublishAot=true` selects a separate NativeAOT
-publication. Enabling it does not qualify all Main services for AOT.
+and WebView2 SDK **1.0.4258.31**. Main remains in the same process. The release
+package is a NativeAOT publication (`-p:PublishAot=true`), like the macOS
+Desktop; a plain `dotnet build` or publish without it remains a managed
+development build.
 
 The Windows App SDK is app-local (`WindowsAppSDKSelfContained=true`), independent
 of .NET self-containment. The WinUI target uses Windows SDK 19041 contracts and
@@ -46,7 +48,7 @@ minimum. The .NET 10 supported-OS policy continues to apply. Minimum-OS GUI
 qualification remains outstanding.
 
 Desktop publication requires Windows SDK manifest/XAML/resource tools. The
-Windows release job builds this package through the existing managed packager;
+Windows release job builds this package through the release packager;
 the Ubuntu producer continues to build Linux/Windows server packages. Compiling
 C# alone on Linux does not create a runnable WinUI package.
 
@@ -54,25 +56,22 @@ C# alone on Linux does not create a runnable WinUI package.
 
 The **Release packages** workflow publishes this package with the same delivery
 graph as the server packages. A Windows job extracts the finished ZIP and checks
-the WebUI, native x64 dependencies, the embedded .NET 10 runtime, collected
+the WebUI, native x64 dependencies, that it holds no .NET runtime or managed
+assembly, that every imported DLL is in the package or part of Windows, collected
 artifact/extension resources and licenses. It then launches that extracted
 executable with disposable data and a configured canonical Agent root, attaches to
 its actual WebView2 view, verifies native cookie sign-in, authenticated WebSockets
 and Setup, runs a native ToolScript turn with exec-helper execution
-against a local model fixture, and checks ordinary shutdown/restart persistence.
-It also executes the packaged esbuild/sharp dependencies. A separate
+against a local model fixture, indexes and searches through the Vector child
+(only the child loads LanceDB), and checks that the process loaded no CoreCLR.
+It closes the window to the notification area, reopens it from the icon, exits
+through the icon's **Exit** menu item and checks restart persistence and
+ordinary shutdown. It also executes the packaged esbuild/sharp dependencies. A separate
 `desktop-acceptance` artifact records the acceptance result without user state,
 tokens or browser profiles.
 
-Managed and NativeAOT direct-publish lanes have exercised native cookie sign-in,
-original Setup, a native ToolScript turn with real exec-helper execution, artifact
-dependencies, extension bundles, shutdown/restart persistence and the window/tray
-lifetime. Native process inspection confirms that CoreCLR is not loaded. Managed release acceptance validates the complete extracted ZIP, including the
-pinned Code workbench and YAML assets. NativeAOT package-layout/release selection
-and optional Main services remain separate qualification steps. Real Explorer
-recreation and pointer-driven tray restore/Exit have also been exercised; Windows
-sign-out, power-loss recovery and optional Vector/embedding services remain
-outside these checks.
+Real Explorer recreation has also been exercised. Windows sign-out and
+power-loss recovery remain outside these checks.
 WebView2 debugging is enabled only for acceptance, through the test child's
 environment or an app-specific policy on the disposable Windows runner. Normal
 Desktop startup does not enable it.
@@ -125,8 +124,9 @@ Optional Vector indexing/search includes the pinned LanceDB native dependency,
 not an embedding service. Configure a compatible embedding endpoint to enable
 it; disabled configuration does not start a native owner. The default supervised
 child runs through the Desktop executable before UI and single-instance setup,
-without a separate console apphost/runtimeconfig. Windows x64 requires system
-Visual C++/Universal C runtime dependencies; minimum versions are not established.
+without a separate console apphost/runtimeconfig. The LanceDB library and the
+ToolScript worker import the Visual C++ runtime, whose DLLs ship beside them
+(`VC-RUNTIME-NOTICE.txt`); the Universal C runtime is part of Windows 10 and later.
 The package includes `LanceDB-LICENSE.txt` and `Apache-Arrow-LICENSE.txt`. A successful
 cross-build does not establish Windows application or child runtime qualification.
 
@@ -144,11 +144,12 @@ an optional external tool for Code SCM, not a bundled dependency.
 
 Install the repository's npm dependencies (`npm ci`, `npm --prefix packages/webui ci`)
 and a patched .NET 10 SDK on Windows, then run the release packager from the repository root. It
-publishes Desktop self-contained for `win-x64` on Windows and removes
-console-only entry files:
+publishes Desktop with NativeAOT for `win-x64` on Windows, removes console-only
+entry files and copies the Visual C++ runtime DLLs that packaged binaries import
+from the given redistributable directory:
 
 ```sh
-node scripts/release/package.mjs --build-assets --output dist --target desktop-win-x64
+node scripts/release/package.mjs --build-assets --output dist --vc-runtime "<VS>\VC\Redist\MSVC\<version>\x64\Microsoft.VC143.CRT" --target desktop-win-x64
 ```
 
 The Core project supplies the same WebUI, public skills, templates, Node bootstrap,
@@ -159,13 +160,13 @@ private configuration or source dependency caches. Preserve the
 artifact resources selected by the delivery collector, including their required
 `node_modules` directories; do not replace them with the source dependency tree.
 
-For a backend/UI compile before collecting release resources:
+For a managed backend/UI compile before collecting release resources:
 
 ```powershell
 dotnet build dotnet/Foxwarm.Desktop -c Release -p:FoxwarmConsoleEntry=false -p:ArtifactTargetRid=win-x64
 ```
 
-NativeAOT additionally needs Visual Studio Build Tools with the Desktop development
+NativeAOT needs Visual Studio Build Tools with the Desktop development
 with C++ workload (x64/x86 tools and Windows SDK). The SDK locates the installed
 linker and import libraries through `vswhere`/`vcvarsall`; the portable NuGet
 Windows SDK BuildTools package alone does not supply that installation. Restore
@@ -176,21 +177,21 @@ by this resource definition.
 
 ### NativeAOT publication
 
-Qualification uses .NET SDK 10.0.403 with runtime and ILCompiler 10.0.14.
-Use a patched SDK rather than forcing one runtime version onto every framework
-reference: WinUI also resolves a separately versioned Windows SDK projection.
-The default release packager remains managed. To publish the same Desktop entry
-as native code after preparing the shared delivery assets:
+Use a patched SDK (qualified with .NET SDK 10.0.403, runtime and ILCompiler
+10.0.14) rather than forcing one runtime version onto every framework reference:
+WinUI also resolves a separately versioned Windows SDK projection. The packager
+publishes with `-p:PublishAot=true`; the equivalent direct publication, without
+the Code workbench and Visual C++ runtime copy, is:
 
 ```powershell
 dotnet publish dotnet/Foxwarm.Desktop -c Release -r win-x64 --self-contained true -p:PublishAot=true -p:FoxwarmConsoleEntry=false -p:ArtifactTargetRid=win-x64 -o desktop-native
 ```
 
 Keep the app-local WinUI and WebView2 native libraries and resources beside the
-executable. NativeAOT does not make this a single-file application. Keep PDB
-symbols separately from the application archive. The selected WebUI/host path
-is qualified; outstanding trim/AOT warnings in other Main services must be
-assessed before expanding that support claim.
+executable. NativeAOT does not make this a single-file application. Main and
+Desktop are compiled into `Foxwarm.Desktop.exe`; the WinRT projections need no
+managed assembly. The Desktop's own code has no trim/AOT warnings (the release
+job fails on one); Main's are reviewed by the Tests workflow's native lane.
 
 ### Windows App SDK components
 
