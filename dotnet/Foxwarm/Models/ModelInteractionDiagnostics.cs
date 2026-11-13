@@ -191,7 +191,7 @@ internal sealed class ModelInteractionDiagnostics(string dataRoot)
         internal sealed class Attempt
         {
             private readonly Interaction interaction;
-            private readonly string[] secrets;
+            private readonly ModelCredentialRedactor credentials;
             private readonly RawCapture raw;
             private readonly object rawGate = new();
             private JsonObject response = new();
@@ -210,20 +210,7 @@ internal sealed class ModelInteractionDiagnostics(string dataRoot)
             {
                 this.interaction = interaction;
                 Number = number;
-                // Keep the exact attempt's credentials even if live configuration
-                // changes while its stream or diagnostic write is still outstanding.
-                secrets = new[] { options.Token }
-                    .Concat(
-                        (options.ExtraHeaders ?? new JsonObject()).Select(pair =>
-                            SessionWait.Text(pair.Value) ?? ""
-                        )
-                    )
-                    .Where(value => value.Length > 0)
-                    .Distinct(StringComparer.Ordinal)
-                    .SelectMany(value => new[] { value, JsonData.Serialize(value)[1..^1] })
-                    .Distinct(StringComparer.Ordinal)
-                    .OrderByDescending(value => value.Length)
-                    .ToArray();
+                credentials = new ModelCredentialRedactor(options);
                 ModelId = SafeText(model.Key);
                 VirtualModel = virtualModel is null ? null : SafeText(virtualModel);
                 raw = new RawCapture(
@@ -280,7 +267,7 @@ internal sealed class ModelInteractionDiagnostics(string dataRoot)
                 try
                 {
                     lock (rawGate)
-                        raw.Block(text);
+                        raw.Block(text, SafeText);
                 }
                 catch
                 {
@@ -357,114 +344,10 @@ internal sealed class ModelInteractionDiagnostics(string dataRoot)
                 return result;
             }
 
-            private string TrimCredentialSuffix(string text)
-            {
-                var open = -1;
-                var escaped = false;
-                for (var index = 0; index < text.Length; index++)
-                {
-                    if (open < 0)
-                    {
-                        if (text[index] == '"')
-                            open = index;
-                    }
-                    else if (escaped)
-                        escaped = false;
-                    else if (text[index] == '\\')
-                        escaped = true;
-                    else if (text[index] == '"')
-                        open = -1;
-                }
-                // The cutoff may bisect an escaped credential. An incomplete
-                // JSON literal cannot be safely decoded for redaction.
-                if (open >= 0)
-                    text = text[..open] + "\"[truncated JSON string omitted]\"";
-                return TrimSecretPrefix(text);
-            }
+            private string TrimCredentialSuffix(string text) =>
+                credentials.TrimCredentialSuffix(text);
 
-            private string TrimSecretPrefix(string text)
-            {
-                foreach (var secret in secrets)
-                    for (
-                        var length = Math.Min(secret.Length - 1, text.Length);
-                        length > 0;
-                        length--
-                    )
-                        if (text.EndsWith(secret[..length], StringComparison.Ordinal))
-                        {
-                            text = text[..^length] + "[redacted]";
-                            break;
-                        }
-                return text;
-            }
-
-            internal string SafeText(string text)
-            {
-                // Scan quoted lexemes, including an interrupted final literal or
-                // one terminated by an illegal raw newline in malformed SSE.
-                // Preserve unrelated spelling; only sensitive literals change.
-                var result = new StringBuilder();
-                var copied = 0;
-                for (var start = 0; start < text.Length; start++)
-                {
-                    if (text[start] != '"')
-                        continue;
-                    var end = start + 1;
-                    var escaped = false;
-                    var closed = false;
-                    for (; end < text.Length && text[end] is not ('\r' or '\n'); end++)
-                    {
-                        if (escaped)
-                            escaped = false;
-                        else if (text[end] == '\\')
-                            escaped = true;
-                        else if (text[end] == '"')
-                        {
-                            closed = true;
-                            end++;
-                            break;
-                        }
-                    }
-                    var literal = text[start..end];
-                    string? decoded = null;
-                    try
-                    {
-                        decoded = JsonData.Deserialize<string>(closed ? literal : literal + "\"");
-                    }
-                    catch (JsonException) { }
-                    string? replacement = null;
-                    if (decoded is not null)
-                    {
-                        var safe = ReplaceSecrets(closed ? decoded : TrimSecretPrefix(decoded));
-                        if (safe != decoded)
-                            replacement = JsonData.Serialize(safe);
-                    }
-                    // An interrupted escape cannot be decoded safely. Omit
-                    // only that literal, retaining the surrounding evidence.
-                    else if (secrets.Length > 0 && literal.Contains('\\'))
-                        replacement = "\"[malformed escaped string omitted]\"";
-                    if (replacement is not null)
-                    {
-                        result.Append(text.AsSpan(copied, start - copied));
-                        result.Append(replacement);
-                        copied = end;
-                    }
-                    start = end - 1;
-                }
-                result.Append(text.AsSpan(copied));
-                return ReplaceSecrets(result.ToString());
-            }
-
-            private string ReplaceSecrets(string text)
-            {
-                foreach (var secret in secrets)
-                    text = text.Replace(secret, "[redacted]", StringComparison.Ordinal);
-                return Regex.Replace(
-                    text,
-                    @"data:image/[a-zA-Z0-9.+-]+;base64,[a-zA-Z0-9+/=]*",
-                    "data:image/omitted;base64,[image omitted from diagnostics]"
-                );
-            }
+            internal string SafeText(string text) => credentials.SafeText(text);
 
             internal JsonNode? Redact(JsonNode? node)
             {
@@ -489,6 +372,8 @@ internal sealed class ModelInteractionDiagnostics(string dataRoot)
                     return new JsonArray(array.Select(Redact).ToArray());
                 if (node is not JsonObject obj)
                     return node?.DeepClone();
+                if (HostedResponsesTools.IsGeneratedImage(obj))
+                    return HostedImageEvidence.Summary(obj, redact: SafeText);
                 var result = new JsonObject();
                 foreach (var (key, child) in obj)
                     result[SafeText(key)] =
@@ -524,6 +409,9 @@ internal sealed class ModelInteractionDiagnostics(string dataRoot)
         private readonly List<string> blocks = [];
         private readonly SortedDictionary<string, long> eventTypes = new(StringComparer.Ordinal);
         private int blockChars;
+        private readonly Dictionary<string, JsonObject> imageCalls = new(StringComparer.Ordinal);
+        private string? responseId;
+        private bool imageCallsTruncated;
         private bool omitted = imageDeclared;
         private bool truncated;
         private long chunkCount,
@@ -572,7 +460,7 @@ internal sealed class ModelInteractionDiagnostics(string dataRoot)
             return false;
         }
 
-        internal void Block(string block)
+        internal void Block(string block, Func<string, string> redact)
         {
             if (block.Length == 0)
                 return;
@@ -589,7 +477,10 @@ internal sealed class ModelInteractionDiagnostics(string dataRoot)
                     continue;
                 try
                 {
-                    var type = SessionWait.Text(JsonNode.Parse(payload)?["type"]) ?? "unknown";
+                    var frame = JsonNode.Parse(payload);
+                    var type = SessionWait.Text(frame?["type"]) ?? "unknown";
+                    if (frame is JsonObject message)
+                        ObserveImages(message, redact);
                     type = type.Length > 80 ? type[..80] : type;
                     if (!eventTypes.ContainsKey(type) && eventTypes.Count >= 1024)
                         type = "other";
@@ -613,6 +504,57 @@ internal sealed class ModelInteractionDiagnostics(string dataRoot)
             truncated |= count < block.Length;
         }
 
+        private void ObserveImages(JsonObject frame, Func<string, string> redact)
+        {
+            if (frame["response"] is JsonObject response)
+            {
+                responseId = SessionWait.Text(response["id"]) ?? responseId;
+                if (response["output"] is JsonArray output)
+                    for (var index = 0; index < output.Count; index++)
+                        if (output[index] is JsonObject item)
+                            ObserveImage(item, index.ToString(), redact);
+            }
+            if (frame["item"] is JsonObject outputItem)
+                ObserveImage(
+                    outputItem,
+                    frame["output_index"]?.ToJsonString() ?? "unknown",
+                    redact
+                );
+        }
+
+        private void ObserveImage(JsonObject item, string index, Func<string, string> redact)
+        {
+            if (!HostedResponsesTools.IsGeneratedImage(item))
+                return;
+            var summary = HostedImageEvidence.Summary(item, responseId, redact);
+            var key = SessionWait.Text(summary["id"]) ?? index;
+            if (!imageCalls.ContainsKey(key) && imageCalls.Count >= HostedImageEvidence.MaxCalls)
+            {
+                imageCallsTruncated = true;
+                return;
+            }
+            if (imageCalls.TryGetValue(key, out var previous))
+            {
+                foreach (var field in new[] { "error", "responseId" })
+                    if (summary[field] is null && previous[field] is JsonNode retained)
+                        summary[field] = retained.DeepClone();
+                if (
+                    SessionWait.Text(summary["status"])
+                        is "unknown"
+                            or "in_progress"
+                            or "generating"
+                    && SessionWait.Text(previous["status"])
+                        is "failed"
+                            or "incomplete"
+                            or "completed"
+                )
+                    summary["status"] = previous["status"]!.DeepClone();
+                if (previous["hasResult"]?.GetValue<bool>() == true)
+                    summary["hasResult"] = true;
+            }
+            imageCalls[key] = summary;
+        }
+
         internal JsonObject Snapshot()
         {
             // A stream can end before its first SSE delimiter. Inspect the
@@ -629,6 +571,10 @@ internal sealed class ModelInteractionDiagnostics(string dataRoot)
                     ["chunkCharCount"] = chunkChars,
                     ["sseBlockCount"] = blockCount,
                     ["nonJsonBlockCount"] = nonJsonBlocks,
+                    ["imageGenerationCalls"] = new JsonArray(
+                        imageCalls.Values.Select(value => (JsonNode?)value.DeepClone()).ToArray()
+                    ),
+                    ["imageGenerationCallsTruncated"] = imageCallsTruncated,
                     ["eventTypes"] = new JsonObject(
                         eventTypes.Select(pair =>
                             KeyValuePair.Create<string, JsonNode?>(

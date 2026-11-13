@@ -1,3 +1,4 @@
+import { isKnownCommand } from '../commandIngress'
 import { applyToolCallActivity, type ToolCallActivity, type ToolCallActivityEvent } from '../toolCallActivity'
 import type { SessionQuestionsProjection } from '../sessionQuestions'
 import { CHAT_BOOTSTRAP_TAIL_LENGTH, peekPreparedChatHistory, peekPreparedChatArchive, discardPreparedChatHistory } from '../preparedChatHistory'
@@ -1187,7 +1188,7 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
     setLoading(true)
 
     const userMessage = text.trim()
-    const isSlashCommand = /^\/[a-zA-Z_\-.]+(?:\s+.*)?$/s.test(userMessage)
+    const isSlashCommand = isKnownCommand(userMessage)
     const files = [...attachments]
     const sendTimestamp = Date.now()
     const clientMessageId = globalThis.crypto?.randomUUID?.()

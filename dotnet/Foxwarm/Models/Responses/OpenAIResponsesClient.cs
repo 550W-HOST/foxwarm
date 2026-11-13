@@ -46,6 +46,7 @@ public sealed record ResponsesClientOptions(
     internal Func<JsonNode, Task>? AttemptPrepared { get; init; }
     internal JsonObject? WebSearch { get; init; }
     internal JsonObject? ImageGeneration { get; init; }
+    internal bool ImageGenerationOnly { get; init; }
     internal Foxwarm.Images.ImageBlobStore? Images { get; init; }
     public Uri ResponsesUri =>
         new($"{BaseUri.ToString().TrimEnd('/')}/responses", UriKind.Absolute);
@@ -641,7 +642,8 @@ public static class ResponsesCanonicalConverter
         double durationMs,
         IReadOnlyDictionary<int, JsonObject>? generatedParts = null,
         IReadOnlyList<string>? generatedFailures = null,
-        int? successfulImageCount = null
+        int? successfulImageCount = null,
+        IReadOnlyDictionary<int, JsonObject>? generatedFailureParts = null
     )
     {
         var parts = new JsonArray();
@@ -655,6 +657,8 @@ public static class ResponsesCanonicalConverter
             {
                 if (generatedParts?.TryGetValue(outputIndex, out var generated) == true)
                     parts.Add(generated.DeepClone());
+                else if (generatedFailureParts?.TryGetValue(outputIndex, out var failed) == true)
+                    parts.Add(failed.DeepClone());
                 continue;
             }
             if (type == "web_search_call")
@@ -768,7 +772,8 @@ public static class ResponsesCanonicalConverter
             );
         }
         if (
-            generatedFailures is { Count: > 0 }
+            generatedFailureParts is null
+            && generatedFailures is { Count: > 0 }
             && (successfulImageCount ?? generatedParts?.Count ?? 0) > 0
         )
             parts.Add(

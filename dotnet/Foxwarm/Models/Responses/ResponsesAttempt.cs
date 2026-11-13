@@ -8,6 +8,7 @@ namespace Foxwarm.Models;
 internal sealed class ResponsesAttempt : IDisposable
 {
     private readonly ResponsesClientOptions options;
+    private readonly ModelCredentialRedactor credentials;
     private readonly CancellationToken caller;
     private readonly CancellationTokenSource attempt;
     private readonly object gate = new();
@@ -29,6 +30,7 @@ internal sealed class ResponsesAttempt : IDisposable
     )
     {
         this.options = options;
+        credentials = new ModelCredentialRedactor(options);
         this.caller = caller;
         attempt = CancellationTokenSource.CreateLinkedTokenSource(caller);
         Callbacks = new ResponsesStreamCallbacks
@@ -271,7 +273,7 @@ internal sealed class ResponsesAttempt : IDisposable
     )
     {
         GeneratedImageNormalization? generated = null;
-        if (options.Images is not null && response["output"] is JsonArray output)
+        if (response["output"] is JsonArray output)
         {
             generated = await HostedResponsesTools
                 .ExternalizeAsync(
@@ -280,7 +282,9 @@ internal sealed class ResponsesAttempt : IDisposable
                     options.ConcreteModelId,
                     caller,
                     imageBudget,
-                    start
+                    start,
+                    SessionWait.Text(response["id"]),
+                    credentials.SafeText
                 )
                 .ConfigureAwait(false);
             foreach (var (id, bytes) in generated.ReplayBytes)
@@ -301,7 +305,8 @@ internal sealed class ResponsesAttempt : IDisposable
             durationMs,
             generated?.Parts,
             generated?.Failures,
-            imageBudget.Success
+            imageBudget.Success,
+            generated?.FailureParts
         );
     }
 

@@ -83,7 +83,15 @@ export function buildStreamingAssistantMessage(draft: StreamingAssistantDraft | 
         const call = draft.toolCalls.find(call => call.index === part.outputIndex)
         if (call) parts.push(toolPart(call))
       } else if (part.kind === 'image-generation') {
-        parts.push({ system: part.status === 'completed' ? 'Image ready' : 'Generating image…' })
+        if (part.status === 'failed' || part.status === 'incomplete') {
+          parts.push({ system: part.status === 'failed' ? 'Image generation failed' : 'Image generation incomplete',
+            providerMeta: { openaiResponses: { imageGenerationFailure: {
+              type: 'image_generation_call', status: part.status, hasResult: false,
+            } } },
+          })
+        } else {
+          parts.push({ system: part.status === 'completed' ? 'Image ready' : 'Generating image…' })
+        }
       }
     }
   } else {

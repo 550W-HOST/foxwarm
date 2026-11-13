@@ -99,24 +99,15 @@ internal sealed partial class MessageRouter
             if (Regex.IsMatch(rest, @"^\s+"))
                 text = Regex.Replace(rest, @"^\s+", "");
         }
-        var match = Regex.Match(
-            text,
-            @"^(?:@[a-zA-Z_\-.]+\s+)?(/[a-zA-Z_\-.]+)(?:\s+(.*))?$",
-            RegexOptions.Singleline
-        );
-        if (!match.Success || whoamiOnly && match.Groups[1].Value != "/whoami")
+        if (
+            !TryReadCommand(text, out var command, out var rawArgs, allowMention: true)
+            || whoamiOnly && command != "/whoami"
+        )
             return false;
         var auth = Authorization(source);
-        if (match.Groups[1].Value != "/whoami" && auth.Override && !auth.Direct && !auth.Wildcard)
+        if (command != "/whoami" && auth.Override && !auth.Direct && !auth.Wildcard)
             return false;
-        var handled = await HandleExternalCommandAsync(
-            source,
-            match.Groups[1].Value,
-            match.Groups[2].Success ? match.Groups[2].Value : null
-        );
-        if (!handled)
-            await source.Reply("Unknown command: " + match.Groups[1].Value);
-        return true;
+        return await HandleExternalCommandAsync(source, command, rawArgs);
     }
 
     internal async Task<bool> HandleExternalCommandAsync(
@@ -128,6 +119,12 @@ internal sealed partial class MessageRouter
     {
         if (!runtime.Manager.Accepting)
             return true;
+        // Unknown slash text is ordinary input, including at Telegram's pre-Router hook.
+        // Catalog classification must precede command authorization; ordinary admission
+        // still checks authorization and guest provisioning in HandleExternalMessageAsync.
+        var definition = ExternalCommands.Find(command);
+        if (definition is null)
+            return false;
         if (command == "/whoami")
         {
             try
@@ -154,9 +151,6 @@ internal sealed partial class MessageRouter
             return true;
         }
         // Telegram enters here before the generic Router's override-only gate.
-        var definition = ExternalCommands.Find(command);
-        if (definition is null)
-            return false;
         var args = string.IsNullOrWhiteSpace(rawArgs) ? [] : Regex.Split(rawArgs.Trim(), @"\s+");
         try
         {

@@ -169,6 +169,7 @@ export interface MessagePartProviderMeta {
   redactedThinkingLength?: number
   openaiResponses?: {
     annotations?: OpenAIResponsesAnnotation[]
+    imageGenerationFailure?: Record<string, unknown>
     outputItem?: Record<string, unknown>
     sourceModelId?: string
   }

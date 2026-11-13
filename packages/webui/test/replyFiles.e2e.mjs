@@ -97,7 +97,7 @@ test('live file grids survive final reply arrival with an open preview; native f
  }finally{await page.close()}
 })
 
-test('page issuance leads to an actual native browser download with no cookie under a deployment prefix',async()=>{
+test('page issuance leads to an actual native browser download with no authentication cookie under a deployment prefix',async()=>{
  const page=await newPage()
  const client=await browser.target().createCDPSession()
  const network=await page.createCDPSession()
@@ -123,7 +123,8 @@ test('page issuance leads to an actual native browser download with no cookie un
   assert.equal(signRequests.length,before+1)
   assert.ok(signRequests.at(-1).cookie.includes('foxwarm_token=synthetic-browser-download'))
   const request=downloadRequests.findLast(item=>item.url.includes('signature=')&&item.method==='GET')
-  assert.ok(request);assert.equal(request.cookie,'');assert.ok(request.url.startsWith('/nested/download?'))
+  // The non-secret theme cookie is path-scoped and may accompany any same-path request; no other cookie, in particular no login token, may.
+  assert.ok(request);assert.deepEqual(request.cookie.split(';').map(part=>part.split('=')[0].trim()).filter(name=>name&&name!=='foxwarm_canvas'),[]);assert.ok(request.url.startsWith('/nested/download?'))
   assert.equal(page.url(),url)
   // Download grants are action-local; the timeline input remains canonical.
   assert.equal(await page.evaluate(()=>JSON.stringify(window.fixture.messages()).includes('signature=')),false)

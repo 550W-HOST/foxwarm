@@ -10,6 +10,8 @@ internal static class ResponsesRequestPlan
         ResponsesClientOptions options
     )
     {
+        if (options.ImageGenerationOnly)
+            return ImageGenerationRequests.Build(history, options);
         var body = ResponsesRequestSerializer.BuildRequestWithImages(
             history,
             options.RequestModel,
@@ -27,32 +29,8 @@ internal static class ResponsesRequestPlan
             hostedTools.Add(search);
             body["tool_choice"] = SessionWait.Text(options.WebSearch?["toolChoice"]) ?? "auto";
         }
-        if (options.ImageGeneration?["enabled"]?.GetValue<bool>() == true)
-        {
-            var image = new JsonObject { ["type"] = "image_generation", ["partial_images"] = 0 };
-            foreach (
-                var key in new[]
-                {
-                    "model",
-                    "action",
-                    "size",
-                    "quality",
-                    "background",
-                    "outputFormat",
-                    "outputCompression",
-                }
-            )
-                if (options.ImageGeneration[key] is JsonNode value)
-                    image[
-                        key switch
-                        {
-                            "outputFormat" => "output_format",
-                            "outputCompression" => "output_compression",
-                            _ => key,
-                        }
-                    ] = value.DeepClone();
+        if (ImageTool(options.ImageGeneration) is { } image)
             hostedTools.Add(image);
-        }
         body["tools"] = hostedTools;
         if (options.ProviderPromptCacheKey is not null)
             body["prompt_cache_key"] = options.ProviderPromptCacheKey;
@@ -101,5 +79,34 @@ internal static class ResponsesRequestPlan
             body["include"] = include.DeepClone();
         }
         return body;
+    }
+
+    internal static JsonObject? ImageTool(JsonObject? configuration)
+    {
+        if (configuration?["enabled"]?.GetValue<bool>() != true)
+            return null;
+        var image = new JsonObject { ["type"] = "image_generation", ["partial_images"] = 0 };
+        foreach (
+            var key in new[]
+            {
+                "model",
+                "action",
+                "size",
+                "quality",
+                "background",
+                "outputFormat",
+                "outputCompression",
+            }
+        )
+            if (configuration[key] is JsonNode value)
+                image[
+                    key switch
+                    {
+                        "outputFormat" => "output_format",
+                        "outputCompression" => "output_compression",
+                        _ => key,
+                    }
+                ] = value.DeepClone();
+        return image;
     }
 }

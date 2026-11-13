@@ -1,6 +1,6 @@
 # Unit: Message routing and presentation commands
 
-Files: `dotnet/Foxwarm/MessageRouter.Controls.cs`, `dotnet/Foxwarm/MessageRouter.Deletion.cs`, `dotnet/Foxwarm/MessageRouter.IdentityMove.cs`, `dotnet/Foxwarm/MessageRouter.Presentation.cs`, `dotnet/Foxwarm/MessageRouter.cs`
+Files: `dotnet/Foxwarm/MessageRouter.Commands.cs`, `dotnet/Foxwarm/MessageRouter.Controls.cs`, `dotnet/Foxwarm/MessageRouter.Deletion.cs`, `dotnet/Foxwarm/MessageRouter.IdentityMove.cs`, `dotnet/Foxwarm/MessageRouter.Presentation.cs`, `dotnet/Foxwarm/MessageRouter.cs`
 
 ## Purpose
 
@@ -8,6 +8,7 @@ Normalizes Main-local and external-channel message ingress, handles commands, re
 
 ## Stable methods and callers
 
+- `TryReadCommand` / `IsKnownCommand` classify complete command heads from `ExternalCommands` using the shared Source whitespace grammar. Classification gates all selected-Session command paths, WebUI command/upload restrictions, and generic external command detection; [public command administration](./dotnet-command-administration.md#parser-and-failure-boundaries) owns the parsing contract.
 - `HandleMessageAsync` resolves presentation commands through catalog first, then obtains the exact `SessionOwner` through `SessionRuntime`.
 - [Public command administration](./dotnet-command-administration.md) shares text commands across actual WebUI and external callers without replacing their authorization gates. `/fork`, `/session clear`, `/continue`, `/compact`, `/dequeue`, `/stop`, and `/stop compact` map to typed runtime/manager operations and preserve partial/committed error fields.
 - `HandleControlAsync` recognizes correlated WebUI controls, maps actual admission/no-op/error outcomes into bounded Session events, and publishes fresh state. `ControlAction` also recognizes unsupported arguments for those command families so they receive honest errors. Manual compact accepts the supported keep-percentage argument; the unimplemented tool-pruning variant is rejected. Continue and cancellation completion are observed independently after acceptance; no command row is appended.
@@ -16,7 +17,7 @@ Normalizes Main-local and external-channel message ingress, handles commands, re
 
 ## Contract and side effects
 
-The router returns `202` for accepted ordinary input with a non-durable-completion note; queue persistence semantics remain in `SessionSaveLane.Wait`. It never edits active JSON, Archive, or catalog directly. Unsupported slash commands return explicit `422`; busy/history mutation conflicts preserve retryable statuses.
+The router returns `202` for accepted ordinary input with a non-durable-completion note; queue persistence semantics remain in `SessionSaveLane.Wait`. It never edits active JSON, Archive, or catalog directly. Unknown slash-prefixed text follows ordinary message admission; recognized commands retain their handler validation/replies, including explicit `422` for unsupported correlated controls. Busy/history mutation conflicts preserve retryable statuses.
 
 ## Tests
 
