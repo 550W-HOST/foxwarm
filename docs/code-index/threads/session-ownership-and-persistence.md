@@ -10,7 +10,7 @@ HTTP/WebUI or command ingress
   -> exact SessionEntry + SessionSaveLane
   -> PersistentSessionAuthorityStore
   -> Archive SQLite (when canonical history/compaction data is appended)
-  -> LinuxAtomicJsonFile (active Session JSON authority)
+  -> AtomicJsonFile (active Session JSON authority)
   -> SessionCatalog.PublishAuthority (Main-owned projection)
   -> SessionRuntime/WebUI queries and restart hydration
 ```
@@ -46,7 +46,7 @@ Stop/dequeue has an intentional immediate path: `SessionControl.StopAsync` reach
 
 1. `SessionSaveLane.CommitCanonicalAppendAsync` prepares the next history snapshot and the exact appended message rows while holding the lane order.
 2. `PersistentSessionAuthorityStore.CommitCanonicalAppendAsync` validates the bound snapshot, calls `SqliteArchiveMessageStore.WriteMessages`, and retains the exact list of rows newly inserted by this operation.
-3. It streams and syncs the complete temporary authority file while Archive persistence is pending, then awaits the accepted Archive receipt before publishing through `LinuxAtomicJsonFile`'s atomic rename.
+3. It streams and syncs the complete temporary authority file while Archive persistence is pending, then awaits the accepted Archive receipt before publishing through `AtomicJsonFile`'s atomic rename.
 4. A failure before rename rolls back only those newly inserted Archive rows. An exact replay row is not deleted, and a conflicting immutable row fails closed.
 5. A failure after rename is `AuthorityCommittedException`: the JSON authority is committed, hot state is published, and callers must treat the operation as committed even if directory sync or catalog projection failed.
 6. A catalog projection failure is also reported after JSON commit. The owner keeps the newer semantic snapshot and the catalog remains an older projection until a later strict save republishes it.

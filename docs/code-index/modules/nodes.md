@@ -79,7 +79,7 @@ The operator-facing deployment/configuration workflow is documented by the singl
 - Current CLI advertises 1-3 and selects generation 3; browser-extension and Android clients advertise 1-2 and select generation 2. All retain omitted-field generation-1 compatibility for Node-first rolling upgrades. Removing the informational six-digit pairing display code does not alter authentication or supported protocol ranges.
 - Approved-node rename is server-side registry migration plus old-runtime disconnect. The current client has no credential-rewrite protocol; the operator updates/restarts/re-pairs the node.
 - `/node/run-cli-node.sh` remains a bootstrap route alias for the current interactive script.
-- Existing numbered `nodes.json` backups remain readable through the durable JSON store.
+- `nodes.json` keeps the Source backup layout: each write rotates three numbered backups plus the legacy `.bak`, and a corrupt registry loads the first readable backup through the [durable state-file helper](../units/dotnet-node-primitives.md#durable-state-files).
 
 ## Design decisions
 

@@ -15,7 +15,7 @@ Model/tool request
 
 - **Producer:** an authorized model or caller supplies inline/file code and JSON input under the current Session/Agent context.
 - **Owner:** `SessionToolExecutor` admits the operation; `MainToolScript` owns run lifecycle and cancellation; `MontyWorker` owns the native protocol worker; `ToolScriptDataBudget`/`MontyFrameBudget` own materialization and frame preflight; `ToolScriptRunStore` owns per-run durable records.
-- **Durable boundary:** `ToolScriptRecordJson` streams run status/result/error/host-call fields through `LinuxAtomicJsonFile`. Waiting state stores opaque `snapshotBase64`, continuation metadata, stdout, and VM identity. Session changes requested by host calls still go through SessionManager/save-lane/authority; a run record is not Session history or a child-handoff receipt.
+- **Durable boundary:** `ToolScriptRecordJson` streams run status/result/error/host-call fields through `AtomicJsonFile`. Waiting state stores opaque `snapshotBase64`, continuation metadata, stdout, and VM identity. Session changes requested by host calls still go through SessionManager/save-lane/authority; a run record is not Session history or a child-handoff receipt.
 - **Consumers:** host-call results resume the worker or become the final tool result; LocalSessionTurnHost appends only the outer canonical tool result; WebUI receives explicit progress/timeline updates.
 
 ## Budget boundaries

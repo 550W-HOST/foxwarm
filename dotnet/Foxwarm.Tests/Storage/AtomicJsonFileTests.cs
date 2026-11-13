@@ -56,7 +56,7 @@ public sealed class AtomicJsonFileTests
             ["store.json"],
             Directory
                 .GetFiles(Path.GetDirectoryName(file.FilePath)!)
-                .Select(Path.GetFileName)
+                .Select(path => Path.GetFileName(path)!)
                 .ToArray()
         );
         Assert.Equal([file.FilePath], file.CandidatePaths);
@@ -102,7 +102,8 @@ public sealed class AtomicJsonFileTests
         Directory.CreateDirectory(file.FilePath + ".2.bak");
         Write(file, 3);
         Assert.Single(errors);
-        Assert.IsAssignableFrom<IOException>(errors[0]);
+        // Windows reports a directory destination as access denied.
+        Assert.True(errors[0] is IOException or UnauthorizedAccessException, errors[0].ToString());
         Assert.Equal(3, Version(file.FilePath));
         Assert.Equal(1, Version(file.FilePath + ".1.bak"));
     }
