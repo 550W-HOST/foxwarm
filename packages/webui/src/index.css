@@ -2680,35 +2680,39 @@ html[data-foxwarm-frame] .foxwarm-frame-edge[data-frame-edge="start"] { top: 0; 
 html[data-foxwarm-frame] .foxwarm-frame-edge[data-frame-edge="end"] { top: 0; bottom: 0; right: 0; width: var(--foxwarm-frame-pad-right, 0px); }
 html[data-foxwarm-frame] .foxwarm-frame-edge[data-frame-edge="top"] { top: 0; left: 0; right: 0; height: max(var(--foxwarm-frame-pad-top, 0px), 0.75rem); }
 /* An inline row too narrow for one tab beside the controls keeps its full width below a
- * drag band as tall as the controls; the end spacer becomes that band. */
-html[data-foxwarm-frame] [data-frame-row="inline"][data-frame-banded] > .foxwarm-frame-edge + .foxwarm-frame-edge + * { margin-top: var(--foxwarm-frame-pad-top, 0px); }
+ * drag band as tall as the controls; the end spacer becomes that band. A tab strip moves its
+ * content down; a content header, whose markup varies, grows by the band. */
+html[data-foxwarm-frame] [data-frame-row="inline"][data-frame-banded]:has([data-frame-row-fill]) > .foxwarm-frame-edge + .foxwarm-frame-edge + * { margin-top: var(--foxwarm-frame-pad-top, 0px); }
+html[data-foxwarm-frame] [data-frame-row="inline"][data-frame-banded]:not(:has([data-frame-row-fill])) { box-sizing: content-box; padding-top: var(--foxwarm-frame-pad-top, 0px); }
 html[data-foxwarm-frame] [data-frame-row="inline"][data-frame-banded] > .foxwarm-frame-edge[data-frame-edge="end"] { left: 0; width: auto; bottom: auto; height: var(--foxwarm-frame-pad-top, 0px); }
-/* Windows: the row under the caption buttons reaches the window's top and right edges.
- * Its pane drops the top border and top corners; .foxwarm-frame-corner paints the row's
- * surface over the shell gutter above and beside it. A tab strip there that fits beside the
- * caption buttons (`fit`) is exactly as tall as they are, its tabs start 6 px below the window edge and run into the
- * content, and tab labels and strip controls are centred on the caption buttons. */
-html[data-foxwarm-frame="windows"] .foxwarm-workbench-panel[data-frame-corner-pane] { border-top-width: 0; border-top-left-radius: 0; border-top-right-radius: 0; }
-html[data-foxwarm-frame="windows"] [data-frame-corner-pane] .foxwarm-workbench-content-slot,
-html[data-foxwarm-frame="windows"] [data-workbench-content-pane][data-frame-corner-pane] { border-top-left-radius: 0 !important; border-top-right-radius: 0 !important; }
-html[data-foxwarm-frame="windows"] .foxwarm-workbench-tab-strip[data-frame-corner="fit"] {
+/* Windows: inline rows in the window's top row reach its top edge. Their panes drop the top
+ * border and top corners; .foxwarm-frame-top paints each row's surface over the shell gutter
+ * above it (and, for the row under the caption buttons, beside it up to the right edge). A
+ * tab strip there that fits the caption height (`fit`) is exactly as tall as the caption
+ * buttons, its tabs start 6 px below the window edge and run into the content, and tab
+ * labels and strip controls are centred on the caption buttons. */
+html[data-foxwarm-frame="windows"] .foxwarm-workbench-panel[data-frame-top-pane] { border-top-width: 0; border-top-left-radius: 0; border-top-right-radius: 0; }
+html[data-foxwarm-frame="windows"] [data-frame-top-pane] .foxwarm-workbench-content-slot,
+html[data-foxwarm-frame="windows"] [data-workbench-content-pane][data-frame-top-pane] { border-top-left-radius: 0 !important; border-top-right-radius: 0 !important; }
+html[data-foxwarm-frame="windows"] .foxwarm-workbench-tab-strip[data-frame-top="fit"] {
   --foxwarm-frame-tab-top: max(6px, var(--foxwarm-frame-row-top, 0px));
   box-sizing: border-box;
   height: calc(var(--foxwarm-frame-top, 0px) - var(--foxwarm-frame-row-top, 0px));
   padding-top: 0;
 }
-html[data-foxwarm-frame="windows"] .foxwarm-workbench-tab-strip[data-frame-corner="fit"] > :not(.foxwarm-frame-edge) { height: 100%; align-items: stretch; }
-html[data-foxwarm-frame="windows"] .foxwarm-workbench-tab-strip[data-frame-corner="fit"] [data-frame-row-fill] { display: flex; align-items: flex-end; }
-html[data-foxwarm-frame="windows"] .foxwarm-workbench-tab-strip[data-frame-corner="fit"] .foxwarm-workbench-tab-drop-row { flex: 1; min-width: 0; }
-html[data-foxwarm-frame="windows"] .foxwarm-workbench-tab-strip[data-frame-corner="fit"] .foxwarm-workbench-tab {
+html[data-foxwarm-frame="windows"] .foxwarm-workbench-tab-strip[data-frame-top="fit"] > :not(.foxwarm-frame-edge) { height: 100%; align-items: stretch; }
+html[data-foxwarm-frame="windows"] .foxwarm-workbench-tab-strip[data-frame-top="fit"] [data-frame-row-fill] { display: flex; align-items: flex-end; }
+html[data-foxwarm-frame="windows"] .foxwarm-workbench-tab-strip[data-frame-top="fit"] .foxwarm-workbench-tab-drop-row { flex: 1; min-width: 0; }
+html[data-foxwarm-frame="windows"] .foxwarm-workbench-tab-strip[data-frame-top="fit"] .foxwarm-workbench-tab {
   height: calc(var(--foxwarm-frame-top, 0px) - var(--foxwarm-frame-tab-top));
   padding-bottom: var(--foxwarm-frame-tab-top);
 }
-html[data-foxwarm-frame="windows"] .foxwarm-workbench-tab-strip[data-frame-corner="fit"] .foxwarm-workbench-tab-toolbar { padding-bottom: var(--foxwarm-frame-row-top, 0px); }
-.foxwarm-frame-corner { position: fixed; inset: 0 auto auto 0; z-index: 1; pointer-events: none; }
-.foxwarm-frame-corner > * { position: absolute; }
-.foxwarm-frame-corner > [data-frame-corner-edge="left"] { box-shadow: inset 1px 0 var(--foxwarm-color-border); }
-.foxwarm-frame-corner > [data-frame-corner-edge="bottom"] { box-shadow: inset 0 -1px var(--foxwarm-color-border); }
+html[data-foxwarm-frame="windows"] .foxwarm-workbench-tab-strip[data-frame-top="fit"] .foxwarm-workbench-tab-toolbar { padding-bottom: var(--foxwarm-frame-row-top, 0px); }
+.foxwarm-frame-top { position: fixed; inset: 0 auto auto 0; z-index: 1; pointer-events: none; }
+.foxwarm-frame-top > * { position: absolute; }
+.foxwarm-frame-top > [data-frame-top-edge="left"] { box-shadow: inset 1px 0 var(--foxwarm-color-border); }
+.foxwarm-frame-top > [data-frame-top-edge="sides"] { box-shadow: inset 1px 0 var(--foxwarm-color-border), inset -1px 0 var(--foxwarm-color-border); }
+.foxwarm-frame-top > [data-frame-top-edge="bottom"] { box-shadow: inset 0 -1px var(--foxwarm-color-border); }
 /* Fills carry title-row drag surfaces through the shell gutter and panel padding to the window edges. */
 .foxwarm-frame-fill { position: fixed; }
 /* Narrow layouts keep their mobile shell under a plain draggable strip. */

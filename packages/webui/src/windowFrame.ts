@@ -221,23 +221,32 @@ export function framePaneOf(row: Element): Element | null {
   return id ? row.ownerDocument.querySelector(`.foxwarm-workbench-panel[data-pane-id="${CSS.escape(id)}"]`) : null
 }
 
-/** A painted piece of the Windows corner: the corner row's surface over gutter and border, with one outline edge. */
-export type FrameCornerPiece = FrameRect & { color: string; edge: 'left' | 'bottom' }
+/**
+ * A painted piece of a Windows top row: the row's surface over gutter and border, with
+ * outline edges where the pane's border continues.
+ */
+export type FrameTopPiece = FrameRect & { color: string; edge: 'left' | 'sides' | 'bottom' }
 
 /**
- * Corner pieces for a row under the caption buttons on Windows: the strip above its
- * pane (the shell's top gutter) and the strip to its right (pane border and right
- * gutter) down to the row's bottom, or only down to the controls for a banded row.
- * Both carry the row's surface so the row reaches the window's top and right edges.
+ * Pieces for a title row in the window's top row on Windows. Every such row gets the
+ * strip above its pane (the shell's top gutter), so it reaches the window's top edge;
+ * the pane's side borders continue as outlines. The corner row, under the caption
+ * buttons, also takes the strip to its right (pane border and right gutter) down to the
+ * row's bottom, or only down to the controls for a banded row, so it reaches the
+ * window's right edge too.
  */
-export function frameCornerPieces(row: Element, banded: boolean, zones: FrameZones): FrameCornerPiece[] {
+export function frameTopPieces(row: Element, corner: boolean, banded: boolean, zones: FrameZones): FrameTopPiece[] {
   const pane = framePaneOf(row) ?? row
   const color = opaqueBackground(row)
   if (!color) return []
   const box = pane.getBoundingClientRect()
   const rowBox = row.getBoundingClientRect()
   const borderRight = parseFloat(getComputedStyle(pane).borderRightWidth) || 0
-  const pieces: FrameCornerPiece[] = []
+  const pieces: FrameTopPiece[] = []
+  if (!corner) {
+    if (box.top > 0.5) pieces.push({ x: box.left, y: 0, w: box.width, h: box.top, color, edge: 'sides' })
+    return pieces
+  }
   if (box.top > 0.5) pieces.push({ x: box.left, y: 0, w: zones.width - box.left, h: box.top, color, edge: 'left' })
   const x = box.right - borderRight
   const bottom = banded ? zones.top : Math.max(zones.top, rowBox.bottom)
@@ -343,11 +352,11 @@ function startFrameRuntime(root: HTMLElement, hosted: boolean): FrameRuntime {
   fills.setAttribute('aria-hidden', 'true')
   fills.className = 'foxwarm-frame-fills'
   document.body.prepend(fills)
-  // Windows: paints the corner row's surface over the shell gutter and panel border at the caption buttons.
-  const corner = document.createElement('div')
-  corner.setAttribute('aria-hidden', 'true')
-  corner.className = 'foxwarm-frame-corner'
-  document.body.appendChild(corner)
+  // Windows: paints the top rows' surfaces over the shell gutter, and at the caption buttons over the panel border.
+  const topPaint = document.createElement('div')
+  topPaint.setAttribute('aria-hidden', 'true')
+  topPaint.className = 'foxwarm-frame-top'
+  document.body.appendChild(topPaint)
   let strip: HTMLDivElement | null = null
   let frame = 0
   let layoutDirty = true
@@ -369,36 +378,54 @@ function startFrameRuntime(root: HTMLElement, hosted: boolean): FrameRuntime {
     element.style.removeProperty('--foxwarm-frame-pad-top')
     element.style.removeProperty('--foxwarm-frame-row-top')
     element.removeAttribute('data-frame-in-band')
+    element.removeAttribute('data-frame-top')
     element.removeAttribute('data-frame-corner')
     element.removeAttribute('data-frame-banded')
   }
 
-  const markCornerPanes = (panes: Set<Element>) => {
-    for (const pane of document.querySelectorAll('[data-frame-corner-pane]')) if (!panes.has(pane)) pane.removeAttribute('data-frame-corner-pane')
-    for (const pane of panes) pane.setAttribute('data-frame-corner-pane', '')
+  const markTopPanes = (panes: Set<Element>) => {
+    for (const pane of document.querySelectorAll('[data-frame-top-pane]')) if (!panes.has(pane)) pane.removeAttribute('data-frame-top-pane')
+    for (const pane of panes) pane.setAttribute('data-frame-top-pane', '')
   }
 
-  let lastCorner = ''
-  const renderCorner = (pieces: FrameCornerPiece[]) => {
+  let lastTop = ''
+  const renderTop = (pieces: FrameTopPiece[]) => {
     const key = JSON.stringify(pieces)
-    if (key === lastCorner) return
-    lastCorner = key
-    corner.replaceChildren(...pieces.map(piece => {
+    if (key === lastTop) return
+    lastTop = key
+    topPaint.replaceChildren(...pieces.map(piece => {
       const element = document.createElement('div')
-      element.dataset.frameCornerEdge = piece.edge
+      element.dataset.frameTopEdge = piece.edge
       element.style.cssText = `left:${piece.x}px;top:${piece.y}px;width:${piece.w}px;height:${piece.h}px;background:${piece.color}`
       return element
     }))
   }
 
+  // Rows without a fill element: the width their content needed when it last overflowed unbanded.
+  const measuredContent = new WeakMap<HTMLElement, number>()
   /**
    * Smallest width an inline row's content needs: everything but its fill element
-   * (`data-frame-row-fill`, the tab list) plus one tab at its minimum width.
+   * (`data-frame-row-fill`, the tab list) plus one tab at its minimum width. A row without
+   * one (a sole tab's content header) is measured instead: when its content runs past the
+   * space left beside the reservation, it needs that space plus the overflow.
    */
   const minContentWidth = (row: HTMLElement, box: DOMRect) => {
-    const fill = row.querySelector<HTMLElement>('[data-frame-row-fill]')
-    if (!fill || fill.closest('[data-frame-row]') !== row) return 0
     const applied = (name: string) => parseFloat(row.style.getPropertyValue(name)) || 0
+    const fill = row.querySelector<HTMLElement>('[data-frame-row-fill]')
+    if (!fill || fill.closest('[data-frame-row]') !== row) {
+      if (row.hasAttribute('data-frame-banded')) return measuredContent.get(row) ?? 0
+      const end = box.right - applied('--foxwarm-frame-pad-right') - (parseFloat(getComputedStyle(row).paddingRight) || 0)
+      let right = -Infinity
+      for (const element of row.querySelectorAll('*')) {
+        if (element.closest('.foxwarm-frame-edge')) continue
+        const rect = element.getBoundingClientRect()
+        if (rect.width > 0 && rect.height > 0) right = Math.max(right, rect.right)
+      }
+      const overflow = right - end
+      const needed = overflow > 0.5 ? box.width - applied('--foxwarm-frame-pad-left') - applied('--foxwarm-frame-pad-right') + overflow : 0
+      measuredContent.set(row, needed)
+      return needed
+    }
     const fixed = box.width - fill.getBoundingClientRect().width - applied('--foxwarm-frame-pad-left') - applied('--foxwarm-frame-pad-right')
     const tab = fill.querySelector('[data-tab-id]')
     return fixed + (tab ? parseFloat(getComputedStyle(tab).minWidth) || tab.getBoundingClientRect().width : 0)
@@ -435,8 +462,8 @@ function startFrameRuntime(root: HTMLElement, hosted: boolean): FrameRuntime {
     const rows = [...document.querySelectorAll<HTMLElement>('[data-frame-row]')]
     if (isNarrow) {
       rows.forEach(clearRow)
-      markCornerPanes(new Set())
-      renderCorner([])
+      markTopPanes(new Set())
+      renderTop([])
       renderFills([])
       return
     }
@@ -446,39 +473,43 @@ function startFrameRuntime(root: HTMLElement, hosted: boolean): FrameRuntime {
       const kind = element.dataset.frameRow === 'stack' ? 'stack' : 'inline'
       return { element, box, plan: frameRowLayout(box, zones, kind, kind === 'inline' ? minContentWidth(element, box) : 0) }
     })
-    // Windows: the row at the caption buttons reaches the window's top and right edges.
+    // Windows: inline rows in the window's top row reach its top edge and share the
+    // caption buttons' line; the one at the buttons also reaches the right edge.
     const flush = root.dataset.foxwarmFrame === 'windows'
-    const cornerRows: Array<{ element: HTMLElement; banded: boolean }> = []
-    const cornerPanes = new Set<Element>()
+    const topRows: Array<{ element: HTMLElement; corner: boolean; banded: boolean }> = []
+    const topPanes = new Set<Element>()
     for (const { element, box, plan } of plans) {
-      const isCorner = flush && plan.corner
+      const isTop = flush && element.dataset.frameRow === 'inline' && (plan.corner || box.top < zones.top)
       element.toggleAttribute('data-frame-in-band', plan.inBand)
       // `fit`: the row is no taller than the controls, so it takes exactly their height.
-      if (isCorner) element.setAttribute('data-frame-corner', !plan.banded && box.bottom <= zones.top + 1 ? 'fit' : '')
+      const fit = !plan.banded && box.bottom <= zones.top + 1 ? 'fit' : ''
+      if (isTop) element.setAttribute('data-frame-top', fit)
+      else element.removeAttribute('data-frame-top')
+      if (isTop && plan.corner) element.setAttribute('data-frame-corner', fit)
       else element.removeAttribute('data-frame-corner')
       element.toggleAttribute('data-frame-banded', plan.banded)
       element.style.setProperty('--foxwarm-frame-pad-top', `${plan.top}px`)
       element.style.setProperty('--foxwarm-frame-pad-left', `${plan.left}px`)
       element.style.setProperty('--foxwarm-frame-pad-right', `${plan.right}px`)
-      if (!isCorner) {
+      if (!isTop) {
         element.style.removeProperty('--foxwarm-frame-row-top')
         continue
       }
-      cornerRows.push({ element, banded: plan.banded })
+      topRows.push({ element, corner: plan.corner, banded: plan.banded })
       const pane = framePaneOf(element)
-      if (pane) cornerPanes.add(pane)
+      if (pane) topPanes.add(pane)
       // A sole tab's content box copies its slot's corners; it drops the top ones too.
       const content = element.closest('[data-workbench-content-pane]')
-      if (content) cornerPanes.add(content)
+      if (content) topPanes.add(content)
     }
-    markCornerPanes(cornerPanes)
-    // The corner pane drops its top border, which moves the row up; size the row and band from there.
-    for (const { element, banded } of cornerRows) {
+    markTopPanes(topPanes)
+    // A top pane drops its top border, which moves the row up; size the row and band from there.
+    for (const { element, banded } of topRows) {
       const top = Math.max(0, element.getBoundingClientRect().top)
       element.style.setProperty('--foxwarm-frame-row-top', `${top}px`)
       if (banded) element.style.setProperty('--foxwarm-frame-pad-top', `${Math.max(0, Math.ceil(zones.top - top))}px`)
     }
-    renderCorner(cornerRows.flatMap(({ element, banded }) => frameCornerPieces(element, banded, zones)))
+    renderTop(topRows.flatMap(({ element, corner, banded }) => frameTopPieces(element, corner, banded, zones)))
     renderFills(computeFrameEdgeFills(document))
   }
 
@@ -528,7 +559,7 @@ function startFrameRuntime(root: HTMLElement, hosted: boolean): FrameRuntime {
     relayout()
   })
   rowObserver.observe(document.body, { childList: true, subtree: true })
-  // Theme changes recolour the Windows corner.
+  // Theme changes recolour the Windows top rows.
   const themeObserver = new MutationObserver(relayout)
   themeObserver.observe(root, { attributes: true, attributeFilter: ['class', 'style', 'data-foxwarm-theme'] })
   // Menus, dialogs, tab changes and theme changes alter the reported regions.
@@ -552,12 +583,12 @@ function startFrameRuntime(root: HTMLElement, hosted: boolean): FrameRuntime {
       narrow?.removeEventListener('change', relayout)
       overlayGeometry?.removeEventListener('geometrychange', relayout)
       document.querySelectorAll<HTMLElement>('[data-frame-row]').forEach(clearRow)
-      markCornerPanes(new Set())
+      markTopPanes(new Set())
       if (overlay) setFrameChromeColor(null)
       root.removeAttribute('data-foxwarm-frame-narrow')
       probe.remove()
       fills.remove()
-      corner.remove()
+      topPaint.remove()
       strip?.remove()
     },
   }
