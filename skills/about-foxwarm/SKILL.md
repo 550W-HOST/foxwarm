@@ -134,7 +134,7 @@ If models are configured and WebUI is open, the user can ask:
 | Pair/bootstrap a Node, add disposable container Nodes, or run delegated development work on a Node | [node-setup](../node-setup/SKILL.md) |
 | Coordinate dependent tool calls | [toolscript-automation](../toolscript-automation/SKILL.md) |
 
-These skills own different workflows; their cross-links provide navigation rather than another copy of the same rules. Ask the agent to load the named skill, or use `skill({ action: "load", skillName: "access-control" })` through the tool interface.
+These skills own different workflows; their cross-links provide navigation rather than another copy of the same rules. Ask the agent to load the named skill, or run `ctl skill load access-control`.
 
 ## Where to find details
 

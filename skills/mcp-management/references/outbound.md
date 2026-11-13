@@ -4,79 +4,46 @@ This reference covers Foxwarm connecting to another tool server. It does not con
 
 ## Outbound configuration lifecycle
 
-- Use the hidden `mcp_config` builtin, invoked with `call_tool`, for connection settings. The former Setup Authorizations entry is not available; existing OAuth grants and administrator APIs remain intact.
+- Use `ctl mcp set` (the `mcp_config` builtin) for connection settings. The former Setup Authorizations entry is not available; existing OAuth grants and administrator APIs remain intact.
 - A successful `mcp_config` call updates the live runtime configuration immediately. Existing HTTP caller connections are closed after the update, and subsequent discovery/calls use the change; **no Foxwarm restart is required**.
 - Do **not** manually edit the MCP state/config file. Manual file edits do not update the live cached configuration immediately and can leave disk and runtime behavior inconsistent.
 - Never print, copy into chat, or commit real tokens, environment secrets, private headers, or credentials. Use values supplied through an approved secret-handling path and keep diagnostic output redacted.
 
 ## Safe listing
 
-List configured servers through the hidden safe-summary builtin:
+List configured servers with the safe-summary command:
 
-```json
-{
-  "toolId": "builtin:list_mcp_servers",
-  "args": {}
-}
+```text
+mcp list
 ```
 
-Invoke that descriptor with `call_tool`. The result includes safe metadata such as enabled state, transport, command/URL, argument count, environment/header key names, whether a token exists, and the configured tool-call timeout override (`null` means the default of 60 seconds). It does not return secret values.
+The result includes safe metadata such as enabled state, transport, command/URL, argument count, environment/header key names, whether a token exists, and the configured tool-call timeout override (`null` means the default of 60 seconds). It does not return secret values.
 
-If the builtin names are uncertain, first use:
-
-```json
-{
-  "query": "MCP server config list",
-  "sources": ["builtin"],
-  "includeSchema": true
-}
-```
-
-with `search_tools`.
+`ctl mcp --help` lists the MCP commands.
 
 ## Configure a server
 
-Invoke `mcp_config` through `call_tool` and pass the complete connection settings being created or changed.
+Run `ctl mcp set` with the complete connection settings being created or changed; `ctl mcp set --help` shows every option.
 
 Streamable HTTP example:
 
-```json
-{
-  "toolId": "builtin:mcp_config",
-  "args": {
-    "name": "example",
-    "transport": "streamable-http",
-    "url": "https://mcp.example.invalid/mcp",
-    "token": "<secret supplied at runtime>",
-    "timeoutSeconds": 240,
-    "enable": true
-  }
-}
+```text
+mcp set example --transport streamable-http --url https://mcp.example.invalid/mcp --token @token --timeout-seconds 240 --enable
+  values: {"token": "<secret supplied at runtime>"}
 ```
 
 Stdio example:
 
-```json
-{
-  "toolId": "builtin:mcp_config",
-  "args": {
-    "name": "example-local",
-    "transport": "stdio",
-    "command": "example-mcp-server",
-    "args": ["--stdio"],
-    "env": {
-      "EXAMPLE_API_KEY": "<secret supplied at runtime>"
-    },
-    "enable": true
-  }
-}
+```text
+mcp set example-local --transport stdio --command example-mcp-server --args=--stdio --env @env --enable
+  values: {"env": {"EXAMPLE_API_KEY": "<secret supplied at runtime>"}}
 ```
 
-Provider schemas may hide free-form objects. In that case, use the documented `envJson` or `headersJson` JSON-object-string fallback instead of passing both forms.
+Pass `--env` and `--headers` as `@name` values or one JSON object text; repeat `--args` for each server argument.
 
 ### Tool-call timeout
 
-`timeoutSeconds` is optional and applies only to tool calls for that server. Acceptable overrides are finite values from 1 through 3600 seconds. Omitting the field leaves the current timeout setting unchanged; servers without an override use 60 seconds. To remove an existing override without changing the connection settings, invoke `mcp_config` with the server name and `timeoutSeconds: 0`; the canonical persisted configuration removes the field. Connection setup and tool listing do not use this override.
+`timeoutSeconds` is optional and applies only to tool calls for that server. Acceptable overrides are finite values from 1 through 3600 seconds. Omitting the field leaves the current timeout setting unchanged; servers without an override use 60 seconds. To remove an existing override without changing the connection settings, run `ctl mcp set <name> --timeout-seconds 0`; the canonical persisted configuration removes the field. Connection setup and tool listing do not use this override.
 
 ## Administrator-managed OAuth
 
@@ -90,17 +57,11 @@ The selected account is deliberately shared by the instance. Existing tool permi
 
 Disable an existing server without repeating its connection details:
 
-```json
-{
-  "toolId": "builtin:mcp_config",
-  "args": {
-    "name": "example",
-    "enable": false
-  }
-}
+```text
+mcp set example --no-enable
 ```
 
-Use `enable: true` to re-enable an existing server. List safe summaries afterward to confirm the state.
+Use `ctl mcp set <name> --enable` to re-enable an existing server. List safe summaries afterward to confirm the state.
 
 ## Transport basics
 
@@ -121,37 +82,28 @@ Do not guess a URL, executable, arguments, or authentication format. Use the MCP
 
 ## Discover and call tools after configuration
 
-1. Configure or enable the server with hidden `mcp_config` via `call_tool`.
-2. Use `search_tools` with `sources: ["mcp"]` and, when known, `server: "<name>"`.
+1. Configure or enable the server with `ctl mcp set`.
+2. Run `ctl tool search --source mcp` and, when known, `--server <name>`.
 3. Prefer the returned `toolId`, such as `mcp:example/tool_name`.
-4. Invoke it with `call_tool`, passing target arguments in `args` (or `argsJson` only when the provider hides the object field).
+4. Run it with `ctl tool call <toolId> --args @args`, passing the target arguments as `values.args`.
 5. If discovery fails, safely list servers and verify enabled state, transport, endpoint/command, and secret presence without exposing values.
 
 Example discovery:
 
-```json
-{
-  "query": "repository search",
-  "sources": ["mcp"],
-  "server": "example",
-  "includeSchema": true
-}
+```text
+tool search --source mcp --server example 'repository search'
 ```
 
 Example call descriptor:
 
-```json
-{
-  "toolId": "mcp:example/search_repositories",
-  "args": {
-    "query": "foxwarm"
-  }
-}
+```text
+tool call mcp:example/search_repositories --args @args
+  values: {"args": {"query": "foxwarm"}}
 ```
 
 ## Internal result shape
 
-Normal MCP calls through `call_tool`, including ToolScript, use source normalization. Plain text JSON duplicating `structuredContent` is removed; a structured-only result returns its own fields at the top level rather than inside `structuredContent` or a new `output` wrapper. Fields defined by the tool itself are not flattened or renamed.
+Normal MCP calls through `ctl tool call`, including ToolScript's `call_tool`, use source normalization. Plain text JSON duplicating `structuredContent` is removed; a structured-only result returns its own fields at the top level rather than inside `structuredContent` or a new `output` wrapper. Fields defined by the tool itself are not flattened or renamed.
 
 Errors, additional explanations, meaningful block/result metadata and multimodal data are retained. Image promotion and output limits keep their existing behavior. External MCP passthrough returns the original wire result, so external clients may still see both text and `structuredContent`. Existing history is not rewritten.
 
@@ -161,4 +113,4 @@ Errors, additional explanations, meaningful block/result metadata and multimodal
 - For connection errors, verify transport and endpoint/command first; do not respond by editing the state file or restarting Foxwarm.
 - A closed/404 context may be rebuilt on a later operation, but do not repeat a possibly executed tool merely to restore the connection. Re-establish any required remote Node/cwd explicitly.
 - For authentication errors, verify that the expected token/header/environment key is configured, but never reveal its value.
-- `search_tools` may return warnings for one broken MCP server while preserving results from healthy servers. Treat the per-server warning as scoped rather than assuming all MCP integration is unavailable.
+- `tool search` may return warnings for one broken MCP server while preserving results from healthy servers. Treat the per-server warning as scoped rather than assuming all MCP integration is unavailable.

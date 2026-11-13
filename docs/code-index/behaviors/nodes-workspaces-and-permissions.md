@@ -11,7 +11,7 @@ Session conversation and [turn ownership](messages-and-turns.md#which-boundary-a
 | Operation | Observable placement |
 | --- | --- |
 | Direct `read`, `write`, `edit`, `exec`, or `browser_*` | Uses the Session's selected Node. At `master`, uses the local handler; elsewhere, requires that exact Node's capability. |
-| `call_tool` with `source=node` | Uses its explicit `nodeId`, or the current Node if omitted. An explicit other-Node call does not import the current Node's cwd. |
+| `ctl tool call` with `--source node` | Uses its explicit `nodeId`, or the current Node if omitted. An explicit other-Node call does not import the current Node's cwd. |
 | Agent memory tools | Use the Agent's memory on Main, not an arbitrary `memory/` directory on the selected Node. |
 | Session, Task, topology, and Provider lifecycle operations | Retain their operation-specific owners. Selecting a Node does not turn management tools into remote shell tools. |
 | `send_file.node`, `image_write_to_file.node` | Select a file source or destination for a compound operation; delivery/image lookup still has its own owner. |
@@ -65,7 +65,7 @@ Restricted text ingress must classify commands consistently with the actual disp
 Discovery, default schema injection, strict authorization, and execution are separate stages:
 
 1. Discovery projects available capabilities through current policy and structural visibility. A definite denial is hidden; an argument-dependent possible allow may remain visible. The model's Node list is part of this stage: it lists the current Node and Nodes where a Node tool or file transfer might be allowed; selection and management alone do not list a Node. Administrator Node surfaces are not filtered. See [Node list visibility](../units/node-list-visibility.md). The model's Session list and `list_agents` likewise show its own Session and Agent plus those its policy might let it read, message, assign to, stop, rename or manage; see [Session and Agent list visibility](../units/session-list-visibility.md).
-2. Invocation resolves the actual builtin, MCP server, or Node capability. `call_tool` and ToolScript do not substitute their wrapper identity for the concrete operation.
+2. Invocation resolves the actual builtin, MCP server, or Node capability. `ctl` and ToolScript do not substitute their wrapper identity for the concrete operation.
 3. Strict authorization evaluates the actual arguments and affected endpoints. A multi-Node allow must cover every endpoint; a matching Node deny can stop the operation. An `ask` outcome makes the call wait for an approver; discovery treats it as possibly invocable ([approval waits](execution-and-waiting.md#a-call-can-wait-for-approval)).
 4. The target still validates its own paths, advertised capabilities, connection, and service requirements. A visible tool may therefore reject a particular request.
 

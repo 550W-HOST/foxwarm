@@ -9,6 +9,7 @@ This module documents current .NET source behavior. Cross-module contracts belon
 ## Units
 
 - [Unified tools and Session tool execution](../units/tools-registry.md)
+- [`ctl` command registry and model front end](../units/ctl-command-registry.md)
 - [Main-owned artifact publication](../units/dotnet-artifacts.md)
 - [Shared native file primitives](../units/dotnet-node-primitives.md)
 - [Local file, exec, delivery, and workspace tools](../units/tools-local-io.md)

@@ -22,13 +22,15 @@ This distinction matters here too.
 
 Examples in this area include:
 
-- `node_bootstrap_info`
-- `node_pair_list`
-- `node_pair_approve`
-- `node_create_auth_token`
-- `node_remove`
-- `node({ action: "list" })`
-- general inspection tools such as `search_tools`, `skill({ action: "load", ... })`, file tools, etc.
+- `ctl node bootstrap-info` (`node_bootstrap_info`)
+- `ctl node pair-list` (`node_pair_list`)
+- `ctl node pair-approve` (`node_pair_approve`)
+- `ctl node token` (`node_create_auth_token`)
+- `ctl node remove` (`node_remove`)
+- `ctl node list`
+- general inspection such as `ctl help`, `ctl tool search`, `ctl skill load`, file tools, etc.
+
+These `ctl` commands are the agent's tool front end; policy rules name the builtin in parentheses.
 
 Use tools when you need agent-side reasoning help or machine-readable/bootstrap-ready information.
 
@@ -68,9 +70,8 @@ the pairing token. The returned commands contain the placeholder `PAIRING_TOKEN`
 the user, or a command run where that file is readable, substitutes the file's contents when
 running the command on the new Node. Choose a new path each time; an existing file is not
 replaced.
-The pairing and agent-management helpers are not all injected into the default
-tool schema. Discover them with `search_tools`, then invoke them with
-`call_tool`.
+The pairing and agent-management helpers are `ctl node` commands; `ctl node --help`
+lists them.
 
 When this skill shows `/node ...` examples below, read them as **commands for the user to run on the master side** unless the surrounding text explicitly says otherwise.
 
@@ -94,7 +95,7 @@ After pairing and approval, a CLI or Shell Node receives tool calls from the Mai
 
 Keep three controls apart:
 
-- **Placement** chooses where tools run: a Session's current Node, set at creation with `create_child_session({node})` or `create_session({node})`, by `node({action:"select"})`, or by an Agent's `defaultNode`. It grants nothing.
+- **Placement** chooses where tools run: a Session's current Node, set at creation with `create_child_session({node})` or `ctl session create --node`, by `ctl node select`, or by an Agent's `defaultNode`. It grants nothing.
 - **Authorization** decides which tools a Session may use on which Nodes: the global tool policy plus Agent-local rule layers (`access-control`, `agent-management`).
 - **Containment** comes from the environment itself: a container, VM or separate machine and its account, network and resource limits. Foxwarm does not turn a Node into a sandbox by selecting it or by restricting an Agent.
 
@@ -154,11 +155,11 @@ Two supported paths are available. For a Node created before the remote client r
 /node create my-node
 ```
 
-It reserves `my-node` and returns the per-node auth token once. Do not confuse this with the shared pairing token. The token is not a six-digit pairing code; the server stores only its hash. Use it on a new host with `--node-id=my-node --auth-token=YOUR_PER_NODE_AUTH_TOKEN` (Windows `-NodeId my-node -AuthToken YOUR_PER_NODE_AUTH_TOKEN`). The client saves credentials on successful registration; later runs use the credentials file. For URLs with a deployment path also pass `--host=YOUR_REACHABLE_URL` or `-HostUrl`. `/node remove my-node` is the user-facing credential-revocation command; agent workflows use the discoverable `node_remove` tool below.
+It reserves `my-node` and returns the per-node auth token once. Do not confuse this with the shared pairing token. The token is not a six-digit pairing code; the server stores only its hash. Use it on a new host with `--node-id=my-node --auth-token=YOUR_PER_NODE_AUTH_TOKEN` (Windows `-NodeId my-node -AuthToken YOUR_PER_NODE_AUTH_TOKEN`). The client saves credentials on successful registration; later runs use the credentials file. For URLs with a deployment path also pass `--host=YOUR_REACHABLE_URL` or `-HostUrl`. `/node remove my-node` is the user-facing credential-revocation command; agent workflows use `ctl node remove` below.
 
-For an agent-managed setup, discover `builtin:node_create_auth_token` with
-`search_tools` and call it through `call_tool`. This is separate from
-`node({ action: "create" })`: the latter runs a configured provider lifecycle,
+For an agent-managed setup, run `ctl node token <nodeId> --file-path <path>`
+(`node_create_auth_token`). This is separate from `ctl node create`: the
+latter runs a configured provider lifecycle,
 while this tool reserves a new approved Node ID and writes its credential to a
 new owner-only file on master. It returns only `{ nodeId, filePath }`; it never
 returns the token. The Node ID and destination file must both be new, and this
@@ -201,9 +202,8 @@ The Node startup log includes the exact `/node approve <pending-id>` command; th
 
 A coordinator allowed to use the pairing tools can discover and call them:
 
-1. `search_tools({ query: "pair node", sources: ["builtin"] })`
-2. `call_tool({ toolId: "builtin:node_pair_list", args: {} })`
-3. after checking the pending id, `call_tool({ toolId: "builtin:node_pair_approve", args: { pendingId, nodeId } })`
+1. `ctl node pair-list`
+2. after checking the pending id, `ctl node pair-approve <pendingId> --node-id <nodeId>`
 
 Approval establishes trust in a new execution host. Even though the tool path
 can automate it, keep a human confirmation step when the operator's policy
@@ -212,12 +212,10 @@ appears in the list.
 
 ### Remove an approved Node
 
-For agent-managed credential revocation, discover the hidden builtin and pass the
-approved Node ID explicitly:
+For agent-managed credential revocation, pass the approved Node ID explicitly:
 
-```javascript
-search_tools({ query: "node_remove", sources: ["builtin"], limit: 1 })
-call_tool({ toolId: "builtin:node_remove", args: { nodeId: "my-node" } })
+```text
+node remove my-node
 ```
 
 It returns `{ nodeId, disconnected }`. Main removes the approved credential and
@@ -229,7 +227,7 @@ current Node.
 
 This does not stop the client process, delete files or containers, remove Agents
 or Sessions, or change their Node bindings. Provider resource destruction is a
-separate `node({ action: "destroy", ... })` operation. Review affected bindings
+separate `ctl node destroy` operation. Review affected bindings
 before revocation and handle any authorized deployment cleanup separately.
 Use this tool rather than injecting `/node remove` through a WebUI/API command
 entry point. The `/node remove <node-id>` command remains available for users.
@@ -255,7 +253,7 @@ After approval:
 - future restarts use stored node credentials
 - the pairing token is mainly for first-time pairing / re-pairing
 
-`node({ action: "list" })` is the agent-facing online-node check. A node that is approved but
+`ctl node list` is the agent-facing online-node check. A node that is approved but
 offline will not be usable for worker execution and may not appear there.
 
 ## Fastest startup: Linux bare-metal bootstrap
@@ -458,7 +456,7 @@ Agents that were bound to a Node with legacy isolation are migrated at startup t
 
 After startup and approval:
 
-1. use `node({ action: "list" })` to confirm the node is online, or tell the user to run `/node` when approved/offline detail is needed
+1. use `ctl node list` to confirm the node is online, or tell the user to run `/node` when approved/offline detail is needed
 2. if approval is pending, use the reviewed `node_pair_list` / `node_pair_approve` tool path or the user-facing `/node approve` path
 3. confirm tool execution happens on the expected Node, not accidentally on `master`
 4. for restricted Agents, check representative allowed and denied calls with `explain_tool_authorization`
