@@ -205,8 +205,8 @@ public sealed class LiteralRecallTests
         var args = Args("literal");
         var direct = await f.Call("recall", args);
         var unified = await f.Call(
-            "call_tool",
-            new JsonObject { ["toolId"] = "builtin:recall", ["args"] = args.DeepClone() }
+            "ctl",
+            CtlTestArgs.Unified(new JsonObject { ["toolId"] = "builtin:recall", ["args"] = args.DeepClone() })
         );
         Assert.Equal(Output(direct), Output(unified));
         var script = await f.Call(

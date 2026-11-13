@@ -50,12 +50,12 @@ public sealed partial class ProviderFileConsumerTests
         Assert.Equal(3, provider.Count);
         Assert.Equal(4, provider["lifecycle"]!.AsArray().Count);
         var full = await f.Call(
-            "call_tool",
-            new JsonObject
+            "ctl",
+            CtlTestArgs.Unified(new JsonObject
             {
                 ["toolId"] = "builtin:node",
                 ["args"] = Lifecycle("inspect", provider: "fixture"),
-            }
+            })
         );
         Success(full);
         Assert.Equal("object", full["provider"]!["createParameters"]!["type"]!.GetValue<string>());
@@ -207,8 +207,8 @@ public sealed partial class ProviderFileConsumerTests
                 id
             );
             var result = await f.Call(
-                "call_tool",
-                new JsonObject { ["toolId"] = "builtin:node", ["args"] = Lifecycle("inspect", id) }
+                "ctl",
+                CtlTestArgs.Unified(new JsonObject { ["toolId"] = "builtin:node", ["args"] = Lifecycle("inspect", id) })
             );
             Assert.True(result["error"] is null, result.ToJsonString());
             var node = result["node"]!;

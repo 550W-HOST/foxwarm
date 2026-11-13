@@ -76,17 +76,17 @@ public sealed partial class NodeAuthorizationTreeTests
             )
         );
         var read = Obj("""{"toolId":"node:fixture/target/read","args":{"filePath":"read.txt"}}""");
-        Success(await f.Call("call_tool", read, delegated));
+        Success(await f.Call("ctl", CtlTestArgs.Unified(read), delegated));
         Assert.True(f.Manager.ToolVisible(delegated, "node", "read", node: "fixture/target"));
         await f.Manager.SetAgentRulesAsync(
             "delegated",
             Rules("""[{"tool":"read","node":{"exact":"fixture/target"},"action":"deny"}]""")
         );
-        Denied(await f.Call("call_tool", read, delegated));
+        Denied(await f.Call("ctl", CtlTestArgs.Unified(read), delegated));
         Assert.False(f.Manager.ToolVisible(delegated, "node", "read", node: "fixture/target"));
         await f.Manager.SetAgentRulesAsync("delegated", new JsonArray());
         await f.Policy("version: 1\nrules: [{tool: read, node: parent, action: deny}]\n");
-        Denied(await f.Call("call_tool", read, delegated));
+        Denied(await f.Call("ctl", CtlTestArgs.Unified(read), delegated));
         await f.Policy("version: 1\nrules: []\n");
         await f.Manager.SetAgentRulesAsync(
             "main",

@@ -211,10 +211,10 @@ public sealed class NodePolicyCliTests
                 "tool_authorization_denied",
                 Error(
                     await Call(
-                        "call_tool",
-                        Obj(
+                        "ctl",
+                        CtlTestArgs.Unified(Obj(
                             """{"toolId":"node:official/read","args":{"filePath":"images/original.bin"}}"""
-                        )
+                        ))
                     )
                 )
             );
@@ -265,10 +265,10 @@ public sealed class NodePolicyCliTests
                 "tool_authorization_denied",
                 Error(
                     await Call(
-                        "call_tool",
-                        Obj(
+                        "ctl",
+                        CtlTestArgs.Unified(Obj(
                             """{"toolId":"node:master/write","args":{"filePath":"wrong-node","content":"no"}}"""
-                        )
+                        ))
                     )
                 )
             );

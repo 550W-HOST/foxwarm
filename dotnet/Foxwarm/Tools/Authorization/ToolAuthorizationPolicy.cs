@@ -9,6 +9,40 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
 {
     internal const int MaxBytes = 256 * 1024;
 
+    // Load-time notes about rules that can never match, such as rules naming a removed
+    // discovery builtin. They never make a policy unavailable.
+    internal IReadOnlyList<string> Warnings { get; init; } = [];
+
+    // Builtin names that are not concrete capabilities. search_tools only gated discovery,
+    // which is now filtered by each target's own policy; ctl and the former call_tool are
+    // permission-neutral front ends. A rule naming one is accepted and has no effect.
+    internal static readonly IReadOnlyList<string> NonCapabilityBuiltins =
+    [
+        "search_tools",
+        "call_tool",
+        "ctl",
+    ];
+
+    [ThreadStatic]
+    private static List<string>? warnings;
+
+    private static readonly HashSet<string> reported = new(StringComparer.Ordinal);
+
+    // Logs each distinct warning of a loaded policy once per process.
+    internal static void Report(string scope, ToolAuthorizationPolicy policy)
+    {
+        foreach (var warning in policy.Warnings)
+        {
+            var line = $"Tool authorization {scope}: {warning}";
+            lock (reported)
+            {
+                if (reported.Count >= 1024 || !reported.Add(line))
+                    continue;
+            }
+            MainLog.Diagnostic(line);
+        }
+    }
+
     internal static ToolAuthorizationPolicy Compatibility() =>
         Normalize(new JsonObject { ["version"] = 1 });
 
@@ -166,6 +200,14 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
                     || (map["oneOf"] as JsonArray ?? []).Any(value =>
                         SessionWait.Text(value) == name
                     )
+                );
+        foreach (var retired in NonCapabilityBuiltins)
+            if (
+                Explicit(retired)
+                && ToolAuthorizationEvaluation.ToolMatches(result, "builtin", retired, null)
+            )
+                warnings?.Add(
+                    $"builtin {retired} is not a capability and is ignored; access to tools through ctl is decided by each target's own rules."
                 );
         if (
             Explicit("update_session_snapshot")
@@ -417,6 +459,26 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
     }
 
     internal static ToolAuthorizationPolicy Normalize(JsonObject root)
+    {
+        var previous = warnings;
+        warnings = [];
+        try
+        {
+            var policy = NormalizeCore(root);
+            return warnings.Count == 0
+                ? policy
+                : policy with
+                {
+                    Warnings = warnings.Distinct(StringComparer.Ordinal).ToArray(),
+                };
+        }
+        finally
+        {
+            warnings = previous;
+        }
+    }
+
+    private static ToolAuthorizationPolicy NormalizeCore(JsonObject root)
     {
         Fields(root, "version", "defaultAction", "rules");
         if (Number(root["version"]) != 1)

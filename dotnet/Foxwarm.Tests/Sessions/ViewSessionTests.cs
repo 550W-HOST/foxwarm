@@ -330,7 +330,9 @@ public sealed class ViewSessionTests
     {
         await using var f = await MainToolScriptTests.Fixture.Create();
         await ForkClearLifecycleTests.AppendAsync(f.Owner, Text("latest evidence"));
-        var definitions = f.Manager.ModelDefinitions(f.Owner).OfType<JsonObject>().ToArray();
+        var definitions = f
+            .Manager.ToolRegistry.Entries.Select(entry => entry.Definition)
+            .ToArray();
         var view = Assert.Single(
             definitions,
             item => SessionWait.Text(item["name"]) == "view_session"
@@ -344,10 +346,15 @@ public sealed class ViewSessionTests
         var direct = await f.Call("view_session", args);
         Assert.Contains("latest evidence", Output(direct));
         var unified = await f.Call(
-            "call_tool",
-            new JsonObject { ["toolId"] = "builtin:view_session", ["args"] = args.DeepClone() }
+            "ctl",
+            CtlTestArgs.Unified(new JsonObject { ["toolId"] = "builtin:view_session", ["args"] = args.DeepClone() })
         );
         Assert.Equal(Output(direct), Output(unified));
+        var command = await f.Call(
+            "ctl",
+            CtlTestArgs.Command("session view " + f.Owner.Id + " --count 1")
+        );
+        Assert.Equal(Output(direct), Output(command));
         var script = await f.Call(
             "run_script",
             new JsonObject

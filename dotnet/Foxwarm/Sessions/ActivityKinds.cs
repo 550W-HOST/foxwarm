@@ -56,7 +56,7 @@ internal static class ActivityKinds
             [
                 "read",
                 "read_memory",
-                "search_tools",
+                "ctl",
                 "recall",
                 "skill",
                 "image_crop",

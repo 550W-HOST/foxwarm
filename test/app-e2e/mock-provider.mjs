@@ -205,7 +205,7 @@ export async function startMockProvider({ toolFile, log, readyDelayMs = 0, enfor
         { filePath: toolFile + '.artifact.png', type: 'image', title: 'Owned raster figure' },
       ]
       if (outputs.length < sources.length) {
-        sse(res, responseTool(`resp-artifact-${outputs.length}`, `call_app_artifact_${outputs.length}`, 'call_tool', { toolId: 'builtin:artifact', args: { action: 'prepare', ...sources[outputs.length] } }))
+        sse(res, responseTool(`resp-artifact-${outputs.length}`, `call_app_artifact_${outputs.length}`, 'ctl', { command: 'artifact prepare @file' + (sources[outputs.length].type ? ' --type image --title @title' : ''), values: { file: sources[outputs.length].filePath, ...(sources[outputs.length].type ? { title: sources[outputs.length].title } : {}) } }))
       } else {
         const ids = [...new Set(JSON.stringify(outputs).match(/art_[a-f0-9]{32}/g) || [])]
         if (ids.length !== 3) {

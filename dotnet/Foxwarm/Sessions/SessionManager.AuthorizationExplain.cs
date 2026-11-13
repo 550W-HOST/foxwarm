@@ -151,12 +151,16 @@ internal sealed partial class SessionManager
             if (target is null)
                 throw new InvalidDataException("Session not found or unavailable.");
             result["sessionId"] = target.Id;
-            // Resolve exactly as call_tool would for this caller's current Node.
+            // Resolve exactly as `tool call` would for this caller's current Node.
             var call = (JsonObject)probe.DeepClone();
             call.Remove("sessionId");
             if (!call.ContainsKey("args") && !call.ContainsKey("argsJson"))
                 call["args"] = new JsonObject();
             var resolved = tools.Resolve("call_tool", call, CurrentNode(target));
+            if (SessionToolExecutor.IsCtlFrontEnd(resolved))
+                throw new InvalidDataException(
+                    "ctl help, discovery and malformed commands are not authorized; probe a command's target instead."
+                );
             result["tool"] = new JsonObject
             {
                 ["source"] = resolved.Source,

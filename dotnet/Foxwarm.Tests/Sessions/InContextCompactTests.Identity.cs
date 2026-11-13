@@ -5,16 +5,14 @@ namespace Foxwarm.Tests;
 
 public sealed partial class InContextCompactTests
 {
+    // `tool call` reaches submit_compact_plan with the same rejected-plan recovery as a direct
+    // call; malformed valuesJson is a ctl parse error before any target is named.
     [Theory]
-    [InlineData("builtin:submit_compact_plan ", null, false)]
-    [InlineData("builtin:submit_compact_plan ", null, true)]
-    [InlineData(null, " builtin ", false)]
-    [InlineData(null, " builtin ", true)]
-    public async Task Dispatcher_normalized_compact_targets_preserve_rejected_inner_JSON(
-        string? toolId,
-        string? source,
-        bool malformed
-    )
+    [InlineData("builtin:submit_compact_plan", false)]
+    [InlineData("builtin:submit_compact_plan", true)]
+    [InlineData(null, false)]
+    [InlineData(null, true)]
+    public async Task Tool_call_compact_targets_preserve_rejected_plans(string? toolId, bool malformed)
     {
         var submitted = Plan(9999).ToJsonString();
         if (malformed)
@@ -30,19 +28,29 @@ public sealed partial class InContextCompactTests
                     wrapper["toolId"] = toolId;
                 else
                 {
-                    wrapper["source"] = source;
+                    wrapper["source"] = "builtin";
                     wrapper["name"] = "submit_compact_plan";
                 }
-                return Task.FromResult(new JsonArray(Call("unified", "call_tool", wrapper)));
+                return Task.FromResult(new JsonArray(Call("unified", "ctl", CtlTestArgs.Unified(wrapper))));
             }
         );
         await f.RunAsync();
         var result = f.ToolResponse("unified")["response"]!;
-        Assert.Equal("compact_plan_invalid", SessionWait.Text(result["error"]?["type"]));
-        Assert.Equal(
-            submitted,
-            await File.ReadAllTextAsync(result["argsFilePath"]!.GetValue<string>())
-        );
+        if (malformed)
+        {
+            Assert.Equal("invalid_command", SessionWait.Text(result["error"]?["type"]));
+            Assert.Null(result["argsFilePath"]);
+        }
+        else
+        {
+            Assert.Equal("compact_plan_invalid", SessionWait.Text(result["error"]?["type"]));
+            Assert.True(
+                JsonNode.DeepEquals(
+                    JsonNode.Parse(submitted),
+                    JsonNode.Parse(await File.ReadAllTextAsync(result["argsFilePath"]!.GetValue<string>()))
+                )
+            );
+        }
         Assert.Equal(0, f.Owner.Entry.Snapshot().HistoryVersion);
     }
 }

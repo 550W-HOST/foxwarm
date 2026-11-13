@@ -195,7 +195,7 @@ public sealed class ToolScriptHostTests
             new JsonObject
             {
                 ["code"] =
-                    "call_tool({'name':'write','filePath':'wrong','content':'descriptor-loose','args':{'filePath':'winner','content':'descriptor-explicit'}}, {'filePath':'positional','content':'positional'}, content='keyword-loose', args={'content':'keyword-explicit'})\ncall_tool('write', {'filePath':'shorthand','content':'positional'}, args={'content':'explicit'}, content='loose')\nreturn call_tool('search_tools', {'query':'run_script','sources':['builtin']})['tools']\n",
+                    "call_tool({'name':'write','filePath':'wrong','content':'descriptor-loose','args':{'filePath':'winner','content':'descriptor-explicit'}}, {'filePath':'positional','content':'positional'}, content='keyword-loose', args={'content':'keyword-explicit'})\ncall_tool('write', {'filePath':'shorthand','content':'positional'}, args={'content':'explicit'}, content='loose')\nreturn call_tool('ctl', {'command':'tool search run_script --source builtin'})['tools']\n",
             }
         );
         Assert.Equal("completed", result["status"]!.GetValue<string>());

@@ -1,0 +1,2560 @@
+{
+  "version": 1,
+  "nouns": [
+    {
+      "name": "session",
+      "summary": "Inspect, list, rename, view and manage Sessions."
+    },
+    {
+      "name": "history",
+      "summary": "Read archived conversation context and search history."
+    },
+    {
+      "name": "agent",
+      "summary": "List and manage Agents, their rules and inheritance."
+    },
+    {
+      "name": "node",
+      "summary": "List, select and manage Nodes; copy files between them."
+    },
+    {
+      "name": "memory",
+      "summary": "Read and change files in this Agent's memory directory."
+    },
+    {
+      "name": "skill",
+      "summary": "List and load skills."
+    },
+    {
+      "name": "file",
+      "summary": "Deliver files to users."
+    },
+    {
+      "name": "image",
+      "summary": "Save, crop or generate images from this Session."
+    },
+    {
+      "name": "artifact",
+      "summary": "Prepare, publish or inspect WebUI artifacts."
+    },
+    {
+      "name": "channel",
+      "summary": "Send messages to channel destinations."
+    },
+    {
+      "name": "timer",
+      "summary": "Schedule, list, change and delete timers."
+    },
+    {
+      "name": "script",
+      "summary": "Inspect and cancel ToolScript runs."
+    },
+    {
+      "name": "config",
+      "summary": "Install configuration and explain tool authorization."
+    },
+    {
+      "name": "secret",
+      "summary": "Store and list secrets."
+    },
+    {
+      "name": "mcp",
+      "summary": "List and configure MCP servers and their notifications."
+    },
+    {
+      "name": "tool",
+      "summary": "Find and call any builtin, MCP or Node tool."
+    }
+  ],
+  "commands": [
+    {
+      "path": "session status",
+      "summary": "Show a Session's status: Node, working directory, model, context usage and recent children.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "session",
+        "fixed": {
+          "action": "status"
+        }
+      },
+      "params": [
+        {
+          "name": "sessionId",
+          "type": "string",
+          "kind": "positional",
+          "help": "Session to inspect. Defaults to this Session."
+        }
+      ]
+    },
+    {
+      "path": "session list",
+      "summary": "List Sessions, the current Agent's by default.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "session",
+        "fixed": {
+          "action": "list"
+        }
+      },
+      "params": [
+        {
+          "name": "query",
+          "type": "string",
+          "kind": "positional",
+          "help": "Keeps Sessions whose ID, alias, display name, Agent, Node, working directory or model contains this text, ignoring case. Applied before start and count."
+        },
+        {
+          "name": "start",
+          "type": "number",
+          "kind": "flag",
+          "help": "Zero-based offset, ordered by most recent activity. Defaults to 0."
+        },
+        {
+          "name": "count",
+          "type": "number",
+          "kind": "flag",
+          "help": "Number of Sessions to return. Defaults to 20."
+        },
+        {
+          "name": "scope",
+          "type": "enum",
+          "values": [
+            "current-agent",
+            "all"
+          ],
+          "kind": "flag",
+          "help": "Defaults to current-agent; use all to include Sessions from other Agents."
+        }
+      ]
+    },
+    {
+      "path": "session rename",
+      "summary": "Set or clear a Session's display name.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "session",
+        "fixed": {
+          "action": "update-display-name"
+        }
+      },
+      "params": [
+        {
+          "name": "name",
+          "type": "string",
+          "kind": "positional",
+          "help": "New display name. An empty string clears it.",
+          "required": true
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "kind": "flag",
+          "help": "Session to rename. Defaults to this Session."
+        }
+      ]
+    },
+    {
+      "path": "session set-parent",
+      "summary": "Change a Session's parent.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "session",
+        "fixed": {
+          "action": "update-parent"
+        }
+      },
+      "params": [
+        {
+          "name": "parentSessionId",
+          "type": "string|null",
+          "kind": "positional",
+          "help": "Existing Session ID to use as the parent.",
+          "required": true
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "kind": "flag",
+          "help": "Session to change. Defaults to this Session."
+        }
+      ]
+    },
+    {
+      "path": "session clear-parent",
+      "summary": "Remove a Session's parent.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "session",
+        "fixed": {
+          "action": "update-parent",
+          "parentSessionId": null
+        }
+      },
+      "params": [
+        {
+          "name": "sessionId",
+          "type": "string",
+          "kind": "flag",
+          "help": "Session to change. Defaults to this Session."
+        }
+      ]
+    },
+    {
+      "path": "session view",
+      "summary": "Read a Session's current conversation and execution state.",
+      "help": "Read a Session's current conversation and execution state. Defaults to the latest 10 visible records, with tools summarized by name and count. Use parts to select content and the returned older-page call to continue reading. Use recall for archived originals.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "view_session"
+      },
+      "params": [
+        {
+          "name": "sessionId",
+          "type": "string",
+          "kind": "positional",
+          "required": true,
+          "help": "Session to read."
+        },
+        {
+          "name": "start",
+          "type": "number",
+          "kind": "flag",
+          "help": "Active-history index to read forward from. Negative values count from the end. Omit start and before to read the newest page; do not combine them."
+        },
+        {
+          "name": "before",
+          "type": "number",
+          "kind": "flag",
+          "help": "Exclusive active-history index to read backward from. Use the value returned for the older page; do not combine with start."
+        },
+        {
+          "name": "count",
+          "type": "number",
+          "kind": "flag",
+          "help": "Maximum visible source records to select after applying parts. Defaults to 10; 0 returns only the header and execution state. Text filters can leave fewer matches."
+        },
+        {
+          "name": "historyVersion",
+          "type": "number",
+          "kind": "flag",
+          "help": "History version returned by an earlier view. Supply with start or before to detect a structurally changed range."
+        },
+        {
+          "name": "parts",
+          "type": "array",
+          "items": "enum",
+          "values": [
+            "text",
+            "tools",
+            "images"
+          ],
+          "kind": "flag",
+          "help": "Content to show: text, tools, or images. Defaults to all three. Hiding tools preserves commentary in mixed messages; text and images belonging to tool results stay with tools."
+        },
+        {
+          "name": "previewLength",
+          "type": "number",
+          "kind": "flag",
+          "help": "Total character budget for the response. Omit or use 0 for the default; other values are bounded to 1,000–20,000."
+        },
+        {
+          "name": "contentFilter",
+          "type": "string",
+          "kind": "flag",
+          "help": "Keep selected records containing this literal text, ignoring case. Searches the included content of the selected page, not the entire history."
+        },
+        {
+          "name": "includeRegex",
+          "type": "string",
+          "kind": "flag",
+          "help": "Keep selected records whose included content matches this regular expression, ignoring case."
+        },
+        {
+          "name": "excludeRegex",
+          "type": "string",
+          "kind": "flag",
+          "help": "Exclude selected records whose included content matches this regular expression, ignoring case."
+        },
+        {
+          "name": "toolDetail",
+          "type": "enum",
+          "values": [
+            "names",
+            "snippets",
+            "full"
+          ],
+          "kind": "flag",
+          "help": "names (default) shows compact tool activity; snippets adds short argument and result excerpts; full includes complete tool content within the preview budget."
+        }
+      ]
+    },
+    {
+      "path": "session create",
+      "summary": "Create a Session under an existing Agent.",
+      "help": "Create a conversation under an existing agent, reusing that agent's memory and workspace.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "create_session"
+      },
+      "params": [
+        {
+          "name": "agentName",
+          "type": "string",
+          "kind": "positional",
+          "required": true,
+          "help": "Existing agent that will own the session."
+        },
+        {
+          "name": "sessionName",
+          "type": "string",
+          "kind": "positional",
+          "required": true,
+          "help": "Session name without the agent prefix. Use only ASCII letters, digits, underscores, and hyphens."
+        },
+        {
+          "name": "runtime",
+          "type": "enum",
+          "values": [
+            "foxwarm",
+            "claude-code"
+          ],
+          "kind": "flag",
+          "help": "Model loop for the new Session: foxwarm (default), or claude-code using the installed Claude Code configuration. Choose the runtime when creating the Session."
+        },
+        {
+          "name": "displayName",
+          "type": "string",
+          "kind": "flag",
+          "help": "Display name for the new session."
+        },
+        {
+          "name": "parentSessionId",
+          "type": "string",
+          "kind": "flag",
+          "help": "Existing session to record as the new session's parent."
+        },
+        {
+          "name": "node",
+          "type": "string",
+          "kind": "flag",
+          "help": "Node for the new Session. If omitted, use the target Agent's default Node, then the installation default, then master; a recorded parent does not affect placement."
+        },
+        {
+          "name": "systemPromptFiles",
+          "type": "array",
+          "items": "string",
+          "kind": "flag",
+          "help": "Memory source files for the new prompt snapshot. When supplied, these replace the default memory-file selection; other system instructions remain."
+        },
+        {
+          "name": "model",
+          "type": "object",
+          "kind": "flag",
+          "help": "Model or effort suited to this task. This Session's child settings, which the user may have chosen, take precedence. Choose from the available models in your instructions by their descriptions; omit to use the normal defaults."
+        },
+        {
+          "name": "forceModel",
+          "type": "object",
+          "kind": "flag",
+          "help": "Only use when the user explicitly requests a model or effort for this task or Session. Takes precedence over `model` and this Session's child settings. Same fields as `model`."
+        }
+      ]
+    },
+    {
+      "path": "session move",
+      "summary": "Rename a Session or move it to another Agent.",
+      "help": "Rename a session or move it to another agent, optionally creating the destination agent. The old session ID remains an alias.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "move_session"
+      },
+      "params": [
+        {
+          "name": "sessionId",
+          "type": "string",
+          "kind": "positional",
+          "help": "Session to move, identified by its ID or an unambiguous alias. Defaults to this session."
+        },
+        {
+          "name": "newSessionId",
+          "type": "string",
+          "kind": "positional",
+          "help": "New session name without an agent prefix or /. Required unless creating an agent, when it defaults to main."
+        },
+        {
+          "name": "createAgent",
+          "type": "boolean",
+          "kind": "flag",
+          "help": "Create the destination agent. Defaults to false."
+        },
+        {
+          "name": "newAgentName",
+          "type": "string",
+          "kind": "flag",
+          "help": "Destination agent. Required when creating an agent or moving to another agent; omit to rename within the source agent."
+        },
+        {
+          "name": "createAgentInheritMemory",
+          "type": "boolean",
+          "kind": "flag",
+          "help": "Copy the source agent's memory when creating the destination agent. Defaults to false."
+        },
+        {
+          "name": "parentSessionId",
+          "type": "string",
+          "kind": "flag",
+          "help": "Existing parent session to assign after the move. Omit to keep the current parent."
+        }
+      ]
+    },
+    {
+      "path": "session delete",
+      "summary": "Delete another Session's live record, keeping its archived history.",
+      "help": "Delete another session's live record, retaining its archived history. Surviving children are detached. A busy target receives a stop request; retry deletion after it becomes idle. The current session cannot delete itself.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "delete_session"
+      },
+      "params": [
+        {
+          "name": "sessionId",
+          "type": "string",
+          "kind": "positional",
+          "required": true,
+          "help": "Session to delete, identified by its ID or an unambiguous alias."
+        }
+      ]
+    },
+    {
+      "path": "session stop",
+      "summary": "Ask a running Session to stop its current turn.",
+      "help": "Request that a running session stop its current turn. An in-flight model request may be aborted; a tool already running may need to finish.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "stop_session"
+      },
+      "params": [
+        {
+          "name": "sessionId",
+          "type": "string",
+          "kind": "positional",
+          "required": true,
+          "help": "Session to stop."
+        }
+      ]
+    },
+    {
+      "path": "session refresh-snapshot",
+      "summary": "Rebuild a Session's prompt snapshot now.",
+      "help": "Refresh a session's prompt snapshot now after changes to memory, inheritance, or available skills, without waiting for an automatic refresh.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "refresh_session_snapshot"
+      },
+      "params": [
+        {
+          "name": "sessionId",
+          "type": "string",
+          "kind": "positional",
+          "help": "Session to refresh now, even if it has been inactive for more than an hour. Defaults to this session."
+        }
+      ]
+    },
+    {
+      "path": "session child-model",
+      "summary": "Show or change the default model and effort for new child Sessions.",
+      "help": "Inspect or change the default model and effort for future child or related new sessions. Unset settings follow the source session's normal model and effort defaults.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "set_session_child_model"
+      },
+      "params": [
+        {
+          "name": "sessionId",
+          "type": "string",
+          "kind": "flag",
+          "help": "Session whose defaults to inspect or change. Defaults to this session."
+        },
+        {
+          "name": "model",
+          "type": "string",
+          "kind": "flag",
+          "help": "Configured model key for future child or related new sessions."
+        },
+        {
+          "name": "effort",
+          "type": "enum",
+          "values": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "default",
+            "unset"
+          ],
+          "kind": "flag",
+          "help": "Effort setting; use default or unset to clear the override."
+        },
+        {
+          "name": "clear",
+          "type": "boolean",
+          "kind": "flag",
+          "help": "Clear only the model override. Do not combine with model."
+        }
+      ]
+    },
+    {
+      "path": "session compact-threshold",
+      "summary": "Show or change the automatic compaction threshold.",
+      "help": "Inspect or change the context-token threshold that triggers automatic compaction for a session. Without an override, the threshold follows the active model's context window.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "set_session_compact_threshold"
+      },
+      "params": [
+        {
+          "name": "sessionId",
+          "type": "string",
+          "kind": "flag",
+          "help": "Session to inspect or change. Defaults to this session."
+        },
+        {
+          "name": "thresholdTokens",
+          "type": "number",
+          "kind": "flag",
+          "help": "Token threshold for automatic compaction. Omit to inspect the current setting."
+        },
+        {
+          "name": "clear",
+          "type": "boolean",
+          "kind": "flag",
+          "help": "Remove the override and use the model-derived default."
+        }
+      ]
+    },
+    {
+      "path": "session compact",
+      "summary": "Start compaction for this or another idle Session.",
+      "help": "Start compaction for this session or another idle session. The target uses a separate planning turn to produce a summary plan with submit_compact_plan; this call does not return the candidates or supply the final summary.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "compact_session"
+      },
+      "params": [
+        {
+          "name": "sessionId",
+          "type": "string",
+          "kind": "positional",
+          "help": "Session to compact. Defaults to this session."
+        },
+        {
+          "name": "summary",
+          "type": "string",
+          "kind": "flag",
+          "help": "Additional instructions for the compaction planner, not the final summary or plan."
+        },
+        {
+          "name": "keepPercent",
+          "type": "number",
+          "kind": "flag",
+          "help": "Recent history to keep unsummarized, measured in tokens as a share of the automatic compaction threshold, or of the current unsummarized history when that is smaller: a fraction greater than 0 and up to 1, or a percentage greater than 1 and up to 100. Defaults to the configured share."
+        }
+      ]
+    },
+    {
+      "path": "history recall",
+      "summary": "Read archived context by reference, or search it literally or by meaning.",
+      "help": "Read archived conversation context or find historical evidence. Use target for known message/block references, --text-query for a bounded literal search in one Session without Vector, or --vector-query for semantic search. Filters narrow the selected results; they do not search unselected history.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "recall"
+      },
+      "params": [
+        {
+          "name": "target",
+          "type": "string",
+          "kind": "positional",
+          "help": "What to open: overview (default), blocks, B#126, msg:B#126, or msg#10637-10680. block#126 is also accepted. Message numbers are Archive sequences, not active-history indices. Omit when using --text-query or --vector-query."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "kind": "flag",
+          "help": "Session for exact lookup or literal search. Defaults to this Session."
+        },
+        {
+          "name": "vector_query",
+          "type": "string",
+          "kind": "flag",
+          "help": "Search earlier context by meaning and return matching source messages or block summaries."
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "kind": "flag",
+          "help": "Maximum search results. Defaults to 5, up to 20."
+        },
+        {
+          "name": "cursor",
+          "type": "string",
+          "kind": "flag",
+          "help": "Opaque continuation cursor returned by structured semantic recall. Continues the same bounded ranked window; keep the query, filters, scope, time range, and limit unchanged. If the cursor expires, start a new search."
+        },
+        {
+          "name": "startTime",
+          "type": "string",
+          "kind": "flag",
+          "help": "Inclusive ISO-8601 timestamp lower bound for semantic results. Date/time filters use UTC and the half-open [--start-time,--end-time) interval."
+        },
+        {
+          "name": "endTime",
+          "type": "string",
+          "kind": "flag",
+          "help": "Exclusive ISO-8601 timestamp upper bound for semantic results. Date/time filters use UTC and the half-open [--start-time,--end-time) interval."
+        },
+        {
+          "name": "scope",
+          "type": "enum",
+          "values": [
+            "current-session",
+            "current-agent"
+          ],
+          "kind": "flag",
+          "help": "Scope for semantic search: this Session, or every Session of this Agent (default)."
+        },
+        {
+          "name": "previewLength",
+          "type": "number",
+          "kind": "flag",
+          "help": "Total character budget for preview text. Omit or use 0 for the default; other values are bounded to 1,000–20,000. ToolScript exact-message reads return complete canonical JSON within ToolScript data limits."
+        },
+        {
+          "name": "contentFilter",
+          "type": "string",
+          "kind": "flag",
+          "help": "Keep retrieved items containing this text, ignoring case, and show the matching area when possible. Omit to read the complete selected context."
+        },
+        {
+          "name": "includeRegex",
+          "type": "string",
+          "kind": "flag",
+          "help": "Keep retrieved items matching this regular expression, ignoring case."
+        },
+        {
+          "name": "excludeRegex",
+          "type": "string",
+          "kind": "flag",
+          "help": "Exclude retrieved items matching this regular expression, ignoring case."
+        },
+        {
+          "name": "preferBlocks",
+          "type": "boolean",
+          "kind": "flag",
+          "help": "Give context-block summaries a small ranking preference in semantic search."
+        },
+        {
+          "name": "toolDetail",
+          "type": "enum",
+          "values": [
+            "names",
+            "snippets",
+            "full"
+          ],
+          "kind": "flag",
+          "help": "names (default) shows compact tool activity; snippets adds short argument and result excerpts; full includes complete tool content within the preview budget."
+        },
+        {
+          "name": "text_query",
+          "type": "string",
+          "kind": "flag",
+          "help": "Literal text to find in archived messages of one Session, ignoring case. Reads a bounded range and reports its extent and older continuation. Do not combine with target or --vector-query."
+        },
+        {
+          "name": "beforeSeq",
+          "type": "number",
+          "kind": "flag",
+          "help": "Exclusive Archive message sequence for continuing a --text-query into older messages. Omit to search from the newest messages."
+        }
+      ]
+    },
+    {
+      "path": "history messages",
+      "summary": "Read archived messages by sequence number.",
+      "help": "Read archived messages by sequence number, including messages no longer present in the active conversation.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "get_archived_messages"
+      },
+      "params": [
+        {
+          "name": "startSeq",
+          "type": "number",
+          "kind": "positional",
+          "help": "First message sequence number to include."
+        },
+        {
+          "name": "endSeq",
+          "type": "number",
+          "kind": "positional",
+          "help": "Last message sequence number to include."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "kind": "flag",
+          "help": "Session to read. Defaults to this session."
+        },
+        {
+          "name": "previewLength",
+          "type": "number",
+          "kind": "flag",
+          "help": "Total character budget for the response. Defaults to 1,000; values are bounded to 1,000–20,000."
+        }
+      ]
+    },
+    {
+      "path": "history blocks",
+      "summary": "Read archived context-block summaries by block ID.",
+      "help": "Read archived context-block summaries by block ID.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "get_archived_blocks"
+      },
+      "params": [
+        {
+          "name": "startId",
+          "type": "number",
+          "kind": "positional",
+          "help": "First block ID to include."
+        },
+        {
+          "name": "endId",
+          "type": "number",
+          "kind": "positional",
+          "help": "Last block ID to include."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "kind": "flag",
+          "help": "Session to read. Defaults to this session."
+        },
+        {
+          "name": "previewLength",
+          "type": "number",
+          "kind": "flag",
+          "help": "Total character budget for the response. Defaults to 1,000; values are bounded to 1,000–20,000."
+        }
+      ]
+    },
+    {
+      "path": "agent list",
+      "summary": "List Agents with Session counts, memory, inheritance and rule summaries.",
+      "help": "List Agents with their Session counts, memory metadata, inheritance and rule summary. The list shows your own Agent and the Agents your tool policy may let you use.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "list_agents"
+      },
+      "params": []
+    },
+    {
+      "path": "agent create",
+      "summary": "Create an Agent with its own workspace and memory.",
+      "help": "Create an agent with its own persistent workspace and memory. A main session is also created by default. Use `session create` instead when you only need another conversation under an existing agent.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "create_agent"
+      },
+      "params": [
+        {
+          "name": "agentName",
+          "type": "string",
+          "kind": "positional",
+          "required": true,
+          "help": "New agent name, using letters, numbers, hyphens, or underscores."
+        },
+        {
+          "name": "createMainSession",
+          "type": "boolean",
+          "kind": "flag",
+          "help": "Also create the agent's main session. Defaults to true."
+        },
+        {
+          "name": "inherit",
+          "type": "string",
+          "kind": "flag",
+          "help": "Agent whose memory should be inherited by the new agent."
+        },
+        {
+          "name": "inheritMemory",
+          "type": "boolean",
+          "kind": "flag",
+          "help": "Copy memory files from the source agent once. Use inherit for ongoing shared-memory inheritance."
+        },
+        {
+          "name": "sourceSessionId",
+          "type": "string",
+          "kind": "flag",
+          "help": "Session whose model provides creation defaults. Defaults to this session."
+        },
+        {
+          "name": "convertSession",
+          "type": "boolean",
+          "kind": "flag",
+          "help": "Convert an existing session into this agent's main session. Requires --create-main-session."
+        },
+        {
+          "name": "rules",
+          "type": "array",
+          "items": "object",
+          "kind": "flag",
+          "help": "Initial local authorization rules for the new Agent, evaluated in order. Calls that match no rule pass this layer, so end with {\"action\":\"deny\"} to allow only the listed capabilities. Omit for an empty layer; ancestor rules still apply."
+        },
+        {
+          "name": "defaultNode",
+          "type": "string",
+          "kind": "flag",
+          "help": "Default execution Node for new Sessions in this Agent; omitted uses the installation default when configured. This chooses initial placement and does not grant access."
+        },
+        {
+          "name": "defaultCwd",
+          "type": "string",
+          "kind": "flag",
+          "help": "Absolute working directory for new Sessions that start on the effective default Node (the installation default, else master, when --default-node is omitted). This sets the initial cwd and does not grant access."
+        }
+      ]
+    },
+    {
+      "path": "agent set-rules",
+      "summary": "Replace an Agent's local authorization rules.",
+      "help": "Replace an Agent's local authorization rules. You may change only strict descendants; ancestor restrictions still apply.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "set_agent_rules"
+      },
+      "params": [
+        {
+          "name": "agentName",
+          "type": "string",
+          "kind": "positional",
+          "required": true,
+          "help": "Agent whose local rules to replace."
+        },
+        {
+          "name": "rules",
+          "type": "array",
+          "items": "object",
+          "kind": "flag",
+          "required": true,
+          "help": "Complete replacement rule list, evaluated in order. Calls that match no rule pass this layer, so end with {\"action\":\"deny\"} to allow only the listed capabilities. An empty list removes this layer's rules. Caller selectors are not accepted."
+        }
+      ]
+    },
+    {
+      "path": "agent inherit",
+      "summary": "Set or clear an Agent's shared-memory inheritance.",
+      "help": "Set or clear an agent's shared-memory inheritance. Memory is included from the oldest ancestor through the agent itself; files with the same name are not deduplicated. Existing session snapshots are unchanged unless --refresh-snapshots is set.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "set_agent_inherit"
+      },
+      "params": [
+        {
+          "name": "agentName",
+          "type": "string",
+          "kind": "positional",
+          "required": true,
+          "help": "Agent to update."
+        },
+        {
+          "name": "inheritAgentName",
+          "type": "string",
+          "kind": "positional",
+          "help": "Agent to inherit from. An empty string clears inheritance."
+        },
+        {
+          "name": "refreshSnapshots",
+          "type": "boolean",
+          "kind": "flag",
+          "help": "Refresh snapshots now for this agent and its inheriting agents, skipping sessions inactive for more than one hour because they refresh automatically when their next turn starts. Defaults to false."
+        }
+      ]
+    },
+    {
+      "path": "node list",
+      "summary": "List Nodes and Providers.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "node",
+        "fixed": {
+          "action": "list"
+        }
+      },
+      "params": []
+    },
+    {
+      "path": "node select",
+      "summary": "Select this Session's execution Node.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "node",
+        "fixed": {
+          "action": "select"
+        }
+      },
+      "params": [
+        {
+          "name": "nodeId",
+          "type": "string",
+          "kind": "positional",
+          "help": "Node to select.",
+          "required": true
+        }
+      ]
+    },
+    {
+      "path": "node inspect",
+      "summary": "Show Node or Provider details.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "node",
+        "fixed": {
+          "action": "inspect"
+        }
+      },
+      "params": [
+        {
+          "name": "nodeId",
+          "type": "string",
+          "kind": "positional",
+          "help": "Node to inspect. Give either a Node or --provider-id."
+        },
+        {
+          "name": "providerId",
+          "type": "string",
+          "kind": "flag",
+          "help": "Configured Provider to inspect instead of a Node."
+        }
+      ]
+    },
+    {
+      "path": "node create",
+      "summary": "Create a Node through its Provider.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "node",
+        "fixed": {
+          "action": "create"
+        }
+      },
+      "params": [
+        {
+          "name": "nodeId",
+          "type": "string",
+          "kind": "flag",
+          "help": "Requested ID for the new Node."
+        },
+        {
+          "name": "providerId",
+          "type": "string",
+          "kind": "flag",
+          "help": "Configured Provider that creates the Node."
+        },
+        {
+          "name": "parameters",
+          "type": "object",
+          "kind": "flag",
+          "help": "Provider-specific options for the lifecycle operation."
+        }
+      ]
+    },
+    {
+      "path": "node ensure",
+      "summary": "Create a Node through its Provider unless it already exists.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "node",
+        "fixed": {
+          "action": "ensure"
+        }
+      },
+      "params": [
+        {
+          "name": "nodeId",
+          "type": "string",
+          "kind": "positional",
+          "help": "Requested Node ID. Required when your Agent was created by another Agent; without it, Node-subtree permissions can't be checked before the Provider runs."
+        },
+        {
+          "name": "providerId",
+          "type": "string",
+          "kind": "flag",
+          "help": "Configured Provider that creates or reconnects the Node."
+        },
+        {
+          "name": "parameters",
+          "type": "object",
+          "kind": "flag",
+          "help": "Provider-specific options for the lifecycle operation."
+        }
+      ]
+    },
+    {
+      "path": "node destroy",
+      "summary": "Request a Node's removal through its Provider.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "node",
+        "fixed": {
+          "action": "destroy"
+        }
+      },
+      "params": [
+        {
+          "name": "nodeId",
+          "type": "string",
+          "kind": "positional",
+          "help": "Node to destroy. Its own Provider performs the removal.",
+          "required": true
+        },
+        {
+          "name": "confirmation",
+          "type": "string",
+          "kind": "flag",
+          "help": "Exactly: destroy node <nodeId>."
+        }
+      ]
+    },
+    {
+      "path": "node copy",
+      "summary": "Copy a file between Nodes, including master.",
+      "help": "Copy a file between Nodes, including master. Both paths are checked against the applicable permissions. If the copy outlasts timeout, it continues in the background and returns a transferId; a later event reports completion. Stop or Run queued ends the wait without cancelling the copy; use `node cancel-transfer` to stop it.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "copy_between_nodes"
+      },
+      "params": [
+        {
+          "name": "sourceNode",
+          "type": "string",
+          "kind": "positional",
+          "required": true,
+          "help": "Node containing the source file."
+        },
+        {
+          "name": "sourcePath",
+          "type": "string",
+          "kind": "positional",
+          "required": true,
+          "help": "Source file path on sourceNode. A relative path uses the Session working directory when the Node is this Session's current Node and a working directory is set, otherwise the Node's default directory (the Agent directory on master and CLI Nodes). On master and CLI Nodes, ~/ and a leading $fw_agentdir or $fw_tmp are accepted; other leading $ names are rejected."
+        },
+        {
+          "name": "targetNode",
+          "type": "string",
+          "kind": "positional",
+          "required": true,
+          "help": "Node that will receive the file."
+        },
+        {
+          "name": "targetPath",
+          "type": "string",
+          "kind": "positional",
+          "required": true,
+          "help": "Destination file path on targetNode. Relative paths follow the same rule as sourcePath."
+        },
+        {
+          "name": "overwrite",
+          "type": "boolean",
+          "kind": "flag",
+          "help": "Allow replacement of an existing destination file. Defaults to false."
+        },
+        {
+          "name": "timeout",
+          "type": "number",
+          "kind": "flag",
+          "help": "Seconds to wait before returning a still-running copy as a background transfer. Defaults to 15; values above 60 are reduced to 60 with a warning."
+        }
+      ]
+    },
+    {
+      "path": "node cancel-transfer",
+      "summary": "Cancel a background copy started by `node copy`.",
+      "help": "Cancel a background copy started by `node copy` in this Session. Already transferred bytes are not undone: an unfinished copy publishes nothing on master and CLI Nodes, while other Nodes may keep a partial destination file.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "cancel_transfer"
+      },
+      "params": [
+        {
+          "name": "transferId",
+          "type": "string",
+          "kind": "positional",
+          "required": true,
+          "help": "Transfer ID returned by `node copy`."
+        }
+      ]
+    },
+    {
+      "path": "node token",
+      "summary": "Reserve a Node ID and write its auth token to a private file on master.",
+      "help": "Reserve a new approved Node ID and write its per-node auth token to a private file on master. Returns the Node ID and file path, never the token. Existing Node IDs and files are not replaced. Use run_script with file transfer or exec tools to configure the Node without putting the token in tool arguments or output.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "node_create_auth_token"
+      },
+      "params": [
+        {
+          "name": "nodeId",
+          "type": "string",
+          "kind": "positional",
+          "required": true,
+          "help": "New Node ID to reserve. Existing IDs are rejected; this does not rotate an existing credential."
+        },
+        {
+          "name": "parentNode",
+          "type": "string",
+          "kind": "flag",
+          "help": "Existing Node whose authorization subtree will contain the new Node. Required for callers in an Agent created by another Agent; omission otherwise creates a root."
+        },
+        {
+          "name": "filePath",
+          "type": "string",
+          "kind": "flag",
+          "required": true,
+          "help": "Absolute path on master for the new token file. Its parent directory must already exist. The file is created with owner-only permissions and contains the token followed by a newline."
+        }
+      ]
+    },
+    {
+      "path": "node remove",
+      "summary": "Revoke an approved Node's credentials and disconnect it.",
+      "help": "Revoke an approved Node's credentials and disconnect its active connection. Nodes with descendants require cascade. Does not stop client processes or delete environments, files, Agents, or Sessions.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "node_remove"
+      },
+      "params": [
+        {
+          "name": "nodeId",
+          "type": "string",
+          "kind": "positional",
+          "required": true,
+          "help": "Approved Node ID to remove."
+        },
+        {
+          "name": "cascade",
+          "type": "boolean",
+          "kind": "flag",
+          "help": "Also revoke approved descendants. Each removal must be authorized before any change. A subtree containing executable-provider Nodes is rejected."
+        }
+      ]
+    },
+    {
+      "path": "node bootstrap-info",
+      "summary": "Get Node setup instructions and bootstrap endpoints.",
+      "help": "Get Node setup instructions and bootstrap endpoints. The pairing token is written to --file-path, a new owner-only file on master; the returned commands show PAIRING_TOKEN in its place, so supply the file's contents when running them on the new Node. Commands use config.url when set; otherwise replace the example address with one reachable from the new Node.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "node_bootstrap_info"
+      },
+      "params": [
+        {
+          "name": "filePath",
+          "type": "string",
+          "kind": "flag",
+          "required": true,
+          "help": "Absolute path on master for a new file that receives the pairing token. The file must not already exist."
+        }
+      ]
+    },
+    {
+      "path": "node pair-list",
+      "summary": "List Node pairing requests awaiting approval.",
+      "help": "List Node pairing requests awaiting approval.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "node_pair_list"
+      },
+      "params": []
+    },
+    {
+      "path": "node pair-approve",
+      "summary": "Approve a pending Node pairing request.",
+      "help": "Approve a pending Node pairing request. First inspect `node pair-list` and verify the request is from the Node you intend to trust. Callers in an Agent created by another Agent must use `node token` with parentNode instead.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "node_pair_approve"
+      },
+      "params": [
+        {
+          "name": "pendingId",
+          "type": "string",
+          "kind": "positional",
+          "required": true,
+          "help": "Pending request ID from `node pair-list`."
+        },
+        {
+          "name": "nodeId",
+          "type": "string",
+          "kind": "flag",
+          "help": "Node ID to assign. Defaults to the requested name."
+        }
+      ]
+    },
+    {
+      "path": "memory read",
+      "summary": "Read a memory file.",
+      "help": "Read a file in this Agent's memory directory on master. Use memory-relative paths such as MEMORY.md or notes/project.md.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "read_memory"
+      },
+      "params": [
+        {
+          "name": "filePath",
+          "type": "string",
+          "kind": "positional",
+          "required": true,
+          "help": "Path relative to this Agent's memory directory, without a memory/ prefix."
+        },
+        {
+          "name": "startLine",
+          "type": "number",
+          "kind": "flag",
+          "help": "First line to read, counting from 1. Omit or use 0 to start at the beginning."
+        },
+        {
+          "name": "endLine",
+          "type": "number",
+          "kind": "flag",
+          "help": "Last line to read, counting from 1. Omit or use 0 to read through the end."
+        }
+      ]
+    },
+    {
+      "path": "memory write",
+      "summary": "Create a memory file.",
+      "help": "Create a file in this Agent's memory directory on master. Existing files are not overwritten; use `memory edit` to modify one. Top-level .md files in this directory are part of the system prompt of every Session of this Agent and of Agents that inherit it.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "write_memory"
+      },
+      "params": [
+        {
+          "name": "filePath",
+          "type": "string",
+          "kind": "positional",
+          "required": true,
+          "help": "Path relative to this Agent's memory directory, without a memory/ prefix."
+        },
+        {
+          "name": "content",
+          "type": "string",
+          "kind": "positional",
+          "required": true,
+          "help": "Complete file contents."
+        }
+      ]
+    },
+    {
+      "path": "memory edit",
+      "summary": "Replace one exact occurrence of text in a memory file.",
+      "help": "Replace one exact occurrence of text in a file in this Agent's memory directory on master. Top-level .md files in this directory are part of the system prompt of every Session of this Agent and of Agents that inherit it.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "edit_memory"
+      },
+      "params": [
+        {
+          "name": "filePath",
+          "type": "string",
+          "kind": "positional",
+          "required": true,
+          "help": "Path relative to this Agent's memory directory, without a memory/ prefix."
+        },
+        {
+          "name": "oldText",
+          "type": "string",
+          "kind": "flag",
+          "required": true,
+          "help": "Exact text to replace; it must identify a single occurrence."
+        },
+        {
+          "name": "newText",
+          "type": "string",
+          "kind": "flag",
+          "required": true,
+          "help": "Replacement text."
+        }
+      ]
+    },
+    {
+      "path": "memory delete",
+      "summary": "Delete a memory file.",
+      "help": "Delete one file from this Agent's memory directory on master.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "delete_memory"
+      },
+      "params": [
+        {
+          "name": "filePath",
+          "type": "string",
+          "kind": "positional",
+          "required": true,
+          "help": "Path relative to this Agent's memory directory, without a memory/ prefix."
+        }
+      ]
+    },
+    {
+      "path": "memory patch",
+      "summary": "Change memory files with an apply_patch patch.",
+      "help": "Add, modify, or delete files in this Agent's memory directory on master using the apply_patch format. Paths in patch headers are relative to the memory directory; a memory/ prefix is also accepted. Top-level .md files in this directory are part of the system prompt of every Session of this Agent and of Agents that inherit it.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "apply_patch_memory"
+      },
+      "params": [
+        {
+          "name": "input",
+          "type": "string",
+          "kind": "positional",
+          "required": true,
+          "help": "Patch text using the same format as apply_patch."
+        }
+      ]
+    },
+    {
+      "path": "skill list",
+      "summary": "List available skills.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "skill",
+        "fixed": {
+          "action": "list"
+        }
+      },
+      "params": [
+        {
+          "name": "agentName",
+          "type": "string",
+          "kind": "flag",
+          "help": "Agent whose available skills to use. Defaults to this Session's Agent."
+        }
+      ]
+    },
+    {
+      "path": "skill load",
+      "summary": "Read a skill's instructions and resource list.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "skill",
+        "fixed": {
+          "action": "load"
+        }
+      },
+      "params": [
+        {
+          "name": "skillName",
+          "type": "string",
+          "kind": "positional",
+          "help": "Skill to read.",
+          "required": true
+        },
+        {
+          "name": "agentName",
+          "type": "string",
+          "kind": "flag",
+          "help": "Agent whose available skills to use. Defaults to this Session's Agent."
+        }
+      ]
+    },
+    {
+      "path": "file send",
+      "summary": "Deliver a file or image from a Node to users.",
+      "help": "Deliver a file or image from a Node to users. Choose either one --channel-target-id or a --session-id whose attached channels should receive it. With neither, delivery uses the current Session.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "send_file"
+      },
+      "params": [
+        {
+          "name": "filePath",
+          "type": "string",
+          "kind": "positional",
+          "required": true,
+          "help": "File path on the selected Node. A relative path uses the Session working directory when the Node is this Session's current Node and a working directory is set, otherwise the Node's default directory (the Agent directory on master and CLI Nodes). On master and CLI Nodes, ~/ and a leading $fw_agentdir or $fw_tmp are accepted; other leading $ names are rejected."
+        },
+        {
+          "name": "channelTargetId",
+          "type": "string",
+          "kind": "flag",
+          "help": "One destination in the form <channel-instance-id>:<conversation-id>. Do not combine with --session-id."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "kind": "flag",
+          "help": "Session whose attached channels should receive the file. Defaults to the current Session; do not combine with --channel-target-id."
+        },
+        {
+          "name": "node",
+          "type": "string",
+          "kind": "flag",
+          "help": "Node containing the file. Defaults to the current Node."
+        },
+        {
+          "name": "caption",
+          "type": "string",
+          "kind": "flag",
+          "help": "Text to accompany the file, where the destination supports captions."
+        }
+      ]
+    },
+    {
+      "path": "image save",
+      "summary": "Save an image from this Session to a file.",
+      "help": "Save an image from this Session, including a generated image or one returned by a tool. The saved file can be reused or delivered with `file send`.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "image_write_to_file"
+      },
+      "params": [
+        {
+          "name": "id",
+          "type": "string",
+          "kind": "positional",
+          "required": true,
+          "help": "Image ID shown in this Session."
+        },
+        {
+          "name": "filePath",
+          "type": "string",
+          "kind": "positional",
+          "required": true,
+          "help": "File path on the selected Node. A relative path uses the Session working directory when the Node is this Session's current Node and a working directory is set, otherwise the Node's default directory (the Agent directory on master and CLI Nodes). On master and CLI Nodes, ~/ and a leading $fw_agentdir or $fw_tmp are accepted; other leading $ names are rejected."
+        },
+        {
+          "name": "overwrite",
+          "type": "boolean",
+          "kind": "flag",
+          "help": "Allow replacement of an existing file. Defaults to false."
+        },
+        {
+          "name": "node",
+          "type": "string",
+          "kind": "flag",
+          "help": "Node on which to save the image. Defaults to the current Node."
+        }
+      ]
+    },
+    {
+      "path": "image crop",
+      "summary": "Crop an image from this Session.",
+      "help": "Crop an image from this Session, including a generated image or one returned by a tool. Returns a new visible image/reference, which can be cropped, saved, or delivered again. GIF input uses its first frame and returns a PNG, without animation. Coordinates and dimensions refer to the original image, before resizing for model input.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "image_crop"
+      },
+      "params": [
+        {
+          "name": "id",
+          "type": "string",
+          "kind": "positional",
+          "required": true,
+          "help": "Image ID shown in this Session."
+        },
+        {
+          "name": "x",
+          "type": "number",
+          "kind": "flag",
+          "required": true,
+          "help": "Left edge of the crop, in pixels."
+        },
+        {
+          "name": "y",
+          "type": "number",
+          "kind": "flag",
+          "required": true,
+          "help": "Top edge of the crop, in pixels."
+        },
+        {
+          "name": "width",
+          "type": "number",
+          "kind": "flag",
+          "required": true,
+          "help": "Crop width in pixels."
+        },
+        {
+          "name": "height",
+          "type": "number",
+          "kind": "flag",
+          "required": true,
+          "help": "Crop height in pixels."
+        }
+      ]
+    },
+    {
+      "path": "image generate",
+      "summary": "Generate or edit an image with the configured image service.",
+      "help": "Generate or edit an image with the selected model's configured image service. Returns visible images that can be saved or delivered with the image tools. Use --image-ids to reference images from this session for edits; describe the requested result in prompt.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "generate_image"
+      },
+      "params": [
+        {
+          "name": "prompt",
+          "type": "string",
+          "kind": "rest",
+          "required": true,
+          "help": "Describe the image to generate or the edit to make."
+        },
+        {
+          "name": "imageIds",
+          "type": "array",
+          "items": "string",
+          "kind": "flag",
+          "help": "Optional source images for editing or visual reference."
+        }
+      ]
+    },
+    {
+      "path": "artifact prepare",
+      "summary": "Prepare an artifact marker for insertion between prose paragraphs.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "artifact",
+        "fixed": {
+          "action": "prepare"
+        }
+      },
+      "params": [
+        {
+          "name": "filePath",
+          "type": "string",
+          "kind": "positional",
+          "help": "Self-contained JSON manifest (2 MiB), or raster image when type=image (12 MiB), on the source Node."
+        },
+        {
+          "name": "type",
+          "type": "enum",
+          "values": [
+            "image"
+          ],
+          "kind": "flag",
+          "help": "Use for PNG/JPEG/GIF/WebP image files. Omit for JSON chart/React manifests."
+        },
+        {
+          "name": "title",
+          "type": "string",
+          "kind": "flag",
+          "help": "Optional image title; otherwise its filename."
+        },
+        {
+          "name": "alt",
+          "type": "string",
+          "kind": "flag",
+          "help": "Optional accessible image description."
+        },
+        {
+          "name": "node",
+          "type": "string",
+          "kind": "flag",
+          "help": "Source Node; defaults to the current Session Node."
+        }
+      ]
+    },
+    {
+      "path": "artifact publish",
+      "summary": "Publish an artifact as a standalone reply card.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "artifact",
+        "fixed": {
+          "action": "publish"
+        }
+      },
+      "params": [
+        {
+          "name": "filePath",
+          "type": "string",
+          "kind": "positional",
+          "help": "Self-contained JSON manifest (2 MiB), or raster image when type=image (12 MiB), on the source Node."
+        },
+        {
+          "name": "type",
+          "type": "enum",
+          "values": [
+            "image"
+          ],
+          "kind": "flag",
+          "help": "Use for PNG/JPEG/GIF/WebP image files. Omit for JSON chart/React manifests."
+        },
+        {
+          "name": "title",
+          "type": "string",
+          "kind": "flag",
+          "help": "Optional image title; otherwise its filename."
+        },
+        {
+          "name": "alt",
+          "type": "string",
+          "kind": "flag",
+          "help": "Optional accessible image description."
+        },
+        {
+          "name": "node",
+          "type": "string",
+          "kind": "flag",
+          "help": "Source Node; defaults to the current Session Node."
+        },
+        {
+          "name": "artifactId",
+          "type": "string",
+          "kind": "flag",
+          "help": "Existing artifact ID when publishing a new revision."
+        },
+        {
+          "name": "expectedRevision",
+          "type": "integer",
+          "kind": "flag",
+          "help": "Required previous revision for an update; conflicts are rejected."
+        }
+      ]
+    },
+    {
+      "path": "artifact get",
+      "summary": "Show artifact publication metadata.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "artifact",
+        "fixed": {
+          "action": "get"
+        }
+      },
+      "params": [
+        {
+          "name": "artifactId",
+          "type": "string",
+          "kind": "positional",
+          "help": "Existing artifact ID when publishing a new revision.",
+          "required": true
+        },
+        {
+          "name": "revision",
+          "type": "integer",
+          "kind": "flag",
+          "help": "Specific revision; omit for the latest publication metadata."
+        }
+      ]
+    },
+    {
+      "path": "channel send",
+      "summary": "Send a message to a channel destination.",
+      "help": "Send a message to a specific channel destination. The destination does not need a Session attachment. For a normal-mode channel attached to this Session, reply directly instead: your assistant text is delivered automatically. Use this tool for send-only channels or when the task requires delivery to a different destination.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "send_to_channel"
+      },
+      "params": [
+        {
+          "name": "channelTargetId",
+          "type": "string",
+          "kind": "positional",
+          "required": true,
+          "help": "Destination in the form <channel-instance-id>:<conversation-id>."
+        },
+        {
+          "name": "message",
+          "type": "string",
+          "kind": "rest",
+          "required": true,
+          "help": "Message to deliver."
+        }
+      ]
+    },
+    {
+      "path": "timer create",
+      "summary": "Schedule a message or a ToolScript run.",
+      "help": "Schedule a message or a ToolScript run, once or on a recurring schedule. Choose one of --at, --after-seconds or --cron. ToolScript timers run for the calling Session without starting a model turn; the script can send a message when needed. Timers survive restarts. Load the timer-automation skill before creating or changing timers.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "create_timer"
+      },
+      "params": [
+        {
+          "name": "action",
+          "type": "enum",
+          "values": [
+            "message",
+            "toolscript"
+          ],
+          "kind": "flag",
+          "help": "What each trigger does. Defaults to message."
+        },
+        {
+          "name": "script",
+          "type": "object",
+          "kind": "flag",
+          "help": "ToolScript to run on each trigger when action is toolscript."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "kind": "flag",
+          "help": "Session that owns the timer. Defaults to this Session. ToolScript timers must belong to the calling Session."
+        },
+        {
+          "name": "at",
+          "type": "string|number",
+          "kind": "flag",
+          "help": "One-time trigger time as an ISO date-time string or Unix epoch milliseconds."
+        },
+        {
+          "name": "afterSeconds",
+          "type": "number",
+          "kind": "flag",
+          "help": "Seconds from now until a one-time trigger."
+        },
+        {
+          "name": "cron",
+          "type": "string",
+          "kind": "flag",
+          "help": "Cron schedule for recurring triggers."
+        },
+        {
+          "name": "message",
+          "type": "string",
+          "kind": "flag",
+          "help": "Message delivered on each trigger when action is message."
+        },
+        {
+          "name": "newSession",
+          "type": "boolean",
+          "kind": "flag",
+          "help": "Deliver each message trigger to a newly created Session instead of the owner Session."
+        },
+        {
+          "name": "sessionPrefix",
+          "type": "string",
+          "kind": "flag",
+          "help": "Name prefix for newly created Sessions. Defaults to timer; applies to message timers when --new-session is true."
+        },
+        {
+          "name": "agentName",
+          "type": "string",
+          "kind": "flag",
+          "help": "Agent for newly created Sessions. Defaults to the owner Session's Agent; applies to message timers when --new-session is true."
+        }
+      ]
+    },
+    {
+      "path": "timer list",
+      "summary": "List timers owned by a Session.",
+      "help": "List timers owned by a session, with each timer's schedule, next run, paused state and most recent result.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "list_timers"
+      },
+      "params": [
+        {
+          "name": "sessionId",
+          "type": "string",
+          "kind": "flag",
+          "help": "Owner Session ID. Defaults to this session."
+        }
+      ]
+    },
+    {
+      "path": "timer update",
+      "summary": "Change a timer.",
+      "help": "Change an existing timer. Omitted fields keep their current values. To change its schedule, supply exactly one of --at, --after-seconds or --cron. A supplied script replaces the complete script specification. Load the timer-automation skill before changing timers.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "update_timer"
+      },
+      "params": [
+        {
+          "name": "timerId",
+          "type": "string",
+          "kind": "positional",
+          "required": true,
+          "help": "Timer to update."
+        },
+        {
+          "name": "action",
+          "type": "enum",
+          "values": [
+            "message",
+            "toolscript"
+          ],
+          "kind": "flag",
+          "help": "Replacement trigger action. Supply the message or script required by the new action."
+        },
+        {
+          "name": "script",
+          "type": "object",
+          "kind": "flag",
+          "help": "Complete replacement ToolScript specification for future triggers."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "kind": "flag",
+          "help": "Owner Session ID. Defaults to this Session. Only the owner Session may configure a ToolScript timer."
+        },
+        {
+          "name": "at",
+          "type": "string|number",
+          "kind": "flag",
+          "help": "New one-time trigger time as an ISO date-time string or Unix epoch milliseconds."
+        },
+        {
+          "name": "afterSeconds",
+          "type": "number",
+          "kind": "flag",
+          "help": "Seconds from now until the rescheduled one-time trigger."
+        },
+        {
+          "name": "cron",
+          "type": "string",
+          "kind": "flag",
+          "help": "New recurring cron schedule."
+        },
+        {
+          "name": "message",
+          "type": "string",
+          "kind": "flag",
+          "help": "Replacement message for future message triggers."
+        },
+        {
+          "name": "newSession",
+          "type": "boolean",
+          "kind": "flag",
+          "help": "Use a new Session for each message trigger when true. Setting false returns message delivery to the owner and clears new-session target settings."
+        },
+        {
+          "name": "sessionPrefix",
+          "type": "string",
+          "kind": "flag",
+          "help": "Name prefix for new Sessions; applies to message timers when --new-session is true."
+        },
+        {
+          "name": "agentName",
+          "type": "string",
+          "kind": "flag",
+          "help": "Agent for new Sessions; applies to message timers when --new-session is true and defaults to the owner Session's Agent."
+        },
+        {
+          "name": "paused",
+          "type": "boolean",
+          "kind": "flag",
+          "help": "Set true to stop the timer from firing while keeping its schedule and settings; set false to resume from the next scheduled time. Missed times are not replayed; a one-time timer whose time has passed fires once on resume."
+        }
+      ]
+    },
+    {
+      "path": "timer pause",
+      "summary": "Pause a timer, keeping its schedule.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "update_timer",
+        "fixed": {
+          "paused": true
+        }
+      },
+      "params": [
+        {
+          "name": "timerId",
+          "type": "string",
+          "kind": "positional",
+          "required": true,
+          "help": "Timer to update."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "kind": "flag",
+          "help": "Owner Session ID. Defaults to this Session. Only the owner Session may configure a ToolScript timer."
+        }
+      ]
+    },
+    {
+      "path": "timer resume",
+      "summary": "Resume a paused timer from its next scheduled time.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "update_timer",
+        "fixed": {
+          "paused": false
+        }
+      },
+      "params": [
+        {
+          "name": "timerId",
+          "type": "string",
+          "kind": "positional",
+          "required": true,
+          "help": "Timer to update."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "kind": "flag",
+          "help": "Owner Session ID. Defaults to this Session. Only the owner Session may configure a ToolScript timer."
+        }
+      ]
+    },
+    {
+      "path": "timer delete",
+      "summary": "Delete a timer.",
+      "help": "Delete a timer to stop future triggers. A delivery already in progress is not undone.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "delete_timer"
+      },
+      "params": [
+        {
+          "name": "timerId",
+          "type": "string",
+          "kind": "positional",
+          "required": true,
+          "help": "Timer to delete."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "kind": "flag",
+          "help": "Owner Session ID. Defaults to this session."
+        }
+      ]
+    },
+    {
+      "path": "script list",
+      "summary": "List this Session's ToolScript runs.",
+      "help": "List this session's ToolScript runs with their status and progress summaries.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "list_toolscript_runs"
+      },
+      "params": [
+        {
+          "name": "limit",
+          "type": "number",
+          "kind": "flag",
+          "help": "Maximum runs to return. Defaults to 20, up to 200."
+        },
+        {
+          "name": "status",
+          "type": "enum",
+          "values": [
+            "running",
+            "waiting",
+            "completed",
+            "failed",
+            "cancelled"
+          ],
+          "kind": "flag",
+          "help": "Include only runs with this status."
+        }
+      ]
+    },
+    {
+      "path": "script get",
+      "summary": "Inspect a ToolScript run.",
+      "help": "Inspect a ToolScript run, including its status, pause details, accumulated output, and tool activity.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "get_toolscript_run"
+      },
+      "params": [
+        {
+          "name": "runId",
+          "type": "string",
+          "kind": "positional",
+          "required": true,
+          "help": "Run to inspect."
+        }
+      ]
+    },
+    {
+      "path": "script cancel",
+      "summary": "Cancel a ToolScript run owned by this Session.",
+      "help": "Cancel a waiting ToolScript run, or request cancellation of an active run, owned by this session. Already started tool effects are not undone.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "cancel_toolscript_run"
+      },
+      "params": [
+        {
+          "name": "runId",
+          "type": "string",
+          "kind": "positional",
+          "required": true,
+          "help": "Run to cancel."
+        }
+      ]
+    },
+    {
+      "path": "config set",
+      "summary": "Install a complete YAML configuration from a file on master.",
+      "help": "Install a complete YAML configuration from a file on master. Choose config, models, or tool-rules. The candidate is validated before replacing the active file. The result identifies applied changes and settings that require a restart. Your current permissions must allow both this operation and reading the candidate file.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "set_config"
+      },
+      "params": [
+        {
+          "name": "target",
+          "type": "enum",
+          "values": [
+            "config",
+            "models",
+            "tool-rules"
+          ],
+          "kind": "positional",
+          "required": true,
+          "help": "Configuration to replace: config for app settings, models for providers and models, or tool-rules for the instance tool authorization policy."
+        },
+        {
+          "name": "filePath",
+          "type": "string",
+          "kind": "positional",
+          "required": true,
+          "help": "Path on master to the complete candidate YAML file. A leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory on master. Other leading $ names are rejected."
+        }
+      ]
+    },
+    {
+      "path": "config explain-auth",
+      "summary": "Explain how tool authorization would decide a call, without running it.",
+      "help": "Explain how tool authorization would decide a call by an existing Session, without running it. Each probe names the caller Session and the tool, as for `tool call`. The result shows the decision and matching rule of the global policy and of each Agent rule layer, and the facts used. Checks made inside the tool itself are not included. With --policy-file-path, a candidate file replaces the global policy; add --compare to evaluate both and list changed rule ids. Requires permission to read the active policy file and any candidate on master; probing another Session also requires permission to view it.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "explain_tool_authorization"
+      },
+      "params": [
+        {
+          "name": "probes",
+          "type": "array",
+          "items": "object",
+          "kind": "flag",
+          "required": true,
+          "help": "Calls to evaluate."
+        },
+        {
+          "name": "policyFilePath",
+          "type": "string",
+          "kind": "flag",
+          "help": "Path on master to a complete candidate tool-rules YAML that replaces the active global policy. A leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory on master."
+        },
+        {
+          "name": "compare",
+          "type": "boolean",
+          "kind": "flag",
+          "help": "With --policy-file-path, evaluate both the active and candidate policy and include a static rule id diff."
+        }
+      ]
+    },
+    {
+      "path": "secret add",
+      "summary": "Store a credential under a new secret name.",
+      "help": "Store a credential under a new secret name. Configuration can then refer to it as `${secret:NAME}`, and its value is hidden from tool output, Session history and model requests. Give exactly one source: --value, --file-path or --from-config. An existing name can't be replaced here; the user replaces values in Setup. Stored values can't be read back.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "add_secret"
+      },
+      "params": [
+        {
+          "name": "name",
+          "type": "string",
+          "kind": "positional",
+          "required": true,
+          "help": "New secret name: 1-64 lowercase letters, digits, `.`, `_` or `-`, starting with a letter or digit."
+        },
+        {
+          "name": "description",
+          "type": "string",
+          "kind": "flag",
+          "help": "Optional one-line description shown in Setup and `list_secrets`."
+        },
+        {
+          "name": "value",
+          "type": "string",
+          "kind": "flag",
+          "help": "The credential. It remains visible in this tool call, so prefer --file-path when the value is in a file or comes from a command's output."
+        },
+        {
+          "name": "filePath",
+          "type": "string",
+          "kind": "flag",
+          "help": "File on your current Node containing the value: UTF-8 text, at most 64 KiB. A single trailing line break is ignored."
+        },
+        {
+          "name": "deleteFile",
+          "type": "boolean",
+          "kind": "flag",
+          "help": "Delete the file after storing its value."
+        },
+        {
+          "name": "fromConfig",
+          "type": "array",
+          "items": "object",
+          "kind": "flag",
+          "help": "Configuration fields that currently hold the same literal credential. Each field is changed to refer to the new secret, which belongs to the instance rather than your Agent."
+        }
+      ]
+    },
+    {
+      "path": "secret list",
+      "summary": "List secret names, owners and usage, never values.",
+      "help": "List secret names with their descriptions, owners and the configuration that uses them, including referenced names that have no value yet. `usable` tells whether your permissions let you use each stored secret from your current Node. Values are never returned.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "list_secrets"
+      },
+      "params": []
+    },
+    {
+      "path": "mcp list",
+      "summary": "List configured MCP servers.",
+      "help": "List configured MCP servers, including disabled ones, with redacted connection summaries. A null timeoutSeconds means the default of 60 seconds is used.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "list_mcp_servers"
+      },
+      "params": []
+    },
+    {
+      "path": "mcp set",
+      "summary": "Add, update or disable an MCP server connection.",
+      "help": "Add or update an MCP server connection. Successful changes apply to subsequent calls without restarting Foxwarm; use enable=false to disable a server. Load the mcp-management skill before changing connections. Use this tool rather than editing the configuration file when the change must apply immediately.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "mcp_config"
+      },
+      "params": [
+        {
+          "name": "name",
+          "type": "string",
+          "kind": "positional",
+          "required": true,
+          "help": "Name identifying the server."
+        },
+        {
+          "name": "url",
+          "type": "string",
+          "kind": "flag",
+          "help": "MCP endpoint URL. Use its streamable HTTP endpoint for streamable-http or auto, or its SSE endpoint for sse."
+        },
+        {
+          "name": "command",
+          "type": "string",
+          "kind": "flag",
+          "help": "Executable to start for stdio transport."
+        },
+        {
+          "name": "args",
+          "type": "array",
+          "items": "string",
+          "kind": "flag",
+          "help": "Command-line arguments for the stdio server."
+        },
+        {
+          "name": "env",
+          "type": "object",
+          "kind": "flag",
+          "help": "Additional environment variables for the stdio server."
+        },
+        {
+          "name": "cwd",
+          "type": "string",
+          "kind": "flag",
+          "help": "Working directory for the stdio server."
+        },
+        {
+          "name": "stderr",
+          "type": "string",
+          "kind": "flag",
+          "help": "How to handle the stdio server's standard error stream: inherit, pipe, or ignore."
+        },
+        {
+          "name": "token",
+          "type": "string",
+          "kind": "flag",
+          "help": "Bearer token for the Authorization header."
+        },
+        {
+          "name": "headers",
+          "type": "object",
+          "kind": "flag",
+          "help": "HTTP request headers. An explicit Authorization header takes precedence over token."
+        },
+        {
+          "name": "transport",
+          "type": "string",
+          "kind": "flag",
+          "help": "Connection transport. Defaults to auto."
+        },
+        {
+          "name": "description",
+          "type": "string",
+          "kind": "flag",
+          "help": "Short description of the server."
+        },
+        {
+          "name": "timeoutSeconds",
+          "type": "number",
+          "kind": "flag",
+          "help": "Time limit for calls to this server, in seconds, from 1 to 3,600. Use 0 to restore the default of 60 seconds. Does not change connection or tool-listing timeouts."
+        },
+        {
+          "name": "enable",
+          "type": "boolean",
+          "kind": "flag",
+          "help": "Whether this server is enabled."
+        }
+      ]
+    },
+    {
+      "path": "mcp notifications",
+      "summary": "Start, stop or inspect message notifications from an MCP server.",
+      "help": "Start, stop, or inspect message notifications from a configured MCP server for the current Session. Requires Streamable HTTP and Foxwarm notification support. Calls to the server share this Session's connection. Incoming messages enter this Session's normal queue only while reception is enabled; disconnected messages are not replayed. See the mcp-management skill for setup and explicit replies between instances.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "mcp_notifications"
+      },
+      "params": [
+        {
+          "name": "action",
+          "type": "enum",
+          "values": [
+            "start",
+            "stop",
+            "status"
+          ],
+          "kind": "positional",
+          "required": true,
+          "help": "Operation to perform."
+        },
+        {
+          "name": "server",
+          "type": "string",
+          "kind": "positional",
+          "required": true,
+          "help": "Configured MCP server name."
+        }
+      ]
+    },
+    {
+      "path": "tool search",
+      "summary": "Find builtin, MCP and Node tools and their argument schemas.",
+      "help": "Find tools by name and description. Results show each tool's ID, its arguments and, for builtins, the matching command. Call a result with `tool call <toolId> --args @args`.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "local": "tool-search"
+      },
+      "params": [
+        {
+          "name": "query",
+          "type": "string",
+          "kind": "positional",
+          "help": "Words to match in tool names and descriptions. Results matching more words rank higher. Omit to list tools.",
+          "variadic": true
+        },
+        {
+          "name": "source",
+          "arg": "sources",
+          "type": "array",
+          "items": "enum",
+          "values": [
+            "builtin",
+            "mcp",
+            "node"
+          ],
+          "kind": "flag",
+          "help": "Source to search; repeat for several. Defaults to builtin, mcp and node."
+        },
+        {
+          "name": "server",
+          "type": "string",
+          "kind": "flag",
+          "help": "Limit MCP results to this server. Omit to search all enabled MCP servers."
+        },
+        {
+          "name": "nodeId",
+          "type": "string",
+          "kind": "flag",
+          "help": "Node to search. Omit or use current to search this Session's execution Node."
+        },
+        {
+          "name": "limit",
+          "type": "integer",
+          "kind": "flag",
+          "help": "Maximum results. Defaults to 5, up to 200."
+        },
+        {
+          "name": "schema",
+          "arg": "includeSchema",
+          "type": "boolean",
+          "kind": "flag",
+          "help": "Include argument schemas for up to the first 10 results. Defaults to true; --no-schema shows short summaries."
+        }
+      ]
+    },
+    {
+      "path": "tool call",
+      "summary": "Call a builtin, MCP or Node tool by its tool ID.",
+      "help": "Call a tool found with `tool search`. Supply its toolId, or identify it with --source and --name plus --server or --node-id when needed. Pass the tool's arguments as one object with --args @args. The target tool's normal checks apply.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "local": "tool-call"
+      },
+      "params": [
+        {
+          "name": "toolId",
+          "type": "string",
+          "kind": "positional",
+          "help": "Tool ID from `tool search`, such as builtin:session, mcp:server/tool or node:master/read."
+        },
+        {
+          "name": "source",
+          "type": "enum",
+          "values": [
+            "builtin",
+            "mcp",
+            "node"
+          ],
+          "kind": "flag",
+          "help": "Tool source when not using toolId."
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "kind": "flag",
+          "help": "Tool name when not using toolId."
+        },
+        {
+          "name": "server",
+          "type": "string",
+          "kind": "flag",
+          "help": "MCP server name. Required for source mcp unless included in toolId."
+        },
+        {
+          "name": "nodeId",
+          "type": "string",
+          "kind": "flag",
+          "help": "Node for source node. Omit or use current for this Session's current Node."
+        },
+        {
+          "name": "args",
+          "type": "object",
+          "kind": "flag",
+          "help": "Arguments for the selected tool. Defaults to no arguments."
+        }
+      ]
+    }
+  ]
+}

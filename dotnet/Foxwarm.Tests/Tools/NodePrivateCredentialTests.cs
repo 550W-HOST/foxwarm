@@ -65,12 +65,12 @@ public sealed class NodePrivateCredentialTests
                     new JsonObject
                     {
                         ["id"] = "private-file",
-                        ["name"] = "call_tool",
-                        ["args"] = new JsonObject
+                        ["name"] = "ctl",
+                        ["args"] = CtlTestArgs.Unified(new JsonObject
                         {
                             ["toolId"] = "builtin:node_create_auth_token",
                             ["args"] = new JsonObject { ["nodeId"] = id, ["filePath"] = path },
-                        },
+                        }),
                     },
                     token
                 )

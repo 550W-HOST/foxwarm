@@ -57,13 +57,13 @@ public sealed partial class ClaudeRuntimeTests
             ),
             new JsonObject
             {
-                ["name"] = "search_tools",
-                ["args"] = new JsonObject
+                ["name"] = "ctl",
+                ["args"] = CtlTestArgs.Search(new JsonObject
                 {
                     ["sources"] = new JsonArray("builtin"),
                     ["limit"] = 200,
                     ["includeSchema"] = false,
-                },
+                }),
             },
         };
         await f.PeerAsync(new JsonObject { ["calls"] = operations });
@@ -132,7 +132,7 @@ public sealed partial class ClaudeRuntimeTests
             .ToHashSet();
         Assert.Equal(expected, names);
         Assert.Contains("write", names);
-        Assert.Contains("call_tool", names);
+        Assert.Contains("ctl", names);
         Assert.Contains("exec", names);
         Assert.DoesNotContain("wait", names);
         var schemas = new JsonArray(
@@ -187,26 +187,26 @@ public sealed partial class ClaudeRuntimeTests
         var path = Path.Combine(f.Main.Manager.AgentDirectory("main"), "denied.txt");
         var denied = await InboundMcpFixture.CallAsync(
             sdk,
-            "call_tool",
-            new JsonObject
+            "ctl",
+            CtlTestArgs.Unified(new JsonObject
             {
                 ["toolId"] = "node:master/write",
                 ["args"] = new JsonObject { ["filePath"] = path, ["content"] = "no" },
-            }
+            })
         );
         Assert.True(denied["isError"]!.GetValue<bool>());
         Assert.Contains("tool_authorization_denied", denied.ToJsonString());
         Assert.False(File.Exists(path));
         var impersonation = await InboundMcpFixture.CallAsync(
             sdk,
-            "call_tool",
-            new JsonObject
+            "ctl",
+            CtlTestArgs.Unified(new JsonObject
             {
                 ["sessionId"] = "target",
                 ["agentName"] = "other",
                 ["toolId"] = "builtin:write_memory",
                 ["args"] = new JsonObject { ["filePath"] = "no.md", ["content"] = "no" },
-            }
+            })
         );
         Assert.True(impersonation["isError"]!.GetValue<bool>());
         Assert.False(

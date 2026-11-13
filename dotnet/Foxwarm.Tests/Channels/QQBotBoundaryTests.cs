@@ -256,8 +256,8 @@ public sealed class QQBotBoundaryTests
         var path = Path.Combine(f.Manager.IdentityWorkspace(f.Owner).ToolDirectory, "file.bin");
         await File.WriteAllTextAsync(path, "native fixture");
         var file = await f.ToolAsync(
-            "call_tool",
-            new()
+            "ctl",
+            CtlTestArgs.Unified(new()
             {
                 ["toolId"] = "builtin:send_file",
                 ["args"] = new JsonObject
@@ -265,7 +265,7 @@ public sealed class QQBotBoundaryTests
                     ["channelTargetId"] = "qq:group:room",
                     ["filePath"] = path,
                 },
-            }
+            })
         );
         Assert.Null(file?["error"]);
         Assert.Equal("latest", peer.Sent.Last().Body["msg_id"]!.ToString());

@@ -10,25 +10,11 @@ internal sealed partial class SessionToolExecutor
         var name = SessionWait.Text(call["name"]);
         if (name == "submit_compact_plan")
             return (JsonObject)call.DeepClone();
-        if (name != "call_tool" || call["args"] is not JsonObject wrapper)
+        if (name != "ctl" || call["args"] is not JsonObject wrapper)
             return null;
-        var toolId = SessionWait.Text(wrapper["toolId"]);
-        var compactTarget = toolId is { Length: > 0 }
-            ? toolId.StartsWith("builtin:", StringComparison.Ordinal)
-                && toolId[8..].Trim() == "submit_compact_plan"
-            : SessionWait.Text(wrapper["source"])?.Trim() == "builtin"
-                && SessionWait.Text(wrapper["name"]) == "submit_compact_plan";
-        if (!compactTarget)
-            return null;
-        if (wrapper.ContainsKey("args") && wrapper.ContainsKey("argsJson"))
-            return null; // The dispatcher owns malformed wrapper arguments.
-        var parsed = FunctionCallArguments.Parse(wrapper["argsJson"] ?? wrapper["args"]);
-        var result = new JsonObject { ["args"] = parsed.Args };
-        if (parsed.RawArgsText is not null)
-            result["rawArgsText"] = parsed.RawArgsText;
-        if (parsed.ArgsParseError is not null)
-            result["argsParseError"] = parsed.ArgsParseError;
-        return result;
+        return CtlParser.Describe(wrapper) is { Source: "builtin", Name: "submit_compact_plan" } described
+            ? new JsonObject { ["args"] = described.Args.DeepClone() }
+            : null;
     }
 
     private async Task<JsonObject> SubmitCompactPlanAsync(JsonObject args, CancellationToken token)

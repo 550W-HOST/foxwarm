@@ -68,7 +68,7 @@ internal static partial class UnifiedTools
         var warnings = new List<string>();
         foreach (
             var entry in registry.Entries.Where(entry =>
-                entry.Definition["name"]!.GetValue<string>() != "call_tool"
+                entry.Definition["name"]!.GetValue<string>() != "ctl"
                 && sources.Contains(entry.Source)
             )
         )
@@ -388,27 +388,33 @@ internal static partial class UnifiedTools
                     ? "builtin:" + tool.Name
                     : tool.Source + ":" + tool.Scope + "/" + tool.Name;
             var descriptor = safe
-                ? "toolId: " + Quote(identity)
-                : "source: "
+                ? identity
+                : "--source "
                     + Quote(tool.Source)
-                    + ", name: "
+                    + " --name "
                     + Quote(tool.Name)
                     + (
                         tool.Scope is null
                             ? ""
-                            : ", "
-                                + (tool.Source == "mcp" ? "server" : "nodeId")
-                                + ": "
+                            : (tool.Source == "mcp" ? " --server " : " --node-id ")
                                 + Quote(tool.Scope)
                     );
+            var commands =
+                tool.Source == "builtin"
+                    ? CtlRegistry
+                        .ForTarget("builtin", tool.Name)
+                        .Where(command => command.Available(CtlRegistry.Ingress))
+                        .Select(command => command.Path)
+                        .ToArray()
+                    : [];
             var line =
-                "call_tool({ "
-                + descriptor
-                + ", args: "
+                descriptor
+                + " args: "
                 + type
-                + " }); /* "
+                + " /* "
                 + Comment(tool.Description)
-                + " */";
+                + " */"
+                + (commands.Length == 0 ? "" : " Command: " + string.Join(", ", commands) + ".");
             if (lines.Sum(item => item.Length + 1) + line.Length > 27_800)
             {
                 omitted++;
@@ -416,7 +422,8 @@ internal static partial class UnifiedTools
             }
             lines.Add(line);
         }
-        var header = $"Found {lines.Count} tool(s); {total} total match(es).";
+        var header =
+            $"Found {lines.Count} tool(s); {total} total match(es). Call one with `tool call <toolId> --args @args` and its arguments in values.args.";
         if (omitted > 0)
             lines.Add($"{omitted} selected tool(s) omitted by declaration/output limits.");
         var builder = new StringBuilder(header + "\n\n" + string.Join('\n', lines));

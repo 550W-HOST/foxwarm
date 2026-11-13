@@ -220,13 +220,13 @@ public sealed partial class HandoffConfirmationTests
         );
         Assert.Null(ToolCallControls.Plan([Call("send_to_session", missing)], false)[0].Preset);
         var unified = Call(
-            "call_tool",
-            new JsonObject { ["toolId"] = "builtin:send_to_session", ["args"] = Args(Review()) }
+            "ctl",
+            CtlTestArgs.Unified(new JsonObject { ["toolId"] = "builtin:send_to_session", ["args"] = Args(Review()) })
         );
         Assert.Null(ToolCallControls.Plan([unified], true)[0].Preset);
-        unified["args"]!["args"]!["__cancelTool"] = true;
+        unified["args"]!["values"]!["args"]!["__cancelTool"] = true;
         Assert.True(
-            ToolCallControls.Plan([unified], true)[0].Call["args"]!["args"]!
+            ToolCallControls.Plan([unified], true)[0].Call["args"]!["values"]!["args"]!
                 .AsObject()
                 .ContainsKey("__cancelTool")
         );

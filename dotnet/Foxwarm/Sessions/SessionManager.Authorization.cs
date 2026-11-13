@@ -783,6 +783,14 @@ internal sealed partial class SessionManager
                 $"Invalid {target} YAML candidate. The active file was not changed."
             );
         }
+        if (target == "tool-rules")
+        {
+            var policy = ToolAuthorizationYaml.Parse(bytes);
+            if (policy.Warnings.Count > 0)
+                installed["warnings"] = new JsonArray(
+                    policy.Warnings.Select(warning => (JsonNode?)warning).ToArray()
+                );
+        }
         return new JsonObject { ["output"] = installed.ToJsonString() };
     }
 }

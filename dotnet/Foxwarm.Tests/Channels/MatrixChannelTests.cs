@@ -225,12 +225,12 @@ public sealed class MatrixChannelTests
         Assert.Null(
             (
                 await f.ToolAsync(
-                    "call_tool",
-                    new JsonObject
+                    "ctl",
+                    CtlTestArgs.Unified(new JsonObject
                     {
                         ["toolId"] = "builtin:send_to_channel",
                         ["args"] = Args("unified"),
-                    }
+                    })
                 )
             )!["error"]
         );
