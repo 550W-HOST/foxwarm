@@ -14,6 +14,7 @@ internal sealed partial class DesktopApplication : NSApplicationDelegate
 {
     private MainHost? host;
     private NSWindow? window;
+    private DesktopFrame? frame;
     private WKWebView? view;
     private Navigation? navigation;
     private BrowserUi? browserUi;
@@ -58,6 +59,7 @@ internal sealed partial class DesktopApplication : NSApplicationDelegate
             MinSize = new CGSize(640, 440),
         };
         window.ReleaseWhenClosed(false);
+        frame = new DesktopFrame(window);
         status.Frame = new CGRect(24, 24, 1000, 80);
         status.AutoresizingMask = NSViewResizingMask.WidthSizable;
         window.ContentView!.AddSubview(status);
@@ -148,6 +150,8 @@ internal sealed partial class DesktopApplication : NSApplicationDelegate
             if (exiting)
                 return;
             webConfiguration.UserContentController.AddContentRuleList(ruleList);
+            // The frame's one-way script message is the only page-to-host channel.
+            frame!.Configure(webConfiguration, endpoint);
             navigation = new Navigation(this);
             browserUi = new BrowserUi();
             view = new WKWebView(window!.ContentView!.Bounds, webConfiguration)
@@ -161,6 +165,7 @@ internal sealed partial class DesktopApplication : NSApplicationDelegate
             if (exiting)
                 return;
             window.ContentView.AddSubview(view);
+            frame.Attach(view);
             // Hidden beneath the web view, the startup label would otherwise remain in the
             // accessibility tree.
             status.RemoveFromSuperview();
@@ -276,6 +281,9 @@ internal sealed partial class DesktopApplication : NSApplicationDelegate
 
     private sealed class Navigation(DesktopApplication owner) : WKNavigationDelegate
     {
+        public override void DidStartProvisionalNavigation(WKWebView webView, WKNavigation navigation) =>
+            owner.frame?.ResetRegions();
+
         public override void DecidePolicy(
             WKWebView webView,
             WKNavigationAction action,
