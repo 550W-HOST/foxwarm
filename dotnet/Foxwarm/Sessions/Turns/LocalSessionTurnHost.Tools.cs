@@ -195,23 +195,7 @@ public sealed partial class LocalSessionTurnHost
                     .Text(args?["action"])
                     ?.Trim()
                     .Equals("select", StringComparison.OrdinalIgnoreCase) == true;
-        if (name != "ctl" || args is null)
-            return false;
-        // A ctl command naming `node select`, even a malformed one, is a selection attempt.
-        var parsed = CtlParser.Parse(args);
-        if (parsed is CtlError { Command: { Path: "node select" } })
-            return true;
-        var described = parsed switch
-        {
-            CtlTarget target => new CtlDescription(target.Source, target.Name, target.Args, null, null),
-            CtlCall unified => CtlParser.DescribeCall(unified.Descriptor),
-            _ => null,
-        };
-        return described is { Source: "builtin", Name: "node" }
-            && SessionWait
-                    .Text(described.Args["action"])
-                    ?.Trim()
-                    .Equals("select", StringComparison.OrdinalIgnoreCase) == true;
+        return name == "ctl" && args is not null && CtlParser.SelectsNode(args);
     }
 
     private static bool SelectionSucceeded(JsonNode? result) =>

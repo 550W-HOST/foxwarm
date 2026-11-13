@@ -2,7 +2,26 @@ using System.Text;
 
 namespace Foxwarm.Tools;
 
-internal sealed record CtlToken(string Text, bool Quoted, int Start);
+// Quoted is true when any part of the token was quoted or escaped. Plain is the length of the
+// leading text written without quoting, which decides whether a token is an option.
+internal sealed record CtlToken(string Text, bool Quoted, int Start, int Plain)
+{
+    // An option: `--name` or `--name=value` whose `--name=` prefix is not quoted.
+    internal bool IsOption(out string flag, out string? inline)
+    {
+        flag = "";
+        inline = null;
+        if (!Text.StartsWith("--", StringComparison.Ordinal) || Text.Length == 2)
+            return false;
+        var equals = Text.IndexOf('=', 2);
+        var name = equals < 0 ? Text.Length : equals + 1;
+        if (Plain < name)
+            return false;
+        flag = equals < 0 ? Text[2..] : Text[2..equals];
+        inline = equals < 0 ? null : Text[(equals + 1)..];
+        return true;
+    }
+}
 
 // POSIX-style word splitting without any expansion. Tokens are read on demand so a trailing
 // rest parameter can take the remaining raw text without tokenizing it.
@@ -51,9 +70,12 @@ internal sealed class CtlLexer(string text)
         var start = position;
         var builder = new StringBuilder();
         var quoted = false;
+        var plain = -1;
         while (position < text.Length && !char.IsWhiteSpace(text[position]))
         {
             var current = text[position];
+            if (current is '\'' or '"' or '\\' && plain < 0)
+                plain = builder.Length;
             if (current == '\'')
             {
                 quoted = true;
@@ -114,6 +136,6 @@ internal sealed class CtlLexer(string text)
                 position++;
             }
         }
-        return new(builder.ToString(), quoted, start);
+        return new(builder.ToString(), quoted, start, plain < 0 ? builder.Length : plain);
     }
 }

@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using Foxwarm.Tools;
 using Foxwarm.Models;
 
 namespace Foxwarm.Sessions;
@@ -231,9 +232,11 @@ internal sealed partial class SessionManager
                     ["error"] = "stale_history_boundary",
                     ["historyVersion"] = page.HistoryVersion,
                     ["output"] =
-                        "The active range changed structurally. Read a fresh page: view_session("
-                        + EcmaJson.Stringify(new JsonObject { ["sessionId"] = targetId })
-                        + ")",
+                        "The active range changed structurally. Read a fresh page: "
+                        + CtlCommandText.For(
+                            "view_session",
+                            new JsonObject { ["sessionId"] = targetId }
+                        ),
                 };
             return Output(renderer.RenderLive(targetId, page, args));
         }

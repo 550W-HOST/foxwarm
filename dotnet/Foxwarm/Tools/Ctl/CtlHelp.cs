@@ -64,9 +64,13 @@ internal static class CtlHelp
         return Bound(builder.ToString().TrimEnd());
     }
 
-    // The text returned for a parse error: the message plus the usage the caller may see.
+    // The text returned for a parse error: the message, suggestions and the usage the caller
+    // may see. Suggestions come only from visible commands, like help.
     internal static string Error(CtlError error, Func<CtlCommand, bool> visible)
     {
+        var message = error.Message;
+        if (error.Unknown is { } typed && Suggestions(typed, visible) is { Length: > 0 } candidates)
+            message += " Did you mean " + string.Join(", ", candidates.Select(path => "`" + path + "`")) + "?";
         var usage =
             error.Command is { } command
                 ? visible(command)
@@ -75,9 +79,44 @@ internal static class CtlHelp
             : error.Noun is { } noun ? Noun(noun, visible)
             : null;
         return Bound(
-            error.Message
+            message
                 + (usage is null ? "\n\nRun `help` for the available commands." : "\n\n" + usage)
         );
+    }
+
+    // Up to three visible nouns (for a one-word command) or commands closest to the typed text.
+    internal static string[] Suggestions(string typed, Func<CtlCommand, bool> visible)
+    {
+        var candidates = typed.Contains(' ')
+            ? CtlRegistry
+                .Commands.Where(command => command.Available(CtlRegistry.Ingress) && visible(command))
+                .Select(command => command.Path)
+            : CtlRegistry.Nouns.Where(noun => Commands(noun.Name, visible).Any()).Select(noun => noun.Name);
+        return candidates
+            .Select(path => (Path: path, Distance: Distance(typed, path)))
+            .Where(pair => pair.Distance <= Math.Max(2, typed.Length / 3))
+            .OrderBy(pair => pair.Distance)
+            .ThenBy(pair => pair.Path, StringComparer.Ordinal)
+            .Take(3)
+            .Select(pair => pair.Path)
+            .ToArray();
+    }
+
+    private static int Distance(string left, string right)
+    {
+        var previous = Enumerable.Range(0, right.Length + 1).ToArray();
+        for (var row = 1; row <= left.Length; row++)
+        {
+            var current = new int[right.Length + 1];
+            current[0] = row;
+            for (var column = 1; column <= right.Length; column++)
+                current[column] = Math.Min(
+                    Math.Min(current[column - 1] + 1, previous[column] + 1),
+                    previous[column - 1] + (left[row - 1] == right[column - 1] ? 0 : 1)
+                );
+            previous = current;
+        }
+        return previous[right.Length];
     }
 
     // Null when the requested noun or command does not exist for this caller.

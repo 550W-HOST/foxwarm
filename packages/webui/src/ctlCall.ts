@@ -92,6 +92,8 @@ export function ctlDescriptor(args: Record<string, unknown> | undefined): Record
   }
   while (remaining.trim()) {
     remaining = remaining.trimStart()
+    // A positional already given as an option is filled; use the next one.
+    while (next < positionals.length && !positionals[next].variadic && positionals[next].name in assigned) next++
     if (restParam && next >= positionals.length && (flagsEnded || !remaining.startsWith('--'))) {
       const raw = remaining.trimEnd()
       assigned[restParam.name] = /^@[A-Za-z_][A-Za-z0-9_-]*$/.test(raw) ? values[raw.slice(1)] : raw.startsWith('@@') ? remaining.slice(1) : remaining
@@ -102,9 +104,12 @@ export function ctlDescriptor(args: Record<string, unknown> | undefined): Record
     remaining = remaining.slice(match[0].length)
     const token = words(match[0])?.[0]
     if (token === undefined) return undefined
-    const quoted = /['"\\]/.test(match[0])
-    if (!flagsEnded && !quoted && token === '--') { flagsEnded = true; continue }
-    if (!flagsEnded && !quoted && token.startsWith('--')) {
+    // An option needs its `--name=` prefix unquoted; quoting only its value keeps it an option.
+    const quoteAt = match[0].search(/['"\\]/)
+    const plain = quoteAt < 0 ? match[0].length : quoteAt
+    const nameEnd = token.indexOf('=', 2) < 0 ? token.length : token.indexOf('=', 2) + 1
+    if (!flagsEnded && quoteAt < 0 && token === '--') { flagsEnded = true; continue }
+    if (!flagsEnded && token.startsWith('--') && token.length > 2 && plain >= nameEnd) {
       const body = token.slice(2), equals = body.indexOf('=')
       const flag = equals < 0 ? body : body.slice(0, equals)
       let parameter = params.find(item => kebab(item.name) === flag || item.name === flag)
@@ -129,7 +134,6 @@ export function ctlDescriptor(args: Record<string, unknown> | undefined): Record
       fill(parameter, value)
       continue
     }
-    while (next < positionals.length && !positionals[next].variadic && positionals[next].name in assigned) next++
     const slot = positionals[next]
     if (!slot) return undefined
     const value = valueOf(token, values)
@@ -137,11 +141,46 @@ export function ctlDescriptor(args: Record<string, unknown> | undefined): Record
     else { fill(slot, value); next++ }
   }
   const mapped: Record<string, unknown> = { ...(entry.target.fixed || {}) }
-  for (const parameter of params) if (parameter.name in assigned) mapped[parameter.arg || parameter.name] = assigned[parameter.name]
+  for (const parameter of params) if (parameter.name in assigned) setPath(mapped, parameter.arg || parameter.name, assigned[parameter.name])
   if (entry.target.local === 'tool-call') return { ...mapped, args: mapped.args ?? {} }
   if (entry.target.local) return undefined
   return { toolId: `${entry.target.source}:${entry.target.name}`, args: mapped }
 }
+
+/** Sets a target argument; a dotted path such as `model.modelId` fills a nested object. */
+function setPath(target: Record<string, unknown>, path: string, value: unknown) {
+  const parts = path.split('.')
+  let current = target
+  for (const part of parts.slice(0, -1)) {
+    if (!current[part] || typeof current[part] !== 'object' || Array.isArray(current[part])) current[part] = {}
+    current = current[part] as Record<string, unknown>
+  }
+  current[parts[parts.length - 1]] = value
+}
+
+/**
+ * The call a ctl command runs, for capability-specific rendering: builtin and Node tools under
+ * their own name and arguments, MCP tools as a unified descriptor. Other calls are unchanged.
+ */
+export function ctlConcrete<T extends { name: string; args?: any }>(call: T): T {
+  if (call.name !== 'ctl') return call
+  const descriptor = ctlDescriptor(call.args)
+  if (!descriptor) return call
+  const toolId = typeof descriptor.toolId === 'string' ? descriptor.toolId.trim() : ''
+  const colon = toolId.indexOf(':')
+  const source = colon > 0 ? toolId.slice(0, colon) : String(descriptor.source ?? '').trim()
+  const rest = toolId.slice(colon + 1)
+  const name = colon <= 0 ? String(descriptor.name ?? '')
+    : source === 'builtin' ? rest.trim()
+      : rest.slice((source === 'mcp' ? rest.indexOf('/') : rest.lastIndexOf('/')) + 1).trim()
+  const args = descriptor.args && typeof descriptor.args === 'object' && !Array.isArray(descriptor.args) ? descriptor.args : {}
+  if ((source === 'builtin' || source === 'node') && name) return { ...call, name, args }
+  return { ...call, name: 'call_tool', args: descriptor }
+}
+
+/** The command of a stored ctl call, shown beside the concrete call it runs. */
+export const ctlCommandText = (call: { name: string; args?: any } | undefined): string | undefined =>
+  call?.name === 'ctl' && typeof call.args?.command === 'string' ? call.args.command.replace(/\s+/g, ' ').trim() : undefined
 
 /** A ctl call naming a capability, shown through the former unified-call projection. */
 export function ctlAsUnified<T extends { name: string; args?: any }>(call: T): T {

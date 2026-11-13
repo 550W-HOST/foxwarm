@@ -1,20 +1,44 @@
 import test, { after } from 'node:test'
 import assert from 'node:assert/strict'
 import { build } from 'esbuild'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 const dir = await mkdtemp(join(tmpdir(), 'ctl-call-'))
 after(() => rm(dir, { recursive: true, force: true }))
-const load = async (entry, name) => {
+const load = async (entry, name, plugins = []) => {
   const file = join(dir, name)
-  await build({ entryPoints: [new URL(entry, import.meta.url).pathname], bundle: true, platform: 'node', format: 'esm', outfile: file, logLevel: 'silent' })
+  await build({ entryPoints: [new URL(entry, import.meta.url).pathname], bundle: true, platform: 'node', format: 'esm', outfile: file, logLevel: 'silent', plugins })
   return import(pathToFileURL(file).href)
 }
+// The production bundle carries the registry without help text (build/ctlRegistry.ts).
+const { slimCtlRegistry } = await load('../build/ctlRegistry.ts', 'slim.mjs')
+const slim = { name: 'slim', setup(b) { b.onLoad({ filter: /CtlCommands\.json$/ }, async args => ({ contents: JSON.stringify(slimCtlRegistry(JSON.parse(await readFile(args.path, 'utf8')))), loader: 'json' })) } }
+const corpus = JSON.parse(await readFile(new URL('../../../dotnet/Foxwarm.Tests/Tools/Fixtures/ctl-conformance.json', import.meta.url), 'utf8'))
 globalThis.window ??= { location: { pathname: '/', origin: 'http://localhost' } }
-const { ctlDescriptor, ctlAsUnified } = await load('../src/ctlCall.ts', 'ctl.mjs')
+const { ctlDescriptor, ctlAsUnified, ctlConcrete } = await load('../src/ctlCall.ts', 'ctl.mjs')
+const slimCtl = await load('../src/ctlCall.ts', 'ctl-slim.mjs', [slim])
+
+// The same corpus is checked by the C# parser (CtlCommandTests.Conformance_corpus_matches_the_parser).
+test('display parser matches the shared conformance corpus with the full and bundled registry', () => {
+  for (const parser of [ctlDescriptor, slimCtl.ctlDescriptor]) {
+    for (const item of corpus.cases) {
+      const args = { command: item.command, ...(item.values ? { values: item.values } : {}) }
+      assert.deepEqual(parser(args) ?? null, item.descriptor, item.command)
+    }
+  }
+})
+
+test('ctl calls render as the concrete call they run', () => {
+  assert.deepEqual(ctlConcrete({ id: 'c', name: 'ctl', args: { command: 'memory edit MEMORY.md --old-text=a --new-text=b' } }), { id: 'c', name: 'edit_memory', args: { filePath: 'MEMORY.md', oldText: 'a', newText: 'b' } })
+  assert.deepEqual(ctlConcrete({ name: 'ctl', args: { command: 'file send out.zip' } }), { name: 'send_file', args: { filePath: 'out.zip' } })
+  assert.deepEqual(ctlConcrete({ name: 'ctl', args: { command: 'tool call node:box/edit --args @a', values: { a: { filePath: 'x', oldText: 'a', newText: 'b' } } } }), { name: 'edit', args: { filePath: 'x', oldText: 'a', newText: 'b' } })
+  assert.equal(ctlConcrete({ name: 'ctl', args: { command: 'tool call mcp:srv/x' } }).name, 'call_tool')
+  const help = { name: 'ctl', args: { command: 'help' } }
+  assert.equal(ctlConcrete(help), help)
+})
 const questions = await load('../src/sessionQuestions.ts', 'questions.mjs')
 const communications = await load('../src/components/sessionCommunications.ts', 'communications.mjs')
 

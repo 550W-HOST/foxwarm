@@ -55,6 +55,24 @@ internal static class IsolationMigrationRules
             .ToLowerInvariant();
 
     /// <summary>
+    /// Digest of a stored generated layer as the current generator would write it. Layers from
+    /// earlier releases list the retired <c>search_tools</c> builtin among the local tools; that
+    /// name no longer matches a call, so the layer is still current and is kept as stored.
+    /// </summary>
+    internal static string CurrentDigest(JsonArray rules)
+    {
+        var copy = rules.DeepClone().AsArray();
+        foreach (var rule in copy.OfType<JsonObject>())
+            if (
+                SessionWait.Text(rule["id"]) == "isolation-local-tools"
+                && rule["match"]?["tool"]?["name"] is JsonArray names
+            )
+                foreach (var retired in names.Where(name => SessionWait.Text(name) == "search_tools").ToArray())
+                    names.Remove(retired);
+        return Digest(copy);
+    }
+
+    /// <summary>
     /// SHA-256 of an Agent row's legacy isolation fence: <c>isolated</c>, <c>isolatedNode</c>
     /// and <c>toolRules</c> as stored. Older releases still write them.
     /// </summary>
@@ -152,7 +170,6 @@ internal static class IsolationMigrationRules
         "ask_user",
         "cancel_transfer",
         "submit_compact_plan",
-        "search_tools",
         "run_script",
         "start_toolscript_run",
         "continue_script",
@@ -182,6 +199,7 @@ internal static class IsolationMigrationRules
         "wait",
         "ask_user",
         "submit_compact_plan",
+        // Retired discovery builtin: a legacy allow for it translates to nothing.
         "search_tools",
         "create_timer",
         "list_timers",

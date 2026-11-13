@@ -109,7 +109,7 @@ public sealed class CtlCommandTests
             Target("node copy master a box b --overwrite=true").Args["overwrite"]!.GetValue<bool>()
         );
         Assert.Contains("one of current-agent, all", Error("session list --scope everyone").Message);
-        Assert.Contains("a number", Error("session list --count many").Message);
+        Assert.Contains("an integer", Error("session list --count many").Message);
         Assert.Contains("Unknown option `--bogus`", Error("session list --bogus 1").Message);
         Assert.Contains("Missing required argument <filePath>", Error("memory read").Message);
         Assert.Contains("Unexpected argument", Error("memory read a b").Message);
@@ -179,11 +179,16 @@ public sealed class CtlCommandTests
         Assert.Equal(new CtlHelpRequest("session", null), CtlParser.Parse(Args("session --help")));
         Assert.Equal(new CtlHelpRequest("session", "list"), CtlParser.Parse(Args("session list --help")));
         Assert.Equal(new CtlHelpRequest("session", "list"), CtlParser.Parse(Args("help session list")));
-        var unknown = Error("session lst");
-        Assert.Contains("`session list`", unknown.Message);
-        Assert.Equal("session", unknown.Noun);
-        Assert.Contains("Did you mean", Error("sesion list").Message);
         var visibleAll = new Func<CtlCommand, bool>(_ => true);
+        var unknown = Error("session lst");
+        Assert.Contains("`session list`", CtlHelp.Error(unknown, visibleAll));
+        Assert.Equal("session", unknown.Noun);
+        Assert.Contains("Did you mean `session`", CtlHelp.Error(Error("sesion list"), visibleAll));
+        // Suggestions come from the commands the caller may see.
+        Assert.DoesNotContain(
+            "session list",
+            CtlHelp.Error(unknown, command => command.Path != "session list")
+        );
         Assert.Contains("session list", CtlHelp.Render(new("session", null), visibleAll));
         Assert.Contains("--count <number>", CtlHelp.Render(new("session", "list"), visibleAll));
         Assert.Null(CtlHelp.Render(new("session", "missing"), visibleAll));
@@ -191,6 +196,167 @@ public sealed class CtlCommandTests
             CtlRegistry.Nouns,
             noun => Assert.True(CtlHelp.Render(new(noun.Name, null), visibleAll)!.Length < CtlHelp.MaxLength)
         );
+    }
+
+    [Fact]
+    public void Quoting_only_an_option_value_keeps_the_option()
+    {
+        Assert.Equal(
+            "hello world",
+            Target("memory edit MEMORY.md --old-text=\"hello world\" --new-text=x").Args["oldText"]!.GetValue<string>()
+        );
+        var write = Target("memory write notes.md --content=\"hello world\"");
+        Assert.Equal("hello world", write.Args["content"]!.GetValue<string>());
+        Assert.Equal("notes.md", write.Args["filePath"]!.GetValue<string>());
+        var call = Assert.IsType<CtlCall>(CtlParser.Parse(Args("tool call node:box/read --args='{\"filePath\":\"x y\"}'")));
+        Assert.Equal("x y", call.Descriptor["args"]!["filePath"]!.GetValue<string>());
+        // A quoted option name is ordinary text.
+        Assert.Equal(
+            "--content=x",
+            Target("memory write notes.md \"--content=x\"").Args["content"]!.GetValue<string>()
+        );
+        Assert.Equal(
+            "--content=x",
+            Target("memory write notes.md --\"content=x\"").Args["content"]!.GetValue<string>()
+        );
+    }
+
+    [Fact]
+    public void Rest_follows_a_positional_given_as_an_option()
+    {
+        var sent = Target("channel send --channel-target-id webui:x @m", new() { ["m"] = "message" });
+        Assert.Equal("webui:x", sent.Args["channelTargetId"]!.GetValue<string>());
+        Assert.Equal("message", sent.Args["message"]!.GetValue<string>());
+        Assert.Equal(
+            "plain words",
+            Target("channel send --channel-target-id webui:x plain words").Args["message"]!.GetValue<string>()
+        );
+    }
+
+    [Fact]
+    public void Model_options_build_the_target_model_objects()
+    {
+        var created = Target("session create main worker --model sonnet --effort high --force-effort max");
+        Assert.True(
+            JsonNode.DeepEquals(
+                new JsonObject { ["modelId"] = "sonnet", ["effort"] = "high" },
+                created.Args["model"]
+            )
+        );
+        Assert.True(JsonNode.DeepEquals(new JsonObject { ["effort"] = "max" }, created.Args["forceModel"]));
+        Assert.Contains("one of", Error("session create main worker --effort extreme").Message);
+        Assert.Contains("an integer", Error("session list --count 2.5").Message);
+    }
+
+    // Selection intent is read from the command words, even when the call is invalid.
+    [Theory]
+    [InlineData("node select box", null, true)]
+    [InlineData("node select box", "values-json", true)]
+    [InlineData("node select box", "extra-key", true)]
+    [InlineData("node select", null, true)]
+    [InlineData("tool call builtin:node --args @a", "unused", true)]
+    [InlineData("tool call builtin:node --args @a", "values-json", true)]
+    [InlineData("tool call --source builtin --name node --args='{\"action\":\"select\"}' --bogus", null, true)]
+    [InlineData("tool call builtin:node --args @list", "unused", false)]
+    [InlineData("node list --bogus", null, false)]
+    [InlineData("tool call node:box/node --args @a", "unused", false)]
+    [InlineData("tool call mcp:srv/node --args @a", null, false)]
+    public void Node_selection_intent_survives_invalid_calls(string command, string? damage, bool selects)
+    {
+        var args = Args(
+            command,
+            new()
+            {
+                ["a"] = new JsonObject { ["action"] = "select", ["nodeId"] = "box" },
+                ["list"] = new JsonObject { ["action"] = "list" },
+            }
+        );
+        if (!command.Contains('@'))
+            args.Remove("values");
+        else if (!command.Contains("@list"))
+            args["values"]!.AsObject().Remove("list");
+        else
+            args["values"]!.AsObject().Remove("a");
+        if (damage == "unused")
+            args["values"]!["unused"] = 1;
+        if (damage == "values-json")
+        {
+            args.Remove("values");
+            args["valuesJson"] = "{";
+        }
+        if (damage == "extra-key")
+            args["unexpected"] = true;
+        Assert.Equal(selects, CtlParser.SelectsNode(args));
+    }
+
+    // Hints in tool output name commands from the registry and read back to the same call.
+    [Fact]
+    public async Task Command_hints_round_trip_through_the_parser()
+    {
+        var cases = new (string Builtin, JsonObject Args)[]
+        {
+            ("recall", new JsonObject { ["target"] = "msg#12" }),
+            ("recall", new JsonObject { ["sessionId"] = "a/b", ["target"] = "msg#3", ["toolDetail"] = "full", ["previewLength"] = 20000 }),
+            ("recall", new JsonObject { ["sessionId"] = "a/b", ["text_query"] = "it's a \"quote\" | here", ["beforeSeq"] = 40 }),
+            ("view_session", new JsonObject { ["sessionId"] = "a/b", ["before"] = 10, ["count"] = 5, ["historyVersion"] = 3, ["parts"] = new JsonArray("text", "tools") }),
+            ("image_crop", new JsonObject { ["id"] = "img_1", ["x"] = 0, ["y"] = 0, ["width"] = 100, ["height"] = 100 }),
+            ("image_write_to_file", new JsonObject { ["id"] = "@img", ["filePath"] = "artifacts/my file.png" }),
+            ("send_to_channel", new JsonObject { ["channelTargetId"] = "webui:x", ["message"] = "--starts like a flag" }),
+            ("create_session", new JsonObject { ["agentName"] = "main", ["sessionName"] = "w", ["model"] = new JsonObject { ["modelId"] = "sonnet", ["effort"] = "low" } }),
+        };
+        foreach (var (builtin, expected) in cases)
+        {
+            var text = CtlCommandText.For(builtin, expected);
+            Assert.StartsWith("ctl ", text);
+            var parsed = Assert.IsType<CtlTarget>(CtlParser.Parse(Args(text)));
+            Assert.Equal(builtin, parsed.Name);
+            var canonical = (JsonObject)expected.DeepClone();
+            foreach (var pair in parsed.Command.Fixed ?? [])
+                canonical[pair.Key] = pair.Value?.DeepClone();
+            Assert.True(JsonNode.DeepEquals(canonical, parsed.Args), text + " => " + parsed.Args.ToJsonString());
+        }
+        Assert.Equal("ctl history recall msg#12", CtlCommandText.For("recall", new JsonObject { ["target"] = "msg#12" }));
+        // Hints can carry any argument of these builtins.
+        await using var f = await ScriptFixture.Create();
+        foreach (var builtin in new[] { "recall", "view_session", "image_crop", "image_write_to_file" })
+        {
+            var properties = f.Manager.ToolRegistry.Entries
+                .Single(entry => entry.Definition["name"]!.GetValue<string>() == builtin)
+                .Definition["parameters"]!["properties"]!.AsObject()
+                .Select(pair => pair.Key);
+            var command = CtlRegistry.ForTarget("builtin", builtin).Single();
+            Assert.All(properties, property => Assert.Contains(command.Parameters, parameter => parameter.Arg == property));
+        }
+        Assert.Equal("ctl history recall", CtlCommandText.Prefix("recall"));
+    }
+
+    // The same corpus is checked by the WebUI display parser (packages/webui/test/ctlCall.test.mjs).
+    [Fact]
+    public void Conformance_corpus_matches_the_parser()
+    {
+        var corpus = JsonNode.Parse(
+            File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Tools", "Fixtures", "ctl-conformance.json"))
+        )!;
+        foreach (var item in corpus["cases"]!.AsArray())
+        {
+            var args = new JsonObject { ["command"] = item!["command"]!.DeepClone() };
+            if (item["values"] is JsonObject values)
+                args["values"] = values.DeepClone();
+            JsonNode? actual = CtlParser.Parse(args) switch
+            {
+                CtlTarget target => new JsonObject
+                {
+                    ["toolId"] = target.Source + ":" + target.Name,
+                    ["args"] = target.Args.DeepClone(),
+                },
+                CtlCall call => call.Descriptor.DeepClone(),
+                _ => null,
+            };
+            Assert.True(
+                JsonNode.DeepEquals(item["descriptor"], actual),
+                item["command"] + " => " + actual?.ToJsonString()
+            );
+        }
     }
 
     [Fact]
@@ -220,7 +386,16 @@ public sealed class CtlCommandTests
             var schema = entry.Definition["parameters"] as JsonObject ?? new JsonObject();
             var properties = schema["properties"] as JsonObject ?? new JsonObject();
             foreach (var parameter in command.Parameters)
-                Assert.True(properties.ContainsKey(parameter.Arg), command.Path + " " + parameter.Arg);
+            {
+                // A dotted Arg names a field of an object argument.
+                var path = parameter.Arg.Split('.');
+                Assert.True(properties.ContainsKey(path[0]), command.Path + " " + parameter.Arg);
+                if (path.Length > 1)
+                    Assert.True(
+                        (properties[path[0]]?["properties"] as JsonObject)?.ContainsKey(path[1]) == true,
+                        command.Path + " " + parameter.Arg
+                    );
+            }
             foreach (var key in command.Fixed ?? [])
                 Assert.True(properties.ContainsKey(key.Key), command.Path + " " + key.Key);
             foreach (var required in (schema["required"] as JsonArray ?? []).Select(value => value!.GetValue<string>()))
@@ -353,6 +528,13 @@ public sealed class CtlCommandTests
         Assert.Contains("timer list", timer);
         var hidden = await Run(tools, "ctl", Args("timer create --help"));
         Assert.Equal("invalid_command", SessionWait.Text(hidden.Response!["error"]!["type"]));
+        Assert.DoesNotContain("mean `timer create`", SessionWait.Text(hidden.Response!["error"]!["message"]));
+        var misspelled = SessionWait.Text((await Run(tools, "ctl", Args("timer creat"))).Response!["error"]!["message"])!;
+        Assert.DoesNotContain("`timer create`", misspelled);
+        Assert.Contains(
+            "`timer list`",
+            SessionWait.Text((await Run(tools, "ctl", Args("timer lst"))).Response!["error"]!["message"])
+        );
         var denied = await Run(tools, "ctl", Args("memory read MEMORY.md"));
         Assert.Equal("tool_authorization_denied", SessionWait.Text(denied.Response!["error"]!["type"]));
         Assert.Equal("read_memory", SessionWait.Text(denied.Target!["name"]));
