@@ -77,22 +77,38 @@ export function subtractRect(base: FrameRect, hole: FrameRect): FrameRect[] {
   return out
 }
 
+export type FrameRowPlan = {
+  inBand: boolean
+  /** Space kept above the row's content: below the controls (stack rows) or a drag band (banded inline rows). */
+  top: number
+  left: number
+  right: number
+  /** An inline row under the right-hand control zone (the caption buttons' corner on Windows). */
+  corner: boolean
+  /** An inline row too narrow for its content beside the controls; it moves below a drag band. */
+  banded: boolean
+}
+
 /**
  * How a frame row clears the control zones. A row is in the band when it starts above
  * the zones' bottom edge. Stack rows (sidebar, rail) move their content below the
  * controls; inline rows (tab strip, sole-tab header) reserve the overlap plus a drag gap.
+ * When an inline row declares a minimum content width (one tab plus its own controls)
+ * and the width left beside the reservation is smaller, the row instead keeps its full
+ * width below a drag band as tall as the controls.
  */
-export function frameRowLayout(row: BoxLike, zones: FrameZones, kind: 'stack' | 'inline') {
+export function frameRowLayout(row: BoxLike, zones: FrameZones, kind: 'stack' | 'inline', minContent = 0): FrameRowPlan {
   const inBand = row.top < zones.top && row.bottom > 0
   const hitsLeft = inBand && zones.left > 0 && row.left < zones.left
   const hitsRight = inBand && zones.right > 0 && row.right > zones.width - zones.right
-  if (kind === 'stack') return { inBand, top: hitsLeft || hitsRight ? Math.max(0, Math.ceil(zones.top - row.top)) : 0, left: 0, right: 0 }
-  return {
-    inBand,
-    top: 0,
-    left: hitsLeft ? Math.ceil(zones.left - row.left) + FRAME_DRAG_GAP : 0,
-    right: hitsRight ? Math.ceil(row.right - (zones.width - zones.right)) + FRAME_DRAG_GAP : 0,
+  const band = Math.max(0, Math.ceil(zones.top - row.top))
+  if (kind === 'stack') return { inBand, top: hitsLeft || hitsRight ? band : 0, left: 0, right: 0, corner: false, banded: false }
+  const left = hitsLeft ? Math.ceil(zones.left - row.left) + FRAME_DRAG_GAP : 0
+  const right = hitsRight ? Math.ceil(row.right - (zones.width - zones.right)) + FRAME_DRAG_GAP : 0
+  if ((left || right) && minContent > 0 && row.right - row.left - left - right < minContent) {
+    return { inBand, top: band, left: 0, right: 0, corner: hitsRight, banded: true }
   }
+  return { inBand, top: 0, left, right, corner: hitsRight, banded: false }
 }
 
 /**
@@ -194,6 +210,41 @@ export function computeFrameEdgeFills(doc: Document = document): FrameRect[] {
   return fills
 }
 
+/**
+ * The workbench pane a title row belongs to. A sole tab's content header is rendered in
+ * the fixed content layer, positioned over its pane's content slot, not inside the pane.
+ */
+export function framePaneOf(row: Element): Element | null {
+  const pane = row.closest('.foxwarm-workbench-panel')
+  if (pane) return pane
+  const id = row.closest('[data-workbench-content-pane]')?.getAttribute('data-workbench-content-pane')
+  return id ? row.ownerDocument.querySelector(`.foxwarm-workbench-panel[data-pane-id="${CSS.escape(id)}"]`) : null
+}
+
+/** A painted piece of the Windows corner: the corner row's surface over gutter and border, with one outline edge. */
+export type FrameCornerPiece = FrameRect & { color: string; edge: 'left' | 'bottom' }
+
+/**
+ * Corner pieces for a row under the caption buttons on Windows: the strip above its
+ * pane (the shell's top gutter) and the strip to its right (pane border and right
+ * gutter) down to the row's bottom, or only down to the controls for a banded row.
+ * Both carry the row's surface so the row reaches the window's top and right edges.
+ */
+export function frameCornerPieces(row: Element, banded: boolean, zones: FrameZones): FrameCornerPiece[] {
+  const pane = framePaneOf(row) ?? row
+  const color = opaqueBackground(row)
+  if (!color) return []
+  const box = pane.getBoundingClientRect()
+  const rowBox = row.getBoundingClientRect()
+  const borderRight = parseFloat(getComputedStyle(pane).borderRightWidth) || 0
+  const pieces: FrameCornerPiece[] = []
+  if (box.top > 0.5) pieces.push({ x: box.left, y: 0, w: zones.width - box.left, h: box.top, color, edge: 'left' })
+  const x = box.right - borderRight
+  const bottom = banded ? zones.top : Math.max(zones.top, rowBox.bottom)
+  if (zones.width - x > 0.5) pieces.push({ x, y: 0, w: zones.width - x, h: bottom, color, edge: 'bottom' })
+  return pieces
+}
+
 type HostChannel = { postMessage(message: unknown): void }
 
 type Rgba = [number, number, number, number]
@@ -216,8 +267,13 @@ export function frameSurfaceColor(doc: Document, zones: FrameZones): string | nu
   if (!zones.top || (!zones.left && !zones.right)) return null
   const x = zones.left >= zones.right ? zones.left / 2 : zones.width - zones.right / 2
   const target = doc.elementsFromPoint(x, zones.top / 2).find(element => !element.closest('.foxwarm-frame-fills'))
+  return opaqueBackground(target ?? null)
+}
+
+/** An element's background composited over its ancestors' backgrounds, as #rrggbb; null without an opaque layer. */
+function opaqueBackground(target: Element | null): string | null {
   const layers: Rgba[] = []
-  for (let element: Element | null = target ?? null; element; element = element.parentElement) {
+  for (let element: Element | null = target; element; element = element.parentElement) {
     const color = parseColor(getComputedStyle(element).backgroundColor)
     if (!color || color[3] === 0) continue
     layers.push(color)
@@ -287,6 +343,11 @@ function startFrameRuntime(root: HTMLElement, hosted: boolean): FrameRuntime {
   fills.setAttribute('aria-hidden', 'true')
   fills.className = 'foxwarm-frame-fills'
   document.body.prepend(fills)
+  // Windows: paints the corner row's surface over the shell gutter and panel border at the caption buttons.
+  const corner = document.createElement('div')
+  corner.setAttribute('aria-hidden', 'true')
+  corner.className = 'foxwarm-frame-corner'
+  document.body.appendChild(corner)
   let strip: HTMLDivElement | null = null
   let frame = 0
   let layoutDirty = true
@@ -306,7 +367,41 @@ function startFrameRuntime(root: HTMLElement, hosted: boolean): FrameRuntime {
     element.style.removeProperty('--foxwarm-frame-pad-left')
     element.style.removeProperty('--foxwarm-frame-pad-right')
     element.style.removeProperty('--foxwarm-frame-pad-top')
+    element.style.removeProperty('--foxwarm-frame-row-top')
     element.removeAttribute('data-frame-in-band')
+    element.removeAttribute('data-frame-corner')
+    element.removeAttribute('data-frame-banded')
+  }
+
+  const markCornerPanes = (panes: Set<Element>) => {
+    for (const pane of document.querySelectorAll('[data-frame-corner-pane]')) if (!panes.has(pane)) pane.removeAttribute('data-frame-corner-pane')
+    for (const pane of panes) pane.setAttribute('data-frame-corner-pane', '')
+  }
+
+  let lastCorner = ''
+  const renderCorner = (pieces: FrameCornerPiece[]) => {
+    const key = JSON.stringify(pieces)
+    if (key === lastCorner) return
+    lastCorner = key
+    corner.replaceChildren(...pieces.map(piece => {
+      const element = document.createElement('div')
+      element.dataset.frameCornerEdge = piece.edge
+      element.style.cssText = `left:${piece.x}px;top:${piece.y}px;width:${piece.w}px;height:${piece.h}px;background:${piece.color}`
+      return element
+    }))
+  }
+
+  /**
+   * Smallest width an inline row's content needs: everything but its fill element
+   * (`data-frame-row-fill`, the tab list) plus one tab at its minimum width.
+   */
+  const minContentWidth = (row: HTMLElement, box: DOMRect) => {
+    const fill = row.querySelector<HTMLElement>('[data-frame-row-fill]')
+    if (!fill || fill.closest('[data-frame-row]') !== row) return 0
+    const applied = (name: string) => parseFloat(row.style.getPropertyValue(name)) || 0
+    const fixed = box.width - fill.getBoundingClientRect().width - applied('--foxwarm-frame-pad-left') - applied('--foxwarm-frame-pad-right')
+    const tab = fill.querySelector('[data-tab-id]')
+    return fixed + (tab ? parseFloat(getComputedStyle(tab).minWidth) || tab.getBoundingClientRect().width : 0)
   }
 
   let lastFills = ''
@@ -340,17 +435,50 @@ function startFrameRuntime(root: HTMLElement, hosted: boolean): FrameRuntime {
     const rows = [...document.querySelectorAll<HTMLElement>('[data-frame-row]')]
     if (isNarrow) {
       rows.forEach(clearRow)
+      markCornerPanes(new Set())
+      renderCorner([])
       renderFills([])
       return
     }
     // Read every row before writing so that one pass needs one layout.
-    const plans = rows.map(element => ({ element, plan: frameRowLayout(element.getBoundingClientRect(), zones, element.dataset.frameRow === 'stack' ? 'stack' : 'inline') }))
-    for (const { element, plan } of plans) {
+    const plans = rows.map(element => {
+      const box = element.getBoundingClientRect()
+      const kind = element.dataset.frameRow === 'stack' ? 'stack' : 'inline'
+      return { element, box, plan: frameRowLayout(box, zones, kind, kind === 'inline' ? minContentWidth(element, box) : 0) }
+    })
+    // Windows: the row at the caption buttons reaches the window's top and right edges.
+    const flush = root.dataset.foxwarmFrame === 'windows'
+    const cornerRows: Array<{ element: HTMLElement; banded: boolean }> = []
+    const cornerPanes = new Set<Element>()
+    for (const { element, box, plan } of plans) {
+      const isCorner = flush && plan.corner
       element.toggleAttribute('data-frame-in-band', plan.inBand)
+      // `fit`: the row is no taller than the controls, so it takes exactly their height.
+      if (isCorner) element.setAttribute('data-frame-corner', !plan.banded && box.bottom <= zones.top + 1 ? 'fit' : '')
+      else element.removeAttribute('data-frame-corner')
+      element.toggleAttribute('data-frame-banded', plan.banded)
       element.style.setProperty('--foxwarm-frame-pad-top', `${plan.top}px`)
       element.style.setProperty('--foxwarm-frame-pad-left', `${plan.left}px`)
       element.style.setProperty('--foxwarm-frame-pad-right', `${plan.right}px`)
+      if (!isCorner) {
+        element.style.removeProperty('--foxwarm-frame-row-top')
+        continue
+      }
+      cornerRows.push({ element, banded: plan.banded })
+      const pane = framePaneOf(element)
+      if (pane) cornerPanes.add(pane)
+      // A sole tab's content box copies its slot's corners; it drops the top ones too.
+      const content = element.closest('[data-workbench-content-pane]')
+      if (content) cornerPanes.add(content)
     }
+    markCornerPanes(cornerPanes)
+    // The corner pane drops its top border, which moves the row up; size the row and band from there.
+    for (const { element, banded } of cornerRows) {
+      const top = Math.max(0, element.getBoundingClientRect().top)
+      element.style.setProperty('--foxwarm-frame-row-top', `${top}px`)
+      if (banded) element.style.setProperty('--foxwarm-frame-pad-top', `${Math.max(0, Math.ceil(zones.top - top))}px`)
+    }
+    renderCorner(cornerRows.flatMap(({ element, banded }) => frameCornerPieces(element, banded, zones)))
     renderFills(computeFrameEdgeFills(document))
   }
 
@@ -400,6 +528,9 @@ function startFrameRuntime(root: HTMLElement, hosted: boolean): FrameRuntime {
     relayout()
   })
   rowObserver.observe(document.body, { childList: true, subtree: true })
+  // Theme changes recolour the Windows corner.
+  const themeObserver = new MutationObserver(relayout)
+  themeObserver.observe(root, { attributes: true, attributeFilter: ['class', 'style', 'data-foxwarm-theme'] })
   // Menus, dialogs, tab changes and theme changes alter the reported regions.
   const reportObserver = hosted && hostChannel() ? new MutationObserver(schedule) : null
   reportObserver?.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class', 'hidden', 'data-frame-in-band'] })
@@ -416,14 +547,17 @@ function startFrameRuntime(root: HTMLElement, hosted: boolean): FrameRuntime {
       if (frame) cancelAnimationFrame(frame)
       resize.disconnect()
       rowObserver.disconnect()
+      themeObserver.disconnect()
       reportObserver?.disconnect()
       narrow?.removeEventListener('change', relayout)
       overlayGeometry?.removeEventListener('geometrychange', relayout)
       document.querySelectorAll<HTMLElement>('[data-frame-row]').forEach(clearRow)
+      markCornerPanes(new Set())
       if (overlay) setFrameChromeColor(null)
       root.removeAttribute('data-foxwarm-frame-narrow')
       probe.remove()
       fills.remove()
+      corner.remove()
       strip?.remove()
     },
   }

@@ -339,7 +339,7 @@ export default function WorkbenchTabs({
   return (
     <WorkbenchPaneDragArea paneId={paneId} enabled={paneDragEnabled} frameRow className="foxwarm-workbench-tab-strip overflow-hidden border-b border-fw-border bg-fw-neutral-surface px-3 pt-2 dark:border-fw-border dark:bg-fw-canvas">
       <div data-workbench-pane-drag-blank className="flex items-start justify-between gap-3">
-        <div data-workbench-pane-drag-blank className="min-w-0 flex-1">
+        <div data-workbench-pane-drag-blank data-frame-row-fill className="min-w-0 flex-1">
           <TabStripRow
             paneId={paneId}
             dragEnabled={dragEnabled}

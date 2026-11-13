@@ -13,7 +13,7 @@ const frame = await import(pathToFileURL(path.join(tempDir, 'windowFrame.mjs')).
 test.after(() => rm(tempDir, { recursive: true, force: true }))
 
 const box = (x, y, w, h) => ({ left: x, top: y, right: x + w, bottom: y + h })
-const windows = { left: 0, right: 138, top: 32, width: 1280 }
+const windows = { left: 0, right: 144, top: 48, width: 1280 }
 const macos = { left: 78, right: 0, top: 38, width: 1280 }
 
 test('host frame state accepts only the two Desktop platforms and normalizes insets and state tokens', () => {
@@ -38,17 +38,35 @@ test('rectangle subtraction leaves the uncovered bands of the base', () => {
   assert.equal(parts.reduce((sum, r) => sum + r.w * r.h, 0), 100 * 40 - 20 * 20)
 })
 
+const plan = (fields) => ({ inBand: true, top: 0, left: 0, right: 0, corner: false, banded: false, ...fields })
+
 test('rows clear only the control zones they actually intersect', () => {
-  // Windows: the sidebar is never under the caption buttons; the right-most strip reserves overlap + gap.
-  assert.deepEqual(frame.frameRowLayout(box(6, 6, 256, 788), windows, 'stack'), { inBand: true, top: 0, left: 0, right: 0 })
-  assert.deepEqual(frame.frameRowLayout(box(269, 7, 1004, 42), windows, 'inline'), { inBand: true, top: 0, left: 0, right: 1273 - 1142 + frame.FRAME_DRAG_GAP })
-  assert.deepEqual(frame.frameRowLayout(box(269, 7, 500, 42), windows, 'inline'), { inBand: true, top: 0, left: 0, right: 0 })
+  // Windows: the sidebar is never under the caption buttons; the right-most strip reserves overlap + gap and is the corner row.
+  assert.deepEqual(frame.frameRowLayout(box(6, 6, 256, 788), windows, 'stack'), plan({}))
+  assert.deepEqual(frame.frameRowLayout(box(269, 7, 1004, 42), windows, 'inline'), plan({ right: 1273 - 1136 + frame.FRAME_DRAG_GAP, corner: true }))
+  assert.deepEqual(frame.frameRowLayout(box(269, 7, 500, 42), windows, 'inline'), plan({}))
   // macOS: the sidebar moves below the lights; a strip under the lights' right edge steps right of them.
-  assert.deepEqual(frame.frameRowLayout(box(6, 6, 256, 788), macos, 'stack'), { inBand: true, top: 32, left: 0, right: 0 })
-  assert.deepEqual(frame.frameRowLayout(box(61, 7, 1212, 42), macos, 'inline'), { inBand: true, top: 0, left: 17 + frame.FRAME_DRAG_GAP, right: 0 })
+  assert.deepEqual(frame.frameRowLayout(box(6, 6, 256, 788), macos, 'stack'), plan({ top: 32 }))
+  assert.deepEqual(frame.frameRowLayout(box(61, 7, 1212, 42), macos, 'inline'), plan({ left: 17 + frame.FRAME_DRAG_GAP }))
   // Rows below the band and full screen (no zones) reserve nothing.
-  assert.deepEqual(frame.frameRowLayout(box(269, 400, 1004, 42), windows, 'inline'), { inBand: false, top: 0, left: 0, right: 0 })
-  assert.deepEqual(frame.frameRowLayout(box(6, 6, 256, 788), { left: 0, right: 0, top: 0, width: 1280 }, 'stack'), { inBand: false, top: 0, left: 0, right: 0 })
+  assert.deepEqual(frame.frameRowLayout(box(269, 400, 1004, 42), windows, 'inline'), plan({ inBand: false }))
+  assert.deepEqual(frame.frameRowLayout(box(6, 6, 256, 788), { left: 0, right: 0, top: 0, width: 1280 }, 'stack'), plan({ inBand: false }))
+})
+
+test('an inline row too narrow for its content beside the controls moves below a band as tall as the controls', () => {
+  // A 250 px corner pane: the reservation leaves 66 px, less than one tab plus the pane controls.
+  assert.deepEqual(frame.frameRowLayout(box(1023, 6, 250, 42), windows, 'inline', 230), plan({ top: 42, corner: true, banded: true }))
+  // A wide corner pane keeps its tabs beside the reservation; they scroll before the row bands.
+  const wide = 1273 - 1136 + frame.FRAME_DRAG_GAP
+  assert.deepEqual(frame.frameRowLayout(box(673, 6, 600, 42), windows, 'inline', 230), plan({ right: wide, corner: true }))
+  // The threshold compares the width left beside the reservation with the declared minimum.
+  assert.equal(frame.frameRowLayout(box(1273 - 230 - wide, 6, 230 + wide, 42), windows, 'inline', 230).banded, false)
+  assert.equal(frame.frameRowLayout(box(1273 - 229 - wide, 6, 229 + wide, 42), windows, 'inline', 230).banded, true)
+  // Rows clear of the zones and rows without a declared minimum never band.
+  assert.equal(frame.frameRowLayout(box(269, 7, 200, 42), windows, 'inline', 230).banded, false)
+  assert.equal(frame.frameRowLayout(box(1023, 6, 250, 42), windows, 'inline').banded, false)
+  // macOS: a narrow first pane under the lights bands too, below the lights' height.
+  assert.deepEqual(frame.frameRowLayout(box(61, 7, 200, 42), macos, 'inline', 230), plan({ top: 31, banded: true }))
 })
 
 test('edge fills reach only the edges a surface nearly touches, top fill first with its corners', () => {

@@ -17,7 +17,8 @@ const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/cs
 const WORKBENCH_KEY = (await readFile(join(webui, 'src/workbench/store.ts'), 'utf8')).match(/WORKBENCH_STATE_STORAGE_KEY = '([^']+)'/)[1]
 const COLLAPSED_KEY = (await readFile(join(webui, 'src/App.tsx'), 'utf8')).match(/SIDEBAR_COLLAPSED_STORAGE_KEY = '([^']+)'/)[1]
 
-const WINDOWS = { platform: 'windows', left: 0, right: 138, top: 32 }
+// Tall caption buttons, as measured on a Windows guest at 100 %.
+const WINDOWS = { platform: 'windows', left: 0, right: 144, top: 48 }
 const MACOS = { platform: 'macos', left: 78, right: 0, top: 38 }
 
 const chat = id => ({ id: `chat:${id}`, type: 'chat', title: id.split('/').pop(), sessionId: id })
@@ -28,6 +29,10 @@ const layouts = {
   sole: { tabs: tabs.slice(0, 1), root: pane('p1', tabs.slice(0, 1)) },
   split: { tabs, root: { id: 's1', kind: 'split', direction: 'row', sizes: [50, 50], children: [pane('p1', tabs.slice(0, 2)), pane('p2', tabs.slice(2))] } },
 }
+// Two tabs per pane: a top/bottom split, and row splits by the right pane's share of the workbench width.
+const fourTabs = [...tabs, chat('tidepool/billing')]
+layouts.column = { tabs: fourTabs, root: { id: 's1', kind: 'split', direction: 'column', sizes: [50, 50], children: [pane('p1', fourTabs.slice(0, 2)), pane('p2', fourTabs.slice(2))] } }
+for (const right of [50, 40, 25]) layouts[`split${right}`] = { tabs: fourTabs, root: { id: 's1', kind: 'split', direction: 'row', sizes: [100 - right, right], children: [pane('p1', fourTabs.slice(0, 2)), pane('p2', fourTabs.slice(2))] } }
 
 let demo, server, browser, base
 
@@ -173,10 +178,11 @@ test('without a frame provider nothing is installed or changed', async () => {
         rowVars: [...document.querySelectorAll('[data-frame-row]')].filter(row => row.style.length).length,
         edges: [...document.querySelectorAll('.foxwarm-frame-edge')].map(edge => getComputedStyle(edge).display).filter(display => display !== 'none').length,
         appRegion: [...document.querySelectorAll('[data-frame-drag]')].map(el => getComputedStyle(el).appRegion).filter(value => value && value !== 'none').length,
+        corner: document.querySelectorAll('.foxwarm-frame-corner, [data-frame-corner], [data-frame-corner-pane], [data-frame-banded]').length,
         stack: [...document.querySelectorAll('[data-frame-row="stack"]')].map(row => getComputedStyle(row).paddingTop),
         messages: window.__frameMessages.length,
       }))
-      assert.deepEqual(state, { frame: null, narrow: false, fills: false, strip: false, inBand: 0, rowVars: 0, edges: 0, appRegion: 0, stack: width < 768 ? [] : ['0px'], messages: 0 })
+      assert.deepEqual(state, { frame: null, narrow: false, fills: false, strip: false, inBand: 0, rowVars: 0, edges: 0, appRegion: 0, corner: 0, stack: width < 768 ? [] : ['0px'], messages: 0 })
       assert.deepEqual(errors, [])
     } finally { await close() }
   }
@@ -210,6 +216,163 @@ test('Windows host: title rows clear the caption buttons and drag surfaces reach
   }
 })
 
+/** Geometry of the Windows corner: the inline rows, their panes, the painted corner pieces and the strip contents. */
+function cornerState(page) {
+  return page.evaluate(() => {
+    const box = element => { const r = element.getBoundingClientRect(); return { left: r.left, top: r.top, right: r.right, bottom: r.bottom } }
+    const mid = element => { const r = element.getBoundingClientRect(); return (r.top + r.bottom) / 2 }
+    const rows = [...document.querySelectorAll('[data-frame-row="inline"]')].map(row => {
+      const pane = row.closest('.foxwarm-workbench-panel')
+      const paneStyle = pane && getComputedStyle(pane)
+      const tabs = [...row.querySelectorAll('[data-tab-id]')]
+      return {
+        pane: pane?.dataset.paneId ?? null,
+        corner: row.getAttribute('data-frame-corner'),
+        banded: row.hasAttribute('data-frame-banded'),
+        cornerPane: !!pane?.hasAttribute('data-frame-corner-pane'),
+        box: box(row),
+        paneBox: pane ? box(pane) : null,
+        paneTop: paneStyle ? { border: paneStyle.borderTopWidth, left: paneStyle.borderTopLeftRadius, right: paneStyle.borderTopRightRadius } : null,
+        background: getComputedStyle(row).backgroundColor,
+        padRight: parseFloat(row.style.getPropertyValue('--foxwarm-frame-pad-right')) || 0,
+        tabs: tabs.map(tab => ({ ...box(tab), label: mid(tab.querySelector('span') || tab) })),
+        controls: [...row.querySelectorAll('.foxwarm-workbench-tab-toolbar button')].map(button => ({ ...box(button), mid: mid(button) })),
+      }
+    })
+    const pieces = [...document.querySelectorAll('.foxwarm-frame-corner > *')].map(piece => ({ ...box(piece), edge: piece.dataset.frameCornerEdge, background: getComputedStyle(piece).backgroundColor }))
+    return { rows, pieces, width: document.documentElement.clientWidth }
+  })
+}
+
+/** The corner row reaches the window's top and right edges: square pane corners and painted gutters in the row's colour. */
+function assertFlushCorner(state, row, label) {
+  assert.ok(row.cornerPane, `${label}: corner pane marked`)
+  assert.deepEqual(row.paneTop, { border: '0px', left: '0px', right: '0px' }, `${label}: pane top edge`)
+  const top = state.pieces.find(piece => piece.edge === 'left')
+  const right = state.pieces.find(piece => piece.edge === 'bottom')
+  assert.ok(top && right, `${label}: corner pieces`)
+  assert.deepEqual([top.left, top.top, top.right, top.bottom], [row.paneBox.left, 0, state.width, row.paneBox.top], `${label}: top gutter painted`)
+  assert.equal(right.top, 0)
+  assert.equal(right.right, state.width, `${label}: right gutter painted to the window edge`)
+  assert.ok(right.left <= row.box.right && right.bottom >= WINDOWS.top, `${label}: right piece covers border and gutter beside the caption buttons`)
+  for (const piece of [top, right]) assert.equal(piece.background, row.background, `${label}: painted in the row's surface`)
+}
+
+test('Windows host: the tab row at the caption buttons is flush with the window corner and as tall as the buttons', async () => {
+  for (const dark of [false, true]) {
+    const { page, errors, close } = await open({ host: WINDOWS, dark })
+    try {
+      const state = await cornerState(page)
+      assert.equal(state.rows.length, 1)
+      const [row] = state.rows
+      assert.equal(row.corner, 'fit')
+      assert.equal(row.banded, false)
+      assertFlushCorner(state, row, `dark=${dark}`)
+      assert.equal(row.box.top, row.paneBox.top, 'row starts at the pane top')
+      assert.equal(row.box.bottom, WINDOWS.top, 'row is exactly as tall as the caption buttons')
+      // Tabs start below the window edge, run into the content, and their labels and the strip controls centre on the buttons.
+      for (const tab of row.tabs) {
+        assert.equal(tab.bottom, WINDOWS.top)
+        assert.ok(tab.top >= 6, 'tab top below the window edge')
+        assert.ok(Math.abs(tab.label - WINDOWS.top / 2) <= 1, `tab label centred (${tab.label})`)
+      }
+      assert.ok(row.controls.length >= 2)
+      for (const control of row.controls) {
+        assert.ok(Math.abs(control.mid - WINDOWS.top / 2) <= 1, `control centred (${control.mid})`)
+        assert.ok(control.right <= state.width - WINDOWS.right - 40, 'controls stay left of the drag gap')
+      }
+      const info = await inspect(page)
+      assertHostContract(info, `windows dark=${dark}`)
+      assert.equal(info.colorScheme, dark ? 'dark' : 'light')
+      assert.deepEqual(errors, [])
+    } finally { await close() }
+  }
+  // The theme recolours the corner.
+  const { page, close } = await open({ host: WINDOWS })
+  try {
+    const before = await cornerState(page)
+    await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: 'dark' }])
+    await settle(page)
+    const after = await cornerState(page)
+    assert.notEqual(after.rows[0].background, before.rows[0].background)
+    assert.ok(after.pieces.every(piece => piece.background === after.rows[0].background))
+  } finally { await close() }
+})
+
+test('Windows host: only the corner pane reserves the caption buttons; a narrow corner pane moves its tabs below a drag band', async () => {
+  for (const [layout, banded] of [['split50', false], ['split40', true], ['split25', true]]) {
+    for (const dark of [false, true]) {
+      const { page, errors, close } = await open({ host: WINDOWS, layout, dark })
+      const label = `${layout} dark=${dark}`
+      try {
+        const state = await cornerState(page)
+        const left = state.rows.find(row => row.pane === 'p1')
+        const right = state.rows.find(row => row.pane === 'p2')
+        // The other pane keeps its browser position and reserves nothing.
+        assert.equal(left.corner, null)
+        assert.equal(left.cornerPane, false)
+        assert.equal(left.padRight, 0)
+        assert.equal(left.paneTop.border, '1px')
+        assert.equal(right.banded, banded, `${label}: banded`)
+        assertFlushCorner(state, right, label)
+        const info = await inspect(page)
+        assertHostContract(info, label)
+        const width = right.box.right - right.box.left
+        if (!banded) {
+          assert.equal(right.corner, 'fit')
+          assert.equal(right.box.bottom, WINDOWS.top)
+          assert.equal(right.padRight, Math.ceil(right.box.right - (state.width - WINDOWS.right)) + 40, 'overlap plus the drag gap')
+        } else {
+          // The band above that pane only drags the window; tabs and controls sit below it at full pane width.
+          assert.equal(right.padRight, 0)
+          for (const element of [...right.tabs, ...right.controls]) assert.ok(element.top >= WINDOWS.top, `${label}: below the band`)
+          assert.ok(right.controls.at(-1).right > state.width - WINDOWS.right, `${label}: controls use the width under the caption buttons`)
+          const bandY = WINDOWS.top / 2
+          for (const x of [right.box.left + 4, right.box.left + width / 2, state.width - WINDOWS.right - 4]) assert.ok(inRegion(info.regions, Math.round(x), bandY), `${label}: band drags at ${x}`)
+          assert.ok(inRegion(info.regions, Math.round(right.box.left + width / 2), 0), `${label}: band reaches the window top`)
+          assert.ok(!inRegion(info.regions, Math.round(left.box.left + 20), bandY), `${label}: the other pane's tabs are not part of the band`)
+        }
+        assert.deepEqual(errors, [])
+      } finally { await close() }
+    }
+  }
+  // Top/bottom split: the top pane keeps its full width; the bottom pane is untouched.
+  const { page, close } = await open({ host: WINDOWS, layout: 'column' })
+  try {
+    const state = await cornerState(page)
+    const top = state.rows.find(row => row.pane === 'p1')
+    const bottom = state.rows.find(row => row.pane === 'p2')
+    assert.equal(top.corner, 'fit')
+    assert.equal(top.banded, false)
+    assertFlushCorner(state, top, 'column')
+    assert.equal(bottom.corner, null)
+    assert.equal(bottom.cornerPane, false)
+    assert.equal(bottom.padRight, 0)
+    assertHostContract(await inspect(page), 'windows column')
+  } finally { await close() }
+})
+
+test('Windows host: a sole tab header at the corner is flush too; a standard-height caption only reserves', async () => {
+  const { page, close } = await open({ host: WINDOWS, layout: 'sole' })
+  try {
+    const state = await cornerState(page)
+    const [row] = state.rows
+    assert.equal(row.corner, '', 'a header taller than the buttons keeps its height')
+    const pane = await page.evaluate(() => { const p = document.querySelector('.foxwarm-workbench-panel'); const s = getComputedStyle(p); return { marked: p.hasAttribute('data-frame-corner-pane'), border: s.borderTopWidth, radius: s.borderTopRightRadius, top: p.getBoundingClientRect().top } })
+    assert.deepEqual(pane, { marked: true, border: '0px', radius: '0px', top: 6 })
+    assert.equal(row.box.top, 6)
+    assert.ok(state.pieces.find(piece => piece.edge === 'bottom')?.bottom >= row.box.bottom, 'gutter beside the whole header painted')
+    assertHostContract(await inspect(page), 'windows sole')
+  } finally { await close() }
+  const standard = await open({ host: { ...WINDOWS, right: 138, top: 32 } })
+  try {
+    const state = await cornerState(standard.page)
+    assert.equal(state.rows[0].corner, '', 'a row taller than the caption keeps its own height')
+    assert.ok(state.rows[0].box.bottom > 32)
+    assertHostContract(await inspect(standard.page), 'windows standard caption')
+  } finally { await standard.close() }
+})
+
 test('macOS host: rows step below and beside the lights, full screen reserves nothing', async () => {
   for (const collapsed of [false, true]) {
     const { page, close } = await open({ host: MACOS, collapsed, dark: true })
@@ -217,6 +380,9 @@ test('macOS host: rows step below and beside the lights, full screen reserves no
       const info = await inspect(page)
       assert.equal(info.frame, 'macos')
       assert.equal(info.colorScheme, 'dark')
+      const corner = await cornerState(page)
+      assert.deepEqual(corner.pieces, [], 'no Windows corner on macOS')
+      assert.ok(corner.rows.every(row => row.corner === null && !row.cornerPane))
       assertHostContract(info, `macos collapsed=${collapsed}`)
       // The band under and beside the lights drags from the window's top-left corner.
       assert.ok(inRegion(info.regions, 0, 0) && inRegion(info.regions, MACOS.left + 10, MACOS.top - 4), 'lights band')
@@ -305,6 +471,7 @@ test('PWA window-controls overlay maps the insets to app-region and switches off
     assert.ok(on.fills.length > 0 && on.fills.every(value => value === 'drag'))
     assert.ok(on.endGap.length === 1 && on.endGap[0] > 186, 'tab strip reserves the overlay controls plus the gap')
     assert.equal(on.messages, 0)
+    assert.equal(await page.evaluate(() => document.querySelectorAll('.foxwarm-frame-corner > *, [data-frame-corner], [data-frame-corner-pane]').length), 0, 'no Windows corner in the overlay')
     // Chromium paints the overlay controls on theme-color; the manifest cookie keeps the canvas.
     assert.equal(on.themeColor, on.under)
     assert.equal(on.under, '#123456')
