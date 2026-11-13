@@ -59,7 +59,8 @@ export function buildApprovalDecisionBody(decision: ApprovalDecisionBody['decisi
 
 /** Tool identity as an approver reads it: MCP tools carry their server. */
 export function approvalToolLabel(tool: ToolApprovalRecord['tool']): string {
-  const name = tool.invocationName || tool.name
+  // Front ends (ctl, the former call_tool) show the capability they run.
+  const name = tool.invocationName && tool.invocationName !== 'ctl' && tool.invocationName !== 'call_tool' ? tool.invocationName : tool.name
   return tool.source === 'mcp' && tool.server ? `${tool.server} · ${name}` : name
 }
 

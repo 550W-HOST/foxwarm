@@ -31,12 +31,12 @@ public sealed class ViewSessionPolicyTests
         Assert.NotNull(
             (
                 await f.Call(
-                    "call_tool",
-                    new JsonObject
+                    "ctl",
+                    CtlTestArgs.Unified(new JsonObject
                     {
                         ["toolId"] = "builtin:view_session",
                         ["args"] = args.DeepClone(),
-                    }
+                    })
                 )
             )["error"]
         );

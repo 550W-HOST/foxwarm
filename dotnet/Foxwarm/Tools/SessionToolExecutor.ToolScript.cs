@@ -15,6 +15,16 @@ internal sealed partial class SessionToolExecutor
     );
 
     private readonly AsyncLocal<ScriptScope?> scriptScope = new();
+
+    private static JsonObject ConcreteDescriptor(ResolvedTool resolved)
+    {
+        var descriptor = new JsonObject { ["source"] = resolved.Source, ["name"] = resolved.Name };
+        if (resolved.Source == "mcp")
+            descriptor["server"] = resolved.Server;
+        else if (resolved.Source == "node")
+            descriptor["nodeId"] = resolved.ExecutionNode;
+        return descriptor;
+    }
     internal bool Programmatic => scriptScope.Value is not null;
     internal ToolScriptDataBudget? ScriptBudget => scriptScope.Value?.Budget;
 
@@ -90,6 +100,9 @@ internal sealed partial class SessionToolExecutor
                     if (planned.Preset is not null)
                         return planned.Preset;
                     var request = (JsonObject)wrapper.DeepClone();
+                    // A ctl command naming a capability runs as that capability.
+                    if (resolved.InvocationName == "ctl" && !IsCtlFrontEnd(resolved))
+                        request = ConcreteDescriptor(resolved);
                     request["args"] = planned.Call["args"]!.DeepClone();
                     var effectStarted = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                     var execution = await ExecuteAttributedAsync(
@@ -299,12 +312,8 @@ internal sealed partial class SessionToolExecutor
                     new JsonObject
                     {
                         ["id"] = rootCall?.CallId ?? "",
-                        ["name"] = "call_tool",
-                        ["args"] = new JsonObject
-                        {
-                            ["toolId"] = "builtin:wait",
-                            ["args"] = pending,
-                        },
+                        ["name"] = "wait",
+                        ["args"] = pending,
                     },
                     token
                 );

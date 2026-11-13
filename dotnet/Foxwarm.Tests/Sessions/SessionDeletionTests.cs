@@ -434,12 +434,12 @@ public sealed class SessionDeletionTests
         var self = await executor.ExecuteAsync(
             new JsonObject
             {
-                ["name"] = "call_tool",
-                ["args"] = new JsonObject
+                ["name"] = "ctl",
+                ["args"] = CtlTestArgs.Unified(new JsonObject
                 {
                     ["toolId"] = "builtin:delete_session",
                     ["args"] = new JsonObject { ["sessionId"] = "self" },
-                },
+                }),
             },
             default
         );
@@ -447,13 +447,13 @@ public sealed class SessionDeletionTests
         var deleted = await executor.ExecuteAsync(
             new JsonObject
             {
-                ["name"] = "call_tool",
-                ["args"] = new JsonObject
+                ["name"] = "ctl",
+                ["args"] = CtlTestArgs.Unified(new JsonObject
                 {
                     ["source"] = "builtin",
                     ["name"] = "delete_session",
                     ["args"] = new JsonObject { ["sessionId"] = "target" },
-                },
+                }),
             },
             default
         );

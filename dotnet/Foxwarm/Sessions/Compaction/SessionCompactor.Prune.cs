@@ -77,6 +77,13 @@ internal sealed partial class SessionCompactor
         var name = SessionWait.Text(call["name"]);
         if (name == "load_skill")
             return !string.IsNullOrWhiteSpace(SessionWait.Text(args["skillName"]));
+        if (name == "ctl")
+        {
+            if (Foxwarm.Tools.CtlParser.Describe(args) is not { Source: "builtin", Name: "skill" } described)
+                return false;
+            args = described.Args;
+            name = "skill";
+        }
         if (name == "call_tool")
         {
             var id = SessionWait.Text(args["toolId"]);

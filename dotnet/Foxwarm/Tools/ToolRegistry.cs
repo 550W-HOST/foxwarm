@@ -86,7 +86,46 @@ internal sealed class ToolRegistry(
                 .ToArray()
         );
 
+    // ctl is a front end: a command resolves to the canonical capability it names, with the
+    // invocation recorded as ctl. Help, discovery and malformed commands stay with ctl itself.
+    // ToolScript's call_tool("ctl", ...) host call is unwrapped the same way.
+    internal static (string Invocation, JsonObject Args, bool Ctl) Unwrap(
+        string invocation,
+        JsonObject args
+    )
+    {
+        if (invocation == "call_tool" && NamesCtl(args))
+        {
+            invocation = "ctl";
+            args = ObjectArg(args, "args", "argsJson") ?? new JsonObject();
+        }
+        if (invocation != "ctl")
+            return (invocation, args, false);
+        return CtlParser.Parse(args) switch
+        {
+            CtlTarget target => (target.Name, target.Args, true),
+            CtlCall call => ("call_tool", call.Descriptor, true),
+            _ => ("ctl", args, true),
+        };
+    }
+
+    private static bool NamesCtl(JsonObject descriptor) =>
+        SessionWait.Text(descriptor["toolId"]) is { Length: > 0 } id
+            ? id.Trim() == "builtin:ctl"
+            : SessionWait.Text(descriptor["source"])?.Trim() == "builtin"
+                && SessionWait.Text(descriptor["name"]) == "ctl";
+
     internal ResolvedTool Resolve(string invocation, JsonObject args, string currentNode = "master")
+    {
+        var (target, targetArgs, ctl) = Unwrap(invocation, args);
+        if (!ctl)
+            return ResolveConcrete(invocation, args, currentNode);
+        if (target == "ctl")
+            return new("ctl", "builtin", "ctl", (JsonObject)targetArgs.DeepClone());
+        return ResolveConcrete(target, targetArgs, currentNode) with { InvocationName = "ctl" };
+    }
+
+    private ResolvedTool ResolveConcrete(string invocation, JsonObject args, string currentNode)
     {
         if (invocation != "call_tool")
         {
@@ -155,7 +194,7 @@ internal sealed class ToolRegistry(
         }
         if (source is not ("builtin" or "node" or "mcp") || string.IsNullOrEmpty(name))
             throw new InvalidDataException(
-                "call_tool requires either toolId or a valid source and tool name."
+                "A tool call requires either toolId or a valid source and tool name."
             );
         var targetArgs = ObjectArg(args, "args", "argsJson", required: true)!;
         if (source == "mcp")
@@ -164,9 +203,9 @@ internal sealed class ToolRegistry(
                 throw new InvalidDataException("MCP calls require an explicit server.");
             return new(invocation, source, name, targetArgs, server);
         }
-        if (name == "call_tool")
+        if (name == "ctl" && source == "builtin")
             throw new InvalidDataException(
-                "Tool `call_tool` is a dispatcher/container, not a concrete builtin capability."
+                "`ctl` is a command front end, not a concrete tool; run the command directly."
             );
         var targetNode = TargetNode(node, currentNode);
         if (source == "node" && targetNode != "master")
@@ -349,6 +388,11 @@ internal sealed class ToolRegistry(
         CancellationToken token
     )
     {
+        var (expanded, expandedArgs, _) = Unwrap(invocation, args);
+        var resolvedArgs = args;
+        args = expandedArgs;
+        var resolvedInvocation = invocation;
+        invocation = expanded;
         var target = currentNode;
         var toolId = Text(args, "toolId");
         var nodeCapability =
@@ -367,9 +411,9 @@ internal sealed class ToolRegistry(
             )
                 target = id[5..id.LastIndexOf('/')];
         }
-        if (nodeCapability && target != "master")
+        if (nodeCapability && target != "master" && invocation != "ctl")
             await RefreshNodeAsync(target, token);
-        return Resolve(invocation, args, currentNode);
+        return Resolve(resolvedInvocation, resolvedArgs, currentNode);
     }
 
     private Task<JsonNode?> ExecuteNodeAsync(

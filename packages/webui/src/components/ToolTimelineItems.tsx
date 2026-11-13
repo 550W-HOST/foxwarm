@@ -50,6 +50,7 @@ import { useSessionQuestionsContext } from '../sessionQuestionsState'
 import { isAskUserCall } from '../sessionQuestions'
 import type { ReasoningBadgeInfo } from './reasoningParts'
 import { SentVersionButton, sentVersionTargets } from './SentVersionDialog'
+import { ctlAsUnified } from '../ctlCall'
 
 const formatToolResponseText = (resp: FunctionResponse): string => resp.__meta?.toolScriptSubCalls !== undefined
   ? formatToolScriptExecutionResponse(resp.response)
@@ -376,7 +377,12 @@ const hasLegacyDiffPayload = (call: FunctionCall): boolean => (
   typeof call.args.oldText === 'string' && typeof call.args.newText === 'string'
 )
 
-const renderToolCallPreview = (call: FunctionCall, options: { partial?: boolean; purposeOnly?: boolean; onOpenCodeFile?: OpenCodeFileHandler; resolvedPaths?: DisplayResolvedPaths } = {}): ReactNode => {
+const renderToolCallPreview = (original: FunctionCall, options: { partial?: boolean; purposeOnly?: boolean; onOpenCodeFile?: OpenCodeFileHandler; resolvedPaths?: DisplayResolvedPaths } = {}): ReactNode => {
+  const call = options.partial ? original : ctlAsUnified(original)
+  if (call.name === 'ctl' && typeof call.args?.command === 'string') {
+    const command = call.args.command.replace(/\s+/g, ' ').trim()
+    return <span className="truncate font-mono" title={command}>{command}</span>
+  }
   if (typeof call.argsParseError === 'string' && typeof call.rawArgsText === 'string') {
     const preview = call.rawArgsText.length > 200 ? `${call.rawArgsText.slice(0, 200)}...` : call.rawArgsText
     return <span className="truncate break-all whitespace-pre-wrap font-mono text-fw-text-muted">{preview}</span>
@@ -390,6 +396,10 @@ const renderToolCallPreview = (call: FunctionCall, options: { partial?: boolean;
   const target = toolActivityTarget(call)
   if (call.name === 'call_tool' && target.name !== 'call_tool') {
     const summary = target.name === 'exec' || target.name === 'run_script' ? executionCallPreview(target, !!options.purposeOnly) : toolActivitySummary(target)
+    if (original.name === 'ctl' && target.name !== 'exec' && target.name !== 'run_script') {
+      const command = String(original.args?.command ?? '').replace(/\s+/g, ' ').trim()
+      return <span className="truncate" title={command}>{summary || command}</span>
+    }
     if (target.name === 'exec' || target.name === 'run_script') {
       return options.purposeOnly
         ? <span className="truncate" title={summary}>{summary}</span>
@@ -696,7 +706,8 @@ const renderToolResponseContent = (resp: FunctionResponse, expanded: boolean, ca
 
 const TOOLSCRIPT_TOOL_NAMES = new Set(['run_script', 'start_toolscript_run', 'continue_script'])
 
-const isToolScriptCall = (call: FunctionCall): boolean => {
+const isToolScriptCall = (original: FunctionCall): boolean => {
+  const call = ctlAsUnified(original)
   if (TOOLSCRIPT_TOOL_NAMES.has(call.name)) return true
   if (call.name !== 'call_tool') return false
   const args = call.args || {}
@@ -831,7 +842,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
   const progressMap = useContext(ToolScriptProgressContext)
   const persistedSubCalls = responses[0]?.__meta?.toolScriptSubCalls
   const isToolScriptTool = !!call && (isToolScriptCall(call)
-    || (call.name === 'call_tool' && (persistedSubCalls !== undefined || !!(call.id && progressMap[call.id]))))
+    || ((call.name === 'call_tool' || call.name === 'ctl') && (persistedSubCalls !== undefined || !!(call.id && progressMap[call.id]))))
   const responseSubCalls = isToolScriptTool && responses.length > 0
     ? persistedSubCalls ?? (responses[0]?.response as any)?.subCalls as ToolScriptSubCall[] | undefined
     : undefined

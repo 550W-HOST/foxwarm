@@ -54,9 +54,9 @@ public sealed partial class ShellHttpTests
         var call = new JsonObject
         {
             ["id"] = "shell-result",
-            ["name"] = unified ? "call_tool" : "exec",
+            ["name"] = unified ? "ctl" : "exec",
             ["args"] = unified
-                ? new JsonObject { ["toolId"] = "node:shell/exec", ["args"] = args }
+                ? CtlTestArgs.Unified(new JsonObject { ["toolId"] = "node:shell/exec", ["args"] = args })
                 : args,
         };
         var execution = tools.ExecuteAsync(call, default);
@@ -93,7 +93,7 @@ public sealed partial class ShellHttpTests
                         ["functionResponse"] = new JsonObject
                         {
                             ["tool_use_id"] = "shell-result",
-                            ["name"] = unified ? "call_tool" : "exec",
+                            ["name"] = unified ? "ctl" : "exec",
                             ["response"] = result,
                         },
                     }

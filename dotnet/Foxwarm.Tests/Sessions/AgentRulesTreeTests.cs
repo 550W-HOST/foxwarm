@@ -214,8 +214,8 @@ public sealed partial class AgentRulesTreeTests
             item => SessionWait.Text(item?["name"]) == "skill"
         );
         var discovered = await f.ToolAsync(
-            "search_tools",
-            new JsonObject { ["query"] = "skill", ["sources"] = new JsonArray("builtin") },
+            "ctl",
+            CtlTestArgs.Search(new JsonObject { ["query"] = "skill", ["sources"] = new JsonArray("builtin") }),
             grand
         );
         Successful(discovered);
@@ -250,8 +250,8 @@ public sealed partial class AgentRulesTreeTests
             );
         Successful(
             await f.ToolAsync(
-                "call_tool",
-                new JsonObject
+                "ctl",
+                CtlTestArgs.Unified(new JsonObject
                 {
                     ["source"] = "builtin",
                     ["name"] = "set_agent_rules",
@@ -260,7 +260,7 @@ public sealed partial class AgentRulesTreeTests
                         ["agentName"] = "grand",
                         ["rules"] = Rules("""[{"action":"deny","tool":"skill"}]"""),
                     },
-                },
+                }),
                 child
             )
         );

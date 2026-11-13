@@ -195,29 +195,23 @@ public sealed partial class LocalSessionTurnHost
                     .Text(args?["action"])
                     ?.Trim()
                     .Equals("select", StringComparison.OrdinalIgnoreCase) == true;
-        if (name != "call_tool" || args is null)
+        if (name != "ctl" || args is null)
             return false;
-        if (
-            SessionWait.Text(args["toolId"]) != "builtin:node"
-            && !(
-                SessionWait.Text(args["source"]) == "builtin"
-                && SessionWait.Text(args["name"]) == "node"
-            )
-        )
-            return false;
-        try
+        // A ctl command naming `node select`, even a malformed one, is a selection attempt.
+        var parsed = CtlParser.Parse(args);
+        if (parsed is CtlError { Command: { Path: "node select" } })
+            return true;
+        var described = parsed switch
         {
-            var target = ToolRegistry.ObjectArg(args, "args", "argsJson");
-            return SessionWait
-                    .Text(target?["action"])
+            CtlTarget target => new CtlDescription(target.Source, target.Name, target.Args, null, null),
+            CtlCall unified => CtlParser.DescribeCall(unified.Descriptor),
+            _ => null,
+        };
+        return described is { Source: "builtin", Name: "node" }
+            && SessionWait
+                    .Text(described.Args["action"])
                     ?.Trim()
                     .Equals("select", StringComparison.OrdinalIgnoreCase) == true;
-        }
-        catch (Exception error)
-            when (error is InvalidDataException or System.Text.Json.JsonException)
-        {
-            return false;
-        }
     }
 
     private static bool SelectionSucceeded(JsonNode? result) =>

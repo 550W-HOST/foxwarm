@@ -9,8 +9,8 @@ public sealed partial class InContextCompactTests
         unified
             ? Call(
                 id,
-                "call_tool",
-                new JsonObject { ["toolId"] = "builtin:submit_compact_plan", ["args"] = args }
+                "ctl",
+                CtlTestArgs.Unified(new JsonObject { ["toolId"] = "builtin:submit_compact_plan", ["args"] = args })
             )
             : Call(id, "submit_compact_plan", args);
 
@@ -53,7 +53,6 @@ public sealed partial class InContextCompactTests
     [InlineData(false, false)]
     [InlineData(true, false)]
     [InlineData(false, true)]
-    [InlineData(true, true)]
     public async Task Rejected_arguments_are_editable_without_regeneration_and_file_resubmit_commits(
         bool unified,
         bool malformed
@@ -75,19 +74,9 @@ public sealed partial class InContextCompactTests
                     if (malformed)
                     {
                         original = original[..^1];
-                        return unified
-                            ? new JsonArray(
-                                Call(
-                                    "bad",
-                                    "call_tool",
-                                    new JsonObject
-                                    {
-                                        ["toolId"] = "builtin:submit_compact_plan",
-                                        ["argsJson"] = original,
-                                    }
-                                )
-                            )
-                            : new JsonArray(
+                        // Malformed raw arguments exist only on the direct call; a
+                        // malformed ctl valuesJson is a parse error (see the Identity tests).
+                        return new JsonArray(
                                 new JsonObject
                                 {
                                     ["type"] = "function_call",

@@ -186,6 +186,7 @@ public sealed class CompactContextTests
                 {
                     ("skill", "current-skill"),
                     ("load_skill", "legacy-skill"),
+                    ("ctl", "ctl-skill"),
                 }
             )
             {
@@ -198,11 +199,14 @@ public sealed class CompactContextTests
                                 {
                                     ["id"] = skill,
                                     ["name"] = name,
-                                    ["args"] = new JsonObject
-                                    {
-                                        ["action"] = "load",
-                                        ["skillName"] = " " + skill + " ",
-                                    },
+                                    ["args"] =
+                                        name == "ctl"
+                                            ? new JsonObject { ["command"] = "skill load " + skill }
+                                            : new JsonObject
+                                            {
+                                                ["action"] = "load",
+                                                ["skillName"] = " " + skill + " ",
+                                            },
                                 },
                             },
                             "model"
@@ -321,9 +325,9 @@ public sealed class CompactContextTests
             marker = after.History.Last().ToJson()["parts"]![0]!["system"]!.GetValue<string>();
             Assert.Contains("parentSessionId=\"" + parent.Id + "\"", marker);
             Assert.Contains("currentSessionId=\"" + childId + "\"", marker);
-            Assert.Contains("`current-skill`, `legacy-skill`", marker);
+            Assert.Contains("`current-skill`, `legacy-skill`, `ctl-skill`", marker);
             Assert.DoesNotContain("recent-skill", marker);
-            Assert.Contains("action=&quot;load&quot;", marker);
+            Assert.Contains("ctl skill load &lt;name&gt;", marker);
             Assert.Equal(
                 marker,
                 owner.Archive.ReadMessages().Last().Message["parts"]![0]![

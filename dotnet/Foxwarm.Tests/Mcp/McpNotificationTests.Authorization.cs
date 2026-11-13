@@ -93,12 +93,12 @@ public sealed partial class McpNotificationTests
         );
         var betaCall = new JsonObject
         {
-            ["name"] = "call_tool",
-            ["args"] = new JsonObject
+            ["name"] = "ctl",
+            ["args"] = CtlTestArgs.Unified(new JsonObject
             {
                 ["toolId"] = "mcp:other/foxwarm_session",
                 ["args"] = Send(peer.Target.Id, "beta"),
-            },
+            }),
         };
         var beta = Target(await f.Tools(f.Second).ExecuteAsync(betaCall, default));
         await peer.Configuration.Access.ApplyAsync(
@@ -163,12 +163,12 @@ public sealed partial class McpNotificationTests
                 await tool.ExecuteAsync(
                     new JsonObject
                     {
-                        ["name"] = "call_tool",
-                        ["args"] = new JsonObject
+                        ["name"] = "ctl",
+                        ["args"] = CtlTestArgs.Unified(new JsonObject
                         {
                             ["toolId"] = "builtin:send_to_channel",
                             ["args"] = args.DeepClone(),
-                        },
+                        }),
                     },
                     default
                 )

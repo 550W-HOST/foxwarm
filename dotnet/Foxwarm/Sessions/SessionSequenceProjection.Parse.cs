@@ -119,11 +119,15 @@ internal sealed partial class SessionSequenceProjection
 
     private static double? Num(JsonNode? node) => SessionCatalog.Number(node);
 
-    // call_tool is shown as the concrete tool it dispatched to.
+    // ctl and the former call_tool are shown as the concrete tool they dispatched to.
     private static (string Name, JsonObject Args) Concrete(JsonObject call)
     {
         var name = Str(call["name"]) ?? "tool";
         var args = call["args"] as JsonObject ?? new JsonObject();
+        if (name == "ctl")
+            return Foxwarm.Tools.CtlParser.Describe(args) is { } described
+                ? (described.Name, described.Args)
+                : (name, args);
         if (name != "call_tool")
             return (name, args);
         var inner = call["inner"] as JsonObject ?? new JsonObject();

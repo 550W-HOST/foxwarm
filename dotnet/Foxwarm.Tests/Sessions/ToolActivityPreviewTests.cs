@@ -242,13 +242,15 @@ public sealed class ToolActivityPreviewTests
             foreach (var unified in new[] { false, true })
             {
                 var response = await f.Call(
-                    unified ? "call_tool" : "exec",
+                    unified ? "ctl" : "exec",
                     unified
-                        ? new JsonObject
-                        {
-                            ["toolId"] = "node:master/exec",
-                            ["args"] = args.DeepClone(),
-                        }
+                        ? CtlTestArgs.Unified(
+                            new JsonObject
+                            {
+                                ["toolId"] = "node:master/exec",
+                                ["args"] = args.DeepClone(),
+                            }
+                        )
                         : args
                 );
                 Assert.Null(response["error"]);
@@ -281,6 +283,19 @@ public sealed class ToolActivityPreviewTests
                     ["toolId"] = "node:master/exec",
                     ["args"] = new JsonObject { ["summary"] = "Inspect source" },
                 }
+            )
+        );
+        Assert.Equal(
+            "Inspect source",
+            SessionToolExecutor.ToolArgsPreview(
+                "ctl",
+                CtlTestArgs.Unified(
+                    new()
+                    {
+                        ["toolId"] = "node:master/exec",
+                        ["args"] = new JsonObject { ["summary"] = "Inspect source" },
+                    }
+                )
             )
         );
     }

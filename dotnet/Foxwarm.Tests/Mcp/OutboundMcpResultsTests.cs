@@ -95,12 +95,12 @@ public sealed class OutboundMcpResultsTests
             .ExecuteAsync(
                 new JsonObject
                 {
-                    ["name"] = "search_tools",
-                    ["args"] = new JsonObject
+                    ["name"] = "ctl",
+                    ["args"] = CtlTestArgs.Search(new JsonObject
                     {
                         ["sources"] = new JsonArray("mcp"),
                         ["server"] = "peer",
-                    },
+                    }),
                 },
                 default
             );
@@ -311,7 +311,7 @@ public sealed class OutboundMcpResultsTests
         var detail = full!["output"]!.GetValue<string>();
         Assert.Contains("ERROR: " + EcmaJson.Stringify(protocol), detail);
         Assert.Contains("ERROR: " + EcmaJson.Stringify(rootError), detail);
-        Assert.Contains("[tool:call_tool] business control", detail);
+        Assert.Contains("[tool:ctl] business control", detail);
         var current = f.First.History();
         Assert.Equal(history.Count, current.Count);
         Assert.True(history.Zip(current).All(pair => JsonNode.DeepEquals(pair.First, pair.Second)));

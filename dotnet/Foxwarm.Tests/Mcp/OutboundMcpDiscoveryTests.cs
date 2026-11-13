@@ -79,12 +79,12 @@ public sealed class OutboundMcpDiscoveryTests
                 new JsonObject
                 {
                     ["id"] = "search",
-                    ["name"] = "search_tools",
-                    ["args"] = new JsonObject
+                    ["name"] = "ctl",
+                    ["args"] = CtlTestArgs.Search(new JsonObject
                     {
                         ["query"] = "probe",
                         ["sources"] = new JsonArray("mcp"),
-                    },
+                    }),
                 },
                 default
             );
@@ -118,12 +118,12 @@ public sealed class OutboundMcpDiscoveryTests
                 new JsonObject
                 {
                     ["id"] = "search",
-                    ["name"] = "search_tools",
-                    ["args"] = new JsonObject
+                    ["name"] = "ctl",
+                    ["args"] = CtlTestArgs.Search(new JsonObject
                     {
                         ["query"] = "probe",
                         ["sources"] = new JsonArray("mcp"),
-                    },
+                    }),
                 },
                 default
             );

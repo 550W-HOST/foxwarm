@@ -293,13 +293,13 @@ public sealed partial class MainLocalToolsTests
         Assert.Equal("tool_authorization_denied", Error(denied));
         Assert.False(File.Exists(Path.Combine(memory, "notes", "denied.md")));
         var unified = await f.Call(
-            "call_tool",
-            new JsonObject
+            "ctl",
+            CtlTestArgs.Unified(new JsonObject
             {
                 ["source"] = "builtin",
                 ["name"] = "read_memory",
                 ["args"] = new JsonObject { ["filePath"] = "notes/added.md" },
-            }
+            })
         );
         Assert.Null(Error(unified));
     }
@@ -909,13 +909,13 @@ public sealed partial class MainLocalToolsTests
         Assert.Contains("messages: 1", output);
 
         var unified = await f.Call(
-            "call_tool",
-            new JsonObject
+            "ctl",
+            CtlTestArgs.Unified(new JsonObject
             {
                 ["source"] = "builtin",
                 ["name"] = "session",
                 ["args"] = new JsonObject { ["action"] = "status", ["sessionId"] = target.Id },
-            }
+            })
         );
         Assert.True(Error(unified) is null, unified.ToJsonString());
         Assert.Contains($"session id: `{target.Id}`", unified["output"]!.GetValue<string>());
