@@ -27,17 +27,17 @@ The CLI runs on master and receives the same Foxwarm tools an ordinary Session w
 
 Each rule layer is evaluated in order, and a call that matches no rule passes that layer. A rule that names only Nodes therefore restricts Node operations but leaves management tools such as `mcp_config` (which can start commands on master) and `set_config` to the global policy. To confine a worker, list what it needs and end with a catch-all deny. From an authorized ancestor or administrator, before assigning work:
 
-```javascript
-set_agent_rules({"agentName":"worker", "rules":[
-  {"tool":["read","write","edit","exec"], "node":"c1", "action":"allow"},
-  {"tool":"search_tools", "action":"allow"},
-  {"tool":{"source":"builtin","name":"send_to_session"},
-   "args":{"sessionId":{"session":{"relation":"parent"}}}, "action":"allow"},
-  {"action":"deny"}
-]})
+```text
+ctl agent set-rules worker --rules @rules
+  values: {"rules":[
+    {"tool":["read","write","edit","exec"], "node":"c1", "action":"allow"},
+    {"tool":{"source":"builtin","name":"send_to_session"},
+     "args":{"sessionId":{"session":{"relation":"parent"}}}, "action":"allow"},
+    {"action":"deny"}
+  ]}
 ```
 
-Create the worker's Claude Code Session with `agentName: "worker"` and `node: "c1"`. The worker can use files and commands in the c1 subtree, discover tools and report to its parent Session; everything else is denied, and denied tools are hidden from its tool list. Add further grants such as `task` or memory tools as needed. An Agent that creates its own sub-Agents needs grants for `create_agent`, `set_agent_rules` and `create_child_session`, and for `node_create_auth_token` with the parent Node. For selector semantics and delegation, see [Node authorization forests](code-index/behaviors/nodes-workspaces-and-permissions.md#node-authorization-forests).
+Create the worker's Claude Code Session with `agentName: "worker"` and `node: "c1"`. The worker can use files and commands in the c1 subtree and report to its parent Session; everything else is denied, and denied tools are hidden from its tool list and from `ctl` help and discovery. Add further grants such as `task` or memory tools as needed. An Agent that creates its own sub-Agents needs grants for `create_agent`, `set_agent_rules` and `create_child_session`, and for `node_create_auth_token` with the parent Node. For selector semantics and delegation, see [Node authorization forests](code-index/behaviors/nodes-workspaces-and-permissions.md#node-authorization-forests).
 
 ## Runtime-specific memory
 

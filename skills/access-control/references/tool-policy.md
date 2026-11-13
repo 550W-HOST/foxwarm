@@ -60,7 +60,7 @@ rules:
     args: { sessionId: { session: { relation: parent } } }
     action: allow
   - agent: [developer, developer-worker]
-    tool: { source: builtin, name: [wait, search_tools] }
+    tool: { source: builtin, name: wait }
     action: allow
 ```
 
@@ -250,7 +250,7 @@ The Agent matcher is registered only for this exact builtin/argument pair; `same
 
 Discovery and default tool injection conservatively project the ordered policy without knowing every future argument or path. A definite identity-only deny can hide a tool; an argument/path/unknown-target denial does not prove that all invocations are denied. Conditional allows may keep the tool visible. Do not diagnose a rule by assuming every denied call removes its tool schema.
 
-`search_tools` has its own authorization and filters returned capabilities. Only `call_tool` is a permission-neutral dispatcher. ToolScript's nested `call_tool` uses the same resolved authorization boundary; that does not make `run_script` or all of its host functionality an unconditional grant.
+`ctl` is a permission-neutral front end: each command, including `tool call`, is authorized as the capability it runs, and `ctl` itself cannot be named in policy. Its help and `tool search` are not separately authorized; they list only commands and tools the caller's policy may allow. A rule naming the removed `search_tools` builtin still loads, matches nothing and is reported as a warning. ToolScript's nested `call_tool` uses the same resolved authorization boundary; that does not make `run_script` or all of its host functionality an unconditional grant.
 
 #### List visibility
 
