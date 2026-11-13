@@ -32,8 +32,12 @@ try {
     await until(async () => (await childIds(page, parent)).length === expected, `${parent} shows ${expected} children`)
   }
   assert.equal((await childIds(page, 'seven')).length, 5)
+  // The preview rows render as soon as the branch is expanded; the continuation row only appears once
+  // the branch load has settled, so wait for the row itself before using it.
+  const more = '[data-session-continuation="more"][data-session-continuation-owner="seven"]'
+  await page.waitForSelector(more)
   // Continuation keeps its step.
-  await page.click('[data-session-continuation="more"][data-session-continuation-owner="seven"]')
+  await page.click(more)
   await until(async () => (await childIds(page, 'seven')).length === 7, 'Show more reveals the remaining children')
   // A realtime refresh does not shrink the window the user grew.
   assert.equal((await fixture.api('POST', '/api/sessions', { agentId: 'main', sessionId: 'refresh-trigger' })).status < 300, true)
