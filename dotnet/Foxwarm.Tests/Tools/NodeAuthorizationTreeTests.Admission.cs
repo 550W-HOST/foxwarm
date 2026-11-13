@@ -125,7 +125,7 @@ public sealed partial class NodeAuthorizationTreeTests
         var file = typeof(ApprovedNodeRegistry)
             .GetField("file", BindingFlags.Instance | BindingFlags.NonPublic)!
             .GetValue(f.Manager.Nodes.Registry)!;
-        var hook = typeof(LinuxAtomicJsonFile).GetField(
+        var hook = typeof(AtomicJsonFile).GetField(
             "stageHook",
             BindingFlags.Instance | BindingFlags.NonPublic
         )!;

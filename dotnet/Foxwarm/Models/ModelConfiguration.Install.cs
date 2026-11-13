@@ -371,52 +371,33 @@ internal sealed partial class ModelConfiguration
         Action? publish = null
     )
     {
-        var directory = Path.GetDirectoryName(path)!;
-        Directory.CreateDirectory(directory);
-        var temporary = Path.Combine(
-            directory,
-            "." + Path.GetFileName(path) + "." + Guid.NewGuid().ToString("N") + ".tmp"
+        var file = new AtomicJsonFile(
+            Path.GetDirectoryName(path)!,
+            Path.GetFileName(path),
+            privateFile: true
         );
-        var renamed = false;
+        Exception? durability = null;
         try
         {
-            var options = new FileStreamOptions
-            {
-                Mode = FileMode.CreateNew,
-                Access = FileAccess.Write,
-                Share = FileShare.None,
-                Options = FileOptions.Asynchronous,
-            };
-            if (!OperatingSystem.IsWindows())
-                options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
-            await using (var file = new FileStream(temporary, options))
-            {
-                await file.WriteAsync(bytes, token);
-                file.Flush(true);
-            }
-            token.ThrowIfCancellationRequested();
-            File.Move(temporary, path, true);
-            renamed = true;
-            publish?.Invoke();
-            LinuxAtomicJsonFile.LinuxDirectorySync.Sync(directory);
+            await file.WriteStreamPayloadAsync(stream => stream.Write(bytes), null, token);
         }
-        catch (Exception error) when (renamed)
+        catch (AuthorityCommittedException error)
         {
+            durability = error.InnerException;
+        }
+        // The file is in place; publish it even when its directory sync failed.
+        try
+        {
+            publish?.Invoke();
+        }
+        catch (Exception error)
+        {
+            durability ??= error;
+        }
+        if (durability is not null)
             throw new AuthorityCommittedException(
                 "Configuration committed but final durability failed.",
-                error
+                durability
             );
-        }
-        finally
-        {
-            if (!renamed)
-            {
-                try
-                {
-                    File.Delete(temporary);
-                }
-                catch { }
-            }
-        }
     }
 }

@@ -119,7 +119,7 @@ internal sealed class ToolScriptRunStore(string root)
         budget.JsonValue(record);
         budget.Charge(ToolScriptRecordJson.ScratchReservation);
         // Existing durability primitive; streaming avoids whole-record escaped UTF-16/UTF-8 copies.
-        var writer = new LinuxAtomicJsonFile(
+        var writer = new AtomicJsonFile(
             root,
             "state/toolscript-runs/" + id + ".json",
             stage =>

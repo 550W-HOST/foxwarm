@@ -46,7 +46,7 @@ public sealed class HostPathsRootTests
     {
         using var temp = new TempDirectory();
 
-        var file = new LinuxAtomicJsonFile(temp.Path + Separator, Path.Combine("state", "x.json"));
+        var file = new AtomicJsonFile(temp.Path + Separator, Path.Combine("state", "x.json"));
 
         Assert.Equal(Path.Combine(temp.Path, "state", "x.json"), file.FilePath);
     }

@@ -127,7 +127,7 @@ internal sealed class InstanceKeys
                 File.Move(temporary, path, overwrite: false);
             }
             catch (IOException) when (File.Exists(path)) { }
-            LinuxAtomicJsonFile.LinuxDirectorySync.Sync(directory);
+            DirectorySync.Sync(directory);
         }
         finally
         {

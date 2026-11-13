@@ -71,7 +71,7 @@ public sealed class NodeOnboardingHttpTests
             var file = typeof(ApprovedNodeRegistry)
                 .GetField("file", BindingFlags.Instance | BindingFlags.NonPublic)!
                 .GetValue(Hub.Registry)!;
-            typeof(LinuxAtomicJsonFile)
+            typeof(AtomicJsonFile)
                 .GetField("stageHook", BindingFlags.Instance | BindingFlags.NonPublic)!
                 .SetValue(file, hook);
         }

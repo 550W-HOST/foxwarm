@@ -46,7 +46,7 @@ internal sealed class RemoteExecAuthority
                 );
                 created.Write(bytes);
                 created.Flush(true);
-                LinuxAtomicJsonFile.LinuxDirectorySync.Sync(Path.GetDirectoryName(file)!);
+                DirectorySync.Sync(Path.GetDirectoryName(file)!);
             }
         }
         var text = File.ReadAllText(file).Trim();

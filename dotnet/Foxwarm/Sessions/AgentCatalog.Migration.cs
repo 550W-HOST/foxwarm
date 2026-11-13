@@ -69,7 +69,7 @@ internal sealed partial class AgentCatalog
                 ?? throw new InvalidDataException("Installation metadata must be an object.")
             : new JsonObject();
         document["minimumReaderVersion"] = level;
-        new LinuxAtomicJsonFile(
+        new AtomicJsonFile(
             Path.GetDirectoryName(path)!,
             InstallationFileName
         ).WriteTextPayload(document.ToJsonString(), default);

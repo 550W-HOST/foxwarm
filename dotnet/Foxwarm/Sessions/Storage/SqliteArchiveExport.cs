@@ -121,7 +121,7 @@ public sealed partial class SqliteArchiveMessageStore
                     Directory.Move(previous, outputRoot);
                 throw;
             }
-            LinuxAtomicJsonFile.LinuxDirectorySync.Sync(Path.GetDirectoryName(outputRoot)!);
+            DirectorySync.Sync(Path.GetDirectoryName(outputRoot)!);
             return new(files, records);
         }
         finally

@@ -151,7 +151,7 @@ internal sealed partial class CodeWorkbench
     }
 
     private static void WriteWorkspace(string path, JsonObject workspace) =>
-        new LinuxAtomicJsonFile(
+        new AtomicJsonFile(
             Path.GetDirectoryName(path)!,
             Path.GetFileName(path)
         ).WriteTextPayload(workspace.ToJsonString(new() { WriteIndented = true }), default);

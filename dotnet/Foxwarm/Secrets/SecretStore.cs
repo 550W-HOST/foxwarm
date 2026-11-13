@@ -495,7 +495,7 @@ internal sealed partial class SecretStore
     {
         if (next["keyId"] is null)
             next["keyId"] = EnsureKey().Id;
-        new LinuxAtomicJsonFile(
+        new AtomicJsonFile(
             Path.GetDirectoryName(path)!,
             Path.GetFileName(path),
             privateFile: true

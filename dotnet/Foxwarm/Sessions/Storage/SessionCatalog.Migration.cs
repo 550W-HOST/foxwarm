@@ -248,7 +248,7 @@ internal sealed partial class SessionCatalog
                 else
                 {
                     WriteDurably(EvidencePath, bytes);
-                    LinuxAtomicJsonFile.LinuxDirectorySync.Sync(
+                    DirectorySync.Sync(
                         Path.GetDirectoryName(EvidencePath)!
                     );
                 }
@@ -256,17 +256,17 @@ internal sealed partial class SessionCatalog
             foreach (var row in rows.Where(row => row.StagePath is not null))
             {
                 File.Move(row.StagePath!, row.AuthorityPath!, overwrite: true);
-                LinuxAtomicJsonFile.LinuxDirectorySync.Sync(
+                DirectorySync.Sync(
                     Path.GetDirectoryName(row.AuthorityPath!)!
                 );
             }
             File.Move(temp, FilePath, overwrite: false);
-            LinuxAtomicJsonFile.LinuxDirectorySync.Sync(Path.GetDirectoryName(FilePath)!);
+            DirectorySync.Sync(Path.GetDirectoryName(FilePath)!);
             if (source is not null)
             {
                 foreach (var candidate in Candidates())
                     File.Delete(candidate);
-                LinuxAtomicJsonFile.LinuxDirectorySync.Sync(Path.GetDirectoryName(FilePath)!);
+                DirectorySync.Sync(Path.GetDirectoryName(FilePath)!);
             }
         }
         finally

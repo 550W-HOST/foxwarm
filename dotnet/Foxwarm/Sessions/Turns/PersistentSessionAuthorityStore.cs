@@ -15,7 +15,7 @@ public sealed class PersistentSessionAuthorityStore
 {
     private string sessionId;
     private string agent;
-    private LinuxAtomicJsonFile authorityFile;
+    private AtomicJsonFile authorityFile;
     private SqliteArchiveMessageStore archive;
     private readonly string root;
     internal Foxwarm.Images.ImageBlobStore Images { get; }
@@ -76,7 +76,7 @@ public sealed class PersistentSessionAuthorityStore
         this.mainFields = mainFields;
         this.checkLifetime = checkLifetime;
         this.archiveCommitted = archiveCommitted;
-        authorityFile = new LinuxAtomicJsonFile(
+        authorityFile = new AtomicJsonFile(
             root,
             $"state/sessions/{sessionId}.json",
             authorityStageHook
@@ -99,7 +99,7 @@ public sealed class PersistentSessionAuthorityStore
         sessionId = id;
         agent = targetAgent;
         archive = next;
-        authorityFile = new LinuxAtomicJsonFile(
+        authorityFile = new AtomicJsonFile(
             root,
             $"state/sessions/{id}.json",
             authorityStageHook

@@ -162,14 +162,14 @@ internal sealed class SessionIdentityMoveJournal(string root)
     }
 
     internal void Write(SessionIdentityMoveRecord record) =>
-        new LinuxAtomicJsonFile(root, "state/session-id-move-pending.json").WritePayload(
+        new AtomicJsonFile(root, "state/session-id-move-pending.json").WritePayload(
             record.Json()
         );
 
     internal void Clear()
     {
         File.Delete(FilePath);
-        LinuxAtomicJsonFile.LinuxDirectorySync.Sync(Path.GetDirectoryName(FilePath)!);
+        DirectorySync.Sync(Path.GetDirectoryName(FilePath)!);
     }
 
     internal string AuthorityPath(string id)
@@ -231,8 +231,8 @@ internal sealed class SessionIdentityMoveJournal(string root)
             }
             else
                 File.Move(source, target, true);
-            LinuxAtomicJsonFile.LinuxDirectorySync.Sync(Path.GetDirectoryName(source)!);
-            LinuxAtomicJsonFile.LinuxDirectorySync.Sync(Path.GetDirectoryName(target)!);
+            DirectorySync.Sync(Path.GetDirectoryName(source)!);
+            DirectorySync.Sync(Path.GetDirectoryName(target)!);
         }
     }
 }

@@ -126,7 +126,7 @@ internal sealed class SecretExposures : IDisposable
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-                new LinuxAtomicJsonFile(
+                new AtomicJsonFile(
                     Path.GetDirectoryName(path)!,
                     Path.GetFileName(path),
                     privateFile: true

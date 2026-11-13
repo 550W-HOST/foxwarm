@@ -114,7 +114,7 @@ internal sealed partial class NodeExecManager(
                     }
                     entries[id] = entry;
                 }
-                await Save();
+                Save();
             }
         }
         catch (FileNotFoundException) { }
@@ -127,37 +127,22 @@ internal sealed partial class NodeExecManager(
         reconciliation = ReconcileLoop();
     }
 
-    private async Task Save()
-    {
-        Directory.CreateDirectory(Path.GetDirectoryName(registryPath)!);
-        var temporary =
-            registryPath
-            + "."
-            + Environment.ProcessId
-            + "."
-            + Guid.NewGuid().ToString("N")
-            + ".tmp";
-        try
-        {
-            await File.WriteAllTextAsync(
-                temporary,
-                new JsonObject
-                {
-                    ["execs"] = new JsonArray(
-                        entries.Values.Select(entry => entry.DeepClone()).ToArray()
-                    ),
-                    ["recentExecIds"] = new JsonArray(
-                        recent.Select(id => (JsonNode?)JsonValue.Create(id)).ToArray()
-                    ),
-                }.ToJsonString(new() { WriteIndented = true })
-            );
-            AtomicFileReplace.Replace(temporary, registryPath);
-        }
-        finally
-        {
-            File.Delete(temporary);
-        }
-    }
+    private void Save() =>
+        new AtomicJsonFile(
+            Path.GetDirectoryName(registryPath)!,
+            Path.GetFileName(registryPath)
+        ).WriteTextPayload(
+            new JsonObject
+            {
+                ["execs"] = new JsonArray(
+                    entries.Values.Select(entry => entry.DeepClone()).ToArray()
+                ),
+                ["recentExecIds"] = new JsonArray(
+                    recent.Select(id => (JsonNode?)JsonValue.Create(id)).ToArray()
+                ),
+            }.ToJsonString(new() { WriteIndented = true }),
+            default
+        );
 
     // Set while an applied change has not reached the registry file. A save can fail after the
     // in-memory change, for example on Windows while another process has the registry open, which
@@ -172,7 +157,7 @@ internal sealed partial class NodeExecManager(
         {
             action();
             savePending = true;
-            await Save();
+            Save();
             savePending = false;
         }
         finally

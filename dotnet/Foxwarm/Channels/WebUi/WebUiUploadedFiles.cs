@@ -178,7 +178,7 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
                             ["size"] = source.Length,
                         }
                     );
-                    LinuxAtomicJsonFile.LinuxDirectorySync.Sync(directory);
+                    DirectorySync.Sync(directory);
                 }
                 finally
                 {

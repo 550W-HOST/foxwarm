@@ -56,7 +56,7 @@ internal sealed partial class AgentCatalog
             file.Write(System.Text.Encoding.UTF8.GetBytes(proof));
             file.Flush(flushToDisk: true);
         }
-        LinuxAtomicJsonFile.LinuxDirectorySync.Sync(directory);
+        DirectorySync.Sync(directory);
     }
 
     private string[] IdentityCleanupDirectories(string name, string? preparationName)
@@ -163,7 +163,7 @@ internal sealed partial class AgentCatalog
             if (!IdentityProofMatches(directory, preparationName))
                 throw new AgentIdentityCleanupException([marker]);
             File.Delete(marker);
-            LinuxAtomicJsonFile.LinuxDirectorySync.Sync(directory);
+            DirectorySync.Sync(directory);
         }
         finally
         {

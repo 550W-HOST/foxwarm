@@ -19,7 +19,7 @@ public sealed partial class ShellHttpTests
         var file = typeof(ApprovedNodeRegistry)
             .GetField("file", BindingFlags.Instance | BindingFlags.NonPublic)!
             .GetValue(hub.Registry)!;
-        typeof(LinuxAtomicJsonFile)
+        typeof(AtomicJsonFile)
             .GetField("stageHook", BindingFlags.Instance | BindingFlags.NonPublic)!
             .SetValue(file, hook);
     }

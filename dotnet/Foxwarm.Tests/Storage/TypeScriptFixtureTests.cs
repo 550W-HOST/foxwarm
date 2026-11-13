@@ -26,7 +26,7 @@ public sealed class TypeScriptFixtureTests
         Assert.Equal([1L, 2L, 3L, 4L], readRecords.Select(record => record.Seq));
         Assert.Empty(archive.WriteMessages(readRecords));
 
-        var writer = new LinuxAtomicJsonFile(temp.Path, "state/sessions/c1/fixture.json");
+        var writer = new AtomicJsonFile(temp.Path, "state/sessions/c1/fixture.json");
         writer.Write(document);
         var secondResult = Path.Combine(temp.Path, "ts-read-result.json");
         TypeScriptOracle.Run("read", temp.Path, secondResult);
@@ -84,7 +84,7 @@ public sealed class TypeScriptFixtureTests
             )
             .ToArray();
         Assert.Equal(4, archive.WriteMessages(records).Count);
-        new LinuxAtomicJsonFile(temp.Path, "state/sessions/c1/fixture.json").Write(document);
+        new AtomicJsonFile(temp.Path, "state/sessions/c1/fixture.json").Write(document);
 
         // The retained TypeScript tables, plus the derived activity-index tables that the
         // TypeScript reader does not know about and must leave alone.

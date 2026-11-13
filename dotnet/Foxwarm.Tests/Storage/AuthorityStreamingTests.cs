@@ -210,7 +210,7 @@ public sealed class AuthorityStreamingTests
     public void Mid_stream_failure_discards_partial_temp_and_leaves_previous_file()
     {
         using var temp = new TempDirectory();
-        var file = new LinuxAtomicJsonFile(temp.Path, "state/authority.json");
+        var file = new AtomicJsonFile(temp.Path, "state/authority.json");
         var document = SessionAuthorityDocument.FromNode(
             PersistencePrimitiveTests.FixtureAuthority(),
             Fixture.SessionId

@@ -10,7 +10,7 @@ internal sealed partial class McpOAuthService
     internal const string CallbackPath = "/api/mcp/oauth/callback";
     internal const string ClientPath = "/api/mcp/oauth/client.json";
     private readonly object gate = new();
-    private readonly LinuxAtomicJsonFile store;
+    private readonly AtomicJsonFile store;
     private readonly string? publicBaseUrl;
     private readonly Func<string, JsonObject> getServer;
     private readonly Func<string, JsonObject?> getConfiguredServer;

@@ -399,7 +399,7 @@ internal sealed partial class AgentCatalog
         );
         try
         {
-            new LinuxAtomicJsonFile(
+            new AtomicJsonFile(
                 Path.GetDirectoryName(path)!,
                 Path.GetFileName(path),
                 metadataWriteStage

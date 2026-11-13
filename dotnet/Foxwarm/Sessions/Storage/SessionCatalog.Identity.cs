@@ -168,7 +168,7 @@ internal sealed class SessionIdentityMetadata(string root, SessionCatalog catalo
             .ToArray();
         foreach (var child in children)
             child.Value!["parentSessionId"] = to;
-        new LinuxAtomicJsonFile(root, Path.GetRelativePath(root, path!)).WritePayload(legacy!);
+        new AtomicJsonFile(root, Path.GetRelativePath(root, path!)).WritePayload(legacy!);
         return children.Select(child => child.Key).ToArray();
     }
 }

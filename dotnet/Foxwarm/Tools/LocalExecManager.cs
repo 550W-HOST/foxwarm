@@ -14,6 +14,7 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
 {
     internal static bool IsSupported => ExecNative.Supported;
     private readonly string registryPath;
+    private readonly AtomicJsonFile registryFile;
     private readonly Func<string, string> workspaceForSession;
     private readonly Func<string, string> agentForSession;
     private readonly Func<string, string> resolveLifetime;
@@ -120,6 +121,7 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
     )
     {
         registryPath = Path.Combine(Path.GetFullPath(dataRoot), "state", "running-exec.json");
+        registryFile = new(dataRoot, Path.Combine("state", "running-exec.json"));
         this.workspaceForSession = workspaceForSession;
         this.notify = notify;
         this.resolveLifetime = resolveLifetime ?? (id => id);
@@ -255,14 +257,12 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
             changed |= raw["notifyOnCompletion"]?.GetValue<bool>() != true;
         }
         if (changed)
-            await SaveAsync();
+            Save();
     }
 
-    private async Task SaveAsync()
+    private void Save()
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(registryPath)!);
-        await AtomicWriteAsync(
-            registryPath,
+        registryFile.WriteTextPayload(
             new JsonObject
             {
                 ["execs"] = new JsonArray(
@@ -271,7 +271,8 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
                 ["recentExecIds"] = new JsonArray(
                     recent.Select(id => (JsonNode?)JsonValue.Create(id)).ToArray()
                 ),
-            }.ToJsonString(new() { WriteIndented = true }) + "\n"
+            }.ToJsonString(new() { WriteIndented = true }) + "\n",
+            default
         );
     }
 
@@ -288,7 +289,7 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
         {
             action();
             savePending = true;
-            await SaveAsync();
+            Save();
             savePending = false;
         }
         finally

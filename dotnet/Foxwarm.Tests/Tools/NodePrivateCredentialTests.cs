@@ -81,7 +81,7 @@ public sealed class NodePrivateCredentialTests
             var file = typeof(ApprovedNodeRegistry)
                 .GetField("file", BindingFlags.Instance | BindingFlags.NonPublic)!
                 .GetValue(Manager.Nodes.Registry)!;
-            typeof(LinuxAtomicJsonFile)
+            typeof(AtomicJsonFile)
                 .GetField("stageHook", BindingFlags.Instance | BindingFlags.NonPublic)!
                 .SetValue(file, hook);
         }

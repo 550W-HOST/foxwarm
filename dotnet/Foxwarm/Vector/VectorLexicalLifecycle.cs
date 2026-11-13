@@ -17,7 +17,7 @@ internal sealed partial class VectorLexicalRuntime
     }
 
     private void SyncDirectory() =>
-        LinuxAtomicJsonFile.LinuxDirectorySync.Sync(Path.GetDirectoryName(databasePath)!);
+        DirectorySync.Sync(Path.GetDirectoryName(databasePath)!);
 
     private void Reconcile(ArchiveSearchIndex current)
     {

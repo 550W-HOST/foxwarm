@@ -11,7 +11,7 @@ internal sealed partial class ApprovedNodeRegistry
 {
     internal const long PairingTtl = 60 * 60 * 1000;
     private readonly object gate = new();
-    private readonly LinuxAtomicJsonFile file;
+    private readonly AtomicJsonFile file;
     private JsonObject data;
     internal string PairingToken { get; }
     internal event Action<string>? Expired;
@@ -19,7 +19,19 @@ internal sealed partial class ApprovedNodeRegistry
 
     internal ApprovedNodeRegistry(string root)
     {
-        file = new(root, "state/nodes.json");
+        file = new(
+            root,
+            "state/nodes.json",
+            privateFile: true,
+            backups: new(
+                Rotate: 3,
+                IncludeLegacyBak: true,
+                OnError: error =>
+                    Console.Error.WriteLine(
+                        "[nodes] Failed to rotate Node registry backups: " + error.Message
+                    )
+            )
+        );
         data = Load();
         var tokenPath = Path.Combine(root, "state", "node_token");
         Directory.CreateDirectory(Path.GetDirectoryName(tokenPath)!);
@@ -37,60 +49,58 @@ internal sealed partial class ApprovedNodeRegistry
 
     private JsonObject Load()
     {
-        var candidates = new[]
+        JsonObject? loaded;
+        string? source;
+        try
         {
-            file.FilePath,
-            file.FilePath + ".1.bak",
-            file.FilePath + ".2.bak",
-            file.FilePath + ".3.bak",
-            file.FilePath + ".bak",
-        };
-        Exception? failure = null;
-        foreach (var path in candidates)
-        {
-            if (!File.Exists(path))
-                continue;
-            try
-            {
-                var loaded =
-                    JsonNode.Parse(File.ReadAllText(path)) as JsonObject
-                    ?? throw new InvalidDataException("Invalid Node registry.");
-                loaded["approvedNodes"] = loaded["approvedNodes"] is JsonObject approved
-                    ? approved.DeepClone()
-                    : new JsonObject();
-                loaded["providerNodes"] = loaded["providerNodes"] is JsonObject providerNodes
-                    ? providerNodes.DeepClone()
-                    : new JsonObject();
-                loaded["pendingPairings"] = loaded["pendingPairings"] is JsonObject pending
-                    ? pending.DeepClone()
-                    : new JsonObject();
-                foreach (
-                    var value in loaded["pendingPairings"]!
-                        .AsObject()
-                        .Select(pair => pair.Value)
-                        .OfType<JsonObject>()
-                )
-                    value.Remove("pairCode");
-                if (path != file.FilePath)
-                    file.WritePayload(loaded);
-                return loaded;
-            }
-            catch (Exception error) when (error is IOException or System.Text.Json.JsonException)
-            {
-                failure = error;
-            }
+            loaded = file.LoadFirstAvailable(ReadCandidate, out source);
         }
-        if (failure is not null)
+        catch (Exception error) when (error is IOException or System.Text.Json.JsonException)
+        {
             throw new InvalidDataException(
                 "Node registry and its backups cannot be read.",
-                failure
+                error
             );
-        return new()
+        }
+        if (loaded is null)
+            return new()
+            {
+                ["approvedNodes"] = new JsonObject(),
+                ["providerNodes"] = new JsonObject(),
+                ["pendingPairings"] = new JsonObject(),
+            };
+        if (source != file.FilePath)
         {
-            ["approvedNodes"] = new JsonObject(),
-            ["providerNodes"] = new JsonObject(),
-            ["pendingPairings"] = new JsonObject(),
-        };
+            Console.Error.WriteLine(
+                "[nodes] Recovering the Node registry from " + Path.GetFileName(source)
+            );
+            file.WritePayload(loaded);
+        }
+        return loaded;
+    }
+
+    private static JsonObject ReadCandidate(string path)
+    {
+        var loaded =
+            JsonNode.Parse(File.ReadAllText(path)) as JsonObject
+            ?? throw new InvalidDataException("Invalid Node registry.");
+        loaded["approvedNodes"] = loaded["approvedNodes"] is JsonObject approved
+            ? approved.DeepClone()
+            : new JsonObject();
+        loaded["providerNodes"] = loaded["providerNodes"] is JsonObject providerNodes
+            ? providerNodes.DeepClone()
+            : new JsonObject();
+        loaded["pendingPairings"] = loaded["pendingPairings"] is JsonObject pending
+            ? pending.DeepClone()
+            : new JsonObject();
+        foreach (
+            var value in loaded["pendingPairings"]!
+                .AsObject()
+                .Select(pair => pair.Value)
+                .OfType<JsonObject>()
+        )
+            value.Remove("pairCode");
+        return loaded;
     }
 
     private T Change<T>(Func<JsonObject, T> apply, Mutation? mutation = null, bool topology = true)
@@ -114,8 +124,6 @@ internal sealed partial class ApprovedNodeRegistry
                 throw;
             }
             data = next;
-            if (!OperatingSystem.IsWindows())
-                File.SetUnixFileMode(file.FilePath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
             return result;
         }
     }

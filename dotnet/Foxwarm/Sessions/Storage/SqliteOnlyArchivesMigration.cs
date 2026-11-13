@@ -249,7 +249,7 @@ internal static class SqliteOnlyArchivesMigration
                 if (HashFileAsync(source).GetAwaiter().GetResult() != expected)
                     throw new InvalidDataException("Migration source hash mismatch: " + relative);
                 File.Delete(destination);
-                LinuxAtomicJsonFile.LinuxDirectorySync.Sync(Path.GetDirectoryName(destination)!);
+                DirectorySync.Sync(Path.GetDirectoryName(destination)!);
             }
         }
     }
@@ -274,7 +274,7 @@ internal static class SqliteOnlyArchivesMigration
     }
 
     private static void Write(string root, string path, JsonObject value) =>
-        new LinuxAtomicJsonFile(
+        new AtomicJsonFile(
             root,
             Path.GetRelativePath(root, path),
             privateFile: true
@@ -284,9 +284,9 @@ internal static class SqliteOnlyArchivesMigration
     {
         Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
         File.Move(source, destination);
-        LinuxAtomicJsonFile.LinuxDirectorySync.Sync(Path.GetDirectoryName(source)!);
+        DirectorySync.Sync(Path.GetDirectoryName(source)!);
         if (Path.GetDirectoryName(source) != Path.GetDirectoryName(destination))
-            LinuxAtomicJsonFile.LinuxDirectorySync.Sync(Path.GetDirectoryName(destination)!);
+            DirectorySync.Sync(Path.GetDirectoryName(destination)!);
     }
 
     internal static async Task<string> HashFileAsync(string path)

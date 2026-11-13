@@ -324,7 +324,7 @@ public sealed partial class ToolAuthorizationEffectsTests
         );
         Assert.Equal(original, await File.ReadAllBytesAsync(target));
         Assert.Empty(
-            Directory.GetFiles(Path.GetDirectoryName(target)!, ".tool-authorization-*.tmp")
+            Directory.GetFiles(Path.GetDirectoryName(target)!, Path.GetFileName(target) + ".tmp-*")
         );
         manager.Authorization.InstallBoundary = stage =>
         {

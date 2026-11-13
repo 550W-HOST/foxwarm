@@ -488,7 +488,7 @@ internal sealed partial class SessionManager
         File.Delete(path);
         removed();
         if (Directory.Exists(Path.GetDirectoryName(path)))
-            LinuxAtomicJsonFile.LinuxDirectorySync.Sync(Path.GetDirectoryName(path)!);
+            DirectorySync.Sync(Path.GetDirectoryName(path)!);
     }
 
     private void CompleteDeletedOwner(DeleteOperation operation, string id, SessionOwner owner)

@@ -204,7 +204,7 @@ internal sealed partial class MainTimers : IAsyncDisposable
             {
                 var payload = next.ToJsonString(JsonOptions);
                 await Task.Run(() =>
-                    new LinuxAtomicJsonFile(
+                    new AtomicJsonFile(
                         root,
                         "state/timers.json",
                         stage => WriteStage?.Invoke(stage)

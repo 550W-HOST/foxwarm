@@ -202,38 +202,31 @@ internal sealed class ToolAuthorizationAuthority(
     internal async Task InstallAsync(byte[] bytes, CancellationToken token)
     {
         _ = ToolAuthorizationYaml.Parse(bytes);
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        var temporary = Path.Combine(
+        var file = new AtomicJsonFile(
             Path.GetDirectoryName(path)!,
-            ".tool-authorization-" + Guid.NewGuid().ToString("N") + ".tmp"
+            Path.GetFileName(path),
+            stage =>
+            {
+                if (stage == AtomicJsonWriteStage.BeforeTempWrite)
+                    InstallBoundary?.Invoke("captured");
+                else if (stage == AtomicJsonWriteStage.BeforeRename)
+                    InstallBoundary?.Invoke("before-rename");
+            },
+            privateFile: true
         );
         try
         {
-            InstallBoundary?.Invoke("captured");
-            var options = new FileStreamOptions
-            {
-                Mode = FileMode.CreateNew,
-                Access = FileAccess.Write,
-                Share = FileShare.None,
-                Options = FileOptions.Asynchronous,
-            };
-            if (!OperatingSystem.IsWindows())
-                options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
-            await using (var stream = new FileStream(temporary, options))
-            {
-                await stream.WriteAsync(bytes, token);
-                stream.Flush(true);
-            }
-            token.ThrowIfCancellationRequested();
-            InstallBoundary?.Invoke("before-rename");
-            File.Move(temporary, path, true);
-            Invalidate();
+            await file.WriteStreamPayloadAsync(stream => stream.Write(bytes), null, token);
         }
-        finally
+        catch (AuthorityCommittedException error)
         {
-            if (File.Exists(temporary))
-                File.Delete(temporary);
+            Invalidate();
+            throw new AuthorityCommittedException(
+                "Configuration committed but final durability failed.",
+                error.InnerException!
+            );
         }
+        Invalidate();
     }
 }
 

@@ -58,11 +58,10 @@ internal sealed partial class WebUIChannel
                             throw new InvalidDataException($"{key} is too long.");
                         settings[key] = normalized;
                     }
-                    var file = Path.Combine(sessions.DataRoot, "state", "webui.json");
-                    Directory.CreateDirectory(Path.GetDirectoryName(file)!);
-                    var temp = file + ".tmp-" + Guid.NewGuid().ToString("N");
-                    await File.WriteAllTextAsync(temp, settings.ToJsonString());
-                    File.Move(temp, file, overwrite: true);
+                    new AtomicJsonFile(
+                        sessions.DataRoot,
+                        Path.Combine("state", "webui.json")
+                    ).WritePayload(settings);
                     return Results.Ok(
                         new JsonObject
                         {
