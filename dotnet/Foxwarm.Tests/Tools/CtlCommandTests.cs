@@ -328,6 +328,7 @@ public sealed class CtlCommandTests
             Assert.All(properties, property => Assert.Contains(command.Parameters, parameter => parameter.Arg == property));
         }
         Assert.Equal("ctl history recall", CtlCommandText.Prefix("recall"));
+        Assert.Equal("--preview-length 20000", CtlCommandText.Option("view_session", "previewLength", 20000));
     }
 
     // The same corpus is checked by the WebUI display parser (packages/webui/test/ctlCall.test.mjs).

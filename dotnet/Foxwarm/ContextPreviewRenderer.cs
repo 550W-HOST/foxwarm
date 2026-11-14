@@ -385,7 +385,13 @@ internal sealed partial class ContextPreviewRenderer
                     || notice.Contains("foxwarm_session(", StringComparison.Ordinal);
                 if (action && notice.Length + 1 > remaining)
                     Append(
-                        "[Navigation exceeds this preview budget; rerun with previewLength:20000 or shorter page filters.]",
+                        "[Navigation exceeds this preview budget; rerun with "
+                            + (
+                                externalRead
+                                    ? "previewLength:20000"
+                                    : CtlCommandText.Option("view_session", "previewLength", 20000)
+                            )
+                            + " or shorter page filters.]",
                         remaining
                     );
                 else

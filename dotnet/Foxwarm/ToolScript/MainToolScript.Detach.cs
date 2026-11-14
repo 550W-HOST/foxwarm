@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
+using Foxwarm.Tools;
 
 namespace Foxwarm.ToolScript;
 
@@ -95,7 +96,9 @@ internal sealed partial class MainToolScript
         if (printed.Length > 0)
             receipt["stdout"] = printed;
         receipt["notice"] =
-            "The run continues in the background. A background-script-finished event reports its outcome; wait for it with waitExecIds, or stop it with cancel_toolscript_run.";
+            "The run continues in the background. A background-script-finished event reports its outcome; wait for it with waitExecIds, or stop it with `"
+            + CtlCommandText.For("cancel_toolscript_run", new JsonObject { ["runId"] = id })
+            + "`.";
         if (warning is not null)
             receipt["warning"] = warning;
         return receipt;

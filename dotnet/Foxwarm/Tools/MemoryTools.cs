@@ -155,7 +155,7 @@ internal static class MemoryTools
         var path = PathOf(manager, owner, args, agent);
         if (File.Exists(path) || Directory.Exists(path))
             throw new InvalidDataException(
-                $"Memory file already exists: {Display(manager, agent, path)}. write_memory only creates new files; use edit_memory to modify an existing memory file."
+                $"Memory file already exists: {Display(manager, agent, path)}. `ctl memory write` only creates new files; use `ctl memory edit` to modify an existing memory file."
             );
         var content = Text(args, "content");
         var parent = Path.GetDirectoryName(path)!;
