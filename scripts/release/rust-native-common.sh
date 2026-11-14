@@ -21,6 +21,8 @@ case "$(uname -s)" in
     native_flags="-C target-feature=+crt-static" ;;
   *) echo "Unsupported build platform: $(uname -s)" >&2; exit 1 ;;
 esac
+# Cargo emits UTF-8; Python on Windows would otherwise decode it with the ANSI code page.
+export PYTHONUTF8=1
 native_work="$(mktemp -d)"
 trap 'rm -rf -- "$native_work"' EXIT
 export CARGO_HOME="${CARGO_HOME:-$native_work/cargo}"

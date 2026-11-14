@@ -25,7 +25,7 @@ import urllib.request
 
 
 def prepare(args):
-    source = json.loads(Path(args.source).read_text())
+    source = json.loads(Path(args.source).read_text(encoding='utf-8'))
     output = Path(args.output).resolve()
     cache = output.parent / ('source-' + source['sha256'][:16] + '.tar.gz')
     cache.parent.mkdir(parents=True, exist_ok=True)
@@ -79,7 +79,7 @@ def prepare(args):
     toolchain = source.get('rust')
     if not toolchain:
         for candidate in output.rglob('rust-toolchain.toml'):
-            found = re.search(r'channel\s*=\s*"([^"]+)"', candidate.read_text())
+            found = re.search(r'channel\s*=\s*"([^"]+)"', candidate.read_text(encoding='utf-8'))
             if found:
                 toolchain = found.group(1)
                 break
@@ -87,7 +87,7 @@ def prepare(args):
 
 
 def packages(path):
-    text = Path(path).read_text()
+    text = Path(path).read_text(encoding='utf-8')
     return {(m.group(1), m.group(2), m.group(3), m.group(4)) for m in re.finditer(
         r'\[\[package\]\]\nname = "([^"]+)"\nversion = "([^"]+)"(?:\nsource = "([^"]+)")?(?:\nchecksum = "([^"]+)")?', text)}
 

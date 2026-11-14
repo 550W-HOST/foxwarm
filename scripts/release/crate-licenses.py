@@ -17,7 +17,7 @@ import sys
 manifest, package, triple, output, title = sys.argv[1:6]
 metadata = json.loads(subprocess.run(
     ['cargo', 'metadata', '--format-version', '1', '--filter-platform', triple, '--manifest-path', manifest],
-    check=True, capture_output=True, text=True).stdout)
+    check=True, capture_output=True, encoding='utf-8').stdout)
 packages = {p['id']: p for p in metadata['packages']}
 nodes = {n['id']: n for n in metadata['resolve']['nodes']}
 roots = [p['id'] for p in metadata['packages'] if p['name'] == package and p['id'] in metadata['workspace_members']]
