@@ -26,8 +26,8 @@ for app in sh curl mktemp mkfifo dd wc head tail cat mv rm mkdir chmod sleep dat
 done
 case "$HOST" in http://*|https://*) ;; *) echo 'An HTTP(S) --host URL is required.' >&2; exit 1 ;; esac
 case "$HOST" in *'?'*|*'#'*|*'@'*) echo 'Host URL must not contain credentials, query or fragment.' >&2; exit 1 ;; esac
-case "$NODE_ID" in ''|*[!a-zA-Z0-9_-]*) echo 'A valid --node-id from /node create is required.' >&2; exit 1 ;; esac
-case "$AUTH_TOKEN" in *[!a-fA-F0-9]*|'') echo 'A per-node token from /node create is required.' >&2; exit 1 ;; esac
+case "$NODE_ID" in ''|*[!a-zA-Z0-9_-]*) echo 'A valid --node-id from /node token is required.' >&2; exit 1 ;; esac
+case "$AUTH_TOKEN" in *[!a-fA-F0-9]*|'') echo 'A per-node token from /node token is required.' >&2; exit 1 ;; esac
 [ "${#AUTH_TOKEN}" -eq 64 ] || { echo 'Per-node token must have 64 hexadecimal characters.' >&2; exit 1; }
 HOST=${HOST%/}
 START_CWD=$(pwd -P)

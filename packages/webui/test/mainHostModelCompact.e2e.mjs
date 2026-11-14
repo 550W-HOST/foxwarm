@@ -306,6 +306,8 @@ try {
         return rows.at(-1)?.parts?.[0]?.text === 'synthetic response' && rows.some(row => JSON.stringify(row).includes(marker))
       }, `seed layered extra turn ${extraSeed}`, 25000)
     }
+    // The reply row lands before busy release; manual compaction of this model needs an idle Session.
+    await until(() => compactIdle(hostPort, layeredId), 'seeded turns idle')
   }
   const levelOneCount = async () => (await history(hostPort, layeredId)).messages.filter(
     row => row.__meta?.contextBlock?.level === 1).length
@@ -438,7 +440,7 @@ try {
   const beforeStop = await history(hostPort, stopId)
   await send(hostPort, stopId, 'queued-stop after planner cancellation')
   assert.equal((await history(hostPort, stopId)).queueLength, 1)
-  const stopped = await command(hostPort, stopId, '/stop compact')
+  const stopped = await command(hostPort, stopId, '/stop --compaction')
   assert.equal(stopped.status, 200)
   assert.equal(stopped.body.success, true)
   await until(() => provider.heldStopClosed, 'planner connection closed')

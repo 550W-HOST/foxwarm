@@ -65,7 +65,7 @@ vector:
 Ask the agent to recall the subject or decision you need, mentioning a Session or project when you know it. You can also search directly from chat:
 
 ```text
-/search --limit 5 why we chose this deployment layout
+/history search --limit 5 why we chose this deployment layout
 ```
 
 Add `--session <session-id>` or `--agent <agent-name>` to narrow the search within your permitted scope.

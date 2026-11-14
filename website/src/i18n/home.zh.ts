@@ -76,8 +76,8 @@ export const zh: HomeStrings = {
       id: 'room',
       eyebrow: '渠道',
       title: '在这里聊清楚，再拉进群里讲。',
-      body: '任何聊天都可以绑定到任何会话。先在 WebUI 里把问题理清楚，再把 bot 拉进团队群，执行 /attach：它带着前面完整的上下文回答，群里任何人都可以接着追问。支持 Telegram、Matrix、QQ、微信和企业微信。',
-      points: ['用 /attach 把聊天接到已有会话', 'Agent 知道是谁在问，上下文完整保留', '发送者白名单；可以对某个群放开追问，命令仍只限授权用户'],
+      body: '任何聊天都可以绑定到任何会话。先在 WebUI 里把问题理清楚，再把 bot 拉进团队群，执行 /channel attach：它带着前面完整的上下文回答，群里任何人都可以接着追问。支持 Telegram、Matrix、QQ、微信和企业微信。',
+      points: ['用 /channel attach 把聊天接到已有会话', 'Agent 知道是谁在问，上下文完整保留', '发送者白名单；可以对某个群放开追问，命令仍只限授权用户'],
       link: { label: '接入渠道', href: docs('channels/') },
       image: { alt: '示意图：团队群聊中，开发者把 bot 绑定到已有会话，请它解释一项改动，同事接着追问。' }
     }
@@ -116,7 +116,7 @@ export const zh: HomeStrings = {
     title: 'tidepool 开发群',
     status: '4 位成员',
     messages: [
-      { from: 'me', text: '/attach tidepool/proration', time: '16:02' },
+      { from: 'me', text: '/channel attach tidepool/proration', time: '16:02' },
       { from: 'system', text: '已绑定到“Ship the proration fix”。' },
       { from: 'me', text: '@foxwarm 用两句话给大家讲讲 proration 这次改了什么', time: '16:03' },
       { from: 'bot', name: 'Foxwarm', text: '原来 prorate() 把剩余时间取整到天，中午换套餐会多退半天的钱。现在按精确时间计算，build-box 上 6 个测试全部通过。', time: '16:03' },

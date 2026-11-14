@@ -10,6 +10,8 @@ internal static class CtlHelp
 
     internal static string Overview(Func<CtlCommand, bool> visible, string ingress = CtlRegistry.Ingress)
     {
+        if (ingress == "user")
+            return UserOverview(visible);
         var builder = new StringBuilder(
             ingress == "external"
                 ? "Foxwarm commands for this MCP connection. Write `<noun> <verb> [arguments]`; add --help to a noun or command for its usage.\n\n"
@@ -32,11 +34,38 @@ internal static class CtlHelp
         return Bound(builder.ToString());
     }
 
+    // User help: shortcuts, then nouns, as chat text.
+    private static string UserOverview(Func<CtlCommand, bool> visible)
+    {
+        var builder = new StringBuilder("📖 *Commands*\n\n");
+        foreach (var shortcut in CtlRegistry.Shortcuts)
+            if (CtlRegistry.Shortcut(shortcut.Name) is { } command && visible(command))
+                builder.Append($"`/{shortcut.Name}` - {command.Summary}\n");
+        builder.Append('\n');
+        foreach (var noun in CtlRegistry.Nouns.Where(noun => Commands(noun.Name, visible, "user").Any()))
+            builder.Append($"`/{noun.Name}` - {CtlRegistry.NounSummary(noun, "user")}\n");
+        builder.Append(
+            "\nSend `/help <noun>` for a noun's commands or `/help <noun> <verb>` for one command's arguments. Quote arguments containing spaces."
+        );
+        return Bound(builder.ToString());
+    }
+
     internal static string? Noun(string noun, Func<CtlCommand, bool> visible, string ingress = CtlRegistry.Ingress)
     {
         var commands = Commands(noun, visible, ingress).ToArray();
         if (commands.Length == 0 || CtlRegistry.Noun(noun) is not { } entry)
             return null;
+        if (ingress == "user")
+            return Bound(
+                $"📋 */{noun}* - {CtlRegistry.NounSummary(entry, ingress)}\n\n"
+                    + string.Join(
+                        "\n",
+                        commands.Select(command =>
+                            $"`{Synopsis(command, compact: true, ingress)}` - {command.Summary}"
+                        )
+                    )
+                    + $"\n\nSend `/help {noun} <verb>` for a command's arguments."
+            );
         var builder = new StringBuilder(
             Prefix(ingress) + noun + ": " + CtlRegistry.NounSummary(entry, ingress) + "\n\n"
         );
@@ -184,12 +213,15 @@ internal static class CtlHelp
 
     internal static string Synopsis(CtlCommand command, bool compact, string ingress = CtlRegistry.Ingress)
     {
-        var parts = new List<string> { Prefix(ingress) + command.Path };
-        foreach (var parameter in command.Parameters.Where(parameter => !parameter.Flag))
+        var parts = new List<string> { Prefix(ingress) + (command.Display ?? command.Path) };
+        string Positional(CtlParameter parameter)
         {
             var term = "<" + parameter.Name + (parameter.Variadic || parameter.Rest ? "..." : "") + ">";
-            parts.Add(parameter.Required ? term : "[" + term + "]");
+            return parameter.Required ? term : "[" + term + "]";
         }
+        parts.AddRange(
+            command.Parameters.Where(parameter => !parameter.Flag && !parameter.Rest).Select(Positional)
+        );
         var flags = command.Parameters.Where(parameter => parameter.Flag).ToArray();
         if (compact)
         {
@@ -201,6 +233,8 @@ internal static class CtlHelp
             parts.AddRange(
                 flags.Select(parameter => parameter.Required ? Term(parameter) : "[" + Term(parameter) + "]")
             );
+        // Rest text takes everything after it, so options come first.
+        parts.AddRange(command.Parameters.Where(parameter => parameter.Rest).Select(Positional));
         return string.Join(' ', parts);
     }
 

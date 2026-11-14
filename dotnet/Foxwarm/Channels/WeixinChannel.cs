@@ -94,7 +94,7 @@ internal sealed class WeixinChannel : IManagedChannel
                 if (ret != 0 || code != 0)
                     throw new ChannelProblem(
                         ret == -14 || code == -14
-                            ? "the Weixin login has expired; run /channel weixin login again"
+                            ? "the Weixin login has expired; run /channel weixin-login again"
                             : $"Weixin returned error {(ret != 0 ? ret : code)}"
                     );
                 failures = 0;

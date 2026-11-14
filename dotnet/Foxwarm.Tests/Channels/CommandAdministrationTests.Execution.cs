@@ -49,7 +49,7 @@ public sealed partial class CommandAdministrationTests
         await f.Router.HandleMessageAsync(
             context,
             new ChannelMessage(
-                "/timer after 600 --new-session --prefix watch -- message detail",
+                "/timer create --after-seconds 600 --new-session --session-prefix watch -- message detail",
                 null
             )
         );
@@ -73,51 +73,15 @@ public sealed partial class CommandAdministrationTests
     }
 
     [Fact]
-    public async Task Timer_text_ingress_keeps_Source_single_token_presets_and_multi_field_limit_and_fires_real_owned_after_and_at_timers()
+    public async Task Timer_create_takes_presets_quoted_cron_and_rest_messages_and_fires_real_owned_after_and_at_timers()
     {
-        var expected = await SourceAsync(
-            new JsonObject
-            {
-                ["command"] = "/timer",
-                ["binding"] = "source",
-                ["args"] = new JsonArray("cron", "@hourly", "--", "preset"),
-            }
-        );
-        Assert.Equal("@hourly", SessionWait.Text(expected["effects"]![0]?["options"]?["cron"]));
-        expected = await SourceAsync(
-            new JsonObject
-            {
-                ["command"] = "/timer",
-                ["binding"] = "source",
-                ["args"] = new JsonArray("cron", "0", "*", "*", "*", "*", "--", "multi"),
-            }
-        );
-        Assert.Equal("0", SessionWait.Text(expected["effects"]![0]?["options"]?["cron"]));
-        Assert.Equal(
-            "* * * * -- multi",
-            SessionWait.Text(expected["effects"]![0]?["options"]?["message"])
-        );
-        expected = await SourceAsync(
-            new JsonObject
-            {
-                ["command"] = "/timer",
-                ["binding"] = "source",
-                ["args"] = new JsonArray("cron", "\"0", "*", "*", "*", "*\"", "--", "quoted"),
-            }
-        );
-        Assert.Empty(expected["effects"]!.AsArray());
-        Assert.Contains(
-            "failed",
-            SessionWait.Text(expected["replies"]![0]),
-            StringComparison.OrdinalIgnoreCase
-        );
         await using var f = await ExternalChannelFixture.CreateAsync(
             new JsonObject { ["alpha"] = ExternalChannelFixture.Channel() }
         );
         var replies = new List<string>();
         var source = Source(replies);
         f.Manager.AttachChannel(source.Target, f.Owner);
-        await f.Router.HandleExternalMessageAsync(source, Message("/timer cron @hourly -- preset"));
+        await f.Router.HandleExternalMessageAsync(source, Message("/timer create --cron @hourly -- preset"));
         Assert.Equal("@hourly", SessionWait.Text(f.Manager.Timers.List(f.Owner.Id)[0]?["cron"]));
         Assert.True(
             SessionWait.Number(f.Manager.Timers.List(f.Owner.Id)[0]?["nextRunAt"])
@@ -125,7 +89,7 @@ public sealed partial class CommandAdministrationTests
         );
         await f.Router.HandleExternalMessageAsync(
             source,
-            Message("/timer cron 0 * * * * -- multi")
+            Message("/timer create --cron 0 * * * * -- multi")
         );
         Assert.Equal(2, f.Manager.Timers.List(f.Owner.Id).Count);
         Assert.Contains(
@@ -136,9 +100,14 @@ public sealed partial class CommandAdministrationTests
         );
         await f.Router.HandleExternalMessageAsync(
             source,
-            Message("/timer cron \"0 * * * *\" -- quoted")
+            Message("/timer create --cron \"0 * * * *\" quoted")
         );
-        Assert.Equal(2, f.Manager.Timers.List(f.Owner.Id).Count);
+        // An unquoted cron is one word; a quoted one keeps all its fields.
+        Assert.Equal(3, f.Manager.Timers.List(f.Owner.Id).Count);
+        Assert.Contains(
+            f.Manager.Timers.List(f.Owner.Id),
+            row => SessionWait.Text(row?["cron"]) == "0 * * * *" && SessionWait.Text(row?["message"]) == "quoted"
+        );
         // The shortened cron is live on Sundays; isolate the one-shot checks from its next tick.
         foreach (var timer in f.Manager.Timers.List(f.Owner.Id))
             await f.Router.HandleExternalMessageAsync(
@@ -148,19 +117,19 @@ public sealed partial class CommandAdministrationTests
         Assert.Empty(f.Manager.Timers.List(f.Owner.Id));
         await f.Router.HandleExternalMessageAsync(
             source,
-            Message("/timer after 1 -- current after trigger")
+            Message("/timer create --after-seconds 1 -- current after trigger")
         );
         await f.Router.HandleExternalMessageAsync(
             source,
             Message(
-                "/timer at "
+                "/timer create --at "
                     + DateTimeOffset.UtcNow.AddSeconds(1).ToString("O")
                     + " -- current at trigger"
             )
         );
         await f.Router.HandleExternalMessageAsync(
             source,
-            Message("/timer after 1 --new-session --prefix command_timer -- fresh trigger")
+            Message("/timer create --after-seconds 1 --new-session --session-prefix command_timer -- fresh trigger")
         );
         await TelegramChannelTests.Until(() =>
             f.Owner.Entry.Snapshot().Queue.Count == 2
@@ -203,7 +172,7 @@ public sealed partial class CommandAdministrationTests
 
     [Theory]
     [InlineData("50", 10)]
-    [InlineData("invalid", 6)]
+    [InlineData("0", 6)]
     public async Task Manual_compact_text_passes_explicit_keep_or_configured_fallback_into_real_provider_preparation(
         string argument,
         int kept
@@ -266,7 +235,7 @@ public sealed partial class CommandAdministrationTests
                     .Select(part => SessionWait.Text(part["text"]) ?? "")
             );
             Assert.Contains($"Recent messages ({kept} rendered item(s)", text);
-            await f.Router.HandleExternalMessageAsync(source, Message("/stop compact"));
+            await f.Router.HandleExternalMessageAsync(source, Message("/stop --compaction"));
             Assert.Equal(20, f.Owner.History().Count);
         }
         finally
@@ -276,7 +245,7 @@ public sealed partial class CommandAdministrationTests
     }
 
     [Fact]
-    public async Task External_move_parser_preserves_target_first_grammar_and_actual_alias_attachment_and_parent_publication()
+    public async Task External_move_uses_the_ctl_grammar_and_actual_alias_attachment_and_parent_publication()
     {
         await using var f = await ExternalChannelFixture.CreateAsync(
             new JsonObject { ["alpha"] = ExternalChannelFixture.Channel() }
@@ -289,13 +258,17 @@ public sealed partial class CommandAdministrationTests
         var old = f.Owner.Id;
         await f.Router.HandleExternalMessageAsync(
             source,
-            Message("/session move --parent " + parent.Id + " destination/moved")
+            Message("/session move destination/moved --parent " + parent.Id)
         );
         Assert.Equal(old, f.Owner.Id);
+        Assert.Contains("Unknown option `--parent`", replies.Single());
         replies.Clear();
         await f.Router.HandleExternalMessageAsync(
             source,
-            Message("/session move destination/moved --parent " + parent.Id)
+            Message(
+                "/session move --new-agent-name destination --new-session-id moved --parent-session-id "
+                    + parent.Id
+            )
         );
         Assert.Equal("destination/moved", f.Owner.Id);
         Assert.Equal(
@@ -330,7 +303,7 @@ public sealed partial class CommandAdministrationTests
         {
             await f.Router.HandleExternalMessageAsync(
                 source,
-                Message("/timer after 3600 -- committed timer")
+                Message("/timer create --after-seconds 3600 -- committed timer")
             );
             var timer = f.Manager.Timers.List(f.Owner.Id).Single()!;
             var id = SessionWait.Text(timer["id"])!;

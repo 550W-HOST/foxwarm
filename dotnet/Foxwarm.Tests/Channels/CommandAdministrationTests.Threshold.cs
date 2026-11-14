@@ -57,7 +57,7 @@ public sealed partial class CommandAdministrationTests
         {
             await f.Router.HandleExternalMessageAsync(
                 source,
-                Message("/session compact-threshold 8000 ignored")
+                Message("/session compact-threshold 8000")
             );
             Assert.Equal(8000, f.Owner.Metadata().CompactThreshold);
             await f.Router.HandleExternalMessageAsync(

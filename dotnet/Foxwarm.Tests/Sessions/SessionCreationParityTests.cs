@@ -310,7 +310,7 @@ public sealed partial class SessionCreationParityTests
     }
 
     [Fact]
-    public async Task Session_new_and_no_argument_fork_use_the_Source_allocator_without_changing_attachment_contracts()
+    public async Task Session_new_uses_the_Source_allocator_and_forks_default_to_numbered_fork_names()
     {
         await using var f = await ExternalChannelFixture.CreateAsync(
             new JsonObject { ["alpha"] = ExternalChannelFixture.Channel() }
@@ -353,16 +353,16 @@ public sealed partial class SessionCreationParityTests
         );
         Assert.Equal(
             "source",
-            (await f.Manager.RequiredAsync("source_1231_i")).Metadata().ParentSessionId
+            (await f.Manager.RequiredAsync("source_fork")).Metadata().ParentSessionId
         );
-        Assert.Contains("source_1231_i", replies.Single());
-        Assert.Empty((await f.Manager.RequiredAsync("source_1231_i")).Entry.Snapshot().Queue);
+        Assert.Contains("source_fork", replies.Single());
+        Assert.Empty((await f.Manager.RequiredAsync("source_fork")).Entry.Snapshot().Queue);
         await f.Router.HandleExternalMessageAsync(
             source,
-            new([new JsonObject { ["text"] = "/session fork" }])
+            new([new JsonObject { ["text"] = "/session fork --attach" }])
         );
         Assert.Equal(
-            "source_fork",
+            "source_fork_2",
             SessionWait.Text(f.Manager.ChannelBinding(source.Target)?["sessionId"])
         );
         await f.Router.HandleMessageAsync(new(f.Owner.Id, "webui"), new("/fork explicit", null));

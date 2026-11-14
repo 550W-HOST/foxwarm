@@ -110,7 +110,7 @@ public sealed class WeixinCommitOrderingTests
                 route,
                 new
                 {
-                    text = "/channel weixin wait " + SessionWait.Text(commandLogin["sessionKey"]),
+                    text = "/channel weixin-wait " + SessionWait.Text(commandLogin["sessionKey"]),
                 }
             );
             var results = await Task.WhenAll(confirmSetup, confirmCommand);

@@ -30,6 +30,7 @@ const provider = asyncCompact => ({ providerType: 'openai-responses', baseUrl: '
 await writeModelFixture(owned.data, { default: 'a', providers: { a: provider(true), sync: provider(false) } })
 const authority = async id => JSON.parse(await readFile(join(owned.data, 'state/sessions', id + '.json'), 'utf8'))
 const command = (id, text) => owned.api('POST', route(id) + '/message', { text })
+const moveArgs = target => { const [agent, name] = target.includes('/') ? target.split('/') : [null, target]; return (agent ? `--new-agent-name ${agent} ` : '') + `--new-session-id ${name}` }
 async function seed(id, model) {
   assert.equal((await owned.api('POST', '/api/sessions', { agentId: 'main', sessionId: id })).status, 200)
   if (model) assert.equal((await owned.api('POST', route(id) + '/model', { model })).status, 200)
@@ -38,7 +39,7 @@ async function seed(id, model) {
     await until(async () => { const state = await authority(id); return !state.busy && state.history.some(row => row.parts?.some(part => part.text === 'DONE-' + key)) }, key)
   }
 }
-async function moved(id) { const result = await command(id, '/session move ' + id + '-moved'); assert.equal(result.status, 200, JSON.stringify(result.body)); return id + '-moved' }
+async function moved(id) { const result = await command(id, '/session move ' + moveArgs(id + '-moved')); assert.equal(result.status, 200, JSON.stringify(result.body)); return id + '-moved' }
 async function settled(id) {
   await until(async () => { const state = (await owned.api('GET', route(id) + '/state')).body; return !state.session.busy && !state.session.compacting && !(await authority(id)).queue.some(item => item.type === 'compact-commit') }, 'moved old-identity operation settled')
   assert(!(await authority(id)).history.some(row => row.__meta?.contextBlock)); assert.equal(owned.sql('SELECT COUNT(*) FROM archive_blocks WHERE session_id=?', [id])[0][0], 0)

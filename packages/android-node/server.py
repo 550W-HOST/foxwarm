@@ -714,7 +714,7 @@ async def connect_to_foxwarm(node: AndroidNode):
 
                     if message_type == "pair_pending":
                         logger.info(
-                            "⏳ Pairing pending approval: pendingId=%s requested=%s. Run /node approve %s",
+                            "⏳ Pairing pending approval: pendingId=%s requested=%s. Run /node pair-approve %s",
                             data.get("pendingId"),
                             data.get("requestedName"),
                             data.get("pendingId"),

@@ -1,26 +1,35 @@
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
+using Foxwarm.Tools;
 
 namespace Foxwarm;
 
 internal sealed partial class MessageRouter
 {
-    private static string? ControlAction(string command)
-    {
-        var words = command.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
-        return words.FirstOrDefault() switch
+    // The WebUI control a command runs: stop, continue, dequeue, compact or cancel-compaction
+    // of the WebUI Session. A malformed control shortcut is still a control, which fails.
+    private static string? ControlAction(string head, CtlInvocation parsed) =>
+        parsed switch
         {
-            "/stop" => words.ElementAtOrDefault(1) == "compact" ? "cancel-compaction" : "stop",
-            "/continue" => "continue",
-            "/dequeue" => "dequeue",
-            "/compact" => "compact",
+            CtlUser { Command.UserHandler: "session-stop" } stop when stop.Text("sessionId") is null =>
+                stop.Flag("compaction") ? "cancel-compaction" : "stop",
+            CtlUser { Command.UserHandler: "session-continue" } => "continue",
+            CtlUser { Command.UserHandler: "session-dequeue" } => "dequeue",
+            CtlUser { Command.UserHandler: "session-compact" } => "compact",
+            CtlError => head switch
+            {
+                "/stop" => "stop",
+                "/continue" => "continue",
+                "/dequeue" => "dequeue",
+                "/compact" => "compact",
+                _ => null,
+            },
             _ => null,
         };
-    }
 
     private async Task<MessageRouteResult> HandleControlAsync(
         SessionOwner owner,
-        string command,
+        CtlInvocation parsed,
         string requestId,
         string action
     )
@@ -61,13 +70,10 @@ internal sealed partial class MessageRouter
         }
         try
         {
-            if (
-                command is not ("/stop" or "/continue" or "/dequeue" or "/stop compact")
-                && !System.Text.RegularExpressions.Regex.IsMatch(command, @"^/compact(?:\s|$)")
-            )
+            if (parsed is not CtlUser call)
                 return Reply(
                     "error",
-                    "This Session command has not been implemented.",
+                    parsed is CtlError error ? error.Message : "This Session command has not been implemented.",
                     httpStatus: 422
                 );
             switch (action)
@@ -114,14 +120,10 @@ internal sealed partial class MessageRouter
                         ? Reply("noop", "No queued messages")
                         : Reply("accepted", "Queued messages requested");
                 case "compact":
-                    var args = command
-                        .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
-                        .Skip(1)
-                        .ToArray();
-                    var toolsOnly = args.FirstOrDefault() == "tools";
-                    var keep = CommandArguments.CompactKeep(
-                        toolsOnly ? args.Skip(1).ToArray() : args
-                    );
+                    var toolsOnly = call.Flag("tools");
+                    var keep = call.Number("keepPercent") is > 0 and <= 100 and var percent
+                        ? percent / 100
+                        : (double?)null;
                     if (owner.Entry.HistoryMutation)
                         return Reply(
                             "error",

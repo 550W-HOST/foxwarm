@@ -75,7 +75,7 @@ for (const runtime of ['source', 'dotnet']) {
     const token = (await readFile(join(fixture.data, 'state/node_token'), 'utf8')).trim()
     ui = await consoleClient(cwd, ['--host', host, '--id', 'console-cli', '--token', token, '--credentials-file', join(cwd, 'credentials.json'), '--timeout', '3', '--no-local-trigger'])
     const pairing = await until(async () => (await fixture.api('GET', '/api/nodes/onboarding/pending')).body.items.find(row => row.requestedName === 'console-cli'), 'real pairing request')
-    await ui.wait(handle => handle.screen().includes('/node approve ' + pairing.id), 'exact pairing command')
+    await ui.wait(handle => handle.screen().includes('/node pair-approve ' + pairing.id), 'exact pairing command')
     assert.equal((await fixture.api('POST', '/api/nodes/onboarding/approve', { pendingId: pairing.id })).status, 200)
     await ui.wait(handle => handle.screen().includes('registered') && handle.screen().includes('nodeId=console-cli'), 'registered status')
     await until(async () => (await fixture.api('GET', '/api/nodes')).body.nodes.some(node => node.id === 'console-cli' && node.online), 'actual registered Node')

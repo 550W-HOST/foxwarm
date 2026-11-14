@@ -485,6 +485,31 @@ internal sealed partial class SessionManager
         return (total, candidates.Skip(Math.Max(0, start - unchangedBefore)).Take(count).ToArray());
     }
 
+    // The administrator's list (user `/session list`): every Session in scope, optionally
+    // narrowed by the WebUI metadata matcher, in the ordinary list order.
+    internal (long Total, JsonObject[] Page) AdministratorSessionList(
+        string? query,
+        int start,
+        int count,
+        string? agent
+    )
+    {
+        query = query is null ? null : SessionCatalog.Trim(query);
+        if (string.IsNullOrEmpty(query))
+            return CatalogMetadataOffset(start, count, agent);
+        var matcher = SessionListQueries.MetadataMatcher(query);
+        var matches = ListPresentations()
+            .Where(row => agent is null || SessionCatalog.Text(row["agent"]) == agent)
+            .Where(row => matcher(row))
+            .OrderByDescending(row => SessionWait.Number(row["lastMessageTime"]) ?? 0)
+            .ThenBy(
+                row => SessionWait.Text(row["id"])!,
+                Comparer<string>.Create(SessionListQueries.CompareIds)
+            )
+            .ToArray();
+        return (matches.Length, matches.Skip(start).Take(count).ToArray());
+    }
+
     private static string? ListQuery(JsonObject args)
     {
         if (!args.ContainsKey("query"))

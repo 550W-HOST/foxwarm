@@ -28,7 +28,7 @@ Pass `--host=...` only when the container should connect to a different reachabl
 Options:
   --host=URL          Override Foxwarm master base URL (default: derived from request URL)
   --pairing=TOKEN     Pairing token from the master (required unless stored credentials already exist)
-  --auth-token=TOKEN  Per-node auth token from /node create (use with --node-id)
+  --auth-token=TOKEN  Per-node auth token from /node token (use with --node-id)
   --node-id=ID        Requested node name (default: node-<hostname>)
   --state-dir=DIR     Persistent data dir on the local machine (default: ./data)
   --compose-file=FILE docker compose file path to create (default: ./docker-compose.yaml)
@@ -127,7 +127,7 @@ Docker-based node client started.
 
 If this is the first run, approve the pending pairing on the master:
   /node
-  /node approve <pending-id> $NODE_ID
+  /node pair-approve <pending-id> --node-id $NODE_ID
 
 Useful follow-up commands:
   $DOCKER_COMPOSE logs -f
@@ -143,7 +143,7 @@ Docker-based node client started. Following logs below.
 
 If this is the first run, approve the pending pairing on the master:
   /node
-  /node approve <pending-id> $NODE_ID
+  /node pair-approve <pending-id> --node-id $NODE_ID
 
 Press Ctrl-C to stop following logs. The container will keep running because it was started detached.
 

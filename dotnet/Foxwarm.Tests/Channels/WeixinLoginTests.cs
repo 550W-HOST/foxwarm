@@ -209,7 +209,7 @@ public sealed class WeixinLoginTests
         peer.MatrixEvents(
             "matrix-a",
             "!command:fixture",
-            ExternalProtocolPeer.MatrixText("login-command", "/channel weixin login")
+            ExternalProtocolPeer.MatrixText("login-command", "/channel weixin-login")
         );
         await TelegramChannelTests.Until(() =>
             peer.Sent("matrix-a")
@@ -228,7 +228,7 @@ public sealed class WeixinLoginTests
         peer.MatrixEvents(
             "matrix-a",
             "!command:fixture",
-            ExternalProtocolPeer.MatrixText("wait-command", "/channel weixin wait " + key)
+            ExternalProtocolPeer.MatrixText("wait-command", "/channel weixin-wait " + key)
         );
         await TelegramChannelTests.Until(() =>
             peer.Sent("matrix-a")

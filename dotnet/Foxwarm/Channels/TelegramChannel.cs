@@ -82,7 +82,7 @@ internal sealed class TelegramChannel : IManagedChannel
         {
             await ApiAsync(
                 "setMyCommands",
-                new JsonObject { ["commands"] = ExternalCommands.TelegramCommands() },
+                new JsonObject { ["commands"] = UserCommands.TelegramCommands() },
                 stopping.Token
             );
             stage = "Telegram identity lookup";

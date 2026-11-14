@@ -134,17 +134,17 @@ public sealed class ExternalChannelRoutingTests
         await guest.DrainForegroundAsync();
         guest.Registry.TriggerOverride = _ => Task.CompletedTask;
         // Router's protected command gate makes indirect allow-all users' slash-looking input ordinary chat.
-        await f.Router.HandleExternalMessageAsync(source, Message("/attach " + f.Owner.Id));
+        await f.Router.HandleExternalMessageAsync(source, Message("/channel attach " + f.Owner.Id));
         Assert.Equal(id, f.Manager.ChannelBinding(source.Target)!["sessionId"]!.GetValue<string>());
         Assert.Contains(
             guest.Entry.Snapshot().Queue,
             item =>
                 item.Parts!.Any(part =>
-                    (SessionWait.Text(part["system"]) ?? "").Contains("/attach ")
+                    (SessionWait.Text(part["system"]) ?? "").Contains("/channel attach ")
                 )
         );
         // Telegram's pre-Router hook is a distinct Source entry path, not a stronger command middleware.
-        Assert.True(await f.Router.HandleExternalCommandAsync(source, "/attach", f.Owner.Id));
+        Assert.True(await f.Router.HandleExternalCommandAsync(source, "/channel", "attach " + f.Owner.Id));
         Assert.Equal(
             f.Owner.Id,
             f.Manager.ChannelBinding(source.Target)!["sessionId"]!.GetValue<string>()

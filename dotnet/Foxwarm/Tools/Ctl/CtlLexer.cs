@@ -23,9 +23,10 @@ internal sealed record CtlToken(string Text, bool Quoted, int Start, int Plain)
     }
 }
 
-// POSIX-style word splitting without any expansion. Tokens are read on demand so a trailing
+// POSIX-style word splitting without any expansion. Shell operators are rejected for callers
+// that might expect a shell (shell: true); user commands treat them as ordinary characters. Tokens are read on demand so a trailing
 // rest parameter can take the remaining raw text without tokenizing it.
-internal sealed class CtlLexer(string text)
+internal sealed class CtlLexer(string text, bool shell = true)
 {
     private int position;
 
@@ -58,9 +59,16 @@ internal sealed class CtlLexer(string text)
 
     private void SkipSpace()
     {
-        while (position < text.Length && char.IsWhiteSpace(text[position]))
+        while (position < text.Length && Space(text[position]))
             position++;
     }
+
+    // User commands split words like their head (MessageRouter.CommandSpace, JavaScript \s).
+    private bool Space(char value) =>
+        shell
+            ? char.IsWhiteSpace(value)
+            : value is '\t' or '\n' or '\v' or '\f' or '\r' or ' ' or '\u00A0' or '\u1680' or '\u2028' or '\u2029' or '\u202F' or '\u205F' or '\u3000' or '\uFEFF'
+                || value is >= '\u2000' and <= '\u200A';
 
     internal CtlToken? Next()
     {
@@ -71,7 +79,7 @@ internal sealed class CtlLexer(string text)
         var builder = new StringBuilder();
         var quoted = false;
         var plain = -1;
-        while (position < text.Length && !char.IsWhiteSpace(text[position]))
+        while (position < text.Length && !Space(text[position]))
         {
             var current = text[position];
             if (current is '\'' or '"' or '\\' && plain < 0)
@@ -124,8 +132,11 @@ internal sealed class CtlLexer(string text)
                 position += 2;
             }
             else if (
-                current is '|' or ';' or '&' or '<' or '>' or '`'
-                || current == '$' && position + 1 < text.Length && text[position + 1] == '('
+                shell
+                && (
+                    current is '|' or ';' or '&' or '<' or '>' or '`'
+                    || current == '$' && position + 1 < text.Length && text[position + 1] == '('
+                )
             )
                 throw new InvalidDataException(
                     $"Unquoted `{(current == '$' ? "$(" : current.ToString())}`: " + NotAShell

@@ -46,7 +46,7 @@ Unknown slash text follows ordinary authorization and configured guest admission
 
 The existing `channels.json` owner accepts supported legacy string/object bindings, `push-only` and the old group-wide flag. Normal writes use current names. Writes use the shared [durable state-file helper](./dotnet-node-primitives.md#durable-state-files); a failure after its rename still counts as persisted. Ordinary mutations retain live state if persistence fails; a critical bind restores its prior live map and surfaces its error. This is not a transaction across channel, Agent and Session files. Identity rewrite and deletion retain their existing claims and representation-sensitive behavior; see [coordination storage](./session-deletion-storage.md).
 
-The shared [command administration owner](./dotnet-command-administration.md) defines catalog/help/autocomplete, source-facing replies, actual caller distinctions and completed effects. Channel runtime/auth/mode/override and attach commands continue using these same channel owners, including actual `/channel weixin status|login|wait` through the [configuration/Setup owner](./dotnet-matrix-weixin.md#configuration-setup-and-lifecycle-ordering).
+The shared [command administration owner](./dotnet-command-administration.md) defines catalog/help/autocomplete, source-facing replies, actual caller distinctions and completed effects. Channel runtime/auth/mode/override and attach commands continue using these same channel owners, including actual `/channel weixin-status|login|wait` through the [configuration/Setup owner](./dotnet-matrix-weixin.md#configuration-setup-and-lifecycle-ordering).
 
 ## Delivery and lifecycle
 

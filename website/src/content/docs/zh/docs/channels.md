@@ -15,13 +15,13 @@ description: 在 Telegram、Matrix、QQ、微信或企业微信里访问会话�
 2. 在群里把这个群聊接到那个会话上：
 
    ```text
-   /attach tidepool/proration
+   /channel attach tidepool/proration
    ```
 
 3. 请 Agent 解释，例如 *"@foxwarm 用两句话跟大家说一下这次改动。"* 它的回答基于整个会话的历史。
 4. 群里的其他人可以直接追问。每条消息都会带着发送者的名字交给 Agent，它知道是谁在问。
 
-`/attach` 会先把群聊从之前接入的会话上断开，所以之后也可以把同一个群改接到别的会话。
+`/channel attach` 会先把群聊从之前接入的会话上断开，所以之后也可以把同一个群改接到别的会话。
 
 群成员的消息会进入会话，Agent 可能会用工具来回答。把会话开放给群之前，先确认这个 Agent 能做什么、能看到什么。面向其他人的会话，适合交给一个[规则](/zh/docs/access-control/)更严格的专用 Agent。
 
@@ -35,7 +35,7 @@ description: 在 Telegram、Matrix、QQ、微信或企业微信里访问会话�
 /channel dangerously-allow-all-users yes
 ```
 
-这只对当前这个聊天生效。不在允许列表里的人可以在这里聊天提问，但 `/attach`、`/channel` 等命令仍然只有允许列表里的用户能用。用 `no` 关闭。
+这只对当前这个聊天生效。不在允许列表里的人可以在这里聊天提问，但 `/channel attach`、`/channel` 等命令仍然只有允许列表里的用户能用。用 `no` 关闭。
 
 ## 添加渠道
 

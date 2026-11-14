@@ -37,8 +37,9 @@ await mkdir(join(owned.work, 'memory'), { recursive: true }); await writeFile(jo
 await writeModelFixture(owned.data, { default: 'a', providers: { a: { providerType: 'openai-responses', baseUrl: 'http://127.0.0.1:' + peer.address().port, models: ['wire'], contextLimit: 20000 } } })
 if (deniedLate) await writeFile(join(owned.data, 'state/tool-authorization.yaml'), JSON.stringify({ version: 1, defaultAction: 'allow', rules: [{ id: 'prepared-old-agent-denial', match: { agent: preparationControl ? 'main' : 'destination', tool: { source: 'node', name: 'exec' }, args: { command: { oneOf: [segmentCommand(5), segmentCommand(6)] } } }, action: 'deny' }] }))
 const authority = async id => JSON.parse(await readFile(join(owned.data, 'state/sessions', id + '.json'), 'utf8'))
+const moveArgs = target => { const [agent, name] = target.includes('/') ? target.split('/') : [null, target]; return (agent ? `--new-agent-name ${agent} ` : '') + `--new-session-id ${name}` }
 async function create(id) { const response = await owned.api('POST', '/api/sessions', { agentId: 'main', sessionId: id }); assert.equal(response.status, 200, JSON.stringify(response.body)); return response.body.sessionId }
-async function move(id, target) { const response = await owned.api('POST', route(id) + '/message', { text: '/session move ' + target }); assert.equal(response.status, 200, JSON.stringify(response.body)); return response.body.result }
+async function move(id, target) { const response = await owned.api('POST', route(id) + '/message', { text: '/session move ' + moveArgs(target) }); assert.equal(response.status, 200, JSON.stringify(response.body)); return response.body.result }
 async function hasFinal(id, text) { return (await owned.api('GET', route(id) + '/history')).body.messages?.some(row => row.parts?.some(part => part.text === text)) }
 try {
   await owned.start(); const page = await owned.openApp(); await create('busy'); assert.equal((await owned.api('POST', '/api/agents', { agentId: 'destination' })).status, 201)

@@ -115,7 +115,7 @@ try {
   assert.equal(background.body.prompt_cache_key, sha(stopped + '--compact-plan')); assert.notEqual(background.connection.id, held.get('held-foreground').connection.id)
   const time = Date.now(); assert.equal((await fixture.api('POST', route(stopped) + '/stop')).status, 200); assert(Date.now() - time < 2500, 'Stop does not wait for held background')
   assert(!background.connection.closed); assert(!(await history(stopped)).session.busy)
-  assert.equal((await command(stopped, '/stop compact')).body.success, true); await until(() => background.connection.closed, 'compact-only provider cancellation'); assert.deepEqual((await history(stopped)).messages, beforeStop)
+  assert.equal((await command(stopped, '/stop --compaction')).body.success, true); await until(() => background.connection.closed, 'compact-only provider cancellation'); assert.deepEqual((await history(stopped)).messages, beforeStop)
   held.delete('plan'); const beforeControl = records.length; await command(stopped, '/compact'); await until(() => held.has('plan'), 'new idle background'); held.get('plan').valid()
   await until(async () => (await history(stopped)).messages.some(row => row.__meta?.contextBlock) && !(await history(stopped)).session.busy, 'control-only apply')
   assert.equal(records.slice(beforeControl).filter(row => !row.planning).length, 0)
@@ -129,7 +129,7 @@ try {
   awaited.valid(); await until(async () => !(await history(synced)).session.busy && (await history(synced)).messages.some(row => row.__meta?.contextBlock), 'awaited owned release')
 
   const target = await create(); await seed(target, 'target'); const caller = await create(); crossTarget = target
-  held.delete('plan'); await send(caller, 'cross-tool'); await until(() => held.has('plan'), 'cross idle existing target'); assert.equal(held.get('plan').body.prompt_cache_key, sha(target + '--compact-plan')); await command(target, '/stop compact')
+  held.delete('plan'); await send(caller, 'cross-tool'); await until(() => held.has('plan'), 'cross idle existing target'); assert.equal(held.get('plan').body.prompt_cache_key, sha(target + '--compact-plan')); await command(target, '/stop --compaction')
   await command(target, 'CASE:held-target'); await until(() => held.has('held-target'), 'busy cross target'); const crossBefore = records.filter(row => row.planning).length
   const rejectedCaller = await create(); await send(rejectedCaller, 'cross-tool'); assert.equal(records.filter(row => row.planning).length, crossBefore); assert((await history(rejectedCaller)).messages.some(row => row.parts?.some(part => part.functionResponse?.response?.error?.message?.includes('must be idle')))); await fixture.api('POST', route(target) + '/stop')
   const countBeforeMissing = (await fixture.api('GET', '/api/sessions')).body.sessions.length; await send(caller, 'missing-tool'); assert.equal((await fixture.api('GET', '/api/sessions')).body.sessions.length, countBeforeMissing)
@@ -159,7 +159,7 @@ try {
   const wsAwaited = await create(); await seed(wsAwaited, 'ws-awaited'); held.delete('plan'); await command(wsAwaited, '/compact'); await until(() => held.has('plan'), 'actual awaited WS operation')
   const awaitedWsPlan = held.get('plan'); assert.equal(awaitedWsPlan.body.prompt_cache_key, sha(wsAwaited)); assert.notEqual(awaitedWsPlan.body.prompt_cache_key, sha(wsAwaited + '--compact-plan')); assert((await history(wsAwaited)).session.busy)
   assert.equal((await fixture.api('POST', route(wsAwaited) + '/stop')).body.stoppedCurrent, false); assert(!awaitedWsPlan.connection.closed)
-  assert.equal((await command(wsAwaited, '/stop compact')).body.success, true); await until(() => awaitedWsPlan.connection.closed, 'awaited compact-only cancellation'); assert(!(await history(wsAwaited)).session.busy)
+  assert.equal((await command(wsAwaited, '/stop --compaction')).body.success, true); await until(() => awaitedWsPlan.connection.closed, 'awaited compact-only cancellation'); assert(!(await history(wsAwaited)).session.busy)
   await fixture.save(config())
 
   const autoBackground = await create(); await seed(autoBackground, 'auto-background'); held.delete('plan'); await send(autoBackground, 'auto-tool'); await until(() => held.has('plan'), 'real usage-triggered tool-loop background planner')

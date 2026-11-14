@@ -54,7 +54,7 @@ public sealed partial class CommandAdministrationTests
     [Fact]
     public void Catalog_heads_use_Source_token_boundaries_and_preserve_multiline_arguments()
     {
-        foreach (var entry in ExternalCommands.WebUiCommands())
+        foreach (var entry in UserCommands.WebUiCommands())
         {
             var name = entry!["name"]!.GetValue<string>();
             foreach (var prefix in new[] { "", " \t", "\uFEFF", "\u2007" })
@@ -107,11 +107,6 @@ public sealed partial class CommandAdministrationTests
         var rejected = await f.Router.HandleMessageAsync(
             new ChannelContext(f.Owner.Id, "webui"),
             new ChannelMessage("/stop invalid", null, ControlRequestId: "bad-stop")
-        );
-        Assert.Equal(422, rejected.Status);
-        rejected = await f.Router.HandleMessageAsync(
-            new ChannelContext(f.Owner.Id, "test"),
-            new ChannelMessage("/stop invalid", null)
         );
         Assert.Equal(422, rejected.Status);
         Assert.Empty(f.Owner.Entry.Snapshot().Queue);

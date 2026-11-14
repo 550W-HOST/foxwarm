@@ -116,7 +116,7 @@ try {
     await online(node)
   }
   const actor = await create('files-owner'), target = await create('delivery-target')
-  assert.equal((await fixture.api('POST', route(target) + '/message', { text: '/session unparent' })).status, 200)
+  assert.equal((await fixture.api('POST', route(target) + '/message', { text: '/session clear-parent' })).status, 200)
   let state = await turn(actor, 'select', [[call('select', 'node', { action: 'select', nodeId: 'one' })]])
   good(state, 'select'); assert.equal((await fixture.api('POST', route(actor) + '/cwd', { cwd: homes.one.project })).status, 200)
   const binary = Buffer.from(Array.from({ length: 1024 * 1024 + 7 }, (_, i) => i % 256)), unicode = '中文 café 🦊\n', remoteOne = join(homes.one.agents, 'main'), remoteTwo = join(homes.two.agents, 'main')

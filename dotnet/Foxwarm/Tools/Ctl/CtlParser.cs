@@ -36,6 +36,16 @@ internal sealed record CtlCall(CtlCommand Command, JsonObject Descriptor) : CtlI
 // A command handled by its ingress itself (Local names it), with normalized arguments.
 internal sealed record CtlLocal(CtlCommand Command, string Local, JsonObject Args) : CtlInvocation;
 
+// A user command with its arguments by parameter name; the user handler runs it.
+internal sealed record CtlUser(CtlCommand Command, JsonObject Args) : CtlInvocation
+{
+    internal string? Text(string name) => SessionWait.Text(Args[name]);
+
+    internal bool Flag(string name) => Args[name] is JsonValue value && value.TryGetValue<bool>(out var flag) && flag;
+
+    internal double? Number(string name) => SessionWait.Number(Args[name]);
+}
+
 // A command resolving to one canonical capability with normalized arguments.
 internal sealed record CtlTarget(CtlCommand Command, string Source, string Name, JsonObject Args)
     : CtlInvocation;
@@ -273,16 +283,19 @@ internal static partial class CtlParser
         internal string? Unknown => unknown;
     }
 
-    private sealed class Values(JsonObject? values)
+    // Values bound to @name words. Users have none: their words are always literal text.
+    private sealed class Values(JsonObject? values, bool literal = false)
     {
         private readonly HashSet<string> used = new(StringComparer.Ordinal);
+
+        internal bool Literal => literal;
 
         // The bound value of an exact `@name` token, or null for literal text.
         internal bool TryBind(string text, out JsonNode? value, out string literal)
         {
             value = null;
             literal = text;
-            if (!text.StartsWith('@'))
+            if (Literal || !text.StartsWith('@'))
                 return false;
             if (text.StartsWith("@@", StringComparison.Ordinal))
             {
@@ -310,6 +323,50 @@ internal static partial class CtlParser
                         + string.Join(", ", unused)
                         + ". Every values entry must be referenced as @name."
                 );
+        }
+    }
+
+    // Parses a user command: its `/` head and the raw text after it, without values. The head
+    // is a noun, a shortcut or `help`; words are literal text and shell characters are ordinary.
+    internal static CtlInvocation ParseUser(string head, string? rawArgs)
+    {
+        try
+        {
+            var lexer = new CtlLexer(head.TrimStart('/') + (rawArgs is null ? "" : " " + rawArgs), shell: false);
+            var bound = new Values(null, literal: true);
+            var word = lexer.Next()!.Text;
+            if (word == "help")
+            {
+                var noun = lexer.Next()?.Text;
+                var verb = lexer.Next()?.Text;
+                if (lexer.Next() is not null)
+                    throw new CtlUsageException("help takes at most a noun and a verb.");
+                return new CtlHelpRequest(noun, verb);
+            }
+            if (CtlRegistry.Shortcut(word) is { } shortcut)
+            {
+                try
+                {
+                    return Arguments(shortcut, lexer, bound);
+                }
+                catch (CtlUsageException)
+                {
+                    throw;
+                }
+                catch (InvalidDataException error)
+                {
+                    throw new CtlUsageException(error.Message, shortcut);
+                }
+            }
+            return Command(word, lexer, bound, "user");
+        }
+        catch (CtlUsageException error)
+        {
+            return new CtlError(error.Message, error.Command, error.Noun, error.Unknown);
+        }
+        catch (InvalidDataException error)
+        {
+            return new CtlError(error.Message);
         }
     }
 
@@ -367,7 +424,12 @@ internal static partial class CtlParser
                 throw new CtlUsageException("help takes at most a noun and a verb.");
             return Help(lexer, bound, noun, verb);
         }
-        var nounName = first.Text;
+        return Command(first.Text, lexer, bound, ingress);
+    }
+
+    // The command a noun and the next word name, with its arguments.
+    private static CtlInvocation Command(string nounName, CtlLexer lexer, Values bound, string ingress)
+    {
         if (CtlRegistry.Noun(nounName) is null || !Visible(nounName, ingress))
             throw new CtlUsageException(Unknown(nounName), unknown: nounName);
 
@@ -435,7 +497,14 @@ internal static partial class CtlParser
                 && (flagsEnded || !lexer.PeekStartsWith("--"))
             )
             {
-                Assign(assigned, rest, RestValue(lexer.Remainder()), bound);
+                Assign(
+                    assigned,
+                    rest,
+                    bound.Literal
+                        ? new Input(null, JsonValue.Create(lexer.Remainder()), false)
+                        : RestValue(lexer.Remainder()),
+                    bound
+                );
                 break;
             }
             var token = lexer.Next()!;
@@ -516,6 +585,8 @@ internal static partial class CtlParser
                         ? $"Missing required option `--{parameter.FlagName}`."
                         : $"Missing required argument <{parameter.Name}>."
                 );
+        if (bound.Literal)
+            return new CtlUser(command, assigned);
         var mapped = command.Fixed is { } fixedArgs ? (JsonObject)fixedArgs.DeepClone() : [];
         foreach (var parameter in command.Parameters)
             if (assigned.TryGetPropertyValue(parameter.Name, out var value))

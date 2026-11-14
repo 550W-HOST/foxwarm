@@ -15,13 +15,13 @@ Suppose you have spent the morning with an agent in the WebUI working out a bill
 2. In the group, attach the conversation to that Session:
 
    ```text
-   /attach tidepool/proration
+   /channel attach tidepool/proration
    ```
 
 3. Ask the agent to explain, for example *"@foxwarm give everyone a two-line summary of the change."* It answers with the whole Session history behind it.
 4. Others in the group can ask follow-up questions directly. Each message reaches the agent with its sender's name, so it knows who is asking.
 
-`/attach` moves the conversation off any Session it was attached to before, so you can point the same group at a different Session later.
+`/channel attach` moves the conversation off any Session it was attached to before, so you can point the same group at a different Session later.
 
 Group members' messages enter the Session and the agent may use its tools to answer them. Before opening a Session to a group, check what that Agent can do and see. A dedicated Agent with narrower [rules](/docs/access-control/) is a good fit for Sessions that face other people.
 
@@ -131,7 +131,7 @@ To let everyone in one particular group talk to the agent, run this in that grou
 /channel dangerously-allow-all-users yes
 ```
 
-This applies to that conversation only. People who are not on the allow list can then chat and ask questions there, but commands such as `/attach` and `/channel` still work only for allowed users. Turn it off with `no`.
+This applies to that conversation only. People who are not on the allow list can then chat and ask questions there, but commands such as `/channel attach` and `/channel` still work only for allowed users. Turn it off with `no`.
 
 ## Session attachments
 

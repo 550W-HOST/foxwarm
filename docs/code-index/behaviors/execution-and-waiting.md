@@ -39,7 +39,7 @@ These control the current Session turn, not all work launched by the Agent:
 | Stop (`/stop`) | Interrupts the current provider request/foreground tool batch and ends the main run. | Commits queued message/event inputs as ordinary history without running another provider turn for them. Later input can start a new turn. | Exec, copy and background ToolScript stop waiting, not the underlying operation. Other tools use their supported cancellation path; effects may already have occurred. |
 | Run queued (`/dequeue`) | Stops current work when necessary, then continues through the ordinary runner. | Runs queued work rather than passively committing it and stopping. | Same foreground cancellation boundary as Stop; no background-work sweep. |
 | Continue (`/continue`) | Resumes an interrupted idle turn using current committed context. It is not regenerate/retry-the-previous-answer. | New compatible input joins at normal safe points. | Does not replay an uncertain external operation automatically. |
-| Cancel compaction (`/stop compact`) | Cancels active/pending compaction, independently of the main run. | Does not itself apply Stop's passive-input behavior. | Not a shell-process control. |
+| Cancel compaction (`/stop --compaction`) | Cancels active/pending compaction, independently of the main run. | Does not itself apply Stop's passive-input behavior. | Not a shell-process control. |
 
 Bare Stop does not cancel compaction. If the main run is awaiting synchronous automatic compaction, that compact finishes before ordinary Stop finalization. Standalone compaction is not a main run that bare Stop can stop.
 

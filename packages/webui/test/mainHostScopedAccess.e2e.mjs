@@ -162,7 +162,7 @@ try {
   // Exact aliases follow moves; Agent scopes follow actual membership and close stale streams.
   const movingSse = await sse('synthetic-bob', seed.parent)
   assert.equal((await admin('POST', '/api/agents', { agentId: 'team' })).status, 201)
-  assert.equal((await admin('POST', route(seed.parent) + '/message', { text: '/session move team/moved' })).status, 200)
+  assert.equal((await admin('POST', route(seed.parent) + '/message', { text: '/session move --new-agent-name team --new-session-id moved' })).status, 200)
   await until(() => movingSse.closed, 'stale canonical SSE closes after move')
   assert.equal((await alice('GET', route('continuous-alias') + '/history')).status, 200)
   assert.equal((await bob('GET', route('team/moved') + '/history')).status, 403)

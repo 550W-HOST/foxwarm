@@ -188,7 +188,7 @@ try {
   assert(queries[0].includes('id=explicit&auth=explicit-secret')); assert(!client.output.includes('explicit-secret')); await stop(client)
   client = await launch('precedence', auth.origin, ['--credentials-file', credentialPath]); await until(() => states.length === 2, 'file-only restart'); assert(queries[1].includes('id=explicit&auth=explicit-secret')); await stop(client)
   client = await launch('pairing', auth.origin, ['--id', 'requested', '--token', 'pair-secret', '--credentials-file', join(root, 'pairing/credentials.json')])
-  await until(() => states.length === 4, 'pair then authenticated reconnect'); assert(queries[2].includes('token=pair-secret')); assert(queries[3].includes('id=approved&auth=approved-secret')); assert(client.output.includes('/node approve owned-pending')); assert(!client.output.includes('pair-secret')); assert(!client.output.includes('approved-secret')); await stop(client)
+  await until(() => states.length === 4, 'pair then authenticated reconnect'); assert(queries[2].includes('token=pair-secret')); assert(queries[3].includes('id=approved&auth=approved-secret')); assert(client.output.includes('/node pair-approve owned-pending')); assert(!client.output.includes('pair-secret')); assert(!client.output.includes('approved-secret')); await stop(client)
 
   let fallbackConnections = 0
   const fallback = await server((socket, request) => {

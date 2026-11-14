@@ -105,8 +105,8 @@ immutable; selected active history is replaced, and queued/new input is retained
 Another pending compaction rejects admission. Invalid sources return an ordinary
 tool error. Recheck current sources before retrying rather than blindly replaying
 old endpoints. Cancellation or a changed snapshot can leave an accepted plan
-unapplied. Ordinary Stop and `/stop compact` retain their different meanings:
-Stop ends the turn; `/stop compact` cancels the compact operation before commit.
+unapplied. Ordinary Stop and `/stop --compaction` retain their different meanings:
+Stop ends the turn; `/stop --compaction` cancels the compact operation before commit.
 
 Inspect the intended active replacements/removals and the compact-completed
 boundary before reporting the effect. Acceptance, a missing tool error, or a

@@ -31,7 +31,7 @@ Client implementations are separate modules: [CLI node](./cli-node.md) and [brow
 - `registerNodeHttpRoutes(httpServer)` — bootstrap scripts, compose template, and source bundle.
 - `buildNodeBootstrapInfo(options)` — current endpoint/examples payload for `node_bootstrap_info`.
 - Pending pairing create/list/approve/reject/claim operations.
-- `/node create <node-id>` directly reserves an approved Node credential and returns its plaintext auth token once; the ordinary pending/approve flow remains available.
+- `/node token <node-id>` directly reserves an approved Node credential and returns its plaintext auth token once; the ordinary pending/approve flow remains available.
 - `node_bootstrap_info` (.NET Main) writes the shared pairing token to a new owner-only file and returns instructions without it.
 - `node_create_auth_token` reserves an approved Node ID and writes its per-node credential to a new owner-only file on Main, returning only the Node ID and file path; it is a discoverable hidden builtin and does not rotate existing credentials.
 - `node_remove` is a discoverable hidden builtin that revokes an explicit approved Node ID and disconnects its active runtime through the same operation as `/node remove`. It returns only `{ nodeId, disconnected }`, removes any unclaimed approved handoff, and does not stop the client, delete resources, or rebind Agents/Sessions. This is distinct from provider lifecycle `node({ action: "destroy" })`.

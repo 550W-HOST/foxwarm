@@ -39,10 +39,10 @@ Use tools when you need agent-side reasoning help or machine-readable/bootstrap-
 Examples in this area include:
 
 - `/node`
-- `/node approve ...`
-- `/node create <node-id>`
-- `/node reject ...`
-- `/node pair-help`
+- `/node pair-approve ...`
+- `/node token <node-id>`
+- `/node pair-reject ...`
+- `/node bootstrap-info`
 
 Do **not** assume you should execute those user commands yourself as an agent.
 
@@ -85,7 +85,7 @@ This skill matches the current bootstrap surfaces exposed by a running master:
 - `/node/docker-compose.yaml`
 - `/node/source.tar.gz`
 
-It does **not** use the removed unauthenticated direct-registration flow. `/node create` is a separate pre-approved, per-node-credential flow.
+It does **not** use the removed unauthenticated direct-registration flow. `/node token` is a separate pre-approved, per-node-credential flow.
 
 ## Mental model
 
@@ -115,7 +115,7 @@ Foxwarm cannot infer one globally correct external base URL for every node boots
 url: https://foxwarm.example.invalid/foxwarm
 ```
 
-The configured URL supplies `/node pair-help` and `node_bootstrap_info` examples, including the deployment path. It must be an absolute HTTP(S) URL without credentials, query or fragment; edits require a restart. Without it, each example contains a replaceable `YOUR_MASTER` address and can be copied independently.
+The configured URL supplies `/node bootstrap-info` and `node_bootstrap_info` examples, including the deployment path. It must be an absolute HTTP(S) URL without credentials, query or fragment; edits require a restart. Without it, each example contains a replaceable `YOUR_MASTER` address and can be copied independently.
 
 Depending on where the node runs, the reachable master URL might be:
 
@@ -145,14 +145,14 @@ So the rule is:
 - if the public URL has a path prefix, pass `--host=YOUR_REACHABLE_URL` (or Windows `-HostUrl`) to preserve it; request headers cannot recover that path
 - if you fetched the script through a different address, pass `--host=...` explicitly
 
-Copy a setup command from `/node pair-help` and replace its example address if necessary.
+Copy a setup command from `/node bootstrap-info` and replace its example address if necessary.
 
 ## Pairing / approval flow
 
 Two supported paths are available. For a Node created before the remote client runs, the master-side user command is:
 
 ```text
-/node create my-node
+/node token my-node
 ```
 
 It reserves `my-node` and returns the per-node auth token once. Do not confuse this with the shared pairing token. The token is not a six-digit pairing code; the server stores only its hash. Use it on a new host with `--node-id=my-node --auth-token=YOUR_PER_NODE_AUTH_TOKEN` (Windows `-NodeId my-node -AuthToken YOUR_PER_NODE_AUTH_TOKEN`). The client saves credentials on successful registration; later runs use the credentials file. For URLs with a deployment path also pass `--host=YOUR_REACHABLE_URL` or `-HostUrl`. `/node remove my-node` is the user-facing credential-revocation command; agent workflows use `ctl node remove` below.
@@ -196,7 +196,7 @@ deletes it.
 For the existing request/approve path, start the Node with the shared pairing token:
 
 On first run, the node connects with a **pairing token** and creates a pending pairing request.
-The Node startup log includes the exact `/node approve <pending-id>` command; there is no six-digit pairing code to compare.
+The Node startup log includes the exact `/node pair-approve <pending-id>` command; there is no six-digit pairing code to compare.
 
 ### Agent-facing approval
 
@@ -238,7 +238,7 @@ If approval should remain on the user command surface, tell the user to run:
 
 ```text
 /node
-/node approve <pending-id> my-node
+/node pair-approve <pending-id> --node-id my-node
 ```
 
 Useful follow-up checks:
@@ -368,7 +368,7 @@ curl -fsSL 'http://YOUR_MASTER:3001/node/run-docker.sh' | bash -s -- \
 
 For a device that needs only command execution without Node.js, use the independent POSIX-shell client. It requires `sh`, `curl`, and `mktemp`, `mkfifo`, `dd`, `wc`, `head`, `tail`, `cat`, `mv`, `rm`, `mkdir`, `chmod`, `sleep`, `date`, `sed`, and `tr`. Its startup checks are authoritative: BusyBox builds can omit applets, and this workflow does not promise compatibility with every router or install packages.
 
-First run `/node create my-shell` on the master and save the returned per-node token privately. The global pairing token is not a Shell Node credential. Run from the desired default command directory:
+First run `/node token my-shell` on the master and save the returned per-node token privately. The global pairing token is not a Shell Node credential. Run from the desired default command directory:
 
 ```sh
 curl -fsSL 'https://foxwarm.example.invalid/foxwarm/node/run-shell.sh' | NODE_AUTH_TOKEN=YOUR_PER_NODE_AUTH_TOKEN sh -s -- --host='https://foxwarm.example.invalid/foxwarm' --node-id=my-shell
@@ -384,7 +384,7 @@ For Windows, choose **Windows Shell** in the administrator onboarding modal, or 
 
 Both Shell methods require a pre-created per-node credential. Windows commands run in separate PowerShell processes with literal Windows cwd handling, private bounded command files, continuously drained pipes and fixed-size output samples. The Windows client has the same exec-only transport and completion ownership as the POSIX client; it installs no service.
 
-Use the normal Node selector or `/node my-shell`; ordinary `exec` then targets this Node. Only `exec` is advertised. Omitted and relative cwd use its startup directory; `cd` does not carry over between calls. File tools, Code/Git/PTY/backend services and external-owner execution are unavailable.
+Use the normal Node selector or `/node select my-shell`; ordinary `exec` then targets this Node. Only `exec` is advertised. Omitted and relative cwd use its startup directory; `cd` does not carry over between calls. File tools, Code/Git/PTY/backend services and external-owner execution are unavailable.
 
 The foreground wait defaults to 15 seconds, clamps above 60, and rounds fractions upward to a whole second. Timeout returns an exec ID without killing the command. Normal `wait` can use that ID; completion goes to the originating Session and includes bounded first/last 4096-byte samples, total output bytes and exit code. The initial background response contains the continuation notice, not a running-output snapshot. Full logs and a read-exec API do not exist. The FIFO collector continuously drains output without growing a full log or closing the command pipe during truncation.
 
@@ -457,7 +457,7 @@ Agents that were bound to a Node with legacy isolation are migrated at startup t
 After startup and approval:
 
 1. use `ctl node list` to confirm the node is online, or tell the user to run `/node` when approved/offline detail is needed
-2. if approval is pending, use the reviewed `node_pair_list` / `node_pair_approve` tool path or the user-facing `/node approve` path
+2. if approval is pending, use the reviewed `node_pair_list` / `node_pair_approve` tool path or the user-facing `/node pair-approve` path
 3. confirm tool execution happens on the expected Node, not accidentally on `master`
 4. for restricted Agents, check representative allowed and denied calls with `explain_tool_authorization`
 

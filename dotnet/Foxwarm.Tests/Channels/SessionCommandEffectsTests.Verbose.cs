@@ -101,7 +101,7 @@ public sealed partial class SessionCommandEffectsTests
         f.Manager.AttachChannel("webui:c", f.Owner);
         try
         {
-            await CommandAsync(f, "/verbose on");
+            await CommandAsync(f, "/session verbose on");
             Assert.True(f.Owner.Entry.Snapshot().AuthorityEnvelope["verbose"]!.GetValue<bool>());
             Assert.Empty(delivered);
             var saved = await f.Owner.AuthorityStore.LoadAsync(f.Owner.Id);
@@ -229,8 +229,8 @@ public sealed partial class SessionCommandEffectsTests
                 malformedPreview["preview"]!.GetValue<string>().Length
             );
             delivered.Clear();
-            await CommandAsync(f, "/verbose off");
-            await CommandAsync(f, "/verbose");
+            await CommandAsync(f, "/session verbose off");
+            await CommandAsync(f, "/session verbose");
             await f.ToolAsync(
                 "write",
                 new JsonObject { ["filePath"] = "off.txt", ["content"] = "off" }

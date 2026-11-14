@@ -1,8 +1,10 @@
 import type { Plugin } from 'vite'
+import { userCommandHeads } from '../src/userCommandHeads'
 
 /**
- * The WebUI reads the ctl registry only to display which tool a command runs. Bundle the
- * command paths, parameters and targets, without help text.
+ * The WebUI reads the ctl registry to display which tool a command runs and to classify user
+ * `/` commands. Bundle the model's command paths, parameters and targets, without help text,
+ * and the user command heads.
  */
 export function ctlRegistryPlugin(): Plugin {
   return {
@@ -17,8 +19,9 @@ export function ctlRegistryPlugin(): Plugin {
 
 const forModel = (item: { ingress?: string[] }) => !item.ingress || item.ingress.includes('model')
 
-export function slimCtlRegistry(registry: { commands: Array<Record<string, any>> }) {
+export function slimCtlRegistry(registry: { commands: Array<Record<string, any>>, nouns?: Array<{ name: string }>, shortcuts?: Array<{ name: string }> }) {
   return {
+    userHeads: userCommandHeads(registry),
     // Only the model's commands, parameters and aliases: the timeline shows model calls.
     commands: registry.commands.filter(forModel).map(command => {
       const aliases = (command.aliases || []).filter((alias: unknown) => typeof alias === 'string')

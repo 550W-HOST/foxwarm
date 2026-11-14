@@ -1,34 +1,21 @@
 using System.Text.Json.Nodes;
-using System.Text.RegularExpressions;
 using Foxwarm.Sessions;
 
 namespace Foxwarm;
 
 internal sealed partial class MessageRouter
 {
-    private static bool IsDeleteCommand(string text) =>
-        Regex.IsMatch(
-            SessionCatalog.Trim(text),
-            "^/session" + CommandSpace + "+delete(?:" + CommandSpace + "|$)"
-        );
-
     private async Task<MessageRouteResult> HandleDeleteCommandAsync(
         ChannelContext context,
-        string text,
+        string requested,
         SessionOwner? source,
         bool publishReply = true
     )
     {
-        var words = Regex.Split(SessionCatalog.Trim(text), CommandSpace + "+");
-        var requested = words.Skip(2).FirstOrDefault();
         JsonObject? result = null;
         string reply;
         try
         {
-            if (requested is null)
-                reply =
-                    "Usage: /session delete <sessionId>\nUse /session list to see available sessions.";
-            else
             {
                 result = await runtime.DeleteAsync(requested, source: source);
                 reply = SessionCatalog.Text(result["status"]) switch

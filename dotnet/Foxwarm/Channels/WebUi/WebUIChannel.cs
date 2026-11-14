@@ -213,7 +213,7 @@ internal sealed partial class WebUIChannel(
                     new JsonObject
                     {
                         ["commands"] = JsonData.WebNode(
-                            Foxwarm.Channels.ExternalCommands.WebUiCommands()
+                            Foxwarm.Channels.UserCommands.WebUiCommands()
                         ),
                     }
                 )

@@ -100,7 +100,7 @@ try {
   await until(() => calls.filter(call => call.key === 'matrix-a' && call.path.endsWith('/versions')).length === 2, 'Setup reload all')
   const qr = calls.find(call => call.path.endsWith('/get_bot_qrcode')); assert.equal(qr.query.bot_type, '7'); assert.equal(qr.headers.skRouteTag ?? qr.headers.skroutetag, 'fixture-route'); assert.equal(qr.key, '')
   assert.equal(calls.find(call => call.path.endsWith('/get_qrcode_status')).headers['ilink-app-clientversion'], '1')
-  pushMatrix('matrix-a', '/attach ' + id); pushMatrix('matrix-b', '/attach ' + id); pushWeixin('/attach ' + id)
+  pushMatrix('matrix-a', '/channel attach ' + id); pushMatrix('matrix-b', '/channel attach ' + id); pushWeixin('/channel attach ' + id)
   await until(() => ['matrix-a', 'matrix-b', 'confirmed-fixture'].every(key => sent(key).some(call => text(call).includes('Attached to session'))), 'actual platform attach')
   pushMatrix('matrix-b', '/channel mode send-only')
   await until(() => sent('matrix-b').some(call => text(call).includes('mode set')), 'send-only')

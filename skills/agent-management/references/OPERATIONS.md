@@ -142,11 +142,11 @@ New Sessions, and existing ones after their normal refresh, pick up saved memory
 
 ## Inheritance
 
-`set_agent_inherit` (or `/agent inherit <agent> <parent-agent|none>`) changes which Agent's memory appears in this Agent's prompts. By default it changes only metadata; existing snapshots keep their prompt. `refreshSnapshots:true` also refreshes affected Sessions active within the last hour; older ones refresh on their next turn. Inheritance does not copy files, grant authority or make one Agent report to another.
+`set_agent_inherit` (or `/agent inherit <agent> [parent-agent]`) changes which Agent's memory appears in this Agent's prompts. By default it changes only metadata; existing snapshots keep their prompt. `refreshSnapshots:true` also refreshes affected Sessions active within the last hour; older ones refresh on their next turn. Inheritance does not copy files, grant authority or make one Agent report to another.
 
 ## Moves and migration
 
-**Sessions.** `move_session` renames a Session or moves it to another Agent, optionally creating that Agent. The old ID remains an alias. Its parent link is kept and direct children are updated; pass `parentSessionId` only to assign a different existing parent. Users can run `/session move <new-id>|<agent>/<new-id> [--parent <parent-id>]`, and `/session unparent` detaches a Session. There is no recursive tree move. New names follow the Session name rule; legacy IDs remain readable and can be moved to a valid name.
+**Sessions.** `move_session` renames a Session or moves it to another Agent, optionally creating that Agent. The old ID remains an alias. Its parent link is kept and direct children are updated; pass `parentSessionId` only to assign a different existing parent. Users can run `/session move [<session-id>] --new-session-id <new-id> [--new-agent-name <agent>] [--parent-session-id <parent-id>]`, and `/session clear-parent` detaches a Session. There is no recursive tree move. New names follow the Session name rule; legacy IDs remain readable and can be moved to a valid name.
 
 **Agents.** There is no direct Agent rename: the name is part of paths, Session IDs, metadata and creator records. To replace an Agent:
 

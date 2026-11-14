@@ -87,7 +87,7 @@ This makes current deletion and pruning visible while preserving continuous read
 
 ### Actions and consequences
 
-`/delete-messages N` removes up to N entries from the beginning of active history; a negative N removes that many from its end. Counts are active entries, not rendered bubbles, original Archive rows, or CTX descendants. A CTX is one active entry. The command is not permanent erasure of historical originals.
+`/session delete-messages N` removes up to N entries from the beginning of active history; a negative N removes that many from its end. Counts are active entries, not rendered bubbles, original Archive rows, or CTX descendants. A CTX is one active entry. The command is not permanent erasure of historical originals.
 
 A clear request against a busy Session can request interruption and return `cleared:false` with a retry requirement instead of completing the reset below. Main-local preparation can drop queued input before that retry; Worker preparation has its own owner boundary. Neither a stop acknowledgement nor dropped input proves active history was cleared. The command reports the actual outcome; [runtime history mutation](../units/src-session-runtime.md) locates these paths.
 

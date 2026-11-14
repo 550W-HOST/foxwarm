@@ -55,13 +55,13 @@ for (const configured of [false, true]) {
       await api('POST', route + '/message', { text })
       return until(() => events.slice(start).map(e => e.message?.parts?.map(p => p.text || '').join('') || '').find(text => text.includes(marker)), 'transient command reply')
     }
-    const help = await command('/node pair-help', 'Node Pairing')
+    const help = await command('/node bootstrap-info', 'Node Pairing')
     assert(help.includes(expected + '/node/run.sh'))
     assert(help.includes(`--host='${expected}'`))
     assert(help.includes(`-HostUrl '${expected}'`))
     assert(help.includes(`NODE_HOST='${expected}'`))
     if (!configured) assert(help.includes('Replace YOUR_MASTER'))
-    const direct = await command('/node create bootstrap-direct', 'Created node')
+    const direct = await command('/node token bootstrap-direct', 'Created node')
     assert(direct.includes(expected))
     const token = /--auth-token=([a-f0-9]+)/.exec(direct)?.[1]
     assert(token)

@@ -20,7 +20,7 @@ Optionally set a public URL at the **top level** of the application config (not 
 url: https://foxwarm.example.invalid/foxwarm
 ```
 
-`/node pair-help` and `node_bootstrap_info` use this URL in their examples and download endpoints. The URL must be an absolute HTTP(S) address with no username, password, query, or fragment. A trailing slash is removed; a deployment path is retained. Restart the server after editing config. If omitted, each command contains a replaceable `YOUR_MASTER` address. No variable assignment is required before copying a command.
+`/node bootstrap-info` and `node_bootstrap_info` use this URL in their examples and download endpoints. The URL must be an absolute HTTP(S) address with no username, password, query, or fragment. A trailing slash is removed; a deployment path is retained. Restart the server after editing config. If omitted, each command contains a replaceable `YOUR_MASTER` address. No variable assignment is required before copying a command.
 
 Without a configured URL, Foxwarm does **not** reliably know one universally correct external base URL for every node.
 The reachable URL depends on where the node runs:
@@ -41,7 +41,7 @@ So the practical rule is:
 
 Replace `YOUR_MASTER` in the command you copy with a host reachable from the new Node.
 
-`/node pair-help` inlines the complete address and explicit host in every command, including any configured deployment prefix.
+`/node bootstrap-info` inlines the complete address and explicit host in every command, including any configured deployment prefix.
 
 ## WebUI onboarding
 
@@ -54,7 +54,7 @@ Copy a setup command and keep it private. CLI clients using pairing appear in **
 Run this **master-side command** before starting the Node:
 
 ```text
-/node create my-node
+/node token my-node
 ```
 
 It reserves `my-node` and returns its per-node auth token **once**. Save it privately. It is different from the global pairing token and the removed six-digit display code. The server stores only its hash. Then on the new Node:
@@ -69,7 +69,7 @@ curl -fsSL 'https://foxwarm.example.invalid/foxwarm/node/run.sh' | bash -s -- \
 
 For an origin-only URL omit `--host`; the downloaded script infers its default from the request. Docker and interactive launchers accept the same `--node-id` and `--auth-token` flags; on Windows use `-NodeId` and `-AuthToken`, plus `-HostUrl` for a deployment path. Initial authenticated registration writes an owner-only credentials file; later restarts can use that file without either command-line token. `/node remove my-node` revokes it.
 
-Alternatively, start a new Node with the global pairing token as shown below. It reports a complete `/node approve <pending-id>` command in the startup log; copy that exact command into the master. This flow remains available alongside `/node create`.
+Alternatively, start a new Node with the global pairing token as shown below. It reports a complete `/node pair-approve <pending-id>` command in the startup log; copy that exact command into the master. This flow remains available alongside `/node token`.
 
 ## Shell-only Node
 
@@ -78,7 +78,7 @@ Use this client when you only need commands and do not want to install Node.js. 
 On the master, first reserve the Node and save its per-node token privately:
 
 ```text
-/node create my-shell
+/node token my-shell
 ```
 
 From the desired default working directory on the Linux device:
@@ -99,7 +99,7 @@ The bootstrap is executed in memory. Each Windows command runs in a fresh Window
 
 The explicit host preserves a reverse-proxy deployment prefix. Both clients retain normal certificate verification. The shared pairing token cannot authenticate a Shell Node. The POSIX client keeps its bearer in a private temporary curl configuration; Windows keeps it in process memory. Both send credentials in headers, not URLs or ordinary client logs.
 
-Select `my-shell` using the normal Node selector or `/node my-shell`, then call ordinary `exec`. This Node advertises only `exec`, with command/cwd/timeout. It has no file tools, Code/Git/PTY services, Agent storage directories, or external-owner execution. Omitted cwd uses the startup directory, relative cwd resolves there, and a command's `cd` does not change the next command's default.
+Select `my-shell` using the normal Node selector or `/node select my-shell`, then call ordinary `exec`. This Node advertises only `exec`, with command/cwd/timeout. It has no file tools, Code/Git/PTY services, Agent storage directories, or external-owner execution. Omitted cwd uses the startup directory, relative cwd resolves there, and a command's `cd` does not change the next command's default.
 
 The default foreground wait is 15 seconds, values above 60 are clamped, and fractional waits are rounded up to the next second. A command exceeding the wait keeps running; its initial response contains the existing exec ID, and completion is reported to the original Session even if its selected Node has changed. The retained output sample and total byte count arrive with completion. Use the returned exec ID with normal `wait`; there is no running-output/read-exec endpoint.
 
@@ -138,7 +138,7 @@ Important persisted path:
 When pairing starts, the Node log prints the exact approval command. Run it on the master; the optional node ID shown here assigns a particular final ID:
 
 ```text
-/node approve <pending-id> my-node
+/node pair-approve <pending-id> --node-id my-node
 ```
 
 ## Client compatibility
@@ -182,7 +182,7 @@ curl -fsSL 'http://YOUR_MASTER:3002/node/run.sh' | bash -s -- \
   -d
 ```
 
-Detached mode prefers tmux and prints the session/attach/stop commands. If tmux
+Detached mode prefers tmux and prints the session/channel attach/stop commands. If tmux
 is unavailable it falls back to `nohup`, records `<dir>/data/node.pid`, and
 writes output to `<dir>/data/logs/node.log`.
 

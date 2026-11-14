@@ -58,7 +58,7 @@ internal sealed partial class WeixinApi
             ["sessionKey"] = sessionKey,
             ["qrcodeUrl"] = url,
             ["message"] =
-                "使用微信扫描二维码后，再执行 /channel weixin wait <sessionKey> 完成登录。",
+                "使用微信扫描二维码后，再执行 /channel weixin-wait <sessionKey> 完成登录。",
         };
     }
 
@@ -71,11 +71,11 @@ internal sealed partial class WeixinApi
     {
         baseUrl = string.IsNullOrWhiteSpace(baseUrl) ? DefaultBaseUrl : baseUrl.Trim();
         if (!logins.TryGetValue(sessionKey, out var login))
-            return new(false, "当前没有进行中的登录，请先执行 /channel weixin login。");
+            return new(false, "当前没有进行中的登录，请先执行 /channel weixin-login。");
         if (!Fresh(login))
         {
             logins.TryRemove(sessionKey, out _);
-            return new(false, "二维码已过期，请重新执行 /channel weixin login。");
+            return new(false, "二维码已过期，请重新执行 /channel weixin-login。");
         }
         var deadline = now().AddMilliseconds(Math.Max(timeoutMs, 1000));
         while (now() < deadline)
@@ -105,11 +105,11 @@ internal sealed partial class WeixinApi
             if (SessionWait.Text(status["status"]) == "expired")
             {
                 logins.TryRemove(sessionKey, out _);
-                return new(false, "二维码已过期，请重新执行 /channel weixin login。");
+                return new(false, "二维码已过期，请重新执行 /channel weixin-login。");
             }
             await DelayAsync(1000);
         }
-        return new(false, "登录仍未完成，请稍后重试 /channel weixin wait <sessionKey>。");
+        return new(false, "登录仍未完成，请稍后重试 /channel weixin-wait <sessionKey>。");
     }
 
     private async Task<JsonObject> LoginGetAsync(

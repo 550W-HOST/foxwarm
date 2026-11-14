@@ -76,8 +76,8 @@ export const en: HomeStrings = {
       id: 'room',
       eyebrow: 'Channels',
       title: 'Work it out here. Explain it in the group.',
-      body: 'Any chat can be attached to any session. Work through a problem in the WebUI, add the bot to your team’s group and run /attach: it answers with the full history behind it, and anyone in the group can ask a follow-up. Works with Telegram, Matrix, QQ, WeChat and WeCom.',
-      points: ['/attach connects a chat to an existing session', 'The agent sees who is asking and keeps the whole context', 'Sender allow lists; open a group to everyone while commands stay restricted'],
+      body: 'Any chat can be attached to any session. Work through a problem in the WebUI, add the bot to your team’s group and run /channel attach: it answers with the full history behind it, and anyone in the group can ask a follow-up. Works with Telegram, Matrix, QQ, WeChat and WeCom.',
+      points: ['/channel attach connects a chat to an existing session', 'The agent sees who is asking and keeps the whole context', 'Sender allow lists; open a group to everyone while commands stay restricted'],
       link: { label: 'Connect a channel', href: docs('channels/') },
       image: { alt: 'Illustration of a team group chat: a developer attaches the bot to an existing session, asks it to explain a change, and a colleague asks a follow-up question.' }
     }
@@ -116,7 +116,7 @@ export const en: HomeStrings = {
     title: 'tidepool-dev',
     status: '4 members',
     messages: [
-      { from: 'me', text: '/attach tidepool/proration', time: '16:02' },
+      { from: 'me', text: '/channel attach tidepool/proration', time: '16:02' },
       { from: 'system', text: 'Attached to “Ship the proration fix”.' },
       { from: 'me', text: '@foxwarm Give everyone a two-line summary of the proration change.', time: '16:03' },
       { from: 'bot', name: 'Foxwarm', text: 'prorate() rounded unused time to whole days, so a plan change at noon could credit half a day too much. It now uses the exact time, and all six tests pass on build-box.', time: '16:03' },

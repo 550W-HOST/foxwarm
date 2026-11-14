@@ -1,6 +1,6 @@
 # Unit: External Node trust and ordinary tools
 
-Files: `dotnet/Foxwarm/Nodes/ApprovedNodeRegistry.cs`, `dotnet/Foxwarm/Nodes/ApprovedNodeRegistry.Tree.cs`, `dotnet/Foxwarm/Nodes/NodeConnectionHub.cs`, `dotnet/Foxwarm/Nodes/NodeConnectionHub.Sessions.cs`, `dotnet/Foxwarm/Nodes/NodeRoutes.cs`, `dotnet/Foxwarm/Nodes/NodeBootstrap.cs`, `dotnet/Foxwarm/Nodes/NodeToolDefinitions.cs`, `dotnet/Foxwarm/Nodes/RemoteNodeResult.cs`, `dotnet/Foxwarm/Sessions/SessionManager.Nodes.cs`, `dotnet/Foxwarm/Sessions/SessionManager.NodeRequests.cs`, `dotnet/Foxwarm/Sessions/SessionManager.NodeCredentials.cs`, `dotnet/Foxwarm/Sessions/Turns/SessionSaveLane.Node.cs`, `dotnet/Foxwarm/MessageRouter.Nodes.cs`
+Files: `dotnet/Foxwarm/Nodes/ApprovedNodeRegistry.cs`, `dotnet/Foxwarm/Nodes/ApprovedNodeRegistry.Tree.cs`, `dotnet/Foxwarm/Nodes/NodeConnectionHub.cs`, `dotnet/Foxwarm/Nodes/NodeConnectionHub.Sessions.cs`, `dotnet/Foxwarm/Nodes/NodeRoutes.cs`, `dotnet/Foxwarm/Nodes/NodeBootstrap.cs`, `dotnet/Foxwarm/Nodes/NodeToolDefinitions.cs`, `dotnet/Foxwarm/Nodes/RemoteNodeResult.cs`, `dotnet/Foxwarm/Sessions/SessionManager.Nodes.cs`, `dotnet/Foxwarm/Sessions/SessionManager.NodeRequests.cs`, `dotnet/Foxwarm/Sessions/SessionManager.NodeCredentials.cs`, `dotnet/Foxwarm/Sessions/Turns/SessionSaveLane.Node.cs`
 
 ## Purpose
 
@@ -66,7 +66,7 @@ Public template GETs instead substitute the validated first forwarded-host/Host 
 
 `NodeOnboardingHttpTests.cs` exercises real administrator/scoped/anonymous HTTP, direct command regeneration, per-method auth inputs, hash-only credential persistence/authentication after registry reload, unchanged Shell response, validation-before-reservation, competing creation, and injected precommit/committed persistence failures. `mainHostNodeOnboarding.e2e.mjs` uses the original built App and a fresh normal Main: modal pairing/approval, explicit creation, directory regeneration with the same token, original CLI authentication and cold Main reconnect. Incoming frontend-only behavior remains covered by the Source browser fixture; this host driver qualifies the translated backend boundary.
 
-`dotnet/Foxwarm.Tests/scripts/qualify-bootstrap-help.mjs` exercises normal HTTP message ingress and WebSocket command replies for `/node pair-help` and `/node create`, plus a genuine two-request `node_bootstrap_info` turn. Source and managed modes check configured prefixes, replaceable unconfigured addresses, browser precedence, complete tool pairs and credential exclusion from ordinary summaries/logs.
+`dotnet/Foxwarm.Tests/scripts/qualify-bootstrap-help.mjs` exercises normal HTTP message ingress and WebSocket command replies for `/node bootstrap-info` and `/node token`, plus a genuine two-request `node_bootstrap_info` turn. Source and managed modes check configured prefixes, replaceable unconfigured addresses, browser precedence, complete tool pairs and credential exclusion from ordinary summaries/logs.
 
 ## Browser setup and ordinary cancellation
 

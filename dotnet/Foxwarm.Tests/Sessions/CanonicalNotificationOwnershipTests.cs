@@ -78,7 +78,7 @@ public sealed class CanonicalNotificationOwnershipTests
             }
             var settings = await new MessageRouter(runtime).HandleMessageAsync(
                 new(owner.Id, "webui"),
-                new("/verbose on", null)
+                new("/session verbose on", null)
             );
             Assert.Equal(200, settings.Status);
             if (!delayNotice)
@@ -155,7 +155,7 @@ public sealed class CanonicalNotificationOwnershipTests
         var current = await manager.RequiredAsync("existing");
         var settings = await new MessageRouter(runtime).HandleMessageAsync(
             new(current.Id, "webui"),
-            new("/verbose on", null)
+            new("/session verbose on", null)
         );
         Assert.Equal(200, settings.Status);
         Assert.Single(current.History());

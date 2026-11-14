@@ -22,20 +22,21 @@ The agent creates the timer with its timer tools and can list, change or delete 
 
 | Command | Effect |
 | --- | --- |
-| `/timer after <seconds> <message>` | Once, after a delay |
-| `/timer at <ISO-time> <message>` | Once, at a time such as `2026-12-01T09:00:00+08:00` |
-| `/timer cron <expr> -- <message>` | Repeatedly, on a cron schedule with 5 or 6 fields |
+| `/timer create --after-seconds <seconds> <message>` | Once, after a delay |
+| `/timer create --at <ISO-time> <message>` | Once, at a time such as `2026-12-01T09:00:00+08:00` |
+| `/timer create --cron '<expr>' <message>` | Repeatedly, on a cron schedule with 5 or 6 fields |
 | `/timer list` | List this Session's timers |
+| `/timer pause <id>` / `/timer resume <id>` | Pause or resume a timer |
 | `/timer delete <id>` | Delete a timer |
 
 Cron schedules use the server's local time zone.
 
 ## Fresh Session for each run
 
-By default every trigger arrives in the Session that owns the timer, so its history grows with each run. For recurring jobs that do not need that history, add `--new-session`. Each trigger then starts a new Session, optionally in another Agent with `--agent <agent>` and with a name prefix from `--prefix <prefix>`:
+By default every trigger arrives in the Session that owns the timer, so its history grows with each run. For recurring jobs that do not need that history, add `--new-session`. Each trigger then starts a new Session, optionally in another Agent with `--agent-name <agent>` and with a name prefix from `--session-prefix <prefix>`:
 
 ```text
-/timer cron "0 9 * * 1-5" --new-session --prefix ci-report -- Check last night's CI and report failures.
+/timer create --cron "0 9 * * 1-5" --new-session --session-prefix ci-report Check last night's CI and report failures.
 ```
 
 ## Scripts without a model turn

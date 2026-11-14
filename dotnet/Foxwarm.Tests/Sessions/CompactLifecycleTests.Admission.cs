@@ -191,7 +191,7 @@ public sealed partial class CompactLifecycleTests
             Assert.Equal(1, owner.Metadata().QueueLength);
             var stopped = await client.PostAsJsonAsync(
                 route + "/message",
-                new { text = "/stop compact" }
+                new { text = "/stop --compaction" }
             );
             Assert.Equal(HttpStatusCode.OK, stopped.StatusCode);
             await plannerClosed.Task.WaitAsync(TimeSpan.FromSeconds(5));

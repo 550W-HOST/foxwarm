@@ -27,7 +27,7 @@ Pass `--host=...` only when the node should connect to a different reachable mas
 Options:
   --host=URL              Override Foxwarm master base URL (default: derived from request URL)
   --pairing=TOKEN         Pairing token for first-time setup
-  --auth-token=TOKEN      Per-node auth token from /node create (use with --node-id)
+  --auth-token=TOKEN      Per-node auth token from /node token (use with --node-id)
   --node-id=ID            Node name (default: node-<hostname>)
   --state-dir=DIR         Persistent data dir (default: ./data)
   --source-dir=DIR        Source dir for node client (default: ./foxwarm-node)
@@ -192,7 +192,7 @@ elif [ -z "$PAIRING" ] || [ -s "$ABS_STATE_DIR/state/node_credentials.json" ]; t
 else
   echo "First run — after startup, approve on master:"
   echo "  /node"
-  echo "  /node approve <pending-id> $NODE_ID"
+  echo "  /node pair-approve <pending-id> --node-id $NODE_ID"
 fi
 
 echo ""

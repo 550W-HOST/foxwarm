@@ -14,7 +14,7 @@ Selecting a Node changes where tools execute. It does not move the Session's con
 From a Foxwarm Session, request bootstrap instructions:
 
 ```text
-/node pair-help
+/node bootstrap-info
 ```
 
 Run the appropriate bootstrap on the target machine. Use a master URL that the target can actually reach; its `localhost` is usually not the Foxwarm server. Keep the pairing token private.
@@ -23,7 +23,7 @@ Back in Foxwarm, inspect the pending request and approve the Node you intended t
 
 ```text
 /node list
-/node approve <pending-id> worker-one
+/node pair-approve <pending-id> --node-id worker-one
 ```
 
 The approved Node receives its own credentials for subsequent connections. Save any credentials shown by the pairing flow securely.
@@ -56,13 +56,13 @@ Browser Node uses the same `browser_*` tools as a machine's headless browser (`b
 To select an approved or provider-created Node for the current Session:
 
 ```text
-/node worker-one
+/node select worker-one
 ```
 
 To return to local execution:
 
 ```text
-/node master
+/node select master
 ```
 
 Tools that use the Session's current Node will execute there. A tool with an explicit Node argument can target a different permitted Node. An Agent's rules still decide which Nodes it may use; selecting a Node does not grant access to it. An Agent's default Node only sets where its new Sessions start.

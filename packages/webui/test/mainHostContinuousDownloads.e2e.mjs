@@ -141,7 +141,7 @@ try {
   assert.equal((await host.api('POST', '/api/sessions', { agentId: 'main', sessionId: 'deliveries' })).status, 200)
   await page.evaluate(() => window.foxwarmTest.switchToSession('deliveries'))
   await page.waitForFunction(() => location.hash.includes('deliveries') && document.querySelector('.foxwarm-chat-root')?.innerText.includes('deliveries') && document.querySelector('.foxwarm-chat-root')?.dataset.chatConnectionState === 'connected')
-  assert.equal((await host.api('POST', route('other-target') + '/message', { text: '/session unparent' })).status, 200)
+  assert.equal((await host.api('POST', route('other-target') + '/message', { text: '/session clear-parent' })).status, 200)
   await page.evaluate(() => window.foxwarmTest.sendMessage('DELIVER-FILES'))
   const deliveryState = await done('deliveries', 'DELIVERY-FINISHED')
   const results = deliveryState.history.flatMap(row => row.parts || []).filter(part => part.functionResponse).map(part => part.functionResponse)

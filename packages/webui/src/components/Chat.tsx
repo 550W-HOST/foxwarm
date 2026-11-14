@@ -1378,7 +1378,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
     void sendSessionCommand('/dequeue')
   }, [sendSessionCommand])
 
-  const handleCancelCompaction = useCallback(() => { void sendSessionCommand('/stop compact') }, [sendSessionCommand])
+  const handleCancelCompaction = useCallback(() => { void sendSessionCommand('/stop --compaction') }, [sendSessionCommand])
 
   const handleContinue = useCallback(() => {
     void sendSessionCommand('/continue')

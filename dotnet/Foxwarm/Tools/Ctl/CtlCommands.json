@@ -5,22 +5,30 @@
       "name": "session",
       "summary": "Inspect, list, rename, view and manage Sessions.",
       "copy": {
-        "external": "List, read and message Foxwarm Sessions."
+        "external": "List, read and message Foxwarm Sessions.",
+        "user": "Show, list, create and manage Sessions and this conversation's Session."
       }
     },
     {
       "name": "history",
-      "summary": "Read archived conversation context and search history."
+      "summary": "Read archived conversation context and search history.",
+      "copy": {
+        "user": "Search archived conversations."
+      }
     },
     {
       "name": "agent",
-      "summary": "List and manage Agents, their rules and inheritance."
+      "summary": "List and manage Agents, their rules and inheritance.",
+      "copy": {
+        "user": "List, create, delete Agents and set their inheritance."
+      }
     },
     {
       "name": "node",
       "summary": "List, select and manage Nodes; copy files between them.",
       "copy": {
-        "external": "List Nodes, choose this external session's Node and approve Node pairing."
+        "external": "List Nodes, choose this external session's Node and approve Node pairing.",
+        "user": "List Nodes, pair new Nodes and manage their credentials."
       }
     },
     {
@@ -29,7 +37,10 @@
     },
     {
       "name": "skill",
-      "summary": "List and load skills."
+      "summary": "List and load skills.",
+      "copy": {
+        "user": "List skills and show their instructions."
+      }
     },
     {
       "name": "file",
@@ -45,11 +56,17 @@
     },
     {
       "name": "channel",
-      "summary": "Send messages to channel destinations."
+      "summary": "Send messages to channel destinations.",
+      "copy": {
+        "user": "Attach this conversation to a Session and manage channels."
+      }
     },
     {
       "name": "timer",
-      "summary": "Schedule, list, change and delete timers."
+      "summary": "Schedule, list, change and delete timers.",
+      "copy": {
+        "user": "Schedule, list, pause and delete timers for this conversation's Session."
+      }
     },
     {
       "name": "script",
@@ -84,7 +101,8 @@
       "path": "session status",
       "summary": "Show a Session's status: Node, working directory, model, context usage and recent children.",
       "ingress": [
-        "model"
+        "model",
+        "user"
       ],
       "target": {
         "source": "builtin",
@@ -100,14 +118,27 @@
           "kind": "positional",
           "help": "Session to inspect. Defaults to this Session."
         }
-      ]
+      ],
+      "user": {
+        "handler": "session-status",
+        "session": "optional"
+      },
+      "copy": {
+        "user": {
+          "summary": "Show a Session's model, context usage, Node, working directory and recent children.",
+          "params": {
+            "sessionId": "Session to inspect. Defaults to this conversation's Session."
+          }
+        }
+      }
     },
     {
       "path": "session list",
       "summary": "List Sessions, the current Agent's by default.",
       "ingress": [
         "model",
-        "external"
+        "external",
+        "user"
       ],
       "target": {
         "source": "builtin",
@@ -123,7 +154,8 @@
           "kind": "positional",
           "help": "Keeps Sessions whose ID, alias, display name, Agent, Node, working directory or model contains this text, ignoring case. Applied before --start and --count.",
           "ingress": [
-            "model"
+            "model",
+            "user"
           ]
         },
         {
@@ -148,7 +180,8 @@
           "kind": "flag",
           "help": "current-agent (default), or all to include Sessions from other Agents.",
           "ingress": [
-            "model"
+            "model",
+            "user"
           ]
         }
       ],
@@ -159,14 +192,25 @@
             "start": "Zero-based offset, ordered by most recent activity. Defaults to 0.",
             "count": "Number of Sessions to return, 1–50. Defaults to 20."
           }
+        },
+        "user": {
+          "summary": "List Sessions, most recently active first.",
+          "params": {
+            "scope": "all (default), or current-agent for the Agents of this conversation's Session."
+          }
         }
+      },
+      "user": {
+        "handler": "session-list",
+        "session": "optional"
       }
     },
     {
       "path": "session rename",
       "summary": "Set or clear a Session's display name.",
       "ingress": [
-        "model"
+        "model",
+        "user"
       ],
       "target": {
         "source": "builtin",
@@ -189,13 +233,26 @@
           "kind": "flag",
           "help": "Session to rename. Defaults to this Session."
         }
-      ]
+      ],
+      "user": {
+        "handler": "session-rename",
+        "session": "optional"
+      },
+      "copy": {
+        "user": {
+          "params": {
+            "name": "New display name; quote it when it contains spaces. An empty string clears it.",
+            "sessionId": "Session to rename. Defaults to this conversation's Session."
+          }
+        }
+      }
     },
     {
       "path": "session set-parent",
       "summary": "Change a Session's parent.",
       "ingress": [
-        "model"
+        "model",
+        "user"
       ],
       "target": {
         "source": "builtin",
@@ -218,13 +275,25 @@
           "kind": "flag",
           "help": "Session to change. Defaults to this Session."
         }
-      ]
+      ],
+      "user": {
+        "handler": "session-parent",
+        "session": "optional"
+      },
+      "copy": {
+        "user": {
+          "params": {
+            "sessionId": "Session to change. Defaults to this conversation's Session."
+          }
+        }
+      }
     },
     {
       "path": "session clear-parent",
       "summary": "Remove a Session's parent.",
       "ingress": [
-        "model"
+        "model",
+        "user"
       ],
       "target": {
         "source": "builtin",
@@ -240,6 +309,61 @@
           "type": "string",
           "kind": "flag",
           "help": "Session to change. Defaults to this Session."
+        }
+      ],
+      "user": {
+        "handler": "session-parent",
+        "session": "optional"
+      },
+      "copy": {
+        "user": {
+          "params": {
+            "sessionId": "Session to change. Defaults to this conversation's Session."
+          }
+        }
+      }
+    },
+    {
+      "path": "session archive",
+      "summary": "Archive a Session.",
+      "ingress": [
+        "user"
+      ],
+      "user": {
+        "handler": "session-archive",
+        "session": "optional"
+      },
+      "target": {
+        "local": "user"
+      },
+      "params": [
+        {
+          "name": "sessionId",
+          "type": "string",
+          "kind": "positional",
+          "help": "Session to archive. Defaults to this conversation's Session."
+        }
+      ]
+    },
+    {
+      "path": "session unarchive",
+      "summary": "Unarchive a Session.",
+      "ingress": [
+        "user"
+      ],
+      "user": {
+        "handler": "session-archive",
+        "session": "optional"
+      },
+      "target": {
+        "local": "user"
+      },
+      "params": [
+        {
+          "name": "sessionId",
+          "type": "string",
+          "kind": "positional",
+          "help": "Session to unarchive. Defaults to this conversation's Session."
         }
       ]
     },
@@ -382,7 +506,8 @@
       "summary": "Create a Session under an existing Agent.",
       "help": "The new Session reuses the Agent's memory and workspace.",
       "ingress": [
-        "model"
+        "model",
+        "user"
       ],
       "target": {
         "source": "builtin",
@@ -411,7 +536,10 @@
             "claude-code"
           ],
           "kind": "flag",
-          "help": "Model loop for the new Session: foxwarm (default), or claude-code using the installed Claude Code configuration. The runtime can only be chosen at creation."
+          "help": "Model loop for the new Session: foxwarm (default), or claude-code using the installed Claude Code configuration. The runtime can only be chosen at creation.",
+          "ingress": [
+            "model"
+          ]
         },
         {
           "name": "displayName",
@@ -465,7 +593,10 @@
           "arg": "forceModel.modelId",
           "type": "string",
           "kind": "flag",
-          "help": "Only when the user explicitly requests a model for this task or Session. Takes precedence over --model and this Session's child settings."
+          "help": "Only when the user explicitly requests a model for this task or Session. Takes precedence over --model and this Session's child settings.",
+          "ingress": [
+            "model"
+          ]
         },
         {
           "name": "forceEffort",
@@ -480,16 +611,52 @@
             "max"
           ],
           "kind": "flag",
-          "help": "Only when the user explicitly requests an effort level for this task or Session. Takes precedence over --effort and this Session's child settings."
+          "help": "Only when the user explicitly requests an effort level for this task or Session. Takes precedence over --effort and this Session's child settings.",
+          "ingress": [
+            "model"
+          ]
         }
-      ]
+      ],
+      "user": {
+        "handler": "session-create",
+        "session": "optional"
+      },
+      "copy": {
+        "user": {
+          "summary": "Create a Session under an existing Agent and attach this conversation to it.",
+          "help": "Without --model or --effort, the new Session follows the child defaults of this conversation's Session.",
+          "params": {
+            "model": "Model for the new Session, by key or a unique part of it.",
+            "effort": "Effort for the new Session.",
+            "node": "Node for the new Session. Defaults to the Agent's default Node.",
+            "parentSessionId": "Existing Session to record as the new Session's parent.",
+            "systemPromptFiles": "Memory source file for the new prompt snapshot; repeat for several."
+          }
+        }
+      }
+    },
+    {
+      "path": "session new",
+      "summary": "Create an ad-hoc Session and attach this conversation to it.",
+      "ingress": [
+        "user"
+      ],
+      "user": {
+        "handler": "session-new",
+        "session": "none"
+      },
+      "target": {
+        "local": "user"
+      },
+      "params": []
     },
     {
       "path": "session move",
       "summary": "Rename a Session or move it to another Agent.",
       "help": "Can also create the destination Agent. The old Session ID remains an alias.",
       "ingress": [
-        "model"
+        "model",
+        "user"
       ],
       "target": {
         "source": "builtin",
@@ -532,14 +699,26 @@
           "kind": "flag",
           "help": "Existing parent Session to assign after the move. Omit to keep the current parent."
         }
-      ]
+      ],
+      "user": {
+        "handler": "session-move",
+        "session": "optional"
+      },
+      "copy": {
+        "user": {
+          "params": {
+            "sessionId": "Session to move. Defaults to this conversation's Session."
+          }
+        }
+      }
     },
     {
       "path": "session delete",
       "summary": "Delete another Session's live record, keeping its archived history.",
       "help": "Surviving children are detached. A busy target receives a stop request; retry deletion after it becomes idle. The current Session cannot delete itself.",
       "ingress": [
-        "model"
+        "model",
+        "user"
       ],
       "target": {
         "source": "builtin",
@@ -553,14 +732,40 @@
           "required": true,
           "help": "Session to delete, identified by its ID or an unambiguous alias."
         }
-      ]
+      ],
+      "user": {
+        "handler": "session-delete",
+        "session": "optional"
+      },
+      "copy": {
+        "user": {
+          "summary": "Delete a Session's live record, keeping its archived history.",
+          "help": "Surviving children are detached. A busy Session receives a stop request; delete it again after it becomes idle."
+        }
+      }
+    },
+    {
+      "path": "session clear",
+      "summary": "Clear the active history of this conversation's Session.",
+      "ingress": [
+        "user"
+      ],
+      "user": {
+        "handler": "session-clear",
+        "session": "required"
+      },
+      "target": {
+        "local": "user"
+      },
+      "params": []
     },
     {
       "path": "session stop",
       "summary": "Ask a running Session to stop its current turn.",
       "help": "An in-flight model request may be aborted; a tool already running may need to finish.",
       "ingress": [
-        "model"
+        "model",
+        "user"
       ],
       "target": {
         "source": "builtin",
@@ -571,17 +776,251 @@
           "name": "sessionId",
           "type": "string",
           "kind": "positional",
-          "required": true,
+          "required": [
+            "model"
+          ],
           "help": "Session to stop."
+        },
+        {
+          "name": "compaction",
+          "type": "boolean",
+          "kind": "flag",
+          "help": "Cancel active or pending compaction instead of stopping the run.",
+          "ingress": [
+            "user"
+          ]
+        }
+      ],
+      "user": {
+        "handler": "session-stop",
+        "session": "required"
+      },
+      "copy": {
+        "user": {
+          "summary": "Stop the current run of this conversation's Session, or cancel its compaction.",
+          "help": "--compaction cancels active or pending compaction without stopping the run.",
+          "params": {
+            "sessionId": "Session to stop. Defaults to this conversation's Session."
+          }
+        }
+      }
+    },
+    {
+      "path": "session continue",
+      "summary": "Continue an interrupted turn without adding a message.",
+      "ingress": [
+        "user"
+      ],
+      "user": {
+        "handler": "session-continue",
+        "session": "required"
+      },
+      "target": {
+        "local": "user"
+      },
+      "params": []
+    },
+    {
+      "path": "session dequeue",
+      "summary": "Run queued messages now, stopping the current run first if needed.",
+      "ingress": [
+        "user"
+      ],
+      "user": {
+        "handler": "session-dequeue",
+        "session": "required"
+      },
+      "target": {
+        "local": "user"
+      },
+      "params": []
+    },
+    {
+      "path": "session btw",
+      "summary": "Ask a side question without running tools or changing the conversation.",
+      "ingress": [
+        "user"
+      ],
+      "user": {
+        "handler": "session-btw",
+        "session": "required"
+      },
+      "target": {
+        "local": "user"
+      },
+      "params": [
+        {
+          "name": "message",
+          "type": "string",
+          "kind": "rest",
+          "required": true,
+          "help": "Question, taken as written."
         }
       ]
+    },
+    {
+      "path": "session model",
+      "summary": "Show or switch the model and effort of this conversation's Session.",
+      "ingress": [
+        "user"
+      ],
+      "user": {
+        "handler": "session-model",
+        "session": "required"
+      },
+      "target": {
+        "local": "user"
+      },
+      "params": [
+        {
+          "name": "model",
+          "type": "string",
+          "kind": "positional",
+          "help": "Model key or a unique part of it; default returns to the default model. Omit to show the current model."
+        },
+        {
+          "name": "effort",
+          "type": "string",
+          "kind": "flag",
+          "help": "Effort level; default or unset clears it."
+        }
+      ]
+    },
+    {
+      "path": "session fork",
+      "summary": "Fork this conversation's Session, optionally sending the fork a first message.",
+      "help": "This conversation stays on the current Session unless --attach.",
+      "ingress": [
+        "user"
+      ],
+      "user": {
+        "handler": "session-fork",
+        "session": "required"
+      },
+      "target": {
+        "local": "user"
+      },
+      "params": [
+        {
+          "name": "suffix",
+          "type": "string",
+          "kind": "positional",
+          "help": "Name of the fork, appended to this conversation's Session ID. Defaults to fork, numbered if taken."
+        },
+        {
+          "name": "message",
+          "type": "string",
+          "kind": "rest",
+          "help": "First message for the fork, taken as written."
+        },
+        {
+          "name": "attach",
+          "type": "boolean",
+          "kind": "flag",
+          "help": "Attach this conversation to the fork."
+        }
+      ]
+    },
+    {
+      "path": "session messages",
+      "summary": "Preview messages of the active history.",
+      "ingress": [
+        "user"
+      ],
+      "user": {
+        "handler": "session-messages",
+        "session": "required"
+      },
+      "target": {
+        "local": "user"
+      },
+      "params": [
+        {
+          "name": "count",
+          "type": "integer",
+          "kind": "positional",
+          "required": true,
+          "help": "Positive shows the oldest messages, negative the newest; with <end>, the first index of a range."
+        },
+        {
+          "name": "end",
+          "type": "integer",
+          "kind": "positional",
+          "help": "Exclusive end index of a range."
+        }
+      ]
+    },
+    {
+      "path": "session delete-messages",
+      "summary": "Delete messages from the active history; archived history is kept.",
+      "ingress": [
+        "user"
+      ],
+      "user": {
+        "handler": "session-delete-messages",
+        "session": "required"
+      },
+      "target": {
+        "local": "user"
+      },
+      "params": [
+        {
+          "name": "count",
+          "type": "integer",
+          "kind": "positional",
+          "required": true,
+          "help": "Positive deletes the oldest messages, negative the newest."
+        }
+      ]
+    },
+    {
+      "path": "session verbose",
+      "summary": "Show or set whether tool calls are shown in this conversation.",
+      "ingress": [
+        "user"
+      ],
+      "user": {
+        "handler": "session-verbose",
+        "session": "required"
+      },
+      "target": {
+        "local": "user"
+      },
+      "params": [
+        {
+          "name": "state",
+          "type": "enum",
+          "kind": "positional",
+          "values": [
+            "on",
+            "off"
+          ],
+          "help": "on or off. Omit to show the current setting."
+        }
+      ]
+    },
+    {
+      "path": "session index",
+      "summary": "Index the archive of this conversation's Session for semantic search now.",
+      "ingress": [
+        "user"
+      ],
+      "user": {
+        "handler": "session-index",
+        "session": "required"
+      },
+      "target": {
+        "local": "user"
+      },
+      "params": []
     },
     {
       "path": "session refresh-snapshot",
       "summary": "Rebuild a Session's prompt snapshot now.",
       "help": "Use after changes to memory, inheritance or available skills, without waiting for an automatic refresh.",
       "ingress": [
-        "model"
+        "model",
+        "user"
       ],
       "target": {
         "source": "builtin",
@@ -594,14 +1033,26 @@
           "kind": "positional",
           "help": "Session to refresh now, even if it has been inactive for more than an hour. Defaults to this Session."
         }
-      ]
+      ],
+      "user": {
+        "handler": "session-refresh",
+        "session": "optional"
+      },
+      "copy": {
+        "user": {
+          "params": {
+            "sessionId": "Session to refresh. Defaults to this conversation's Session."
+          }
+        }
+      }
     },
     {
       "path": "session child-model",
       "summary": "Show or change the default model and effort for new child Sessions.",
       "help": "Applies to future child or related new Sessions. Unset settings follow the source Session's normal model and effort defaults.",
       "ingress": [
-        "model"
+        "model",
+        "user"
       ],
       "target": {
         "source": "builtin",
@@ -609,16 +1060,16 @@
       },
       "params": [
         {
+          "name": "model",
+          "type": "string",
+          "kind": "positional",
+          "help": "Configured model key for future child or related new Sessions."
+        },
+        {
           "name": "sessionId",
           "type": "string",
           "kind": "flag",
           "help": "Session whose defaults to inspect or change. Defaults to this Session."
-        },
-        {
-          "name": "model",
-          "type": "string",
-          "kind": "flag",
-          "help": "Configured model key for future child or related new Sessions."
         },
         {
           "name": "effort",
@@ -642,14 +1093,27 @@
           "kind": "flag",
           "help": "Clear only the model override. Do not combine with --model."
         }
-      ]
+      ],
+      "user": {
+        "handler": "session-child-model",
+        "session": "optional"
+      },
+      "copy": {
+        "user": {
+          "params": {
+            "sessionId": "Session whose defaults to inspect or change. Defaults to this conversation's Session.",
+            "model": "Model key, or a unique part of it, for future child Sessions; default follows this conversation's Session model again."
+          }
+        }
+      }
     },
     {
       "path": "session compact-threshold",
       "summary": "Show or change the automatic compaction threshold.",
       "help": "Without an override, the threshold follows the active model's context window.",
       "ingress": [
-        "model"
+        "model",
+        "user"
       ],
       "target": {
         "source": "builtin",
@@ -666,22 +1130,49 @@
           "name": "thresholdTokens",
           "type": "number",
           "kind": "flag",
-          "help": "Token threshold for automatic compaction. Omit to inspect the current setting."
+          "help": "Token threshold for automatic compaction. Omit to inspect the current setting.",
+          "ingress": [
+            "model"
+          ]
         },
         {
           "name": "clear",
           "type": "boolean",
           "kind": "flag",
-          "help": "Remove the override and use the model-derived default."
+          "help": "Remove the override and use the model-derived default.",
+          "ingress": [
+            "model"
+          ]
+        },
+        {
+          "name": "value",
+          "type": "string",
+          "kind": "positional",
+          "help": "Token threshold such as 120000 or 120k, or clear to inherit the default. Omit to show the current setting.",
+          "ingress": [
+            "user"
+          ]
         }
-      ]
+      ],
+      "user": {
+        "handler": "session-compact-threshold",
+        "session": "optional"
+      },
+      "copy": {
+        "user": {
+          "params": {
+            "sessionId": "Session to inspect or change. Defaults to this conversation's Session."
+          }
+        }
+      }
     },
     {
       "path": "session compact",
       "summary": "Start compaction for this or another idle Session.",
       "help": "The target uses a separate planning turn to produce a summary plan with submit_compact_plan; this command does not return the candidates or supply the final summary.",
       "ingress": [
-        "model"
+        "model",
+        "user"
       ],
       "target": {
         "source": "builtin",
@@ -692,21 +1183,49 @@
           "name": "sessionId",
           "type": "string",
           "kind": "positional",
-          "help": "Session to compact. Defaults to this Session."
+          "help": "Session to compact. Defaults to this Session.",
+          "ingress": [
+            "model"
+          ]
         },
         {
           "name": "summary",
           "type": "string",
           "kind": "flag",
-          "help": "Additional instructions for the compaction planner, not the final summary or plan."
+          "help": "Additional instructions for the compaction planner, not the final summary or plan.",
+          "ingress": [
+            "model"
+          ]
         },
         {
           "name": "keepPercent",
           "type": "number",
           "kind": "flag",
           "help": "Recent history to keep unsummarized, measured in tokens as a share of the automatic compaction threshold, or of the current unsummarized history when that is smaller: a fraction greater than 0 and up to 1, or a percentage greater than 1 and up to 100. Defaults to the configured share."
+        },
+        {
+          "name": "tools",
+          "type": "boolean",
+          "kind": "flag",
+          "help": "Shorten oversized historical tool results instead of compacting.",
+          "ingress": [
+            "user"
+          ]
         }
-      ]
+      ],
+      "user": {
+        "handler": "session-compact",
+        "session": "required"
+      },
+      "copy": {
+        "user": {
+          "summary": "Compact the history of this conversation's Session, or shorten its old tool results.",
+          "help": "--tools shortens oversized historical tool results without a model request.",
+          "params": {
+            "keepPercent": "Recent history to keep, as a percentage such as 20 or 50."
+          }
+        }
+      }
     },
     {
       "path": "history recall",
@@ -903,24 +1422,77 @@
       ]
     },
     {
+      "path": "history search",
+      "summary": "Search archived messages by meaning.",
+      "ingress": [
+        "user"
+      ],
+      "user": {
+        "handler": "history-search",
+        "session": "required"
+      },
+      "target": {
+        "local": "user"
+      },
+      "params": [
+        {
+          "name": "query",
+          "type": "string",
+          "kind": "rest",
+          "required": true,
+          "help": "What to search for, taken as written."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "kind": "flag",
+          "help": "Search only the Session with this ID."
+        },
+        {
+          "name": "agentName",
+          "type": "string",
+          "kind": "flag",
+          "help": "Search only this Agent; defaults to the Agent of this conversation's Session."
+        },
+        {
+          "name": "limit",
+          "type": "integer",
+          "kind": "flag",
+          "help": "Maximum matches. Defaults to 5."
+        }
+      ]
+    },
+    {
       "path": "agent list",
       "summary": "List Agents with Session counts, memory, inheritance and rule summaries.",
       "help": "The list shows your own Agent and the Agents your tool policy may let you use.",
       "ingress": [
-        "model"
+        "model",
+        "user"
       ],
       "target": {
         "source": "builtin",
         "name": "list_agents"
       },
-      "params": []
+      "params": [],
+      "user": {
+        "handler": "agent-list",
+        "session": "none"
+      },
+      "copy": {
+        "user": {
+          "summary": "List Agents with their Session counts, inheritance and rules.",
+          "help": ""
+        }
+      }
     },
     {
       "path": "agent create",
       "summary": "Create an Agent with its own workspace and memory.",
       "help": "A main Session is also created by default. Use `ctl session create` instead when you only need another conversation under an existing Agent.",
       "ingress": [
-        "model"
+        "model",
+        "user"
       ],
       "target": {
         "source": "builtin",
@@ -944,46 +1516,76 @@
           "name": "inherit",
           "type": "string",
           "kind": "flag",
-          "help": "Agent whose memory should be inherited by the new Agent."
+          "help": "Agent whose memory should be inherited by the new Agent.",
+          "ingress": [
+            "model"
+          ]
         },
         {
           "name": "inheritMemory",
           "type": "boolean",
           "kind": "flag",
-          "help": "Copy memory files from the source Agent once. Use --inherit for ongoing shared-memory inheritance."
+          "help": "Copy memory files from the source Agent once. Use --inherit for ongoing shared-memory inheritance.",
+          "ingress": [
+            "model"
+          ]
         },
         {
           "name": "sourceSessionId",
           "type": "string",
           "kind": "flag",
-          "help": "Session whose model provides creation defaults. Defaults to this Session."
+          "help": "Session whose model provides creation defaults. Defaults to this Session.",
+          "ingress": [
+            "model"
+          ]
         },
         {
           "name": "convertSession",
           "type": "boolean",
           "kind": "flag",
-          "help": "Convert an existing Session into this Agent's main Session. Requires --create-main-session."
+          "help": "Convert an existing Session into this Agent's main Session. Requires --create-main-session.",
+          "ingress": [
+            "model"
+          ]
         },
         {
           "name": "rules",
           "type": "array",
           "items": "object",
           "kind": "flag",
-          "help": "Initial local authorization rules for the new Agent, evaluated in order; pass a JSON array, usually as @name. Calls that match no rule pass this layer, so end with {\"action\":\"deny\"} to allow only the listed capabilities. Omit for an empty layer; ancestor rules still apply."
+          "help": "Initial local authorization rules for the new Agent, evaluated in order; pass a JSON array, usually as @name. Calls that match no rule pass this layer, so end with {\"action\":\"deny\"} to allow only the listed capabilities. Omit for an empty layer; ancestor rules still apply.",
+          "ingress": [
+            "model"
+          ]
         },
         {
           "name": "defaultNode",
           "type": "string",
           "kind": "flag",
-          "help": "Default execution Node for new Sessions in this Agent; omitted uses the installation default when configured. This chooses initial placement and does not grant access."
+          "help": "Default execution Node for new Sessions in this Agent; omitted uses the installation default when configured. This chooses initial placement and does not grant access.",
+          "ingress": [
+            "model"
+          ]
         },
         {
           "name": "defaultCwd",
           "type": "string",
           "kind": "flag",
-          "help": "Absolute working directory for new Sessions that start on the effective default Node (the installation default, else master, when --default-node is omitted). This sets the initial cwd and does not grant access."
+          "help": "Absolute working directory for new Sessions that start on the effective default Node (the installation default, else master, when --default-node is omitted). This sets the initial cwd and does not grant access.",
+          "ingress": [
+            "model"
+          ]
         }
-      ]
+      ],
+      "user": {
+        "handler": "agent-create",
+        "session": "none"
+      },
+      "copy": {
+        "user": {
+          "help": "A main Session is also created unless --no-create-main-session."
+        }
+      }
     },
     {
       "path": "agent set-rules",
@@ -1019,7 +1621,8 @@
       "summary": "Set or clear an Agent's shared-memory inheritance.",
       "help": "Memory is included from the oldest ancestor through the Agent itself; files with the same name are not deduplicated. Existing Session snapshots are unchanged unless --refresh-snapshots is set.",
       "ingress": [
-        "model"
+        "model",
+        "user"
       ],
       "target": {
         "source": "builtin",
@@ -1043,7 +1646,52 @@
           "name": "refreshSnapshots",
           "type": "boolean",
           "kind": "flag",
-          "help": "Refresh snapshots now for this Agent and its inheriting Agents, skipping Sessions inactive for more than one hour because they refresh automatically when their next turn starts. Defaults to false."
+          "help": "Refresh snapshots now for this Agent and its inheriting Agents, skipping Sessions inactive for more than one hour because they refresh automatically when their next turn starts. Defaults to false.",
+          "ingress": [
+            "model"
+          ]
+        }
+      ],
+      "user": {
+        "handler": "agent-inherit",
+        "session": "none"
+      },
+      "copy": {
+        "user": {
+          "help": "Memory is included from the oldest ancestor through the Agent itself.",
+          "params": {
+            "inheritAgentName": "Agent to inherit from. Omit to clear inheritance."
+          }
+        }
+      }
+    },
+    {
+      "path": "agent delete",
+      "summary": "Delete an Agent folder and its Sessions; archived history is kept.",
+      "help": "Without --confirm, shows what would be deleted.",
+      "ingress": [
+        "user"
+      ],
+      "user": {
+        "handler": "agent-delete",
+        "session": "none"
+      },
+      "target": {
+        "local": "user"
+      },
+      "params": [
+        {
+          "name": "agentName",
+          "type": "string",
+          "kind": "positional",
+          "required": true,
+          "help": "Agent to delete."
+        },
+        {
+          "name": "confirm",
+          "type": "boolean",
+          "kind": "flag",
+          "help": "Delete now."
         }
       ]
     },
@@ -1052,7 +1700,8 @@
       "summary": "List Nodes and Providers.",
       "ingress": [
         "model",
-        "external"
+        "external",
+        "user"
       ],
       "target": {
         "source": "builtin",
@@ -1066,7 +1715,14 @@
         "external": {
           "summary": "List the Nodes this external session can use.",
           "params": {}
+        },
+        "user": {
+          "summary": "List approved Nodes, pending pairing requests and the current Node."
         }
+      },
+      "user": {
+        "handler": "node-list",
+        "session": "optional"
       }
     },
     {
@@ -1089,7 +1745,8 @@
       "summary": "Select this Session's execution Node.",
       "ingress": [
         "model",
-        "external"
+        "external",
+        "user"
       ],
       "target": {
         "source": "builtin",
@@ -1114,14 +1771,23 @@
           "params": {
             "nodeId": "Exact Node ID to select."
           }
+        },
+        "user": {
+          "summary": "Select the Node of this conversation's Session.",
+          "help": "File and exec tools of the Session run on the selected Node."
         }
+      },
+      "user": {
+        "handler": "node-select",
+        "session": "required"
       }
     },
     {
       "path": "node inspect",
       "summary": "Show Node or Provider details.",
       "ingress": [
-        "model"
+        "model",
+        "user"
       ],
       "target": {
         "source": "builtin",
@@ -1135,15 +1801,33 @@
           "name": "nodeId",
           "type": "string",
           "kind": "positional",
-          "help": "Node to inspect. Give either a Node or --provider-id."
+          "help": "Node to inspect. Give either a Node or --provider-id.",
+          "required": [
+            "user"
+          ]
         },
         {
           "name": "providerId",
           "type": "string",
           "kind": "flag",
-          "help": "Configured Provider to inspect instead of a Node."
+          "help": "Configured Provider to inspect instead of a Node.",
+          "ingress": [
+            "model"
+          ]
         }
-      ]
+      ],
+      "user": {
+        "handler": "node-inspect",
+        "session": "optional"
+      },
+      "copy": {
+        "user": {
+          "summary": "Show a Node's details.",
+          "params": {
+            "nodeId": "Node to inspect."
+          }
+        }
+      }
     },
     {
       "path": "node create",
@@ -1322,7 +2006,8 @@
       "summary": "Reserve a Node ID and write its auth token to a private file on master.",
       "help": "Returns the Node ID and file path, never the token. Existing Node IDs and files are not replaced. Use run_script with file transfer or exec tools to configure the Node without putting the token in tool arguments or output.",
       "ingress": [
-        "model"
+        "model",
+        "user"
       ],
       "target": {
         "source": "builtin",
@@ -1340,23 +2025,42 @@
           "name": "parentNode",
           "type": "string",
           "kind": "flag",
-          "help": "Existing Node whose authorization subtree will contain the new Node. Required for callers in an Agent created by another Agent; omission otherwise creates a root."
+          "help": "Existing Node whose authorization subtree will contain the new Node. Required for callers in an Agent created by another Agent; omission otherwise creates a root.",
+          "ingress": [
+            "model"
+          ]
         },
         {
           "name": "filePath",
           "type": "string",
           "kind": "flag",
-          "required": true,
-          "help": "Absolute path on master for the new token file. Its parent directory must already exist. The file is created with owner-only permissions and contains the token followed by a newline."
+          "required": [
+            "model"
+          ],
+          "help": "Absolute path on master for the new token file. Its parent directory must already exist. The file is created with owner-only permissions and contains the token followed by a newline.",
+          "ingress": [
+            "model"
+          ]
         }
-      ]
+      ],
+      "user": {
+        "handler": "node-token",
+        "session": "none"
+      },
+      "copy": {
+        "user": {
+          "summary": "Reserve a Node ID and show its credential.",
+          "help": "The credential is shown once, in a ready-to-run start command; save it then."
+        }
+      }
     },
     {
       "path": "node remove",
       "summary": "Revoke an approved Node's credentials and disconnect it.",
       "help": "Nodes with descendants require --cascade. Does not stop client processes or delete environments, files, Agents or Sessions.",
       "ingress": [
-        "model"
+        "model",
+        "user"
       ],
       "target": {
         "source": "builtin",
@@ -1374,7 +2078,49 @@
           "name": "cascade",
           "type": "boolean",
           "kind": "flag",
-          "help": "Also revoke approved descendants. Each removal must be authorized before any change. A subtree containing executable-provider Nodes is rejected."
+          "help": "Also revoke approved descendants. Each removal must be authorized before any change. A subtree containing executable-provider Nodes is rejected.",
+          "ingress": [
+            "model"
+          ]
+        }
+      ],
+      "user": {
+        "handler": "node-remove",
+        "session": "none"
+      },
+      "copy": {
+        "user": {
+          "help": "Does not stop client processes or delete environments, files, Agents or Sessions."
+        }
+      }
+    },
+    {
+      "path": "node rename",
+      "summary": "Rename an approved Node, keeping its credential and metadata.",
+      "ingress": [
+        "user"
+      ],
+      "user": {
+        "handler": "node-rename",
+        "session": "none"
+      },
+      "target": {
+        "local": "user"
+      },
+      "params": [
+        {
+          "name": "nodeId",
+          "type": "string",
+          "kind": "positional",
+          "required": true,
+          "help": "Current Node ID."
+        },
+        {
+          "name": "newNodeId",
+          "type": "string",
+          "kind": "positional",
+          "required": true,
+          "help": "New Node ID."
         }
       ]
     },
@@ -1383,7 +2129,8 @@
       "summary": "Get Node setup instructions and bootstrap endpoints.",
       "help": "The pairing token is written to --file-path, a new owner-only file on master; the returned commands show PAIRING_TOKEN in its place, so supply the file's contents when running them on the new Node. Commands use config.url when set; otherwise replace the example address with one reachable from the new Node.",
       "ingress": [
-        "model"
+        "model",
+        "user"
       ],
       "target": {
         "source": "builtin",
@@ -1394,23 +2141,43 @@
           "name": "filePath",
           "type": "string",
           "kind": "flag",
-          "required": true,
-          "help": "Absolute path on master for a new file that receives the pairing token. The file must not already exist."
+          "required": [
+            "model"
+          ],
+          "help": "Absolute path on master for a new file that receives the pairing token. The file must not already exist.",
+          "ingress": [
+            "model"
+          ]
         }
-      ]
+      ],
+      "user": {
+        "handler": "node-bootstrap-info",
+        "session": "none"
+      },
+      "copy": {
+        "user": {
+          "summary": "Show Node setup instructions and bootstrap commands.",
+          "help": ""
+        }
+      }
     },
     {
       "path": "node pair-list",
       "summary": "List Node pairing requests awaiting approval.",
       "ingress": [
         "model",
-        "external"
+        "external",
+        "user"
       ],
       "target": {
         "source": "builtin",
         "name": "node_pair_list"
       },
-      "params": []
+      "params": [],
+      "user": {
+        "handler": "node-pair-list",
+        "session": "none"
+      }
     },
     {
       "path": "node pair-approve",
@@ -1418,7 +2185,8 @@
       "help": "First check `ctl node pair-list` and verify the request is from the Node you intend to trust. Callers in an Agent created by another Agent must use `ctl node token` with --parent-node instead.",
       "ingress": [
         "model",
-        "external"
+        "external",
+        "user"
       ],
       "target": {
         "source": "builtin",
@@ -1444,8 +2212,46 @@
           "summary": "Approve a pending Node pairing request.",
           "help": "First check `node pair-list` and verify the request is from the Node you intend to trust.",
           "params": {}
+        },
+        "user": {
+          "help": "First check `/node pair-list` and verify the request is from the Node you intend to trust."
         }
-      }
+      },
+      "user": {
+        "handler": "node-pair-approve",
+        "session": "none"
+      },
+      "aliases": [
+        {
+          "name": "approve",
+          "ingress": [
+            "user"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "node pair-reject",
+      "summary": "Reject a pending Node pairing request.",
+      "ingress": [
+        "user"
+      ],
+      "user": {
+        "handler": "node-pair-reject",
+        "session": "none"
+      },
+      "target": {
+        "local": "user"
+      },
+      "params": [
+        {
+          "name": "pendingId",
+          "type": "string",
+          "kind": "positional",
+          "required": true,
+          "help": "Pending request ID from `/node pair-list`."
+        }
+      ]
     },
     {
       "path": "memory read",
@@ -1588,7 +2394,8 @@
       "path": "skill list",
       "summary": "List available skills.",
       "ingress": [
-        "model"
+        "model",
+        "user"
       ],
       "target": {
         "source": "builtin",
@@ -1604,13 +2411,25 @@
           "kind": "flag",
           "help": "Agent whose available skills to use. Defaults to this Session's Agent."
         }
-      ]
+      ],
+      "user": {
+        "handler": "skill-list",
+        "session": "optional"
+      },
+      "copy": {
+        "user": {
+          "params": {
+            "agentName": "Agent whose skills to list. Defaults to the Agent of this conversation's Session, or main."
+          }
+        }
+      }
     },
     {
       "path": "skill load",
       "summary": "Read a skill's instructions and resource list.",
       "ingress": [
-        "model"
+        "model",
+        "user"
       ],
       "target": {
         "source": "builtin",
@@ -1632,6 +2451,26 @@
           "type": "string",
           "kind": "flag",
           "help": "Agent whose available skills to use. Defaults to this Session's Agent."
+        }
+      ],
+      "user": {
+        "handler": "skill-load",
+        "session": "optional"
+      },
+      "copy": {
+        "user": {
+          "summary": "Show a skill's instructions and resource list.",
+          "params": {
+            "agentName": "Agent whose skills to use. Defaults to the Agent of this conversation's Session, or main."
+          }
+        }
+      },
+      "aliases": [
+        {
+          "name": "show",
+          "ingress": [
+            "user"
+          ]
         }
       ]
     },
@@ -1965,11 +2804,277 @@
       ]
     },
     {
+      "path": "channel attach",
+      "summary": "Attach this conversation to a Session.",
+      "ingress": [
+        "user"
+      ],
+      "user": {
+        "handler": "channel-attach",
+        "session": "none"
+      },
+      "target": {
+        "local": "user"
+      },
+      "params": [
+        {
+          "name": "sessionId",
+          "type": "string",
+          "kind": "positional",
+          "required": true,
+          "help": "Existing Session ID."
+        }
+      ]
+    },
+    {
+      "path": "channel whoami",
+      "summary": "Show your user ID and this conversation's channel target ID.",
+      "ingress": [
+        "user"
+      ],
+      "user": {
+        "handler": "channel-whoami",
+        "session": "none"
+      },
+      "target": {
+        "local": "user"
+      },
+      "params": []
+    },
+    {
+      "path": "channel info",
+      "summary": "Show this conversation's channel identifiers and attachment state.",
+      "ingress": [
+        "user"
+      ],
+      "user": {
+        "handler": "channel-info",
+        "session": "none"
+      },
+      "target": {
+        "local": "user"
+      },
+      "params": []
+    },
+    {
+      "path": "channel auth",
+      "summary": "Show authorization diagnostics for this conversation.",
+      "ingress": [
+        "user"
+      ],
+      "user": {
+        "handler": "channel-auth",
+        "session": "none"
+      },
+      "target": {
+        "local": "user"
+      },
+      "params": []
+    },
+    {
+      "path": "channel status",
+      "summary": "Show the runtime status of channels.",
+      "ingress": [
+        "user"
+      ],
+      "user": {
+        "handler": "channel-status",
+        "session": "none"
+      },
+      "target": {
+        "local": "user"
+      },
+      "params": [
+        {
+          "name": "channel",
+          "type": "string",
+          "kind": "positional",
+          "help": "Channel ID or type to show. Omit for every channel."
+        }
+      ]
+    },
+    {
+      "path": "channel start",
+      "summary": "Start a managed channel without restarting Foxwarm.",
+      "ingress": [
+        "user"
+      ],
+      "user": {
+        "handler": "channel-runtime",
+        "session": "none"
+      },
+      "target": {
+        "local": "user"
+      },
+      "params": [
+        {
+          "name": "channel",
+          "type": "string",
+          "kind": "positional",
+          "required": true,
+          "help": "Channel ID."
+        }
+      ]
+    },
+    {
+      "path": "channel stop",
+      "summary": "Stop a managed channel.",
+      "ingress": [
+        "user"
+      ],
+      "user": {
+        "handler": "channel-runtime",
+        "session": "none"
+      },
+      "target": {
+        "local": "user"
+      },
+      "params": [
+        {
+          "name": "channel",
+          "type": "string",
+          "kind": "positional",
+          "required": true,
+          "help": "Channel ID."
+        }
+      ]
+    },
+    {
+      "path": "channel restart",
+      "summary": "Restart a managed channel.",
+      "ingress": [
+        "user"
+      ],
+      "user": {
+        "handler": "channel-runtime",
+        "session": "none"
+      },
+      "target": {
+        "local": "user"
+      },
+      "params": [
+        {
+          "name": "channel",
+          "type": "string",
+          "kind": "positional",
+          "required": true,
+          "help": "Channel ID."
+        }
+      ]
+    },
+    {
+      "path": "channel mode",
+      "summary": "Show or set the mode of this conversation.",
+      "help": "send-only conversations receive only explicit sends, not Session replies.",
+      "ingress": [
+        "user"
+      ],
+      "user": {
+        "handler": "channel-mode",
+        "session": "none"
+      },
+      "target": {
+        "local": "user"
+      },
+      "params": [
+        {
+          "name": "mode",
+          "type": "enum",
+          "kind": "positional",
+          "values": [
+            "normal",
+            "send-only"
+          ],
+          "help": "normal or send-only. Omit to show the current mode."
+        }
+      ]
+    },
+    {
+      "path": "channel dangerously-allow-all-users",
+      "summary": "Show or set whether everyone in this conversation may send messages.",
+      "ingress": [
+        "user"
+      ],
+      "user": {
+        "handler": "channel-allow-all",
+        "session": "none"
+      },
+      "target": {
+        "local": "user"
+      },
+      "params": [
+        {
+          "name": "value",
+          "type": "enum",
+          "kind": "positional",
+          "values": [
+            "yes",
+            "no"
+          ],
+          "help": "yes or no. Omit to show the current setting."
+        }
+      ]
+    },
+    {
+      "path": "channel weixin-status",
+      "summary": "Show the Weixin channel status.",
+      "ingress": [
+        "user"
+      ],
+      "user": {
+        "handler": "channel-weixin",
+        "session": "none"
+      },
+      "target": {
+        "local": "user"
+      },
+      "params": []
+    },
+    {
+      "path": "channel weixin-login",
+      "summary": "Start a Weixin QR login.",
+      "ingress": [
+        "user"
+      ],
+      "user": {
+        "handler": "channel-weixin",
+        "session": "none"
+      },
+      "target": {
+        "local": "user"
+      },
+      "params": []
+    },
+    {
+      "path": "channel weixin-wait",
+      "summary": "Wait for a Weixin QR login to finish.",
+      "ingress": [
+        "user"
+      ],
+      "user": {
+        "handler": "channel-weixin",
+        "session": "none"
+      },
+      "target": {
+        "local": "user"
+      },
+      "params": [
+        {
+          "name": "sessionKey",
+          "type": "string",
+          "kind": "positional",
+          "required": true,
+          "help": "Login key shown by `/channel weixin-login`."
+        }
+      ]
+    },
+    {
       "path": "timer create",
       "summary": "Schedule a message or a ToolScript run.",
       "help": "Runs once or on a recurring schedule; give one of --at, --after-seconds or --cron. ToolScript timers run for the calling Session without starting a model turn; the script can send a message when needed. Timers survive restarts. Load the timer-automation skill before creating or changing timers.",
       "ingress": [
-        "model"
+        "model",
+        "user"
       ],
       "target": {
         "source": "builtin",
@@ -1984,19 +3089,28 @@
             "toolscript"
           ],
           "kind": "flag",
-          "help": "What each trigger does: message (default) or toolscript."
+          "help": "What each trigger does: message (default) or toolscript.",
+          "ingress": [
+            "model"
+          ]
         },
         {
           "name": "script",
           "type": "object",
           "kind": "flag",
-          "help": "ToolScript to run on each trigger with `--action toolscript`, as a JSON object, usually @name."
+          "help": "ToolScript to run on each trigger with `--action toolscript`, as a JSON object, usually @name.",
+          "ingress": [
+            "model"
+          ]
         },
         {
           "name": "sessionId",
           "type": "string",
           "kind": "flag",
-          "help": "Session that owns the timer. Defaults to this Session. ToolScript timers must belong to the calling Session."
+          "help": "Session that owns the timer. Defaults to this Session. ToolScript timers must belong to the calling Session.",
+          "ingress": [
+            "model"
+          ]
         },
         {
           "name": "at",
@@ -2019,7 +3133,7 @@
         {
           "name": "message",
           "type": "string",
-          "kind": "flag",
+          "kind": "rest",
           "help": "Message delivered on each trigger with `--action message` (the default)."
         },
         {
@@ -2040,14 +3154,29 @@
           "kind": "flag",
           "help": "Agent for newly created Sessions. Defaults to the owner Session's Agent; applies to message timers when --new-session is true."
         }
-      ]
+      ],
+      "user": {
+        "handler": "timer-create",
+        "session": "required"
+      },
+      "copy": {
+        "user": {
+          "summary": "Schedule a message for this conversation's Session.",
+          "help": "Give one of --at, --after-seconds or --cron; quote a cron expression with spaces. The message is the rest of the text.",
+          "params": {
+            "message": "Message delivered on each trigger, taken as written.",
+            "agentName": "Agent for new Sessions. Defaults to the Agent of this conversation's Session; applies with --new-session."
+          }
+        }
+      }
     },
     {
       "path": "timer list",
       "summary": "List timers owned by a Session.",
       "help": "Shows each timer's schedule, next run, paused state and most recent result.",
       "ingress": [
-        "model"
+        "model",
+        "user"
       ],
       "target": {
         "source": "builtin",
@@ -2060,7 +3189,18 @@
           "kind": "flag",
           "help": "Owner Session ID. Defaults to this Session."
         }
-      ]
+      ],
+      "user": {
+        "handler": "timer-list",
+        "session": "required"
+      },
+      "copy": {
+        "user": {
+          "params": {
+            "sessionId": "Owner Session ID. Defaults to this conversation's Session."
+          }
+        }
+      }
     },
     {
       "path": "timer update",
@@ -2157,7 +3297,8 @@
       "path": "timer pause",
       "summary": "Pause a timer, keeping its schedule.",
       "ingress": [
-        "model"
+        "model",
+        "user"
       ],
       "target": {
         "source": "builtin",
@@ -2180,13 +3321,25 @@
           "kind": "flag",
           "help": "Owner Session ID. Defaults to this Session. Only the owner Session may configure a ToolScript timer."
         }
-      ]
+      ],
+      "user": {
+        "handler": "timer-pause",
+        "session": "required"
+      },
+      "copy": {
+        "user": {
+          "params": {
+            "sessionId": "Owner Session ID. Defaults to this conversation's Session."
+          }
+        }
+      }
     },
     {
       "path": "timer resume",
       "summary": "Resume a paused timer from its next scheduled time.",
       "ingress": [
-        "model"
+        "model",
+        "user"
       ],
       "target": {
         "source": "builtin",
@@ -2209,14 +3362,26 @@
           "kind": "flag",
           "help": "Owner Session ID. Defaults to this Session. Only the owner Session may configure a ToolScript timer."
         }
-      ]
+      ],
+      "user": {
+        "handler": "timer-resume",
+        "session": "required"
+      },
+      "copy": {
+        "user": {
+          "params": {
+            "sessionId": "Owner Session ID. Defaults to this conversation's Session."
+          }
+        }
+      }
     },
     {
       "path": "timer delete",
       "summary": "Delete a timer.",
       "help": "Stops future triggers. A delivery already in progress is not undone.",
       "ingress": [
-        "model"
+        "model",
+        "user"
       ],
       "target": {
         "source": "builtin",
@@ -2236,7 +3401,18 @@
           "kind": "flag",
           "help": "Owner Session ID. Defaults to this Session."
         }
-      ]
+      ],
+      "user": {
+        "handler": "timer-delete",
+        "session": "required"
+      },
+      "copy": {
+        "user": {
+          "params": {
+            "sessionId": "Owner Session ID. Defaults to this conversation's Session."
+          }
+        }
+      }
     },
     {
       "path": "script list",
@@ -2745,6 +3921,61 @@
           "help": "Maximum executions to list, 1–20. Defaults to 5."
         }
       ]
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "stop",
+      "command": "session stop",
+      "positional": []
+    },
+    {
+      "name": "continue",
+      "command": "session continue",
+      "positional": []
+    },
+    {
+      "name": "dequeue",
+      "command": "session dequeue",
+      "positional": []
+    },
+    {
+      "name": "btw",
+      "command": "session btw",
+      "positional": []
+    },
+    {
+      "name": "model",
+      "command": "session model",
+      "positional": [
+        "model"
+      ]
+    },
+    {
+      "name": "fork",
+      "command": "session fork",
+      "positional": [
+        "suffix"
+      ]
+    },
+    {
+      "name": "compact",
+      "command": "session compact",
+      "positional": [
+        "keepPercent"
+      ]
+    },
+    {
+      "name": "status",
+      "command": "session status",
+      "positional": [
+        "sessionId"
+      ]
+    },
+    {
+      "name": "whoami",
+      "command": "channel whoami",
+      "positional": []
     }
   ]
 }

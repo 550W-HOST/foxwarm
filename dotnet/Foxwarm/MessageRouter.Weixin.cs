@@ -6,17 +6,17 @@ namespace Foxwarm;
 
 internal sealed partial class MessageRouter
 {
-    private async Task HandleWeixinCommandAsync(ExternalChannelContext source, string[] args)
+    private async Task HandleWeixinCommandAsync(UserCommand user)
     {
+        var source = user.Source;
         var configuration =
             runtime.Manager.Models.ConfigurationOwner
             ?? throw new InvalidOperationException("Configuration is unavailable.");
         var settings = configuration.WeixinSettings();
         var api = runtime.Manager.ManagedChannels!.Weixin;
-        var command = args.FirstOrDefault()?.ToLowerInvariant() ?? "status";
-        switch (command)
+        switch (user.Verb)
         {
-            case "status":
+            case "weixin-status":
                 var config = settings.Config;
                 var status = runtime
                     .Manager.ManagedChannels.Statuses()
@@ -48,14 +48,14 @@ internal sealed partial class MessageRouter
                             $"- runtime: `{(SessionCatalog.Flag(status?["running"]) ? "running" : "stopped")}`",
                             "",
                             "Usage:",
-                            "- `/channel weixin login`",
-                            "- `/channel weixin wait <sessionKey>`",
+                            "- `/channel weixin-login`",
+                            "- `/channel weixin-wait <sessionKey>`",
                             $"- `/channel start {settings.ChannelId}`",
                         }
                     )
                 );
                 return;
-            case "login":
+            case "weixin-login":
                 try
                 {
                     var result = await api.StartLoginAsync(
@@ -65,7 +65,7 @@ internal sealed partial class MessageRouter
                     );
                     var key = SessionWait.Text(result["sessionKey"]);
                     await source.Reply(
-                        $"✅ Weixin QR login started.\n- sessionKey: `{key}`\n- qrcodeUrl: {SessionWait.Text(result["qrcodeUrl"]) ?? "(none)"}\n\nAfter scanning, run:\n`/channel weixin wait {key}`"
+                        $"✅ Weixin QR login started.\n- sessionKey: `{key}`\n- qrcodeUrl: {SessionWait.Text(result["qrcodeUrl"]) ?? "(none)"}\n\nAfter scanning, run:\n`/channel weixin-wait {key}`"
                     );
                 }
                 catch (Exception error)
@@ -75,11 +75,11 @@ internal sealed partial class MessageRouter
                     );
                 }
                 return;
-            case "wait":
-                var sessionKey = args.ElementAtOrDefault(1)?.Trim();
+            case "weixin-wait":
+                var sessionKey = user.Text("sessionKey")?.Trim();
                 if (string.IsNullOrEmpty(sessionKey))
                 {
-                    await source.Reply("Usage: /channel weixin wait <sessionKey>");
+                    await source.Reply("Usage: /channel weixin-wait <sessionKey>");
                     return;
                 }
                 try
@@ -133,8 +133,5 @@ internal sealed partial class MessageRouter
                 }
                 return;
         }
-        await source.Reply(
-            "Usage: /channel weixin status\n       /channel weixin login\n       /channel weixin wait <sessionKey>"
-        );
     }
 }

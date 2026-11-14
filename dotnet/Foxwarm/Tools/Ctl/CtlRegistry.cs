@@ -19,7 +19,9 @@ internal sealed record CtlParameter(
     bool Variadic,
     string? Help,
     // The ingresses offering this parameter; null for every ingress of its command.
-    IReadOnlyList<string>? Ingress = null
+    IReadOnlyList<string>? Ingress = null,
+    // The ingresses that must supply it, when that differs by ingress; null to use Required.
+    IReadOnlyList<string>? RequiredIngress = null
 )
 {
     internal bool AvailableTo(string ingress) =>
@@ -38,9 +40,15 @@ internal sealed record CtlParameter(
 // of named parameters.
 internal sealed record CtlCopy(
     string? Summary,
+    // Present when the ingress replaces the help; an empty help removes it.
+    bool ReplacesHelp,
     string? Help,
     IReadOnlyDictionary<string, string> Parameters
 );
+
+// A short user command such as `/stop` for one command. Its positional words fill the named
+// parameters in order; the command's other positionals are given as options.
+internal sealed record CtlShortcut(string Name, string Command, IReadOnlyList<string> Positional);
 
 // A verb alias, for every ingress of its command or only the listed ones.
 internal sealed record CtlAlias(string Name, IReadOnlyList<string>? Ingress)
@@ -89,19 +97,42 @@ internal sealed record CtlCommand(
             ],
             IngressAliases = [],
             Summary = copy?.Summary ?? Summary,
-            Help = copy is null ? Help : copy.Help,
+            Help = copy is { ReplacesHelp: true } ? copy.Help : Help,
             Parameters =
             [
                 .. Parameters
                     .Where(parameter => parameter.AvailableTo(ingress))
                     .Select(parameter =>
-                        copy?.Parameters.GetValueOrDefault(parameter.Name) is { } help
-                            ? parameter with { Help = help }
-                            : parameter
+                        parameter with
+                        {
+                            Help = copy?.Parameters.GetValueOrDefault(parameter.Name) ?? parameter.Help,
+                            Required = parameter.RequiredIngress is { } required
+                                ? required.Contains(ingress, StringComparer.Ordinal)
+                                : parameter.Required,
+                        }
                     ),
             ],
         };
     }
+
+    // The shortcut's view of the user command: shown under its own name, with its positional
+    // words for the listed parameters and every other positional as an option.
+    internal CtlCommand Shortcut(CtlShortcut shortcut)
+    {
+        var view = View("user");
+        var positional = shortcut
+            .Positional.Select(name => view.Parameters.Single(parameter => parameter.Name == name))
+            .Select(parameter => parameter with { Kind = "positional" });
+        var others = view
+            .Parameters.Where(parameter => !shortcut.Positional.Contains(parameter.Name))
+            .Select(parameter =>
+                parameter.Positional ? parameter with { Kind = "flag", Variadic = false } : parameter
+            );
+        return view with { Display = shortcut.Name, Parameters = [.. positional, .. others] };
+    }
+
+    // The name shown in usage: the command path, or a shortcut's name.
+    internal string? Display { get; init; }
 
     internal CtlParameter? FindFlag(string flag) =>
         Parameters.FirstOrDefault(parameter =>
@@ -135,11 +166,19 @@ internal static class CtlRegistry
 
     private static readonly Lazy<(
         IReadOnlyList<CtlNoun> Nouns,
-        IReadOnlyList<CtlCommand> Commands
+        IReadOnlyList<CtlCommand> Commands,
+        IReadOnlyList<CtlShortcut> Shortcuts
     )> loaded = new(() => Load(ReadResource()));
 
     internal static IReadOnlyList<CtlNoun> Nouns => loaded.Value.Nouns;
     internal static IReadOnlyList<CtlCommand> Commands => loaded.Value.Commands;
+    internal static IReadOnlyList<CtlShortcut> Shortcuts => loaded.Value.Shortcuts;
+
+    // A user shortcut's command view, or null.
+    internal static CtlCommand? Shortcut(string name) =>
+        Shortcuts.FirstOrDefault(shortcut => shortcut.Name == name) is { } shortcut
+            ? Commands.Single(command => command.Path == shortcut.Command).Shortcut(shortcut)
+            : null;
 
     private static string ReadResource()
     {
@@ -184,7 +223,11 @@ internal static class CtlRegistry
             .Select(command => command.View(Ingress));
 
     // Validates the registry shape so a malformed entry fails at first use and in tests.
-    internal static (IReadOnlyList<CtlNoun>, IReadOnlyList<CtlCommand>) Load(string text)
+    internal static (
+        IReadOnlyList<CtlNoun> Nouns,
+        IReadOnlyList<CtlCommand> Commands,
+        IReadOnlyList<CtlShortcut> Shortcuts
+    ) Load(string text)
     {
         var root =
             JsonNode.Parse(text) as JsonObject
@@ -230,7 +273,7 @@ internal static class CtlRegistry
                 );
             if (source is not (null or "builtin" or "node" or "mcp"))
                 throw new InvalidDataException("ctl target source is invalid: " + path);
-            if (local is not (null or "tool-search" or "tool-call" or "exec-result"))
+            if (local is not (null or "tool-search" or "tool-call" or "exec-result" or "user"))
                 throw new InvalidDataException("ctl local target is invalid: " + path);
             var parameters = new List<CtlParameter>();
             foreach (var item in entry["params"] as JsonArray ?? [])
@@ -260,10 +303,11 @@ internal static class CtlRegistry
                         items,
                         values,
                         kind,
-                        item?["required"]?.GetValue<bool>() == true,
+                        item?["required"] is JsonValue requiredFlag && requiredFlag.GetValue<bool>(),
                         item?["variadic"]?.GetValue<bool>() == true,
                         SessionWait.Text(item?["help"]),
-                        IngressList(item?["ingress"], path)
+                        IngressList(item?["ingress"], path),
+                        item?["required"] is JsonArray ? IngressList(item["required"], path) : null
                     )
                 );
             }
@@ -298,7 +342,8 @@ internal static class CtlRegistry
             foreach (var (key, value) in IngressMap(entry["copy"], path))
                 copy[key] = new(
                     SessionWait.Text(value?["summary"]),
-                    SessionWait.Text(value?["help"]),
+                    value is JsonObject replaced && replaced.ContainsKey("help"),
+                    SessionWait.Text(value?["help"]) is { Length: > 0 } helpText ? helpText : null,
                     (value?["params"] as JsonObject ?? [])
                         .ToDictionary(pair => pair.Key, pair => Required(pair.Value, "parameter copy"))
                 );
@@ -331,7 +376,23 @@ internal static class CtlRegistry
                 }
             );
         }
-        return (nouns, commands);
+        var shortcuts = new List<CtlShortcut>();
+        foreach (var node in root["shortcuts"] as JsonArray ?? [])
+        {
+            var name = Required(node?["name"], "shortcut name");
+            var target = commands.FirstOrDefault(command => command.Path == SessionWait.Text(node?["command"]));
+            if (target is null || !target.Available("user"))
+                throw new InvalidDataException("ctl shortcut needs a user command: " + name);
+            if (shortcuts.Any(shortcut => shortcut.Name == name) || nouns.Any(noun => noun.Name == name))
+                throw new InvalidDataException("Duplicate ctl shortcut: " + name);
+            var positional = (node?["positional"] as JsonArray ?? [])
+                .Select(value => Required(value, "shortcut parameter"))
+                .ToArray();
+            if (positional.Any(parameter => !target.View("user").Parameters.Any(item => item.Name == parameter)))
+                throw new InvalidDataException("ctl shortcut names an unknown parameter: " + name);
+            shortcuts.Add(new(name, target.Path, positional));
+        }
+        return (nouns, commands, shortcuts);
     }
 
     private static IReadOnlyList<string>? IngressList(JsonNode? node, string path)

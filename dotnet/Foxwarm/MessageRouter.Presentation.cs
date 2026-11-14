@@ -9,19 +9,11 @@ internal sealed partial class MessageRouter
     internal const string CommandSpace =
         "[\u0009\u000A\u000B\u000C\u000D\u0020\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF]";
 
-    internal static bool IsPresentationCommand(string text) =>
-        Regex.IsMatch(
-            SessionCatalog.Trim(text),
-            "^/session"
-                + CommandSpace
-                + "+(archive|unarchive|parent|unparent)(?:"
-                + CommandSpace
-                + "|$)"
-        );
-
     private MessageRouteResult HandlePresentationCommand(
         ChannelContext context,
-        string text,
+        string verb,
+        string? sessionId,
+        string? parentSessionId,
         bool publishReply = true
     )
     {
@@ -30,16 +22,19 @@ internal sealed partial class MessageRouter
             if (publishReply)
                 runtime.ReplyToCommand(id, value);
         }
-        var words = Regex.Split(SessionCatalog.Trim(text), CommandSpace + "+");
-        var action = words[1];
-        var args = words.Skip(2).ToArray();
+        var action = verb switch
+        {
+            "set-parent" => "parent",
+            "clear-parent" => "unparent",
+            _ => verb,
+        };
         var reply = "";
         JsonObject? outcome = null;
         try
         {
             if (action is "archive" or "unarchive")
             {
-                var requested = args.FirstOrDefault() ?? context.SessionId;
+                var requested = sessionId ?? context.SessionId;
                 var canonical = SessionCatalog.Text(
                     runtime.Catalog.Resolve(requested)["sessionId"]
                 );
@@ -56,17 +51,12 @@ internal sealed partial class MessageRouter
                         $"✅ Session `{requested}` {(action == "archive" ? "archived" : "unarchived")}.";
                 }
             }
-            else if (action == "parent" && args.Length == 0)
-                reply = "Usage: /session parent <parent-session-id> [child-session-id]";
             else
             {
-                var child =
-                    action == "parent"
-                        ? args.Skip(1).FirstOrDefault() ?? context.SessionId
-                        : args.FirstOrDefault() ?? context.SessionId;
+                var child = sessionId ?? context.SessionId;
                 outcome = runtime
                     .ChangePresentation(catalog =>
-                        catalog.SetParent(child, action == "parent" ? args[0] : null)
+                        catalog.SetParent(child, action == "parent" ? parentSessionId : null)
                     )
                     .Result;
                 var previous = SessionCatalog.Text(outcome["previousParentSessionId"]);

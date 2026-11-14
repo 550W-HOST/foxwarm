@@ -13,16 +13,15 @@ Foxwarm 当前把 **agent** 与 **session** 明确分开：
 /session list
 /session new
 /session create <agent> <session>
-/session fork
+/session fork [suffix] [message] [--attach]
 /session rename <name>
-/session move <new-session-id> [--parent <parent-session-id>]
-/session move <existing-agent>/<new-session-id> [--parent <parent-session-id>]
+/session move [<session-id>] --new-session-id <new-session-id> [--new-agent-name <agent>] [--parent-session-id <parent-session-id>]
 /session clear
 /session delete <sessionId>
 /session archive [session-id]
 /session unarchive [session-id]
-/session parent <parent-session-id> [child-session-id]
-/session unparent [child-session-id]
+/session set-parent <parent-session-id> [--session-id <child-session-id>]
+/session clear-parent [--session-id <child-session-id>]
 /session index
 ```
 
@@ -30,27 +29,28 @@ Foxwarm 当前把 **agent** 与 **session** 明确分开：
 
 ```bash
 /status
-/messages <num>
+/session messages <count>
 /model [name|default]
-/node [list|<node-id>]
-/node approve <pending-id> [node-id]
-/node reject <pending-id>
-/node pair-help
+/node list
+/node select <node-id>
+/node pair-approve <pending-id> [--node-id <node-id>]
+/node pair-reject <pending-id>
+/node bootstrap-info
 /agent list
-/agent create <name> [--no-main]
+/agent create <name> [--no-create-main-session]
 /agent delete <name> [--confirm]
-/agent inherit <agent> <parent-agent|none>
+/agent inherit <agent> [parent-agent]
 /skill list
 ```
 
 `/session move` 说明：
 
-- `/session move my-project`：在当前 agent 内重命名当前 session
-- `/session move my-agent/main`：把当前 session 移动到**已存在的** agent `my-agent` 下，并改名为 `main`
+- `/session move --new-session-id my-project`：在当前 agent 内重命名当前 session
+- `/session move --new-agent-name my-agent --new-session-id main`：把当前 session 移动到**已存在的** agent `my-agent` 下，并改名为 `main`
 - 默认保留当前 `parentSessionId`，并自动把直接 child 的 parent 引用改成移动后的新 ID；迁移一棵 session tree 时无需逐项重建已有关系
-- `/session move my-agent/task --parent my-agent/main`：移动后明确把该 session 设为 `my-agent/main` 的 child
-- 移除 parent 关系继续使用 `/session unparent`，不通过 `/session move` 隐式完成
-- 该命令**不会创建 agent**；如果目标 agent 不存在，请先用 `/agent create`
+- `/session move --new-agent-name my-agent --new-session-id task --parent-session-id my-agent/main`：移动后明确把该 session 设为 `my-agent/main` 的 child
+- 移除 parent 关系继续使用 `/session clear-parent`，不通过 `/session move` 隐式完成
+- 目标 agent 不存在时，加 `--create-agent` 创建，或先用 `/agent create`
 - 该命令也**不会重命名 agent 本身**；agent 级别变更更适合走新建/迁移/清理流程
 
 创建或移动 Session 时，新名称只允许 ASCII 字母、数字、`_`、`-`；fork/child 的 suffix 也遵循该规则。已有包含其他字符的 Session 不会批量改名，仍可读取并移动到合法名称。`displayName` 不受此限制。

@@ -266,7 +266,7 @@ public sealed class ChannelRuntimeStatusTests
         await ErrorAsync(
             f,
             "wx",
-            "Weixin polling failed: the Weixin login has expired; run /channel weixin login again."
+            "Weixin polling failed: the Weixin login has expired; run /channel weixin-login again."
         );
         Volatile.Write(ref failing, false);
         await ClearAsync(f, "wx");

@@ -143,12 +143,12 @@ send_to_session({
 /session list
 /session create <agent> <session>
 /session fork
-/session parent <parent-session-id> [child-session-id]
-/session unparent [child-session-id]
+/session set-parent <parent-session-id> [--session-id <child-session-id>]
+/session clear-parent [--session-id <child-session-id>]
 /agent list
-/agent create <name> [--no-main]
-/agent inherit <agent> <parent-agent|none>
-/skill show <skill>
+/agent create <name> [--no-create-main-session]
+/agent inherit <agent> [parent-agent]
+/skill load <skill>
 ```
 
 ## 推荐模式

@@ -151,7 +151,7 @@ public sealed partial class SessionCreationParityTests
             new([
                 new JsonObject
                 {
-                    ["text"] = $"/session create restricted allowed --system-prompt-file {outside}",
+                    ["text"] = $"/session create restricted allowed --system-prompt-files {outside}",
                 },
             ])
         );
@@ -174,7 +174,7 @@ public sealed partial class SessionCreationParityTests
             new([
                 new JsonObject
                 {
-                    ["text"] = "/session create restricted missing --system-prompt-file missing.md",
+                    ["text"] = "/session create restricted missing --system-prompt-files missing.md",
                 },
             ])
         );

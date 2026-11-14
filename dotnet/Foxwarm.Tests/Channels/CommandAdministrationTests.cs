@@ -62,82 +62,7 @@ public sealed partial class CommandAdministrationTests
     }
 
     [Fact]
-    public async Task Frozen_Source_create_and_effort_parsers_match_supported_success_and_rejection_cases()
-    {
-        string[][] creates =
-        [
-            [],
-            [
-                "--model",
-                "virtual",
-                "--effort",
-                "NONE",
-                "--system-prompt-file",
-                "a",
-                "--system-prompt-file",
-                "b",
-            ],
-            ["--model"],
-            ["--model", "--effort", "high"],
-            ["--effort", "default"],
-            ["--model", "a", "--model", "b"],
-            ["--effort", "low", "--effort", "high"],
-            ["extra"],
-        ];
-        string[][] efforts =
-        [
-            [],
-            ["--effort", "none"],
-            ["wire", "--effort", "HIGH"],
-            ["--effort", "default"],
-            ["--effort", "unset"],
-            ["--effort"],
-            ["--effort", "bad"],
-            ["--effort", "low", "--effort", "high"],
-        ];
-        var source = await SourceAsync(
-            new JsonObject
-            {
-                ["operation"] = "parsers",
-                ["create"] = JsonSerializer.SerializeToNode(creates),
-                ["efforts"] = JsonSerializer.SerializeToNode(efforts),
-                ["thresholds"] = new JsonArray(),
-                ["moves"] = new JsonArray(),
-                ["timers"] = new JsonArray(),
-            }
-        );
-        for (var index = 0; index < creates.Length; index++)
-        {
-            var expected = source["create"]![index]!;
-            if (expected["error"] is not null)
-                Assert.Throws<InvalidDataException>(() =>
-                    CommandArguments.SessionCreate(creates[index])
-                );
-            else
-            {
-                var actual = CommandArguments.SessionCreate(creates[index]);
-                Assert.Equal(SessionWait.Text(expected["model"]), actual.Model);
-                Assert.Equal(SessionWait.Text(expected["effort"]), actual.Effort);
-                Assert.Equal(SessionWait.Strings(expected["systemPromptFiles"]), actual.Files);
-            }
-        }
-        for (var index = 0; index < efforts.Length; index++)
-        {
-            var expected = source["efforts"]![index]!;
-            if (expected["error"] is not null)
-                Assert.Throws<InvalidDataException>(() => CommandArguments.Effort(efforts[index]));
-            else
-            {
-                var actual = CommandArguments.Effort(efforts[index]);
-                Assert.Equal(SessionWait.Strings(expected["remaining"]), actual.Remaining);
-                Assert.Equal(SessionCatalog.Flag(expected["present"]), actual.Present);
-                Assert.Equal(SessionWait.Text(expected["effort"]), actual.Effort);
-            }
-        }
-    }
-
-    [Fact]
-    public async Task Shared_catalog_projects_hidden_handlers_autocomplete_and_completed_effects()
+    public async Task Generated_catalog_projects_registry_heads_autocomplete_and_completed_effects()
     {
         await using var f = await ExternalChannelFixture.CreateAsync(
             new JsonObject { ["alpha"] = ExternalChannelFixture.Channel() }
@@ -146,26 +71,28 @@ public sealed partial class CommandAdministrationTests
         var source = Source(replies);
         await f.Router.HandleExternalMessageAsync(source, Message("/help"));
         var help = replies.Single();
-        var telegram = ExternalCommands
+        var telegram = UserCommands
             .TelegramCommands()
             .OfType<JsonObject>()
             .Select(row => "/" + row["command"])
             .ToArray();
-        var web = ExternalCommands.WebUiCommands().OfType<JsonObject>().ToArray();
-        Assert.Contains("/agent", telegram);
-        Assert.DoesNotContain("/messages", telegram);
-        Assert.DoesNotContain("`/messages`", help);
-        Assert.DoesNotContain("/delete-messages", telegram);
-        Assert.NotNull(ExternalCommands.Find("/delete-messages"));
-        Assert.Contains("/btw", telegram);
-        Assert.Contains("/verbose", telegram);
-        Assert.True(ExternalCommands.Find("/messages")!["requiresSession"]!.GetValue<bool>());
-        foreach (var name in new[] { "/tools", "/config", "/index", "/retry" })
-            Assert.Null(ExternalCommands.Find(name));
+        var web = UserCommands.WebUiCommands().OfType<JsonObject>().ToArray();
+        // Heads: help, the shortcuts and every noun with a user command, in every projection.
         Assert.Equal(
-            web.Select(row => row["name"]!.GetValue<string>()).Order(StringComparer.Ordinal),
+            UserCommands.Heads.Order(StringComparer.Ordinal),
             web.Select(row => row["name"]!.GetValue<string>())
         );
+        Assert.Equal(web.Select(row => row["name"]!.GetValue<string>()), telegram);
+        Assert.All(telegram, name => Assert.Matches("^/[a-z0-9_]{1,32}$", name));
+        foreach (var head in new[] { "/session", "/history", "/agent", "/skill", "/timer", "/node", "/channel", "/stop", "/compact", "/whoami" })
+        {
+            Assert.Contains(head, UserCommands.Heads);
+            Assert.Contains("`" + head + "`", help);
+        }
+        // Retired heads and model-only nouns are not commands.
+        foreach (var name in new[] { "/messages", "/delete-messages", "/verbose", "/search", "/attach", "/memory", "/file", "/tool", "/tools", "/config", "/index", "/retry" })
+            Assert.Null(UserCommands.Find(name));
+        Assert.True(UserCommands.Find("/stop")!["requiresSession"]!.GetValue<bool>());
         Assert.All(
             web,
             row =>
@@ -177,16 +104,21 @@ public sealed partial class CommandAdministrationTests
             }
         );
         Assert.Contains(
-            ExternalCommands.Find("/compact")!["autocomplete"]!["children"]!.AsArray(),
-            row => SessionWait.Text(row?["value"]) == "tools"
+            UserCommands.Find("/compact")!["autocomplete"]!["children"]!.AsArray(),
+            row => SessionWait.Text(row?["value"]) == "--tools"
         );
+        var session = UserCommands.Find("/session")!["autocomplete"]!["children"]!.AsArray();
+        Assert.Contains(session, row => SessionWait.Text(row?["value"]) == "messages");
+        Assert.DoesNotContain(session, row => SessionWait.Text(row?["value"]) == "view");
+        var verbose = session.Single(row => SessionWait.Text(row?["value"]) == "verbose")!;
+        Assert.Contains(verbose["children"]!.AsArray(), row => SessionWait.Text(row?["value"]) == "on");
         Assert.Contains(
-            ExternalCommands.Find("/agent")!["autocomplete"]!["children"]!.AsArray(),
+            UserCommands.Find("/agent")!["autocomplete"]!["children"]!.AsArray(),
             row => SessionWait.Text(row?["value"]) == "delete"
         );
         f.Manager.AttachChannel(source.Target, f.Owner);
         replies.Clear();
-        await f.Router.HandleExternalMessageAsync(source, Message("/messages -1"));
+        await f.Router.HandleExternalMessageAsync(source, Message("/session messages -1"));
         Assert.Contains("No messages", replies.Single());
         Assert.Empty(f.Owner.History());
         Assert.Empty(f.Owner.Entry.Snapshot().Queue);
@@ -203,7 +135,7 @@ public sealed partial class CommandAdministrationTests
         var other = await f.Manager.CreateNamedAsync("main", "target", null, null);
         await f.Router.HandleExternalMessageAsync(
             source,
-            Message("/session parent " + f.Owner.Id + " " + other.Id)
+            Message("/session set-parent " + f.Owner.Id + " --session-id " + other.Id)
         );
         Assert.Equal(
             f.Owner.Id,
@@ -215,7 +147,7 @@ public sealed partial class CommandAdministrationTests
             source,
             Message("/session unarchive " + other.Id)
         );
-        await f.Router.HandleExternalMessageAsync(source, Message("/session unparent " + other.Id));
+        await f.Router.HandleExternalMessageAsync(source, Message("/session clear-parent --session-id " + other.Id));
         Assert.Null(f.Manager.Catalog.Get(other.Id)?["parentSessionId"]);
         await f.Router.HandleExternalMessageAsync(
             source,
@@ -246,7 +178,7 @@ public sealed partial class CommandAdministrationTests
         var unauthorized = Source(replies, sender: "999");
         await f.Router.HandleExternalMessageAsync(
             unauthorized,
-            Message("/agent create forbidden --no-main")
+            Message("/agent create forbidden --no-create-main-session")
         );
         Assert.DoesNotContain("forbidden", f.Manager.Agents());
         Assert.Contains("Unauthorized", replies.Single());
@@ -259,7 +191,7 @@ public sealed partial class CommandAdministrationTests
         replies.Clear();
         await f.Router.HandleExternalMessageAsync(
             unauthorized,
-            Message("/agent create ordinary --no-main")
+            Message("/agent create ordinary --no-create-main-session")
         );
         Assert.DoesNotContain("ordinary", f.Manager.Agents());
         Assert.Single(f.Owner.Entry.Snapshot().Queue);
@@ -267,7 +199,7 @@ public sealed partial class CommandAdministrationTests
         await f.Router.HandleExternalCommandAsync(
             unauthorized,
             "/agent",
-            "create direct --no-main"
+            "create direct --no-create-main-session"
         );
         Assert.Contains("direct", f.Manager.Agents());
         Assert.Contains("created successfully", replies.Single());

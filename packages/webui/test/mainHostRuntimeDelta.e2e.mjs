@@ -131,7 +131,7 @@ try {
   const rootLogin = await fetch(fixture.origin + '/login.html'); const prefixLogin = await fetch(fixture.origin + '/nested/login.html'); assert.equal(rootLogin.status, 200); assert.equal(prefixLogin.status, 200)
   const generatedLogin = await readFile(resolve('packages/webui/public/login.html'), 'utf8'); assert.equal(await rootLogin.text(), generatedLogin); assert.equal(await prefixLogin.text(), generatedLogin)
   for (const value of ['', 1, 'x'.repeat(129)]) assert.equal((await send(source, '/stop', { controlRequestId: value })).status, 400)
-  await control(source, '/stop', 'noop', 'stop'); await control(source, '/dequeue', 'noop', 'dequeue'); await control(source, '/continue', 'noop', 'continue'); await control(source, '/compact tools', 'noop', 'compact')
+  await control(source, '/stop', 'noop', 'stop'); await control(source, '/dequeue', 'noop', 'dequeue'); await control(source, '/continue', 'noop', 'continue'); await control(source, '/compact --tools', 'noop', 'compact')
   await page.evaluate(id => window.foxwarmTest.switchToSession(id), source)
   await page.waitForFunction(id => document.querySelector('[data-session-header-subtitle]')?.textContent.includes('session ' + id), {}, source)
   assert.equal((await send(source, 'CASE:retry')).status, 202)
@@ -205,7 +205,7 @@ try {
   await projections(source, state => { assert.equal(state.active.phase, 'normal-turn'); assert.equal(state.compaction.retry.attempt, 1); assert.equal(state.compaction.retry.retryAt, compactRetry.retryAt); assert.equal(state.retry, undefined) })
   await until(() => held.has('plan'), 'independent compact next attempt'); assert.equal((await history(source)).session.runtimeState.compaction.retry, null)
   const compactState = await projections(source, state => { assert.equal(state.active.phase, 'normal-turn'); assert.equal(state.compaction.phase, 'planning'); assert.equal(state.compaction.background, true) })
-  await control(source, '/stop compact', 'accepted', 'cancel-compaction'); await until(async () => !(await history(source)).session.runtimeState.compaction, 'compact cancellation settled')
+  await control(source, '/stop --compaction', 'accepted', 'cancel-compaction'); await until(async () => !(await history(source)).session.runtimeState.compaction, 'compact cancellation settled')
   assert((await history(source)).session.busy)
   await control(source, '/stop', 'accepted', 'stop'); await settled(source)
   // A failed background plan becomes a durable typed owner notice, never planner prose.

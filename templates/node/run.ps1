@@ -53,7 +53,7 @@ Usage:
 Parameters:
   -HostUrl        Override Foxwarm master base URL (default: derived from request URL)
   -Pairing        Pairing token for first-time setup
-  -AuthToken      Per-node auth token from /node create (use with -NodeId)
+  -AuthToken      Per-node auth token from /node token (use with -NodeId)
   -NodeId         Node name (default: node-<hostname>)
   -StateDir       Persistent data dir (default: .\data)
   -SourceDir      Source dir for node client (default: .\foxwarm-node)
@@ -262,7 +262,7 @@ if (-not $Pairing -or (Test-Path -LiteralPath $CredentialsFile)) {
 } else {
     Write-Host "First run - after startup, approve on master:"
     Write-Host "  /node"
-    Write-Host "  /node approve <pending-id> $NodeId"
+    Write-Host "  /node pair-approve <pending-id> --node-id $NodeId"
 }
 
 Write-Host ""

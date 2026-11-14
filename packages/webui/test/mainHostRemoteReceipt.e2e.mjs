@@ -54,7 +54,7 @@ try {
   for (const stream of [client.stdout, client.stderr]) stream.on('data', chunk => { clientOutput = (clientOutput + chunk).slice(-20000) })
   await until(async () => (await fixture.api('GET', '/api/nodes')).body.nodes.some(node => node.id === 'two' && node.online && node.executable), 'official CLI online', 30000)
   const actor = await create('receipt-owner'), target = await create('receipt-target')
-  assert.equal((await fixture.api('POST', route(target) + '/message', { text: '/session unparent' })).status, 200)
+  assert.equal((await fixture.api('POST', route(target) + '/message', { text: '/session clear-parent' })).status, 200)
   const targetBefore = (await saved(target)).history
   const directState = await turn(actor, 'direct', [call('direct', 'send_file', { filePath: 'config.yaml', node: 'two', sessionId: target })])
   const direct = result(directState, 'direct'); assert(direct && !direct.error, JSON.stringify(direct))

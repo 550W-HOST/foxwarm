@@ -67,8 +67,8 @@ public sealed partial class CommandAdministrationTests
             Assert.Contains(
                 commands,
                 row =>
-                    SessionWait.Text(row?["name"]) == "/messages"
-                    && row?["showInTelegram"]?.GetValue<bool>() == false
+                    SessionWait.Text(row?["name"]) == "/stop"
+                    && row?["requiresSession"]?.GetValue<bool>() == true
             );
             Assert.Contains(
                 commands,
@@ -125,10 +125,10 @@ public sealed partial class CommandAdministrationTests
                     {
                         "/model --effort none",
                         "/session compact-threshold 9.5k",
-                        "/session rename Selected owner",
-                        "/timer after 3600 persisted timer",
+                        "/session rename \"Selected owner\"",
+                        "/timer create --after-seconds 3600 persisted timer",
                         "/status",
-                        "/messages -1",
+                        "/session messages -1",
                         "/agent list",
                     }
                 )
@@ -163,7 +163,7 @@ public sealed partial class CommandAdministrationTests
                         "/dequeue",
                         "/continue",
                         "/compact 20",
-                        "/compact tools 50",
+                        "/compact 50 --tools",
                     }
                 )
                 {
@@ -235,8 +235,8 @@ public sealed partial class CommandAdministrationTests
                 "/stop",
                 "/dequeue",
                 "/compact 20",
-                "/compact invalid",
-                "/compact tools 50",
+                "/compact 0",
+                "/compact 50 --tools",
             }
         )
         {
@@ -263,85 +263,45 @@ public sealed partial class CommandAdministrationTests
     }
 
     [Fact]
-    public async Task Omitted_session_fork_suffix_uses_owner_default_and_numbered_collisions_through_generic_and_selected_entries()
+    public async Task Omitted_fork_name_uses_numbered_fork_through_channel_and_WebUI_entries_and_attach_is_explicit()
     {
         await using var f = await ExternalChannelFixture.CreateAsync(
             new JsonObject { ["alpha"] = ExternalChannelFixture.Channel() }
         );
         var replies = new List<string>();
         var source = Source(replies);
+        f.Manager.AttachChannel(source.Target, f.Owner);
         for (var number = 1; number <= 2; number++)
         {
-            f.Manager.DetachChannel(source.Target);
-            f.Manager.AttachChannel(source.Target, f.Owner);
             replies.Clear();
-            await f.Router.HandleExternalMessageAsync(source, Message("/session fork"));
-            var expected = f.Owner.Id + "_fork" + (number == 1 ? "" : "_" + number);
-            Assert.Equal(
-                expected,
-                SessionWait.Text(f.Manager.ChannelBinding(source.Target)?["sessionId"])
+            await f.Router.HandleExternalMessageAsync(
+                source,
+                Message(number == 1 ? "/session fork" : "/fork --attach")
             );
+            var expected = f.Owner.Id + "_fork" + (number == 1 ? "" : "_" + number);
             Assert.NotNull(f.Manager.Catalog.Get(expected));
             Assert.Contains(expected, replies.Single());
+            Assert.Equal(
+                number == 1 ? f.Owner.Id : expected,
+                SessionWait.Text(f.Manager.ChannelBinding(source.Target)?["sessionId"])
+            );
         }
         var events = new List<SessionRuntimeEvent>();
         f.Manager.Changed += events.Add;
-        for (var number = 3; number <= 4; number++)
-        {
-            events.Clear();
-            await f.Router.HandleMessageAsync(new(f.Owner.Id, "webui"), new("/session fork", null));
-            var expected = f.Owner.Id + "_fork_" + number;
-            Assert.Equal(
-                expected,
-                SessionWait.Text(f.Manager.ChannelBinding("webui:" + f.Owner.Id)?["sessionId"])
-            );
-            Assert.NotNull(f.Manager.Catalog.Get(expected));
-            Assert.Single(events, e => e.Kind == SessionEventKind.CommandReply);
-        }
-        f.Manager.DetachChannel(source.Target);
-        f.Manager.AttachChannel(source.Target, f.Owner);
-        Assert.Empty(f.Owner.History());
-        var before = f
-            .Manager.Catalog.List()
-            .Select(row => SessionWait.Text(row["id"]))
-            .ToHashSet();
-        await f.Router.HandleExternalMessageAsync(source, Message("/fork"));
-        var generated = f
-            .Manager.Catalog.List()
-            .Single(row => !before.Contains(SessionWait.Text(row["id"])));
-        Assert.Matches(
-            "^" + System.Text.RegularExpressions.Regex.Escape(f.Owner.Id) + @"_\d{4}_[a-z0-9]{5}$",
-            SessionWait.Text(generated["id"])!
-        );
+        await f.Router.HandleMessageAsync(new(f.Owner.Id, "webui"), new("/fork", null));
+        Assert.NotNull(f.Manager.Catalog.Get(f.Owner.Id + "_fork_3"));
+        Assert.Single(events, e => e.Kind == SessionEventKind.CommandReply);
+        // Each fork leaves the parent its manual-fork notice.
         Assert.Equal(
-            f.Owner.Id,
-            SessionWait.Text(f.Manager.ChannelBinding(source.Target)?["sessionId"])
+            3,
+            f.Owner.History().Count(row => row.ToJsonString().Contains("manual-fork-created"))
         );
     }
 
     [Fact]
-    public async Task Raw_multiline_fork_matches_Source_keeps_parent_attachment_and_session_fork_rebinds()
+    public async Task Raw_multiline_fork_message_is_kept_exactly_and_attach_rebinds()
     {
         const string raw = "leaf First line\n\n  second line  ";
-        var expected = await SourceAsync(
-            new JsonObject
-            {
-                ["command"] = "/fork",
-                ["args"] = new JsonArray("leaf", "First", "line", "second", "line"),
-                ["raw"] = raw,
-                ["binding"] = "main/source",
-            }
-        );
-        Assert.Equal(
-            "First line\n\n  second line  ",
-            SessionWait.Text(
-                expected["effects"]!
-                    .AsArray()
-                    .OfType<JsonObject>()
-                    .Single(row => SessionWait.Text(row["action"]) == "enqueue")["item"]
-                    ?["parts"]?[0]?["text"]
-            )
-        );
         await using var f = await ExternalChannelFixture.CreateAsync(
             new JsonObject { ["alpha"] = ExternalChannelFixture.Channel() }
         );
@@ -366,7 +326,7 @@ public sealed partial class CommandAdministrationTests
         var count = f.Manager.Catalog.List().Length;
         await f.Router.HandleExternalMessageAsync(source, Message("/fork " + raw));
         Assert.Equal(count, f.Manager.Catalog.List().Length);
-        await f.Router.HandleExternalMessageAsync(source, Message("/session fork sibling"));
+        await f.Router.HandleExternalMessageAsync(source, Message("/session fork sibling --attach"));
         Assert.Equal(
             f.Owner.Id + "_sibling",
             SessionWait.Text(f.Manager.ChannelBinding(source.Target)?["sessionId"])

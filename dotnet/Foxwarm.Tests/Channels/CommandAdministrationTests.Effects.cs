@@ -65,27 +65,8 @@ public sealed partial class CommandAdministrationTests
     }
 
     [Fact]
-    public async Task Skill_generic_main_fallback_and_explicit_administrator_selection_match_actual_Source_callers()
+    public async Task Skill_commands_default_to_the_conversation_Session_Agent_and_accept_an_explicit_Agent()
     {
-        var genericSource = await SourceAsync(
-            new JsonObject
-            {
-                ["command"] = "/skill",
-                ["args"] = new JsonArray("list"),
-                ["binding"] = "peer/main",
-            }
-        );
-        var explicitSource = await SourceAsync(
-            new JsonObject
-            {
-                ["command"] = "/skill",
-                ["args"] = new JsonArray("list"),
-                ["binding"] = "peer/main",
-                ["explicit"] = true,
-            }
-        );
-        Assert.Equal("main", SessionWait.Text(genericSource["effects"]![0]!["agentName"]));
-        Assert.Equal("peer", SessionWait.Text(explicitSource["effects"]![0]!["agentName"]));
         await using var f = await ExternalChannelFixture.CreateAsync(
             new JsonObject { ["alpha"] = ExternalChannelFixture.Channel() }
         );
@@ -108,13 +89,20 @@ public sealed partial class CommandAdministrationTests
         var source = Source(replies);
         f.Manager.AttachChannel(source.Target, peer);
         await f.Router.HandleExternalMessageAsync(source, Message("/skill list"));
+        Assert.Contains("peer-only", replies.Single());
+        Assert.DoesNotContain("main-only", replies.Single());
+        replies.Clear();
+        await f.Router.HandleExternalMessageAsync(source, Message("/skill list --agent-name main"));
         Assert.Contains("main-only", replies.Single());
-        Assert.DoesNotContain("peer-only", replies.Single());
+        replies.Clear();
+        f.Manager.DetachChannel(source.Target);
+        await f.Router.HandleExternalMessageAsync(source, Message("/skill list"));
+        Assert.Contains("main-only", replies.Single());
         var events = new List<SessionRuntimeEvent>();
         f.Manager.Changed += events.Add;
         await f.Router.HandleMessageAsync(
             new(peer.Id, "webui"),
-            new("/skill show peer-only", null)
+            new("/skill load peer-only", null)
         );
         var reply = SessionWait.Text(
             events.Single(e => e.Kind == SessionEventKind.CommandReply).Data?["parts"]?[0]?["text"]
@@ -154,7 +142,7 @@ public sealed partial class CommandAdministrationTests
         var replies = new List<string>();
         var source = Source(replies);
         f.Manager.AttachChannel(source.Target, f.Owner);
-        await f.Router.HandleExternalMessageAsync(source, Message("/agent create peer --no-main"));
+        await f.Router.HandleExternalMessageAsync(source, Message("/agent create peer --no-create-main-session"));
         Assert.True(
             File.Exists(Path.Combine(f.Manager.AgentDirectory("peer"), "memory", "SOUL.md"))
         );
@@ -182,7 +170,7 @@ public sealed partial class CommandAdministrationTests
         await File.WriteAllTextAsync(file, "Selected memory marker.");
         await f.Router.HandleExternalMessageAsync(
             source,
-            Message("/session create peer target --system-prompt-file memory/SELECTED.md")
+            Message("/session create peer target --system-prompt-files memory/SELECTED.md")
         );
         var child = await f.Manager.RequiredAsync("peer/target");
         Assert.Equal("virtual", child.Metadata().Model);
@@ -202,7 +190,7 @@ public sealed partial class CommandAdministrationTests
         );
         await f.Router.HandleExternalMessageAsync(
             source,
-            Message("/session rename Project With Spaces")
+            Message("/session rename \"Project With Spaces\"")
         );
         Assert.Equal(
             "Project With Spaces",
@@ -241,7 +229,7 @@ public sealed partial class CommandAdministrationTests
             Message("/session compact-threshold clear")
         );
         Assert.Null(child.Metadata().CompactThreshold);
-        await f.Router.HandleExternalMessageAsync(source, Message("/session rename -"));
+        await f.Router.HandleExternalMessageAsync(source, Message("/session rename \"\""));
         Assert.Null(child.Metadata().DisplayName);
         var count = f.Manager.Catalog.List().Length;
         await f.Router.HandleExternalMessageAsync(
@@ -282,7 +270,7 @@ public sealed partial class CommandAdministrationTests
         f.Manager.AttachChannel(source.Target, f.Owner);
         await f.Router.HandleExternalMessageAsync(
             source,
-            Message("/timer after 3600 --prefix ignored -- --new-session literal")
+            Message("/timer create --after-seconds 3600 --session-prefix ignored -- --new-session literal")
         );
         Assert.Single(f.Manager.Timers.List(f.Owner.Id));
         Assert.Contains("Timer created", replies.Single());
@@ -291,7 +279,7 @@ public sealed partial class CommandAdministrationTests
             SessionWait.Text(f.Manager.Timers.List(f.Owner.Id)[0]?["message"])
         );
         replies.Clear();
-        await f.Router.HandleExternalMessageAsync(source, Message("/search --limit 2 query text"));
+        await f.Router.HandleExternalMessageAsync(source, Message("/history search --limit 2 query text"));
         Assert.Contains("synthetic recall refusal", replies.Single());
         Assert.Empty(f.Owner.History());
         var old = await f.Manager.CreateNamedAsync("main", "unrelated", null, null);
@@ -327,12 +315,12 @@ public sealed partial class CommandAdministrationTests
         );
         Assert.True(f.Owner.History()[0]["__meta"]!["seq"]!.GetValue<long>() > 1);
         replies.Clear();
-        await f.Router.HandleExternalMessageAsync(source, Message("/messages -1"));
+        await f.Router.HandleExternalMessageAsync(source, Message("/session messages -1"));
         Assert.Contains("[1", replies.Single());
         Assert.Contains("[non-context]", replies.Single());
         Assert.DoesNotContain(new string('y', 110), replies.Single());
         replies.Clear();
-        await f.Router.HandleExternalMessageAsync(source, Message("/messages -999 1"));
+        await f.Router.HandleExternalMessageAsync(source, Message("/session messages -999 1"));
         Assert.Contains("fresh", replies.Single());
         Assert.DoesNotContain("first", replies.Single());
         replies.Clear();

@@ -71,7 +71,7 @@ try {
   assert.equal((await download('relative')).status, 400); assert.equal((await download(join(fixture.root, 'absent'))).status, 404)
   await writeFile(outside, 'Changed after readiness.'); assert.equal(await (await download(outside)).text(), 'Changed after readiness.'); await rm(outside); assert.equal((await download(outside)).status, 404)
   // Normal command ingress creates a real persisted attachment without admitting the cold target.
-  assert.equal((await fixture.api('POST', route('target') + '/message', { text: '/session unparent' })).status, 200)
+  assert.equal((await fixture.api('POST', route('target') + '/message', { text: '/session clear-parent' })).status, 200)
   const bindings = JSON.parse(await readFile(join(fixture.data, 'state/channels.json'), 'utf8')); assert.equal(bindings.channels['webui:target'].sessionId, 'target')
   for (const [provider, protocol] of [['r', 'responses'], ['c', 'completions'], ['a', 'anthropic'], ['w', 'websocket']]) {
     const id = 'export-' + protocol; assert.equal((await fixture.api('POST', '/api/sessions', { agentId: 'main', sessionId: id })).status, 200); assert.equal((await fixture.api('POST', route(id) + '/model', { model: provider })).status, 200)

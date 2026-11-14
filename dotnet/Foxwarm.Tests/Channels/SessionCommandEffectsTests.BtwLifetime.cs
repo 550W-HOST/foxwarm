@@ -102,7 +102,7 @@ public sealed partial class SessionCommandEffectsTests
             Assert.False(f.Owner.Processing);
             if (operation == "move")
             {
-                var replies = await CommandAsync(f, "/session move moved");
+                var replies = await CommandAsync(f, "/session move --new-session-id moved");
                 Assert.NotEqual(original, f.Owner.Id);
                 Assert.DoesNotContain(replies, reply => reply.StartsWith("❌"));
                 release.TrySetResult();
