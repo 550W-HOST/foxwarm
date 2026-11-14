@@ -491,7 +491,7 @@
           "type": "string",
           "kind": "rest",
           "required": true,
-          "help": "Message text, taken as written."
+          "help": "Message text: the rest of the command, with quotes kept."
         },
         {
           "name": "allowReply",
@@ -854,7 +854,7 @@
           "type": "string",
           "kind": "rest",
           "required": true,
-          "help": "Question, taken as written."
+          "help": "Question: the rest of the text, with quotes kept."
         }
       ]
     },
@@ -911,7 +911,7 @@
           "name": "message",
           "type": "string",
           "kind": "rest",
-          "help": "First message for the fork, taken as written."
+          "help": "First message for the fork: the rest of the text, with quotes kept."
         },
         {
           "name": "attach",
@@ -1440,7 +1440,7 @@
           "type": "string",
           "kind": "rest",
           "required": true,
-          "help": "What to search for, taken as written."
+          "help": "What to search for: the rest of the text, with quotes kept."
         },
         {
           "name": "sessionId",
@@ -3164,7 +3164,7 @@
           "summary": "Schedule a message for this conversation's Session.",
           "help": "Give one of --at, --after-seconds or --cron; quote a cron expression with spaces. The message is the rest of the text.",
           "params": {
-            "message": "Message delivered on each trigger, taken as written.",
+            "message": "Message delivered on each trigger: the rest of the text, with quotes kept.",
             "agentName": "Agent for new Sessions. Defaults to the Agent of this conversation's Session; applies with --new-session."
           }
         }

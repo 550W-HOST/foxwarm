@@ -121,7 +121,7 @@ public sealed class InboundMcpCtlTests
         Assert.Contains("1–50", Text(await Ctl(client, "session list --help")));
         Assert.Contains("this connection only", Text(await Ctl(client, "node select --help")));
 
-        // Rest text is taken as written, including newlines and quotes.
+        // External send keeps its rest text unchanged, including newlines and quotes.
         var message = "first line\n  second 'quoted' line";
         var sent = await Ctl(client, "session send " + f.Target.Id + " " + message);
         Assert.False(Failed(sent), sent.ToJsonString());

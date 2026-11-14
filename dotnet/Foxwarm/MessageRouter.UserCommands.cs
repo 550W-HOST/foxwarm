@@ -81,11 +81,40 @@ internal sealed partial class MessageRouter
     // A failure whose message is the complete reply.
     private sealed class UserCommandException(string message) : Exception(message);
 
-    // Identity discovery answers before authorization, whatever follows it.
-    internal static bool IsWhoami(string command, string? rawArgs) =>
-        command == "/whoami"
-        || command == "/channel"
-            && System.Text.RegularExpressions.Regex.IsMatch(rawArgs ?? "", "^" + CommandSpace + "*whoami(?:" + CommandSpace + "|$)");
+    // Identity discovery answers before authorization, whatever follows it. The verb is read
+    // with the user lexer, so a quoted or escaped `whoami` is the same command.
+    internal static bool IsWhoami(string command, string? rawArgs)
+    {
+        if (command == "/whoami")
+            return true;
+        if (command != "/channel")
+            return false;
+        try
+        {
+            return new CtlLexer(rawArgs ?? "", shell: false).Next() is { Text: "whoami" };
+        }
+        catch (InvalidDataException)
+        {
+            return false;
+        }
+    }
+
+    private static async Task WhoamiAsync(ExternalChannelContext source)
+    {
+        try
+        {
+            await source.Reply(
+                "User ID: "
+                    + (source.Sender ?? "(unavailable)")
+                    + "\nChannel Target ID: "
+                    + source.Target
+            );
+        }
+        catch (Exception error)
+        {
+            Console.Error.WriteLine("Channel identity reply failed: " + error.Message);
+        }
+    }
 
     internal async Task<bool> HandleExternalCommandAsync(
         ExternalChannelContext source,
@@ -103,19 +132,7 @@ internal sealed partial class MessageRouter
             return false;
         if (IsWhoami(command, rawArgs))
         {
-            try
-            {
-                await source.Reply(
-                    "User ID: "
-                        + (source.Sender ?? "(unavailable)")
-                        + "\nChannel Target ID: "
-                        + source.Target
-                );
-            }
-            catch (Exception error)
-            {
-                Console.Error.WriteLine("Channel identity reply failed: " + error.Message);
-            }
+            await WhoamiAsync(source);
             return true;
         }
         var auth = runtime.Manager.ChannelAuthorization?.Inspect(source);
@@ -206,6 +223,7 @@ internal sealed partial class MessageRouter
             "node-token" => NodeTokenAsync(command),
             "node-bootstrap-info" => command.Reply(NodeBootstrapInfo()),
             "node-rename" => NodeRenameAsync(command),
+            "channel-whoami" => WhoamiAsync(command.Source),
             "channel-attach" => ChannelAttachAsync(command),
             "channel-info" => ChannelInfoAsync(command),
             "channel-auth" => command.Reply(Authorization(command.Source).Describe(command.Source)),

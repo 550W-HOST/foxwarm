@@ -46,6 +46,15 @@ public sealed class ExternalChannelRoutingTests
         Assert.Contains("alpha:-100:topic", replies.Single());
         Assert.Equal(before, f.Manager.Catalog.List().Length);
         Assert.Null(f.Manager.ChannelBinding(unauthorized.Target));
+        // The verb is read like any other user command word, so quoting or escaping it is the same command.
+        foreach (var text in new[] { "/channel \"whoami\"", "/channel wh\\oami", "/channel whoami extra" })
+        {
+            replies.Clear();
+            await f.Router.HandleExternalMessageAsync(unauthorized, Message(text));
+            Assert.Contains("User ID: 999", replies.Single());
+            Assert.Contains("alpha:-100:topic", replies.Single());
+        }
+        Assert.Equal(before, f.Manager.Catalog.List().Length);
         replies.Clear();
         await f.Router.HandleExternalMessageAsync(unauthorized, Message("not admitted"));
         Assert.Contains("Unauthorized", replies.Single());

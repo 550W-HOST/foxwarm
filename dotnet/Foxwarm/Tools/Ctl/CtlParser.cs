@@ -632,7 +632,7 @@ internal static partial class CtlParser
 
     private static Input Literal(JsonNode? node) => new(null, node, true);
 
-    // Rest text is taken as written. Only text that is exactly one @name binds; a leading @@
+    // Rest text is the raw remainder, without quote processing. Only text that is exactly one @name binds; a leading @@
     // stands for a literal @.
     private static Input RestValue(string raw)
     {
