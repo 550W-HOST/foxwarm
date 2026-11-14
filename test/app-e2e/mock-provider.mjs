@@ -106,19 +106,36 @@ function replayedImageResults(body) {
 // `enforceSequence` keeps the scripted request order strict for a full harness
 // run. A targeted run (`FOXWARM_APP_E2E_FILES`) relaxes only that ordering and
 // still fails on any unexpected request or unpaired tool output.
+//
+// The order is divided into named segments. A scenario that begins its segment
+// (`POST /__control/segment/<name>`) moves the cursor to that segment's first
+// request, so a scenario that failed before issuing all of its requests does not
+// make every later scenario's requests out of order. Skipped requests still fail
+// `assertConsumed`; requests within a segment stay strictly ordered.
 export async function startMockProvider({ toolFile, log, readyDelayMs = 0, enforceSequence = true }) {
-  const expectedSequence = [
-    'responses:INCREMENTAL',
-    'responses:TOOL', 'responses:TOOL', 'responses:TOOL',
-    'responses:STOP', 'responses:AFTER_STOP', 'responses:EMPTY',
-    'chat:CHAT', 'chat:CHAT',
-    'ws:WS_ONE', 'ws:WS_TWO', 'ws:WS_THREE', 'ws:FORK_CHILD',
-    'responses:ATTACHMENT', 'responses:LONGPASTE',
-    'ws:COMPACT_SYNC', 'ws:COMPACT_BACKGROUND', 'ws:BTW',
-    'responses:AFTER_STOP', // New active conversation after the history scenario clears its fork.
-    'responses:IMAGE_ONE', 'responses:IMAGE_EDIT', 'responses:IMAGE_RESTART',
-    'responses:ARTIFACT', 'responses:ARTIFACT', 'responses:ARTIFACT', 'responses:ARTIFACT',
+  const expectedSegments = [
+    ['core:incremental', ['responses:INCREMENTAL']],
+    ['core:responses-tool', ['responses:TOOL', 'responses:TOOL', 'responses:TOOL']],
+    ['core:stop', ['responses:STOP', 'responses:AFTER_STOP']],
+    ['core:empty', ['responses:EMPTY']],
+    ['core:chat-tool', ['chat:CHAT', 'chat:CHAT']],
+    ['core:ws-fork', ['ws:WS_ONE', 'ws:WS_TWO', 'ws:WS_THREE', 'ws:FORK_CHILD']],
+    ['core:attachment-longpaste', ['responses:ATTACHMENT', 'responses:LONGPASTE']],
+    ['core:compact-btw', ['ws:COMPACT_SYNC', 'ws:COMPACT_BACKGROUND', 'ws:BTW']],
+    // Later files run only after the previous file passed and follow file order.
+    ['later-files', [
+      'responses:AFTER_STOP', // New active conversation after the history scenario clears its fork.
+      'responses:IMAGE_ONE', 'responses:IMAGE_EDIT', 'responses:IMAGE_RESTART',
+      'responses:ARTIFACT', 'responses:ARTIFACT', 'responses:ARTIFACT', 'responses:ARTIFACT',
+    ]],
   ]
+  const expectedSequence = expectedSegments.flatMap(([, entries]) => entries)
+  const segmentStarts = new Map()
+  expectedSegments.reduce((start, [name, entries]) => {
+    segmentStarts.set(name, start)
+    return start + entries.length
+  }, 0)
+  const skipped = []
   const generatedImages = {
     one: await sharp({ create: { width: 9, height: 7, channels: 3, background: { r: 12, g: 120, b: 208 } } }).png().toBuffer(),
     two: await sharp({ create: { width: 9, height: 7, channels: 3, background: { r: 208, g: 52, b: 12 } } }).png().toBuffer(),
@@ -150,6 +167,24 @@ export async function startMockProvider({ toolFile, log, readyDelayMs = 0, enfor
     if (req.method === 'GET' && req.url === '/__control/state') {
       res.writeHead(200, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ requests, wsRequests, unexpected, stopAborted }))
+      return
+    }
+    if (req.method === 'POST' && req.url?.startsWith('/__control/segment/')) {
+      const name = decodeURIComponent(req.url.slice('/__control/segment/'.length))
+      const start = segmentStarts.get(name)
+      if (start === undefined || (enforceSequence && expectedIndex > start)) {
+        unexpected = start === undefined
+          ? `unknown provider segment ${name}`
+          : `provider segment ${name} began after request ${expectedIndex + 1}`
+        res.writeHead(409).end(unexpected)
+        return
+      }
+      if (enforceSequence && expectedIndex < start) {
+        skipped.push(...expectedSequence.slice(expectedIndex, start))
+        await log(`segment ${name} skipped ${expectedSequence.slice(expectedIndex, start).join(',')}\n`)
+        expectedIndex = start
+      }
+      res.writeHead(204).end()
       return
     }
     if (req.method === 'POST' && req.url === '/__control/release-incremental') {
@@ -408,6 +443,7 @@ export async function startMockProvider({ toolFile, log, readyDelayMs = 0, enfor
     assertConsumed() {
       if (unexpected) throw new Error(unexpected)
       if (!enforceSequence) return
+      if (skipped.length > 0) throw new Error(`provider skipped expected requests ${skipped.join(', ')}`)
       if (expectedIndex !== expectedSequence.length) {
         throw new Error(`provider consumed ${expectedIndex}/${expectedSequence.length} expected requests; next is ${expectedSequence[expectedIndex]}`)
       }

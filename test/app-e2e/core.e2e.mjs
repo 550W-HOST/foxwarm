@@ -17,6 +17,8 @@ const token = (await fs.readFile(tokenFile, 'utf8')).trim()
 let browser
 let page
 const browserConsole = []
+// Sessions the running scenario opened; a failed scenario stops any left busy.
+const scenarioSessions = new Set()
 
 async function api(pathname, init = {}) {
   const response = await fetch(`${baseUrl}${pathname}`, {
@@ -34,6 +36,7 @@ async function createSession(name) {
 }
 
 async function openSession(sessionId) {
+  scenarioSessions.add(sessionId)
   await page.evaluate(id => window.foxwarmTest.switchToSession(id), sessionId)
   await page.waitForFunction(id => (document.querySelector('.foxwarm-chat-root')?.textContent || '').includes(`session ${id}`), { timeout: 15_000 }, sessionId)
   await page.waitForSelector('[role="textbox"][aria-label="Message"]', { timeout: 15_000 })
@@ -44,6 +47,19 @@ async function sendMessage(text) {
   await page.click(editor)
   await page.type(editor, text)
   await page.click('button[aria-label="Send message"]')
+}
+
+// The composer shows a queued preview before the server accepts the send, and the
+// owner publishes hot queue state before its Session JSON save. Ordinary input is
+// acknowledged by the send response, which follows the owner's save attempt.
+async function sendAcceptedMessage(sessionId, text) {
+  const pathname = `/api/sessions/${encodeURIComponent(sessionId)}/message`
+  const accepted = page.waitForResponse(response => response.request().method() === 'POST'
+    && new URL(response.url()).pathname.endsWith(pathname)
+    && (response.request().postData() || '').includes(text), { timeout: 15_000 })
+  await sendMessage(text)
+  const response = await accepted
+  assert.equal(response.status(), 202, `${pathname} returned ${response.status()}`)
 }
 
 async function history(sessionId) {
@@ -104,10 +120,38 @@ function assertCommittedCompaction(authority, before, summary) {
   assert.match(authority.history.at(-1)?.parts?.[0]?.system || '', /kind="session-boundary" event="compact-completed"/)
 }
 
+function isIdle(value) {
+  return value.session?.runtimeState === 'idle' || value.runtimeState === 'idle' || value.session?.busy === false
+}
+
+// Leaves the application as later scenarios expect it after a failure: owned
+// Sessions idle (a held provider stream is aborted by Stop) and a freshly loaded page.
+async function releaseFailedScenario() {
+  for (const sessionId of scenarioSessions) {
+    const statePath = `/api/sessions/${encodeURIComponent(sessionId)}/state`
+    if (isIdle(await api(statePath))) continue
+    await api(`/api/sessions/${encodeURIComponent(sessionId)}/stop`, { method: 'POST' })
+    const deadline = Date.now() + 15_000
+    while (!isIdle(await api(statePath))) {
+      if (Date.now() > deadline) throw new Error(`${sessionId} did not become idle after Stop`)
+      await new Promise(resolve => setTimeout(resolve, 100))
+    }
+  }
+  await page.reload({ waitUntil: 'networkidle2' })
+  await waitForWebUiReady(page)
+  await page.waitForFunction(() => !!window.foxwarmTest, { timeout: 15_000 })
+}
+
 async function scenario(name, run) {
+  scenarioSessions.clear()
+  const segment = await fetch(`${providerUrl}/__control/segment/${encodeURIComponent(`core:${name}`)}`, { method: 'POST' })
+  assert.equal(segment.status, 204, `provider segment core:${name}: ${await segment.text()}`)
   try { await run() }
   catch (error) {
     await page.screenshot({ path: path.join(artifactDir, 'screenshots', `core-${name}.png`), fullPage: true }).catch(() => {})
+    await releaseFailedScenario().catch(cleanupError => {
+      console.error(`core-${name} cleanup after failure: ${cleanupError?.stack || cleanupError}`)
+    })
     throw error
   }
 }
@@ -177,7 +221,7 @@ test('Stop aborts a held stream and later input can run as a new turn', async ()
   await sendMessage('APP_E2E_STOP')
   await page.waitForFunction(() => document.body.textContent?.includes('held stream'), { timeout: 15_000 })
   const queuedText = 'owned input queued before Stop'
-  await sendMessage(queuedText)
+  await sendAcceptedMessage(sessionId, queuedText)
   await page.waitForFunction(text => document.querySelector('[data-queued-preview]')?.textContent.includes(text), { timeout: 15_000 }, queuedText)
   const queued = await history(sessionId)
   assert.equal(queued.queueLength, 1)
