@@ -596,3 +596,60 @@ test('PWA window-controls overlay maps the insets to app-region and switches off
     assert.deepEqual(errors, [])
   } finally { await close() }
 })
+
+test('drag overlays draw the real tab and a compact pane summary, framed or not, light and dark', async () => {
+  for (const host of [WINDOWS, null]) for (const dark of [false, true]) {
+    const label = `host=${host ? 'windows' : 'none'} dark=${dark}`
+    const { page, errors, close } = await open({ host, layout: 'split', dark })
+    const tabStyle = selector => page.$eval(selector, element => {
+      const style = getComputedStyle(element)
+      return { background: style.backgroundColor, color: style.color, height: element.getBoundingClientRect().height, fontSize: style.fontSize, radius: style.borderTopLeftRadius }
+    })
+    const drag = async (from, selector) => {
+      await page.mouse.move(from.x, from.y)
+      await page.mouse.down()
+      await page.mouse.move(from.x + 12, from.y + 2, { steps: 3 })
+      await page.waitForSelector(selector)
+    }
+    const release = async selector => {
+      await page.keyboard.press('Escape')
+      await page.mouse.up()
+      await page.waitForSelector(selector, { hidden: true })
+    }
+    try {
+      // Tab: the overlay is the strip's tab drawn without its interactive parts.
+      const real = await tabStyle('[data-tab-id][data-tab-active]')
+      const tab = await (await page.$('[data-tab-id][data-tab-active]')).boundingBox()
+      const tabOverlay = '[data-workbench-tab-overlay]:not([data-pane-drag-overlay])'
+      await drag({ x: tab.x + tab.width / 2, y: tab.y + tab.height / 2 }, tabOverlay)
+      assert.deepEqual(await tabStyle(`${tabOverlay} .foxwarm-workbench-tab[data-tab-active]`), real, `${label}: active tab overlay matches the strip tab`)
+      assert.equal(await page.$eval(tabOverlay, element => element.getAttribute('aria-hidden')), 'true', label)
+      assert.equal(await page.$eval(tabOverlay, element => element.querySelector('button, a, input, [tabindex], [role]') === null && getComputedStyle(element).pointerEvents), 'none', `${label}: overlay is not interactive`)
+      assert.equal(await page.$eval(tabOverlay, element => getComputedStyle(element).cursor), 'grabbing', label)
+      await release(tabOverlay)
+
+      // Pane: the shown tab and the number of the others.
+      const blank = await page.evaluate(() => {
+        const area = document.querySelector('[data-workbench-pane-drag-area="p1"]')
+        const rect = area.getBoundingClientRect()
+        for (let x = rect.right - 4; x > rect.left; x -= 6) {
+          const y = rect.top + rect.height / 2
+          const hit = document.elementFromPoint(x, y)
+          if (hit?.matches('[data-workbench-pane-drag-area], [data-workbench-pane-drag-blank]') && hit.closest('[data-workbench-pane-drag-area]') === area) return { x, y }
+        }
+        return null
+      })
+      assert.ok(blank, `${label}: blank pane header space`)
+      await drag(blank, '[data-pane-drag-overlay]')
+      const pane = await page.$eval('[data-pane-drag-overlay]', element => ({
+        text: element.textContent.replace(/[\u200E]/g, ''),
+        hidden: element.getAttribute('aria-hidden'),
+        tab: element.querySelector('.foxwarm-workbench-tab[data-tab-active]') !== null,
+      }))
+      assert.match(pane.text, /\+1$/, `${label}: the other tab is counted`)
+      assert.deepEqual({ hidden: pane.hidden, tab: pane.tab }, { hidden: 'true', tab: true }, label)
+      await release('[data-pane-drag-overlay]')
+      assert.deepEqual(errors, [], label)
+    } finally { await close() }
+  }
+})

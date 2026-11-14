@@ -2,7 +2,8 @@ import { prepareChatHistory, discardPreparedChatHistory } from './preparedChatHi
 import { subscribeWindowFrame, windowFrameActive } from './windowFrame'
 import { SessionMessageNamesContext } from './components/SessionMessageCard'
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
-import { DndContext, DragOverlay, PointerSensor, pointerWithin, useSensor, useSensors, type DragEndEvent, type DragStartEvent } from '@dnd-kit/core'
+import { DndContext, DragOverlay, PointerSensor, pointerWithin, useSensor, useSensors, type DragEndEvent, type DragStartEvent, type Modifier } from '@dnd-kit/core'
+import { getEventCoordinates } from '@dnd-kit/utilities'
 import { Plus } from 'lucide-react'
 import Chat from './components/Chat'
 import SessionList from './components/SessionList'
@@ -13,6 +14,7 @@ import CollapsedSidebarContainer from './components/CollapsedSidebarContainer'
 import WorkbenchLayout from './components/WorkbenchLayout'
 import WorkbenchStatusBar from './components/WorkbenchStatusBar'
 import WorkbenchPane, { type WorkbenchPaneProps } from './components/WorkbenchPane'
+import { WorkbenchTabDragPreview } from './components/WorkbenchTabs'
 import VscodeWebFrameHost, { createCodeFrame, useCodeFrames } from './components/VscodeWebFrameHost'
 import type { SessionMoveRequest } from './components/SessionListCore'
 import { API_BASE_PATH } from './config'
@@ -212,6 +214,17 @@ function buildSvgFaviconDataUrl(label: string): string | null {
   } catch (error) {
     console.warn('Failed to build custom favicon', error)
     return null
+  }
+}
+
+// A whole-pane drag starts from a wide header, so the compact overlay is centred on the pointer.
+const snapCenterToPointer: Modifier = ({ activatorEvent, draggingNodeRect, transform }) => {
+  const pointer = activatorEvent ? getEventCoordinates(activatorEvent) : null
+  if (!pointer || !draggingNodeRect) return transform
+  return {
+    ...transform,
+    x: transform.x + pointer.x - draggingNodeRect.left - draggingNodeRect.width / 2,
+    y: transform.y + pointer.y - draggingNodeRect.top - draggingNodeRect.height / 2,
   }
 }
 
@@ -535,7 +548,7 @@ function App() {
   const setPaneCollapsed = useWorkbenchStore((state) => state.setPaneCollapsed)
   const updateSplitSizes = useWorkbenchStore((state) => state.updateSplitSizes)
 
-  const [draggingItem, setDraggingItem] = useState<{ type: 'tab' | 'session' | 'pane'; id: string; title: string } | null>(null)
+  const [draggingItem, setDraggingItem] = useState<{ type: 'tab' | 'session' | 'pane'; id: string; title: string; tabId?: string; active?: boolean; more?: number } | null>(null)
   const [tabRevealRequest, setTabRevealRequest] = useState<{ tabId: string } | null>(null)
 
   const pendingRouteTabIdRef = useRef<string | null>(null)
@@ -1895,13 +1908,22 @@ function App() {
   }, [dragging])
 
   const draggingTab = draggingItem?.type === 'tab' && draggingItem.id ? (tabsById[draggingItem.id] || null) : null
+  const paneOverlayTab = draggingItem?.type === 'pane' && draggingItem.tabId ? (tabsById[draggingItem.tabId] || null) : null
 
   const handleDragStart = (event: DragStartEvent) => {
     const activeId = String(event.active.id)
     const activeData = event.active.data.current as { type?: string; title?: string; sessionId?: string; paneId?: string } | undefined
     if (activeData?.type === 'pane' && activeData.paneId) {
       const pane = findPaneNode(root, activeData.paneId)
-      setDraggingItem({ type: 'pane', id: activeData.paneId, title: pane?.tabIds.map((id) => tabsById[id]?.title).filter(Boolean).join(', ') || 'Empty pane' })
+      const shownTabId = pane?.activeTabId && tabsById[pane.activeTabId] ? pane.activeTabId : pane?.tabIds.find((id) => tabsById[id])
+      setDraggingItem({
+        type: 'pane',
+        id: activeData.paneId,
+        title: pane?.tabIds.map((id) => tabsById[id]?.title).filter(Boolean).join(', ') || 'Empty pane',
+        tabId: shownTabId,
+        active: !!shownTabId && shownTabId === pane?.activeTabId,
+        more: shownTabId && pane ? pane.tabIds.filter((id) => id !== shownTabId && tabsById[id]).length : 0,
+      })
       return
     }
     if (activeData?.type === 'session') {
@@ -1909,7 +1931,7 @@ function App() {
       return
     }
     const tab = tabsById[activeId]
-    setDraggingItem({ type: 'tab', id: activeId, title: tab?.title || activeId })
+    setDraggingItem({ type: 'tab', id: activeId, title: tab?.title || activeId, active: !!activeData?.paneId && findPaneNode(root, activeData.paneId)?.activeTabId === activeId })
   }
 
   const handleDragEnd = (event: DragEndEvent) => {
@@ -2123,15 +2145,16 @@ function App() {
       <WorkbenchContentProvider>
         {content}
         {renderStableContent()}
-        <DragOverlay>
+        <DragOverlay
+          style={draggingItem?.type === 'session' ? undefined : { width: 'max-content', height: 'auto' }}
+          modifiers={draggingItem?.type === 'pane' ? [snapCenterToPointer] : undefined}
+        >
           {draggingTab ? (
-            <div className="inline-flex max-w-[24rem] cursor-grabbing select-none items-center gap-2 rounded-lg border border-fw-border bg-fw-surface px-3 py-2 text-sm text-fw-text shadow-lg dark:border-fw-border dark:bg-fw-surface dark:text-fw-text-strong">
-              <span className="truncate">{draggingTab.title}</span>
-            </div>
+            <WorkbenchTabDragPreview tab={draggingTab} active={!!draggingItem?.active} />
           ) : draggingItem?.type === 'pane' ? (
-            <div data-pane-drag-overlay className="inline-flex max-w-[24rem] cursor-grabbing select-none items-center gap-2 rounded-lg border border-fw-border bg-fw-surface px-3 py-2 text-sm text-fw-text shadow-lg">
-              <span className="truncate">Pane: {draggingItem.title}</span>
-            </div>
+            paneOverlayTab
+              ? <WorkbenchTabDragPreview data-pane-drag-overlay tab={paneOverlayTab} active={!!draggingItem.active} more={draggingItem.more} />
+              : <div data-pane-drag-overlay aria-hidden="true" className="pointer-events-none inline-flex max-w-[24rem] cursor-grabbing select-none items-center gap-2 rounded-lg border border-fw-border bg-fw-surface px-3 py-2 text-sm text-fw-text shadow-lg">Empty pane</div>
           ) : draggingItem?.type === 'session' ? (
             <div data-session-drag-overlay className="inline-flex max-w-[24rem] cursor-grabbing select-none items-center gap-2 rounded-lg border border-fw-border bg-fw-surface px-3 py-2 text-sm text-fw-text shadow-lg dark:border-fw-border dark:bg-fw-surface dark:text-fw-text-strong">
               <span className="truncate">{draggingItem.title}</span>

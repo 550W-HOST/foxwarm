@@ -2802,7 +2802,7 @@ html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-workbench-tab
 }
 
 /* Tabs: inactive tabs are text with separators; the active tab joins its card. */
-html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-workbench-tab {
+html[data-foxwarm-frame] :is(.foxwarm-desktop-workbench-shell, [data-workbench-tab-overlay]) .foxwarm-workbench-tab {
   height: calc(var(--foxwarm-frame-strip-height) - 6px);
   min-width: 96px; max-width: 200px;
   margin: 0; padding: 0 8px 0 12px;
@@ -2812,23 +2812,23 @@ html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-workbench-tab
   color: var(--foxwarm-color-text-muted);
   box-shadow: none;
 }
-html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell [data-frame-in-band]:not([data-frame-banded]) .foxwarm-workbench-tab { height: var(--foxwarm-frame-tab-height); }
-html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-workbench-tab > svg { color: var(--foxwarm-color-text-muted); }
-html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-workbench-tab:not([data-tab-active="true"]):hover {
+html[data-foxwarm-frame] :is(.foxwarm-desktop-workbench-shell [data-frame-in-band]:not([data-frame-banded]), [data-workbench-tab-overlay]) .foxwarm-workbench-tab { height: var(--foxwarm-frame-tab-height); }
+html[data-foxwarm-frame] :is(.foxwarm-desktop-workbench-shell, [data-workbench-tab-overlay]) .foxwarm-workbench-tab > svg { color: var(--foxwarm-color-text-muted); }
+html[data-foxwarm-frame] :is(.foxwarm-desktop-workbench-shell, [data-workbench-tab-overlay]) .foxwarm-workbench-tab:not([data-tab-active="true"]):hover {
   background: color-mix(in srgb, var(--foxwarm-color-text-strong) 7%, transparent);
   color: var(--foxwarm-color-text);
 }
-html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-workbench-tab:not([data-tab-active="true"]) + .foxwarm-workbench-tab:not([data-tab-active="true"])::before {
+html[data-foxwarm-frame] :is(.foxwarm-desktop-workbench-shell, [data-workbench-tab-overlay]) .foxwarm-workbench-tab:not([data-tab-active="true"]) + .foxwarm-workbench-tab:not([data-tab-active="true"])::before {
   content: ''; position: absolute; left: -1px; top: 30%; width: 1px; height: 40%;
   background: var(--foxwarm-color-border);
 }
-html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-workbench-tab[data-tab-active="true"] {
+html[data-foxwarm-frame] :is(.foxwarm-desktop-workbench-shell, [data-workbench-tab-overlay]) .foxwarm-workbench-tab[data-tab-active="true"] {
   z-index: 1;
   background: var(--foxwarm-color-workbench-header-surface);
   color: var(--foxwarm-color-text-strong);
   box-shadow: inset 1px 0 var(--foxwarm-color-border), inset -1px 0 var(--foxwarm-color-border), inset 0 1px var(--foxwarm-color-border);
 }
-html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-workbench-tab[data-tab-active="true"] > svg { color: var(--foxwarm-color-accent); }
+html[data-foxwarm-frame] :is(.foxwarm-desktop-workbench-shell, [data-workbench-tab-overlay]) .foxwarm-workbench-tab[data-tab-active="true"] > svg { color: var(--foxwarm-color-accent); }
 
 /* A banded row (a narrow pane under the caption buttons): the title row above the pane
  * stays blank chrome and the strip moves into the top of the card. */

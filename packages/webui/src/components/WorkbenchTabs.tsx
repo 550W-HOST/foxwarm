@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { forwardRef, useEffect, useRef, useState, type CSSProperties, type HTMLAttributes, type ReactNode } from 'react'
 import { useDroppable } from '@dnd-kit/core'
 import { CSS } from '@dnd-kit/utilities'
 import { SortableContext, horizontalListSortingStrategy, useSortable } from '@dnd-kit/sortable'
@@ -31,6 +31,64 @@ function TabIcon({ type }: { type: WorkbenchTab['type'] }) {
   if (type === 'search') return <History className="h-4 w-4 shrink-0" />
   if (type === 'setup') return <Settings className="h-4 w-4 shrink-0" />
   return <SquareTerminal className="h-4 w-4 shrink-0" />
+}
+
+/**
+ * The tab as drawn in a strip, shared by the real tab and the drag overlay so they cannot drift.
+ * Without `onClose` the close control is drawn but inert, which is what the overlay uses; the real
+ * tab passes its interactive props (handlers, drag attributes, ref) through.
+ */
+export const WorkbenchTabVisual = forwardRef<HTMLDivElement, {
+  tab: WorkbenchTab
+  active: boolean
+  dragging?: boolean
+  onClose?: () => void
+} & HTMLAttributes<HTMLDivElement>>(function WorkbenchTabVisual({ tab, active, dragging, onClose, className, ...rest }, ref) {
+  const isPreview = tab.type === 'chat' && tab.preview
+  const closeClassName = 'foxwarm-workbench-tab-close rounded p-0.5 text-fw-text-muted opacity-70 hover:bg-fw-overlay/5 hover:text-fw-text group-hover:opacity-100 dark:hover:bg-fw-surface/10 dark:hover:text-fw-text-strong'
+  return (
+    <div
+      ref={ref}
+      data-tab-active={active || undefined}
+      className={`foxwarm-workbench-tab group relative -mb-px flex min-w-[88px] max-w-[12rem] shrink-0 cursor-pointer items-center gap-1.5 rounded-t-lg border border-b-0 px-2.5 py-2 text-sm transition-colors ${active ? 'border-fw-border bg-fw-surface text-fw-accent shadow-sm dark:border-fw-border dark:bg-fw-surface dark:text-fw-accent' : 'border-transparent bg-fw-neutral-border/70 text-fw-text hover:bg-fw-surface/70 dark:bg-fw-surface/70 dark:text-fw-text dark:hover:bg-fw-hover'} ${dragging ? 'opacity-50' : ''} ${className || ''}`}
+      {...rest}
+    >
+      <TabIcon type={tab.type} />
+      {/* RTL direction moves the ellipsis to the start; the LRM marks keep IDs such as `1103_9t0ea` in their written order. */}
+      <span className={`min-w-0 flex-1 truncate text-left [direction:rtl] ${isPreview ? 'italic' : ''}`}>{`\u200E${tab.title}\u200E`}</span>
+      {onClose ? (
+        <button
+          onPointerDown={(event) => event.stopPropagation()}
+          onMouseDown={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.stopPropagation()
+            onClose()
+          }}
+          className={closeClassName}
+          title="Close tab"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      ) : (
+        <span className={closeClassName}><X className="h-3.5 w-3.5" /></span>
+      )}
+    </div>
+  )
+})
+
+/** Non-interactive drag overlay for a tab, or for a pane through its shown tab and a `+N` count of the others. */
+export function WorkbenchTabDragPreview({ tab, active, more = 0, ...rest }: { tab: WorkbenchTab; active: boolean; more?: number } & HTMLAttributes<HTMLDivElement>) {
+  return (
+    <div
+      aria-hidden="true"
+      data-workbench-tab-overlay
+      className="pointer-events-none inline-flex cursor-grabbing select-none items-end gap-1 overflow-hidden rounded-lg bg-fw-surface shadow-lg ring-1 ring-fw-border"
+      {...rest}
+    >
+      <WorkbenchTabVisual tab={tab} active={active} />
+      {more > 0 && <span className="self-center px-1.5 text-xs text-fw-text-muted">+{more}</span>}
+    </div>
+  )
 }
 
 function isHorizontallyFullyVisible(element: HTMLElement, container: HTMLElement) {
@@ -264,13 +322,16 @@ function SortableTab({
   }
 
   return (
-    <div
+    <WorkbenchTabVisual
       ref={(node) => {
         setNodeRef(node)
         setTabRef(node)
       }}
+      tab={tab}
+      active={active}
+      dragging={isDragging}
+      onClose={() => onCloseTab(tab.id)}
       data-tab-id={tab.id}
-      data-tab-active={active || undefined}
       style={style}
       onClick={() => onSelectTab(tab.id)}
       onDoubleClick={() => onKeepTab(tab.id)}
@@ -293,27 +354,10 @@ function SortableTab({
           onSelectTab(tab.id)
         }
       }}
-      className={`foxwarm-workbench-tab group relative -mb-px flex min-w-[88px] max-w-[12rem] shrink-0 cursor-pointer items-center gap-1.5 rounded-t-lg border border-b-0 px-2.5 py-2 text-sm transition-colors ${active ? 'border-fw-border bg-fw-surface text-fw-accent shadow-sm dark:border-fw-border dark:bg-fw-surface dark:text-fw-accent' : 'border-transparent bg-fw-neutral-border/70 text-fw-text hover:bg-fw-surface/70 dark:bg-fw-surface/70 dark:text-fw-text dark:hover:bg-fw-hover'} ${isDragging ? 'opacity-50' : ''}`}
       title={isPreview ? `${tab.title} (preview)` : tab.title}
       {...attributes}
       {...listeners}
-    >
-      <TabIcon type={tab.type} />
-      {/* RTL direction moves the ellipsis to the start; the LRM marks keep IDs such as `1103_9t0ea` in their written order. */}
-      <span className={`min-w-0 flex-1 truncate text-left [direction:rtl] ${isPreview ? 'italic' : ''}`}>{`\u200E${tab.title}\u200E`}</span>
-      <button
-        onPointerDown={(event) => event.stopPropagation()}
-        onMouseDown={(event) => event.stopPropagation()}
-        onClick={(event) => {
-          event.stopPropagation()
-          onCloseTab(tab.id)
-        }}
-        className="foxwarm-workbench-tab-close rounded p-0.5 text-fw-text-muted opacity-70 hover:bg-fw-overlay/5 hover:text-fw-text group-hover:opacity-100 dark:hover:bg-fw-surface/10 dark:hover:text-fw-text-strong"
-        title="Close tab"
-      >
-        <X className="h-3.5 w-3.5" />
-      </button>
-    </div>
+    />
   )
 }
 
