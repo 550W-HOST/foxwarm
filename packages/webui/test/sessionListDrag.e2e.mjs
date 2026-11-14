@@ -59,6 +59,13 @@ async function getVisibleSessionRow(page) {
   return row
 }
 
+function cursorAt(page, x, y) {
+  return page.evaluate((px, py) => {
+    const style = getComputedStyle(document.elementFromPoint(px, py))
+    return { cursor: style.cursor, userSelect: style.userSelect }
+  }, x, y)
+}
+
 before(async () => {
   browser = await puppeteer.launch({
     executablePath: chromiumPath,
@@ -118,11 +125,59 @@ test('desktop mouse drag still starts and can be cancelled without changing plac
     await page.mouse.down()
     await page.mouse.move(x + 12, y, { steps: 3 })
     await page.waitForSelector('[data-session-drag-overlay]', { timeout: 5_000 })
+
+    // The cursor is `grabbing` wherever the pointer is for the whole drag: over the overlay,
+    // over the source row and over plain page text, and the drag does not select text.
+    const overlayBox = await (await page.$('[data-session-drag-overlay]')).boundingBox()
+    const overlayStyle = await page.$eval('[data-session-drag-overlay]', (element) => {
+      const style = getComputedStyle(element)
+      return { cursor: style.cursor, userSelect: style.userSelect }
+    })
+    assert.equal(overlayStyle.cursor, 'grabbing')
+    assert.equal(overlayStyle.userSelect, 'none')
+    assert.equal((await cursorAt(page, overlayBox.x + overlayBox.width / 2, overlayBox.y + overlayBox.height / 2)).cursor, 'grabbing')
+    assert.equal((await cursorAt(page, x, y)).cursor, 'grabbing')
+    const textPoint = await page.evaluate(() => {
+      const search = document.querySelector('input[aria-label="Search sessions"]')
+      const rect = (search || document.body).getBoundingClientRect()
+      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
+    })
+    assert.deepEqual(await cursorAt(page, textPoint.x, textPoint.y), { cursor: 'grabbing', userSelect: 'none' })
+    assert.equal(await page.evaluate(() => document.documentElement.hasAttribute('data-fw-dragging')), true)
+
     await page.keyboard.press('Escape')
     await page.mouse.up()
     await page.waitForSelector('[data-session-drag-overlay]', { hidden: true, timeout: 5_000 })
     assert.deepEqual(await readSessionPlacement(page), placementBefore)
+
+    // Cancelling releases the cursor and text selection back to each element's own style.
+    assert.equal(await page.evaluate(() => document.documentElement.hasAttribute('data-fw-dragging')), false)
+    assert.notEqual((await cursorAt(page, x, y)).cursor, 'grabbing')
+    assert.notEqual((await cursorAt(page, textPoint.x, textPoint.y)).userSelect, 'none')
   } finally {
+    await page.close()
+  }
+})
+test('a drag dropped outside every target releases the grabbing cursor', async () => {
+  const page = await openSessionList({ width: 1440, height: 900, isMobile: false, hasTouch: false, deviceScaleFactor: 1 })
+  try {
+    const row = await getVisibleSessionRow(page)
+    const box = await row.boundingBox()
+    assert.ok(box)
+    const x = box.x + box.width * 0.55
+    const y = box.y + box.height * 0.5
+    await page.mouse.move(x, y)
+    await page.mouse.down()
+    await page.mouse.move(x + 12, y, { steps: 3 })
+    await page.waitForSelector('[data-session-drag-overlay]', { timeout: 5_000 })
+    await page.mouse.move(2, 2, { steps: 5 })
+    assert.equal((await cursorAt(page, 2, 2)).cursor, 'grabbing')
+    await page.mouse.up()
+    await page.waitForSelector('[data-session-drag-overlay]', { hidden: true, timeout: 5_000 })
+    assert.equal(await page.evaluate(() => document.documentElement.hasAttribute('data-fw-dragging')), false)
+    assert.notEqual((await cursorAt(page, x, y)).cursor, 'grabbing')
+  } finally {
+    await page.mouse.up().catch(() => {})
     await page.close()
   }
 })

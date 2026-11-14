@@ -2700,6 +2700,14 @@ html[data-foxwarm-frame] :is([role="menu"], [role="dialog"], [role="listbox"], [
 }
 @media (forced-colors: active) { .foxwarm-frame-strip { background: Canvas; } }
 
+/* While a dnd-kit drag is active (tab, pane or session) the cursor stays `grabbing` over every
+ * element, including the overlay and drop targets, and the drag never selects page text. Only the
+ * cursor and user-select properties are set, so window-frame app-region surfaces are unaffected,
+ * and iframe contents keep their own cursor because the rule cannot cross the frame boundary. */
+html[data-fw-dragging], html[data-fw-dragging] * {
+  cursor: grabbing !important; user-select: none !important; -webkit-user-select: none !important;
+}
+
 /* Framed desktop layout ([D-window-frame], direction C): the window background is chrome;
  * the title row, the sidebar and the status row sit on it, and only the panes are cards
  * ("islands") with even gutters. One title row spans the window, as tall as the window

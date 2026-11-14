@@ -1885,6 +1885,15 @@ function App() {
     return props ? <WorkbenchPane {...props} /> : null
   }
 
+  // One owner for the drag cursor and text selection: the attribute follows draggingItem, which
+  // drag end, cancel (Escape) and drops outside all clear. See [data-fw-dragging] in index.css.
+  const dragging = draggingItem !== null
+  useEffect(() => {
+    if (!dragging) return
+    document.documentElement.setAttribute('data-fw-dragging', '')
+    return () => document.documentElement.removeAttribute('data-fw-dragging')
+  }, [dragging])
+
   const draggingTab = draggingItem?.type === 'tab' && draggingItem.id ? (tabsById[draggingItem.id] || null) : null
 
   const handleDragStart = (event: DragStartEvent) => {
@@ -2116,15 +2125,15 @@ function App() {
         {renderStableContent()}
         <DragOverlay>
           {draggingTab ? (
-            <div className="inline-flex max-w-[24rem] items-center gap-2 rounded-lg border border-fw-border bg-fw-surface px-3 py-2 text-sm text-fw-text shadow-lg dark:border-fw-border dark:bg-fw-surface dark:text-fw-text-strong">
+            <div className="inline-flex max-w-[24rem] cursor-grabbing select-none items-center gap-2 rounded-lg border border-fw-border bg-fw-surface px-3 py-2 text-sm text-fw-text shadow-lg dark:border-fw-border dark:bg-fw-surface dark:text-fw-text-strong">
               <span className="truncate">{draggingTab.title}</span>
             </div>
           ) : draggingItem?.type === 'pane' ? (
-            <div data-pane-drag-overlay className="inline-flex max-w-[24rem] items-center gap-2 rounded-lg border border-fw-border bg-fw-surface px-3 py-2 text-sm text-fw-text shadow-lg">
+            <div data-pane-drag-overlay className="inline-flex max-w-[24rem] cursor-grabbing select-none items-center gap-2 rounded-lg border border-fw-border bg-fw-surface px-3 py-2 text-sm text-fw-text shadow-lg">
               <span className="truncate">Pane: {draggingItem.title}</span>
             </div>
           ) : draggingItem?.type === 'session' ? (
-            <div data-session-drag-overlay className="inline-flex max-w-[24rem] items-center gap-2 rounded-lg border border-fw-border bg-fw-surface px-3 py-2 text-sm text-fw-text shadow-lg dark:border-fw-border dark:bg-fw-surface dark:text-fw-text-strong">
+            <div data-session-drag-overlay className="inline-flex max-w-[24rem] cursor-grabbing select-none items-center gap-2 rounded-lg border border-fw-border bg-fw-surface px-3 py-2 text-sm text-fw-text shadow-lg dark:border-fw-border dark:bg-fw-surface dark:text-fw-text-strong">
               <span className="truncate">{draggingItem.title}</span>
             </div>
           ) : null}
