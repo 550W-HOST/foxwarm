@@ -49,7 +49,7 @@ internal sealed partial class MessageRouter
                             "",
                             "Usage:",
                             "- `/channel weixin-login`",
-                            "- `/channel weixin-wait <sessionKey>`",
+                            "- `/channel weixin-wait <session-key>`",
                             $"- `/channel start {settings.ChannelId}`",
                         }
                     )
@@ -79,7 +79,7 @@ internal sealed partial class MessageRouter
                 var sessionKey = user.Text("sessionKey")?.Trim();
                 if (string.IsNullOrEmpty(sessionKey))
                 {
-                    await source.Reply("Usage: /channel weixin-wait <sessionKey>");
+                    await source.Reply("Usage: /channel weixin-wait <session-key>");
                     return;
                 }
                 try

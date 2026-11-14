@@ -216,7 +216,7 @@ internal static class CtlHelp
         var parts = new List<string> { Prefix(ingress) + (command.Display ?? command.Path) };
         string Positional(CtlParameter parameter)
         {
-            var term = "<" + parameter.Name + (parameter.Variadic || parameter.Rest ? "..." : "") + ">";
+            var term = parameter.UsageTerm;
             return parameter.Required ? term : "[" + term + "]";
         }
         parts.AddRange(
@@ -241,7 +241,7 @@ internal static class CtlHelp
     private static string Term(CtlParameter parameter)
     {
         if (!parameter.Flag)
-            return "<" + parameter.Name + (parameter.Variadic || parameter.Rest ? "..." : "") + ">";
+            return parameter.UsageTerm;
         if (parameter.IsBoolean)
             return "--[no-]" + parameter.FlagName;
         return "--"

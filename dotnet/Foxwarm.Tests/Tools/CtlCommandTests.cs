@@ -111,7 +111,7 @@ public sealed class CtlCommandTests
         Assert.Contains("one of current-agent, all", Error("session list --scope everyone").Message);
         Assert.Contains("a number", Error("session list --count many").Message);
         Assert.Contains("Unknown option `--bogus`", Error("session list --bogus 1").Message);
-        Assert.Contains("Missing required argument <filePath>", Error("memory read").Message);
+        Assert.Contains("Missing required argument <file-path>", Error("memory read").Message);
         Assert.Contains("Unexpected argument", Error("memory read a b").Message);
         var error = Error("session list --count many");
         Assert.Equal("session list", error.Command!.Path);

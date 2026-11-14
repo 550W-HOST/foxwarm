@@ -157,7 +157,7 @@ Two supported paths are available. For a Node created before the remote client r
 
 It reserves `my-node` and returns the per-node auth token once. Do not confuse this with the shared pairing token. The token is not a six-digit pairing code; the server stores only its hash. Use it on a new host with `--node-id=my-node --auth-token=YOUR_PER_NODE_AUTH_TOKEN` (Windows `-NodeId my-node -AuthToken YOUR_PER_NODE_AUTH_TOKEN`). The client saves credentials on successful registration; later runs use the credentials file. For URLs with a deployment path also pass `--host=YOUR_REACHABLE_URL` or `-HostUrl`. `/node remove my-node` is the user-facing credential-revocation command; agent workflows use `ctl node remove` below.
 
-For an agent-managed setup, run `ctl node token <nodeId> --file-path <path>`
+For an agent-managed setup, run `ctl node token <node-id> --file-path <path>`
 (`node_create_auth_token`). This is separate from `ctl node create`: the
 latter runs a configured provider lifecycle,
 while this tool reserves a new approved Node ID and writes its credential to a
@@ -203,7 +203,7 @@ The Node startup log includes the exact `/node pair-approve <pending-id>` comman
 A coordinator allowed to use the pairing tools can discover and call them:
 
 1. `ctl node pair-list`
-2. after checking the pending id, `ctl node pair-approve <pendingId> --node-id <nodeId>`
+2. after checking the pending id, `ctl node pair-approve <pending-id> --node-id <node-id>`
 
 Approval establishes trust in a new execution host. Even though the tool path
 can automate it, keep a human confirmation step when the operator's policy

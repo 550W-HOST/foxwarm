@@ -84,7 +84,7 @@ public sealed class InboundMcpCtlTests
         // Parse errors show the external usage; model commands and parameters do not exist here.
         var missing = await Ctl(client, "session view");
         Assert.True(Failed(missing));
-        Assert.Contains("Usage: session view <sessionId>", Text(missing));
+        Assert.Contains("Usage: session view <session-id>", Text(missing));
         Assert.Contains("Unknown command `memory`", Text(await Ctl(client, "memory read MEMORY.md")));
         Assert.Contains("Unknown command `node copy`", Text(await Ctl(client, "node copy a b c d")));
         Assert.Contains("Unknown option `--query`", Text(await Ctl(client, "session list --query x")));
@@ -119,7 +119,7 @@ public sealed class InboundMcpCtlTests
             list["structuredContent"]!.ToJsonString()
         );
         Assert.Contains("1–50", Text(await Ctl(client, "session list --help")));
-        Assert.Contains("this external session only", Text(await Ctl(client, "node select --help")));
+        Assert.Contains("this connection only", Text(await Ctl(client, "node select --help")));
 
         // Rest text is taken as written, including newlines and quotes.
         var message = "first line\n  second 'quoted' line";

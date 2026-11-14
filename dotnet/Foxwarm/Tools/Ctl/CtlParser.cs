@@ -583,7 +583,7 @@ internal static partial class CtlParser
                 throw new InvalidDataException(
                     parameter.Flag
                         ? $"Missing required option `--{parameter.FlagName}`."
-                        : $"Missing required argument <{parameter.Name}>."
+                        : $"Missing required argument {parameter.Placeholder}."
                 );
         if (bound.Literal)
             return new CtlUser(command, assigned);
@@ -651,7 +651,7 @@ internal static partial class CtlParser
         if (bound.TryBind(text, out var node, out var literal))
         {
             if (assigned.ContainsKey(parameter.Name))
-                throw new InvalidDataException($"<{parameter.Name}> is bound with @name and can't take more words.");
+                throw new InvalidDataException($"{parameter.Placeholder} is bound with @name and can't take more words.");
             assigned[parameter.Name] = Convert(parameter, node, bound: true, element: false);
             return;
         }
@@ -695,7 +695,7 @@ internal static partial class CtlParser
         }
         if (assigned.ContainsKey(parameter.Name))
             throw new InvalidDataException(
-                (parameter.Flag ? "--" + parameter.FlagName : "<" + parameter.Name + ">")
+                (parameter.Flag ? "--" + parameter.FlagName : parameter.Placeholder)
                     + " is given more than once."
             );
         assigned[parameter.Name] = Convert(parameter, value, isBound, element: false);
@@ -714,7 +714,7 @@ internal static partial class CtlParser
     }
 
     private static string Label(CtlParameter parameter) =>
-        parameter.Positional || parameter.Rest ? "<" + parameter.Name + ">" : "--" + parameter.FlagName;
+        parameter.Positional || parameter.Rest ? parameter.Placeholder : "--" + parameter.FlagName;
 
     private static string Clip(string text) => text.Length <= 60 ? text : text[..57] + "...";
 

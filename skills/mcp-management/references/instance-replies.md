@@ -81,7 +81,7 @@ B receives ordinary external input with a server-owned `<foxwarm-system kind="ex
 channel send '<exact channelTargetId from the server metadata>' The review is complete. Here are the findings.
 ```
 
-`ctl channel send <channelTargetId> <message>` runs the same tool. Do not turn that destination into a URL, expose another token, or create a reverse MCP server on A. An ordinary assistant final reply in B is **not** sent to this endpoint.
+`ctl channel send <channel-target-id> <message>` runs the same tool. Do not turn that destination into a URL, expose another token, or create a reverse MCP server on A. An ordinary assistant final reply in B is **not** sent to this endpoint.
 
 The destination is an online channel endpoint, not another internal Session authority. Another authorized B Session can manually send to the same available target; it is not locked to the first recipient. Normal policy still applies.
 

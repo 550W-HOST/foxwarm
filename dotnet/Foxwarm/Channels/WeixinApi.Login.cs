@@ -58,7 +58,7 @@ internal sealed partial class WeixinApi
             ["sessionKey"] = sessionKey,
             ["qrcodeUrl"] = url,
             ["message"] =
-                "使用微信扫描二维码后，再执行 /channel weixin-wait <sessionKey> 完成登录。",
+                "使用微信扫描二维码后，再执行 /channel weixin-wait <session-key> 完成登录。",
         };
     }
 
@@ -109,7 +109,7 @@ internal sealed partial class WeixinApi
             }
             await DelayAsync(1000);
         }
-        return new(false, "登录仍未完成，请稍后重试 /channel weixin-wait <sessionKey>。");
+        return new(false, "登录仍未完成，请稍后重试 /channel weixin-wait <session-key>。");
     }
 
     private async Task<JsonObject> LoginGetAsync(

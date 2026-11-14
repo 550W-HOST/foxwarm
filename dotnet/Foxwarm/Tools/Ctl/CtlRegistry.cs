@@ -31,6 +31,11 @@ internal sealed record CtlParameter(
     internal bool Rest => Kind == "rest";
     internal bool Flag => Kind == "flag";
     internal string FlagName => CtlRegistry.Kebab(Name);
+
+    // How messages name a positional value; usage lines add ... when it repeats.
+    internal string Placeholder => "<" + CtlRegistry.Kebab(Name) + ">";
+    internal string UsageTerm =>
+        "<" + CtlRegistry.Kebab(Name) + (Variadic || Rest ? "..." : "") + ">";
     internal bool IsBoolean => Type == "boolean";
     internal bool IsArray => Type == "array";
     internal IReadOnlyList<string> Types => Type.Split('|');

@@ -142,7 +142,7 @@ internal static class UserCommands
 
     private static JsonObject Placeholder(CtlParameter parameter, JsonArray? children)
     {
-        var term = "<" + CtlRegistry.Kebab(parameter.Name) + (parameter.Rest ? "..." : "") + ">";
+        var term = parameter.UsageTerm;
         var node = new JsonObject
         {
             ["value"] = parameter.Required ? term : "[" + term + "]",

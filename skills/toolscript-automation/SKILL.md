@@ -298,8 +298,8 @@ A long host call can therefore take longer than `timeoutSecs` before the timeout
 Run management uses the `ctl script` commands:
 
 - `ctl script list` (`list_toolscript_runs`)
-- `ctl script get <runId>` (`get_toolscript_run`)
-- `ctl script cancel <runId>` (`cancel_toolscript_run`)
+- `ctl script get <run-id>` (`get_toolscript_run`)
+- `ctl script cancel <run-id>` (`cancel_toolscript_run`)
  A run can be inspected or resumed only by its owner session.
 
 ## Execution results and diagnostics

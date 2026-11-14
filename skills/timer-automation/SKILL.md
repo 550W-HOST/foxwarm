@@ -64,7 +64,7 @@ timer delete abcd1234
 
 ## Inspecting timers
 
-`timer list` returns each timer's schedule, `nextRunAt` (null while paused or when nothing is scheduled), `paused`, and `lastRun`, the most recent result: `delivered` or `failed` for message timers; `completed`, `paused` (the script is waiting for continuation), `failed`, or `skipped` (the previous run was still active) for ToolScript timers, with its `runId` when there is one. Use `ctl script get <runId>` for the run's output. One-time timers are removed after they fire, so they have no results to list.
+`timer list` returns each timer's schedule, `nextRunAt` (null while paused or when nothing is scheduled), `paused`, and `lastRun`, the most recent result: `delivered` or `failed` for message timers; `completed`, `paused` (the script is waiting for continuation), `failed`, or `skipped` (the previous run was still active) for ToolScript timers, with its `runId` when there is one. Use `ctl script get <run-id>` for the run's output. One-time timers are removed after they fire, so they have no results to list.
 
 ## Scheduling Rules
 
