@@ -90,6 +90,24 @@ internal sealed class DesktopFrame
             regions = null;
             ApplyRegions();
         };
+        // WebView2 doesn't run document-created scripts in the first document of a window
+        // that hosts an opener's new contents (NewWindowRequested). The page listens for
+        // foxwarm-frame, so that document gets the state once its DOM is loaded.
+        core.DOMContentLoaded += async (_, _) =>
+        {
+            try
+            {
+                await core.ExecuteScriptAsync(
+                    "if (!window.foxwarmFrame) { "
+                        + DocumentScript(state)
+                        + " window.dispatchEvent(new Event('foxwarm-frame')); }"
+                );
+            }
+            catch (Exception error) when (error is ObjectDisposedException or InvalidOperationException or COMException)
+            {
+                // The web view is closing.
+            }
+        };
         this.origin = origin.GetLeftPart(UriPartial.Authority);
         view.XamlRoot.Changed += (_, _) => Update();
         state = StateJson();
@@ -147,14 +165,17 @@ internal sealed class DesktopFrame
         state = next;
         try
         {
-            if (scriptId is not null)
-                core.RemoveScriptToExecuteOnDocumentCreated(scriptId);
+            // Add the new state before removing the old one, so that no document, such as an
+            // app window's first one, is created without either.
+            var previous = scriptId;
             scriptId = await core.AddScriptToExecuteOnDocumentCreatedAsync(DocumentScript(next));
+            if (previous is not null)
+                core.RemoveScriptToExecuteOnDocumentCreated(previous);
             await core.ExecuteScriptAsync(
                 DocumentScript(next) + " window.dispatchEvent(new Event('foxwarm-frame'));"
             );
         }
-        catch (Exception error) when (error is ObjectDisposedException or InvalidOperationException or System.Runtime.InteropServices.COMException)
+        catch (Exception error) when (error is ObjectDisposedException or InvalidOperationException or COMException)
         {
             // The web view is closing.
         }

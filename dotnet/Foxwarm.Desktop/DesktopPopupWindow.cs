@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -106,13 +107,32 @@ internal sealed partial class DesktopPopupWindow : Window
             presenter.PreferredMinimumWidth = (int)Math.Round(DesktopNavigation.MinimumWidth * scale);
             presenter.PreferredMinimumHeight = (int)Math.Round(DesktopNavigation.MinimumHeight * scale);
         }
-        AppWindow.ResizeClient(
-            new SizeInt32(
-                (int)Math.Round(contentWidth * scale),
-                (int)Math.Round(contentHeight * scale)
-            )
+        var wanted = new SizeInt32(
+            (int)Math.Round(contentWidth * scale),
+            (int)Math.Round(contentHeight * scale)
         );
+        AppWindow.ResizeClient(wanted);
+        // With the content extended into the title bar, ResizeClient still leaves room for a
+        // system title bar; correct to the actual client area.
+        if (GetClientRect(WinRT.Interop.WindowNative.GetWindowHandle(this), out var client))
+        {
+            var extraWidth = client.Right - client.Left - wanted.Width;
+            var extraHeight = client.Bottom - client.Top - wanted.Height;
+            if (extraWidth != 0 || extraHeight != 0)
+                AppWindow.Resize(
+                    new SizeInt32(AppWindow.Size.Width - extraWidth, AppWindow.Size.Height - extraHeight)
+                );
+        }
+        // A system title bar and borders add to the content size; keep the whole window within
+        // the work area, as the content size alone was clamped to it.
         var size = AppWindow.Size;
+        if (size.Width > work.Width || size.Height > work.Height)
+        {
+            AppWindow.Resize(
+                new SizeInt32(Math.Min(size.Width, work.Width), Math.Min(size.Height, work.Height))
+            );
+            size = AppWindow.Size;
+        }
         var (x, y) = DesktopNavigation.WindowPosition(
             opener.AppWindow.Position.X,
             opener.AppWindow.Position.Y,
@@ -126,4 +146,14 @@ internal sealed partial class DesktopPopupWindow : Window
         );
         AppWindow.Move(new PointInt32((int)x, (int)y));
     }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ClientRect
+    {
+        public int Left, Top, Right, Bottom;
+    }
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetClientRect(nint hwnd, out ClientRect rect);
 }
