@@ -131,8 +131,8 @@ public sealed class CanonicalHttpTests
                     new McpClientOptions { ProtocolVersion = "2025-11-25" }
                 );
                 Assert.Equal(
-                    5,
-                    (await sdk.ListToolsAsync(new ListToolsRequestParams())).Tools.Count
+                    InboundMcpFixture.ToolNames,
+                    InboundMcpFixture.Names(await sdk.ListToolsAsync(new ListToolsRequestParams()))
                 );
                 Assert.Equal(
                     HttpStatusCode.Unauthorized,
@@ -253,7 +253,10 @@ public sealed class CanonicalHttpTests
             transport,
             new McpClientOptions { ProtocolVersion = "2025-11-25" }
         );
-        Assert.Equal(5, (await sdk.ListToolsAsync(new ListToolsRequestParams())).Tools.Count);
+        Assert.Equal(
+            InboundMcpFixture.ToolNames,
+            InboundMcpFixture.Names(await sdk.ListToolsAsync(new ListToolsRequestParams()))
+        );
     }
 
     [Fact]

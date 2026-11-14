@@ -41,10 +41,7 @@ public sealed class InboundMcpCtlTests
         await using var client = await f.ClientAsync();
 
         var tools = await client.ListToolsAsync();
-        Assert.Equal(
-            ["foxwarm_discover", "foxwarm_call", "foxwarm_node", "foxwarm_exec_result", "foxwarm_session", "ctl"],
-            tools.Select(tool => tool.Name).ToArray()
-        );
+        Assert.Equal(InboundMcpFixture.ToolNames, tools.Select(tool => tool.Name).ToArray());
 
         // Help lists external commands the policy may allow; denied capabilities and model-only
         // commands are absent.

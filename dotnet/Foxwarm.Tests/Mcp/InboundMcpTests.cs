@@ -30,7 +30,7 @@ public sealed class InboundMcpTests
         await using var alpha = await f.ClientAsync();
         await using var beta = await f.ClientAsync(InboundMcpFixture.Beta);
         var tools = await alpha.ListToolsAsync(new ListToolsRequestParams());
-        Assert.Equal(6, tools.Tools.Count);
+        Assert.Equal(InboundMcpFixture.ToolNames, InboundMcpFixture.Names(tools));
         Assert.Equal(
             "2025-11-25",
             alpha.ServerInfo is not null ? alpha.NegotiatedProtocolVersion : null
@@ -309,7 +309,10 @@ public sealed class InboundMcpTests
                     && row["tag"]?.GetValue<string>() == tag
             );
         }
-        Assert.Equal(6, (await client.ListToolsAsync(new ListToolsRequestParams())).Tools.Count);
+        Assert.Equal(
+            InboundMcpFixture.ToolNames,
+            InboundMcpFixture.Names(await client.ListToolsAsync(new ListToolsRequestParams()))
+        );
         Assert.Contains(
             "id",
             Text(await InboundMcpFixture.ConcreteAsync(client, "mcp:peer/probe"))
