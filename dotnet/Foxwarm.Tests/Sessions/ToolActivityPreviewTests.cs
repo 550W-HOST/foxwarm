@@ -104,7 +104,7 @@ public sealed class ToolActivityPreviewTests
         Assert.DoesNotContain("×", text);
         Assert.DoesNotContain("call_tool", text);
         Assert.Equal(3, text.Split('\n').Count(line => line.Contains("exec —")));
-        Assert.Equal(1, text.Split("ctl history recall ").Length - 1);
+        Assert.Equal(1, text.Split("recall(").Length - 1);
         Assert.Contains("(#2/#3)", text);
         Assert.Equal(original, rows.Select(row => row.ToJsonString()));
 
@@ -211,7 +211,7 @@ public sealed class ToolActivityPreviewTests
         Assert.True(text.Length <= 1000);
         Assert.Contains("Inspect source 1", text);
         Assert.Contains("not displayed", text);
-        Assert.Equal(1, text.Split("ctl history recall ").Length - 1);
+        Assert.Equal(1, text.Split("recall(").Length - 1);
     }
 
     [Fact]
@@ -242,15 +242,13 @@ public sealed class ToolActivityPreviewTests
             foreach (var unified in new[] { false, true })
             {
                 var response = await f.Call(
-                    unified ? "ctl" : "exec",
+                    unified ? "call_tool" : "exec",
                     unified
-                        ? CtlTestArgs.Unified(
-                            new JsonObject
-                            {
-                                ["toolId"] = "node:master/exec",
-                                ["args"] = args.DeepClone(),
-                            }
-                        )
+                        ? new JsonObject
+                        {
+                            ["toolId"] = "node:master/exec",
+                            ["args"] = args.DeepClone(),
+                        }
                         : args
                 );
                 Assert.Null(response["error"]);
@@ -283,19 +281,6 @@ public sealed class ToolActivityPreviewTests
                     ["toolId"] = "node:master/exec",
                     ["args"] = new JsonObject { ["summary"] = "Inspect source" },
                 }
-            )
-        );
-        Assert.Equal(
-            "Inspect source",
-            SessionToolExecutor.ToolArgsPreview(
-                "ctl",
-                CtlTestArgs.Unified(
-                    new()
-                    {
-                        ["toolId"] = "node:master/exec",
-                        ["args"] = new JsonObject { ["summary"] = "Inspect source" },
-                    }
-                )
             )
         );
     }

@@ -1,6 +1,5 @@
 import { parseFileDeliveryArtifact, type FileDeliveryArtifact } from '../../../shared/src/fileDelivery'
 import type { FunctionCall, Message } from './chatShared'
-import { ctlAsUnified } from '../ctlCall'
 
 export type ReplyFile = Omit<FileDeliveryArtifact, 'sizeBytes'> & { sizeBytes?: number }
 export interface ReplyFileGroup { key: string; files: ReplyFile[]; startIndex: number; endIndex: number }
@@ -8,9 +7,8 @@ export interface ReplyFileGroup { key: string; files: ReplyFile[]; startIndex: n
 const localTarget = (file: FileDeliveryArtifact, sessionId: string) => file.targetKind === 'session'
   ? file.targetId === sessionId : file.targetId === `webui:${sessionId}`
 const isSend = (name: string) => name === 'send_file' || name === 'functions.send_file'
-function sendArgs(original?: FunctionCall): Record<string, any> | undefined {
-  if (!original) return undefined
-  const call = ctlAsUnified(original)
+function sendArgs(call?: FunctionCall): Record<string, any> | undefined {
+  if (!call) return undefined
   if (isSend(call.name)) return call.args
   if (call.name === 'call_tool' && (call.args?.toolId === 'builtin:send_file' || call.args?.source === 'builtin' && call.args.name === 'send_file')) return call.args.args
   return undefined
@@ -66,7 +64,7 @@ export function buildReplyFileGroups(messages: readonly Message[], sessionId: st
       const resp = part.functionResponse
       if (!resp || resp.response?.error || (resp.response as any)?.isError) continue
       const call = resp.tool_use_id ? calls.get(resp.tool_use_id) : undefined
-      if (!isSend(resp.name) && !sendArgs(call) && !['run_script', 'continue_script', 'call_tool', 'ctl'].includes(resp.name.replace(/^functions\./, ''))) continue
+      if (!isSend(resp.name) && !sendArgs(call) && !['run_script', 'continue_script', 'call_tool'].includes(resp.name.replace(/^functions\./, ''))) continue
       let found: ReplyFile[] = receipts(resp.response).filter(file => localTarget(file, sessionId))
       if (!found.length && (isSend(resp.name) || sendArgs(call))) {
         const old = legacyFile(call, resp.response, `legacy:${resp.tool_use_id}`, sessionId)

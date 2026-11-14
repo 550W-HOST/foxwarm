@@ -96,7 +96,7 @@ public sealed class DefaultToolWireTests(ITestOutputHelper output)
                     Assert.True(JsonNode.DeepEquals(selected[index], functions[index]));
                 Assert.Contains(
                     tools,
-                    tool => SessionWait.Text(tool?["name"]) == "ctl"
+                    tool => SessionWait.Text(tool?["name"]) == "send_to_channel"
                 );
                 Assert.Contains(tools, tool => SessionWait.Text(tool?["name"]) == "read");
                 var search = tools
@@ -214,7 +214,7 @@ public sealed class DefaultToolWireTests(ITestOutputHelper output)
                 JsonNode.DeepEquals(original["parameters"], anthropicTools[index]?["input_schema"])
             );
         }
-        Assert.Contains(definitions, tool => SessionWait.Text(tool?["name"]) == "ctl");
+        Assert.Contains(definitions, tool => SessionWait.Text(tool?["name"]) == "send_to_channel");
         await manager.ShutdownAsync();
     }
 

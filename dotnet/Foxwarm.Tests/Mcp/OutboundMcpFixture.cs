@@ -117,12 +117,12 @@ internal sealed class OutboundMcpFixture : IAsyncDisposable
         new()
         {
             ["id"] = Guid.NewGuid().ToString("N"),
-            ["name"] = "ctl",
-            ["args"] = CtlTestArgs.Unified(new JsonObject
+            ["name"] = "call_tool",
+            ["args"] = new JsonObject
             {
                 ["toolId"] = "mcp:peer/" + name,
                 ["args"] = args?.DeepClone() ?? new JsonObject(),
-            }),
+            },
         };
 
     internal Task<JsonObject> ConfigureAsync(

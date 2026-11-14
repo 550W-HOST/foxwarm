@@ -80,7 +80,7 @@ public sealed partial class ClaudeRuntimeTests
             Plant(privateCwd);
             File.WriteAllText(
                 Path.Combine(f.PeerDirectory, "peer.json"),
-                ClaudeRuntimeFixture.PeerSettings(new JsonObject
+                new JsonObject
                 {
                     ["probeSettingSources"] = true,
                     ["calls"] = new JsonArray(
@@ -111,7 +111,7 @@ public sealed partial class ClaudeRuntimeTests
                             }
                         )
                     ),
-                }).ToJsonString()
+                }.ToJsonString()
             );
         };
         await f.RunAsync();

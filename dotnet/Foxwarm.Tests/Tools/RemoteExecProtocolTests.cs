@@ -250,11 +250,11 @@ public sealed partial class RemoteExecProtocolTests
                 .Manager.NodeProviders.Definitions("remote")
                 .Any(node => node?["name"]?.GetValue<string>() == "exec")
         );
-        // A peer tool sharing a builtin name never replaces a declaration.
-        Assert.DoesNotContain(
+        var session = Assert.Single(
             definitions.OfType<JsonObject>(),
-            node => node["description"]?.GetValue<string>() == "peer collision"
+            node => node["name"]?.GetValue<string>() == "session"
         );
+        Assert.NotEqual("peer collision", session["description"]?.GetValue<string>());
         var explicitOverride = new JsonArray(new JsonObject { ["name"] = "exec" });
         Assert.True(
             JsonNode.DeepEquals(

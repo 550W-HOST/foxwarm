@@ -237,12 +237,12 @@ public sealed partial class TelegramChannelTests
         Assert.Null(
             (
                 await f.ToolAsync(
-                    "ctl",
-                    CtlTestArgs.Unified(new JsonObject
+                    "call_tool",
+                    new JsonObject
                     {
                         ["toolId"] = "builtin:send_to_channel",
                         ["args"] = Args("retry"),
-                    })
+                    }
                 )
             )!["error"]
         );

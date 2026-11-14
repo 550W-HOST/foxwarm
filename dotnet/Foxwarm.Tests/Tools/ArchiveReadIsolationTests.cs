@@ -34,14 +34,14 @@ public sealed class ArchiveReadIsolationTests
                 new JsonObject
                 {
                     ["id"] = Guid.NewGuid().ToString("N"),
-                    ["name"] = unified ? "ctl" : tool,
+                    ["name"] = unified ? "call_tool" : tool,
                     ["args"] = unified
-                        ? CtlTestArgs.Unified(new JsonObject
+                        ? new JsonObject
                         {
                             ["source"] = "builtin",
                             ["name"] = tool,
                             ["args"] = args,
-                        })
+                        }
                         : args,
                 },
                 default

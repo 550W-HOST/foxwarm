@@ -4,23 +4,21 @@ Reference for the workflows listed in [the skill entry](../SKILL.md). Read the s
 
 ## Tools and commands
 
-Agents use tools and `ctl` commands. Run `ctl help` or `ctl <noun> --help` for the commands your policy may allow; `ctl tool search` finds any other builtin, MCP or Node tool.
+Agents use tools. If a tool is not in your tool list, look for it with `search_tools`; it may be available on request or denied by policy.
 
-| Tool or command | Use |
+| Tool | Use |
 | --- | --- |
-| `ctl agent create` (`create_agent`) | Create an Agent, optionally with initial local rules and placement defaults |
-| `ctl agent set-rules` (`set_agent_rules`) | Replace the local rules of an Agent created from yours |
-| `ctl agent inherit` (`set_agent_inherit`) | Set or clear memory inheritance |
-| `ctl session create` (`create_session`) | Create a Session under an existing Agent |
+| `create_agent` | Create an Agent, optionally with initial local rules and placement defaults |
+| `set_agent_rules` | Replace the local rules of an Agent created from yours |
+| `set_agent_inherit` | Set or clear memory inheritance |
+| `create_session` | Create a Session under an existing Agent |
 | `create_child_session` | Create a child Session, also in another Agent, optionally assigned a Task (`taskId`) and placed on a Node (`node`) |
-| `ctl session move` (`move_session`) | Rename a Session or move it to another Agent; the old ID remains an alias |
-| `ctl session delete` (`delete_session`) | Delete another Session's live record; its archive is kept |
-| `ctl agent list`, `ctl session list`, `ctl session status` | Inspect Agents and Sessions |
-| `ctl session refresh-snapshot` | Rebuild one Session's system prompt now |
-| `ctl memory read`, `write`, `edit`, `patch`, `delete` | The current Agent's memory |
-| `task`, `ctl node ...` | Assignments and execution environments |
-
-Policy rules name the builtin in parentheses, not the command.
+| `move_session` | Rename a Session or move it to another Agent; the old ID remains an alias |
+| `delete_session` | Delete another Session's live record; its archive is kept |
+| `list_agents`, `session` | Inspect Agents and Sessions |
+| `refresh_session_snapshot` | Rebuild one Session's system prompt now |
+| `read_memory`, `write_memory`, `edit_memory`, `apply_patch_memory`, `delete_memory` | The current Agent's memory |
+| `task`, `node` | Assignments and execution environments |
 
 Users have commands: `/agent list|create|delete|inherit`, `/session ...` (including `move`, `parent`, `unparent`, `delete` and `refresh-snapshot`) and `/node ...`. When a step needs a command, tell the user exactly what to run. Do not simulate a user request to run a command yourself.
 
@@ -33,7 +31,7 @@ A Session works from a prompt snapshot assembled from:
 3. a catalog of available skills (name and description only);
 4. runtime context such as the Agent directory.
 
-`ctl skill load <name>` returns a skill's entry document and lists its resources; resources are read only when needed. Snapshots are cached per Session, so a changed memory file does not change an open Session's prompt until that snapshot is rebuilt.
+`skill({action:"load"})` returns a skill's entry document and lists its resources; resources are read only when needed. Snapshots are cached per Session, so a changed memory file does not change an open Session's prompt until that snapshot is rebuilt.
 
 ## Where knowledge belongs
 
@@ -90,8 +88,7 @@ Restriction has two independent parts:
 Create a restricted Agent with its rules in one call, so no Session runs without them:
 
 ```text
-ctl agent create worker --no-create-main-session --rules @rules
-  values: { "rules": <contents of restricted-worker.rules.json> }
+create_agent({agentName:"worker", createMainSession:false, rules:<contents of restricted-worker.rules.json>})
 ```
 
 Then write the matching memory template to the worker Agent's `memory/MEMORY.md` by its absolute path, as described above. The rules in the templates were reviewed for these hazards; keep them when adapting:
@@ -105,15 +102,15 @@ Then write the matching memory template to the worker Agent's `memory/MEMORY.md`
 - **Copying out goes through the coordinator.** A worker's copy with a `master` endpoint is denied, so the coordinator collects results.
 - **Agent rules govern Foxwarm tools only.** Web search or image generation built into a model are controlled by the model configuration, so give restricted Agents a model without them.
 
-Check a candidate with `ctl config explain-auth` for a real Session of the Agent before relying on it. A worker Agent without a main Session has none until its first assignment; check that Session before it starts work.
+Check a candidate with `explain_tool_authorization` (find it with `search_tools`) for a real Session of the Agent before relying on it. A worker Agent without a main Session has none until its first assignment; check that Session before it starts work.
 
 ### Restricted workers
 
 Use one long-lived worker Agent for all assignments of a kind instead of one Agent per worker: rules apply to every Session of the Agent, while Agents cannot be deleted by models. Each assignment gets:
 
-- a fresh Node: `ctl node create --provider-id sandbox --node-id sandbox/<assignment> --parameters '{"profile":"offline"}'`. Use `ensure` only as a deliberate reconnect to an environment that should still exist;
+- a fresh Node: `node({action:"create", providerId:"sandbox", nodeId:"sandbox/<assignment>", parameters:{profile:"offline"}})`. Use `ensure` only as a deliberate reconnect to an environment that should still exist;
 - a Task and a child Session on that Node: `create_child_session({agentName:"worker", suffix:"<assignment>", node:"sandbox/<assignment>", taskId:"<task>", …handoff fields})`. Task completion notifies the coordinator;
-- an explicit release after review: `ctl session delete` for the worker, then `ctl node destroy` with its exact confirmation.
+- an explicit release after review: `delete_session` for the worker, then `node({action:"destroy", ...})` with its exact confirmation.
 
 The [node-setup development workflow](../../node-setup/references/development-workflow.md) runs these steps with source transfer and delivery.
 

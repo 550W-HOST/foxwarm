@@ -32,7 +32,7 @@ public sealed class TaskNativeResultTests
 
     [Theory]
     [InlineData("task")]
-    [InlineData("ctl")]
+    [InlineData("call_tool")]
     [InlineData("run_script")]
     public async Task Direct_unified_and_Monty_task_values_keep_native_receipts_and_detail_queries(
         string entry
@@ -43,10 +43,10 @@ public sealed class TaskNativeResultTests
         {
             if (entry == "task")
                 return await f.Call(entry, args);
-            if (entry == "ctl")
+            if (entry == "call_tool")
                 return await f.Call(
                     entry,
-                    CtlTestArgs.Unified(new JsonObject { ["toolId"] = "builtin:task", ["args"] = args })
+                    new JsonObject { ["toolId"] = "builtin:task", ["args"] = args }
                 );
             var run = await f.Call(
                 entry,

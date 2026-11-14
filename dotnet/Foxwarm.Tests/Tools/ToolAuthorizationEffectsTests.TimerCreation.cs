@@ -86,8 +86,8 @@ public sealed partial class ToolAuthorizationEffectsTests
             Error(
                 await Call(
                     execution.Tools,
-                    "ctl",
-                    CtlTestArgs.Unified(new JsonObject { ["toolId"] = "builtin:create_timer", ["args"] = transformed })
+                    "call_tool",
+                    new JsonObject { ["toolId"] = "builtin:create_timer", ["args"] = transformed }
                 )
             )
         );

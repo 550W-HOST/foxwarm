@@ -28,7 +28,7 @@ Mechanics of the [user-decided removal of legacy Agent isolation](../modules/too
    - the Agent's own skills;
    - `session` status of the current Session (generator 2);
    - own-Session timers, whose new-Session target is the Agent's own Agent (an update may omit `newSession`);
-   - ToolScript, wait, ask and other local tools. Layers generated before the `ctl` front end also listed the retired `search_tools`; a stored layer that differs from the current generation only by that name counts as current and is kept as stored ([D-ctl-command-registry](./ctl-command-registry.md#d-ctl-command-registry)).
+   - ToolScript, wait, ask and other local tools.
 5. Translated exact allows.
 6. A final selector-free deny.
 

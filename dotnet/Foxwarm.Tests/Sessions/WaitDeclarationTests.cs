@@ -33,12 +33,12 @@ public sealed class WaitDeclarationTests
     {
         var name =
             mode == "direct" ? "wait"
-            : mode == "unified" ? "ctl"
+            : mode == "unified" ? "call_tool"
             : "run_script";
         var parameters =
             mode == "direct" ? args.DeepClone()
             : mode == "unified"
-                ? CtlTestArgs.Unified(new JsonObject { ["toolId"] = "builtin:wait", ["args"] = args.DeepClone() })
+                ? new JsonObject { ["toolId"] = "builtin:wait", ["args"] = args.DeepClone() }
             : new JsonObject
             {
                 ["code"] = "return call_tool('builtin:wait', args)",

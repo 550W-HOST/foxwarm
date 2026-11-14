@@ -296,16 +296,12 @@ internal static class ArchiveToolEffects
         return approval is "rejected" ? "approval-rejected" : "ok";
     }
 
-    // Old rows without a recorded target still name the wrapped tool of call_tool or ctl.
+    // Old rows without a recorded target still name the wrapped tool of call_tool.
     private static (string Name, string? Source, string? Server) Wrapped(
         string name,
         JsonObject? args
     )
     {
-        if (name == "ctl" && args is not null)
-            return Foxwarm.Tools.CtlParser.Describe(args) is { } described
-                ? (described.Name, described.Source, described.Server)
-                : (name, null, null);
         if (name != "call_tool" || args is null)
             return (name, null, null);
         if (Text(args["toolId"]) is { } id)
@@ -433,10 +429,7 @@ internal static class ArchiveToolEffects
             var wrapped = Wrapped(name, callArgs);
             var toolName = Text(target?["name"]) ?? wrapped.Name;
             var innerArgs =
-                name == "call_tool" ? callArgs?["args"] as JsonObject ?? callArgs
-                : name == "ctl" && callArgs is not null
-                    ? Foxwarm.Tools.CtlParser.Describe(callArgs)?.Args ?? callArgs
-                : callArgs;
+                name == "call_tool" ? callArgs?["args"] as JsonObject ?? callArgs : callArgs;
             var startedAt = Milliseconds(timing?["startedAt"], fallback);
             var approvalStatus = Text(approval?["status"]);
             rows.Add(

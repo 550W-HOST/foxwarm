@@ -255,7 +255,7 @@ public sealed class ImageIdentityGuidanceTests
                 labels,
                 label =>
                     Assert.Contains(
-                        ", size=390x3600, sent_size=277x2560] `ctl image crop` coordinates use the original size.",
+                        ", size=390x3600, sent_size=277x2560] image_crop coordinates use the original size.",
                         label
                     )
             );

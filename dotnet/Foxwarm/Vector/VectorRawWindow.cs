@@ -1,6 +1,5 @@
 using System.Text;
 using System.Text.Json.Nodes;
-using Foxwarm.Tools;
 using System.Text.RegularExpressions;
 using Foxwarm.Sessions;
 using static Foxwarm.Vector.VectorText;
@@ -298,7 +297,7 @@ internal static class VectorRawWindow
                             : ""
                     )
                     + ". Inspect exact source with "
-                    + string.Join("; ", shown.Select(seq => CtlCommandText.For("recall", new JsonObject { ["target"] = $"msg#{seq}" })))
+                    + string.Join("; ", shown.Select(seq => $"recall({{ target: \"msg#{seq}\" }})"))
                     + "."
             );
         }

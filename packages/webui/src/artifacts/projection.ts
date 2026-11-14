@@ -13,7 +13,7 @@ export function buildArtifactGroups(messages: readonly Message[], sessionId: str
     if (msg.role === 'model' || msg.__meta?.queuedPreview) return
     for (const p of msg.parts) {
       const r = p.functionResponse
-      if (!r || r.response?.error || (r.response as any)?.isError || !['artifact', 'call_tool', 'ctl', 'run_script', 'continue_script'].includes(r.name.replace(/^functions\./, ''))) continue
+      if (!r || r.response?.error || (r.response as any)?.isError || !['artifact', 'call_tool', 'run_script', 'continue_script'].includes(r.name.replace(/^functions\./, ''))) continue
       const pending: { value: unknown; depth: number }[] = [{ value: r.response, depth: 0 }]
       let count = 0
       while (pending.length && count++ < 512) {

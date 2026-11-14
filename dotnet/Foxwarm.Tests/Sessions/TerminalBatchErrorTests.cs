@@ -18,7 +18,7 @@ public sealed partial class TerminalBatchErrorTests
         };
 
     private static JsonObject Unified(string id, string name, JsonObject args) =>
-        Call(id, "ctl", CtlTestArgs.Unified(new() { ["toolId"] = "builtin:" + name, ["args"] = args }));
+        Call(id, "call_tool", new() { ["toolId"] = "builtin:" + name, ["args"] = args });
 
     private static JsonObject Final() =>
         new()

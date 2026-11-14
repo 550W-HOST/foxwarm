@@ -153,7 +153,7 @@ public sealed class ToolScriptLifecycleTests
             {
                 calls++;
                 return await f.Tools.ExecuteAsync(
-                    new JsonObject { ["name"] = "ctl", ["args"] = CtlTestArgs.Unified((JsonObject)wrapper.DeepClone()) },
+                    new JsonObject { ["name"] = "call_tool", ["args"] = wrapper.DeepClone() },
                     token
                 );
             }

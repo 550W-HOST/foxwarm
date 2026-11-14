@@ -151,12 +151,6 @@ public sealed partial class ToolAuthorizationEffectsTests
             {
                 await manager.LoadAsync();
                 Assert.Equal(outcome, SingleEntry(manager)["outcome"]!.GetValue<string>());
-                // An accepted R1 layer keeps the retired search_tools name as stored; a
-                // regenerated layer no longer lists it.
-                Assert.Equal(
-                    outcome == "upgraded",
-                    Row(manager)["rules"]!.ToJsonString().Contains("\"search_tools\"")
-                );
                 var (masterExec, boundExec, otherExec) = await NodeExecAuthority(manager, temp.Path);
                 Assert.False(masterExec);
                 Assert.Equal(boundExecAllowed, boundExec);

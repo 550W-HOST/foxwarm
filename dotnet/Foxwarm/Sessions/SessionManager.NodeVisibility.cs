@@ -129,8 +129,7 @@ internal sealed partial class SessionManager
             return false;
         if (context.Layers is null)
             return false;
-        // ctl is a permission-neutral front end; its commands are filtered per target.
-        if (name == "ctl" && source == "builtin")
+        if (name == "call_tool" && source == "builtin")
             return true;
         if (
             source == "builtin"

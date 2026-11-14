@@ -38,7 +38,7 @@ The coordinator rule is intentionally powerful; use the installation's trusted c
 
 ## Load the runnable example
 
-The self-contained ToolScript is `examples/development_workflow.py`. Resolve `<skill-directory>` from `ctl skill load node-setup`. It runs from an installed/copied skill directory without importing a source checkout or sibling Python modules:
+The self-contained ToolScript is `examples/development_workflow.py`. Resolve `<skill-directory>` from `skill({action:"load",skillName:"node-setup"})`. It runs from an installed/copied skill directory without importing a source checkout or sibling Python modules:
 
 ```text
 run_script({node:"master", filePath:"<skill-directory>/examples/development_workflow.py", args:{...}})

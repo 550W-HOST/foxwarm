@@ -135,9 +135,7 @@ internal sealed class ToolAuthorizationAuthority(
                     throw new InvalidDataException("Tool policy exceeds its byte limit.");
                 output.Write(buffer, 0, count);
             }
-            var policy = ToolAuthorizationYaml.Parse(output.ToArray());
-            ToolAuthorizationPolicy.Report("policy", policy);
-            return policy;
+            return ToolAuthorizationYaml.Parse(output.ToArray());
         }
         catch (Exception error)
             when ((error is FileNotFoundException or DirectoryNotFoundException)

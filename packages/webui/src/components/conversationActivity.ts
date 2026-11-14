@@ -2,7 +2,6 @@ import { getMessageStableKey } from '../chatViewportState'
 import { isCommittedHistoryMessage } from '../chatHistoryState'
 import { getWebSearchAction } from '../webSearchAction'
 import { parseFoxwarmMetadataLine, type FunctionCall, type FunctionResponse, type Message } from './chatShared'
-import { ctlAsUnified } from '../ctlCall'
 
 const argsObject = (value: unknown): Record<string, any> | undefined => {
   if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, any>
@@ -11,8 +10,7 @@ const argsObject = (value: unknown): Record<string, any> | undefined => {
   }
   return undefined
 }
-const target = (original: FunctionCall) => {
-  const call = ctlAsUnified(original)
+const target = (call: FunctionCall) => {
   if (call.name !== 'call_tool') return { source: 'builtin', name: call.name, args: argsObject(call.args) }
   const descriptor = argsObject(call.args)
   const builtin = typeof descriptor?.toolId === 'string' ? descriptor.toolId.match(/^builtin:(.+)$/)?.[1] : undefined

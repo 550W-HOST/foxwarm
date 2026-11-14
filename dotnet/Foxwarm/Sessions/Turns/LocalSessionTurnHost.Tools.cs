@@ -195,7 +195,29 @@ public sealed partial class LocalSessionTurnHost
                     .Text(args?["action"])
                     ?.Trim()
                     .Equals("select", StringComparison.OrdinalIgnoreCase) == true;
-        return name == "ctl" && args is not null && CtlParser.SelectsNode(args);
+        if (name != "call_tool" || args is null)
+            return false;
+        if (
+            SessionWait.Text(args["toolId"]) != "builtin:node"
+            && !(
+                SessionWait.Text(args["source"]) == "builtin"
+                && SessionWait.Text(args["name"]) == "node"
+            )
+        )
+            return false;
+        try
+        {
+            var target = ToolRegistry.ObjectArg(args, "args", "argsJson");
+            return SessionWait
+                    .Text(target?["action"])
+                    ?.Trim()
+                    .Equals("select", StringComparison.OrdinalIgnoreCase) == true;
+        }
+        catch (Exception error)
+            when (error is InvalidDataException or System.Text.Json.JsonException)
+        {
+            return false;
+        }
     }
 
     private static bool SelectionSucceeded(JsonNode? result) =>

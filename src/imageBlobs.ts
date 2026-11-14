@@ -10,9 +10,6 @@ import { buildFoxwarmAttachmentText } from '../packages/shared/dist/foxwarmMarku
 import { parseFoxwarmTagLine } from './utils/promptWrappers';
 import { formatToolResponsePayload } from '../packages/shared/dist/toolResponseFormatting';
 
-// Quotes one word of a `ctl` command the way its lexer reads it back.
-const ctlWord = (text: string): string => /^[A-Za-z0-9_./:#%+=,@-]+$/.test(text) ? text : `'${text.replace(/'/g, `'\\''`)}'`;
-
 const BLOB_ID_RE = /^([a-f0-9]{64})\.(png|jpg|gif|webp|svg|bin)$/;
 const SAFE_RASTER_MIME_BY_EXTENSION: Record<string, string> = {
   png: 'image/png',
@@ -397,7 +394,7 @@ function appendImageFileFallback(parts: MessagePart[], part: MessagePart, mimeTy
     const imageId = part.imageMeta?.imageId || part.inlineDataRef?.imageId;
     const note = 'Image content was not sent because it exceeds the image input limit. '
       + (imageId
-        ? `The original is retained as image ${JSON.stringify(imageId)}; save it as a file with \`ctl image save ${ctlWord(imageId)} <file-path>\`.`
+        ? `The original is retained as image ${JSON.stringify(imageId)}; use image_write_to_file to save it as a file.`
         : 'The original remains in the source message.');
     const descriptor = [filePart.text, note].filter(Boolean).join('\n');
     const result = { ...filePart, text: descriptor };

@@ -3,9 +3,8 @@ using Foxwarm.Sessions;
 
 namespace Foxwarm.Tests;
 
-// send_file and image_write_to_file choose their Node per call. They are reached through ctl and
-// are never declared, so declarations do not follow the Session's current Node; the restriction
-// is enforced when they are called.
+// send_file and image_write_to_file choose their Node per call, so their default declarations
+// must not follow the Session's current Node. The restriction is enforced when they are called.
 public sealed partial class ProviderFileConsumerTests
 {
     private static readonly string[] DeliveryTools = ["send_file", "image_write_to_file"];
@@ -17,7 +16,10 @@ public sealed partial class ProviderFileConsumerTests
             .Select(tool => tool!["name"]!.GetValue<string>())
             .ToArray();
 
-    private static async Task AssertDeclarationsStableAcrossNodes(Fixture f)
+    private static async Task AssertDeclarationsStableAcrossNodes(
+        Fixture f,
+        params string[] expected
+    )
     {
         var nodes = new[] { "master", f.Node, "fixture/readonly", "master" };
         string? canonical = null;
@@ -28,9 +30,8 @@ public sealed partial class ProviderFileConsumerTests
             canonical ??= serialized;
             Assert.Equal(canonical, serialized);
             var declared = DeclaredNames(serialized);
-            Assert.Contains("ctl", declared);
             foreach (var name in DeliveryTools)
-                Assert.DoesNotContain(name, declared);
+                Assert.Equal(expected.Contains(name), declared.Contains(name));
         }
     }
 
@@ -60,7 +61,7 @@ public sealed partial class ProviderFileConsumerTests
             policy
         );
         f.Manager.Authorization.Invalidate();
-        await AssertDeclarationsStableAcrossNodes(f);
+        await AssertDeclarationsStableAcrossNodes(f, DeliveryTools);
     }
 
     [Fact]
@@ -84,7 +85,9 @@ public sealed partial class ProviderFileConsumerTests
             )!
             .AsArray();
         await f.Manager.SetAgentRulesAsync(f.Owner.Agent, rules);
-        await AssertDeclarationsStableAcrossNodes(f);
+        // The Agent's rules allow send_file only with arguments and give image_write_to_file no
+        // allowance, so the second stays hidden on every Node.
+        await AssertDeclarationsStableAcrossNodes(f, "send_file");
     }
 
     [Fact]
@@ -113,8 +116,8 @@ public sealed partial class ProviderFileConsumerTests
         );
         Assert.Equal("tool_authorization_denied", image["error"]!["type"]!.GetValue<string>());
         var unified = await f.Call(
-            "ctl",
-            CtlTestArgs.Unified(new JsonObject
+            "call_tool",
+            new JsonObject
             {
                 ["toolId"] = "builtin:send_file",
                 ["args"] = new JsonObject
@@ -122,7 +125,7 @@ public sealed partial class ProviderFileConsumerTests
                     ["filePath"] = "report.txt",
                     ["channelTargetId"] = "chat:room",
                 },
-            })
+            }
         );
         Assert.Equal("tool_authorization_denied", unified["error"]!["type"]!.GetValue<string>());
         Assert.Equal(before, (await f.Requests()).Length);
@@ -144,7 +147,10 @@ public sealed partial class ProviderFileConsumerTests
             return;
         await using var f = await Fixture.Create();
         await LegacyIsolationFixture.RestrictAsync(f.Manager, f.Owner.Agent, f.Node);
-        Assert.Contains("ctl", DeclaredNames(f.Manager.ModelDefinitions(f.Owner).ToJsonString()));
+        Assert.Subset(
+            DeclaredNames(f.Manager.ModelDefinitions(f.Owner).ToJsonString()).ToHashSet(),
+            DeliveryTools.ToHashSet()
+        );
         var send = await f.Call(
             "send_file",
             new JsonObject

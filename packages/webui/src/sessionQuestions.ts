@@ -1,6 +1,5 @@
 import { API_BASE_PATH } from './config'
 import type { ToolApprovalRecord } from './sessionApprovals'
-import { ctlAsUnified } from './ctlCall'
 
 /** One `ask_user` option as stored by the Session. */
 export interface QuestionOption {
@@ -168,15 +167,13 @@ export function askUserQuestionId(args: Record<string, unknown> | undefined, res
   return null
 }
 
-export function isAskUserCall(original: { name: string; args?: Record<string, unknown> } | undefined): boolean {
-  if (!original) return false
-  const call = ctlAsUnified(original)
+export function isAskUserCall(call: { name: string; args?: Record<string, unknown> } | undefined): boolean {
+  if (!call) return false
   if (call.name === 'ask_user') return true
   return call.name === 'call_tool' && (call.args?.toolId === 'builtin:ask_user' || call.args?.source === 'builtin' && call.args?.name === 'ask_user')
 }
 
-export function askUserArgs(original: { name: string; args?: Record<string, unknown> }): Record<string, unknown> | undefined {
-  const call = ctlAsUnified(original)
+export function askUserArgs(call: { name: string; args?: Record<string, unknown> }): Record<string, unknown> | undefined {
   if (call.name === 'call_tool') return call.args?.args && typeof call.args.args === 'object' ? call.args.args as Record<string, unknown> : undefined
   return call.args
 }

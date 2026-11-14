@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.Text.Json.Nodes;
-using Foxwarm.Tools;
 using System.Text.RegularExpressions;
 
 namespace Foxwarm.Sessions;
@@ -483,10 +482,11 @@ internal static class ArchiveRecallTool
                 + string.Join(
                     "; ",
                     targets.Select(item =>
-                        CtlCommandText.For(
-                            "recall",
+                        "recall("
+                        + EcmaJson.Stringify(
                             new JsonObject { ["sessionId"] = id, ["target"] = item }
                         )
+                        + ")"
                     )
                 );
             if (target.Kind == "overview")
@@ -706,7 +706,7 @@ internal static class ArchiveRecallTool
         next["sessionId"] = id;
         next["beforeSeq"] = oldest;
         var continuation = remaining
-            ? "Older literal search: " + CtlCommandText.For("recall", next)
+            ? "Older literal search: recall(" + EcmaJson.Stringify(next) + ")"
             : "No older messages remain in this Session's accessible Archive range.";
         var extent =
             scanned == 0

@@ -10,7 +10,7 @@ Use this for custom interactive demonstrations. For ordinary plots, prefer `data
 
 1. Write a JSON manifest with `type:"react"`, `schemaVersion:1`, `title`, optional short `description`, `entry:"App.tsx"` and `files:{"App.tsx":"...source...","style.css":"..."}`.
 2. Export a default React component from the entry. Import `react` hooks normally. Relative TS/TSX/JS/JSX/CSS/JSON imports must exist in `files`.
-3. Prepare it with `ctl artifact prepare demo.json` (add `--node <id>` for another source Node). Put the exact returned `marker` on its own line at column 0 between blank lines, at the desired position in ordinary assistant prose. Put any short caption below it. Use `ctl artifact publish` instead for a separate reply-end card. `prepare` alone displays nothing.
+3. Discover `artifact` with `search_tools`; prepare with `{action:"prepare",filePath:"demo.json",node?}`. Put the exact returned `marker` on its own line at column 0 between blank lines, at the desired position in ordinary assistant prose. Put any short caption below it. Use `action:"publish"` instead for a separate reply-end card. `prepare` alone displays nothing.
 4. Revise with the returned `artifactId` and explicit `expectedRevision`. Historical replies remain pinned to their version.
 
 Up to 24 source files, 200,000 characters/file, 2 MiB/manifest. No filesystem paths outside the package. The runtime provides fixed React 18.3.1; arbitrary npm dependencies, remote imports and installation scripts are not supported. Do not include ReactDOM setup: the host mounts your default component.

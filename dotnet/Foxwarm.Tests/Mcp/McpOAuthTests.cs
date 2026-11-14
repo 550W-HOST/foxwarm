@@ -191,12 +191,12 @@ public sealed partial class McpOAuthTests
             .ExecuteAsync(
                 new JsonObject
                 {
-                    ["name"] = "ctl",
-                    ["args"] = CtlTestArgs.Search(new JsonObject
+                    ["name"] = "search_tools",
+                    ["args"] = new JsonObject
                     {
                         ["sources"] = new JsonArray("mcp"),
                         ["server"] = "peer",
-                    }),
+                    },
                 },
                 default
             );

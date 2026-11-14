@@ -144,7 +144,7 @@ public sealed partial class ToolAuthorizationEffectsTests
 
     [Theory]
     [InlineData("task")]
-    [InlineData("ctl")]
+    [InlineData("call_tool")]
     [InlineData("run_script")]
     public async Task Parent_question_creation_is_narrow_and_parent_answer_returns_to_child(
         string entry
@@ -200,11 +200,11 @@ public sealed partial class ToolAuthorizationEffectsTests
         {
             if (entry == "task")
                 return await Call(execution.Tools, entry, args);
-            if (entry == "ctl")
+            if (entry == "call_tool")
                 return await Call(
                     execution.Tools,
                     entry,
-                    CtlTestArgs.Unified(new JsonObject { ["toolId"] = "builtin:task", ["args"] = args })
+                    new JsonObject { ["toolId"] = "builtin:task", ["args"] = args }
                 );
             var script = await Call(
                 execution.Tools,

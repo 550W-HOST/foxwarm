@@ -48,8 +48,6 @@ internal sealed partial class SessionToolExecutor(
             }
         }
         RequireRuntime();
-        if (IsCtlFrontEnd(resolved))
-            return;
         var files =
             resolved.Name is "run_script" or "start_toolscript_run"
                 ? invocation.Value?.ScriptSource?.Files ?? Files
@@ -707,10 +705,7 @@ internal sealed partial class SessionToolExecutor(
             ?? (
                 name switch
                 {
-                    "exec" or "run_script" or "call_tool" or "ctl" => ToolActivity.Summary(
-                        name,
-                        args
-                    ),
+                    "exec" or "run_script" or "call_tool" => ToolActivity.Summary(name, args),
                     "edit" when args.ContainsKey("apply_patch") => Text(args["apply_patch"]),
                     "edit" or "write" or "edit_memory" or "write_memory" or "delete_memory" => Text(
                         args["filePath"]
@@ -750,10 +745,13 @@ internal sealed partial class SessionToolExecutor(
             var args =
                 functionCall["args"] as JsonObject
                 ?? throw new InvalidDataException("Tool arguments must be an object.");
-            // call_tool is ToolScript's host function, not a model tool.
-            if (name == "call_tool" && !Programmatic)
-                throw new InvalidDataException("Unknown tool: call_tool");
             var compactCall = CompactSubmissionCall(functionCall);
+            if (compactCall?["argsParseError"] is not null && name == "call_tool")
+            {
+                args = (JsonObject)args.DeepClone();
+                args.Remove("argsJson");
+                args["args"] = new JsonObject();
+            }
             if (invocation.Value is { } compactInvocation)
                 compactInvocation.CompactCall = compactCall;
             var resolved = await registry.ResolveAsync(
@@ -1219,27 +1217,6 @@ internal sealed partial class SessionToolExecutor(
         return server => manager.McpServerVisible(context ??= manager.VisibilityFor(owner), server);
     }
 
-    // The default model declarations: frequent tools stay native, everything else is reached
-    // through ctl. generate_image is added per request by its own policy.
-    internal static readonly IReadOnlySet<string> DefaultBuiltins = new HashSet<string>(
-        StringComparer.Ordinal
-    )
-    {
-        "read",
-        "write",
-        "edit",
-        "exec",
-        "run_script",
-        "continue_script",
-        "wait",
-        "ask_user",
-        "send_to_session",
-        "create_child_session",
-        "task",
-        "submit_compact_plan",
-        "ctl",
-    };
-
     internal static ToolRegistry CreateRegistry(
         JsonArray definitions,
         Foxwarm.McpClient mcp,
@@ -1421,7 +1398,25 @@ internal sealed partial class SessionToolExecutor(
             Task.FromResult(owner.Manager.NodePairList(args));
         handlers["node_pair_approve"] = (owner, args, _) =>
             owner.Manager.NodePairApproveAsync(args, owner.Hosted);
-        handlers["ctl"] = (owner, args, token) => owner.ExecuteCtlAsync(args, token);
+        handlers["search_tools"] = (owner, args, token) =>
+            UnifiedTools.SearchAsync(
+                registry,
+                args,
+                token,
+                (source, name, server) =>
+                    owner.Manager.ToolVisible(
+                        owner.Hosted,
+                        source,
+                        name,
+                        source == "mcp" ? server : null,
+                        node: source == "node" ? server : null
+                    ),
+                owner.ScriptBudget,
+                owner.Hosted,
+                BroadMcpServerVisible(owner.Manager, owner.Hosted)
+            );
+        handlers["call_tool"] = (_, _, _) =>
+            throw new InvalidDataException("call_tool is a dispatcher, not a concrete target.");
         handlers["mcp_notifications"] = (owner, args, token) =>
             owner.Manager.ManageMcpNotificationsAsync(owner.Hosted, args, token);
         handlers["send_to_channel"] = (owner, args, token) =>
@@ -1448,7 +1443,48 @@ internal sealed partial class SessionToolExecutor(
         {
             var name = SessionWait.Text(definition["name"])!;
             var source = name is "read" or "write" or "edit" or "exec" ? "node" : "builtin";
-            registry.Register(definition, source, DefaultBuiltins.Contains(name), handlers[name]
+            registry.Register(
+                definition,
+                source,
+                name
+                    is not (
+                        "generate_image"
+                        or "set_session_child_model"
+                        or "set_session_compact_threshold"
+                        or "refresh_session_snapshot"
+                        or "compact_session"
+                        or "create_agent"
+                        or "create_session"
+                        or "set_agent_inherit"
+                        or "set_agent_rules"
+                        or "artifact"
+                        or "mcp_config"
+                        or "mcp_notifications"
+                        or "node_create_auth_token"
+                        or "node_remove"
+                        or "node_bootstrap_info"
+                        or "node_pair_list"
+                        or "node_pair_approve"
+                        or "list_mcp_servers"
+                        or "delete_session"
+                        or "set_config"
+                        or "add_secret"
+                        or "list_secrets"
+                        or "explain_tool_authorization"
+                        or "move_session"
+                        or "create_timer"
+                        or "list_timers"
+                        or "update_timer"
+                        or "delete_timer"
+                        or "start_toolscript_run"
+                        or "list_toolscript_runs"
+                        or "get_toolscript_run"
+                        or "cancel_toolscript_run"
+                        or "get_archived_messages"
+                        or "get_archived_blocks"
+                        or "stop_session"
+                    ),
+                handlers[name]
             );
         }
         var browser = new BrowserHost(BrowserHost.DefaultBundlePath());

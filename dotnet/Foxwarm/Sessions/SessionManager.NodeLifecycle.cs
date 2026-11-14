@@ -239,7 +239,7 @@ internal sealed partial class SessionManager
             // The cap applies to listed Nodes, so hidden ones cannot crowd them out.
             if (result.Count == 100)
                 break;
-            // Names only: descriptions and schemas come from Node inspection or `ctl tool search`.
+            // Names only: descriptions and schemas come from Node inspection or search_tools.
             var visible = new JsonArray();
             foreach (var definition in definitions)
             {

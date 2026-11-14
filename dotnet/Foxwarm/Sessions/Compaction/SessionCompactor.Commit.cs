@@ -268,24 +268,15 @@ internal sealed partial class SessionCompactor
             if (part["functionCall"] is not JsonObject call)
                 continue;
             var name = SessionWait.Text(call["name"]);
-            var args = call["args"] as JsonObject;
-            // `ctl skill load <name>` counts as the skill load it runs.
-            if (
-                name == "ctl"
-                && call["argsParseError"] is null
-                && args is not null
-                && Foxwarm.Tools.CtlParser.Describe(args) is { Source: "builtin", Name: "skill" } described
-            )
-            {
-                name = "skill";
-                args = described.Args;
-            }
             if (
                 name != "load_skill"
-                && !(name == "skill" && SessionWait.Text(args?["action"]) == "load")
+                && !(
+                    name == "skill"
+                    && SessionWait.Text((call["args"] as JsonObject)?["action"]) == "load"
+                )
             )
                 continue;
-            var skill = SessionWait.Text(args?["skillName"]);
+            var skill = SessionWait.Text((call["args"] as JsonObject)?["skillName"]);
             if (
                 skill is not null
                 && OpenAIRequestText.Trim(skill) is { Length: > 0 } trimmed
@@ -309,9 +300,9 @@ internal sealed partial class SessionCompactor
                 ? ""
                 : " hint=\""
                     + Attribute(
-                        "Note: The following skill(s) were loaded with `ctl skill load` but their content was compacted away: "
+                        "Note: The following skill(s) were loaded with skill(action=\"load\") but their content was compacted away: "
                             + string.Join(", ", skills.Select(skill => "`" + skill + "`"))
-                            + ". If you still need them, run `ctl skill load <name>` again."
+                            + ". If you still need them, call skill with action=\"load\" again."
                     )
                     + "\"";
         return $"<foxwarm-system kind=\"session-boundary\" event=\"compact-completed\" parentSessionId=\"{Attribute(string.IsNullOrEmpty(parent) ? "(none)" : parent)}\" currentSessionId=\"{Attribute(id)}\" time=\"{ArchiveBlockRecord.LocalTimestamp(now)}\"{hint} />";

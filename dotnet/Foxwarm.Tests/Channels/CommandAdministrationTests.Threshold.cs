@@ -96,13 +96,13 @@ public sealed partial class CommandAdministrationTests
         async Task Set(JsonObject args)
         {
             var result = await f.ToolAsync(
-                "ctl",
-                CtlTestArgs.Unified(new JsonObject
+                "call_tool",
+                new JsonObject
                 {
                     ["source"] = "builtin",
                     ["name"] = "set_session_compact_threshold",
                     ["args"] = args,
-                })
+                }
             );
             Assert.Null(result?["error"]);
         }

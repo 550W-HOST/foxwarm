@@ -98,8 +98,8 @@ public sealed partial class ToolAuthorizationEffectsTests
         await using var mcp = execution.Mcp;
         var search = await Call(
             execution.Tools,
-            "ctl",
-            CtlTestArgs.Search(Obj("""{"query":"browser_tabs","sources":["node"],"nodeId":"master","limit":1}"""))
+            "search_tools",
+            Obj("""{"query":"browser_tabs","sources":["node"],"nodeId":"master","limit":1}""")
         );
         var runnable = new BrowserHost(BrowserHost.DefaultBundlePath()).Describe().Available;
         Assert.Equal(

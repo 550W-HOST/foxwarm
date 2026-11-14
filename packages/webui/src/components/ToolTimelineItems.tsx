@@ -50,7 +50,6 @@ import { useSessionQuestionsContext } from '../sessionQuestionsState'
 import { isAskUserCall } from '../sessionQuestions'
 import type { ReasoningBadgeInfo } from './reasoningParts'
 import { SentVersionButton, sentVersionTargets } from './SentVersionDialog'
-import { ctlAsUnified, ctlCommandText, ctlConcrete } from '../ctlCall'
 
 const formatToolResponseText = (resp: FunctionResponse): string => resp.__meta?.toolScriptSubCalls !== undefined
   ? formatToolScriptExecutionResponse(resp.response)
@@ -136,10 +135,7 @@ const ExecutionArguments = ({ call }: { call: FunctionCall }) => {
 }
 
 /** Search the same expanded text surfaces as a Tool card, never its raw JSON view or response metadata. */
-export const getToolCallSearchText = (stored: FunctionCall): string => {
-  const command = ctlCommandText(stored)
-  const call = ctlConcrete(stored)
-  if (command && call.name !== 'ctl') return `ctl ${command}\u0000${getToolCallSearchText(call)}`
+export const getToolCallSearchText = (call: FunctionCall): string => {
   if (call.argsParseError && typeof call.rawArgsText === 'string') return call.rawArgsText
   const args = call.args || {}
   if (call.name === 'read') return `${args.filePath || ''}${args.startLine || args.endLine ? ` (lines ${args.startLine || 1}-${args.endLine || 'end'})` : ''}`
@@ -163,9 +159,7 @@ export const getToolCallSearchText = (stored: FunctionCall): string => {
   return formatCompactObjectPreview(call.name === 'session' ? call.args || { action: 'status' } : call.args)
 }
 
-export const getToolResponseSearchText = (stored: FunctionResponse, call?: FunctionCall): string => {
-  const concrete = stored.name === 'ctl' && call ? ctlConcrete(call) : undefined
-  const resp = concrete && concrete.name !== 'ctl' ? { ...stored, name: concrete.name } : stored
+export const getToolResponseSearchText = (resp: FunctionResponse): string => {
   if (resp.name === 'read') {
     const content = resp.response?.content ?? resp.response?.output
     return typeof content === 'string' ? content : content !== undefined ? formatCompactObjectPreview(content) : formatToolResponseText(resp)
@@ -382,12 +376,7 @@ const hasLegacyDiffPayload = (call: FunctionCall): boolean => (
   typeof call.args.oldText === 'string' && typeof call.args.newText === 'string'
 )
 
-const renderToolCallPreview = (original: FunctionCall, options: { partial?: boolean; purposeOnly?: boolean; onOpenCodeFile?: OpenCodeFileHandler; resolvedPaths?: DisplayResolvedPaths } = {}): ReactNode => {
-  const call = options.partial ? original : ctlAsUnified(original)
-  if (call.name === 'ctl' && typeof call.args?.command === 'string') {
-    const command = call.args.command.replace(/\s+/g, ' ').trim()
-    return <span className="truncate font-mono" title={command}>{command}</span>
-  }
+const renderToolCallPreview = (call: FunctionCall, options: { partial?: boolean; purposeOnly?: boolean; onOpenCodeFile?: OpenCodeFileHandler; resolvedPaths?: DisplayResolvedPaths } = {}): ReactNode => {
   if (typeof call.argsParseError === 'string' && typeof call.rawArgsText === 'string') {
     const preview = call.rawArgsText.length > 200 ? `${call.rawArgsText.slice(0, 200)}...` : call.rawArgsText
     return <span className="truncate break-all whitespace-pre-wrap font-mono text-fw-text-muted">{preview}</span>
@@ -401,10 +390,6 @@ const renderToolCallPreview = (original: FunctionCall, options: { partial?: bool
   const target = toolActivityTarget(call)
   if (call.name === 'call_tool' && target.name !== 'call_tool') {
     const summary = target.name === 'exec' || target.name === 'run_script' ? executionCallPreview(target, !!options.purposeOnly) : toolActivitySummary(target)
-    if (original.name === 'ctl' && target.name !== 'exec' && target.name !== 'run_script') {
-      const command = String(original.args?.command ?? '').replace(/\s+/g, ' ').trim()
-      return <span className="truncate" title={command}>{summary || command}</span>
-    }
     if (target.name === 'exec' || target.name === 'run_script') {
       return options.purposeOnly
         ? <span className="truncate" title={summary}>{summary}</span>
@@ -711,8 +696,7 @@ const renderToolResponseContent = (resp: FunctionResponse, expanded: boolean, ca
 
 const TOOLSCRIPT_TOOL_NAMES = new Set(['run_script', 'start_toolscript_run', 'continue_script'])
 
-const isToolScriptCall = (original: FunctionCall): boolean => {
-  const call = ctlAsUnified(original)
+const isToolScriptCall = (call: FunctionCall): boolean => {
   if (TOOLSCRIPT_TOOL_NAMES.has(call.name)) return true
   if (call.name !== 'call_tool') return false
   const args = call.args || {}
@@ -791,8 +775,8 @@ const renderToolScriptResultContent = (resp: FunctionResponse, expanded: boolean
 }
 
 const ToolCallResponseItem = memo(function ToolCallResponseItem({
-  call: storedCall,
-  responses: storedResponses,
+  call,
+  responses,
   imageParts,
   modelMessage,
   responseMessage,
@@ -822,13 +806,6 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
   neutralSuccess?: boolean
   reasoningBadges?: readonly ReasoningBadgeInfo[]
 }) {
-  // A ctl command renders as the call it runs; the command stays visible beside it.
-  const ctlCommand = ctlCommandText(storedCall)
-  const call = useMemo(() => storedCall && ctlConcrete(storedCall), [storedCall])
-  const responses = useMemo(
-    () => call && ctlCommand ? storedResponses.map(resp => resp.name === 'ctl' ? { ...resp, name: call.name } : resp) : storedResponses,
-    [call, ctlCommand, storedResponses],
-  )
   const [localExpanded, setLocalExpanded] = useState(false)
   const manualExpanded = controlledExpanded ?? localExpanded
   const setExpanded = onExpandedChange ?? setLocalExpanded
@@ -854,7 +831,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
   const progressMap = useContext(ToolScriptProgressContext)
   const persistedSubCalls = responses[0]?.__meta?.toolScriptSubCalls
   const isToolScriptTool = !!call && (isToolScriptCall(call)
-    || ((call.name === 'call_tool' || call.name === 'ctl') && (persistedSubCalls !== undefined || !!(call.id && progressMap[call.id]))))
+    || (call.name === 'call_tool' && (persistedSubCalls !== undefined || !!(call.id && progressMap[call.id]))))
   const responseSubCalls = isToolScriptTool && responses.length > 0
     ? persistedSubCalls ?? (responses[0]?.response as any)?.subCalls as ToolScriptSubCall[] | undefined
     : undefined
@@ -923,14 +900,13 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
           <MiniToggleButton onClick={(e) => { e.stopPropagation(); setDiffMode('split') }} active={displayedDiffViewMode === 'split'} title="Split">Split</MiniToggleButton>
         </div>
       )}
-      {ctlCommand && call.name !== 'ctl' && <div data-ctl-command className="mb-1 break-all font-mono text-fw-text-muted">ctl {ctlCommand}</div>}
       {renderToolCallExpandedContent(call, displayedDiffViewMode, { partial: partialToolCall, onOpenCodeFile, resolvedPaths: primaryResponse?.__meta?.resolvedPaths })}
     </div>
   ) : null
 
   const viewButtons = (
     <div className={`foxwarm-tool-action-buttons ${actionButtonsToneClass} absolute right-0 top-1/2 -translate-y-1/2 flex gap-0.5 opacity-0 transition-opacity`}>
-      <IconToggleButton onClick={(e) => { e.stopPropagation(); setJsonSnapshot(JSON.stringify({ modelMessage, call: storedCall, responses: storedResponses, imageParts }, null, 2)) }} active={jsonSnapshot !== null} title="JSON"><FileJson size={14} /></IconToggleButton>
+      <IconToggleButton onClick={(e) => { e.stopPropagation(); setJsonSnapshot(JSON.stringify({ modelMessage, call, responses, imageParts }, null, 2)) }} active={jsonSnapshot !== null} title="JSON"><FileJson size={14} /></IconToggleButton>
       <SentVersionButton targets={sentVersionTargets([
         call?.id ? { meta: modelMessage?.__meta, callId: call.id } : undefined,
         responseMessage && (call?.id || responses[0]?.tool_use_id) ? { meta: responseMessage.__meta, callId: call?.id || responses[0]?.tool_use_id } : undefined,
@@ -949,7 +925,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
       >
         <ToolTag toolCall={!!call || !!primaryResponse} name={primaryName} label={primaryLabel} tone={tagTone} className="foxwarm-tool-tag" />
         <div className="foxwarm-tool-call-header relative flex min-w-0 flex-1 items-center self-stretch">
-          {includeCallPreview && call && <div ref={headerFade.ref} {...headerFade.overflowFadeProps} title={ctlCommand && call.name !== 'ctl' ? `ctl ${ctlCommand}` : undefined} className={`foxwarm-tool-call-summary min-w-0 max-w-full ${call.name === 'read' ? 'flex text-[13px] leading-[18px]' : THREAD_CARD_HEADER_PREVIEW_CLASS}`}>{renderToolCallPreview(call, { partial: partialToolCall, purposeOnly: hideCollapsedContent, onOpenCodeFile, resolvedPaths: primaryResponse?.__meta?.resolvedPaths })}</div>}
+          {includeCallPreview && call && <div ref={headerFade.ref} {...headerFade.overflowFadeProps} className={`foxwarm-tool-call-summary min-w-0 max-w-full ${call.name === 'read' ? 'flex text-[13px] leading-[18px]' : THREAD_CARD_HEADER_PREVIEW_CLASS}`}>{renderToolCallPreview(call, { partial: partialToolCall, purposeOnly: hideCollapsedContent, onOpenCodeFile, resolvedPaths: primaryResponse?.__meta?.resolvedPaths })}</div>}
           {viewButtons}
         </div>
         {invocationDurationMs !== null && invocationDurationMs >= 1000 && <span data-tool-execution-time className="ml-auto inline-flex shrink-0 items-center gap-1 font-mono text-[10px] tabular-nums text-fw-text-muted" title="Tool call duration"><Timer aria-hidden="true" size={11} />{formatCompactDuration(invocationDurationMs)}</span>}

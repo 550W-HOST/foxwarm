@@ -28,8 +28,8 @@ public sealed partial class MainLocalToolsTests
         var id = SessionWait.Text(prepared["preparedArtifact"]?["artifactId"])!;
         Assert.Contains(id, SessionWait.Text(prepared["marker"])!);
         var publish = await f.Call(
-            "ctl",
-            CtlTestArgs.Unified(new JsonObject
+            "call_tool",
+            new JsonObject
             {
                 ["toolId"] = "builtin:artifact",
                 ["args"] = new JsonObject
@@ -39,7 +39,7 @@ public sealed partial class MainLocalToolsTests
                     ["artifactId"] = id,
                     ["expectedRevision"] = 1,
                 },
-            })
+            }
         );
         Assert.Null(publish["error"]);
         Assert.True(ArtifactStore.ValidReceipt(publish["artifact"]));
@@ -165,8 +165,8 @@ public sealed partial class MainLocalToolsTests
             "explicit/source",
             registry
                 .Resolve(
-                    "ctl",
-                    CtlTestArgs.Unified(new JsonObject
+                    "call_tool",
+                    new JsonObject
                     {
                         ["toolId"] = "builtin:artifact",
                         ["args"] = new JsonObject
@@ -174,7 +174,7 @@ public sealed partial class MainLocalToolsTests
                             ["action"] = "publish",
                             ["node"] = "explicit/source",
                         },
-                    }),
+                    },
                     "selected"
                 )
                 .ExecutionNode

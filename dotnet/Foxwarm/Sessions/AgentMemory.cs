@@ -115,7 +115,7 @@ internal sealed partial class AgentMemory(
         if (catalog.Count > 0)
         {
             blocks.Append(
-                "\n\nThe following skills provide specialized instructions for specific tasks.\nWhen a task matches a skill's description, run `ctl skill load <name>`\nto load its full instructions and resource list.\nRead listed resources only when the loaded skill or current task needs them:\n<available_skills>\n"
+                "\n\nThe following skills provide specialized instructions for specific tasks.\nWhen a task matches a skill's description, call skill with action=\"load\"\nand the skill's name to load its full instructions and resource list.\nRead listed resources only when the loaded skill or current task needs them:\n<available_skills>\n"
             );
             foreach (var skill in catalog)
                 blocks

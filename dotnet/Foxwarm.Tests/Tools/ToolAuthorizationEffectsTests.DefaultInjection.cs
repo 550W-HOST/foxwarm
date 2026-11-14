@@ -40,25 +40,25 @@ public sealed partial class ToolAuthorizationEffectsTests
             );
             var search = await Call(
                 execution.Tools,
-                "ctl",
-                CtlTestArgs.Search(new JsonObject
+                "search_tools",
+                new JsonObject
                 {
                     ["query"] = name,
                     ["sources"] = new JsonArray("builtin"),
                     ["includeSchema"] = false,
-                })
+                }
             );
             Assert.Contains("builtin:" + name, search["output"]!.GetValue<string>());
         }
         var result = await Call(
             execution.Tools,
-            "ctl",
-            CtlTestArgs.Unified(new JsonObject
+            "call_tool",
+            new JsonObject
             {
                 ["source"] = "builtin",
                 ["name"] = "set_session_compact_threshold",
                 ["args"] = new JsonObject { ["thresholdTokens"] = 1234 },
-            })
+            }
         );
         Assert.Null(Error(result));
         Assert.Equal(
@@ -71,13 +71,13 @@ public sealed partial class ToolAuthorizationEffectsTests
         );
         var denied = await Call(
             execution.Tools,
-            "ctl",
-            CtlTestArgs.Unified(new JsonObject
+            "call_tool",
+            new JsonObject
             {
                 ["source"] = "builtin",
                 ["name"] = "set_session_compact_threshold",
                 ["args"] = new JsonObject { ["thresholdTokens"] = 2222 },
-            })
+            }
         );
         Assert.Equal("tool_authorization_denied", Error(denied));
         Assert.Equal(
@@ -86,12 +86,12 @@ public sealed partial class ToolAuthorizationEffectsTests
         );
         var filtered = await Call(
             execution.Tools,
-            "ctl",
-            CtlTestArgs.Search(new JsonObject
+            "search_tools",
+            new JsonObject
             {
                 ["query"] = "set_session_compact_threshold",
                 ["sources"] = new JsonArray("builtin"),
-            })
+            }
         );
         Assert.DoesNotContain(
             "builtin:set_session_compact_threshold",

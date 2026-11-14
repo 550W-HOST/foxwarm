@@ -102,14 +102,14 @@ public sealed partial class ToolAuthorizationEffectsTests
             return await Call(
                 execution.Tools,
                 entry,
-                entry == "ctl"
-                    ? CtlTestArgs.Unified(new JsonObject { ["toolId"] = "builtin:task", ["args"] = args })
+                entry == "call_tool"
+                    ? new JsonObject { ["toolId"] = "builtin:task", ["args"] = args }
                     : args
             );
         }
         Assert.True(manager.ToolVisible(owner, "builtin", "task"));
         Assert.Null(Error(await Update(own)));
-        Assert.Null(Error(await Update(userOwned, "ctl")));
+        Assert.Null(Error(await Update(userOwned, "call_tool")));
         foreach (var id in new[] { creatorOnly, unowned, "task_missing" })
             Assert.Equal("tool_authorization_denied", Error(await Update(id)));
         var script = await Call(
@@ -145,7 +145,7 @@ public sealed partial class ToolAuthorizationEffectsTests
                 )
             )
         );
-        Assert.Equal("tool_authorization_denied", Error(await Update(own, "ctl")));
+        Assert.Equal("tool_authorization_denied", Error(await Update(own, "call_tool")));
         await Assert.ThrowsAsync<ToolAuthorizationDeniedException>(() =>
             manager.AuthorizeToolAsync(
                 owner,
@@ -212,21 +212,21 @@ public sealed partial class ToolAuthorizationEffectsTests
         );
         var definitions = manager.ModelDefinitions(owner);
         Assert.Contains(definitions, value => SessionWait.Text(value?["name"]) == "read");
-        Assert.Contains(definitions, value => SessionWait.Text(value?["name"]) == "ctl");
-        Assert.DoesNotContain(
+        Assert.Contains(
             definitions,
-            value => SessionWait.Text(value?["name"]) is "copy_between_nodes" or "node"
+            value => SessionWait.Text(value?["name"]) == "copy_between_nodes"
         );
+        Assert.Contains(definitions, value => SessionWait.Text(value?["name"]) == "node");
         Assert.DoesNotContain(definitions, value => SessionWait.Text(value?["name"]) == "task");
         Assert.Null(Error(await Call(execution.Tools, "read", Obj("""{"filePath":"source"}"""))));
         Assert.Null(
             Error(
                 await Call(
                     execution.Tools,
-                    "ctl",
-                    CtlTestArgs.Unified(Obj(
+                    "call_tool",
+                    Obj(
                         """{"toolId":"node:master/write","args":{"filePath":"resolved","content":"one"}}"""
-                    ))
+                    )
                 )
             )
         );

@@ -4,7 +4,7 @@ This independently runnable reference adapter exposes existing Linux machines th
 
 The local adapter requires Python 3 and an OpenSSH client as optional administrator-provided prerequisites; they are not installed by loading this skill. Each target requires Python 3, Bash and Linux `/proc`. It does not require the Foxwarm CLI, pairing credentials or a resident Foxwarm daemon. Commands run as the configured SSH account with that account's filesystem and network permissions. **This is not an OS, VM or network sandbox.**
 
-The adapter and adjacent `target.py` are resources of `node-setup`. Copy this whole directory or use the absolute skill directory returned by `ctl skill load`. No source checkout or protocol-document file is needed to run it. The linked protocol is optional deeper reading. Registration below is administrator opt-in; loading the skill registers nothing.
+The adapter and adjacent `target.py` are resources of `node-setup`. Copy this whole directory or use the absolute skill directory returned by `skill({action:"load",skillName:"node-setup"})`. No source checkout or protocol-document file is needed to run it. The linked protocol is optional deeper reading. Registration below is administrator opt-in; loading the skill registers nothing.
 
 ## Private configuration
 

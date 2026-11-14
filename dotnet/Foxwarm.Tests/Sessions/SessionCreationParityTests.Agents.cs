@@ -189,8 +189,8 @@ public sealed partial class SessionCreationParityTests
         // one-time memory copy.
         Successful(
             await f.ToolAsync(
-                "ctl",
-                CtlTestArgs.Unified(new JsonObject
+                "call_tool",
+                new JsonObject
                 {
                     ["source"] = "builtin",
                     ["name"] = "create_agent",
@@ -202,7 +202,7 @@ public sealed partial class SessionCreationParityTests
                         ["inheritMemory"] = true,
                         ["rules"] = rules,
                     },
-                })
+                }
             )
         );
         Assert.Null(await f.Manager.GetExistingAsync("worker/main"));

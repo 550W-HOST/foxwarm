@@ -275,8 +275,8 @@ public sealed class MainFileDeliveryTests
         Assert.Null(
             Error(
                 await f.Call(
-                    "ctl",
-                    CtlTestArgs.Unified(new JsonObject { ["toolId"] = "builtin:send_file", ["args"] = args })
+                    "call_tool",
+                    new JsonObject { ["toolId"] = "builtin:send_file", ["args"] = args }
                 )
             )
         );

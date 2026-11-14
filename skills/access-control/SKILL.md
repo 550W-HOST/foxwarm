@@ -27,7 +27,7 @@ Use this skill when deciding who can enter Foxwarm, which Sessions a browser ide
 - Agent-local rule layers add per-Agent restrictions after the global policy. They apply to the Agent and every Agent created from it, can only narrow, and are changed by a creator-ancestor Agent or an administrator.
 - Concise top-level `session`/`node` selectors support identity patterns, current-Node and Provider scope without a Session-to-Node permission binding. Use the policy reference for multi-endpoint and owned-Task semantics.
 - Configuration changes that would send a stored secret somewhere new follow the caller's authorization for unrestricted master `exec` unless a top-level `secrets` rule names them or the caller's Agent owns them; see [Stored secrets](references/tool-policy.md#stored-secrets).
-- Authorize the resolved concrete builtin, Node tool, or MCP server/tool, not `ctl` or an inbound wrapper such as `foxwarm_call`. `ctl` commands are checked as the capability they run.
+- Authorize the resolved concrete builtin, Node tool, or MCP server/tool, not `call_tool` or an inbound wrapper such as `foxwarm_call`.
 - Legacy Agent isolation is [retired](../../docs/code-index/modules/tools-and-permissions.md#d-tools-legacy-isolation-deprecation): formerly isolated Agents carry a generated Agent-local layer instead. Agent lifecycle belongs to `agent-management`, not this skill.
 - Tool rules are not an operating-system or network sandbox. A permitted `exec` can use the chosen environment's commands, files, credentials, and network; path rules do not constrain arbitrary shell effects.
 - Tool rules govern Foxwarm tools only. Web search or image generation built into a model are controlled by the model configuration, so give restricted Agents a model without them.

@@ -67,7 +67,7 @@ public sealed class UnifiedToolSearchTests
         Assert.DoesNotContain("[hidden]", output);
         var declarations = output
             .Split('\n')
-            .Where(line => line.StartsWith("builtin:" + Prefix))
+            .Where(line => line.StartsWith("call_tool("))
             .ToArray();
         Assert.Equal(12, declarations.Length);
         var native = await UnifiedTools.SearchAsync(
@@ -171,7 +171,7 @@ public sealed class UnifiedToolSearchTests
         var output = broad["output"]!.GetValue<string>();
         var declarations = output
             .Split('\n')
-            .Where(line => line.StartsWith("builtin:" + Prefix))
+            .Where(line => line.StartsWith("call_tool("))
             .ToArray();
         Assert.InRange(declarations.Length, 1, 11);
         Assert.All(declarations, declaration => Assert.Contains(description, declaration));
@@ -192,14 +192,14 @@ public sealed class UnifiedToolSearchTests
         await using var f = await ScriptFixture.Create();
         Register(f.Registry, 2);
         var args = new JsonObject { ["query"] = Prefix, ["sources"] = new JsonArray("builtin") };
-        var ordinary = await f.Call("ctl", CtlTestArgs.Search(args));
+        var ordinary = await f.Call("search_tools", args);
         var output = ordinary["output"]!.GetValue<string>();
         Assert.Contains("Found 2 tool(s); 2 total match(es).", output);
         Assert.Contains(DisplayDescription, output);
         Assert.Contains(DisplayParameterDescription, output);
         Assert.DoesNotContain("[hidden]", output);
         args["includeSchema"] = false;
-        var summary = await f.Call("ctl", CtlTestArgs.Search(args));
+        var summary = await f.Call("search_tools", args);
         Assert.Contains(DisplayDescription, summary["output"]!.GetValue<string>());
         Assert.DoesNotContain(DisplayParameterDescription, summary["output"]!.GetValue<string>());
         Assert.Contains("schema omitted", summary["output"]!.GetValue<string>());
@@ -209,10 +209,10 @@ public sealed class UnifiedToolSearchTests
             new JsonObject
             {
                 ["code"] =
-                    "base = 'tool search --source builtin discovery_fixture_'\n"
-                    + "default = call_tool('ctl', {'command': base})['tools']\n"
-                    + "disabled = call_tool('ctl', {'command': base + ' --no-schema'})['tools']\n"
-                    + "enabled = call_tool('ctl', {'command': base + ' --schema'})['tools']\n"
+                    "base = {'query': 'discovery_fixture_', 'sources': ['builtin']}\n"
+                    + "default = call_tool('search_tools', base)['tools']\n"
+                    + "disabled = call_tool('search_tools', dict(base, includeSchema=False))['tools']\n"
+                    + "enabled = call_tool('search_tools', dict(base, includeSchema=True))['tools']\n"
                     + "effect = call_tool('builtin:discovery_fixture_01', {'value': 'called'})\n"
                     + "return {'default': default, 'disabled': disabled, 'enabled': enabled, 'effect': effect}\n",
             }
@@ -244,26 +244,26 @@ public sealed class UnifiedToolSearchTests
             ),
             default
         );
-        var filtered = await f.Call("ctl", CtlTestArgs.Search(args));
+        var filtered = await f.Call("search_tools", args);
         Assert.DoesNotContain(Prefix + "01", filtered["output"]!.GetValue<string>());
         var nativeFiltered = await f.Call(
             "run_script",
             new JsonObject
             {
                 ["code"] =
-                    "return call_tool('ctl', {'command': 'tool search --source builtin discovery_fixture_'})['tools']",
+                    "return call_tool('search_tools', {'query': 'discovery_fixture_', 'sources': ['builtin']})['tools']",
             }
         );
         Assert.True(nativeFiltered["error"] is null, nativeFiltered.ToJsonString());
         Assert.Single(nativeFiltered["result"]!.AsArray());
         Assert.Equal(Prefix + "00", nativeFiltered["result"]![0]!["name"]!.GetValue<string>());
         var denied = await f.Call(
-            "ctl",
-            CtlTestArgs.Unified(new JsonObject
+            "call_tool",
+            new JsonObject
             {
                 ["toolId"] = "builtin:" + Prefix + "01",
                 ["args"] = new JsonObject { ["value"] = "denied" },
-            })
+            }
         );
         Assert.Equal("tool_authorization_denied", denied["error"]!["type"]!.GetValue<string>());
     }

@@ -21,12 +21,12 @@ public sealed partial class ProviderFileConsumerTests
             await f.Owner.UpdateCwdAsync("opaque://root/selected");
             var result = unified
                 ? await f.Call(
-                    "ctl",
-                    CtlTestArgs.Unified(new JsonObject
+                    "call_tool",
+                    new JsonObject
                     {
                         ["toolId"] = "node:" + f.Node + "/read",
                         ["args"] = Args("input.txt"),
-                    })
+                    }
                 )
                 : await f.Call("read", Args("input.txt"));
             Success(result);
@@ -96,8 +96,8 @@ public sealed partial class ProviderFileConsumerTests
         Assert.Equal(content, await File.ReadAllTextAsync(f.FilePath("selected/" + path)));
         Assert.Contains("opaque://root/selected", result["output"]!.GetValue<string>());
         var deniedMain = await f.Call(
-            "ctl",
-            CtlTestArgs.Unified(new JsonObject { ["toolId"] = "node:master/read", ["args"] = Args(path) })
+            "call_tool",
+            new JsonObject { ["toolId"] = "node:master/read", ["args"] = Args(path) }
         );
         Assert.NotNull(deniedMain["error"]);
         var read = await f.Call(

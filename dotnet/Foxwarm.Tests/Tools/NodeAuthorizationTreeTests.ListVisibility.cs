@@ -270,8 +270,8 @@ public sealed partial class NodeAuthorizationTreeTests
             if (id == "master")
                 continue;
             var found = await f.Call(
-                "ctl",
-                CtlTestArgs.Search(Obj($$"""{"sources":["node"],"nodeId":"{{id}}","limit":200}"""))
+                "search_tools",
+                Obj($$"""{"sources":["node"],"nodeId":"{{id}}","limit":200}""")
             );
             Success(found);
             var output = found!["output"]!.GetValue<string>();
@@ -279,7 +279,7 @@ public sealed partial class NodeAuthorizationTreeTests
                 listed,
                 tool =>
                     Assert.Contains(
-                        $"--name \"{SessionWait.Text(tool)}\" --node-id \"{id}\"",
+                        $"name: \"{SessionWait.Text(tool)}\", nodeId: \"{id}\"",
                         output
                     )
             );

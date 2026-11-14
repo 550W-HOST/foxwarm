@@ -9,10 +9,6 @@ internal static class ToolActivity
 {
     internal static (string Name, JsonObject Args) Target(string name, JsonObject args)
     {
-        if (name == "ctl")
-            return CtlParser.Describe(args) is { } described
-                ? (described.Name, described.Args)
-                : (name, args);
         if (name != "call_tool")
             return (name, args);
         var id = SessionWait.Text(args["toolId"]);

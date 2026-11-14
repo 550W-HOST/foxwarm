@@ -41,10 +41,9 @@ public sealed class LiteralRecallTests
         Assert.Contains("100 archived messages", page);
         Assert.Contains("#31–#130", page);
         Assert.Contains("No literal matches in the examined range", page);
-        // The query holds a line break, so the quoted command spans the end of the output.
-        var nextLine = page[page.IndexOf("\nOlder literal search: ctl history recall ", StringComparison.Ordinal)..].TrimStart('\n');
-        nextLine = nextLine[..nextLine.IndexOf('\n', nextLine.IndexOf("--before-seq", StringComparison.Ordinal))];
-        var next = CtlTestArgs.Hint(nextLine["Older literal search: ".Length..], "recall");
+        var nextLine = page.Split('\n')
+            .Single(line => line.StartsWith("Older literal search: recall("));
+        var next = JsonNode.Parse(nextLine["Older literal search: recall(".Length..^1])!.AsObject();
         Assert.Equal(31, next["beforeSeq"]!.GetValue<int>());
         Assert.Equal(f.First.Id, next["sessionId"]!.GetValue<string>());
         var older = Output(await ArchiveRecallTool.ExecuteAsync(f.Manager, f.First, next));
@@ -75,8 +74,8 @@ public sealed class LiteralRecallTests
         Assert.DoesNotContain("literal hit 12", result);
         var nextLine = result
             .Split('\n')
-            .Single(line => line.StartsWith("Older literal search: ctl history recall "));
-        var next = CtlTestArgs.Hint(nextLine["Older literal search: ".Length..], "recall");
+            .Single(line => line.StartsWith("Older literal search: recall("));
+        var next = JsonNode.Parse(nextLine["Older literal search: recall(".Length..^1])!.AsObject();
         Assert.Equal(11, next["beforeSeq"]!.GetValue<int>());
         Assert.Equal("11$", next["includeRegex"]!.GetValue<string>());
         next.Remove("includeRegex");
@@ -206,8 +205,8 @@ public sealed class LiteralRecallTests
         var args = Args("literal");
         var direct = await f.Call("recall", args);
         var unified = await f.Call(
-            "ctl",
-            CtlTestArgs.Unified(new JsonObject { ["toolId"] = "builtin:recall", ["args"] = args.DeepClone() })
+            "call_tool",
+            new JsonObject { ["toolId"] = "builtin:recall", ["args"] = args.DeepClone() }
         );
         Assert.Equal(Output(direct), Output(unified));
         var script = await f.Call(

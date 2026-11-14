@@ -59,8 +59,8 @@ compaction, so prefer shortening or merging the oldest blocks.
 
 A standalone submission is easier to inspect, but ordinary foreground batches
 may contain other tools. Use `submit_compact_plan` directly when it is available
-in your tool list. `ctl tool call builtin:submit_compact_plan` is also supported;
-it is not required for this workflow. Calls inside native ToolScript, timers/unattended execution and external
+in your tool list. `call_tool` is also supported; it is not required for this
+workflow. Calls inside native ToolScript, timers/unattended execution and external
 invocation are outside this version. Submission applies only to the current Session.
 
 ## Direct examples

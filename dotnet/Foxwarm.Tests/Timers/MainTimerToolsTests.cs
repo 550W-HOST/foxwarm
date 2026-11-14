@@ -217,8 +217,8 @@ public sealed class MainTimerToolsTests
         Assert.Null(
             (
                 await f.Call(
-                    "ctl",
-                    CtlTestArgs.Unified(new JsonObject { ["toolId"] = "builtin:create_timer", ["args"] = args })
+                    "call_tool",
+                    new JsonObject { ["toolId"] = "builtin:create_timer", ["args"] = args }
                 )
             )["error"]
         );
@@ -340,8 +340,8 @@ public sealed class MainTimerToolsTests
             );
         }
         var result = await f.Call(
-            "ctl",
-            CtlTestArgs.Unified(new JsonObject { ["toolId"] = "builtin:create_timer", ["args"] = Future() })
+            "call_tool",
+            new JsonObject { ["toolId"] = "builtin:create_timer", ["args"] = Future() }
         );
         Assert.Null(result["error"]);
         var id = result["timer"]!["id"]!.GetValue<string>();
@@ -349,13 +349,13 @@ public sealed class MainTimerToolsTests
         var listed = await f.Call("list_timers", new());
         Assert.Single(listed["timers"]!.AsArray());
         var deleted = await f.Call(
-            "ctl",
-            CtlTestArgs.Unified(new JsonObject
+            "call_tool",
+            new JsonObject
             {
                 ["source"] = "builtin",
                 ["name"] = "delete_timer",
                 ["argsJson"] = new JsonObject { ["timerId"] = id }.ToJsonString(),
-            })
+            }
         );
         Assert.True(deleted["deleted"]!.GetValue<bool>());
     }
@@ -503,8 +503,8 @@ public sealed class MainTimerToolsTests
         Assert.Null(
             (
                 await f.Call(
-                    "ctl",
-                    CtlTestArgs.Search(new JsonObject { ["query"] = "timer", ["sources"] = new JsonArray("builtin") })
+                    "search_tools",
+                    new JsonObject { ["query"] = "timer", ["sources"] = new JsonArray("builtin") }
                 )
             )["error"]
         );

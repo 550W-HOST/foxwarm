@@ -130,7 +130,7 @@ internal sealed partial class SessionManager
             if (failure is not null)
                 return FailClosedMigratedRow(name, row, marker, failure, markerNode, isolation, fence);
             var current = row["rules"] as JsonArray;
-            if (current is not null && IsolationMigrationRules.CurrentDigest(current) == plan!.Digest)
+            if (current is not null && IsolationMigrationRules.Digest(current) == plan!.Digest)
             {
                 // Accepted as is: record the fence it follows, so a later edit is not read
                 // as a fence change.

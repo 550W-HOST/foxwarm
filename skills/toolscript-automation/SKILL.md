@@ -30,7 +30,7 @@ label = ask_agent("Reply with a short label")
 return {"label": label, "listingPreview": listing[:200]}
 ```
 
-Run the bundled file using the absolute skill directory returned by `ctl skill load` in place of `<skill-directory>`. This example assumes the session's current Node is Main, where the bundled resources live:
+Run the bundled file using the absolute skill directory returned by `skill({action:"load"})` in place of `<skill-directory>`. This example assumes the session's current Node is Main, where the bundled resources live:
 
 ```text
 run_script({node: "master", filePath: "<skill-directory>/examples/automation_basic.py", args: {baseDir: "<skill-directory>/examples"}})
@@ -122,8 +122,6 @@ For a simple builtin call, the string form is supported:
 content = call_tool("read", {"filePath": "README.md"})
 ```
 
-`call_tool("ctl", {"command": ..., "values": ...})` runs a `ctl` command and returns the native result of the tool it names; an invalid command raises an exception with its usage.
-
 ToolScript returns the concrete tool's direct result, normalized to Python-native strings, lists, dictionaries, and scalar values. It does not wrap every result in one common envelope.
 
 Common shapes:
@@ -136,18 +134,18 @@ Common shapes:
 | `exec` | dictionary with `output`, captured `content` when available, `truncated`, `status`, completion `exitCode`, `execId` and log metadata |
 | `write` / `edit` | success string; failure raises an exception |
 | `edit` with `apply_patch` | string summarizing changed files |
-| `ctl` with `tool search` | dictionary with readable `output`, source-qualified `tools` descriptors, requested schemas and actual warnings when present |
-| `ctl` with another command | the native value of the tool the command runs |
+| `search_tools` | dictionary with readable `output`, source-qualified `tools` descriptors, requested schemas and actual warnings when present |
 | `request_model_without_context` | dictionary containing `text` and `parts` (text and stored-image references) |
 
-Use `ctl tool search` in the normal agent loop before scripting an unfamiliar tool. Tool discovery describes inputs; it does not guarantee a uniform output schema.
+Use `search_tools` in the normal agent loop before scripting an unfamiliar tool. Tool discovery describes inputs; it does not guarantee a uniform output schema.
 
 When discovery belongs inside a script, use the structured descriptors:
 
 ```python
-catalog = call_tool("ctl", {
-    "command": "tool search --source builtin --limit 5 @query",
-    "values": {"query": args["query"]},
+catalog = call_tool("search_tools", {
+    "query": args["query"],
+    "sources": ["builtin"],
+    "limit": 5,
 })
 print(catalog["output"])
 return {"toolIds": [tool["toolId"] for tool in catalog["tools"]]}
@@ -155,7 +153,7 @@ return {"toolIds": [tool["toolId"] for tool in catalog["tools"]]}
 
 ### Script-only text data
 
-Nested `read`, `exec` and `tool search` calls opt into data fields automatically. Their `output` remains the ordinary readable display; other tools and MCP values keep their native shapes. There is no format argument and no common result envelope. Ordinary agent calls do not add these fields.
+Nested `read`, `exec` and `search_tools` calls opt into data fields automatically. Their `output` remains the ordinary readable display; other tools and MCP values keep their native shapes. There is no format argument and no common result envelope. Ordinary agent calls do not add these fields.
 
 For retained text reads and command captures, full `content` is available up to **1,048,576 source bytes (1 MiB), inclusive**, without human-display line, character or token shortening. A small selected file range can fit even when its source is larger. `content` preserves existing UTF-8 decoding and recognized newlines, and excludes metadata footers, empty-output labels and synthetic separators. Empty content is `""`. Above the budget, `content` is omitted and `truncated` is true; use the real source path or log locator when supplied. Running exec content is a captured snapshot so far, not the command's future output. Nonzero exits remain results.
 
@@ -294,12 +292,13 @@ A long host call can therefore take longer than `timeoutSecs` before the timeout
 
 ### Run management
 
-Run management uses the `ctl script` commands:
+Run management tools are discoverable rather than injected into the default tool list:
 
-- `ctl script list` (`list_toolscript_runs`)
-- `ctl script get <runId>` (`get_toolscript_run`)
-- `ctl script cancel <runId>` (`cancel_toolscript_run`)
- A run can be inspected or resumed only by its owner session.
+- `list_toolscript_runs`
+- `get_toolscript_run`
+- `cancel_toolscript_run`
+
+Find them with `search_tools`, then invoke them through the outer `call_tool` tool. A run can be inspected or resumed only by its owner session.
 
 ## Execution results and diagnostics
 

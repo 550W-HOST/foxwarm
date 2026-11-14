@@ -348,7 +348,7 @@ internal sealed partial class SessionManager
         return new JsonObject
         {
             ["output"] =
-                $"Image `{id}` written to `{raw}` on node `{node}`.\nYou can deliver it with `{CtlCommandText.For("send_file", new JsonObject { ["filePath"] = raw, ["node"] = node })}`.",
+                $"Image `{id}` written to `{raw}` on node `{node}`.\nYou can make it available with send_file.",
             ["fullPath"] = path,
         };
     }

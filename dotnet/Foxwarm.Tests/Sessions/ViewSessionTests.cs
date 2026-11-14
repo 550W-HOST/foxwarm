@@ -125,7 +125,7 @@ public sealed class ViewSessionTests
         var filtered = Output(await View(f, options));
         Assert.Contains("0 matches from 3 selected", filtered);
         var olderLine = filtered.Split('\n').Single(line => line.StartsWith("Older: "));
-        var older = CtlTestArgs.Hint(olderLine["Older: ".Length..], "view_session");
+        var older = JsonNode.Parse(olderLine["Older: view_session(".Length..^1])!.AsObject();
         Assert.Equal(11, older["before"]!.GetValue<int>());
         Assert.Equal("absent", older["contentFilter"]!.GetValue<string>());
         Assert.Equal("line", older["includeRegex"]!.GetValue<string>());
@@ -135,7 +135,7 @@ public sealed class ViewSessionTests
         await f.First.Entry.SaveLane.DeleteMessagesAsync(1);
         var stale = await View(f, older);
         Assert.Equal("stale_history_boundary", stale["error"]!.GetValue<string>());
-        Assert.Contains("ctl session view ", Output(stale));
+        Assert.Contains("view_session(", Output(stale));
         await Assert.ThrowsAsync<InvalidDataException>(() =>
             View(f, new JsonObject { ["start"] = 0, ["before"] = 4 })
         );
@@ -163,7 +163,7 @@ public sealed class ViewSessionTests
         Assert.Contains("200 matches from 200 selected eligible source records", page);
         Assert.Contains("[50,250) of 250", page);
         var olderLine = page.Split('\n').Single(line => line.StartsWith("Older: "));
-        var older = CtlTestArgs.Hint(olderLine["Older: ".Length..], "view_session");
+        var older = JsonNode.Parse(olderLine["Older: view_session(".Length..^1])!.AsObject();
         Assert.Equal(200, older["count"]!.GetValue<int>());
         Assert.Equal(50, older["before"]!.GetValue<int>());
         Assert.Equal("text", older["parts"]![0]!.GetValue<string>());
@@ -178,7 +178,7 @@ public sealed class ViewSessionTests
         Assert.True(entire.Length <= 1000);
         Assert.Contains("250 matches from 250 selected eligible source records", entire);
         Assert.Contains("[0,250) of 250", entire);
-        Assert.DoesNotContain("Older: ", entire);
+        Assert.DoesNotContain("Older: view_session(", entire);
     }
 
     [Fact]
@@ -208,7 +208,7 @@ public sealed class ViewSessionTests
         var partial = Output(await View(f, new JsonObject { ["start"] = 2, ["count"] = 1 }));
         Assert.Contains("result only", partial);
         Assert.DoesNotContain("partial/unpaired", partial);
-        Assert.Contains("ctl history recall ", partial);
+        Assert.Contains("recall(", partial);
         var full = Output(await View(f, new JsonObject { ["toolDetail"] = "full" }));
         Assert.Contains("synthetic failure", full);
         Assert.DoesNotContain("hidden-id", full);
@@ -268,7 +268,7 @@ public sealed class ViewSessionTests
         Assert.DoesNotContain("[101]", rendered);
         Assert.Contains("Truncated preview", rendered);
         Assert.Contains("#42", rendered);
-        Assert.Contains("ctl history recall ", rendered);
+        Assert.Contains("recall(", rendered);
     }
 
     [Fact]
@@ -303,11 +303,11 @@ public sealed class ViewSessionTests
         Assert.Contains("not displayed", output);
         var calls = System.Text.RegularExpressions.Regex.Matches(
             output,
-            @"ctl history recall (\S+)"
+            @"recall\((\{[^\n]+?\})\)"
         );
         Assert.NotEmpty(calls);
         foreach (System.Text.RegularExpressions.Match call in calls)
-            Assert.StartsWith("msg#", call.Groups[1].Value);
+            Assert.NotNull(JsonNode.Parse(call.Groups[1].Value)!["target"]);
         var tool = Tool("correlation-id", false);
         var filtered = new ContextPreviewRenderer(
             new JsonObject { ["contentFilter"] = "call:" }
@@ -330,9 +330,7 @@ public sealed class ViewSessionTests
     {
         await using var f = await MainToolScriptTests.Fixture.Create();
         await ForkClearLifecycleTests.AppendAsync(f.Owner, Text("latest evidence"));
-        var definitions = f
-            .Manager.ToolRegistry.Entries.Select(entry => entry.Definition)
-            .ToArray();
+        var definitions = f.Manager.ModelDefinitions(f.Owner).OfType<JsonObject>().ToArray();
         var view = Assert.Single(
             definitions,
             item => SessionWait.Text(item["name"]) == "view_session"
@@ -346,15 +344,10 @@ public sealed class ViewSessionTests
         var direct = await f.Call("view_session", args);
         Assert.Contains("latest evidence", Output(direct));
         var unified = await f.Call(
-            "ctl",
-            CtlTestArgs.Unified(new JsonObject { ["toolId"] = "builtin:view_session", ["args"] = args.DeepClone() })
+            "call_tool",
+            new JsonObject { ["toolId"] = "builtin:view_session", ["args"] = args.DeepClone() }
         );
         Assert.Equal(Output(direct), Output(unified));
-        var command = await f.Call(
-            "ctl",
-            CtlTestArgs.Command("session view " + f.Owner.Id + " --count 1")
-        );
-        Assert.Equal(Output(direct), Output(command));
         var script = await f.Call(
             "run_script",
             new JsonObject

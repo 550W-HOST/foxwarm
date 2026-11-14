@@ -99,15 +99,15 @@ internal sealed partial class AgentCatalog
             var snapshot = MetadataSnapshot();
             return CreatorChain(name, snapshot)
                 .Select(agent =>
-                {
-                    var policy = AgentRulePolicy.Parse(
-                        snapshot[agent] is JsonObject row && row.ContainsKey("rules")
-                            ? row["rules"]
-                            : new JsonArray()
-                    );
-                    ToolAuthorizationPolicy.Report("rules of Agent " + agent, policy);
-                    return (agent, policy);
-                })
+                    (
+                        agent,
+                        AgentRulePolicy.Parse(
+                            snapshot[agent] is JsonObject row && row.ContainsKey("rules")
+                                ? row["rules"]
+                                : new JsonArray()
+                        )
+                    )
+                )
                 .ToArray();
         }
     }

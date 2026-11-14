@@ -38,8 +38,8 @@ public sealed partial class SessionCreationParityTests
             };
             return unified
                 ? await f.ToolAsync(
-                    "ctl",
-                    CtlTestArgs.Unified(new JsonObject { ["toolId"] = "builtin:create_session", ["args"] = args }),
+                    "call_tool",
+                    new JsonObject { ["toolId"] = "builtin:create_session", ["args"] = args },
                     creator
                 )
                 : await f.ToolAsync("create_session", args, creator);

@@ -162,13 +162,13 @@ public sealed partial class ProviderFileConsumerTests
         await f.Manager.SelectNodeAsync(f.Owner, f.Node);
         var before = (await f.Requests()).Length;
         var result = await f.Call(
-            "ctl",
-            CtlTestArgs.Unified(new JsonObject
+            "call_tool",
+            new JsonObject
             {
                 ["toolId"] = "builtin:run_script",
                 ["source"] = "node",
                 ["args"] = new JsonObject { ["code"] = "return 7" },
-            })
+            }
         );
         Success(result);
         Assert.Equal(7, result["result"]!.GetValue<int>());
@@ -347,18 +347,18 @@ public sealed partial class ProviderFileConsumerTests
         );
         Success(await f.Call("read", Args("source")));
         var explicitMain = await f.Call(
-            "ctl",
-            CtlTestArgs.Unified(new JsonObject { ["toolId"] = "node:master/read", ["args"] = Args("source") })
+            "call_tool",
+            new JsonObject { ["toolId"] = "node:master/read", ["args"] = Args("source") }
         );
         Assert.NotNull(explicitMain["error"]);
         Success(await f.Call("exec", Exec("printf allowed")));
         var deniedExec = await f.Call(
-            "ctl",
-            CtlTestArgs.Unified(new JsonObject
+            "call_tool",
+            new JsonObject
             {
                 ["toolId"] = "node:other/target/exec",
                 ["args"] = Exec("printf forbidden"),
-            })
+            }
         );
         Assert.NotNull(deniedExec["error"]);
         var otherRequests = await File.ReadAllLinesAsync(

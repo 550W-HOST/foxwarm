@@ -206,12 +206,12 @@ public sealed partial class ProviderFileConsumerTests
         Assert.True(clock.Elapsed < TimeSpan.FromSeconds(3), clock.Elapsed.ToString());
         var slowId = Assert.Single(ExecRecords(f.Data))["id"]!.GetValue<string>();
         var fast = await f.Call(
-            "ctl",
-            CtlTestArgs.Unified(new JsonObject
+            "call_tool",
+            new JsonObject
             {
                 ["toolId"] = "node:other/target/exec",
                 ["args"] = Exec("sleep 1.4; printf fast", 1),
-            })
+            }
         );
         Success(fast);
         await Task.Delay(500);

@@ -16,6 +16,6 @@ This Agent answers conversations in <channel or group>. Its Sessions run on <Nod
 ## Limits
 
 - This Agent's rules allow tools only on its current Node, plus reading files people send, sending files from that Node to the current conversation, its own history and skills. Everything else is denied.
-- Files people send are saved on `master`; read one with `ctl tool call node:master/read --args @args` and `values.args.filePath` set to the path given in the message.
+- Files people send are saved on `master`; read one through `call_tool` with `nodeId: "master"` and the path given in the message.
 - These rules cover Foxwarm tools only: web search or image generation built into a model are controlled by its model configuration, so this Agent should run on a model without them.
 - This Agent's memory is read-only for its Sessions, so a conversation cannot change these instructions.

@@ -135,7 +135,7 @@ internal static class ProviderImageParts
                         + "]"
                         + (
                             resized.Length > 0
-                                ? " `ctl image crop` coordinates use the original size."
+                                ? " image_crop coordinates use the original size."
                                 : ""
                         ),
                 }

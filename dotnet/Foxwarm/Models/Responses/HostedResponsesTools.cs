@@ -1,6 +1,5 @@
 using System.Text;
 using System.Text.Json.Nodes;
-using Foxwarm.Tools;
 using Foxwarm.Images;
 using Foxwarm.Sessions;
 
@@ -241,22 +240,7 @@ internal static class HostedResponsesTools
                 )
                 .ToArray()
         );
-        var crop = CtlCommandText.For(
-            "image_crop",
-            new JsonObject
-            {
-                ["id"] = imageId,
-                ["x"] = 0,
-                ["y"] = 0,
-                ["width"] = 100,
-                ["height"] = 100,
-            }
-        );
-        var save = CtlCommandText.For(
-            "image_write_to_file",
-            new JsonObject { ["id"] = imageId, ["filePath"] = $"artifacts/{fileName}.{extension}" }
-        );
-        return $"[IMAGE: id={imageId}, size={width}x{height}] you can use `{crop}` and `{save}`";
+        return $"[IMAGE: id={imageId}, size={width}x{height}] you can use image_crop({{ id: \"{imageId}\", x: 0, y: 0, width: 100, height: 100 }}) and image_write_to_file({{ id: \"{imageId}\", filePath: \"artifacts/{fileName}.{extension}\" }})";
     }
 
     internal static string Placeholder(JsonObject part) =>

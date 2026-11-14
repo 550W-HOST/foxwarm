@@ -101,7 +101,7 @@ public sealed partial class AgentRulesTreeTests
         await manager.LoadAsync();
         var owner = await manager.CreateNamedAsync("broken", "main", null, null);
         Assert.False(manager.ToolVisible(owner, "node", "exec", node: "master"));
-        Assert.False(manager.ToolVisible(owner, "builtin", "ctl"));
+        Assert.False(manager.ToolVisible(owner, "builtin", "call_tool"));
         Assert.Equal(
             new[] { "edit", "exec", "read", "write" },
             manager
@@ -144,9 +144,9 @@ public sealed partial class AgentRulesTreeTests
                 new JsonObject
                 {
                     ["id"] = Guid.NewGuid().ToString("N"),
-                    ["name"] = unified ? "ctl" : "write",
+                    ["name"] = unified ? "call_tool" : "write",
                     ["args"] = unified
-                        ? CtlTestArgs.Unified(new JsonObject { ["toolId"] = "node:master/write", ["args"] = args })
+                        ? new JsonObject { ["toolId"] = "node:master/write", ["args"] = args }
                         : args,
                 },
                 default
@@ -317,13 +317,13 @@ public sealed partial class AgentRulesTreeTests
         await f.Manager.SetAgentRulesAsync("main", Rules("""[{"tool":"write","action":"deny"}]"""));
         Denied(
             await f.ToolAsync(
-                "ctl",
-                CtlTestArgs.Unified(new JsonObject
+                "call_tool",
+                new JsonObject
                 {
                     ["source"] = "node",
                     ["name"] = "write",
                     ["args"] = args.DeepClone(),
-                }),
+                },
                 child
             )
         );

@@ -31,7 +31,7 @@ public sealed class OutboundMcpLifecycleTests
         );
         var tools = f.Tools(f.First);
         var discovered = await tools.ExecuteAsync(
-            new JsonObject { ["name"] = "ctl", ["args"] = CtlTestArgs.Search(Search()) },
+            new JsonObject { ["name"] = "search_tools", ["args"] = Search() },
             default
         );
         Assert.Contains("probe", discovered!["output"]!.GetValue<string>());
@@ -86,14 +86,14 @@ public sealed class OutboundMcpLifecycleTests
         await f.ConfigureAsync(peer.Url + "/mcp");
         var search = await f.Tools(f.First)
             .ExecuteAsync(
-                new JsonObject { ["name"] = "ctl", ["args"] = CtlTestArgs.Search(Search()) },
+                new JsonObject { ["name"] = "search_tools", ["args"] = Search() },
                 default
             );
         Assert.Contains("probe", search!["output"]!.GetValue<string>());
         var first = Id(await f.CallAsync(f.First, "probe", Args("first")));
         var again = Id(await f.CallAsync(f.First, "probe", Args("again")));
         var script = await f.ScriptAsync(
-            "found = call_tool('ctl', {'command': 'tool search --source mcp --server peer'})\nreturn {'search': found, 'call': call_tool('mcp:peer/probe', {'tag': 'native'})}"
+            "search_tools = call_tool('search_tools', {'sources': ['mcp'], 'server': 'peer'})\nreturn {'search': search_tools, 'call': call_tool('mcp:peer/probe', {'tag': 'native'})}"
         );
         Assert.Equal("completed", script!["status"]!.GetValue<string>());
         Assert.Equal(first, Id(script["result"]!["call"]));

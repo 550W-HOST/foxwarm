@@ -283,9 +283,7 @@ internal sealed partial class ImageBlobStore
                             imageId is not null
                                 ? "The original is retained as image "
                                     + JsonStringQuoting.Quote(imageId)
-                                    + "; save it as a file with `ctl image save "
-                                    + CtlCommandText.Quote(imageId)
-                                    + " <file-path>`."
+                                    + "; use image_write_to_file to save it as a file."
                                 : "The original remains in the source message."
                         ),
                 }.Where(text => !string.IsNullOrEmpty(text))

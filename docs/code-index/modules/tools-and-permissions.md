@@ -34,7 +34,7 @@ This module owns model-facing tool definitions, builtin tool implementations, un
 - `mainManagementToolServiceDescriptor` and `executeMainManagementTool` — current local-only RPC boundary for the first closed main-management allowlist.
 - `fileDeliveryServiceDescriptor` and `deliverFile` — bounded operation-specific file-delivery boundary with no file bytes on reverse RPC.
 - `callTool(toolName, args, context)` — builtin dispatch entry.
-- `ctl` — the [command front end](../units/ctl-command-registry.md); its `tool search` and `tool call` give unified discovery and invocation across builtin, MCP, and node sources (formerly `search_tools` and `call_tool`).
+- `search_tools` and `call_tool` — unified discovery and invocation across builtin, MCP, and node sources.
 - `checkToolPermission` and `checkPathAccess` — generic policy entry plus current isolation checks.
 - `normalizeAgentToolRules`, `findExactAgentToolRule`, and `isDefaultIsolatedCapabilityAllowed` — exact persisted rule and fallback evaluation.
 - Shared file, memory, image, browser, patch, exec, and output-guard helpers.
@@ -97,8 +97,6 @@ The generated layer provides a conservative migration baseline, not a requiremen
 ### D-tools-unified-discovery
 
 **Derived interface design; requested and adopted to reduce tool-catalog duplication and keep [schemas stable](./llm.md#d-llm-stable-tool-schema).** Search locates a concrete capability and a single invocation interface reaches it. Consolidation is not an authorization shortcut: [resolved-target policy](../threads/tool-dispatch-authorization.md#d-dispatch-resolved-target) still owns the operation.
-
-[2026-11-14] Superseded as the model interface by [D-ctl-command-registry](../units/ctl-command-registry.md#d-ctl-command-registry): `search_tools` and `call_tool` were removed (user) and their behavior moved unchanged to `ctl tool search` and `ctl tool call`; the search formatting, budgets, schema selection and server prefilter below still describe `tool search`, with copyable descriptors written as `tool call` commands. ToolScript's `call_tool` host function is unchanged.
 
 Less frequently used builtins, MCP tools, and node tools are discovered through `search_tools` and invoked through `call_tool`. Direct provider calls, unified calls, and ToolScript nested calls share the canonical resolved-operation boundary in [D-dispatch-resolved-target](../threads/tool-dispatch-authorization.md#d-dispatch-resolved-target).
 

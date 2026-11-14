@@ -526,7 +526,7 @@ internal sealed class ClaudeSessionDriver(
                 n is null
                 || n != "EndConversation"
                     && !n.StartsWith("mcp__foxwarm__", StringComparison.Ordinal)
-            ) || !names.Contains("mcp__foxwarm__ctl")
+            ) || !names.Contains("mcp__foxwarm__call_tool")
         )
             throw new ClaudeRuntimeException(
                 "Claude Code did not report the required MCP-only tool set."

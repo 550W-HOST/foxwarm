@@ -87,24 +87,8 @@ internal sealed class ClaudeRuntimeFixture : IAsyncDisposable
         }
     }
 
-    // Operations without a name are unified tool descriptors; the peer sends them as `tool call`.
-    internal static JsonObject PeerSettings(JsonObject settings)
-    {
-        if (settings["calls"] is JsonArray calls)
-            foreach (var operation in calls.OfType<JsonObject>())
-                if (!operation.ContainsKey("name") && operation["args"] is JsonObject descriptor)
-                {
-                    operation["name"] = "ctl";
-                    operation["args"] = CtlTestArgs.Unified((JsonObject)descriptor.DeepClone());
-                }
-        return settings;
-    }
-
     internal Task PeerAsync(JsonObject settings) =>
-        File.WriteAllTextAsync(
-            Path.Combine(PeerDirectory, "peer.json"),
-            PeerSettings(settings).ToJsonString()
-        );
+        File.WriteAllTextAsync(Path.Combine(PeerDirectory, "peer.json"), settings.ToJsonString());
 
     internal async Task RunAsync(string? text = "input")
     {

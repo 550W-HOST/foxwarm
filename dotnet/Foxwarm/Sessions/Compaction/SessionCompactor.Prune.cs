@@ -1,6 +1,5 @@
 using System.Text;
 using System.Text.Json.Nodes;
-using Foxwarm.Tools;
 using Foxwarm.Models;
 using Foxwarm.Sessions;
 
@@ -78,13 +77,6 @@ internal sealed partial class SessionCompactor
         var name = SessionWait.Text(call["name"]);
         if (name == "load_skill")
             return !string.IsNullOrWhiteSpace(SessionWait.Text(args["skillName"]));
-        if (name == "ctl")
-        {
-            if (Foxwarm.Tools.CtlParser.Describe(args) is not { Source: "builtin", Name: "skill" } described)
-                return false;
-            args = described.Args;
-            name = "skill";
-        }
         if (name == "call_tool")
         {
             var id = SessionWait.Text(args["toolId"]);
@@ -136,7 +128,7 @@ internal sealed partial class SessionCompactor
         var tool = function?["name"]?.GetValue<string>() ?? "unknown";
         var id = function?["tool_use_id"]?.GetValue<string>() ?? "unknown";
         var marker =
-            $"--- [foxwarm: historical tool response pruned; original: {CtlCommandText.For("recall", new JsonObject { ["target"] = $"msg#{seq}" })}; tool={JsonData.Serialize(tool)}; tool_use_id={JsonData.Serialize(id)}; kept first {head.EnumerateRunes().Count()} and last {tail.EnumerateRunes().Count()} Unicode characters] ---";
+            $"--- [foxwarm: historical tool response pruned; original: recall({{ target: \"msg#{seq}\" }}); tool={JsonData.Serialize(tool)}; tool_use_id={JsonData.Serialize(id)}; kept first {head.EnumerateRunes().Count()} and last {tail.EnumerateRunes().Count()} Unicode characters] ---";
         var bounded = head + "\n\n" + marker + "\n\n" + tail;
         if (bounded.EnumerateRunes().Count() >= characters.Length)
             return null;

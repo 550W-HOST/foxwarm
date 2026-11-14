@@ -73,10 +73,10 @@ if (settings.emptyOnce && !(await fs.stat(path.join(fixtureDirectory, 'empty-onc
 }
 if (settings.pauseBeforeCalls) { await fs.writeFile(path.join(fixtureDirectory, 'before-calls'), 'ready'); await waitFor('allow-calls') }
 for (const [index, operation] of (settings.calls || []).entries()) {
-  const result = await client.callTool({ name: operation.name || 'ctl', arguments: operation.args })
+  const result = await client.callTool({ name: operation.name || 'call_tool', arguments: operation.args })
   await fs.appendFile(path.join(fixtureDirectory, 'results.jsonl'), JSON.stringify({ index, result }) + '\n')
   if (settings.pauseAfterFirstCall && index === 0) { await fs.writeFile(path.join(fixtureDirectory, 'after-first-call'), 'ready'); await waitFor('policy-restored') }
-  await emit({ type: 'assistant', uuid: `echo-${index}`, message: { id: `echo-${index}`, content: [{ type: 'tool_use', id: `cli-${index}`, name: operation.name || 'ctl', input: operation.args }] } })
+  await emit({ type: 'assistant', uuid: `echo-${index}`, message: { id: `echo-${index}`, content: [{ type: 'tool_use', id: `cli-${index}`, name: operation.name || 'call_tool', input: operation.args }] } })
   await emit({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: `cli-${index}`, content: 'observed' }] } })
 }
 await fs.writeFile(path.join(fixtureDirectory, 'ready'), 'ready')

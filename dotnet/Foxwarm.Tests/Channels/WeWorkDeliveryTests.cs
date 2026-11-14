@@ -163,8 +163,8 @@ public sealed class WeWorkDeliveryTests
         );
         await File.WriteAllBytesAsync(imagePath, TelegramChannelTests.Jpeg());
         var unified = await f.ToolAsync(
-            "ctl",
-            CtlTestArgs.Unified(new()
+            "call_tool",
+            new()
             {
                 ["toolId"] = "builtin:send_file",
                 ["args"] = new JsonObject
@@ -172,7 +172,7 @@ public sealed class WeWorkDeliveryTests
                     ["channelTargetId"] = "work:image-target",
                     ["filePath"] = imagePath,
                 },
-            })
+            }
         );
         Assert.Null(unified?["error"]);
         Assert.Equal("image", peer.Frames.Last()["body"]!["msgtype"]!.GetValue<string>());

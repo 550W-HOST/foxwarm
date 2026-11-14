@@ -458,12 +458,12 @@ public sealed class SeparateImageGenerationTests
                     .Any(definition => definition?["name"]?.GetValue<string>() == "generate_image")
             );
             var discovery = await Call(
-                "ctl",
-                CtlTestArgs.Search(new JsonObject
+                "search_tools",
+                new JsonObject
                 {
                     ["query"] = "generate_image",
                     ["sources"] = new JsonArray("builtin"),
-                })
+                }
             );
             Assert.Equal(expected, discovery.ToJsonString().Contains("builtin:generate_image"));
             // An invalid owned image proves allowed dispatch reaches the effect owner, without I/O.
@@ -475,13 +475,13 @@ public sealed class SeparateImageGenerationTests
             foreach (var wrapped in new[] { false, true })
             {
                 var result = await Call(
-                    wrapped ? "ctl" : "generate_image",
+                    wrapped ? "call_tool" : "generate_image",
                     wrapped
-                        ? CtlTestArgs.Unified(new JsonObject
+                        ? new JsonObject
                         {
                             ["toolId"] = "builtin:generate_image",
                             ["args"] = args.DeepClone(),
-                        })
+                        }
                         : args
                 );
                 Assert.Contains(

@@ -15,15 +15,27 @@ A headless receiving instance can set `bot.enableWebUI: false` and `bot.enableTr
 
 On the calling instance, follow [outbound connections](outbound.md). Configure the receiver as a named `streamable-http` server using its existing private identity token. Discover its tools:
 
-```text
-tool search --source mcp --server peer --limit 5 foxwarm
+```json
+{
+  "query": "foxwarm",
+  "sources": ["mcp"],
+  "server": "peer",
+  "limit": 5,
+  "includeSchema": true
+}
 ```
 
-Run this with `ctl`, then call the returned ID with `ctl tool call`. For example, after granting a send rule for the exact receiving Session:
+Use this descriptor with `search_tools`, then invoke the returned ID with `call_tool`. For example, after granting a send rule for the exact receiving Session:
 
-```text
-tool call mcp:peer/foxwarm_session --args @args
-  values: {"args": {"action": "send", "sessionId": "project/review", "message": "Please review the requested change."}}
+```json
+{
+  "toolId": "mcp:peer/foxwarm_session",
+  "args": {
+    "action": "send",
+    "sessionId": "project/review",
+    "message": "Please review the requested change."
+  }
+}
 ```
 
 Accepted means queued, not completed or answered. The receiving Session runs under its own Agent and tool permissions. To receive an explicit answer without polling, use [explicit instance replies](instance-replies.md): start notifications **before** sending with `allowReply: true`. Reading history is a separate permission and operation, not a mandatory reply mechanism.

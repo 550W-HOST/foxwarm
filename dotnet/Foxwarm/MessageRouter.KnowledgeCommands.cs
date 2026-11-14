@@ -42,7 +42,7 @@ internal sealed partial class MessageRouter
                 return;
             case "attach" or "detach":
                 await source.Reply(
-                    "❌ Skill attach/detach is no longer supported. Visible skills are cataloged automatically in session snapshots; use `/skill show <skill>` or `ctl skill load <skill>` to load full instructions on demand."
+                    "❌ Skill attach/detach is no longer supported. Visible skills are cataloged automatically in session snapshots; use `/skill show <skill>` or `skill({ action: \"load\", skillName: \"<skill>\" })` to load full instructions on demand."
                 );
                 return;
             case "show":

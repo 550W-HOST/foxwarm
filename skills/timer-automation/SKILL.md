@@ -9,62 +9,97 @@ Use this skill when you need to schedule future work for a session, inspect exis
 
 Before polling an external service, check whether it can push. When it can (GitHub, Cloudflare and many monitors send webhooks) and Foxwarm is reachable from it, an inbound webhook reacts when the event happens and can run the same kind of quiet handler script. Webhooks are access identities that the user adds in Setup › Config, described in [access-control identities](../access-control/references/identities.md); agents cannot create them, so propose the configuration instead. Keep polling timers for sources that cannot push, for instances the source cannot reach, and as an infrequent check for deliveries a webhook missed.
 
-Timers are managed with the `ctl timer` commands. `ctl timer --help` lists them and `ctl timer <verb> --help` shows each command's options.
+Timer tools are intentionally **not injected into the default model-facing tool schema**. After loading this skill, use `search_tools` / `call_tool` with the builtin timer tool names below.
 
-## Commands
+## Tools
 
-- `timer create` (`create_timer`) — create a one-shot or recurring timer.
-- `timer list` (`list_timers`) — list timers for the current session, or for `--session-id` when you are allowed to manage that session.
-- `timer update` (`update_timer`) — update an existing timer in place; `timer pause` and `timer resume` change only its paused state.
-- `timer delete` (`delete_timer`) — delete a timer.
+- `create_timer` — create a one-shot or recurring timer.
+- `list_timers` — list timers for the current session, or for `sessionId` when you are allowed to manage that session.
+- `update_timer` — update an existing timer in place.
+- `delete_timer` — delete a timer.
 
-Policy rules name the builtin in parentheses.
+There is no separate `list_timer` tool. The tool name is plural: `list_timers`.
 
 ## Examples
 
 Create a one-shot reminder in this session:
 
-```text
-timer create --after-seconds 3600 --message 'Check whether the long build finished and report status.'
+```json
+{
+  "toolId": "builtin:create_timer",
+  "args": {
+    "afterSeconds": 3600,
+    "message": "Check whether the long build finished and report status."
+  }
+}
 ```
 
 Create a recurring timer that opens a new session on every firing:
 
-```text
-timer create --cron '0 9 * * 1-5' --message 'Run weekday morning maintenance checks.' --new-session --session-prefix weekday-maintenance
+```json
+{
+  "toolId": "builtin:create_timer",
+  "args": {
+    "cron": "0 9 * * 1-5",
+    "message": "Run weekday morning maintenance checks.",
+    "newSession": true,
+    "sessionPrefix": "weekday-maintenance"
+  }
+}
 ```
 
-Update only the message of an existing timer (long text can be passed as `@name` with `values`):
+Update only the message of an existing timer:
 
-```text
-timer update abcd1234 --message @message
-  values: { "message": "Use the updated checklist, then report findings." }
+```json
+{
+  "toolId": "builtin:update_timer",
+  "args": {
+    "timerId": "abcd1234",
+    "message": "Use the updated checklist, then report findings."
+  }
+}
 ```
 
 Reschedule an existing timer:
 
-```text
-timer update abcd1234 --cron '0 0 L * *'
+```json
+{
+  "toolId": "builtin:update_timer",
+  "args": {
+    "timerId": "abcd1234",
+    "cron": "0 0 L * *"
+  }
+}
 ```
 
 Pause a timer, then resume it later:
 
-```text
-timer pause abcd1234
-timer resume abcd1234
+```json
+{
+  "toolId": "builtin:update_timer",
+  "args": {
+    "timerId": "abcd1234",
+    "paused": true
+  }
+}
 ```
 
-A paused timer keeps its schedule and settings but does not fire. `timer resume` resumes it from the next scheduled occurrence; ticks missed while paused are not replayed. A paused one-time timer whose time has already passed fires once when resumed. Pausing does not stop a run already in progress. `timer update --paused` can be combined with other changes, and later updates keep the timer paused.
+A paused timer keeps its schedule and settings but does not fire. `"paused": false` resumes it from the next scheduled occurrence; ticks missed while paused are not replayed. A paused one-time timer whose time has already passed fires once when resumed. Pausing does not stop a run already in progress. `paused` can be combined with other updates, and later updates keep the timer paused.
 
 Delete a timer:
 
-```text
-timer delete abcd1234
+```json
+{
+  "toolId": "builtin:delete_timer",
+  "args": {
+    "timerId": "abcd1234"
+  }
+}
 ```
 
 ## Inspecting timers
 
-`timer list` returns each timer's schedule, `nextRunAt` (null while paused or when nothing is scheduled), `paused`, and `lastRun`, the most recent result: `delivered` or `failed` for message timers; `completed`, `paused` (the script is waiting for continuation), `failed`, or `skipped` (the previous run was still active) for ToolScript timers, with its `runId` when there is one. Use `ctl script get <runId>` for the run's output. One-time timers are removed after they fire, so they have no results to list.
+`list_timers` returns each timer's schedule, `nextRunAt` (null while paused or when nothing is scheduled), `paused`, and `lastRun`, the most recent result: `delivered` or `failed` for message timers; `completed`, `paused` (the script is waiting for continuation), `failed`, or `skipped` (the previous run was still active) for ToolScript timers, with its `runId` when there is one. Use `get_toolscript_run` with that `runId` for the run's output. One-time timers are removed after they fire, so they have no results to list.
 
 ## Scheduling Rules
 
@@ -82,9 +117,19 @@ For `update_timer`, omit schedule fields when you only want to change metadata s
 
 Set `action: "toolscript"` and supply a complete `script` specification instead of a message. These timers must belong to the calling Session. Message timers retain the default `action: "message"`, including their existing other-Session and new-Session targets.
 
-```text
-timer create --action toolscript --cron '*/10 * * * *' --script @script
-  values: { "script": { "node": "master", "filePath": "checks/monitor.py", "args": {"check": "disk"} } }
+```json
+{
+  "toolId": "builtin:create_timer",
+  "args": {
+    "action": "toolscript",
+    "cron": "*/10 * * * *",
+    "script": {
+      "node": "master",
+      "filePath": "checks/monitor.py",
+      "args": {"check": "disk"}
+    }
+  }
+}
 ```
 
 `script` accepts the normal `run_script` source/input fields: `code` or `filePath`, source `node`, `args` or `argsJson`, `mode`, and `timeoutSecs`. Files are read and authorized anew at firing. Omitted/current source Node and relative paths use the owner's current routing; explicit source selection does not change VM placement or nested tools' default Node. Inline code cannot specify a source Node. A supplied replacement `script` replaces the whole specification, not individual keys. Switching action requires its new payload and clears stale fields. `newSession` target fields apply only to message timers.

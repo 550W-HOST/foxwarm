@@ -161,7 +161,7 @@ public sealed class GeneratedImageReplayAdmissionTests
             var wire = captured.Last().ToJsonString();
             Assert.Contains("current model does not receive its image content", wire);
             Assert.Contains("ig_normal-generation", wire);
-            Assert.Contains("ctl image save", wire);
+            Assert.Contains("image_write_to_file", wire);
             Assert.DoesNotContain(Png, wire);
             Assert.DoesNotContain("input_image", wire);
             Assert.DoesNotContain("image_url", wire);

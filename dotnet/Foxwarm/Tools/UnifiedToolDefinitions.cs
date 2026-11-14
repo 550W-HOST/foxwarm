@@ -10,30 +10,98 @@ internal static class UnifiedToolDefinitions
                 """
 [
   {
-    "type": "function",
-    "strict": false,
-    "name": "ctl",
-    "description": "Run a Foxwarm runtime command, such as `session list`, `memory read MEMORY.md` or `timer create …`. Commands act on Sessions, Agents, Nodes, memory, history, skills, timers, configuration and MCP or Node tools with this Session's permissions; they don't run in a shell. Start with `help`, or add `--help` to any command. Pass long text or JSON as `@name` and supply it in `values`.",
+    "name": "search_tools",
+    "defaultInject": true,
+    "description": "Find tools and their calling schemas. Results include a toolId or explicit source fields you can pass to call_tool. Search builtin for Session and management tools, node for file and shell tools, or mcp for connected servers. Use limit=1 when looking up one known tool.",
     "parameters": {
       "type": "object",
       "properties": {
-        "command": {
+        "query": {
           "type": "string",
-          "description": "One command. Quote arguments containing spaces. An argument that is exactly `@name` takes `values.name`; write `@@` for a literal leading `@`."
+          "description": "Words to match in tool names and descriptions. Results matching more words rank higher. Omit to list tools."
         },
-        "values": {
-          "type": "object",
-          "description": "Values for `@name` arguments, used as-is: multi-line text, numbers, arrays or objects.",
-          "additionalProperties": true
+        "sources": {
+          "type": "array",
+          "description": "Sources to search. Defaults to builtin, mcp, and node.",
+          "items": {
+            "type": "string",
+            "enum": [
+              "builtin",
+              "mcp",
+              "node"
+            ]
+          }
         },
-        "valuesJson": {
+        "server": {
           "type": "string",
-          "description": "`values` as a JSON object string when `values` cannot be supplied."
+          "description": "Limit MCP results to this server. Omit to search all enabled MCP servers."
+        },
+        "nodeId": {
+          "type": "string",
+          "description": "Node to search. Omit or use current to search this Session's execution Node."
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200,
+          "description": "Maximum results. Defaults to 5, up to 200."
+        },
+        "includeSchema": {
+          "type": "boolean",
+          "description": "Include input schemas for up to the first 10 results. Defaults to true; remaining results use short summaries."
         }
       },
-      "required": ["command"],
       "additionalProperties": false
-    }
+    },
+    "type": "function",
+    "strict": false
+  },
+  {
+    "name": "call_tool",
+    "defaultInject": true,
+    "description": "Call a tool found with search_tools. Supply its toolId, or identify it with source and name plus server or nodeId when needed. Put the tool's arguments in args. File and shell tools use source=node; Session and management tools use builtin. Calling through this tool applies the target tool's normal checks.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "toolId": {
+          "type": "string",
+          "description": "Tool ID returned by search_tools, such as builtin:session, mcp:server/tool, or node:master/read."
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "builtin",
+            "mcp",
+            "node"
+          ],
+          "description": "Tool source when not using toolId."
+        },
+        "name": {
+          "type": "string",
+          "description": "Tool name when not using toolId."
+        },
+        "server": {
+          "type": "string",
+          "description": "MCP server name. Required for source=mcp unless included in toolId."
+        },
+        "nodeId": {
+          "type": "string",
+          "description": "Node for source=node. Omit or use current for this Session's current Node."
+        },
+        "args": {
+          "type": "object",
+          "description": "Arguments for the selected tool.",
+          "additionalProperties": true
+        },
+        "argsJson": {
+          "type": "string",
+          "description": "Arguments encoded as a JSON object string when args cannot be supplied, for example {\"filePath\":\"README.md\"}."
+        }
+      },
+      "additionalProperties": false
+    },
+    "type": "function",
+    "strict": false
   },
   {
     "type": "function",
@@ -53,6 +121,7 @@ internal static class UnifiedToolDefinitions
     "type": "function",
     "strict": false,
     "name": "send_to_channel",
+    "defaultInject": true,
     "description": "Send a message to a specific channel destination. The destination does not need a Session attachment. For a normal-mode channel attached to this Session, reply directly instead: your assistant text is delivered automatically. Use this tool for send-only channels or when the task requires delivery to a different destination.",
     "parameters": {
       "type": "object",

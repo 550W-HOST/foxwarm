@@ -103,13 +103,13 @@ public sealed partial class McpNotificationTests
                 new JsonObject
                 {
                     ["id"] = "explicit-reply",
-                    ["name"] = unified ? "ctl" : "send_to_channel",
+                    ["name"] = unified ? "call_tool" : "send_to_channel",
                     ["args"] = unified
-                        ? CtlTestArgs.Unified(new JsonObject
+                        ? new JsonObject
                         {
                             ["toolId"] = "builtin:send_to_channel",
                             ["args"] = Channel(target, text),
-                        })
+                        }
                         : Channel(target, text),
                 },
                 default
