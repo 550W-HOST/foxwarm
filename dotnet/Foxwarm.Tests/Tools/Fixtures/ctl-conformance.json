@@ -7,6 +7,8 @@
     { "command": "session view alpha/main --parts text --parts tools --count 3", "descriptor": { "toolId": "builtin:view_session", "args": { "sessionId": "alpha/main", "parts": ["text", "tools"], "count": 3 } } },
     { "command": "session create main worker --model sonnet --effort high", "descriptor": { "toolId": "builtin:create_session", "args": { "agentName": "main", "sessionName": "worker", "model": { "modelId": "sonnet", "effort": "high" } } } },
     { "command": "session create main worker --force-effort max", "descriptor": { "toolId": "builtin:create_session", "args": { "agentName": "main", "sessionName": "worker", "forceModel": { "effort": "max" } } } },
+    { "command": "session view a/b --parts '[]' --before 4", "descriptor": { "toolId": "builtin:view_session", "args": { "sessionId": "a/b", "before": 4, "parts": [] } } },
+    { "command": "history recall --preview-length 1234.5 --limit 2", "descriptor": { "toolId": "builtin:recall", "args": { "limit": 2, "previewLength": 1234.5 } } },
     { "command": "ctl skill load node-setup", "descriptor": { "toolId": "builtin:skill", "args": { "action": "load", "skillName": "node-setup" } } },
     { "command": "memory read 'my notes.md' --start-line 3", "descriptor": { "toolId": "builtin:read_memory", "args": { "filePath": "my notes.md", "startLine": 3 } } },
     { "command": "memory edit MEMORY.md --old-text=\"a b\" --new-text='c d'", "descriptor": { "toolId": "builtin:edit_memory", "args": { "filePath": "MEMORY.md", "oldText": "a b", "newText": "c d" } } },

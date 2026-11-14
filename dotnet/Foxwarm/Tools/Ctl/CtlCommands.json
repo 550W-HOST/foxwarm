@@ -111,13 +111,13 @@
         },
         {
           "name": "start",
-          "type": "integer",
+          "type": "number",
           "kind": "flag",
           "help": "Zero-based offset, ordered by most recent activity. Defaults to 0."
         },
         {
           "name": "count",
-          "type": "integer",
+          "type": "number",
           "kind": "flag",
           "help": "Number of Sessions to return. Defaults to 20."
         },
@@ -271,7 +271,7 @@
         },
         {
           "name": "previewLength",
-          "type": "integer",
+          "type": "number",
           "kind": "flag",
           "help": "Total character budget for the response. Omit or use 0 for the default; other values are bounded to 1,000–20,000."
         },
@@ -669,7 +669,7 @@
         },
         {
           "name": "limit",
-          "type": "integer",
+          "type": "number",
           "kind": "flag",
           "help": "Maximum search results. Defaults to 5, up to 20."
         },
@@ -703,7 +703,7 @@
         },
         {
           "name": "previewLength",
-          "type": "integer",
+          "type": "number",
           "kind": "flag",
           "help": "Total character budget for preview text. Omit or use 0 for the default; other values are bounded to 1,000–20,000. ToolScript exact-message reads return complete canonical JSON within ToolScript data limits."
         },
@@ -770,13 +770,13 @@
       "params": [
         {
           "name": "startSeq",
-          "type": "integer",
+          "type": "number",
           "kind": "positional",
           "help": "First message sequence number to include."
         },
         {
           "name": "endSeq",
-          "type": "integer",
+          "type": "number",
           "kind": "positional",
           "help": "Last message sequence number to include."
         },
@@ -788,7 +788,7 @@
         },
         {
           "name": "previewLength",
-          "type": "integer",
+          "type": "number",
           "kind": "flag",
           "help": "Total character budget for the response. Defaults to 1,000; values are bounded to 1,000–20,000."
         }
@@ -807,13 +807,13 @@
       "params": [
         {
           "name": "startId",
-          "type": "integer",
+          "type": "number",
           "kind": "positional",
           "help": "First block ID to include."
         },
         {
           "name": "endId",
-          "type": "integer",
+          "type": "number",
           "kind": "positional",
           "help": "Last block ID to include."
         },
@@ -825,7 +825,7 @@
         },
         {
           "name": "previewLength",
-          "type": "integer",
+          "type": "number",
           "kind": "flag",
           "help": "Total character budget for the response. Defaults to 1,000; values are bounded to 1,000–20,000."
         }
@@ -1356,13 +1356,13 @@
         },
         {
           "name": "startLine",
-          "type": "integer",
+          "type": "number",
           "kind": "flag",
           "help": "First line to read, counting from 1. Omit or use 0 to start at the beginning."
         },
         {
           "name": "endLine",
-          "type": "integer",
+          "type": "number",
           "kind": "flag",
           "help": "Last line to read, counting from 1. Omit or use 0 to read through the end."
         }
@@ -2140,7 +2140,7 @@
       "params": [
         {
           "name": "limit",
-          "type": "integer",
+          "type": "number",
           "kind": "flag",
           "help": "Maximum runs to return. Defaults to 20, up to 200."
         },
@@ -2518,7 +2518,7 @@
         },
         {
           "name": "limit",
-          "type": "integer",
+          "type": "number",
           "kind": "flag",
           "help": "Maximum results. Defaults to 5, up to 200."
         },

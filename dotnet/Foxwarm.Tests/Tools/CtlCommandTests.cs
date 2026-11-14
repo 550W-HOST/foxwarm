@@ -109,7 +109,7 @@ public sealed class CtlCommandTests
             Target("node copy master a box b --overwrite=true").Args["overwrite"]!.GetValue<bool>()
         );
         Assert.Contains("one of current-agent, all", Error("session list --scope everyone").Message);
-        Assert.Contains("an integer", Error("session list --count many").Message);
+        Assert.Contains("a number", Error("session list --count many").Message);
         Assert.Contains("Unknown option `--bogus`", Error("session list --bogus 1").Message);
         Assert.Contains("Missing required argument <filePath>", Error("memory read").Message);
         Assert.Contains("Unexpected argument", Error("memory read a b").Message);
@@ -245,7 +245,7 @@ public sealed class CtlCommandTests
         );
         Assert.True(JsonNode.DeepEquals(new JsonObject { ["effort"] = "max" }, created.Args["forceModel"]));
         Assert.Contains("one of", Error("session create main worker --effort extreme").Message);
-        Assert.Contains("an integer", Error("session list --count 2.5").Message);
+        Assert.Contains("an integer", Error("session view main/a --count 2.5").Message);
     }
 
     // Selection intent is read from the command words, even when the call is invalid.
@@ -287,6 +287,145 @@ public sealed class CtlCommandTests
         if (damage == "extra-key")
             args["unexpected"] = true;
         Assert.Equal(selects, CtlParser.SelectsNode(args));
+    }
+
+    // Recovery reads identities and --args with the parser's option and @name rules.
+    [Theory]
+    [InlineData("tool call @id --args @a", """{"id":"builtin:node","a":{"action":"select"},"unused":1}""", true)]
+    [InlineData("tool call --source @source --name @name --args @a", """{"source":"builtin","name":"node","a":{"action":"select"},"unused":1}""", true)]
+    [InlineData("tool call --tool-id=@id --args=@a", """{"id":"builtin:node","a":{"action":"select"},"unused":1}""", true)]
+    [InlineData("tool call @id --args @a", """{"id":"mcp:srv/node","a":{"action":"select"},"unused":1}""", false)]
+    [InlineData("tool call @id --args @a", """{"id":"builtin:node","a":{"action":"list"},"unused":1}""", false)]
+    [InlineData("tool call mcp:srv/read \"--tool-id=builtin:node\" --args @a", """{"a":{"action":"select"}}""", false)]
+    [InlineData("tool call mcp:srv/read '--source' builtin --args @a", """{"a":{"action":"select"}}""", false)]
+    [InlineData("tool call @missing --args @a", """{"a":{"action":"select"}}""", true)]
+    [InlineData("tool call @missing --args @a", """{"a":{"action":"list"}}""", false)]
+    [InlineData("tool call --source builtin --name @missing --args @a", """{"a":{"action":"select"}}""", true)]
+    [InlineData("tool call --source node --name @missing --args @a", """{"a":{"action":"select"}}""", false)]
+    [InlineData("tool call builtin:node --args @missing", """{"unused":1}""", true)]
+    [InlineData("tool call @missing --args @missing2", """{"unused":1}""", false)]
+    [InlineData("tool call builtin:node --args @a --bogus", """{"a":{"action":"select"}}""", true)]
+    [InlineData("tool call -- builtin:node --args", """{"unused":1}""", false)]
+    public void Node_selection_intent_binds_identities_like_the_parser(string command, string values, bool selects)
+    {
+        var args = Args(command, JsonNode.Parse(values)!.AsObject());
+        Assert.IsType<CtlError>(CtlParser.Parse(args));
+        Assert.Equal(selects, CtlParser.SelectsNode(args));
+    }
+
+    // A generated next-page command keeps the page's options, including values the target
+    // accepts but normalizes (a fractional budget) and an explicit empty selection.
+    [Fact]
+    public async Task Generated_navigation_reads_back_the_same_page_options()
+    {
+        await using var f = await ScriptFixture.Create();
+        await ForkClearLifecycleTests.AppendAsync(
+            f.Owner,
+            VectorFixture.Message("older content", "user"),
+            VectorFixture.Message("newer content", "user")
+        );
+        async Task<JsonObject> FollowOlder(JsonObject options)
+        {
+            var output = SessionWait.Text((await f.Manager.ObserveAsync(f.Owner, "view_session", options))["output"])!;
+            var hint = output.Split('\n').Single(line => line.StartsWith("Older: "))["Older: ".Length..];
+            var target = Assert.IsType<CtlTarget>(CtlParser.Parse(new JsonObject { ["command"] = hint }));
+            Assert.Equal("view_session", target.Name);
+            return target.Args;
+        }
+        var fractional = await FollowOlder(
+            new JsonObject { ["sessionId"] = f.Owner.Id, ["count"] = 1, ["previewLength"] = 1234.5 }
+        );
+        Assert.Equal(1234.5, fractional["previewLength"]!.GetValue<double>());
+        var empty = await FollowOlder(
+            new JsonObject { ["sessionId"] = f.Owner.Id, ["start"] = 1, ["count"] = 1, ["parts"] = new JsonArray() }
+        );
+        Assert.True(JsonNode.DeepEquals(new JsonArray(), empty["parts"]));
+        var older = SessionWait.Text((await f.Manager.ObserveAsync(f.Owner, "view_session", empty))["output"])!;
+        Assert.DoesNotContain("older content", older);
+    }
+
+    // Every builtin a hint names: any argument values its command accepts are written so the
+    // parser reads back the same arguments.
+    [Fact]
+    public void Hints_round_trip_for_every_argument_shape_of_hinted_builtins()
+    {
+        string[] strings =
+        [
+            "plain", "two words", "it's \"quoted\"", "--looks-like-an-option", "--x=y", "-", "--",
+            "@name", "@@two", "[bracket", "{brace", "line\nbreak", "", " leading space",
+            "trailing space ", "semi;colon | pipe & amp $(sub) `tick` <in >out", "über ✓",
+        ];
+        JsonNode?[] Samples(CtlParameter parameter, bool element = false)
+        {
+            var type = element ? parameter.Items! : parameter.Type;
+            if (parameter.Values is { Count: > 0 } choices && (element || !parameter.IsArray))
+                return choices.Select(choice => (JsonNode?)choice).ToArray();
+            return type switch
+            {
+                "integer" => [0, 7, -3, 9007199254740991L],
+                "number" => [0, 7, -3, 1234.5, 1e20, 0.000001],
+                "boolean" => [true, false],
+                "array" =>
+                [
+                    new JsonArray(),
+                    new JsonArray(Samples(parameter, element: true).Take(1).Select(item => item?.DeepClone()).ToArray()),
+                    new JsonArray(Samples(parameter, element: true).Select(item => item?.DeepClone()).ToArray()),
+                ],
+                "object" or "json" => [new JsonObject { ["k"] = "v w", ["n"] = 1 }],
+                _ => strings.Select(text => (JsonNode?)text).ToArray(),
+            };
+        }
+        var builtins = new[] { "recall", "view_session", "send_to_channel", "cancel_toolscript_run", "image_crop", "image_write_to_file", "send_file" };
+        var checkedCount = 0;
+        foreach (var builtin in builtins)
+        foreach (var command in CtlRegistry.ForTarget("builtin", builtin))
+        {
+            var required = command.Parameters.Where(parameter => parameter.Required).ToArray();
+            JsonObject Base(int variant)
+            {
+                var args = new JsonObject();
+                foreach (var parameter in required)
+                {
+                    var samples = Samples(parameter);
+                    CtlTestArgs.SetPath(args, parameter.Arg, samples[variant % samples.Length]?.DeepClone());
+                }
+                return args;
+            }
+            var cases = new List<JsonObject>();
+            for (var variant = 0; variant < strings.Length; variant++)
+                cases.Add(Base(variant));
+            foreach (var parameter in command.Parameters.Where(parameter => !parameter.Required))
+            foreach (var sample in Samples(parameter))
+            {
+                var args = Base(cases.Count);
+                CtlTestArgs.SetPath(args, parameter.Arg, sample?.DeepClone());
+                cases.Add(args);
+            }
+            // Every optional argument at once.
+            for (var variant = 0; variant < 4; variant++)
+            {
+                var all = Base(variant);
+                foreach (var parameter in command.Parameters.Where(parameter => !parameter.Required))
+                {
+                    var samples = Samples(parameter);
+                    CtlTestArgs.SetPath(all, parameter.Arg, samples[variant % samples.Length]?.DeepClone());
+                }
+                cases.Add(all);
+            }
+            foreach (var expected in cases)
+            {
+                foreach (var pair in command.Fixed ?? [])
+                    expected[pair.Key] = pair.Value?.DeepClone();
+                var text = CtlCommandText.For(builtin, expected);
+                var parsed = CtlParser.Parse(new JsonObject { ["command"] = text });
+                Assert.True(
+                    parsed is CtlTarget target && JsonNode.DeepEquals(expected, target.Args),
+                    text + " => " + (parsed is CtlTarget t ? t.Args.ToJsonString() : parsed.ToString())
+                );
+                checkedCount++;
+            }
+        }
+        Assert.True(checkedCount > 300, checkedCount.ToString());
     }
 
     // Hints in tool output name commands from the registry and read back to the same call.

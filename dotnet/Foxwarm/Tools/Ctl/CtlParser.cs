@@ -71,9 +71,9 @@ internal static partial class CtlParser
         };
 
     // Whether a ctl call is an attempt to select a Node: `node select`, or `tool call` naming
-    // builtin `node` with action select. Judged from the command words, so a call whose values,
-    // envelope or arguments are invalid still counts. When `tool call builtin:node` arguments
-    // can't be read, the call counts as a selection attempt.
+    // builtin `node` with action select. An invalid call (bad values or envelope, unused values,
+    // unknown options) is judged from its tokens with the parser's option and @name rules, so
+    // it counts exactly when the parser would have read a selection from those words.
     internal static bool SelectsNode(JsonObject args)
     {
         switch (Parse(args))
@@ -86,100 +86,135 @@ internal static partial class CtlParser
             case CtlError { Command.Path: "node select" }:
                 return true;
             case CtlError:
-                break;
+                return SelectionIntent(args);
             default:
                 return false;
         }
+    }
+
+    // Selection intent of a call that failed to parse. Identity fields and --args are read like
+    // the parser reads them; an @name whose value is missing or unreadable is unknown. A known
+    // `builtin:node` identity counts when its arguments select or can't be read; an unknown
+    // identity counts only when the arguments are known to select.
+    private static bool SelectionIntent(JsonObject args)
+    {
         if (SessionWait.Text(args["command"]) is not { } command)
             return false;
-        var words = Words(command);
-        if (words.Count > 0 && words[0] == "ctl")
-            words.RemoveAt(0);
-        if (words.Count < 2)
-            return false;
-        if (words[0] == "node" && words[1] == "select")
-            return true;
-        if (words[0] != "tool" || words[1] != "call")
-            return false;
-        string? toolId = null, source = null, name = null, argsText = null;
-        for (var index = 2; index < words.Count; index++)
-        {
-            var word = words[index];
-            if (!word.StartsWith("--", StringComparison.Ordinal))
-            {
-                toolId ??= word;
-                continue;
-            }
-            var equals = word.IndexOf('=');
-            var flag = equals < 0 ? word[2..] : word[2..equals];
-            var value =
-                equals >= 0 ? word[(equals + 1)..]
-                : index + 1 < words.Count ? words[++index]
-                : null;
-            switch (flag)
-            {
-                case "tool-id" or "toolId":
-                    toolId = value;
-                    break;
-                case "source":
-                    source = value;
-                    break;
-                case "name":
-                    name = value;
-                    break;
-                case "args":
-                    argsText = value;
-                    break;
-            }
-        }
-        var names =
-            toolId is not null ? toolId.Trim() == "builtin:node"
-            : source?.Trim() == "builtin" && name == "node";
-        if (!names)
-            return false;
-        if (argsText is null)
-            return false;
-        JsonNode? toolArgs = null;
+        var tokens = new List<CtlToken>();
         try
         {
-            if (argsText.StartsWith('@') && !argsText.StartsWith("@@", StringComparison.Ordinal))
-            {
-                var values =
-                    args["values"] as JsonObject
-                    ?? (
-                        SessionWait.Text(args["valuesJson"]) is { } json
-                            ? JsonNode.Parse(json) as JsonObject
-                            : null
-                    );
-                toolArgs = values?[argsText[1..]];
-            }
-            else
-                toolArgs = JsonNode.Parse(argsText);
+            var lexer = new CtlLexer(command);
+            while (lexer.Next() is { } token)
+                tokens.Add(token);
         }
-        catch (System.Text.Json.JsonException) { }
-        return toolArgs is not JsonObject known || IsSelect(known);
+        catch (InvalidDataException)
+        {
+            // Unreadable words (an unclosed quote or a shell operator): only an explicit
+            // `node select` is recognizable.
+            var words = command.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            var skip = words.Length > 0 && words[0] == "ctl" ? 1 : 0;
+            return words.Length >= skip + 2 && words[skip] == "node" && words[skip + 1] == "select";
+        }
+        if (tokens.Count > 0 && !tokens[0].Quoted && tokens[0].Text == "ctl")
+            tokens.RemoveAt(0);
+        if (tokens.Count < 2)
+            return false;
+        if (tokens[0].Text == "node" && tokens[1].Text == "select")
+            return true;
+        if (tokens[0].Text != "tool" || tokens[1].Text != "call")
+            return false;
+        var call = CtlRegistry.Find("tool", "call")!;
+        var values = BoundValues(args);
+        var fields = new Dictionary<string, Recovered>(StringComparer.Ordinal);
+        var positional = call.Parameters.Where(parameter => parameter.Positional).ToList();
+        var flagsEnded = false;
+        for (var index = 2; index < tokens.Count; index++)
+        {
+            var token = tokens[index];
+            if (!flagsEnded && !token.Quoted && token.Text == "--")
+            {
+                flagsEnded = true;
+                continue;
+            }
+            if (!flagsEnded && token.IsOption(out var flag, out var inline))
+            {
+                if (call.FindFlag(flag) is not { IsBoolean: false } parameter)
+                    continue;
+                var text = inline ?? (index + 1 < tokens.Count ? tokens[++index].Text : null);
+                if (text is not null)
+                    fields[parameter.Name] = Resolve(text, values);
+                continue;
+            }
+            if (positional.Count > 0)
+            {
+                fields.TryAdd(positional[0].Name, Resolve(token.Text, values));
+                positional.RemoveAt(0);
+            }
+        }
+        bool? names;
+        if (fields.TryGetValue("toolId", out var id))
+            names = id.Known ? (SessionWait.Text(id.Value)?.Trim() == "builtin:node") : null;
+        else if (fields.ContainsKey("source") || fields.ContainsKey("name"))
+        {
+            var source = fields.GetValueOrDefault("source");
+            var name = fields.GetValueOrDefault("name");
+            names =
+                source is { Known: true } && SessionWait.Text(source.Value)?.Trim() != "builtin" ? false
+                : name is { Known: true } && SessionWait.Text(name.Value) != "node" ? false
+                : source is { Known: true } && name is { Known: true } ? true
+                : null;
+        }
+        else
+            names = null;
+        if (names == false || !fields.TryGetValue("args", out var toolArgs))
+            return false;
+        JsonObject? known = null;
+        if (toolArgs.Known)
+            known = toolArgs.IsBound
+                ? toolArgs.Value as JsonObject
+                : TryParse(SessionWait.Text(toolArgs.Value)) as JsonObject;
+        return known is not null ? IsSelect(known) : names == true;
+    }
+
+    // A recovered option value: Known is false for an @name without a readable value.
+    private sealed record Recovered(bool Known, bool IsBound, JsonNode? Value);
+
+    private static Recovered Resolve(string text, JsonObject? values)
+    {
+        if (!text.StartsWith('@'))
+            return new(true, false, JsonValue.Create(text));
+        if (text.StartsWith("@@", StringComparison.Ordinal))
+            return new(true, false, JsonValue.Create(text[1..]));
+        return values is not null && values.TryGetPropertyValue(text[1..], out var value)
+            ? new(true, true, value)
+            : new(false, true, null);
+    }
+
+    // The call's values object, or null when it is absent or unreadable.
+    private static JsonObject? BoundValues(JsonObject args)
+    {
+        if (args["values"] is JsonObject values)
+            return values;
+        return SessionWait.Text(args["valuesJson"]) is { } json ? TryParse(json) as JsonObject : null;
+    }
+
+    private static JsonNode? TryParse(string? json)
+    {
+        if (json is null)
+            return null;
+        try
+        {
+            return JsonNode.Parse(json);
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return null;
+        }
     }
 
     private static bool IsSelect(JsonObject args) =>
         SessionWait.Text(args["action"])?.Trim().Equals("select", StringComparison.OrdinalIgnoreCase)
         == true;
-
-    // Command words for intent checks: lexed when possible, otherwise split on whitespace.
-    private static List<string> Words(string command)
-    {
-        try
-        {
-            var lexer = new CtlLexer(command);
-            var words = new List<string>();
-            while (lexer.Next() is { } token)
-                words.Add(token.Text);
-            return words;
-        }
-        catch (InvalidDataException)
-        {
-            return command.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).ToList();
-        }
-    }
 
     // A unified-call descriptor (toolId, or source/name/server/nodeId, plus args).
     internal static CtlDescription? DescribeCall(JsonObject descriptor)
