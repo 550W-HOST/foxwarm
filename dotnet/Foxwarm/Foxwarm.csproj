@@ -43,8 +43,8 @@
       GeneratePathProperty="true"
       Condition="'$(RuntimeIdentifier)' == 'win-x64' or ('$(RuntimeIdentifier)' == '' and '$(OS)' == 'Windows_NT')"
     />
-    <!-- The original package supplies the RID-native libraries, except a Linux library given
-         as LanceDbNativeLibrary (see UseLanceDbNativeLibrary). -->
+    <!-- The original package supplies the RID-native libraries unless FoxwarmNativeLibraries
+         replaces them (see UseNativeLibraries). -->
     <PackageReference Include="LanceDB" Version="[2.5.0]" ExcludeAssets="compile;runtime" />
     <ProjectReference Include="../Foxwarm.LanceDb/Foxwarm.LanceDb.csproj" />
     <PackageReference Include="Apache.Arrow" Version="[22.1.0]" />
@@ -74,41 +74,62 @@
     <MontyNativePrefix>$(MSBuildProjectDirectory)/obj/monty-0.0.19/$(MontyTargetRid)</MontyNativePrefix>
     <MontyPython Condition="'$(OS)' != 'Windows_NT'">python3</MontyPython>
     <MontyPython Condition="'$(OS)' == 'Windows_NT'">python</MontyPython>
+    <MontyExecutablePath>$(MontyNativePrefix)/bin/$(MontyExecutable)</MontyExecutablePath>
+    <MontyExecutablePath Condition="'$(FoxwarmNativeLibraries)' != ''">$(FoxwarmNativeLibraries)/$(MontyExecutable)</MontyExecutablePath>
   </PropertyGroup>
+  <!-- Ordinary builds use the official prebuilt worker and the LanceDB package's libraries. Release
+       builds pass FoxwarmNativeLibraries, a directory with the libraries built from pinned, patched
+       source (scripts/release/build-lancedb.sh and build-monty.sh), for the target RID. -->
   <Target
     Name="PrepareMontyWorker"
     BeforeTargets="AssignTargetPaths"
     Condition="'$(MontyExecutable)' != ''"
   >
+    <Error
+      Condition="'$(FoxwarmNativeLibraries)' != '' and !Exists('$(MontyExecutablePath)')"
+      Text="FoxwarmNativeLibraries has no $(MontyExecutable): $(MontyExecutablePath)"
+    />
     <Exec
-      Condition="!Exists('$(MontyNativePrefix)/bin/$(MontyExecutable)')"
+      Condition="'$(FoxwarmNativeLibraries)' == '' and !Exists('$(MontyExecutablePath)')"
       Command="$(MontyPython) &quot;$(MSBuildProjectDirectory)/../scripts/acquire-monty-native.py&quot; &quot;$(MontyNativePrefix)&quot; --rid $(MontyTargetRid)"
     />
     <ItemGroup>
       <Content
-        Include="$(MontyNativePrefix)/bin/$(MontyExecutable)"
+        Include="$(MontyExecutablePath)"
         Link="ToolScript/native/$(MontyExecutable)"
         CopyToOutputDirectory="PreserveNewest"
         CopyToPublishDirectory="PreserveNewest"
       />
     </ItemGroup>
   </Target>
+  <ItemGroup Condition="'$(FoxwarmNativeLibraries)' != ''">
+    <Content
+      Include="$(FoxwarmNativeLibraries)/LanceDB-native-crates.txt;$(FoxwarmNativeLibraries)/Monty-native-crates.txt"
+      Link="%(Filename)%(Extension)"
+      CopyToOutputDirectory="PreserveNewest"
+      CopyToPublishDirectory="PreserveNewest"
+    />
+  </ItemGroup>
   <Import Project="Delivery.targets" />
-  <!-- Release builds replace the package's Linux LanceDB library, which needs glibc 2.39, with
-       one built from the same pinned source on glibc 2.34 (scripts/release/build-lancedb-linux.sh).
-       The replacement keeps the package item's metadata, so build, publish and NativeAOT treat it
+  <!-- The replacement keeps the package item's metadata, so build, publish and NativeAOT treat it
        exactly like the original. -->
   <Target
-    Name="UseLanceDbNativeLibrary"
+    Name="UseNativeLibraries"
     AfterTargets="ResolvePackageAssets"
-    Condition="'$(LanceDbNativeLibrary)' != '' and $(RuntimeIdentifier.StartsWith('linux-'))"
+    Condition="'$(FoxwarmNativeLibraries)' != ''"
   >
-    <Error Condition="!Exists('$(LanceDbNativeLibrary)')" Text="LanceDbNativeLibrary does not exist: $(LanceDbNativeLibrary)" />
+    <PropertyGroup>
+      <_LanceDbFile Condition="$(MontyTargetRid.StartsWith('linux-'))">liblancedb_ffi.so</_LanceDbFile>
+      <_LanceDbFile Condition="$(MontyTargetRid.StartsWith('win-'))">lancedb_ffi.dll</_LanceDbFile>
+      <_LanceDbFile Condition="$(MontyTargetRid.StartsWith('osx-'))">liblancedb_ffi.dylib</_LanceDbFile>
+    </PropertyGroup>
+    <Error Condition="'$(_LanceDbFile)' == ''" Text="FoxwarmNativeLibraries needs a linux, win or osx runtime identifier." />
+    <Error Condition="!Exists('$(FoxwarmNativeLibraries)/$(_LanceDbFile)')" Text="FoxwarmNativeLibraries has no $(_LanceDbFile): $(FoxwarmNativeLibraries)" />
     <ItemGroup>
-      <_PackageLanceDbNative Include="@(NativeCopyLocalItems)" Condition="'%(Filename)%(Extension)' == 'liblancedb_ffi.so'" />
+      <_PackageLanceDbNative Include="@(NativeCopyLocalItems)" Condition="'%(Filename)%(Extension)' == '$(_LanceDbFile)'" />
       <NativeCopyLocalItems Remove="@(_PackageLanceDbNative)" />
-      <NativeCopyLocalItems Include="@(_PackageLanceDbNative->'$([System.IO.Path]::GetFullPath($(LanceDbNativeLibrary)))')" />
+      <NativeCopyLocalItems Include="@(_PackageLanceDbNative->'$([System.IO.Path]::GetFullPath($(FoxwarmNativeLibraries)/$(_LanceDbFile)))')" />
     </ItemGroup>
-    <Error Condition="'@(_PackageLanceDbNative)' == ''" Text="The LanceDB package supplied no liblancedb_ffi.so to replace." />
+    <Error Condition="'@(_PackageLanceDbNative)' == ''" Text="The LanceDB package supplied no $(_LanceDbFile) to replace." />
   </Target>
 </Project>

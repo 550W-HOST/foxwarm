@@ -1,0 +1,9 @@
+{
+  "repository": "pydantic/monty",
+  "tag": "v0.0.19",
+  "commit": "e347739909877f4fb03877e23dd092286fc7e659",
+  "version": "0.0.19",
+  "rust": "1.95.0",
+  "archive": "https://codeload.github.com/pydantic/monty/tar.gz/e347739909877f4fb03877e23dd092286fc7e659",
+  "sha256": "2326fa36a24594289534359ca03f8d2f030397d5856c0f93a58652705bd7833d"
+}

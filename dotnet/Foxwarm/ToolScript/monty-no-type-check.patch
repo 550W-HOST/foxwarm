@@ -1,0 +1,86 @@
+Foxwarm build patch for the Monty standalone worker (pydantic/monty v0.0.19, MIT License; see
+MONTY-LICENSE). It removes the ty-based type checker (crate monty-type-checking, with ruff, ty,
+salsa and the embedded typeshed) from the `monty` executable. Foxwarm starts `monty subprocess` and
+never asks for type checking, so the checker is unreachable there; a request for it reports that
+type checking is not available. The interpreter and the worker protocol are unchanged.
+Applied by scripts/release/native-source.py (git apply) before scripts/release/build-monty.sh builds.
+
+diff --git a/crates/monty-proto/Cargo.toml b/crates/monty-proto/Cargo.toml
+index 23868ff..9742f3a 100644
+--- a/crates/monty-proto/Cargo.toml
++++ b/crates/monty-proto/Cargo.toml
+@@ -21,8 +21,6 @@ num-bigint = { workspace = true }
+ # Optional: the worker feature's Child state machine drives the interpreter
+ monty = { workspace = true, optional = true }
+ prost = { workspace = true }
+-# Optional: used with the worker feature
+-monty-type-checking = { workspace = true, optional = true }
+ # Optional: powers the `python` feature's Python ↔ MontyObject conversion layer
+ pyo3 = { workspace = true, optional = true, features = ["num-bigint"] }
+ # generation-only dependencies (see src/bin/generate.rs); exact pins so the
+@@ -41,7 +39,7 @@ python = ["dep:pyo3"]
+ # Enables the `worker` module: the child-side Child state machine that drives
+ # the interpreter. Off by default so host-side consumers (monty-pool, the
+ # bindings) never link the interpreter itself.
+-worker = ["dep:monty", "dep:monty-type-checking"]
++worker = ["dep:monty"]
+ 
+ [[bin]]
+ name = "generate-proto"
+diff --git a/crates/monty-proto/src/worker.rs b/crates/monty-proto/src/worker.rs
+index a8dc3c2..639c33e 100644
+--- a/crates/monty-proto/src/worker.rs
++++ b/crates/monty-proto/src/worker.rs
+@@ -19,7 +19,16 @@
+ use std::{borrow::Cow, mem};
+ 
+ use monty::{MontyRepl, ReplProgress, ReplStartError};
+-use monty_type_checking::{SourceFile, type_check};
++// Foxwarm build: the ty-based type checker is not linked into this build.
++// Foxwarm never requests `type_check` (it sends Configure without it), so these stubs are
++// unreachable from its `monty subprocess` use; a request for type checking reports an error.
++struct SourceFile<'a>(#[allow(dead_code)] &'a str);
++impl<'a> SourceFile<'a> {
++    fn new(code: &'a str, _name: &str) -> Self { Self(code) }
++}
++fn type_check(_code: &SourceFile<'_>, _stubs: Option<&SourceFile<'_>>) -> Result<Option<String>, String> {
++    Err("type checking is not available in this build".to_string())
++}
+ use monty_types::{
+     AssertMessageAnnotations, CompileOptions, ExcType, ExtFunctionResult, LimitedTracker, MontyException, MontyObject,
+     OsFunctionCall, PrintWriter, PrintWriterCallback,
+diff --git a/crates/monty-runtime/Cargo.toml b/crates/monty-runtime/Cargo.toml
+index ceb47b4..1d8e7b3 100644
+--- a/crates/monty-runtime/Cargo.toml
++++ b/crates/monty-runtime/Cargo.toml
+@@ -21,7 +21,6 @@ clap = { workspace = true }
+ monty = { workspace = true }
+ monty-fs = { workspace = true }
+ monty-proto = { workspace = true, features = ["worker"] }
+-monty-type-checking = { workspace = true }
+ monty-types = { workspace = true }
+ rustyline = "15"
+ 
+diff --git a/crates/monty-runtime/src/main.rs b/crates/monty-runtime/src/main.rs
+index bd37047..9d3eb47 100644
+--- a/crates/monty-runtime/src/main.rs
++++ b/crates/monty-runtime/src/main.rs
+@@ -16,8 +16,16 @@ use monty_types::{
+ use rustyline::{DefaultEditor, error::ReadlineError};
+ // disabled due to format failing on https://github.com/pydantic/monty/pull/75 where CI and local wanted imports ordered differently
+ // TODO re-enabled soon!
+-#[rustfmt::skip]
+-use monty_type_checking::{SourceFile, type_check};
++// Foxwarm build: the ty-based type checker is not linked into this build.
++// Foxwarm never requests `type_check` (it sends Configure without it), so these stubs are
++// unreachable from its `monty subprocess` use; a request for type checking reports an error.
++struct SourceFile<'a>(#[allow(dead_code)] &'a str);
++impl<'a> SourceFile<'a> {
++    fn new(code: &'a str, _name: &str) -> Self { Self(code) }
++}
++fn type_check(_code: &SourceFile<'_>, _stubs: Option<&SourceFile<'_>>) -> Result<Option<String>, String> {
++    Err("type checking is not available in this build".to_string())
++}
+ 
+ mod subprocess;
+ 

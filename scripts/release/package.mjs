@@ -39,6 +39,13 @@ export function hostRid(platform = process.platform, arch = process.arch) {
   return os && cpu ? `${os}-${cpu}` : ''
 }
 
+// What a --native-libraries directory holds for each RID: LanceDB library, ToolScript worker, crate licences.
+const nativeFiles = {
+  'linux-x64': ['liblancedb_ffi.so', 'monty', 'LanceDB-native-crates.txt', 'Monty-native-crates.txt'],
+  'osx-arm64': ['liblancedb_ffi.dylib', 'monty', 'LanceDB-native-crates.txt', 'Monty-native-crates.txt'],
+  'win-x64': ['lancedb_ffi.dll', 'monty.exe', 'LanceDB-native-crates.txt', 'Monty-native-crates.txt'],
+}
+
 // Collected artifact-runtime packages that npm installs only for the build host.
 const TARGET_NATIVES = {
   'linux-x64': ['@esbuild/linux-x64', '@img/sharp-linux-x64', '@img/sharp-libvips-linux-x64'],
@@ -93,10 +100,11 @@ export function archiveCode(output, source = codeAssets) {
 
 function usage(message) {
   if (message) console.error(message)
-  console.error(`Usage: node scripts/release/package.mjs --output DIR [--target NAME]... [--build-assets] [--directory-only] [--lancedb-library FILE] [--checksums-only | --code-only]
+  console.error(`Usage: node scripts/release/package.mjs --output DIR [--target NAME]... [--build-assets] [--directory-only] [--native-libraries DIR] [--checksums-only | --code-only]
 Targets: ${Object.keys(TARGETS).join(', ')}
 (default: the published targets this host can build; native targets build only on their own platform)
---lancedb-library: Linux x64 liblancedb_ffi.so to package instead of the LanceDB package's (scripts/release/build-lancedb-linux.sh)
+--native-libraries: directory with the LanceDB library and the ToolScript worker built for the targets' RID from pinned source
+(scripts/release/build-lancedb.sh and build-monty.sh); without it, the LanceDB package's libraries and the official worker are used
 --vc-runtime: the x64 Microsoft.VC14x.CRT directory whose DLLs Windows packages ship`)
   process.exit(2)
 }
@@ -157,12 +165,17 @@ function addWindowsRuntime(directory, runtime) {
   }
 }
 
-function publish(name, directory, lancedbLibrary, vcRuntimeDirectory) {
+function publish(name, directory, nativeLibraries, vcRuntimeDirectory) {
   const target = TARGETS[name]
   const common = ['-c', 'Release', '-r', target.rid, '--self-contained', String(target.selfContained),
     '-p:DebugType=None', '-p:DebugSymbols=false', '-o', directory]
-  // The LanceDB package's Linux library needs glibc 2.39; release builds supply one built on 2.34.
-  if (lancedbLibrary && target.rid === 'linux-x64') common.push(`-p:LanceDbNativeLibrary=${lancedbLibrary}`)
+  // Release builds ship the libraries built from pinned, patched source (see Foxwarm.csproj).
+  if (nativeLibraries) {
+    for (const file of nativeFiles[target.rid] ?? []) {
+      if (!fs.existsSync(path.join(nativeLibraries, file))) throw new Error(`${nativeLibraries} has no ${file} for ${target.rid}`)
+    }
+    common.push(`-p:FoxwarmNativeLibraries=${nativeLibraries.replaceAll('\\', '/')}`)
+  }
   if (target.native) common.push('-p:PublishAot=true', '-p:StripSymbols=true')
   if (target.bundle) {
     // The Apple SDK builds and ad-hoc signs the bundle in the project's output directory; the
@@ -264,7 +277,7 @@ function main(argv) {
   let directoryOnly = false
   let checksumsOnly = false
   let codeOnly = false
-  let lancedbLibrary
+  let nativeLibraries
   let vcRuntimeDirectory
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
@@ -274,12 +287,12 @@ function main(argv) {
     else if (arg === '--directory-only') directoryOnly = true
     else if (arg === '--checksums-only') checksumsOnly = true
     else if (arg === '--code-only') codeOnly = true
-    else if (arg === '--lancedb-library') lancedbLibrary = path.resolve(argv[++i] || usage('--lancedb-library requires a file'))
+    else if (arg === '--native-libraries') nativeLibraries = path.resolve(argv[++i] || usage('--native-libraries requires a directory'))
     else if (arg === '--vc-runtime') vcRuntimeDirectory = path.resolve(argv[++i] || usage('--vc-runtime requires a directory'))
     else usage(`Unknown argument: ${arg}`)
   }
   if (!output) usage('--output is required')
-  if (lancedbLibrary && !fs.statSync(lancedbLibrary, { throwIfNoEntry: false })?.isFile()) usage(`No such file: ${lancedbLibrary}`)
+  if (nativeLibraries && !fs.statSync(nativeLibraries, { throwIfNoEntry: false })?.isDirectory()) usage(`No such directory: ${nativeLibraries}`)
   if (vcRuntimeDirectory && !fs.statSync(vcRuntimeDirectory, { throwIfNoEntry: false })?.isDirectory()) usage(`No such directory: ${vcRuntimeDirectory}`)
   for (const name of targets) if (!TARGETS[name]) usage(`Unknown target: ${name}`)
   output = path.resolve(output)
@@ -314,7 +327,7 @@ function main(argv) {
     const prefix = TARGETS[name].kind === 'desktop' ? 'foxwarm-desktop' : 'foxwarm'
     const staging = path.join(work, name, TARGETS[name].bundle ?? `${prefix}-${version}-${TARGETS[name].rid}`)
     fs.rmSync(path.dirname(staging), { recursive: true, force: true })
-    publish(name, staging, lancedbLibrary, vcRuntimeDirectory)
+    publish(name, staging, nativeLibraries, vcRuntimeDirectory)
     if (directoryOnly) {
       console.log(`Prepared ${staging}`)
       continue

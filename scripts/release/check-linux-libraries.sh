@@ -2,7 +2,7 @@
 # List every ELF file of an extracted Linux package with the newest glibc/libstdc++ symbol
 # versions and the shared libraries it needs, and fail when any of them needs glibc newer than
 # 2.34 or a shared library beyond the base C/C++ runtime. Release builds replace the LanceDB
-# package's Linux library (glibc 2.39) with one built on 2.34 (build-lancedb-linux.sh). ICU and OpenSSL are loaded at run time
+# package's Linux library (glibc 2.39) with one built on 2.34 (build-lancedb.sh). ICU and OpenSSL are loaded at run time
 # by .NET, not linked, so they do not appear here.
 # Usage: scripts/release/check-linux-libraries.sh EXTRACTED_PACKAGE
 set -euo pipefail

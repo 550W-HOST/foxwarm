@@ -27,46 +27,126 @@ jobs:
     name: Build and qualify standalone Native AOT CLI packages
     uses: ./.github/workflows/native-cli-node.yml
 
-  # The LanceDB package's Linux library is linked on glibc 2.39. Both Linux packages use one
-  # built from the same pinned source on glibc 2.34, cached until that source or its build changes.
-  lancedb-linux:
-    name: Build the Linux LanceDB library on glibc 2.34
+  # Release packages ship the LanceDB library and the ToolScript worker built from pinned,
+  # patched upstream sources (scripts/release/build-lancedb.sh, build-monty.sh): LanceDB without
+  # its object-store back ends and optimized for size, the worker without its type checker. One
+  # job per platform, each cached until a source, patch, build script or toolchain pin changes.
+  # Linux builds on glibc 2.34, which the packages' libraries need to run on Ubuntu 22.04 and RHEL 9.
+  native-linux-x64:
+    name: Build the Linux LanceDB library and ToolScript worker on glibc 2.34
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Restore the LanceDB library
+      - name: Restore the native libraries
         id: cache
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
-          path: lancedb-linux-x64
-          key: lancedb-linux-x64-${{ hashFiles('dotnet/Foxwarm.LanceDb/source.json', 'scripts/release/build-lancedb-linux.sh', 'scripts/release/lancedb-linux.Dockerfile') }}
-      - name: Build the LanceDB library
+          path: native-linux-x64
+          key: native-linux-x64-${{ hashFiles('dotnet/Foxwarm.LanceDb/source.json', 'dotnet/Foxwarm.LanceDb/native-build.patch', 'dotnet/Foxwarm/ToolScript/monty-source.json', 'dotnet/Foxwarm/ToolScript/monty-no-type-check.patch', 'scripts/release/build-lancedb.sh', 'scripts/release/build-monty.sh', 'scripts/release/rust-native-common.sh', 'scripts/release/native-source.py', 'scripts/release/crate-licenses.py', 'scripts/release/rust-native-linux.Dockerfile') }}
+      - name: Build the native libraries
         if: ${{ steps.cache.outputs.cache-hit != 'true' }}
         run: |
-          docker build --progress=plain -f scripts/release/lancedb-linux.Dockerfile -t foxwarm-lancedb-build scripts/release
-          mkdir -p lancedb-linux-x64
-          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/src:ro" -v "$PWD/lancedb-linux-x64:/out" \
-            -e HOME=/tmp foxwarm-lancedb-build bash /src/scripts/release/build-lancedb-linux.sh /out
-      - name: Check the LanceDB library
-        run: bash scripts/release/check-linux-libraries.sh lancedb-linux-x64
-      - name: Save the LanceDB library
+          docker build --progress=plain -f scripts/release/rust-native-linux.Dockerfile -t foxwarm-rust-build scripts/release
+          mkdir -p native-linux-x64
+          for script in build-lancedb build-monty; do
+            docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/src:ro" -v "$PWD/native-linux-x64:/out" \
+              -e HOME=/tmp foxwarm-rust-build bash "/src/scripts/release/$script.sh" /out
+          done
+      - name: Check the native libraries
+        run: bash scripts/release/check-linux-libraries.sh native-linux-x64
+      - name: Save the native libraries
         if: ${{ steps.cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
-          path: lancedb-linux-x64
+          path: native-linux-x64
           key: ${{ steps.cache.outputs.cache-primary-key }}
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: lancedb-linux-x64
-          path: lancedb-linux-x64/
+          name: native-linux-x64
+          path: native-linux-x64/
+          if-no-files-found: error
+          retention-days: 1
+
+  native-win-x64:
+    name: Build the Windows LanceDB library and ToolScript worker
+    runs-on: windows-2025
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Restore the native libraries
+        id: cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: native-win-x64
+          key: native-win-x64-${{ hashFiles('dotnet/Foxwarm.LanceDb/source.json', 'dotnet/Foxwarm.LanceDb/native-build.patch', 'dotnet/Foxwarm/ToolScript/monty-source.json', 'dotnet/Foxwarm/ToolScript/monty-no-type-check.patch', 'scripts/release/build-lancedb.sh', 'scripts/release/build-monty.sh', 'scripts/release/rust-native-common.sh', 'scripts/release/native-source.py', 'scripts/release/crate-licenses.py', 'scripts/release/install-protoc.py') }}
+      - name: Build the native libraries
+        if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+        run: |
+          export PROTOC="$(python scripts/release/install-protoc.py "$RUNNER_TEMP/protoc")"
+          export PROTOC_INCLUDE="$(dirname "$(dirname "$PROTOC")")/include"
+          mkdir -p native-win-x64
+          bash scripts/release/build-lancedb.sh native-win-x64
+          bash scripts/release/build-monty.sh native-win-x64
+      - name: Save the native libraries
+        if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: native-win-x64
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-win-x64
+          path: native-win-x64/
+          if-no-files-found: error
+          retention-days: 1
+
+  native-osx-arm64:
+    name: Build the macOS LanceDB library and ToolScript worker
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Restore the native libraries
+        id: cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: native-osx-arm64
+          key: native-osx-arm64-${{ hashFiles('dotnet/Foxwarm.LanceDb/source.json', 'dotnet/Foxwarm.LanceDb/native-build.patch', 'dotnet/Foxwarm/ToolScript/monty-source.json', 'dotnet/Foxwarm/ToolScript/monty-no-type-check.patch', 'scripts/release/build-lancedb.sh', 'scripts/release/build-monty.sh', 'scripts/release/rust-native-common.sh', 'scripts/release/native-source.py', 'scripts/release/crate-licenses.py', 'scripts/release/install-protoc.py') }}
+      - name: Build the native libraries
+        if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+        run: |
+          test "$(uname -m)" = arm64
+          export PROTOC="$(python3 scripts/release/install-protoc.py "$RUNNER_TEMP/protoc")"
+          export PROTOC_INCLUDE="$(dirname "$(dirname "$PROTOC")")/include"
+          export MACOSX_DEPLOYMENT_TARGET=15.0
+          mkdir -p native-osx-arm64
+          bash scripts/release/build-lancedb.sh native-osx-arm64
+          bash scripts/release/build-monty.sh native-osx-arm64
+      - name: Save the native libraries
+        if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: native-osx-arm64
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-osx-arm64
+          path: native-osx-arm64/
           if-no-files-found: error
           retention-days: 1
 
   packages:
-    needs: [code-resources, lancedb-linux]
+    needs: [code-resources, native-linux-x64]
     name: Build Linux server packages
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -96,15 +176,15 @@ jobs:
         with:
           name: code-resources
           path: dist
-      - name: Download the LanceDB library
+      - name: Download the native libraries
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: lancedb-linux-x64
-          path: ${{ runner.temp }}/lancedb
+          name: native-linux-x64
+          path: ${{ runner.temp }}/native
       - name: Build the framework-dependent Linux package
         run: >-
           node scripts/release/package.mjs --build-assets --output dist
-          --lancedb-library "$RUNNER_TEMP/lancedb/liblancedb_ffi.so"
+          --native-libraries "$RUNNER_TEMP/native"
           --target linux-x64
       # NativeAOT links against the build system's glibc. The UBI 9 container (glibc 2.34) keeps
       # the native package runnable on Ubuntu 22.04, Debian 12 and RHEL 9; the delivery assets
@@ -116,10 +196,10 @@ jobs:
           mkdir -p "$HOME/.nuget/packages"
           docker run --rm --user "$(id -u):$(id -g)" \
             -v "$PWD:/src" -w /src -v "$node_bin:/opt/node/bin:ro" -v "$HOME/.nuget/packages:/nuget" \
-            -v "$RUNNER_TEMP/lancedb:/lancedb:ro" \
+            -v "$RUNNER_TEMP/native:/native:ro" \
             -e HOME=/tmp -e NUGET_PACKAGES=/nuget -e PATH=/opt/node/bin:/usr/share/dotnet:/usr/bin:/bin \
             foxwarm-native-build node scripts/release/package.mjs --output dist --target linux-x64-native \
-            --lancedb-library /lancedb/liblancedb_ffi.so
+            --native-libraries /native
       - name: Check the Linux packages' native libraries
         run: |
           for asset in foxwarm-linux-x64.tar.gz foxwarm-linux-x64-native.tar.gz; do
@@ -127,7 +207,7 @@ jobs:
             tar -xzf "dist/$asset" -C "$RUNNER_TEMP/check"
             echo "== $asset"
             bash scripts/release/check-linux-libraries.sh "$RUNNER_TEMP"/check/*
-            cmp "$RUNNER_TEMP"/check/*/liblancedb_ffi.so "$RUNNER_TEMP/lancedb/liblancedb_ffi.so"
+            node scripts/release/check-native-libraries.mjs "$RUNNER_TEMP"/check/* "$RUNNER_TEMP/native"
           done
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -139,6 +219,7 @@ jobs:
 
   macos:
     name: Build and qualify macOS arm64 packages
+    needs: native-osx-arm64
     # The standard macos-15 label is arm64; macos-15-intel is a different image.
     runs-on: macos-15
     timeout-minutes: 75
@@ -161,8 +242,13 @@ jobs:
           test "$(uname -m)" = arm64
           command -v tmux || brew install tmux
           npm ci && npm --prefix packages/webui ci
+      - name: Download the native libraries
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: native-osx-arm64
+          path: ${{ runner.temp }}/native
       - name: Build both macOS packages natively
-        run: node scripts/release/package.mjs --build-assets --output dist --target osx-arm64 --target osx-arm64-native
+        run: node scripts/release/package.mjs --build-assets --output dist --native-libraries "$RUNNER_TEMP/native" --target osx-arm64 --target osx-arm64-native
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-packages-macos
@@ -179,6 +265,7 @@ jobs:
             payload="$(find "$extracted" -mindepth 1 -maxdepth 1 -type d -print -quit)"
             test -f "$payload/libfoxwarm-pty.dylib"
             test -x "$payload/foxwarm-pty-helper"
+            node scripts/release/check-native-libraries.mjs "$payload" "$RUNNER_TEMP/native"
             # Published natives must not depend on the runner's Homebrew installation.
             find "$payload" -name '*.dylib' -exec otool -L {} \; > "$extracted/native-libraries.txt"
             otool -L "$payload/Foxwarm" "$payload/foxwarm-pty-helper" >> "$extracted/native-libraries.txt"
@@ -228,6 +315,7 @@ jobs:
   # The Desktop app is a NativeAOT build of the AppKit host, published as its ad-hoc signed bundle.
   macos-desktop:
     name: Build and qualify the macOS Desktop app
+    needs: native-osx-arm64
     runs-on: macos-15
     timeout-minutes: 60
     env:
@@ -256,8 +344,13 @@ jobs:
           dotnet workload install macos --from-rollback-file "$RUNNER_TEMP/macos-workload.json"
           dotnet workload list
           npm ci && npm --prefix packages/webui ci
+      - name: Download the native libraries
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: native-osx-arm64
+          path: ${{ runner.temp }}/native
       - name: Build the Desktop app natively
-        run: node scripts/release/package.mjs --build-assets --output dist --target desktop-osx-arm64
+        run: node scripts/release/package.mjs --build-assets --output dist --native-libraries "$RUNNER_TEMP/native" --target desktop-osx-arm64
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-packages-macos-desktop
@@ -267,6 +360,8 @@ jobs:
           retention-days: 14
       - name: Extract the Desktop package
         run: ditto -x -k dist/foxwarm-desktop-osx-arm64.zip "$RUNNER_TEMP/desktop-extracted"
+      - name: Check the Desktop app's native libraries
+        run: node scripts/release/check-native-libraries.mjs "$RUNNER_TEMP/desktop-extracted/Foxwarm.app" "$RUNNER_TEMP/native" --resigned
       - name: Validate and launch the extracted Desktop app
         run: node dotnet/scripts/qualify-desktop-mac-package.mjs "$RUNNER_TEMP/desktop-extracted/Foxwarm.app" "$RUNNER_TEMP/desktop-mac-acceptance.json"
       - name: Upload Desktop acceptance summary
@@ -401,7 +496,7 @@ jobs:
 
   windows:
     name: Build and qualify Windows packages
-    needs: packages
+    needs: [packages, native-win-x64]
     runs-on: windows-2025
     timeout-minutes: 75
     steps:
@@ -422,6 +517,10 @@ jobs:
         with:
           name: release-packages-linux
           path: dist
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: native-win-x64
+          path: ${{ runner.temp }}/native
       - name: Install build and acceptance dependencies
         run: npm ci && npm --prefix packages/webui ci
       - name: Prepare shared Code resources
@@ -450,7 +549,7 @@ jobs:
       - name: Build the Windows server packages and Desktop
         shell: pwsh
         run: |
-          node scripts/release/package.mjs --build-assets --output dist --vc-runtime $env:VC_RUNTIME --target win-x64 --target win-x64-native --target desktop-win-x64 | Tee-Object -FilePath "$env:RUNNER_TEMP/windows-publish.log"
+          node scripts/release/package.mjs --build-assets --output dist --vc-runtime $env:VC_RUNTIME --native-libraries "$env:RUNNER_TEMP/native" --target win-x64 --target win-x64-native --target desktop-win-x64 | Tee-Object -FilePath "$env:RUNNER_TEMP/windows-publish.log"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       # Main's NativeAOT warnings are gated by the Tests workflow's native lane. The Desktop's own
       # code has none; release publications carry no symbols, so warnings name only the caller.
@@ -479,7 +578,12 @@ jobs:
             $payload = (Get-ChildItem $extracted -Directory | Select-Object -First 1).FullName
             node scripts/release/windows-imports.mjs $payload
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            if (-not (Test-Path (Join-Path $payload 'VC-RUNTIME-NOTICE.txt'))) { throw "$package has no Visual C++ runtime notice" }
+            node scripts/release/check-native-libraries.mjs $payload "$env:RUNNER_TEMP/native"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            # The runtime and Microsoft's notice ship together, or neither ships.
+            $runtime = @(Get-ChildItem $payload -Recurse -Filter 'vcruntime*.dll').Count
+            Write-Host "$package ships $runtime Visual C++ runtime DLLs"
+            if (($runtime -gt 0) -ne (Test-Path (Join-Path $payload 'VC-RUNTIME-NOTICE.txt'))) { throw "$package must ship the Visual C++ runtime and its notice together" }
             if ($package -ne 'foxwarm-win-x64.zip' -and (Test-Path (Join-Path $payload 'Foxwarm.dll'))) { throw "The native package $package must not contain Foxwarm.dll" }
           }
       - name: Qualify the archived Main, detached exec, PTY, native ToolScript and the Vector child

@@ -99,22 +99,51 @@ test('only resource producers build pins; consumers require the exact validated 
   assert.equal(published[0].if, '${{ matrix.shard == 1 }}')
 })
 
-test('Both Linux packages use the cached glibc 2.34 LanceDB build', () => {
-  const producer = release.jobs['lancedb-linux']
-  const cache = restore(producer)[0]
-  for (const input of ['dotnet/Foxwarm.LanceDb/source.json', 'scripts/release/build-lancedb-linux.sh', 'scripts/release/lancedb-linux.Dockerfile']) {
-    assert.ok(cache.with.key.includes(`'${input}'`), input)
-  }
-  const build = producer.steps.find(step => step.run?.includes('build-lancedb-linux.sh'))
-  assert.equal(build.if, "${{ steps.cache.outputs.cache-hit != 'true' }}")
-  assert.ok(producer.steps.some(step => step.run?.includes('check-linux-libraries.sh')))
-  const uploaded = producer.steps.find(step => step.uses?.startsWith('actions/upload-artifact@'))
+const nativeInputs = [
+  'dotnet/Foxwarm.LanceDb/source.json', 'dotnet/Foxwarm.LanceDb/native-build.patch',
+  'dotnet/Foxwarm/ToolScript/monty-source.json', 'dotnet/Foxwarm/ToolScript/monty-no-type-check.patch',
+  'scripts/release/build-lancedb.sh', 'scripts/release/build-monty.sh', 'scripts/release/rust-native-common.sh',
+  'scripts/release/native-source.py', 'scripts/release/crate-licenses.py',
+]
+
+for (const [rid, extra] of [
+  ['linux-x64', ['scripts/release/rust-native-linux.Dockerfile']],
+  ['win-x64', ['scripts/release/install-protoc.py']],
+  ['osx-arm64', ['scripts/release/install-protoc.py']],
+]) {
+  test(`${rid} packages ship the cached LanceDB library and ToolScript worker built from pinned source`, () => {
+    const name = `native-${rid}`
+    const producer = release.jobs[name]
+    const cache = restore(producer)[0]
+    for (const input of [...nativeInputs, ...extra]) assert.ok(cache.with.key.includes(`'${input}'`), input)
+    const builds = producer.steps.filter(step => /build-lancedb|build-monty/.test(step.run || ''))
+    assert.ok(builds.length > 0)
+    for (const step of builds) assert.equal(step.if, "${{ steps.cache.outputs.cache-hit != 'true' }}")
+    const uploaded = producer.steps.find(step => step.uses?.startsWith('actions/upload-artifact@'))
+    assert.equal(uploaded.with.name, name)
+    const consumers = Object.entries(release.jobs).filter(([, job]) => job.steps?.some(step =>
+      step.uses?.startsWith('actions/download-artifact@') && step.with.name === name))
+    assert.ok(consumers.length > 0)
+    for (const [consumer, job] of consumers) {
+      assert.ok([job.needs].flat().includes(name), `${consumer} must wait for ${name}`)
+      // Every package build of this RID passes the directory; no job packages the NuGet or npm binaries.
+      for (const step of job.steps.filter(step => /package\.mjs[\s\S]*--target (linux-x64|osx-arm64|win-x64|desktop-)/.test(step.run || ''))) {
+        assert.match(step.run, /--native-libraries/, `${consumer}: ${step.name}`)
+      }
+    }
+  })
+}
+
+test('The Linux native libraries are checked against glibc 2.34 and every package against the build output', () => {
+  const producer = release.jobs['native-linux-x64']
+  assert.ok(producer.steps.some(step => step.run?.includes('check-linux-libraries.sh native-linux-x64')))
   const packages = release.jobs.packages
-  assert.ok([packages.needs].flat().includes('lancedb-linux'))
-  assert.ok(packages.steps.some(step => step.uses?.startsWith('actions/download-artifact@') && step.with.name === uploaded.with.name))
   const linuxBuilds = packages.steps.filter(step => /package\.mjs[\s\S]*--target linux-x64(-native)?\b/.test(step.run || ''))
   assert.equal(linuxBuilds.length, 2)
-  for (const step of linuxBuilds) assert.match(step.run, /--lancedb-library \S+liblancedb_ffi\.so/)
+  assert.ok(packages.steps.some(step => step.run?.includes('check-native-libraries.mjs')))
+  assert.ok(release.jobs.windows.steps.some(step => step.run?.includes('check-native-libraries.mjs')))
+  assert.ok(release.jobs.macos.steps.some(step => step.run?.includes('check-native-libraries.mjs')))
+  assert.ok(release.jobs['macos-desktop'].steps.some(step => step.run?.includes('check-native-libraries.mjs')))
 })
 
 test('Tests and Release reuse one cache-backed Code producer and consume its per-run archive', () => {
