@@ -1,6 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import { createRequire } from 'node:module'
+import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
 
 async function loadTypeScriptModule(relativePath) {
@@ -12,6 +16,39 @@ async function loadTypeScriptModule(relativePath) {
     write: false,
   })
   return import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`)
+}
+
+async function loadSessionRowRenderer() {
+  const root = fileURLToPath(new URL('..', import.meta.url))
+  const temp = await mkdtemp(path.join(tmpdir(), 'foxwarm-session-row-'))
+  try {
+    const output = path.join(temp, 'row.cjs')
+    await build({
+      stdin: {
+        contents: `import React from 'react'; import { renderToStaticMarkup } from 'react-dom/server'
+          import SessionRowContent from './src/components/SessionRowContent'
+          export function render(props) {
+            return renderToStaticMarkup(React.createElement(SessionRowContent, {
+              session: { id: 'main/task', displayName: 'Task', messageCount: 3 },
+              title: 'Task', agentTag: null, paddingLeft: '8px', displayId: 'task', compact: false, ...props,
+            }))
+          }`,
+        resolveDir: root,
+        loader: 'tsx',
+      },
+      outfile: output, bundle: true, format: 'cjs', platform: 'node', target: 'node20', logLevel: 'silent',
+    })
+    // The bundle reads the page location (API base path) when it is first evaluated.
+    const hadWindow = 'window' in globalThis
+    if (!hadWindow) globalThis.window = { location: { pathname: '/', origin: 'http://localhost' } }
+    try {
+      return createRequire(import.meta.url)(output).render
+    } finally {
+      if (!hadWindow) delete globalThis.window
+    }
+  } finally {
+    await rm(temp, { recursive: true, force: true })
+  }
 }
 
 const notifications = await loadTypeScriptModule('../src/sessionIdleNotifications.ts')
@@ -384,12 +421,24 @@ test('session context menu exposes an accessible once item with a trailing alway
   assert.match(list, /Bell size=\{14\}/)
   assert.match(list, /checked: idleNotificationMode === 'once'/)
   assert.match(list, /trailingControl:/)
-  assert.match(list, /Unread idle completion/)
   assert.match(list, /result\.deletedSessionIds/)
   const collapsed = await readFile(new URL('../src/components/CollapsedSidebar.tsx', import.meta.url), 'utf8')
   assert.match(collapsed, /top-0\.5 right-0\.5/)
   assert.match(collapsed, /bottom-0\.5 right-0\.5/)
   assert.match(collapsed, /Unread idle completion/)
+})
+
+test('session row announces an unread idle completion in both densities and in the drag preview', async () => {
+  const render = await loadSessionRowRenderer()
+  for (const compact of [false, true]) {
+    for (const preview of [false, true]) {
+      const unread = render({ compact, preview, unread: true })
+      assert.match(unread, /Unread idle completion/, `compact=${compact} preview=${preview}`)
+      assert.doesNotMatch(render({ compact, preview, unread: false }), /Unread idle completion/, `compact=${compact} preview=${preview}`)
+    }
+  }
+  assert.match(render({ compact: true, unread: true }), /role="img" aria-label="Unread idle completion"/)
+  assert.match(render({ compact: false, unread: true }), /class="sr-only">Unread idle completion</)
 })
 
 test('failed settlement uses the existing completion watch once per observed run, with queue and reload baselines intact', () => {

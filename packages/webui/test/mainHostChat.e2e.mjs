@@ -190,6 +190,10 @@ try {
   await send(page, 'queued while busy')
   await page.waitForSelector('[data-queued-preview="true"]')
   assert.equal((await browserHistory(page, id)).queueLength, 1)
+  // Main queues the input before it answers the send, so queueLength 1 does not mean the page has seen the
+  // answer. Until it has, the composer still holds the sent text, and a reload restores that text as a draft,
+  // which replaces the Stop button with Send. An idle-text composer on a running session shows Stop.
+  await page.waitForSelector('button[aria-label="Stop session"]')
   await page.reload({ waitUntil: 'load' }); await waitForWebUiReady(page)
   await timeline(page, 'Waiting to stop')
   await page.waitForSelector('[data-queued-preview="true"]')
