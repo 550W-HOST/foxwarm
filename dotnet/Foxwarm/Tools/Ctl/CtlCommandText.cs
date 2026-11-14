@@ -15,6 +15,13 @@ internal static partial class CtlCommandText
     internal static string Prefix(string builtin, JsonObject? fixedArgs = null) =>
         "ctl " + Command(builtin, fixedArgs ?? []).Path;
 
+    // One option of the command running a builtin, such as `--preview-length 20000`.
+    internal static string Option(string builtin, string arg, JsonNode value)
+    {
+        var parameter = Command(builtin, []).Parameters.Single(parameter => parameter.Arg == arg);
+        return string.Join(' ', Option(parameter, value));
+    }
+
     internal static string For(string builtin, JsonObject args)
     {
         var command = Command(builtin, args);

@@ -169,7 +169,7 @@ public sealed class VisionInputParityTests
             Assert.DoesNotContain("base64", json);
             Assert.DoesNotContain("inlineData", json);
             Assert.Contains("foxwarm-file", json);
-            Assert.Contains("image_write_to_file", json);
+            Assert.Contains("ctl image save", json);
             Assert.Contains("first result", json);
             Assert.Contains("second result", json);
         }

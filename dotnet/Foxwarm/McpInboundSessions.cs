@@ -204,7 +204,7 @@ internal sealed class McpInboundSessions(
             + "\" hint=\"Message from an external MCP client."
             + (
                 allowReply
-                    ? " For an explicit reply, use send_to_channel with the channelTargetId shown here. Ordinary assistant replies are not sent to this connection."
+                    ? " For an explicit reply, use `ctl channel send` with the channelTargetId shown here. Ordinary assistant replies are not sent to this connection."
                     : ""
             )
             + "\">";

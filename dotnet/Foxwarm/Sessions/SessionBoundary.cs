@@ -163,7 +163,7 @@ internal static class SessionBoundary
         parts = parts.Select(ExternalPart).ToArray();
         var hint = sendOnly
             ? "direct user message via channel"
-            : "direct user message via channel; This channel is in normal mode. Assistant text from this session is automatically delivered to this channel, so you do not need to call send_to_channel to reply here.";
+            : "direct user message via channel; This channel is in normal mode. Assistant text from this session is automatically delivered to this channel, so you do not need `ctl channel send` to reply here.";
         var opening =
             "<foxwarm-message type=\"channel\" channelInstanceId=\""
             + Attribute(source.Instance)
@@ -184,9 +184,12 @@ internal static class SessionBoundary
         if (sendOnly)
         {
             var notice =
-                "Channel is in send-only mode. If you need to reply, call send_to_channel({channelTargetId: \""
-                + source.Target
-                + "\", message: \"...\"}).";
+                "Channel is in send-only mode. If you need to reply, run `"
+                + CtlCommandText.For(
+                    "send_to_channel",
+                    new JsonObject { ["channelTargetId"] = source.Target, ["message"] = "..." }
+                )
+                + "`.";
             result.Add(
                 new JsonObject
                 {
