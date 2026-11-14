@@ -6,6 +6,15 @@ namespace Foxwarm.Tests;
 // commands with the descriptor and search fields the former unified tools took.
 internal static class CtlTestArgs
 {
+    // Sets a (possibly dotted) target argument, creating parent objects.
+    internal static void SetPath(JsonObject target, string path, JsonNode? value)
+    {
+        var parts = path.Split('.');
+        foreach (var part in parts[..^1])
+            target = target[part] as JsonObject ?? (JsonObject)(target[part] = new JsonObject());
+        target[parts[^1]] = value;
+    }
+
     // The target arguments of a ctl command hint in tool output, such as an older-page link.
     internal static JsonObject Hint(string text, string builtin)
     {

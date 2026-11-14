@@ -40,6 +40,8 @@ public sealed class CtlNodeSelectionBatchTests
     [InlineData("values-type")]
     [InlineData("extra-key")]
     [InlineData("generic-unused-values")]
+    [InlineData("bound-id")]
+    [InlineData("bound-source-name")]
     [InlineData("command")]
     [InlineData("malformed")]
     [InlineData("tool-call")]
@@ -64,6 +66,35 @@ public sealed class CtlNodeSelectionBatchTests
                 "select",
                 "ctl",
                 new() { ["command"] = "node select missing-node", ["unexpected"] = true }
+            ),
+            "bound-id" => Call(
+                "select",
+                "ctl",
+                new()
+                {
+                    ["command"] = "tool call @id --args @a",
+                    ["values"] = new JsonObject
+                    {
+                        ["id"] = "builtin:node",
+                        ["a"] = new JsonObject { ["action"] = "select", ["nodeId"] = "missing-node" },
+                        ["unused"] = 1,
+                    },
+                }
+            ),
+            "bound-source-name" => Call(
+                "select",
+                "ctl",
+                new()
+                {
+                    ["command"] = "tool call --source @source --name @name --args @a",
+                    ["values"] = new JsonObject
+                    {
+                        ["source"] = "builtin",
+                        ["name"] = "node",
+                        ["a"] = new JsonObject { ["action"] = "select", ["nodeId"] = "missing-node" },
+                        ["unused"] = 1,
+                    },
+                }
             ),
             "generic-unused-values" => Call(
                 "select",

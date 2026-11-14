@@ -40,8 +40,16 @@ internal static partial class CtlCommandText
                     positionalOpen = false;
                 continue;
             }
-            if (parameter.Rest)
-                rest = RestText(value);
+            // Rest text is written raw only when the parser will read it back unchanged: every
+            // positional before it given as a word, and no leading whitespace. Otherwise it is
+            // an ordinary quoted option.
+            if (
+                parameter.Rest
+                && positionalOpen
+                && RestText(value) is { Length: > 0 } text
+                && !char.IsWhiteSpace(text[0])
+            )
+                rest = text;
             else if (parameter.Positional && positionalOpen && Positional(value) is { } word)
                 words.Add(word);
             else
@@ -99,7 +107,16 @@ internal static partial class CtlCommandText
         var flag = "--" + parameter.FlagName;
         if (parameter.IsBoolean && value is JsonValue boolean && boolean.TryGetValue<bool>(out var on))
             return [on ? flag : "--no-" + parameter.FlagName];
-        if (parameter.IsArray && value is JsonArray items && items.All(item => item is JsonValue))
+        // Repeated options for scalar items; an empty or structured array is one JSON token, so
+        // an explicit `[]` stays distinct from omission.
+        if (
+            parameter.IsArray
+            && value is JsonArray { Count: > 0 } items
+            && items.All(item =>
+                item is JsonValue scalar
+                && !(scalar.TryGetValue<string>(out var text) && text.TrimStart().StartsWith('['))
+            )
+        )
             return items.SelectMany(item => new[] { flag, Word(item!) });
         return [flag, Word(value)];
     }
