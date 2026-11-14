@@ -6,7 +6,7 @@ The macOS Desktop is the separate [AppKit host](../Foxwarm.Desktop.Mac/README.md
 
 This is an unsigned **Windows x64** desktop app compiled to native code
 (NativeAOT). It needs no .NET installation, Visual C++ redistributable or
-installer: the package carries the Visual C++ runtime DLLs its components import.
+installer: its components link the C runtime statically or import only Windows DLLs.
 
 1. Install the **Microsoft Edge WebView2 Evergreen Runtime (x64)** if it is not
    already installed (Windows 10 and 11 normally include it). Microsoft Edge alone
@@ -125,8 +125,8 @@ not an embedding service. Configure a compatible embedding endpoint to enable
 it; disabled configuration does not start a native owner. The default supervised
 child runs through the Desktop executable before UI and single-instance setup,
 without a separate console apphost/runtimeconfig. The LanceDB library and the
-ToolScript worker import the Visual C++ runtime, whose DLLs ship beside them
-(`VC-RUNTIME-NOTICE.txt`); the Universal C runtime is part of Windows 10 and later.
+ToolScript worker are built with the static C runtime, so the package ships no Visual C++
+runtime; the Universal C runtime is part of Windows 10 and later.
 The package includes `LanceDB-LICENSE.txt` and `Apache-Arrow-LICENSE.txt`. A successful
 cross-build does not establish Windows application or child runtime qualification.
 
@@ -145,11 +145,12 @@ an optional external tool for Code SCM, not a bundled dependency.
 Install the repository's npm dependencies (`npm ci`, `npm --prefix packages/webui ci`)
 and a patched .NET 10 SDK on Windows, then run the release packager from the repository root. It
 publishes Desktop with NativeAOT for `win-x64` on Windows, removes console-only
-entry files and copies the Visual C++ runtime DLLs that packaged binaries import
-from the given redistributable directory:
+entry files and checks that every DLL a packaged binary imports is in the package or part
+of Windows. It takes the LanceDB library and ToolScript worker from a `--native-libraries`
+directory built with `scripts/release/build-lancedb.sh` and `build-monty.sh`:
 
 ```sh
-node scripts/release/package.mjs --build-assets --output dist --vc-runtime "<VS>\VC\Redist\MSVC\<version>\x64\Microsoft.VC143.CRT" --target desktop-win-x64
+node scripts/release/package.mjs --build-assets --output dist --native-libraries <native-libraries-directory> --target desktop-win-x64
 ```
 
 The Core project supplies the same WebUI, public skills, templates, Node bootstrap,
@@ -181,7 +182,7 @@ Use a patched SDK (qualified with .NET SDK 10.0.403, runtime and ILCompiler
 10.0.14) rather than forcing one runtime version onto every framework reference:
 WinUI also resolves a separately versioned Windows SDK projection. The packager
 publishes with `-p:PublishAot=true`; the equivalent direct publication, without
-the Code workbench and Visual C++ runtime copy, is:
+the Code workbench and the import check, is:
 
 ```powershell
 dotnet publish dotnet/Foxwarm.Desktop -c Release -r win-x64 --self-contained true -p:PublishAot=true -p:FoxwarmConsoleEntry=false -p:ArtifactTargetRid=win-x64 -o desktop-native

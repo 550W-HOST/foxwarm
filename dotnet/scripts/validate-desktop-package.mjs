@@ -25,7 +25,7 @@ export async function validateDesktopPackage(directory) {
   assert.equal(release.target, 'desktop-win-x64')
   assert.equal(release.native, true, 'The Windows Desktop is a NativeAOT package')
   for (const file of [
-    'Foxwarm.ico', 'VC-RUNTIME-NOTICE.txt', 'Microsoft.UI.Xaml.Controls.pri', 'WindowsAppSDK-LICENSE.txt', 'WindowsAppSDK-NOTICE.txt',
+    'Foxwarm.ico', 'Microsoft.UI.Xaml.Controls.pri', 'WindowsAppSDK-LICENSE.txt', 'WindowsAppSDK-NOTICE.txt',
     'webui-dist/index.html', 'packages/webui/login.html',
     'templates/agents/00_SYSTEM.md', 'templates/models.example.yaml',
     'templates/node/run.ps1', 'templates/node/run.sh',
@@ -61,7 +61,7 @@ export async function validateDesktopPackage(directory) {
   }
   assert((await readdir(join(root, 'webui-dist/assets'))).some(file => file.endsWith('.js')), 'Built WebUI JavaScript is missing')
   for (const file of [
-    'Foxwarm.Desktop.exe', 'ToolScript/native/monty.exe', 'vcruntime140.dll', 'ToolScript/native/vcruntime140.dll',
+    'Foxwarm.Desktop.exe', 'ToolScript/native/monty.exe',
     'Microsoft.UI.Xaml.dll', 'Microsoft.WindowsAppRuntime.dll', 'Microsoft.Web.WebView2.Core.dll',
     'e_sqlite3.dll', 'libSkiaSharp.dll', 'lancedb_ffi.dll',
     'node_modules/@esbuild/win32-x64/esbuild.exe',

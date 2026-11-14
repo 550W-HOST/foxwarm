@@ -541,22 +541,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node scripts/test/prepare-browser.mjs --check-code
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      # NativeAOT links with the image's Visual Studio C++ tools; the server and Desktop packages
-      # ship the Visual C++ runtime of the same installation beside the binaries that import it.
-      - name: Locate the Visual C++ runtime
-        shell: pwsh
-        run: |
-          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-          $version = (Get-Content "$vs\VC\Auxiliary\Build\Microsoft.VCRedistVersion.default.txt" -Raw).Trim()
-          $crt = @(Get-ChildItem "$vs\VC\Redist\MSVC\$version\x64" -Directory -Filter 'Microsoft.VC*.CRT')
-          if ($crt.Count -ne 1) { throw "Expected one Visual C++ runtime directory for $version" }
-          Write-Host "Visual C++ runtime $version from $($crt[0].FullName)"
-          Get-ChildItem $crt[0].FullName | Format-Table Name, Length | Out-String | Write-Host
-          "VC_RUNTIME=$($crt[0].FullName)" >> $env:GITHUB_ENV
       - name: Build the Windows server packages and Desktop
         shell: pwsh
         run: |
-          node scripts/release/package.mjs --build-assets --output dist --vc-runtime $env:VC_RUNTIME --native-libraries "$env:RUNNER_TEMP/native" --target win-x64 --target win-x64-native --target desktop-win-x64 | Tee-Object -FilePath "$env:RUNNER_TEMP/windows-publish.log"
+          node scripts/release/package.mjs --build-assets --output dist --native-libraries "$env:RUNNER_TEMP/native" --target win-x64 --target win-x64-native --target desktop-win-x64 | Tee-Object -FilePath "$env:RUNNER_TEMP/windows-publish.log"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       # Main's NativeAOT warnings are gated by the Tests workflow's native lane. The Desktop's own
       # code has none; release publications carry no symbols, so warnings name only the caller.
@@ -587,10 +575,9 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             node scripts/release/check-native-libraries.mjs $payload "$env:RUNNER_TEMP/native"
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            # The runtime and Microsoft's notice ship together, or neither ships.
-            $runtime = @(Get-ChildItem $payload -Recurse -Filter 'vcruntime*.dll').Count
-            Write-Host "$package ships $runtime Visual C++ runtime DLLs"
-            if (($runtime -gt 0) -ne (Test-Path (Join-Path $payload 'VC-RUNTIME-NOTICE.txt'))) { throw "$package must ship the Visual C++ runtime and its notice together" }
+            # Static C runtime: no Visual C++ redistributable ships with any Windows package.
+            if (Get-ChildItem $payload -Recurse -Include 'vcruntime*.dll', 'msvcp*.dll') { throw "$package ships Visual C++ runtime DLLs" }
+            if (Test-Path (Join-Path $payload 'VC-RUNTIME-NOTICE.txt')) { throw "$package ships the Visual C++ runtime notice" }
             if ($package -ne 'foxwarm-win-x64.zip' -and (Test-Path (Join-Path $payload 'Foxwarm.dll'))) { throw "The native package $package must not contain Foxwarm.dll" }
           }
       - name: Qualify the archived Main, detached exec, PTY, native ToolScript and the Vector child

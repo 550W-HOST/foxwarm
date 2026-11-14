@@ -125,7 +125,7 @@ test('the Windows Desktop is a NativeAOT package built only on Windows x64', t =
   if (hostRid() === 'win-x64') return t.skip('this host can build the package')
   const output = scratch(t)
   const script = path.join(root, 'scripts/release/package.mjs')
-  const elsewhere = spawnSync(process.execPath, [script, '--output', output, '--vc-runtime', output, '--target', 'desktop-win-x64'], { encoding: 'utf8' })
+  const elsewhere = spawnSync(process.execPath, [script, '--output', output, '--native-libraries', output, '--target', 'desktop-win-x64'], { encoding: 'utf8' })
   assert.equal(elsewhere.status, 1)
   assert.match(elsewhere.stderr, /desktop-win-x64 is a NativeAOT package and must be built on win-x64/)
   assert.deepEqual(fs.readdirSync(output), [])

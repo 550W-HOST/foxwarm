@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { addVcRuntime, missingImports, vcRuntime } from './windows-imports.mjs'
+import { missingImports } from './windows-imports.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const version = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version
@@ -104,8 +104,7 @@ function usage(message) {
 Targets: ${Object.keys(TARGETS).join(', ')}
 (default: the published targets this host can build; native targets build only on their own platform)
 --native-libraries: directory with the LanceDB library and the ToolScript worker built for the targets' RID from pinned source
-(scripts/release/build-lancedb.sh and build-monty.sh); without it, the LanceDB package's libraries and the official worker are used
---vc-runtime: the x64 Microsoft.VC14x.CRT directory whose DLLs Windows packages ship`)
+(scripts/release/build-lancedb.sh and build-monty.sh); without it, the LanceDB package's libraries and the official worker are used (Windows packages require it: its libraries link the C runtime statically)`)
   process.exit(2)
 }
 
@@ -152,20 +151,16 @@ function removeDebugFiles(directory) {
   }
 }
 
-// Windows packages carry the Visual C++ runtime DLLs their native binaries import
-// (the ToolScript worker and LanceDB), beside each importer, with Microsoft's notice.
-function addWindowsRuntime(directory, runtime) {
-  if (!runtime) throw new Error('Windows packages need --vc-runtime DIR: the x64 Microsoft.VC14x.CRT redistributable directory of the Visual Studio build tools.')
-  const copied = addVcRuntime(directory, runtime)
-  const missing = missingImports(directory, name => !vcRuntime.test(name))
-  if (missing.length) throw new Error(`${path.basename(directory)} imports Visual C++ runtime DLLs that ${runtime} does not provide: ${missing.join(', ')}`)
-  if (copied.length) {
-    fs.copyFileSync(path.join(root, 'scripts/release/vc-runtime-notice.txt'), path.join(directory, 'VC-RUNTIME-NOTICE.txt'))
-    console.log(`Added the Visual C++ runtime: ${copied.join(', ')}`)
-  }
+// Windows packages need no Visual C++ redistributable: the Rust binaries link the C runtime
+// statically and the NativeAOT executables only import Windows DLLs. A binary that imports a DLL
+// the package lacks (an official LanceDB or worker build imports the runtime) fails the build.
+function checkWindowsImports(directory) {
+  if (process.platform !== 'win32') return
+  const missing = missingImports(directory)
+  if (missing.length) throw new Error(`${path.basename(directory)} imports DLLs that are neither in it nor part of Windows: ${missing.join(', ')}`)
 }
 
-function publish(name, directory, nativeLibraries, vcRuntimeDirectory) {
+function publish(name, directory, nativeLibraries) {
   const target = TARGETS[name]
   const common = ['-c', 'Release', '-r', target.rid, '--self-contained', String(target.selfContained),
     '-p:DebugType=None', '-p:DebugSymbols=false', '-o', directory]
@@ -198,19 +193,18 @@ function publish(name, directory, nativeLibraries, vcRuntimeDirectory) {
     // Desktop compiles the host in; it does not launch the console apphost.
     fs.rmSync(path.join(directory, 'Foxwarm.exe'), { force: true })
     fs.rmSync(path.join(directory, 'Foxwarm.runtimeconfig.json'), { force: true })
-    addWindowsRuntime(directory, vcRuntimeDirectory)
   } else {
     run('dotnet', ['publish', 'dotnet/Foxwarm/Foxwarm.csproj', ...common])
     const control = path.join(root, 'scripts/release')
     if (target.rid.startsWith('win-')) {
       for (const file of ['foxwarmctl.ps1', 'foxwarmctl.cmd']) fs.copyFileSync(path.join(control, file), path.join(directory, file))
-      addWindowsRuntime(directory, vcRuntimeDirectory)
     } else {
       fs.copyFileSync(path.join(control, 'foxwarmctl'), path.join(directory, 'foxwarmctl'))
       fs.chmodSync(path.join(directory, 'foxwarmctl'), 0o755)
     }
   }
   removeDebugFiles(directory)
+  if (target.rid.startsWith('win-')) checkWindowsImports(directory)
   if (includesCode(name)) installCodeAssets(directory)
   const commit = capture('git', ['rev-parse', 'HEAD'])
   fs.writeFileSync(path.join(directory, 'release.json'), JSON.stringify({
@@ -278,7 +272,6 @@ function main(argv) {
   let checksumsOnly = false
   let codeOnly = false
   let nativeLibraries
-  let vcRuntimeDirectory
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
     if (arg === '--output') output = argv[++i]
@@ -288,12 +281,10 @@ function main(argv) {
     else if (arg === '--checksums-only') checksumsOnly = true
     else if (arg === '--code-only') codeOnly = true
     else if (arg === '--native-libraries') nativeLibraries = path.resolve(argv[++i] || usage('--native-libraries requires a directory'))
-    else if (arg === '--vc-runtime') vcRuntimeDirectory = path.resolve(argv[++i] || usage('--vc-runtime requires a directory'))
     else usage(`Unknown argument: ${arg}`)
   }
   if (!output) usage('--output is required')
   if (nativeLibraries && !fs.statSync(nativeLibraries, { throwIfNoEntry: false })?.isDirectory()) usage(`No such directory: ${nativeLibraries}`)
-  if (vcRuntimeDirectory && !fs.statSync(vcRuntimeDirectory, { throwIfNoEntry: false })?.isDirectory()) usage(`No such directory: ${vcRuntimeDirectory}`)
   for (const name of targets) if (!TARGETS[name]) usage(`Unknown target: ${name}`)
   output = path.resolve(output)
   if (codeOnly) {
@@ -316,7 +307,8 @@ function main(argv) {
   }
   for (const name of selected) {
     if (TARGETS[name].native && TARGETS[name].rid !== hostRid()) throw new Error(`${name} is a NativeAOT package and must be built on ${TARGETS[name].rid}.`)
-    if (TARGETS[name].rid === 'win-x64' && !vcRuntimeDirectory) usage(`${name} needs --vc-runtime DIR`)
+    // Only libraries linked with the static C runtime keep a Windows package free of the Visual C++ redistributable.
+    if (TARGETS[name].rid === 'win-x64' && !nativeLibraries) usage(`${name} needs --native-libraries DIR`)
   }
   if (selected.some(includesCode)) validateCodeAssets()
   if (buildAssets) run('npm', ['run', 'build:assets'], { shell: process.platform === 'win32' })
@@ -327,7 +319,7 @@ function main(argv) {
     const prefix = TARGETS[name].kind === 'desktop' ? 'foxwarm-desktop' : 'foxwarm'
     const staging = path.join(work, name, TARGETS[name].bundle ?? `${prefix}-${version}-${TARGETS[name].rid}`)
     fs.rmSync(path.dirname(staging), { recursive: true, force: true })
-    publish(name, staging, nativeLibraries, vcRuntimeDirectory)
+    publish(name, staging, nativeLibraries)
     if (directoryOnly) {
       console.log(`Prepared ${staging}`)
       continue

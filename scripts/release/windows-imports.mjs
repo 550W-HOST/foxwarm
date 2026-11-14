@@ -1,10 +1,9 @@
 #!/usr/bin/env node
-// DLL imports of the native Windows binaries in a server package, and the app-local Visual C++
-// runtime they need. Windows resolves an import from the importing binary's own directory
+// DLL imports of the native Windows binaries in a package. Windows resolves an import from the importing binary's own directory
 // (the application directory for an executable; .NET loads native libraries by full path, so
 // their directory is searched first) and then the system directories. The Visual C++ runtime
-// is not part of Windows, so a package must ship each runtime DLL beside every binary that
-// imports it.
+// is not part of Windows, so a package must not contain a binary that imports it: the Rust
+// libraries link the C runtime statically and the NativeAOT executables import only Windows DLLs.
 // Usage: windows-imports.mjs EXTRACTED_PACKAGE
 //   Fails when a binary imports a DLL that is neither beside it nor a Windows system DLL.
 import fs from 'node:fs'
@@ -91,27 +90,6 @@ export function missingImports(payload, isSystem = windowsSystemDll()) {
     }
   }
   return missing
-}
-
-// Copy the Visual C++ runtime DLLs from `runtime` beside every binary that imports them,
-// including the runtime's own dependencies on each other. Returns the copied paths.
-export function addVcRuntime(payload, runtime) {
-  const available = new Map(fs.readdirSync(runtime).filter(name => /\.dll$/i.test(name)).map(name => [name.toLowerCase(), path.join(runtime, name)]))
-  const copied = []
-  for (let changed = true; changed;) {
-    changed = false
-    for (const file of binaries(payload)) {
-      for (const name of peImports(fs.readFileSync(file)) || []) {
-        const source = available.get(name.toLowerCase())
-        if (!source || besides(file, name)) continue
-        const target = path.join(path.dirname(file), path.basename(source))
-        fs.copyFileSync(source, target)
-        copied.push(path.relative(payload, target))
-        changed = true
-      }
-    }
-  }
-  return copied.sort()
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

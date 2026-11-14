@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
-import { addVcRuntime, missingImports, peImports, windowsSystemDll } from './windows-imports.mjs'
+import { missingImports, peImports, windowsSystemDll } from './windows-imports.mjs'
 
 // A minimal PE32+ image with one section holding its import and delay-import tables.
 function image({ imports = [], delayed = [], managed = false } = {}) {
@@ -56,22 +56,19 @@ test('PE imports include delay-loaded DLLs; managed assemblies and other files h
   assert.equal(peImports(Buffer.from('#!/bin/sh\n')), null)
 })
 
-test('the Visual C++ runtime is copied beside each importer, with its own dependencies', t => {
-  const work = scratch(t), payload = path.join(work, 'payload'), runtime = path.join(work, 'crt')
+test('a binary that imports the Visual C++ runtime is reported, even where it is installed', t => {
+  const work = scratch(t), payload = path.join(work, 'payload')
   write(path.join(payload, 'lancedb_ffi.dll'), image({ imports: ['KERNEL32.dll', 'VCRUNTIME140_1.dll'] }))
   write(path.join(payload, 'ToolScript/native/monty.exe'), image({ imports: ['kernel32.dll', 'vcruntime140.dll'] }))
   write(path.join(payload, 'node_modules/addon/addon.node'), image({ imports: ['node.exe', 'api-ms-win-crt-heap-l1-1-0.dll'] }))
   write(path.join(payload, 'Foxwarm.dll'), image({ imports: ['mscoree.dll'], managed: true }))
-  write(path.join(runtime, 'vcruntime140.dll'), image({ imports: ['KERNEL32.dll'] }))
-  write(path.join(runtime, 'vcruntime140_1.dll'), image({ imports: ['VCRUNTIME140.dll'] }))
-  write(path.join(runtime, 'msvcp140.dll'), image({ imports: ['VCRUNTIME140.dll'] }))
   const system = path.join(work, 'System32')
   for (const name of ['kernel32.dll', 'vcruntime140.dll']) write(path.join(system, name), Buffer.alloc(1))
   const isSystem = windowsSystemDll(system)
   assert(!isSystem('vcruntime140.dll'), 'An installed Visual C++ runtime is not part of Windows')
   assert.deepEqual(missingImports(payload, isSystem).sort(), [
     `${path.join('ToolScript', 'native', 'monty.exe')}: vcruntime140.dll`, 'lancedb_ffi.dll: VCRUNTIME140_1.dll'])
-  assert.deepEqual(addVcRuntime(payload, runtime), [path.join('ToolScript', 'native', 'vcruntime140.dll'), 'vcruntime140.dll', 'vcruntime140_1.dll'])
+  write(path.join(payload, 'lancedb_ffi.dll'), image({ imports: ['KERNEL32.dll'] }))
+  write(path.join(payload, 'ToolScript/native/monty.exe'), image({ imports: ['kernel32.dll'] }))
   assert.deepEqual(missingImports(payload, isSystem), [])
-  assert(!fs.existsSync(path.join(payload, 'msvcp140.dll')), 'Only imported runtime DLLs are shipped')
 })

@@ -175,7 +175,8 @@ const summary = { result: 'passed' }
 try {
   await validateDesktopPackage(payload)
   stage = 'imported DLLs'
-  // Every DLL a packaged binary imports is beside it or part of Windows; the Visual C++ runtime is not.
+  // Every DLL a packaged binary imports is beside it or part of Windows; the Visual C++ runtime is not,
+  // so the statically linked Rust binaries must not import it.
   assert.deepEqual(missingImports(payload), [], 'The package lacks imported DLLs')
   stage = 'artifact dependencies'
   // Resolve from the package, not the test runner's source dependencies.
