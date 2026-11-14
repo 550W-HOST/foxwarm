@@ -467,6 +467,50 @@ test('split panes keep blank tab-strip space for pane drag; menus opened from th
   } finally { await close() }
 })
 
+/** Open the Setup split button's menu and read the panel and its controls as computed. */
+async function setupMenuStyle(page) {
+  await page.click('[data-sidebar-brand] button[aria-label="Open UI settings"]')
+  await page.waitForSelector('[data-global-ui-settings-menu]', { visible: true })
+  await settle(page)
+  return page.evaluate(() => {
+    const menu = document.querySelector('[data-global-ui-settings-menu]')
+    const look = element => { const s = getComputedStyle(element); return { background: s.backgroundColor, borderColor: s.borderTopColor, borderWidth: s.borderTopWidth, radius: s.borderTopLeftRadius, shadow: s.boxShadow, color: s.color, height: s.height } }
+    const surface = document.createElement('div')
+    surface.style.cssText = 'position:fixed;visibility:hidden;background-color:var(--foxwarm-color-surface)'
+    document.body.appendChild(surface)
+    const expected = getComputedStyle(surface).backgroundColor
+    surface.remove()
+    return {
+      expected,
+      panel: look(menu),
+      controls: [...menu.querySelectorAll('button')].map(button => ({ label: button.textContent.trim(), ...look(button) })),
+    }
+  })
+}
+
+const alphaOf = color => { const parts = color.match(/[\d.]+/g).map(Number); return parts.length > 3 ? parts[3] : 1 }
+
+test('framed layout: the Setup menu panel and its controls keep their own surfaces, light and dark', async () => {
+  for (const dark of [false, true]) {
+    const label = `dark=${dark}`
+    const plain = await open({ host: null, dark })
+    const framed = await open({ host: WINDOWS, dark })
+    try {
+      const before = await setupMenuStyle(plain.page)
+      const after = await setupMenuStyle(framed.page)
+      assert.ok(alphaOf(after.panel.background) === 1, `${label}: the open Setup menu is opaque under the frame (${after.panel.background})`)
+      assert.notEqual(after.panel.background, transparent, `${label}: the panel has a background`)
+      assert.equal(after.panel.background, after.expected, `${label}: the panel is the surface colour`)
+      assert.notEqual(after.panel.borderWidth, '0px', `${label}: the panel keeps its border`)
+      assert.notEqual(after.panel.shadow, 'none', `${label}: the panel keeps its shadow`)
+      assert.ok(after.controls.length >= 4, `${label}: colour mode and application buttons`)
+      // Nothing inside a floating menu is a title-row button: the panel and its controls look as in the browser.
+      assert.deepEqual(after.panel, before.panel, `${label}: panel unchanged by the frame`)
+      assert.deepEqual(after.controls, before.controls, `${label}: menu controls unchanged by the frame`)
+    } finally { await plain.close(); await framed.close() }
+  }
+})
+
 test('narrow windows keep the mobile shell below a draggable strip; mid widths use the desktop layout', async () => {
   for (const host of [WINDOWS, MACOS]) {
     const { page, close } = await open({ host, width: 700, layout: 'sole' })

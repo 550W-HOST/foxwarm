@@ -110,6 +110,7 @@ export default function Sidebar({
             <button
               type="button"
               onClick={onToggleCollapsed}
+              data-sidebar-toggle
               className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-fw-border bg-fw-surface-sunken text-fw-text hover:bg-fw-hover hover:text-fw-text-strong dark:border-fw-border dark:bg-fw-surface dark:text-fw-text dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse"
               title={isPeek ? 'Pin sidebar open' : 'Collapse sidebar'}
             >

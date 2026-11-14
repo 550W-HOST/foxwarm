@@ -2759,17 +2759,20 @@ html[data-foxwarm-frame][data-foxwarm-frame-leading] .foxwarm-desktop-workbench-
 }
 html[data-foxwarm-frame][data-foxwarm-frame-leading] .foxwarm-desktop-workbench-shell .foxwarm-sidebar-rail > .foxwarm-sidebar-body { margin-top: var(--foxwarm-frame-title-height); }
 
-/* Title-row buttons: borderless, hover fill only. */
-html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell :is(.foxwarm-sidebar-brand-row button, .foxwarm-sidebar-brand-row [data-sidebar-brand] > div > div > div, .foxwarm-workbench-tab-toolbar button, .foxwarm-sidebar-rail-toggle) {
+/* Title-row buttons: borderless, hover fill only. Only the controls themselves are named: the
+ * Setup split button and its two buttons, the sidebar toggle, the strip's own buttons and the
+ * rail toggle. Never a descendant or structural match, which would also reach the menu panel
+ * and its controls that float inside the row. */
+html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell :is(.foxwarm-sidebar-brand-row :is([data-global-ui-settings-split], [data-global-ui-settings-split] > button, [data-sidebar-toggle]), .foxwarm-workbench-tab-toolbar > button, .foxwarm-sidebar-rail-toggle) {
   border-color: transparent;
   background-color: transparent;
   box-shadow: none;
   border-radius: 6px;
   color: var(--foxwarm-color-text-muted);
 }
-html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-sidebar-brand-row button { height: 32px; }
-html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-workbench-tab-toolbar button { width: 32px; height: 32px; }
-html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell :is(.foxwarm-sidebar-brand-row button, .foxwarm-workbench-tab-toolbar button, .foxwarm-sidebar-rail-toggle):hover {
+html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-sidebar-brand-row :is([data-global-ui-settings-split] > button, [data-sidebar-toggle]) { height: 32px; }
+html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-workbench-tab-toolbar > button { width: 32px; height: 32px; }
+html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell :is(.foxwarm-sidebar-brand-row :is([data-global-ui-settings-split] > button, [data-sidebar-toggle]), .foxwarm-workbench-tab-toolbar > button, .foxwarm-sidebar-rail-toggle):hover {
   background-color: color-mix(in srgb, var(--foxwarm-color-text-strong) 9%, transparent);
   color: var(--foxwarm-color-text-strong);
 }
