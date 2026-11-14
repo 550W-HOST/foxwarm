@@ -126,6 +126,21 @@ test('desktop mouse drag still starts and can be cancelled without changing plac
     await page.mouse.move(x + 12, y, { steps: 3 })
     await page.waitForSelector('[data-session-drag-overlay]', { timeout: 5_000 })
 
+    // The overlay draws the dragged row's title and Agent tag, out of the accessibility tree and
+    // without the row's controls or test hooks.
+    const sourceTitle = await row.$eval('[data-session-title]', (element) => element.textContent)
+    const sourceTag = await row.$eval('[data-session-agent-tag]', (element) => element.textContent).catch(() => null)
+    const overlay = await page.$eval('[data-session-drag-overlay]', (element) => ({
+      hidden: element.getAttribute('aria-hidden'),
+      text: element.textContent,
+      hooks: element.querySelectorAll('[data-session-title], [data-session-id], [data-session-status], [data-session-agent-tag]').length,
+      interactive: element.querySelectorAll('button, a, input, [tabindex]').length,
+    }))
+    assert.equal(overlay.hidden, 'true')
+    assert.ok(overlay.text.includes(sourceTitle), `overlay shows the row title: ${overlay.text}`)
+    if (sourceTag) assert.ok(overlay.text.includes(sourceTag), 'overlay shows the row Agent tag')
+    assert.deepEqual({ hooks: overlay.hooks, interactive: overlay.interactive }, { hooks: 0, interactive: 0 })
+
     // The cursor is `grabbing` wherever the pointer is for the whole drag: over the overlay,
     // over the source row and over plain page text, and the drag does not select text.
     const overlayBox = await (await page.$('[data-session-drag-overlay]')).boundingBox()

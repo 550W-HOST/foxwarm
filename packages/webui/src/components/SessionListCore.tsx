@@ -1,24 +1,22 @@
-import { getSessionRuntimeTone } from '../sessionRuntimeState'
 import { useState, useRef, useEffect, useMemo, type ReactNode } from 'react'
 import { useDndContext, useDraggable, useDroppable } from '@dnd-kit/core'
 import { API_BASE_PATH } from '../config'
-import { SlidersHorizontal, MoreVertical, Plus, Settings, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X, CornerDownRight, ListTree, Clock3, Rows3, Pin, PinOff, Bell, BellRing, GitBranch, Server, ChevronDown, ChevronUp, Copy, SquarePlus, MessageCircleQuestion, ShieldAlert } from 'lucide-react'
-import RuntimeBusySpinner from './RuntimeBusySpinner'
+import { SlidersHorizontal, MoreVertical, Plus, Settings, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X, CornerDownRight, ListTree, Clock3, Rows3, Pin, PinOff, Bell, BellRing, ChevronDown, ChevronUp, Copy, SquarePlus } from 'lucide-react'
+import SessionRowContent from './SessionRowContent'
 import MobilePageHeader from './MobilePageHeader'
 import ContextMenu, { type ContextMenuAnchorRect, type ContextMenuEntry } from './ContextMenu'
 import SessionListQuestionHint from './SessionListQuestionHint'
 import SessionListSectionHeader, { SESSION_ROW_PADDING_PX } from './SessionListSectionHeader'
 import { copyTextToClipboard } from './chatShared'
-import { getSessionRuntimeSummary, getSessionRuntimeStateName, type SessionRuntimeState } from '../sessionRuntimeState'
+import { type SessionRuntimeState } from '../sessionRuntimeState'
 import { type SessionIdleNotificationMode } from '../sessionIdleNotifications'
 import { collapseSessionListExpandedBranch, compareSessionListSessions, getSessionListAutoExpandedPath, getSessionListChildDisclosure, getSessionListAgentTag, getSessionListDisplayId, assignSessionListGroupRoots, shouldElevateSessionToRoot, orderQuestionSessions, SESSION_LIST_GROUPING_KEY, loadStoredSessionListGrouping, type SessionListGrouping, type SessionListOrderMode } from '../sessionListPresentation'
 import type { SessionCreationRequest } from './AgentCreationMenu'
 import { GROUP_PAGE_STEP, type BoundedSessionGroupView } from '../boundedSessionList'
 import { shouldActivateSessionListDrag, shouldEnableSessionListDrag } from '../sessionListDrag'
 import { useSessionListCompact } from '../sessionListDensity'
-import { getResolvedSessionNodeId } from '../sessionNode'
 import { dispatchSessionIdleDeleted } from '../sessionIdleAttention'
-import { getSessionQuestionAttention, questionAttentionLabel, type SessionQuestionsProjection } from '../sessionQuestions'
+import { getSessionQuestionAttention, type SessionQuestionsProjection } from '../sessionQuestions'
 
 export interface Session {
   id: string
@@ -162,16 +160,6 @@ const loadStoredSessionListViewMode = (mobile: boolean): SessionListViewMode => 
   return mobile ? 'flat-time' : 'default'
 }
 
-const activityTime = (timestamp: number): string => {
-  if (!timestamp || !Number.isFinite(new Date(timestamp).getTime())) return ''
-  const minutes = Math.max(0, Math.floor((Date.now() - timestamp) / 60000))
-  if (minutes < 1) return 'Now'
-  if (minutes < 60) return `${minutes}m ago`
-  if (minutes < 1440) return `${Math.floor(minutes / 60)}h ago`
-  if (minutes < 10080) return `${Math.floor(minutes / 1440)}d ago`
-  return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(timestamp)
-}
-
 const getSessionFilterFields = (session: Session): string[] => {
   return [
     session.displayName,
@@ -193,17 +181,6 @@ const sessionMatchesFilter = (session: Session, normalizedQuery: string): boolea
   if (!normalizedQuery) return true
   return getSessionFilterFields(session).some(field => field.toLowerCase().includes(normalizedQuery))
 }
-
-const getRuntimeBadgeTone = (session: Session): string => {
-  const tone = getSessionRuntimeTone(session)
-  return tone === 'muted' ? 'text-fw-text-muted' : `text-fw-${tone}`
-}
-
-const RuntimeActivityIndicator = ({ state }: { state: string }) => state === 'waiting'
-  ? <span className="w-1.5 h-1.5 bg-fw-warning dark:bg-fw-warning rounded-full" />
-  : state === 'llm-failed'
-    ? <span className="w-1.5 h-1.5 bg-fw-danger rounded-full" />
-    : <RuntimeBusySpinner />
 
 const getStoredAuthToken = () => {
   return localStorage.getItem(FOXWARM_TOKEN_KEY)
@@ -420,6 +397,7 @@ function DraggableSessionRow({
   onContextMenu,
   setRowRef,
   dragEnabled,
+  preview,
 }: {
   session: Session
   children: ReactNode
@@ -429,6 +407,8 @@ function DraggableSessionRow({
   onContextMenu: (event: React.MouseEvent<HTMLDivElement>) => void
   setRowRef: (node: HTMLDivElement | null) => void
   dragEnabled: boolean
+  /** What the drag overlay shows for this row. */
+  preview: ReactNode
 }) {
   const title = session.displayName || session.id
   const suppressClickRef = useRef(false)
@@ -441,6 +421,7 @@ function DraggableSessionRow({
       sessionId: session.id,
       title,
       sessionPinned: !!session.pinned,
+      preview,
     },
   })
 
@@ -1338,31 +1319,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     const title = session.displayName || displayId
     // Top-level tree rows name their Agent, except inside an Agent group.
     const agentTag = showAgentTags && !parentSession ? getSessionListAgentTag(session, title) : null
-    // The title truncates first; the tag keeps up to 45% of the row so the Agent stays readable.
-    const agentTagBadge = agentTag && (
-      <span
-        data-session-agent-tag={agentTag}
-        title={`Agent: ${agentTag}`}
-        className="max-w-[45%] shrink-0 truncate rounded bg-fw-neutral-surface px-1.5 py-0.5 text-[10px] font-normal leading-none text-fw-text-muted"
-      >
-        {agentTag}
-      </span>
-    )
-
-    const questionAttention = getSessionQuestionAttention(session)
-    const questionLabel = questionAttentionLabel(questionAttention, session.questions?.open, session.questions?.approvals)
-    const questionBadge = questionAttention && (
-      <span role="img" aria-label={questionLabel} title={questionLabel} data-session-question={questionAttention}
-        className={`inline-flex shrink-0 items-center justify-center ${questionAttention === 'waiting' ? 'h-5 w-5 rounded-full bg-fw-warning-surface text-fw-warning ring-1 ring-fw-warning-border dark:bg-fw-warning-surface-strong/30' : 'h-3.5 w-3.5 text-fw-accent'}`}>
-        {(session.questions?.approvals ?? 0) > 0
-          ? <ShieldAlert className="h-3.5 w-3.5" strokeWidth={2.25} aria-hidden="true" />
-          : <MessageCircleQuestion className="h-3.5 w-3.5" strokeWidth={questionAttention === 'waiting' ? 2.25 : 1.75} aria-hidden="true" />}
-      </span>
-    )
     const isCurrentSession = resolvedCurrentSessionId === session.id
-    const runtimeStateName = getSessionRuntimeStateName(session)
-    const showRuntimeBadge = session.runtimeState ? runtimeStateName !== 'idle' || !!session.runtimeState.compaction : !!session.busy
-    const resolvedNodeId = getResolvedSessionNodeId(session)
     const rowParentSessionId = visibleParentMap.get(session.id) || null
     const targetParentWouldCreateCycle = rowParentSessionId
       ? rowParentSessionId === draggingSessionId || isDescendantOf(rowParentSessionId, draggingSessionId)
@@ -1378,18 +1335,6 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       || targetParentWouldCreateCycle
       // A drop across groups would change a Session's Agent or Node.
       || !!draggingSessionId && rowGroupKeys.get(session.id) !== rowGroupKeys.get(draggingSessionId)
-
-    const nodeBadge = resolvedNodeId !== 'master' && (
-      <span
-        role="img"
-        aria-label={`Node: ${resolvedNodeId}`}
-        title={`Node: ${resolvedNodeId}`}
-        data-session-node={resolvedNodeId}
-        className="inline-flex shrink-0 items-center justify-center text-fw-text-muted opacity-60"
-      >
-        <Server className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
-      </span>
-    )
 
     const disclosure = (
       hasChildren && (
@@ -1479,6 +1424,11 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
           onContextMenu={(e) => handleContextMenu(e, session.id)}
           setRowRef={(node) => { if (node) sessionRefs.current.set(session.id, node); else sessionRefs.current.delete(session.id) }}
           dragEnabled={sessionDragEnabled}
+          preview={
+            <div className={`session-row ${compact ? 'session-row-compact' : ''} pointer-events-none flex w-full items-center rounded bg-fw-surface shadow-lg ring-1 ring-fw-border`}>
+              <SessionRowContent preview session={session} title={title} compact={compact} agentTag={agentTag} paddingLeft="12px" displayId={displayId} />
+            </div>
+          }
         >
           <>
             {rowConnector}
@@ -1489,85 +1439,19 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                 allowReorder={allowSidebarOrder}
                 allowParentDrop={allowParentDrop}
               />
-              {compact ? (
-                <div className="flex flex-1 min-w-0 items-center gap-1.5 py-1 pr-2 min-h-10" style={{ paddingLeft: contentPaddingLeft }}>
-                  {hasChildren ? disclosure : viewMode !== 'flat-time' && !isFiltering ? <span className="session-compact-disclosure w-4 shrink-0" aria-hidden="true" /> : null}
-                  <span className={"min-w-0 flex-1 truncate text-sm font-medium text-fw-text-strong"} title={`${title} · ${session.id}`} data-session-title>
-                    {title}{session.runtime === 'claude-code' && <span className="ml-1 text-xs font-normal text-fw-text-muted">Claude Code</span>}
-                    {mobileList && activityTime(session.lastMessageTime) && <span className="mt-0.5 block truncate text-xs font-normal text-fw-text-muted">{session.agent ? `${session.agent} · ` : ''}{activityTime(session.lastMessageTime)}</span>}
-                  </span>
-                  {agentTagBadge}
-                  {questionBadge}
-                  {session.archived && <Archive className="h-3 w-3 shrink-0 text-fw-text-muted" aria-label="Archived session" />}
-                  {unreadSessionIds.has(session.id) && (
-                    <span className="h-2 w-2 shrink-0 rounded-full bg-fw-accent" role="img" aria-label="Unread idle completion" title="Unread idle completion" />
-                  )}
-                  {nodeBadge}
-                  {descendantBusyCount > 0 && (
-                    <span role="img" aria-label="Active descendant sessions" title={`${descendantBusyCount} active descendant ${descendantBusyCount === 1 ? 'session' : 'sessions'}`} className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center text-fw-accent" data-descendant-activity>
-                      <GitBranch className="h-3.5 w-3.5" strokeWidth={1.5} aria-hidden="true" />
-                    </span>
-                  )}
-                  {showRuntimeBadge && (
-                    <span
-                      role="img"
-                      aria-label={`Status: ${getSessionRuntimeSummary(session)}`}
-                      title={`${getSessionRuntimeSummary(session)}${session.runtimeState?.note ? ` · ${session.runtimeState.note}` : ''}`}
-                      data-session-status={runtimeStateName}
-                      className={`session-compact-status ${getRuntimeBadgeTone(session)}`}
-                    >
-                      <RuntimeActivityIndicator state={runtimeStateName} />
-                    </span>
-                  )}
-                </div>
-              ) : (
-              <div className="flex flex-1 min-w-0 items-start py-3 pr-2" style={{ paddingLeft: contentPaddingLeft }}>
-                <div className="min-w-0 flex-1">
-                  <div className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-fw-text-strong">
-                    <span className={"min-w-0 flex-1 truncate"} data-session-title>
-                      {title}{session.runtime === 'claude-code' && <span className="ml-1 text-xs font-normal text-fw-text-muted">Claude Code</span>}
-                      {unreadSessionIds.has(session.id) && (
-                        <span className="ml-1.5 inline-flex items-center align-middle">
-                          <span className="h-2 w-2 rounded-full bg-fw-accent" aria-hidden="true" />
-                          <span className="sr-only">Unread idle completion</span>
-                        </span>
-                      )}
-                      {session.archived && (
-                        <span className="ml-2 text-xs text-fw-text-muted">[Archived]</span>
-                      )}
-                    </span>
-                    {questionBadge}
-                    {agentTagBadge}
-                  </div>
-                  {session.displayName && (
-                    <div className="text-xs text-fw-text-muted font-mono truncate">
-                      {displayId}
-                    </div>
-                  )}
-                  <div className="text-xs text-fw-text-muted flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
-                    {nodeBadge}
-                    {resolvedNodeId !== 'master' && <span>•</span>}
-                    {showRuntimeBadge && (
-                      <>
-                        <span className={`inline-flex items-center gap-1 ${getRuntimeBadgeTone(session)}`} title={session.runtimeState?.note || undefined}>
-                          <RuntimeActivityIndicator state={runtimeStateName} />
-                          <span>{getSessionRuntimeSummary(session)}</span>
-                        </span>
-                        <span>•</span>
-                      </>
-                    )}
-                    {!!session.queueLength && (
-                      <>
-                        <span>{session.queueLength} queued</span>
-                        <span>•</span>
-                      </>
-                    )}
-                    <span>{session.sequenceMessageCount ?? session.messageCount ?? 0} msgs</span>
-                  </div>
-                  {disclosure}
-                </div>
-              </div>
-              )}
+              <SessionRowContent
+                session={session}
+                title={title}
+                compact={compact}
+                agentTag={agentTag}
+                paddingLeft={contentPaddingLeft}
+                displayId={displayId}
+                leading={compact ? (hasChildren ? disclosure : viewMode !== 'flat-time' && !isFiltering ? <span className="session-compact-disclosure w-4 shrink-0" aria-hidden="true" /> : null) : undefined}
+                disclosure={compact ? undefined : disclosure}
+                unread={unreadSessionIds.has(session.id)}
+                descendantBusyCount={descendantBusyCount}
+                mobileList={mobileList}
+              />
               {/* The same menu owns row actions on both desktop and mobile. */}
               <button
                 onClick={(e) => handleMenuClick(e, session.id)}
