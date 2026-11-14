@@ -35,7 +35,7 @@ const intersects = ([x, y, w, h], r) => Math.min(x + w, r.right) - Math.max(x, r
 test('drag rectangles exclude interactive descendants, floating layers and rows outside the band', async () => {
   await withFixture(`
     <div class="shell">
-      <div class="panel" data-frame-row="stack" data-frame-in-band style="width:260px;padding:12px">
+      <div class="panel" data-frame-row="column" data-frame-in-band style="width:260px;padding:12px">
         <div id="brand" data-frame-drag style="display:flex;gap:8px;height:36px;align-items:center">
           <span tabindex="-1" id="inert">inert</span>
           <h1 style="margin:0;font-size:16px">Brand</h1>

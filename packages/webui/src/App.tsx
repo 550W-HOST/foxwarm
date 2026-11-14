@@ -1,6 +1,7 @@
 import { prepareChatHistory, discardPreparedChatHistory } from './preparedChatHistory'
+import { subscribeWindowFrame, windowFrameActive } from './windowFrame'
 import { SessionMessageNamesContext } from './components/SessionMessageCard'
-import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { DndContext, DragOverlay, PointerSensor, pointerWithin, useSensor, useSensors, type DragEndEvent, type DragStartEvent } from '@dnd-kit/core'
 import { Plus } from 'lucide-react'
 import Chat from './components/Chat'
@@ -479,6 +480,8 @@ function App() {
   const [focusModelsRequest, setFocusModelsRequest] = useState(0)
   const [activeTerminals, setActiveTerminals] = useState<TerminalRegistryRecord[] | null>(null)
   const [isMobile, setIsMobile] = useState<boolean>(window.innerWidth < 768)
+  // Under a window frame every pane's tab strip is a title row, so a sole tab keeps it.
+  const windowFramed = useSyncExternalStore(subscribeWindowFrame, windowFrameActive, () => false)
   const pendingChatRef = useRef<{ sessionId: string; paneId: string; fromTabId: string | null; controller: AbortController } | null>(null)
   const [pendingChatNavigation, setPendingChatNavigation] = useState<{sessionId:string;paneId:string;title:string;showLoader:boolean} | null>(null)
   const cancelPendingChatNavigation = useCallback(() => {
@@ -1834,7 +1837,7 @@ function App() {
       emphasizeFocus: paneIds.length > 1,
       dragEnabled: !isMobile,
       showPaneControls: !isMobile,
-      hideTabStrip: isMobile || paneTabs.length === 1 && paneTabs[0].type !== 'vscode',
+      hideTabStrip: isMobile || paneTabs.length === 1 && paneTabs[0].type !== 'vscode' && !windowFramed,
       canClosePane: paneIds.length > 1,
       onFocusPane: handleFocus,
       onSetCollapsed: (targetPaneId, collapsed) => {

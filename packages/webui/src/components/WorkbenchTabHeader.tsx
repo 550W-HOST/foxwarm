@@ -22,7 +22,7 @@ export const useWorkbenchTabHeader = () => useContext(WorkbenchTabHeaderContext)
 
 export function WorkbenchHeaderDragArea(props: HTMLAttributes<HTMLDivElement>) {
   const header = useWorkbenchTabHeader()
-  return <WorkbenchPaneDragArea {...props} frameRow={!!header} paneId={header?.paneId || null} enabled={!!header?.canMovePane && header.dragEnabled} />
+  return <WorkbenchPaneDragArea {...props} paneId={header?.paneId || null} enabled={!!header?.canMovePane && header.dragEnabled} />
 }
 
 export function WorkbenchPaneControls() {

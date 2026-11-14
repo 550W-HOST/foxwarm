@@ -6,7 +6,6 @@ import type { SessionIdleNotificationMode } from '../sessionIdleNotifications'
 import CreateTabButton from './CreateTabButton'
 import { FoxwarmMark } from './FoxwarmMark'
 import CodeLaunchButton from './CodeLaunchButton'
-import { FrameBand } from './WindowFrameEdges'
 import GlobalUiSettingsMenu from './GlobalUiSettingsMenu'
 import { useState } from 'react'
 import AgentCreationMenu, { type SessionCreationRequest } from './AgentCreationMenu'
@@ -95,12 +94,12 @@ export default function Sidebar({
   const defaultPath = currentSessionRecord?.cwd || '/'
 
   // Brand row with settings, then navigation rows (icon + text), then the Session list.
+  // Under a window frame the brand row is the title row's left end (index.css).
   return (
-    <div className="foxwarm-sidebar-panel h-full bg-fw-sidebar-surface border-r border-fw-border flex flex-col" data-frame-row="stack">
-      <FrameBand />
-      <div className="shrink-0 px-3 pb-2 pt-3 border-b border-fw-border">
-        <div className="mb-2 flex items-center justify-between gap-2 pl-1" data-sidebar-brand data-frame-drag>
-          <h1 className="flex items-center gap-2 text-xl font-bold text-fw-text-strong"><FoxwarmMark className="h-6 w-6 shrink-0" />Foxwarm</h1>
+    <div className="foxwarm-sidebar-panel h-full bg-fw-sidebar-surface border-r border-fw-border flex flex-col" data-frame-row="column">
+      <div className="foxwarm-sidebar-brand-row shrink-0 px-3 pt-3" data-frame-drag>
+        <div className="mb-2 flex items-center justify-between gap-2 pl-1" data-sidebar-brand>
+          <h1 className="flex items-center gap-2 text-xl font-bold text-fw-text-strong"><FoxwarmMark className="h-6 w-6 shrink-0" /><span className="foxwarm-sidebar-wordmark">Foxwarm</span></h1>
           <div className="flex items-center gap-1">
             <GlobalUiSettingsMenu
               menuAlign="end"
@@ -118,66 +117,69 @@ export default function Sidebar({
             </button>
           </div>
         </div>
-
-        <nav className="space-y-0.5" aria-label="Workspace" data-sidebar-nav-list>
-          <SidebarNavItem icon={Network} label="System" active={currentView === 'agents'} onClick={onSelectArchitecture} title="Open System" dataNav="system" />
-          {onSelectTasks && <SidebarNavItem icon={ClipboardList} label="Tasks" active={currentView === 'tasks'} onClick={onSelectTasks} dataNav="tasks" />}
-          <SidebarNavItem icon={Search} label="Search" active={activeTabType === 'search'} onClick={onSelectSearch} title="Search history" dataNav="search" />
-          <CodeLaunchButton
-            path={codePath}
-            nodeId={codeNodeId}
-            nodeTargets={nodeTargets}
-            nodeTargetsError={nodeTargetsError}
-            openInNewWindow={codeOpenInNewWindow}
-            active={codeActive}
-            onOpen={onOpenCode}
-            onNodeChange={onCodeNodeChange}
-            onPathChange={onCodePathChange}
-            onOpenInNewWindowChange={onCodeOpenInNewWindowChange}
-            onRefreshNodeTargets={onRefreshNodeTargets}
-          />
-          <CreateTabButton
-            variant="nav"
-            defaultNodeId={defaultNodeId}
-            defaultPath={defaultPath}
-            onCreate={(options) => onCreateTerminalTab(options)}
-            nodeTargets={nodeTargets}
-            nodeTargetsError={nodeTargetsError}
-            onRefreshNodeTargets={onRefreshNodeTargets}
-          />
-        </nav>
       </div>
-
-      <div className="flex-1 min-h-0">
-        <SessionListCore
-          sessions={sessions}
-          currentSession={currentSession}
-          onSelectSession={onSelectSession}
-          onKeepSession={onKeepSession}
-          idleNotificationModes={idleNotificationModes}
-          unreadSessionIds={unreadSessionIds}
-          onToggleIdleNotificationMode={onToggleIdleNotificationMode}
-          bounded={bounded}
-          onRequestSession={setCreationRequest}
-          onOpenAgentSettings={onOpenAgentSettings}
-          onStartSession={() => { void onCreateSession('main').catch(error => window.alert(`Failed to create session: ${error instanceof Error ? error.message : String(error)}`)) }}
-          onSearchMessages={onSearchMessages}
-          toolbarActions={
-            <AgentCreationMenu
-              agents={agents}
-              currentAgent={currentSessionRecord?.agent}
-              onCreateAgent={onCreateAgent}
-              onCreateSession={onCreateSession}
-              creationRequest={creationRequest}
-              onCreationRequestHandled={() => setCreationRequest(null)}
-              directCreate
-              triggerClassName="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-fw-border bg-fw-surface text-fw-text-muted transition hover:border-fw-accent-border hover:text-fw-accent focus:outline-none focus:ring-2 focus:ring-fw-focus-ring/30 dark:border-fw-border dark:bg-fw-canvas dark:text-fw-text"
-              optionsTriggerClassName="inline-flex h-7 w-5 shrink-0 items-center justify-center rounded-lg border border-l-0 border-fw-border bg-fw-surface text-fw-text-muted transition hover:border-fw-accent-border hover:text-fw-accent focus:outline-none focus:ring-2 focus:ring-fw-focus-ring/30 dark:border-fw-border dark:bg-fw-canvas dark:text-fw-text"
+      <div className="foxwarm-sidebar-body flex min-h-0 flex-1 flex-col">
+        <div className="foxwarm-sidebar-nav shrink-0 px-3 pb-2 border-b border-fw-border">
+          <nav className="space-y-0.5" aria-label="Workspace" data-sidebar-nav-list>
+            <SidebarNavItem icon={Network} label="System" active={currentView === 'agents'} onClick={onSelectArchitecture} title="Open System" dataNav="system" />
+            {onSelectTasks && <SidebarNavItem icon={ClipboardList} label="Tasks" active={currentView === 'tasks'} onClick={onSelectTasks} dataNav="tasks" />}
+            <SidebarNavItem icon={Search} label="Search" active={activeTabType === 'search'} onClick={onSelectSearch} title="Search history" dataNav="search" />
+            <CodeLaunchButton
+              path={codePath}
+              nodeId={codeNodeId}
+              nodeTargets={nodeTargets}
+              nodeTargetsError={nodeTargetsError}
+              openInNewWindow={codeOpenInNewWindow}
+              active={codeActive}
+              onOpen={onOpenCode}
+              onNodeChange={onCodeNodeChange}
+              onPathChange={onCodePathChange}
+              onOpenInNewWindowChange={onCodeOpenInNewWindowChange}
+              onRefreshNodeTargets={onRefreshNodeTargets}
             />
-          }
-          toolbarContainerClassName="p-2 pb-1"
-          listContainerClassName="p-2 pt-1"
-        />
+            <CreateTabButton
+              variant="nav"
+              defaultNodeId={defaultNodeId}
+              defaultPath={defaultPath}
+              onCreate={(options) => onCreateTerminalTab(options)}
+              nodeTargets={nodeTargets}
+              nodeTargetsError={nodeTargetsError}
+              onRefreshNodeTargets={onRefreshNodeTargets}
+            />
+          </nav>
+        </div>
+
+        <div className="flex-1 min-h-0">
+          <SessionListCore
+            sessions={sessions}
+            currentSession={currentSession}
+            onSelectSession={onSelectSession}
+            onKeepSession={onKeepSession}
+            idleNotificationModes={idleNotificationModes}
+            unreadSessionIds={unreadSessionIds}
+            onToggleIdleNotificationMode={onToggleIdleNotificationMode}
+            bounded={bounded}
+            onRequestSession={setCreationRequest}
+            onOpenAgentSettings={onOpenAgentSettings}
+            onStartSession={() => { void onCreateSession('main').catch(error => window.alert(`Failed to create session: ${error instanceof Error ? error.message : String(error)}`)) }}
+            onSearchMessages={onSearchMessages}
+            toolbarActions={
+              <AgentCreationMenu
+                agents={agents}
+                currentAgent={currentSessionRecord?.agent}
+                onCreateAgent={onCreateAgent}
+                onCreateSession={onCreateSession}
+                creationRequest={creationRequest}
+                onCreationRequestHandled={() => setCreationRequest(null)}
+                directCreate
+                triggerClassName="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-fw-border bg-fw-surface text-fw-text-muted transition hover:border-fw-accent-border hover:text-fw-accent focus:outline-none focus:ring-2 focus:ring-fw-focus-ring/30 dark:border-fw-border dark:bg-fw-canvas dark:text-fw-text"
+                optionsTriggerClassName="inline-flex h-7 w-5 shrink-0 items-center justify-center rounded-lg border border-l-0 border-fw-border bg-fw-surface text-fw-text-muted transition hover:border-fw-accent-border hover:text-fw-accent focus:outline-none focus:ring-2 focus:ring-fw-focus-ring/30 dark:border-fw-border dark:bg-fw-canvas dark:text-fw-text"
+              />
+            }
+            toolbarContainerClassName="p-2 pb-1"
+            listContainerClassName="p-2 pt-1"
+          />
+        </div>
       </div>
     </div>
   )

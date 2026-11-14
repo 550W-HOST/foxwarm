@@ -11,7 +11,7 @@ export function isWorkbenchPaneDragBlankTarget(target: EventTarget | null) {
 export default function WorkbenchPaneDragArea({ paneId, enabled, frameRow = false, onPointerDown, onMouseDown, children, ...props }: HTMLAttributes<HTMLDivElement> & {
   paneId: string | null
   enabled: boolean
-  /** The header may be a window title row (tab strip or sole-tab content header). */
+  /** The header is a window title row (a pane's tab strip). */
   frameRow?: boolean
 }) {
   const fallbackId = useId()

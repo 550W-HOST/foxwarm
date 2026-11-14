@@ -37,8 +37,8 @@ internal sealed class DesktopFrame
         this.isAppUri = isAppUri;
         var bar = window.AppWindow.TitleBar;
         bar.ExtendsContentIntoTitleBar = true;
-        // Tall (48 epx) caption buttons line up with the title row the page puts beside them:
-        // the tab strip, which is as tall as the buttons in that corner.
+        // Tall (48 epx) caption buttons: the page makes its title row (brand row and tab
+        // strips) exactly as tall as the buttons and centres its controls on them.
         bar.PreferredHeightOption = TitleBarHeightOption.Tall;
         bar.ButtonBackgroundColor = Colors.Transparent;
         bar.ButtonInactiveBackgroundColor = Colors.Transparent;

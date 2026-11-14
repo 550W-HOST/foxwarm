@@ -3,15 +3,10 @@
  * hidden unless a frame provider is active.
  */
 
-/** Drag gaps at both ends of an inline title row (tab strip, sole-tab header), sized to its reserved space. */
+/** Drag gaps at both ends of an inline title row (a tab strip), sized to its reserved space. */
 export function FrameEdges() {
   return <>
     <div aria-hidden="true" data-frame-drag data-frame-edge="start" className="foxwarm-frame-edge" />
     <div aria-hidden="true" data-frame-drag data-frame-edge="end" className="foxwarm-frame-edge" />
   </>
-}
-
-/** Band at the top of a stack row (sidebar, rail): the space under the controls plus the row's blank top padding. */
-export function FrameBand() {
-  return <div aria-hidden="true" data-frame-drag data-frame-edge="top" className="foxwarm-frame-edge" />
 }

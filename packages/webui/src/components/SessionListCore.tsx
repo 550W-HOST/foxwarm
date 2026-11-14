@@ -1756,7 +1756,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
         </>}>
           {mobileSearchOpen && <div className="relative"><input ref={mobileSearchRef} type="search" aria-label="Filter sessions" placeholder="Search sessions" value={filterText} onChange={event => setFilterText(event.target.value)} onKeyDown={event => {if(event.key === 'Escape') {setMobileSearchOpen(false); setFilterText('')}}} className="mobile-header-search w-full pr-10" />{filterText && <button type="button" aria-label="Clear session search" onClick={() => setFilterText('')} className="absolute right-0 top-0 inline-flex h-11 w-11 items-center justify-center"><X size={16} /></button>}</div>}
         </MobilePageHeader> : (
-        <div className={`shrink-0 bg-fw-surface/95 dark:bg-fw-surface/95 ${toolbarContainerClassName}`}>
+        <div data-session-list-toolbar className={`shrink-0 bg-fw-surface/95 dark:bg-fw-surface/95 ${toolbarContainerClassName}`}>
           <div className="flex items-center gap-1.5">
             <div className="relative min-w-0 flex-1">
               <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-fw-text-muted" />

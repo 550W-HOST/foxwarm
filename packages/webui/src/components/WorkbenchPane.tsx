@@ -239,7 +239,7 @@ export default function WorkbenchPane({
               onCloseAllTabs={onCloseAllTabs}
             />
           )}
-          <div className="min-h-0 flex-1 overflow-hidden bg-fw-canvas">
+          <div className="foxwarm-workbench-pane-body min-h-0 flex-1 overflow-hidden bg-fw-canvas">
             {contentSlot}
           </div>
         </>
