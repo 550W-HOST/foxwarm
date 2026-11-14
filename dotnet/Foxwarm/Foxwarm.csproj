@@ -111,25 +111,4 @@
     />
   </ItemGroup>
   <Import Project="Delivery.targets" />
-  <!-- The replacement keeps the package item's metadata, so build, publish and NativeAOT treat it
-       exactly like the original. -->
-  <Target
-    Name="UseNativeLibraries"
-    AfterTargets="ResolvePackageAssets"
-    Condition="'$(FoxwarmNativeLibraries)' != ''"
-  >
-    <PropertyGroup>
-      <_LanceDbFile Condition="$(MontyTargetRid.StartsWith('linux-'))">liblancedb_ffi.so</_LanceDbFile>
-      <_LanceDbFile Condition="$(MontyTargetRid.StartsWith('win-'))">lancedb_ffi.dll</_LanceDbFile>
-      <_LanceDbFile Condition="$(MontyTargetRid.StartsWith('osx-'))">liblancedb_ffi.dylib</_LanceDbFile>
-    </PropertyGroup>
-    <Error Condition="'$(_LanceDbFile)' == ''" Text="FoxwarmNativeLibraries needs a linux, win or osx runtime identifier." />
-    <Error Condition="!Exists('$(FoxwarmNativeLibraries)/$(_LanceDbFile)')" Text="FoxwarmNativeLibraries has no $(_LanceDbFile): $(FoxwarmNativeLibraries)" />
-    <ItemGroup>
-      <_PackageLanceDbNative Include="@(NativeCopyLocalItems)" Condition="'%(Filename)%(Extension)' == '$(_LanceDbFile)'" />
-      <NativeCopyLocalItems Remove="@(_PackageLanceDbNative)" />
-      <NativeCopyLocalItems Include="@(_PackageLanceDbNative->'$([System.IO.Path]::GetFullPath($(FoxwarmNativeLibraries)/$(_LanceDbFile)))')" />
-    </ItemGroup>
-    <Error Condition="'@(_PackageLanceDbNative)' == ''" Text="The LanceDB package supplied no $(_LanceDbFile) to replace." />
-  </Target>
 </Project>

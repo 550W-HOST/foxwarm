@@ -1,0 +1,31 @@
+<Project>
+  <!-- Release builds pass FoxwarmNativeLibraries, a directory with the LanceDB library built from
+       pinned, patched source for the target RID (scripts/release/build-lancedb.sh). Every project
+       that publishes the LanceDB package's native asset, Main and the Desktop apps, replaces the
+       package's item with it, keeping the item's metadata so build, publish, the Apple SDK and
+       NativeAOT treat it exactly like the original. Foxwarm.csproj supplies the ToolScript worker. -->
+  <Target
+    Name="UseNativeLibraries"
+    AfterTargets="ResolvePackageAssets"
+    Condition="'$(FoxwarmNativeLibraries)' != ''"
+  >
+    <PropertyGroup>
+      <_NativeRid>$(RuntimeIdentifier)</_NativeRid>
+      <_NativeRid Condition="'$(_NativeRid)' == ''">$(NETCoreSdkPortableRuntimeIdentifier)</_NativeRid>
+      <_LanceDbFile Condition="$(_NativeRid.StartsWith('linux-'))">liblancedb_ffi.so</_LanceDbFile>
+      <_LanceDbFile Condition="$(_NativeRid.StartsWith('win-'))">lancedb_ffi.dll</_LanceDbFile>
+      <_LanceDbFile Condition="$(_NativeRid.StartsWith('osx-'))">liblancedb_ffi.dylib</_LanceDbFile>
+    </PropertyGroup>
+    <Error Condition="'$(_LanceDbFile)' == ''" Text="FoxwarmNativeLibraries needs a linux, win or osx runtime identifier." />
+    <Error Condition="!Exists('$(FoxwarmNativeLibraries)/$(_LanceDbFile)')" Text="FoxwarmNativeLibraries has no $(_LanceDbFile): $(FoxwarmNativeLibraries)" />
+    <ItemGroup>
+      <_PackageLanceDbNative Include="@(NativeCopyLocalItems)" Condition="'%(Filename)%(Extension)' == '$(_LanceDbFile)'" />
+      <NativeCopyLocalItems Remove="@(_PackageLanceDbNative)" />
+      <NativeCopyLocalItems Include="@(_PackageLanceDbNative->'$([System.IO.Path]::GetFullPath($(FoxwarmNativeLibraries)/$(_LanceDbFile)))')" />
+    </ItemGroup>
+    <Error
+      Condition="'@(_PackageLanceDbNative)' == '' and '$(MSBuildProjectName)' == 'Foxwarm'"
+      Text="The LanceDB package supplied no $(_LanceDbFile) to replace."
+    />
+  </Target>
+</Project>

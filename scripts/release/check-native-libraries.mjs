@@ -37,6 +37,10 @@ export function checkNativeLibraries(payload, native, resigned = false) {
     const expected = built.get(name)
     if (!expected) continue
     found.set(name, (found.get(name) ?? 0) + 1)
+    // upload-artifact does not preserve modes, so the worker must have been made executable.
+    if (name === 'monty' && process.platform !== 'win32' && !(fs.statSync(file).mode & 0o111)) {
+      problems.push(`${path.relative(payload, file)} is not executable`)
+    }
     if (resigned) {
       const delta = Math.abs(fs.statSync(file).size - fs.statSync(expected).size)
       if (delta > 1024 * 1024) problems.push(`${path.relative(payload, file)} differs from the built ${name} by ${delta} bytes`)

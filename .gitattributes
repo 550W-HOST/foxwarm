@@ -1,0 +1,8 @@
+# Files that are applied to or run against LF sources on every platform, including Windows
+# runners whose Git checks out text files with CRLF.
+dotnet/Foxwarm.LanceDb/native-build.patch text eol=lf
+dotnet/Foxwarm/ToolScript/*-no-type-check.patch text eol=lf
+dotnet/Foxwarm/ToolScript/*-source.json text eol=lf
+scripts/release/build-lancedb.sh text eol=lf
+scripts/release/build-monty.sh text eol=lf
+scripts/release/rust-native-common.sh text eol=lf

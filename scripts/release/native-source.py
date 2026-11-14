@@ -70,9 +70,11 @@ def prepare(args):
             # Symbolic links and special files are not needed to build.
     if args.patch:
         # Apply outside any enclosing checkout so Git cannot treat these paths as product source.
+        # The upstream Rust sources use LF, but a Windows checkout can hold the patch with CRLF.
+        patch = output.parent / 'native-build.patch'
+        patch.write_bytes(Path(args.patch).read_bytes().replace(b'\r\n', b'\n'))
         environment = dict(os.environ, GIT_CEILING_DIRECTORIES=str(output.parent))
-        subprocess.run(['git', 'apply', '--whitespace=nowarn', str(Path(args.patch).resolve())],
-                       cwd=output, env=environment, check=True)
+        subprocess.run(['git', 'apply', '--whitespace=nowarn', str(patch)], cwd=output, env=environment, check=True)
     print('prepared ' + source['repository'] + ' ' + source['commit'], file=sys.stderr)
     toolchain = source.get('rust')
     if not toolchain:

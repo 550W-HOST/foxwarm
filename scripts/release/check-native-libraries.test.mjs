@@ -17,6 +17,7 @@ function layout(native, payload, { library = 'built-lancedb', worker = 'built-wo
   for (const name of ['LanceDB-native-crates.txt', 'Monty-native-crates.txt']) write(path.join(payload, name), 'licenses')
   write(path.join(payload, 'liblancedb_ffi.so'), library)
   write(path.join(payload, 'ToolScript/native/monty'), worker)
+  fs.chmodSync(path.join(payload, 'ToolScript/native/monty'), 0o755)
 }
 
 test('a package with the built libraries and licence files passes', () => {
@@ -56,4 +57,12 @@ test('a re-signed bundle may differ in content within a size tolerance only', ()
   assert.deepEqual(checkNativeLibraries(payload, native, true), [])
   write(path.join(payload, 'liblancedb_ffi.so'), Buffer.alloc(2 * 1024 * 1024))
   assert.equal(checkNativeLibraries(payload, native, true).length, 1)
+})
+
+test('a worker without the executable bit is reported', { skip: process.platform === 'win32' }, () => {
+  const native = directory()
+  const payload = directory()
+  layout(native, payload)
+  fs.chmodSync(path.join(payload, 'ToolScript/native/monty'), 0o644)
+  assert.match(checkNativeLibraries(payload, native).join('\n'), /is not executable/)
 })
