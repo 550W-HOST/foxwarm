@@ -30,8 +30,10 @@ internal sealed partial class MainToolScript
         {
             switch (name)
             {
+                case "ctl":
                 case "call_tool":
-                    var wrapper = Wrapper(positional, kwargs);
+                    var wrapper =
+                        name == "ctl" ? CtlWrapper(positional, kwargs) : Wrapper(positional, kwargs);
                     var toolName = Text(wrapper["name"]) ?? Text(wrapper["toolId"]) ?? "call_tool";
                     last["summaryName"] = toolName;
                     var arguments = wrapper["args"] as JsonObject ?? new JsonObject();
@@ -130,7 +132,7 @@ internal sealed partial class MainToolScript
                     throw new InvalidDataException(
                         "Unknown ToolScript host function: "
                             + name
-                            + ". Available functions are call_tool, ask_agent and request_model_without_context."
+                            + ". Available functions are call_tool, ctl, ask_agent and request_model_without_context."
                     );
             }
         }
@@ -204,6 +206,37 @@ internal sealed partial class MainToolScript
         ],
         StringComparer.Ordinal
     );
+
+    // ctl(command, values=None) is call_tool("ctl", {"command": command, "values": values}).
+    private static JsonObject CtlWrapper(JsonArray positional, JsonObject kwargs)
+    {
+        foreach (var key in kwargs.Select(pair => pair.Key))
+            if (key is not ("command" or "values"))
+                throw new InvalidDataException(
+                    "ctl() got an unexpected keyword argument '" + key + "'."
+                );
+        if (positional.Count > 2)
+            throw new InvalidDataException("ctl() takes at most two arguments: command and values.");
+        if (positional.Count > 0 && kwargs.ContainsKey("command"))
+            throw new InvalidDataException("ctl() got multiple values for argument 'command'.");
+        if (positional.Count > 1 && kwargs.ContainsKey("values"))
+            throw new InvalidDataException("ctl() got multiple values for argument 'values'.");
+        var command =
+            Text(positional.Count > 0 ? positional[0] : kwargs["command"])
+            ?? throw new InvalidDataException("ctl() requires a command string.");
+        var values = positional.Count > 1 ? positional[1] : kwargs["values"];
+        if (values is not null and not JsonObject)
+            throw new InvalidDataException("ctl() values must be a dict or None.");
+        var args = new JsonObject { ["command"] = command };
+        if (values is not null)
+            args["values"] = values.DeepClone();
+        return new JsonObject
+        {
+            ["name"] = "ctl",
+            ["args"] = args,
+            ["source"] = "builtin",
+        };
+    }
 
     private static JsonObject Wrapper(JsonArray positional, JsonObject kwargs)
     {

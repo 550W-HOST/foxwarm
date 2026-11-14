@@ -49,7 +49,7 @@ Node selection is a batch prerequisite: when it fails, later calls in the same m
 
 `tool search` writes each result's descriptor so it can be pasted after `tool call` (`UnifiedTools.Descriptor`): the tool ID when every part is a plain identifier, otherwise `--source`/`--name` and `--server` or `--node-id` with ctl quoting (`CtlCommandText.Literal`). A name or scope with control or line-direction characters can't be shown as one readable token; it becomes `@name`/`@server`/`@nodeId` and the descriptor ends with `with values {…}` holding its escaped JSON value. Descriptions keep their comment escaping. `CtlCommandTests` checks that every rendered descriptor parses back to the same target.
 
-`call_tool` is no longer a model tool; a model call to it is `Unknown tool`. The ToolScript `call_tool` host function remains.
+`call_tool` is no longer a model tool; a model call to it is `Unknown tool`. The ToolScript `call_tool` host function remains, and the ToolScript host function `ctl(command, values=None)` is the same call as `call_tool("ctl", …)` ([ToolScript](./toolscript.md)).
 
 ## Default declarations
 

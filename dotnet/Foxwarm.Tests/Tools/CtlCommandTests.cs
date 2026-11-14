@@ -778,4 +778,47 @@ public sealed class CtlCommandTests
         Assert.Contains("builtin:skill", result["found"]!.AsArray().Select(value => value!.GetValue<string>()));
         Assert.Contains("Usage: session list", result["bad"]!.GetValue<string>());
     }
+
+    // ctl(command, values=None) is call_tool("ctl", {"command": ..., "values": ...}).
+    [Fact]
+    public async Task ToolScript_ctl_host_function_matches_call_tool_ctl()
+    {
+        await using var f = await ScriptFixture.Create();
+        var tools = Executor(f);
+        var run = await Run(
+            tools,
+            "run_script",
+            new JsonObject
+            {
+                ["code"] =
+                    "a = ctl('skill list')\n"
+                    + "b = call_tool('ctl', {'command': 'skill list'})\n"
+                    + "c = ctl(command='skill list', values=None)\n"
+                    + "d = ctl('tool search @q --source builtin', {'q': 'skill'})['tools']\n"
+                    + "e = call_tool('ctl', {'command': 'tool search @q --source builtin', 'values': {'q': 'skill'}})['tools']\n"
+                    + "errors = []\n"
+                    + "try:\n    errors.append(type(ctl('session list --count many')).__name__)\nexcept Exception as error:\n    errors.append(str(error))\n"
+                    + "try:\n    errors.append(type(ctl(42)).__name__)\nexcept Exception as error:\n    errors.append(str(error))\n"
+                    + "try:\n    errors.append(type(ctl('skill list', [1])).__name__)\nexcept Exception as error:\n    errors.append(str(error))\n"
+                    + "try:\n    errors.append(type(ctl('skill list', None, None)).__name__)\nexcept Exception as error:\n    errors.append(str(error))\n"
+                    + "try:\n    errors.append(type(ctl('skill list', extra=1)).__name__)\nexcept Exception as error:\n    errors.append(str(error))\n"
+                    + "try:\n    errors.append(type(ctl('skill list @unused', {'unused': 1})).__name__)\nexcept Exception as error:\n    errors.append(str(error))\n"
+                    + "try:\n    errors.append(type(ctl('help')).__name__)\nexcept Exception as error:\n    errors.append(str(error))\n"
+                    + "return {'same': a == b and b == c, 'search': d == e, 'errors': errors}\n",
+            }
+        );
+        Assert.True(run.Response?["result"] is JsonObject, run.Response?.ToJsonString());
+        var result = run.Response!["result"]!.AsObject();
+        Assert.True(result["same"]!.GetValue<bool>(), run.Response.ToJsonString());
+        Assert.True(result["search"]!.GetValue<bool>(), run.Response.ToJsonString());
+        var errors = result["errors"]!.AsArray().Select(value => value!.GetValue<string>()).ToArray();
+        Assert.Contains("Usage: session list", errors[0]);
+        Assert.Contains("ctl() requires a command string", errors[1]);
+        Assert.Contains("values must be a dict or None", errors[2]);
+        Assert.Contains("at most two arguments", errors[3]);
+        Assert.Contains("unexpected keyword argument 'extra'", errors[4]);
+        Assert.Contains("unused", errors[5]);
+        // Help returns its text like any other ctl result.
+        Assert.Equal("dict", errors[6]);
+    }
 }

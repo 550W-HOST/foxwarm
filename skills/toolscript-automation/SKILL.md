@@ -122,7 +122,11 @@ For a simple builtin call, the string form is supported:
 content = call_tool("read", {"filePath": "README.md"})
 ```
 
-`call_tool("ctl", {"command": ..., "values": ...})` runs a `ctl` command and returns the native result of the tool it names; an invalid command raises an exception with its usage.
+`ctl(command, values=None)` runs a `ctl` command and returns the native result of the tool it names; an invalid command raises an exception with its usage. It is the same call as `call_tool("ctl", {"command": command, "values": values})`, with the same authorization, approvals and Node placement as the tool the command runs.
+
+```python
+ctl("memory edit MEMORY.md --old-text @old --new-text @new", {"old": old, "new": new})
+```
 
 ToolScript returns the concrete tool's direct result, normalized to Python-native strings, lists, dictionaries, and scalar values. It does not wrap every result in one common envelope.
 
@@ -145,10 +149,7 @@ Use `ctl tool search` in the normal agent loop before scripting an unfamiliar to
 When discovery belongs inside a script, use the structured descriptors:
 
 ```python
-catalog = call_tool("ctl", {
-    "command": "tool search --source builtin --limit 5 @query",
-    "values": {"query": args["query"]},
-})
+catalog = ctl("tool search --source builtin --limit 5 @query", {"query": args["query"]})
 print(catalog["output"])
 return {"toolIds": [tool["toolId"] for tool in catalog["tools"]]}
 ```
