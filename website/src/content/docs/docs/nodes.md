@@ -23,7 +23,7 @@ Back in Foxwarm, inspect the pending request and approve the Node you intended t
 
 ```text
 /node list
-/node pair-approve <pending-id> --node-id worker-one
+/node approve <pending-id> --node-id worker-one
 ```
 
 The approved Node receives its own credentials for subsequent connections. Save any credentials shown by the pairing flow securely.

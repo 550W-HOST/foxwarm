@@ -276,7 +276,7 @@ internal sealed partial class NodeClient
                     case "pair_pending":
                         Log(
                             "pair_pending",
-                            "Node pairing pending approval. Run /node pair-approve "
+                            "Node pairing pending approval. Run /node approve "
                                 + Text(frame, "pendingId")
                         );
                         break;

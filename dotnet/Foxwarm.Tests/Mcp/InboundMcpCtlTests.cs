@@ -138,7 +138,7 @@ public sealed class InboundMcpCtlTests
         Assert.False(Failed(pending), pending.ToJsonString());
         var viaTool = await Ctl(client, "tool call builtin:node_pair_list");
         Assert.Equal(Text(pending), Text(viaTool));
-        Assert.True(Failed(await Ctl(client, "node pair-approve missing-request")));
+        Assert.True(Failed(await Ctl(client, "node approve missing-request")));
 
         var search = await Ctl(client, "tool search pair --source builtin --limit 5");
         Assert.False(Failed(search), search.ToJsonString());

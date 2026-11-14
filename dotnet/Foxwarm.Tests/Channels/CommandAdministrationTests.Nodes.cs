@@ -54,7 +54,7 @@ public sealed partial class CommandAdministrationTests
     }
 
     [Fact]
-    public async Task Actual_Node_commands_reserve_pair_approve_select_move_and_revoke_with_official_client_effects()
+    public async Task Actual_Node_commands_reserve_approve_select_move_and_revoke_with_official_client_effects()
     {
         await using var f = await ExternalChannelFixture.CreateAsync(
             new JsonObject { ["alpha"] = ExternalChannelFixture.Channel() }
@@ -277,7 +277,7 @@ public sealed partial class CommandAdministrationTests
             },
             NodeConnectionHub.Protocol(new())
         );
-        await f.Router.HandleExternalMessageAsync(source, Message("/node pair-reject " + request["id"]));
+        await f.Router.HandleExternalMessageAsync(source, Message("/node reject " + request["id"]));
         Assert.DoesNotContain(
             f.Manager.Nodes.ListPending(),
             row => SessionWait.Text(row?["id"]) == SessionWait.Text(request["id"])

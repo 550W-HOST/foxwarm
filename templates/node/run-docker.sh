@@ -127,7 +127,7 @@ Docker-based node client started.
 
 If this is the first run, approve the pending pairing on the master:
   /node
-  /node pair-approve <pending-id> --node-id $NODE_ID
+  /node approve <pending-id> --node-id $NODE_ID
 
 Useful follow-up commands:
   $DOCKER_COMPOSE logs -f
@@ -143,7 +143,7 @@ Docker-based node client started. Following logs below.
 
 If this is the first run, approve the pending pairing on the master:
   /node
-  /node pair-approve <pending-id> --node-id $NODE_ID
+  /node approve <pending-id> --node-id $NODE_ID
 
 Press Ctrl-C to stop following logs. The container will keep running because it was started detached.
 

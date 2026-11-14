@@ -373,7 +373,7 @@ internal sealed partial class MessageRouter
         );
     }
 
-    private async Task NodePairApproveAsync(UserCommand command)
+    private async Task NodeApproveAsync(UserCommand command)
     {
         var manager = runtime.Manager;
         var pendingId = command.Text("pendingId")!;
@@ -387,7 +387,7 @@ internal sealed partial class MessageRouter
         );
     }
 
-    private async Task NodePairRejectAsync(UserCommand command)
+    private async Task NodeRejectAsync(UserCommand command)
     {
         var pendingId = command.Text("pendingId")!;
         runtime.Manager.Nodes.Reject(pendingId, null);
@@ -427,7 +427,7 @@ internal sealed partial class MessageRouter
             + commands["shell"]
             + "\n```\n\n**Shell-only Node (Windows PowerShell 5.1; exec only)**\nUse the same pre-created per-node credential with the Windows client.\n```powershell\n"
             + commands["windowsShell"]
-            + "\n```\n\n**Approve a pending Node**\nCopy the exact `/node pair-approve <pending-id>` command shown by the client, or approve it in WebUI → Nodes → New nodes.\n\nThe commands above contain pairing credentials. Keep them private.";
+            + "\n```\n\n**Approve a pending Node**\nCopy the exact `/node approve <pending-id>` command shown by the client, or approve it in WebUI → Nodes → New nodes.\n\nThe commands above contain pairing credentials. Keep them private.";
     }
 
     private async Task NodeRenameAsync(UserCommand command)

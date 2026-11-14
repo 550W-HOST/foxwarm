@@ -2180,7 +2180,7 @@
       }
     },
     {
-      "path": "node pair-approve",
+      "path": "node approve",
       "summary": "Approve a pending Node pairing request.",
       "help": "First check `ctl node pair-list` and verify the request is from the Node you intend to trust. Callers in an Agent created by another Agent must use `ctl node token` with --parent-node instead.",
       "ingress": [
@@ -2218,26 +2218,18 @@
         }
       },
       "user": {
-        "handler": "node-pair-approve",
+        "handler": "node-approve",
         "session": "none"
-      },
-      "aliases": [
-        {
-          "name": "approve",
-          "ingress": [
-            "user"
-          ]
-        }
-      ]
+      }
     },
     {
-      "path": "node pair-reject",
+      "path": "node reject",
       "summary": "Reject a pending Node pairing request.",
       "ingress": [
         "user"
       ],
       "user": {
-        "handler": "node-pair-reject",
+        "handler": "node-reject",
         "session": "none"
       },
       "target": {

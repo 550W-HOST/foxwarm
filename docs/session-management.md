@@ -33,8 +33,8 @@ Foxwarm 当前把 **agent** 与 **session** 明确分开：
 /model [name|default]
 /node list
 /node select <node-id>
-/node pair-approve <pending-id> [--node-id <node-id>]
-/node pair-reject <pending-id>
+/node approve <pending-id> [--node-id <node-id>]
+/node reject <pending-id>
 /node bootstrap-info
 /agent list
 /agent create <name> [--no-create-main-session]

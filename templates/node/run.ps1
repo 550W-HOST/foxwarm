@@ -262,7 +262,7 @@ if (-not $Pairing -or (Test-Path -LiteralPath $CredentialsFile)) {
 } else {
     Write-Host "First run - after startup, approve on master:"
     Write-Host "  /node"
-    Write-Host "  /node pair-approve <pending-id> --node-id $NodeId"
+    Write-Host "  /node approve <pending-id> --node-id $NodeId"
 }
 
 Write-Host ""

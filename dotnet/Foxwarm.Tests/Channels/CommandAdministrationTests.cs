@@ -116,6 +116,16 @@ public sealed partial class CommandAdministrationTests
             UserCommands.Find("/agent")!["autocomplete"]!["children"]!.AsArray(),
             row => SessionWait.Text(row?["value"]) == "delete"
         );
+        // Node pairing verbs are approve and reject; no pair-prefixed spelling exists.
+        var nodeVerbs = UserCommands
+            .Find("/node")!["autocomplete"]!["children"]!.AsArray()
+            .Select(row => SessionWait.Text(row?["value"]))
+            .ToArray();
+        Assert.Contains("approve", nodeVerbs);
+        Assert.Contains("reject", nodeVerbs);
+        Assert.Contains("pair-list", nodeVerbs);
+        Assert.DoesNotContain("pair-approve", nodeVerbs);
+        Assert.DoesNotContain("pair-reject", nodeVerbs);
         f.Manager.AttachChannel(source.Target, f.Owner);
         replies.Clear();
         await f.Router.HandleExternalMessageAsync(source, Message("/session messages -1"));

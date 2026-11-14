@@ -24,7 +24,7 @@ Examples in this area include:
 
 - `ctl node bootstrap-info` (`node_bootstrap_info`)
 - `ctl node pair-list` (`node_pair_list`)
-- `ctl node pair-approve` (`node_pair_approve`)
+- `ctl node approve` (`node_pair_approve`)
 - `ctl node token` (`node_create_auth_token`)
 - `ctl node remove` (`node_remove`)
 - `ctl node list`
@@ -39,9 +39,9 @@ Use tools when you need agent-side reasoning help or machine-readable/bootstrap-
 Examples in this area include:
 
 - `/node`
-- `/node pair-approve ...`
+- `/node approve ...`
 - `/node token <node-id>`
-- `/node pair-reject ...`
+- `/node reject ...`
 - `/node bootstrap-info`
 
 Do **not** assume you should execute those user commands yourself as an agent.
@@ -196,14 +196,14 @@ deletes it.
 For the existing request/approve path, start the Node with the shared pairing token:
 
 On first run, the node connects with a **pairing token** and creates a pending pairing request.
-The Node startup log includes the exact `/node pair-approve <pending-id>` command; there is no six-digit pairing code to compare.
+The Node startup log includes the exact `/node approve <pending-id>` command; there is no six-digit pairing code to compare.
 
 ### Agent-facing approval
 
 A coordinator allowed to use the pairing tools can discover and call them:
 
 1. `ctl node pair-list`
-2. after checking the pending id, `ctl node pair-approve <pending-id> --node-id <node-id>`
+2. after checking the pending id, `ctl node approve <pending-id> --node-id <node-id>`
 
 Approval establishes trust in a new execution host. Even though the tool path
 can automate it, keep a human confirmation step when the operator's policy
@@ -238,7 +238,7 @@ If approval should remain on the user command surface, tell the user to run:
 
 ```text
 /node
-/node pair-approve <pending-id> --node-id my-node
+/node approve <pending-id> --node-id my-node
 ```
 
 Useful follow-up checks:
@@ -457,7 +457,7 @@ Agents that were bound to a Node with legacy isolation are migrated at startup t
 After startup and approval:
 
 1. use `ctl node list` to confirm the node is online, or tell the user to run `/node` when approved/offline detail is needed
-2. if approval is pending, use the reviewed `node_pair_list` / `node_pair_approve` tool path or the user-facing `/node pair-approve` path
+2. if approval is pending, use the reviewed `node_pair_list` / `node_pair_approve` tool path or the user-facing `/node approve` path
 3. confirm tool execution happens on the expected Node, not accidentally on `master`
 4. for restricted Agents, check representative allowed and denied calls with `explain_tool_authorization`
 

@@ -69,7 +69,7 @@ curl -fsSL 'https://foxwarm.example.invalid/foxwarm/node/run.sh' | bash -s -- \
 
 For an origin-only URL omit `--host`; the downloaded script infers its default from the request. Docker and interactive launchers accept the same `--node-id` and `--auth-token` flags; on Windows use `-NodeId` and `-AuthToken`, plus `-HostUrl` for a deployment path. Initial authenticated registration writes an owner-only credentials file; later restarts can use that file without either command-line token. `/node remove my-node` revokes it.
 
-Alternatively, start a new Node with the global pairing token as shown below. It reports a complete `/node pair-approve <pending-id>` command in the startup log; copy that exact command into the master. This flow remains available alongside `/node token`.
+Alternatively, start a new Node with the global pairing token as shown below. It reports a complete `/node approve <pending-id>` command in the startup log; copy that exact command into the master. This flow remains available alongside `/node token`.
 
 ## Shell-only Node
 
@@ -138,7 +138,7 @@ Important persisted path:
 When pairing starts, the Node log prints the exact approval command. Run it on the master; the optional node ID shown here assigns a particular final ID:
 
 ```text
-/node pair-approve <pending-id> --node-id my-node
+/node approve <pending-id> --node-id my-node
 ```
 
 ## Client compatibility

@@ -192,7 +192,7 @@ elif [ -z "$PAIRING" ] || [ -s "$ABS_STATE_DIR/state/node_credentials.json" ]; t
 else
   echo "First run — after startup, approve on master:"
   echo "  /node"
-  echo "  /node pair-approve <pending-id> --node-id $NODE_ID"
+  echo "  /node approve <pending-id> --node-id $NODE_ID"
 fi
 
 echo ""

@@ -23,6 +23,18 @@ public sealed class CtlCommandTests
         Assert.IsType<CtlError>(CtlParser.Parse(Args(command, values)));
 
     [Fact]
+    public void Node_pairing_approval_is_node_approve_and_has_no_pair_prefixed_spelling()
+    {
+        var target = Target("node approve pair_1 --node-id box");
+        Assert.Equal("node_pair_approve", target.Name);
+        Assert.Equal("pair_1", target.Args["pendingId"]!.GetValue<string>());
+        Assert.Equal("box", target.Args["nodeId"]!.GetValue<string>());
+        Assert.IsType<CtlTarget>(CtlParser.Parse(Args("node pair-list")));
+        Assert.IsType<CtlError>(CtlParser.Parse(Args("node pair-approve pair_1")));
+        Assert.IsType<CtlError>(CtlParser.Parse(Args("node pair-reject pair_1")));
+    }
+
+    [Fact]
     public void Words_split_like_a_shell_without_expansion()
     {
         var target = Target(

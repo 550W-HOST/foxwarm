@@ -609,8 +609,8 @@ export class NodeClient {
         this.onStatus?.('protocol_incompatible', message);
         break;
       case 'pair_pending':
-        logger.info({ pendingId: message.pendingId, requestedName: message.requestedName }, `Node pairing pending approval. Run /node pair-approve ${String(message.pendingId)}`);
-        this.onStatus?.('pair_pending', { pendingId: message.pendingId, approvalCommand: `/node pair-approve ${String(message.pendingId)}` });
+        logger.info({ pendingId: message.pendingId, requestedName: message.requestedName }, `Node pairing pending approval. Run /node approve ${String(message.pendingId)}`);
+        this.onStatus?.('pair_pending', { pendingId: message.pendingId, approvalCommand: `/node approve ${String(message.pendingId)}` });
         break;
       case 'pair_approved':
         logger.info({ nodeId: message.nodeId }, 'Node pairing approved, storing credentials');
