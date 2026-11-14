@@ -66,7 +66,7 @@ test.after(async () => {
   if (demo?.owned) await rm(demo.dir, { recursive: true, force: true })
 })
 
-async function open({ width = 1280, height = 800, layout = 'tabs', collapsed = false, host = null, overlay = null, dark = false }) {
+async function open({ width = 1280, height = 800, layout = 'tabs', collapsed = false, host = null, overlay = null, dark = false, query = '' }) {
   const context = await browser.createBrowserContext()
   const page = await context.newPage()
   const errors = []
@@ -95,7 +95,7 @@ async function open({ width = 1280, height = 800, layout = 'tabs', collapsed = f
       document.addEventListener('DOMContentLoaded', () => { const style = document.createElement('style'); style.textContent = css; document.head.appendChild(style) })
     }
   }, storage, host, overlay)
-  await page.goto(base, { waitUntil: 'networkidle0' })
+  await page.goto(base + query, { waitUntil: 'networkidle0' })
   await page.waitForFunction(() => document.documentElement.hasAttribute('data-foxwarm-boot-ready') && !document.getElementById('foxwarm-boot'))
   await settle(page)
   return { page, errors, close: () => context.close() }
@@ -146,11 +146,11 @@ function inspect(page) {
 const overlaps = ([x, y, w, h], r) => Math.min(x + w, r.right) - Math.max(x, r.left) >= 1 && Math.min(y + h, r.bottom) - Math.max(y, r.top) >= 1
 const inRegion = (regions, x, y) => regions.some(([rx, ry, w, h]) => x >= rx && x < rx + w && y >= ry && y < ry + h)
 
-function assertHostContract(info, label) {
+function assertHostContract(info, label, minControls = 10) {
   assert.ok(info.regions, `${label}: a frame-regions report`)
   assert.deepEqual(info.keys, ['colorScheme', 'regions', 'type'], `${label}: message schema`)
   assert.ok(info.regions.length > 0 && info.regions.length <= 128)
-  assert.ok(info.interactive.length > 10, `${label}: the app rendered its controls`)
+  assert.ok(info.interactive.length > minControls, `${label}: the app rendered its controls`)
   for (const region of info.regions) {
     assert.equal(region.length, 4)
     for (const control of info.interactive) assert.ok(!overlaps(region, control), `${label}: region ${region} covers "${control.name}"`)
@@ -484,6 +484,57 @@ test('narrow windows keep the mobile shell below a draggable strip; mid widths u
       assertHostContract(info, `${host.platform} 800`)
     } finally { await mid.close() }
   }
+})
+
+const popupQuery = target => '?' + new URLSearchParams({ ...target, foxwarmPopupVersion: '1' })
+const popups = {
+  tasks: popupQuery({ foxwarmPopup: 'tasks' }),
+  chat: popupQuery({ foxwarmPopup: 'chat', sessionId: 'tidepool/proration-v2', title: 'proration-v2' }),
+}
+
+test('popup windows: under a host frame the title row carries the popup title clear of the window controls above one card', async () => {
+  for (const [host, width, height, kind] of [[WINDOWS, 1100, 760, 'tasks'], [MACOS, 1100, 760, 'chat'], [WINDOWS, 560, 640, 'chat'], [MACOS, 560, 640, 'tasks']]) {
+    const label = `${host.platform} ${kind} ${width}px`
+    const { page, errors, close } = await open({ host, width, height, query: popups[kind] })
+    try {
+      await page.waitForSelector('[data-foxwarm-popup-root] .foxwarm-popup-card > *')
+      await settle(page)
+      const info = await inspect(page)
+      assertHostContract(info, label, 4)
+      const layout = await page.evaluate(() => {
+        const box = selector => { const r = document.querySelector(selector).getBoundingClientRect(); return { left: r.left, top: r.top, right: r.right, bottom: r.bottom } }
+        return { row: box('.foxwarm-popup-title-row'), title: box('.foxwarm-popup-title'), card: box('.foxwarm-popup-card'), text: document.querySelector('.foxwarm-popup-title').textContent, document: document.title }
+      })
+      assert.equal(layout.text, kind === 'tasks' ? 'Tasks' : 'proration-v2', label)
+      assert.equal(layout.document, `${layout.text} · Foxwarm`)
+      assert.equal(layout.row.top, 0)
+      assert.equal(layout.row.bottom, Math.max(host.top, 36), `${label}: the title row is as tall as the controls`)
+      assert.ok(layout.title.left >= host.left && layout.title.right <= width - host.right, `${label}: the title clears the controls`)
+      assert.equal(layout.card.top, layout.row.bottom, `${label}: the card starts below the title row`)
+      assert.deepEqual([layout.card.left, width - layout.card.right, height - layout.card.bottom], [8, 8, 8], `${label}: even gutters`)
+      // The whole title row drags the window.
+      for (const [x, y] of [[layout.row.left + 2, 2], [width / 2, layout.row.bottom / 2], [width - host.right - 4, layout.row.bottom - 2]]) {
+        assert.ok(inRegion(info.regions, x, y), `${label}: (${x}, ${y}) drags`)
+      }
+      assert.ok(!inRegion(info.regions, width / 2, layout.card.top + 20), `${label}: the card does not drag`)
+      assert.deepEqual(errors, [])
+    } finally { await close() }
+  }
+})
+
+test('popup windows without a frame provider render as before', async () => {
+  const { page, errors, close } = await open({ query: popups.tasks })
+  try {
+    await page.waitForSelector('[data-foxwarm-popup-root] [data-tasks-view], [data-foxwarm-popup-root] h1, [data-foxwarm-popup-root] h2')
+    const state = await page.evaluate(() => ({
+      titleRow: !!document.querySelector('.foxwarm-popup-title-row'),
+      card: !!document.querySelector('.foxwarm-popup-card'),
+      rootTop: document.querySelector('[data-foxwarm-popup-root]').getBoundingClientRect().top,
+      messages: window.__frameMessages.length,
+    }))
+    assert.deepEqual(state, { titleRow: false, card: false, rootTop: 0, messages: 0 })
+    assert.deepEqual(errors, [])
+  } finally { await close() }
 })
 
 test('PWA window-controls overlay: theme-color is the chrome under the controls once the boot screen is gone', async () => {

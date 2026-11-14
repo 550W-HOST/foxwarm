@@ -1034,8 +1034,10 @@ function App() {
 
   const openCodeCommit = async (target: CodeCommitTarget): Promise<void> => {
     if (codeOpenInNewWindow) {
-      const opened = window.open(makeVscodeWebUrl(API_BASE_PATH, window.location.origin, target, { openCommit: target }).toString(), '_blank', 'noopener,noreferrer')
+      // With noopener, window.open returns null even when the window opens.
+      const opened = window.open(makeVscodeWebUrl(API_BASE_PATH, window.location.origin, target, { openCommit: target }).toString(), '_blank')
       if (!opened) throw new Error('The browser blocked the Code window.')
+      try { opened.opener = null } catch {}
       return
     }
     await requestEmbeddedCode(target, { kind: 'openCommit', ...target })

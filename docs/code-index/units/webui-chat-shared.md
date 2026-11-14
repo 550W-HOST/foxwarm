@@ -17,7 +17,7 @@ Shared utilities, types, and rendering helpers for the chat UI components. Provi
 - `renderAssistantMarkdownSegments` / `renderAssistantMarkdownSegmentsWithSanitizer` — render assistant Markdown into sanitized HTML, interactive display-LaTeX, and Mermaid segments without introducing a second parser
 - `SpecialBlock` / `MermaidDiagram` — reusable per-block rendered/raw/copy surface and lazy strict Mermaid renderer
 - `MarkdownHtmlSegment` — memoized sanitized-HTML leaf whose stable token key lets unchanged streamed blocks retain DOM identity
-- `handleMarkdownLinkClick` — click handler that intercepts links with a confirmation dialog
+- `handleMarkdownLinkClick` — click handler that intercepts links with a confirmation dialog; in app windows it names a new window or the browser ([app windows](./webui-app.md#app-windows-and-new-window-copy))
 - `IconToggleButton`, `MiniToggleButton` — small toggle button components
 - `copyTextToClipboard` — clipboard utility with fallback
 - `getSlashCommandCompletions` — produces autocomplete suggestions for slash commands

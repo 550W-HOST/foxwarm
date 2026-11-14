@@ -1,4 +1,5 @@
 import * as Diff from 'diff'
+import { isAppWindow, linkOpenConfirmation } from '../appWindow'
 import type { ToolApprovalMeta } from '../sessionApprovals'
 import {
   Brain,
@@ -355,7 +356,7 @@ export const handleMarkdownLinkClick = (e: MouseEvent<HTMLDivElement>) => {
   e.preventDefault()
   e.stopPropagation()
 
-  if (window.confirm(`Open this link in a new tab?\n\n${href}`)) {
+  if (window.confirm(linkOpenConfirmation(href, isAppWindow(), window.location.href))) {
     window.open(href, '_blank', 'noopener,noreferrer')
   }
 }

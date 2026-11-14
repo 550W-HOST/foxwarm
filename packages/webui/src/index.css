@@ -2847,3 +2847,28 @@ html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-workbench-tab
 
 /* Status row on the chrome below the cards. */
 html[data-foxwarm-frame] .foxwarm-desktop-workbench-shell .foxwarm-status-bar { height: var(--foxwarm-frame-status-height); padding: 0 2px; background: transparent; }
+
+/* Popup windows (Move to new window, Tasks, Logs): the title row shows the popup's title on
+ * the chrome, clear of the window controls, and the content is one card with even gutters.
+ * Narrow popups keep this row instead of the mobile strip: the strip stays a transparent
+ * drag surface over it and the content needs no extra top inset. */
+[data-foxwarm-popup-framed] { background: var(--foxwarm-color-canvas-edge); }
+.foxwarm-popup-title-row {
+  display: flex; flex-shrink: 0; align-items: center; gap: 8px;
+  height: var(--foxwarm-frame-title-height);
+  padding: 0 calc(var(--foxwarm-frame-right, 0px) + 12px) 0 max(14px, var(--foxwarm-frame-left, 0px));
+}
+.foxwarm-popup-title {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 12.5px; font-weight: 500;
+  color: var(--foxwarm-color-text-strong);
+}
+html[data-foxwarm-window~="inactive"] .foxwarm-popup-title { color: var(--foxwarm-color-text-muted); }
+.foxwarm-popup-card {
+  margin: 0 var(--foxwarm-frame-gutter) var(--foxwarm-frame-gutter);
+  border: 1px solid var(--foxwarm-color-border);
+  border-radius: 10px;
+}
+[data-foxwarm-popup-framed] { --foxwarm-safe-area-top: 0px; }
+body:has([data-foxwarm-popup-framed]) .foxwarm-frame-strip { background: transparent; }
+@media (forced-colors: active) { .foxwarm-popup-card { border-color: CanvasText; } }

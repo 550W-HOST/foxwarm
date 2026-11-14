@@ -16,7 +16,7 @@ A collection of small, reusable React UI components and utility functions for th
 - `AgentCreationMenu` — Shared Agents `+` control and single new-session/new-agent modal flow, including Agent tags plus inline validation/loading/error states
 - `agentCreation` helpers — Client validation and request-body helpers that omit an empty session ID so the backend generates the existing random name
 - `CreateTabButton` — Split button (or, with `variant="nav"`, a sidebar navigation row) for creating terminal tabs with custom node/path options
-- `CodeLaunchButton` — Sidebar navigation row (`SidebarNavItem`) with an options chevron for opening Code at a remembered node/path and controlling the global new-browser-tab default
+- `CodeLaunchButton` — Sidebar navigation row (`SidebarNavItem`) with an options chevron for opening Code at a remembered node/path and controlling the global new-window default; its tooltip and option say "new window" in app windows and "new browser tab" in the browser ([app windows](./webui-app.md#app-windows-and-new-window-copy))
 - `NodeTargetSelect` — Shared capability-aware Code/terminal node selector
 - `ImageParts` — Renders safe image attachments from legacy inline data or current authenticated blob URLs
 - [Runtime status](./webui-runtime-status.md) owns ProcessingStatus and queue controls.
