@@ -22,7 +22,7 @@ test('Conversation honors real delete and clear commands across paging, remount 
   sessionId = (await api('/fork', { method: 'POST', body: JSON.stringify({ suffix: 'conversation-history' }) })).newSessionId
   const forkRows = (await api('/history')).messages
   const forkNotices = forkRows.filter(message => message.__meta.seq > 140).length
-  if (forkNotices) await api('/message', { method: 'POST', body: JSON.stringify({ text: `/delete-messages -${forkNotices}` }) })
+  if (forkNotices) await api('/message', { method: 'POST', body: JSON.stringify({ text: `/session delete-messages -${forkNotices}` }) })
   const archiveHighWater = (await api('/history/continuous')).messages.at(-1).__meta.seq
   const browser = await puppeteer.launch({ executablePath: process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium',
     headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] })
@@ -44,7 +44,7 @@ test('Conversation honors real delete and clear commands across paging, remount 
     const rows = () => page.$$eval('[data-chat-message-anchor-key]', elements => elements.map(element => element.getAttribute('data-chat-message-anchor-key')))
     await open()
     await page.waitForSelector('[data-chat-message-anchor-key="seq-local-140"]')
-    await send('/delete-messages -1')
+    await send('/session delete-messages -1')
     await page.waitForFunction(() => document.body.textContent.includes('Deleted 1 messages'))
     await page.waitForFunction(() => !document.querySelector('[data-chat-message-anchor-key="seq-local-140"]'))
     assert.equal((await api('/history')).messages.at(-1).__meta.seq, 139)
@@ -73,7 +73,7 @@ test('Conversation honors real delete and clear commands across paging, remount 
     await page.waitForSelector('[data-chat-message-anchor-key="seq-local-139"]')
     assert.equal((await rows()).includes('seq-local-140'), false)
 
-    await send('/delete-messages 1')
+    await send('/session delete-messages 1')
     await page.waitForFunction(() => document.body.textContent.includes('Remaining: 138'))
     assert.equal((await api('/history')).messages[0].__meta.seq, 2)
     await page.waitForFunction(() => document.querySelector('[data-continuous-history] button') && !document.querySelector('[data-continuous-history] button').disabled)

@@ -79,7 +79,7 @@ try {
   assert(status.body.channels.find(channel => channel.channelId === 'work').running)
   assert(!status.body.capabilities.externalChannelMessage.includes('WeWork and QQ are not implemented'))
   await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Close')?.click())
-  inbound('attach', '@企业机器人 /attach ' + id)
+  inbound('attach', '@企业机器人 /channel attach ' + id)
   await until(() => cards('attach').some(frame => frame.body.stream.content.includes('Attached to session')), 'actual callback attach')
   await page.evaluate(id => window.foxwarmTest.switchToSession(id), id)
   inbound('first', 'busy-card-start 你好 🦊')
