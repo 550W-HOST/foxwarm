@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Net.Http.Json;
 using System.Text.Json.Nodes;
 using Foxwarm.Models;
@@ -24,6 +23,7 @@ internal sealed partial class DesktopWindow : Window
     private readonly DesktopNative native;
     private readonly DesktopFrame frame;
     private MainHost? host;
+    private DesktopWebViews? webViews;
     private Task startup = Task.CompletedTask;
     private bool exiting;
     private Uri? endpoint;
@@ -107,35 +107,12 @@ internal sealed partial class DesktopWindow : Window
             if (exiting)
                 return;
             var core = view.CoreWebView2;
-            core.Settings.AreHostObjectsAllowed = false;
+            webViews = new DesktopWebViews(environment, endpoint);
+            webViews.Configure(core, this);
             // The frame's one-way frame-regions message is the only page-to-host channel.
             await frame.InstallAsync(core, endpoint);
             if (exiting)
                 return;
-            core.NavigationStarting += (_, e) =>
-            {
-                if (!IsAppUri(e.Uri))
-                {
-                    e.Cancel = true;
-                    OpenExternal(e.Uri);
-                }
-            };
-            core.NewWindowRequested += (_, e) =>
-            {
-                e.Handled = true;
-                OpenExternal(e.Uri);
-            };
-            core.PermissionRequested += (_, e) => e.State = CoreWebView2PermissionState.Deny;
-            core.AddWebResourceRequestedFilter("*", CoreWebView2WebResourceContext.All);
-            core.WebResourceRequested += (_, e) =>
-            {
-                if (
-                    Uri.TryCreate(e.Request.Uri, UriKind.Absolute, out var uri)
-                    && uri.Scheme is "http" or "https"
-                    && !IsAppUri(e.Request.Uri)
-                )
-                    e.Response = environment.CreateWebResourceResponse(null, 403, "Forbidden", "");
-            };
             core.NavigationCompleted += (_, e) =>
             {
                 if (exiting)
@@ -206,29 +183,7 @@ internal sealed partial class DesktopWindow : Window
     }
 
     private bool IsAppUri(string text) =>
-        Uri.TryCreate(text, UriKind.Absolute, out var uri)
-        && endpoint is not null
-        && uri.Scheme == endpoint.Scheme
-        && uri.Host == endpoint.Host
-        && uri.Port == endpoint.Port;
-
-    private static void OpenExternal(string text)
-    {
-        if (
-            !Uri.TryCreate(text, UriKind.Absolute, out var uri)
-            || uri.Scheme is not ("http" or "https")
-        )
-            return;
-        try
-        {
-            Process.Start(new ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true });
-        }
-        catch (Exception error)
-            when (error is System.ComponentModel.Win32Exception or InvalidOperationException)
-        {
-            DesktopNative.ShowMessage("The link could not be opened in your browser.");
-        }
-    }
+        endpoint is not null && DesktopNavigation.IsApp(endpoint, text);
 
     private async Task ObserveHostAsync()
     {
@@ -255,6 +210,7 @@ internal sealed partial class DesktopWindow : Window
         if (exiting)
             return;
         exiting = true;
+        webViews?.CloseAll();
         status.Text = "Closing Foxwarm…";
         view.Visibility = Visibility.Collapsed;
         status.Visibility = Visibility.Visible;
@@ -278,6 +234,7 @@ internal sealed partial class DesktopWindow : Window
         // Windows shutdown must not wait on startup's UI continuation or veto sign-out.
         if (host is not null)
             Task.Run(async () => await host.DisposeAsync()).GetAwaiter().GetResult();
+        webViews?.CloseAll();
         view.Close();
         native.Dispose();
     }

@@ -18,6 +18,8 @@ internal sealed partial class DesktopApplication : NSApplicationDelegate
     private WKWebView? view;
     private Navigation? navigation;
     private BrowserUi? browserUi;
+    private WKContentRuleList? ruleList;
+    private readonly List<DesktopPopupWindow> popups = [];
     private Uri? endpoint;
     private Task startup = Task.CompletedTask;
     private bool exiting;
@@ -143,7 +145,7 @@ internal sealed partial class DesktopApplication : NSApplicationDelegate
                     ["action"] = new JsonObject { ["type"] = "ignore-previous-rules" },
                 }
             );
-            var ruleList = await rulesStore.CompileContentRuleListAsync(
+            ruleList = await rulesStore.CompileContentRuleListAsync(
                 "FoxwarmLocalResources",
                 rules.ToJsonString()
             );
@@ -152,8 +154,8 @@ internal sealed partial class DesktopApplication : NSApplicationDelegate
             webConfiguration.UserContentController.AddContentRuleList(ruleList);
             // The frame's one-way script message is the only page-to-host channel.
             frame!.Configure(webConfiguration, endpoint);
-            navigation = new Navigation(this);
-            browserUi = new BrowserUi();
+            navigation = new Navigation(this, frame, null);
+            browserUi = new BrowserUi(this);
             view = new WKWebView(window!.ContentView!.Bounds, webConfiguration)
             {
                 AutoresizingMask =
@@ -213,12 +215,36 @@ internal sealed partial class DesktopApplication : NSApplicationDelegate
         await view!.Configuration.WebsiteDataStore.HttpCookieStore.SetCookieAsync(cookie);
     }
 
-    private bool IsAppUri(string? text) =>
-        Uri.TryCreate(text, UriKind.Absolute, out var uri)
-        && endpoint is not null
-        && uri.Scheme == endpoint.Scheme
-        && uri.Host == endpoint.Host
-        && uri.Port == endpoint.Port;
+    /// <summary>
+    /// Opens a same-origin or blank new-window request as an app window. Its web view must
+    /// be built from WebKit's configuration, which keeps the opener relationship.
+    /// </summary>
+    private WKWebView OpenWindow(
+        WKWebView opener,
+        WKWebViewConfiguration configuration,
+        string? url,
+        DesktopTarget target,
+        WKWindowFeatures features
+    )
+    {
+        var popup = new DesktopPopupWindow(
+            opener.Window,
+            configuration,
+            ruleList!,
+            endpoint!,
+            DesktopNavigation.IsFramed(endpoint!, url),
+            target == DesktopTarget.Blank,
+            features,
+            closed => popups.Remove(closed)
+        );
+        var policy = new Navigation(this, popup.Frame, popup);
+        popup.Navigation = policy;
+        popup.View.NavigationDelegate = policy;
+        popup.View.UIDelegate = browserUi!;
+        popups.Add(popup);
+        popup.Show();
+        return popup.View;
+    }
 
     private static void OpenExternal(NSUrl? url)
     {
@@ -259,6 +285,8 @@ internal sealed partial class DesktopApplication : NSApplicationDelegate
         if (!exiting)
         {
             exiting = true;
+            foreach (var popup in popups.ToArray())
+                popup.Window.Close();
             _ = StopAsync(sender);
         }
         return NSApplicationTerminateReply.Later;
@@ -279,10 +307,14 @@ internal sealed partial class DesktopApplication : NSApplicationDelegate
         }
     }
 
-    private sealed class Navigation(DesktopApplication owner) : WKNavigationDelegate
+    private sealed class Navigation(
+        DesktopApplication owner,
+        DesktopFrame? frame,
+        DesktopPopupWindow? popup
+    ) : WKNavigationDelegate
     {
         public override void DidStartProvisionalNavigation(WKWebView webView, WKNavigation navigation) =>
-            owner.frame?.ResetRegions();
+            frame?.ResetRegions();
 
         public override void DecidePolicy(
             WKWebView webView,
@@ -290,18 +322,25 @@ internal sealed partial class DesktopApplication : NSApplicationDelegate
             Action<WKNavigationActionPolicy> decisionHandler
         )
         {
-            if (owner.IsAppUri(action.Request.Url?.AbsoluteString))
+            var target = DesktopNavigation.Classify(owner.endpoint!, action.Request.Url?.AbsoluteString);
+            var mainFrame = action.TargetFrame?.MainFrame != false;
+            if (target is DesktopTarget.App or DesktopTarget.Blank)
             {
+                if (mainFrame && target == DesktopTarget.App)
+                    popup?.ShowsPage();
                 decisionHandler(WKNavigationActionPolicy.Allow);
                 return;
             }
             decisionHandler(WKNavigationActionPolicy.Cancel);
-            if (action.TargetFrame?.MainFrame != false)
+            if (!mainFrame)
+                return;
+            if (target == DesktopTarget.Browser)
                 OpenExternal(action.Request.Url);
+            popup?.LeftApp();
         }
     }
 
-    private sealed class BrowserUi : WKUIDelegate
+    private sealed class BrowserUi(DesktopApplication owner) : WKUIDelegate
     {
         public override async void RunJavaScriptAlertPanel(
             WKWebView webView,
@@ -366,9 +405,21 @@ internal sealed partial class DesktopApplication : NSApplicationDelegate
             WKWindowFeatures windowFeatures
         )
         {
-            OpenExternal(action.Request.Url);
-            return null;
+            var url = action.Request.Url?.AbsoluteString;
+            var target = DesktopNavigation.Classify(owner.endpoint!, url);
+            if (owner.exiting || target is DesktopTarget.Browser or DesktopTarget.Ignore)
+            {
+                // Returning no web view makes window.open return null.
+                if (!owner.exiting && target == DesktopTarget.Browser)
+                    OpenExternal(action.Request.Url);
+                return null;
+            }
+            return owner.OpenWindow(webView, configuration, url, target, windowFeatures);
         }
+
+        // window.close() from the page, including the opener closing its popup.
+        public override void DidClose(WKWebView webView) =>
+            owner.popups.FirstOrDefault(popup => popup.View == webView)?.CloseLater();
 
         public override void RequestMediaCapturePermission(
             WKWebView webView,
