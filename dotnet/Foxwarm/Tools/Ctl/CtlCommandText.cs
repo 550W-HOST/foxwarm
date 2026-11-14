@@ -135,6 +135,9 @@ internal static partial class CtlCommandText
             ? text.StartsWith('@') ? "@" + text : text
             : value.ToJsonString();
 
+    // A literal word: quoted when needed, with a leading @ doubled so it doesn't bind.
+    internal static string Literal(string text) => Quote(text.StartsWith('@') ? "@" + text : text);
+
     internal static string Quote(string text) =>
         text.Length > 0 && Plain().IsMatch(text) ? text : "'" + text.Replace("'", "'\\''") + "'";
 }

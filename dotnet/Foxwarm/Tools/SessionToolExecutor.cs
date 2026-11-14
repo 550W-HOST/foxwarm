@@ -692,10 +692,11 @@ internal sealed partial class SessionToolExecutor(
         var raw = SessionWait.Text(call["argsParseError"]) is { Length: > 0 }
             ? SessionWait.Text(call["rawArgsText"])
             : null;
-        sessions.BroadcastTransientText(
-            hosted,
-            $"🛠 *[{name}]*: `{ToolArgsPreview(name, call["args"] as JsonObject ?? new JsonObject(), raw)}`"
-        );
+        var args = call["args"] as JsonObject ?? new JsonObject();
+        // ctl and call_tool calls are shown as the capability they resolve to.
+        if (raw is null)
+            (name, args) = ToolActivity.Target(name, args);
+        sessions.BroadcastTransientText(hosted, $"🛠 *[{name}]*: `{ToolArgsPreview(name, args, raw)}`");
     }
 
     internal static string ToolArgsPreview(string name, JsonObject args, string? rawArgsText = null)

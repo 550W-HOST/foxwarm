@@ -18,10 +18,10 @@ public sealed partial class ProviderFileConsumerTests
             CtlTestArgs.Search(new JsonObject { ["sources"] = new JsonArray("node"), ["includeSchema"] = true })
         );
         Assert.Contains(
-            "--name \"read\" --node-id \"fixture/readonly\"",
+            "--name read --node-id fixture/readonly",
             discovery["output"]!.GetValue<string>()
         );
-        Assert.DoesNotContain("--name \"write\"", discovery["output"]!.GetValue<string>());
+        Assert.DoesNotContain("--name write ", discovery["output"]!.GetValue<string>());
         var args = new JsonObject { ["filePath"] = "no-effect.txt", ["content"] = "forbidden" };
         var missing = await f.Call("write", args);
         Assert.Contains("Node file capability is unavailable", missing.ToJsonString());
@@ -37,7 +37,7 @@ public sealed partial class ProviderFileConsumerTests
             "ctl",
             CtlTestArgs.Search(new JsonObject { ["sources"] = new JsonArray("node"), ["includeSchema"] = true })
         );
-        Assert.DoesNotContain("--name \"write\"", discovery["output"]!.GetValue<string>());
+        Assert.DoesNotContain("--name write ", discovery["output"]!.GetValue<string>());
         var before = (await f.Requests()).Length;
         var direct = await f.Call("write", args);
         Assert.Equal("tool_authorization_denied", direct["error"]!["type"]!.GetValue<string>());

@@ -382,23 +382,7 @@ internal static partial class UnifiedTools
             var tool = tools[index];
             var type =
                 schema && index < 10 ? SchemaType(tool.Schema, 0) : "unknown /* schema omitted */";
-            var safe = SafeIdentity(tool.Name) && (tool.Scope is null || SafeIdentity(tool.Scope));
-            var identity =
-                tool.Source == "builtin"
-                    ? "builtin:" + tool.Name
-                    : tool.Source + ":" + tool.Scope + "/" + tool.Name;
-            var descriptor = safe
-                ? identity
-                : "--source "
-                    + Quote(tool.Source)
-                    + " --name "
-                    + Quote(tool.Name)
-                    + (
-                        tool.Scope is null
-                            ? ""
-                            : (tool.Source == "mcp" ? " --server " : " --node-id ")
-                                + Quote(tool.Scope)
-                    );
+            var descriptor = Descriptor(tool.Source, tool.Name, tool.Scope);
             var commands =
                 tool.Source == "builtin"
                     ? CtlRegistry
@@ -439,6 +423,31 @@ internal static partial class UnifiedTools
         return builder.ToString();
     }
 
+    // How a search result names its tool for `tool call`: the tool ID when every part is a
+    // plain identifier; otherwise --source/--name/--server or --node-id with ctl quoting. A
+    // part with control or line-direction characters can't be shown as one readable token, so
+    // it is passed as `@name` and its JSON value is shown after the descriptor.
+    internal static string Descriptor(string source, string name, string? scope)
+    {
+        if (SafeIdentity(name) && (scope is null || SafeIdentity(scope)))
+            return source == "builtin" ? "builtin:" + name : source + ":" + scope + "/" + name;
+        var values = new List<string>();
+        string Part(string key, string value)
+        {
+            if (Escape(value) == value)
+                return CtlCommandText.Literal(value);
+            values.Add(Quote(key) + ": " + Quote(value));
+            return "@" + key;
+        }
+        var flags = "--source " + source + " --name " + Part("name", name);
+        if (scope is not null)
+            flags +=
+                source == "mcp"
+                    ? " --server " + Part("server", scope)
+                    : " --node-id " + Part("nodeId", scope);
+        return values.Count == 0 ? flags : flags + " with values {" + string.Join(", ", values) + "}";
+    }
+
     private static bool SafeIdentity(string value) =>
         value.Length > 0
         && Regex.IsMatch(value, "^[A-Za-z0-9_.-]+$", RegexOptions.CultureInvariant);
@@ -463,6 +472,7 @@ internal static partial class UnifiedTools
         return builder.ToString();
     }
 
+    // A JSON string literal with control and line-direction characters escaped.
     private static string Quote(string text)
     {
         var builder = new StringBuilder("\"");

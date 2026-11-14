@@ -209,7 +209,7 @@ try {
   assert(meta.output.length <= 32000); assert(!meta.output.includes('\u202e')); assert(meta.output.includes('schema omitted'))
   const unsafe = 'unsafe*/\nline\u202e'
   const dangerous = await perform('builtin:search_tools', { query: 'unsafe', sources: ['mcp'], server: 'local' }, 'unsafe-schema')
-  assert.match(dangerous.output, /--source "mcp"/); assert(!dangerous.output.includes('\nDO-NOT-EXECUTE')); assert(dangerous.output.includes('\\u202e'))
+  assert.match(dangerous.output, /--source mcp --name @name --server local with values \{"name": "/); assert(!dangerous.output.includes('\nDO-NOT-EXECUTE')); assert(dangerous.output.includes('\\u202e'))
   assert.equal((await perform({ source: 'mcp', server: 'local', name: unsafe }, { tag: 'unsafe-name', 'key*/\nname': 'exact' }, 'call-unsafe')).args['key*/\nname'], 'exact')
   for (const [query, expected] of [['schema_required_open', /extra: number/], ['schema_required_closed', /never/], ['schema_many', /required keys omitted/], ['schema_ref', /Record<string, unknown>/]])
     assert.match((await perform('builtin:search_tools', { sources: ['mcp'], server: 'local', query, limit: 1 }, 'schema-' + query)).output, expected)

@@ -279,7 +279,7 @@ public sealed partial class NodeAuthorizationTreeTests
                 listed,
                 tool =>
                     Assert.Contains(
-                        $"--name \"{SessionWait.Text(tool)}\" --node-id \"{id}\"",
+                        $"--name {CtlCommandText.Literal(SessionWait.Text(tool)!)} --node-id {CtlCommandText.Literal(id)}",
                         output
                     )
             );

@@ -428,6 +428,72 @@ public sealed class CtlCommandTests
         Assert.True(checkedCount > 300, checkedCount.ToString());
     }
 
+    // Every `tool search` descriptor, pasted after `tool call` with the values it shows,
+    // resolves to the same tool.
+    [Fact]
+    public void Search_descriptors_parse_back_to_the_same_target()
+    {
+        string[] names =
+        [
+            "read", "browser_fill", "two words", "it's \"quoted\"", "--looks-like-option", "--", "-x",
+            "@name", "@@two", "a/b", "srv:tool", "über✓", "back\\slash", "semi;colon | pipe & $(sub) `tick`",
+            "line\nbreak", "tab\there", "rtl\u202eoverride", "isolate\u2066x\u2069", "nul\u0000x",
+            "unsafe*/\nline\u202e",
+        ];
+        string?[] scopes = ["local", "external-ssh/ssh:fixture", "fixture/readonly", "two words", "line\nbreak", "@srv"];
+        var cases = new List<(string Source, string Name, string? Scope)>();
+        foreach (var name in names)
+        {
+            cases.Add(("builtin", name, null));
+            foreach (var scope in scopes)
+            {
+                cases.Add(("mcp", name, scope));
+                cases.Add(("node", name, scope));
+            }
+        }
+        foreach (var (source, name, scope) in cases)
+        {
+            var descriptor = UnifiedTools.Descriptor(source, name, scope);
+            var split = descriptor.IndexOf(" with values ", StringComparison.Ordinal);
+            var values = split < 0
+                ? new JsonObject()
+                : JsonNode.Parse(descriptor[(split + " with values ".Length)..])!.AsObject();
+            var words = split < 0 ? descriptor : descriptor[..split];
+            Assert.DoesNotMatch("[\\x00-\\x1f\\u202a-\\u202e\\u2066-\\u2069]", descriptor);
+            values["args"] = new JsonObject();
+            var parsed = CtlParser.Parse(
+                new JsonObject { ["command"] = "tool call " + words + " --args @args", ["values"] = values }
+            );
+            var call = Assert.IsType<CtlCall>(parsed);
+            var described = CtlParser.DescribeCall(call.Descriptor);
+            Assert.True(described is not null, descriptor + " => " + call.Descriptor.ToJsonString());
+            Assert.Equal((source, name), (described!.Source, described.Name));
+            Assert.Equal(source == "mcp" ? scope : null, described.Server);
+            Assert.Equal(source == "node" ? scope : null, described.Node);
+        }
+    }
+
+    // Channel progress and verbose broadcasts name the capability a ctl call resolves to.
+    [Theory]
+    [InlineData("memory edit MEMORY.md --old-text a --new-text b", "edit_memory")]
+    [InlineData("tool call builtin:send_to_channel --args @args", "send_to_channel")]
+    [InlineData("tool call node:master/exec --args @args", "exec")]
+    [InlineData("channel send webui:x hello", "send_to_channel")]
+    [InlineData("help", "ctl")]
+    [InlineData("session --help", "ctl")]
+    [InlineData("tool search memory", "ctl")]
+    [InlineData("sesion list", "ctl")]
+    [InlineData("session list 'unclosed", "ctl")]
+    public void Progress_names_the_resolved_capability(string command, string expected)
+    {
+        var args = new JsonObject { ["command"] = command, ["values"] = new JsonObject { ["args"] = new JsonObject { ["command"] = "true" } } };
+        if (!command.Contains("@args"))
+            args.Remove("values");
+        Assert.Equal(expected, ToolActivity.ProgressName("ctl", args));
+        Assert.Equal("write", ToolActivity.ProgressName("write", new JsonObject { ["filePath"] = "x" }));
+        Assert.Equal("tool", ToolActivity.ProgressName(null, null));
+    }
+
     // Hints in tool output name commands from the registry and read back to the same call.
     [Fact]
     public async Task Command_hints_round_trip_through_the_parser()

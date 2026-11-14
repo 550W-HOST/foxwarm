@@ -230,7 +230,10 @@ public sealed partial class LocalSessionTurnHost
                             calls
                                 .Select(call => new Foxwarm.Channels.ChannelTurnTool(
                                     SessionWait.Text(call["id"]) ?? "",
-                                    SessionWait.Text(call["name"]) ?? "tool"
+                                    Foxwarm.Tools.ToolActivity.ProgressName(
+                                        SessionWait.Text(call["name"]),
+                                        call["args"]
+                                    )
                                 ))
                                 .ToArray(),
                             string.Join(
@@ -295,7 +298,13 @@ public sealed partial class LocalSessionTurnHost
                                 .OfType<JsonObject>()
                                 .Select(result => new Foxwarm.Channels.ChannelTurnTool(
                                     SessionWait.Text(result["tool_use_id"]) ?? "",
-                                    SessionWait.Text(result["name"]) ?? "tool",
+                                    Foxwarm.Tools.ToolActivity.ProgressName(
+                                        SessionWait.Text(result["name"]),
+                                        calls.FirstOrDefault(call =>
+                                            SessionWait.Text(call["id"]) is { } id
+                                            && id == SessionWait.Text(result["tool_use_id"])
+                                        )?["args"]
+                                    ),
                                     result["response"] is JsonObject response
                                     && response["error"] is not null
                                         ? "error"

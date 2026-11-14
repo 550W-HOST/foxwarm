@@ -7,6 +7,13 @@ namespace Foxwarm.Tools;
 // Display-only projection. Original arguments remain the execution and search authority.
 internal static class ToolActivity
 {
+    // The name channel progress shows for a call: the capability a ctl or call_tool call
+    // resolves to, like the WebUI timeline; help, search and unparsable ctl calls stay `ctl`.
+    internal static string ProgressName(string? name, JsonNode? args) =>
+        string.IsNullOrEmpty(name) ? "tool"
+        : args is JsonObject values ? Target(name, values).Name
+        : name;
+
     internal static (string Name, JsonObject Args) Target(string name, JsonObject args)
     {
         if (name == "ctl")
