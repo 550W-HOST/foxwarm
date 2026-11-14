@@ -134,7 +134,7 @@ public sealed class InboundMcpCtlTests
         );
         Assert.False(Failed(await Ctl(client, "node status")));
 
-        var pending = await Ctl(client, "node pair-list");
+        var pending = await Ctl(client, "node pending");
         Assert.False(Failed(pending), pending.ToJsonString());
         var viaTool = await Ctl(client, "tool call builtin:node_pair_list");
         Assert.Equal(Text(pending), Text(viaTool));

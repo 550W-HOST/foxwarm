@@ -123,7 +123,8 @@ public sealed partial class CommandAdministrationTests
             .ToArray();
         Assert.Contains("approve", nodeVerbs);
         Assert.Contains("reject", nodeVerbs);
-        Assert.Contains("pair-list", nodeVerbs);
+        Assert.Contains("pending", nodeVerbs);
+        Assert.DoesNotContain("pair-list", nodeVerbs);
         Assert.DoesNotContain("pair-approve", nodeVerbs);
         Assert.DoesNotContain("pair-reject", nodeVerbs);
         f.Manager.AttachChannel(source.Target, f.Owner);

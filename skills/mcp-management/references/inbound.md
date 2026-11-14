@@ -37,7 +37,7 @@ Accepted means queued, not completed or answered. The receiving Session runs und
 | `foxwarm_node` | List, inspect selection, or select a Node | `builtin:node` with `args.action` and a real Node target where applicable |
 | `foxwarm_exec_result` | Read status/output retained by this MCP context | Original command/tool/Node permission is rechecked |
 | `foxwarm_session` | Bounded list/read or send to an existing exact Session ID | `builtin:session`, `builtin:view_session`, or `builtin:send_to_session` |
-| `ctl` | The same operations as commands: `session list/view/send`, `node list/status/select/pair-list/approve`, `tool search/call`, `exec result`; `help` lists them | The policy identity of the wrapper operation each command runs |
+| `ctl` | The same operations as commands: `session list/view/send`, `node list/status/select/pending/approve`, `tool search/call`, `exec result`; `help` lists them | The policy identity of the wrapper operation each command runs |
 
 `ctl` takes `command` text and optional `values` for `@name` arguments, with the same grammar as the model's `ctl`. Each command runs the wrapper operation above with the same validation, policy and results; `node select` changes only this MCP context's Node, as `foxwarm_node` does.
 

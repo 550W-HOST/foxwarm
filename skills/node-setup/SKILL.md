@@ -23,7 +23,7 @@ This distinction matters here too.
 Examples in this area include:
 
 - `ctl node bootstrap-info` (`node_bootstrap_info`)
-- `ctl node pair-list` (`node_pair_list`)
+- `ctl node pending` (`node_pair_list`)
 - `ctl node approve` (`node_pair_approve`)
 - `ctl node token` (`node_create_auth_token`)
 - `ctl node remove` (`node_remove`)
@@ -202,7 +202,7 @@ The Node startup log includes the exact `/node approve <pending-id>` command; th
 
 A coordinator allowed to use the pairing tools can discover and call them:
 
-1. `ctl node pair-list`
+1. `ctl node pending`
 2. after checking the pending id, `ctl node approve <pending-id> --node-id <node-id>`
 
 Approval establishes trust in a new execution host. Even though the tool path

@@ -217,7 +217,7 @@ internal sealed partial class MessageRouter
             "node-select" => NodeSelectAsync(command),
             "node-inspect" => NodeInspectAsync(command),
             "node-remove" => NodeRemoveAsync(command),
-            "node-pair-list" => command.Reply(NodePairList()),
+            "node-pending" => command.Reply(NodePairList()),
             "node-approve" => NodeApproveAsync(command),
             "node-reject" => NodeRejectAsync(command),
             "node-token" => NodeTokenAsync(command),

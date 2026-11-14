@@ -16,7 +16,7 @@ Files: `dotnet/Foxwarm/Tools/Ctl/CtlCommands.json`, `dotnet/Foxwarm/Tools/Ctl/Ct
 - `search_tools` and `call_tool` are removed without an alias period. ToolScript's `call_tool` host function is unrelated and stays.
 - Later phases reuse the same registry and grammar for user `/commands`, inbound MCP and a ToolScript host function; only authority and presentation differ. Commands carry an ingress list for that purpose.
 - [2026-11-14] Phases B, C and D are done together (user). B: user `/commands` run on the same registry and grammar; only authority and presentation differ, user-only commands stay user-only and model capabilities don't widen. C: inbound MCP gains a top-level `ctl` limited to commands with external ingress, over the existing owners; the five wrappers stay ([inbound MCP](./dotnet-inbound-mcp.md#inbound-ctl)). D: ToolScript `ctl(command, values=None)` equals `call_tool("ctl", …)` ([ToolScript](./toolscript.md)).
-- [2026-11-14] The Node pairing verbs are `node approve` and `node reject`, the same spelling on every ingress where the command exists and in Node client output (`/node approve <id>`), with no alias spellings. `node pair-list` keeps its name.
+- [2026-11-14] The Node pairing verbs are `node approve` and `node reject`, the same spelling on every ingress where the command exists and in Node client output (`/node approve <id>`), with no alias spellings. The pending requests are listed by `node pending`, so the set reads pending, approve, reject; `node pending` replaces the earlier `pair-list` spelling without an alias.
 
 Coordinator decisions:
 

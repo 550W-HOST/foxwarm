@@ -69,7 +69,7 @@ internal sealed partial class McpInboundCatalog
                         return await CallAsync(context, "foxwarm_session", mapped, token);
                     case "node list" or "node status" or "node select":
                         return await CallAsync(context, "foxwarm_node", mapped, token);
-                    case "node pair-list" or "node approve":
+                    case "node pending" or "node approve":
                         return await CallTargetAsync(context, "builtin", null, target.Name, mapped, token);
                 }
                 break;

@@ -21,6 +21,7 @@
     { "command": "tool call --source node --name read --node-id box --args @a", "values": { "a": { "filePath": "x.txt" } }, "descriptor": { "source": "node", "name": "read", "nodeId": "box", "args": { "filePath": "x.txt" } } },
     { "command": "tool call mcp:github/search_repos --args @a", "values": { "a": { "query": "foxwarm" } }, "descriptor": { "toolId": "mcp:github/search_repos", "args": { "query": "foxwarm" } } },
     { "command": "node select box", "descriptor": { "toolId": "builtin:node", "args": { "action": "select", "nodeId": "box" } } },
+    { "command": "node pending", "descriptor": { "toolId": "builtin:node_pair_list", "args": {} } },
     { "command": "node approve pair_1 --node-id box", "descriptor": { "toolId": "builtin:node_pair_approve", "args": { "pendingId": "pair_1", "nodeId": "box" } } },
     { "command": "node copy master a.txt box b.txt --overwrite", "descriptor": { "toolId": "builtin:copy_between_nodes", "args": { "sourceNode": "master", "sourcePath": "a.txt", "targetNode": "box", "targetPath": "b.txt", "overwrite": true } } },
     { "command": "timer create --after-seconds 60 --message 'Check the build'", "descriptor": { "toolId": "builtin:create_timer", "args": { "afterSeconds": 60, "message": "Check the build" } } },

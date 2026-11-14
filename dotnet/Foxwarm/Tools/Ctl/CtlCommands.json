@@ -2162,7 +2162,7 @@
       }
     },
     {
-      "path": "node pair-list",
+      "path": "node pending",
       "summary": "List Node pairing requests awaiting approval.",
       "ingress": [
         "model",
@@ -2175,14 +2175,14 @@
       },
       "params": [],
       "user": {
-        "handler": "node-pair-list",
+        "handler": "node-pending",
         "session": "none"
       }
     },
     {
       "path": "node approve",
       "summary": "Approve a pending Node pairing request.",
-      "help": "First check `ctl node pair-list` and verify the request is from the Node you intend to trust. Callers in an Agent created by another Agent must use `ctl node token` with --parent-node instead.",
+      "help": "First check `ctl node pending` and verify the request is from the Node you intend to trust. Callers in an Agent created by another Agent must use `ctl node token` with --parent-node instead.",
       "ingress": [
         "model",
         "external",
@@ -2198,7 +2198,7 @@
           "type": "string",
           "kind": "positional",
           "required": true,
-          "help": "Pending request ID from `node pair-list`."
+          "help": "Pending request ID from `node pending`."
         },
         {
           "name": "nodeId",
@@ -2210,11 +2210,11 @@
       "copy": {
         "external": {
           "summary": "Approve a pending Node pairing request.",
-          "help": "First check `node pair-list` and verify the request is from the Node you intend to trust.",
+          "help": "First check `node pending` and verify the request is from the Node you intend to trust.",
           "params": {}
         },
         "user": {
-          "help": "First check `/node pair-list` and verify the request is from the Node you intend to trust."
+          "help": "First check `/node pending` and verify the request is from the Node you intend to trust."
         }
       },
       "user": {
@@ -2241,7 +2241,7 @@
           "type": "string",
           "kind": "positional",
           "required": true,
-          "help": "Pending request ID from `/node pair-list`."
+          "help": "Pending request ID from `/node pending`."
         }
       ]
     },
