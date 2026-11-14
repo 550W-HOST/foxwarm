@@ -30,7 +30,7 @@ public sealed class InboundMcpTests
         await using var alpha = await f.ClientAsync();
         await using var beta = await f.ClientAsync(InboundMcpFixture.Beta);
         var tools = await alpha.ListToolsAsync(new ListToolsRequestParams());
-        Assert.Equal(5, tools.Tools.Count);
+        Assert.Equal(6, tools.Tools.Count);
         Assert.Equal(
             "2025-11-25",
             alpha.ServerInfo is not null ? alpha.NegotiatedProtocolVersion : null
@@ -185,7 +185,7 @@ public sealed class InboundMcpTests
         }
         using var healthyDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         Assert.Equal(
-            5,
+            6,
             (await client.ListToolsAsync(new ListToolsRequestParams(), healthyDeadline.Token))
                 .Tools
                 .Count
@@ -309,7 +309,7 @@ public sealed class InboundMcpTests
                     && row["tag"]?.GetValue<string>() == tag
             );
         }
-        Assert.Equal(5, (await client.ListToolsAsync(new ListToolsRequestParams())).Tools.Count);
+        Assert.Equal(6, (await client.ListToolsAsync(new ListToolsRequestParams())).Tools.Count);
         Assert.Contains(
             "id",
             Text(await InboundMcpFixture.ConcreteAsync(client, "mcp:peer/probe"))

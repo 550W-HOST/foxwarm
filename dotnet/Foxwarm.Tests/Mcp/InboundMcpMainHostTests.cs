@@ -75,7 +75,7 @@ public sealed class InboundMcpMainHostTests
             transport,
             new McpClientOptions { ProtocolVersion = "2025-11-25" }
         );
-        Assert.Equal(5, (await client.ListToolsAsync(new ListToolsRequestParams())).Tools.Count);
+        Assert.Equal(6, (await client.ListToolsAsync(new ListToolsRequestParams())).Tools.Count);
         var list = (
             await InboundMcpFixture.CallAsync(
                 client,

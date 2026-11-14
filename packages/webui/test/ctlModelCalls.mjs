@@ -10,7 +10,7 @@ export const NATIVE_TOOLS = new Set([
 // Builtins reachable through a specific ctl command; other names (retired or unknown tools in
 // negative cases) stay direct so their errors are unchanged.
 const registry = JSON.parse(readFileSync(new URL('../../../dotnet/Foxwarm/Tools/Ctl/CtlCommands.json', import.meta.url), 'utf8'))
-export const CTL_BUILTINS = new Set(registry.commands.filter(command => command.target?.source === 'builtin').map(command => command.target.name))
+export const CTL_BUILTINS = new Set(registry.commands.filter(command => command.ingress.includes('model') && command.target?.source === 'builtin').map(command => command.target.name))
 
 const quote = value => {
   const text = String(value).startsWith('@') ? '@' + value : String(value)

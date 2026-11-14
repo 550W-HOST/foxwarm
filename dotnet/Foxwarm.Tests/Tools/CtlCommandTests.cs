@@ -192,10 +192,14 @@ public sealed class CtlCommandTests
         Assert.Contains("session list", CtlHelp.Render(new("session", null), visibleAll));
         Assert.Contains("--count <number>", CtlHelp.Render(new("session", "list"), visibleAll));
         Assert.Null(CtlHelp.Render(new("session", "missing"), visibleAll));
-        Assert.All(
-            CtlRegistry.Nouns,
-            noun => Assert.True(CtlHelp.Render(new(noun.Name, null), visibleAll)!.Length < CtlHelp.MaxLength)
-        );
+        foreach (var ingress in new[] { "model", "user", "external" })
+            Assert.All(
+                CtlRegistry.Nouns.Where(noun => CtlRegistry.ForNoun(noun.Name, ingress).Any()),
+                noun =>
+                    Assert.True(
+                        CtlHelp.Render(new(noun.Name, null), visibleAll, ingress)!.Length < CtlHelp.MaxLength
+                    )
+            );
     }
 
     [Fact]
@@ -585,7 +589,13 @@ public sealed class CtlCommandTests
                 entry => entry.Definition["name"]!.GetValue<string>(),
                 StringComparer.Ordinal
             );
-        foreach (var command in CtlRegistry.Commands.Where(command => command.Local is null))
+        // Model commands call their target with these arguments; commands of other ingresses only
+        // name the capability their own dispatch is checked as.
+        foreach (
+            var command in CtlRegistry
+                .Commands.Where(command => command.Local is null && command.Available("model"))
+                .Select(command => command.View("model"))
+        )
         {
             Assert.True(registered.TryGetValue(command.Name!, out var entry), command.Path);
             Assert.Equal(entry!.Source, command.Source);

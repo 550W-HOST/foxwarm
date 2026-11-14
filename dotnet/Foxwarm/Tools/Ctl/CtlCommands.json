@@ -3,7 +3,10 @@
   "nouns": [
     {
       "name": "session",
-      "summary": "Inspect, list, rename, view and manage Sessions."
+      "summary": "Inspect, list, rename, view and manage Sessions.",
+      "copy": {
+        "external": "List, read and message Foxwarm Sessions."
+      }
     },
     {
       "name": "history",
@@ -15,7 +18,10 @@
     },
     {
       "name": "node",
-      "summary": "List, select and manage Nodes; copy files between them."
+      "summary": "List, select and manage Nodes; copy files between them.",
+      "copy": {
+        "external": "List Nodes, choose this external session's Node and approve Node pairing."
+      }
     },
     {
       "name": "memory",
@@ -63,7 +69,14 @@
     },
     {
       "name": "tool",
-      "summary": "Find and call any builtin, MCP or Node tool."
+      "summary": "Find and call any builtin, MCP or Node tool.",
+      "copy": {
+        "external": "Find and call the MCP and Node tools available to this external session."
+      }
+    },
+    {
+      "name": "exec",
+      "summary": "Read results of commands started by this external session."
     }
   ],
   "commands": [
@@ -93,7 +106,8 @@
       "path": "session list",
       "summary": "List Sessions, the current Agent's by default.",
       "ingress": [
-        "model"
+        "model",
+        "external"
       ],
       "target": {
         "source": "builtin",
@@ -107,7 +121,10 @@
           "name": "query",
           "type": "string",
           "kind": "positional",
-          "help": "Keeps Sessions whose ID, alias, display name, Agent, Node, working directory or model contains this text, ignoring case. Applied before --start and --count."
+          "help": "Keeps Sessions whose ID, alias, display name, Agent, Node, working directory or model contains this text, ignoring case. Applied before --start and --count.",
+          "ingress": [
+            "model"
+          ]
         },
         {
           "name": "start",
@@ -129,9 +146,21 @@
             "all"
           ],
           "kind": "flag",
-          "help": "current-agent (default), or all to include Sessions from other Agents."
+          "help": "current-agent (default), or all to include Sessions from other Agents.",
+          "ingress": [
+            "model"
+          ]
         }
-      ]
+      ],
+      "copy": {
+        "external": {
+          "summary": "List Foxwarm Sessions.",
+          "params": {
+            "start": "Zero-based offset, ordered by most recent activity. Defaults to 0.",
+            "count": "Number of Sessions to return, 1–50. Defaults to 20."
+          }
+        }
+      }
     },
     {
       "path": "session rename",
@@ -219,7 +248,8 @@
       "summary": "Read a Session's current conversation and execution state.",
       "help": "Defaults to the latest 10 visible records, with tools summarized by name and count. Use --parts to select content and the returned older-page command to continue reading. Use `ctl history recall` for archived originals.",
       "ingress": [
-        "model"
+        "model",
+        "external"
       ],
       "target": {
         "source": "builtin",
@@ -303,6 +333,47 @@
           ],
           "kind": "flag",
           "help": "names (default) shows compact tool activity; snippets adds short argument and result excerpts; full includes complete tool content within the preview budget."
+        }
+      ],
+      "copy": {
+        "external": {
+          "summary": "Read a Session's current conversation and execution state.",
+          "help": "Defaults to the latest 10 visible records, with tools summarized by name and count. Use --parts to select content and the returned older-page arguments to continue reading.",
+          "params": {}
+        }
+      }
+    },
+    {
+      "path": "session send",
+      "summary": "Queue a message for a Session.",
+      "help": "A successful send confirms that the message was queued, not that the Session has read or answered it. With --allow-reply the Session can reply to this external session, which needs a Foxwarm notification receiver.",
+      "ingress": [
+        "external"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "send_to_session"
+      },
+      "params": [
+        {
+          "name": "sessionId",
+          "type": "string",
+          "kind": "positional",
+          "required": true,
+          "help": "Session to send to."
+        },
+        {
+          "name": "message",
+          "type": "string",
+          "kind": "rest",
+          "required": true,
+          "help": "Message text, taken as written."
+        },
+        {
+          "name": "allowReply",
+          "type": "boolean",
+          "kind": "flag",
+          "help": "Let the Session reply to this external session. Defaults to false."
         }
       ]
     },
@@ -980,7 +1051,8 @@
       "path": "node list",
       "summary": "List Nodes and Providers.",
       "ingress": [
-        "model"
+        "model",
+        "external"
       ],
       "target": {
         "source": "builtin",
@@ -989,13 +1061,35 @@
           "action": "list"
         }
       },
+      "params": [],
+      "copy": {
+        "external": {
+          "summary": "List the Nodes this external session can use.",
+          "params": {}
+        }
+      }
+    },
+    {
+      "path": "node status",
+      "summary": "Show this external session's current Node and working directory.",
+      "ingress": [
+        "external"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "node",
+        "fixed": {
+          "action": "status"
+        }
+      },
       "params": []
     },
     {
       "path": "node select",
       "summary": "Select this Session's execution Node.",
       "ingress": [
-        "model"
+        "model",
+        "external"
       ],
       "target": {
         "source": "builtin",
@@ -1012,7 +1106,16 @@
           "help": "Node to select.",
           "required": true
         }
-      ]
+      ],
+      "copy": {
+        "external": {
+          "summary": "Choose this external session's Node for later Node tool calls.",
+          "help": "The selection belongs to this external session only; it does not change any Foxwarm Session's Node.",
+          "params": {
+            "nodeId": "Exact Node ID to select."
+          }
+        }
+      }
     },
     {
       "path": "node inspect",
@@ -1300,7 +1403,8 @@
       "path": "node pair-list",
       "summary": "List Node pairing requests awaiting approval.",
       "ingress": [
-        "model"
+        "model",
+        "external"
       ],
       "target": {
         "source": "builtin",
@@ -1313,7 +1417,8 @@
       "summary": "Approve a pending Node pairing request.",
       "help": "First check `ctl node pair-list` and verify the request is from the Node you intend to trust. Callers in an Agent created by another Agent must use `ctl node token` with --parent-node instead.",
       "ingress": [
-        "model"
+        "model",
+        "external"
       ],
       "target": {
         "source": "builtin",
@@ -1333,7 +1438,14 @@
           "kind": "flag",
           "help": "Node ID to assign. Defaults to the requested name."
         }
-      ]
+      ],
+      "copy": {
+        "external": {
+          "summary": "Approve a pending Node pairing request.",
+          "help": "First check `node pair-list` and verify the request is from the Node you intend to trust.",
+          "params": {}
+        }
+      }
     },
     {
       "path": "memory read",
@@ -2478,7 +2590,8 @@
       "summary": "Find builtin, MCP and Node tools and their argument schemas.",
       "help": "Matches tool names and descriptions. Results show each tool's ID, its arguments and, for builtins, the matching command. Call a result with `ctl tool call <tool-id> --args @args`.",
       "ingress": [
-        "model"
+        "model",
+        "external"
       ],
       "target": {
         "local": "tool-search"
@@ -2529,14 +2642,27 @@
           "kind": "flag",
           "help": "Include argument schemas for up to the first 10 results. Defaults to true; --no-schema shows short summaries."
         }
-      ]
+      ],
+      "copy": {
+        "external": {
+          "summary": "Find MCP and Node tools available to this external session, with their argument schemas.",
+          "help": "Matches tool names and descriptions. The text result lists tool IDs; the structured result describes each tool. Call one with `tool call <tool-id> --args @args`.",
+          "params": {
+            "source": "Source to search; repeat for several. Defaults to builtin, mcp and node.",
+            "nodeId": "Limit Node results to this Node.",
+            "limit": "Maximum results, 1–50. Defaults to 5.",
+            "schema": "Include argument schemas. Defaults to true; --no-schema leaves them out."
+          }
+        }
+      }
     },
     {
       "path": "tool call",
       "summary": "Call a builtin, MCP or Node tool by its tool ID.",
       "help": "Give a <tool-id> from `ctl tool search`, or identify the tool with --source and --name plus --server or --node-id when needed. Pass the tool's arguments as one object with --args @args. The target tool's normal checks apply.",
       "ingress": [
-        "model"
+        "model",
+        "external"
       ],
       "target": {
         "local": "tool-call"
@@ -2582,6 +2708,41 @@
           "type": "object",
           "kind": "flag",
           "help": "Arguments for the selected tool, as a JSON object, usually @args. Defaults to no arguments."
+        }
+      ],
+      "copy": {
+        "external": {
+          "summary": "Call an MCP or Node tool by its tool ID.",
+          "help": "Give a <tool-id> from `tool search`, or identify the tool with --source and --name plus --server or --node-id. Pass the tool's arguments as one object with --args @args. Permission is checked for the resolved tool, target and arguments.",
+          "params": {
+            "toolId": "Tool ID from `tool search`, such as mcp:server/tool or node:my-node/read.",
+            "nodeId": "Node for `--source node`."
+          }
+        }
+      }
+    },
+    {
+      "path": "exec result",
+      "summary": "Read a command started by this external session, or list its execution IDs.",
+      "help": "Results stay available only while this external session is retained; closing a connection does not stop a command.",
+      "ingress": [
+        "external"
+      ],
+      "target": {
+        "local": "exec-result"
+      },
+      "params": [
+        {
+          "name": "execId",
+          "type": "string",
+          "kind": "positional",
+          "help": "Execution ID to read. Omit to list this external session's executions."
+        },
+        {
+          "name": "limit",
+          "type": "integer",
+          "kind": "flag",
+          "help": "Maximum executions to list, 1–20. Defaults to 5."
         }
       ]
     }

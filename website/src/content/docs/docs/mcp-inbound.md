@@ -93,6 +93,9 @@ Keep a trailing slash on the base URL, including any deployment prefix. Replace 
 | `foxwarm_node` | List, inspect the current selection, or select a Node |
 | `foxwarm_exec_result` | Read command status and bounded output for the current MCP context |
 | `foxwarm_session` | List internal Sessions, read a bounded preview, or queue a message |
+| `ctl` | Run the same operations as commands, such as `session view <id>`, `tool call <tool-id> --args @args` or `exec result <exec-id>`; `help` lists them |
+
+`ctl` takes `command` text and optional `values` for `@name` arguments. Each command runs the matching operation of the tools above, with the same permissions and results.
 
 `foxwarm_discover` accepts `sources: ['node']`, `['mcp']`, or `['builtin']`. The supported builtins are currently the two Node pairing actions.
 

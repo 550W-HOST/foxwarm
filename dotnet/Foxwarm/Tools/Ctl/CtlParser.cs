@@ -33,6 +33,9 @@ internal sealed record CtlSearch(CtlCommand Command, JsonObject Args) : CtlInvoc
 // `tool call`: a descriptor in the former unified-call shape (toolId/source/name/server/nodeId/args).
 internal sealed record CtlCall(CtlCommand Command, JsonObject Descriptor) : CtlInvocation;
 
+// A command handled by its ingress itself (Local names it), with normalized arguments.
+internal sealed record CtlLocal(CtlCommand Command, string Local, JsonObject Args) : CtlInvocation;
+
 // A command resolving to one canonical capability with normalized arguments.
 internal sealed record CtlTarget(CtlCommand Command, string Source, string Name, JsonObject Args)
     : CtlInvocation;
@@ -375,8 +378,8 @@ internal static partial class CtlParser
                 throw new CtlUsageException("Unexpected text after --help.", noun: nounName);
             return Help(lexer, bound, nounName, null);
         }
-        var found = CtlRegistry.Find(nounName, second.Text);
-        if (found is null || !found.Available(ingress))
+        var found = CtlRegistry.Find(nounName, second.Text, ingress);
+        if (found is null)
             throw new CtlUsageException(
                 Unknown(nounName + " " + second.Text),
                 noun: nounName,
@@ -405,7 +408,7 @@ internal static partial class CtlParser
     }
 
     private static bool Visible(string noun, string ingress) =>
-        CtlRegistry.ForNoun(noun).Any(command => command.Available(ingress));
+        CtlRegistry.ForNoun(noun, ingress).Any();
 
     internal static string Unknown(string typed) => $"Unknown command `{typed}`.";
 
@@ -521,6 +524,7 @@ internal static partial class CtlParser
         {
             "tool-search" => new CtlSearch(command, mapped),
             "tool-call" => new CtlCall(command, Descriptor(mapped)),
+            { } local => new CtlLocal(command, local, mapped),
             _ => new CtlTarget(command, command.Source!, command.Name!, mapped),
         };
     }

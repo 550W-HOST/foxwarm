@@ -208,5 +208,27 @@
         }
       }
     }
+  },
+  {
+    "name": "ctl",
+    "description": "Run one Foxwarm command: list, read and message Sessions, choose this external session's Node, approve Node pairing, find and call permitted MCP and Node tools, and read command results. Write `<noun> <verb> [arguments]`; `help` lists the commands available to you and `<noun> <verb> --help` shows one command's arguments. Pass long text or JSON as @name and supply its value in values.",
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "command"
+      ],
+      "properties": {
+        "command": {
+          "type": "string",
+          "description": "Command text, such as `session list`, `session send my-agent/main @message` or `tool call node:my-node/read --args @args`."
+        },
+        "values": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Values for @name arguments in command, by name."
+        }
+      }
+    }
   }
 ]

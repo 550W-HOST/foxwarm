@@ -7,7 +7,7 @@ using Foxwarm.Tools;
 
 namespace Foxwarm;
 
-internal sealed class McpInboundCatalog
+internal sealed partial class McpInboundCatalog
 {
     private readonly McpClient mcp;
     internal Foxwarm.Channels.ChannelRegistry ChannelRegistry { get; }
@@ -148,6 +148,8 @@ internal sealed class McpInboundCatalog
             JsonNode? result;
             switch (name)
             {
+                case "ctl":
+                    return await CtlAsync(context, args, token);
                 case "foxwarm_discover":
                     return await DiscoverAsync(context, args, token);
                 case "foxwarm_call":
@@ -156,11 +158,32 @@ internal sealed class McpInboundCatalog
                     JsonObject? called = null;
                     try
                     {
-                        return called = await CallConcreteAsync(context, args, token);
+                        Keys(args, "toolId", "args");
+                        var toolId = Text(args, "toolId", true)!;
+                        var callArgs = !args.ContainsKey("args")
+                            ? new JsonObject()
+                            : args["args"] as JsonObject
+                                ?? throw new McpInboundSafeException("Invalid tool call arguments.");
+                        var (source, scope, tool, valid) = ToolIdParts(toolId);
+                        if (!valid)
+                            throw new McpInboundSafeException("Invalid tool ID.");
+                        return called = await CallConcreteAsync(context, source!, scope, tool, callArgs, token);
                     }
                     finally
                     {
-                        RecordExternal(context, args, started, called);
+                        if (args["toolId"] is JsonValue value && value.TryGetValue<string>(out var recorded))
+                        {
+                            var (source, scope, tool, _) = ToolIdParts(recorded);
+                            RecordExternal(
+                                context,
+                                source,
+                                scope,
+                                tool,
+                                args["args"] as JsonObject ?? new JsonObject(),
+                                started,
+                                called
+                            );
+                        }
                     }
                 }
                 case "foxwarm_node":
@@ -276,24 +299,16 @@ internal sealed class McpInboundCatalog
     // A call that ended in an exception is recorded as an error with no further detail.
     private void RecordExternal(
         McpExternalContext context,
-        JsonObject args,
+        string? source,
+        string? scope,
+        string tool,
+        JsonObject callArgs,
         long started,
         JsonObject? result
     )
     {
         try
         {
-            if (args["toolId"] is not JsonValue value || !value.TryGetValue<string>(out var id))
-                return;
-            var colon = id.IndexOf(':');
-            var slash = id.IndexOf('/', colon + 1);
-            var source = colon > 0 ? id[..colon] : null;
-            var scope = colon > 0 && slash > colon ? id[(colon + 1)..slash] : null;
-            var tool =
-                slash > 0 ? id[(slash + 1)..]
-                : colon > 0 ? id[(colon + 1)..]
-                : id;
-            var callArgs = args["args"] as JsonObject ?? new JsonObject();
             var failed = result is null || result["isError"]?.GetValue<bool>() == true;
             var target = new JsonObject { ["name"] = tool };
             if (source is not null)
@@ -335,27 +350,59 @@ internal sealed class McpInboundCatalog
         }
     }
 
-    private async Task<JsonObject> CallConcreteAsync(
+    // A tool ID as foxwarm_call reads it: the two pairing builtins, or source:scope/name split
+    // at the first slash. An invalid ID is still split as far as it goes, for its activity record.
+    private static (string? Source, string? Scope, string Name, bool Valid) ToolIdParts(string id)
+    {
+        var colon = id.IndexOf(':');
+        var slash = id.IndexOf('/', colon + 1);
+        var source = colon > 0 ? id[..colon] : null;
+        var scope = colon > 0 && slash > colon ? id[(colon + 1)..slash] : null;
+        var name =
+            slash > 0 ? id[(slash + 1)..]
+            : colon > 0 ? id[(colon + 1)..]
+            : id;
+        var valid =
+            id is "builtin:node_pair_list" or "builtin:node_pair_approve"
+            || colon > 0 && slash > colon + 1 && slash < id.Length - 1;
+        return (source, scope, name, valid);
+    }
+
+    // One concrete tool call by `ctl` and its activity record, as for foxwarm_call.
+    private async Task<JsonObject> CallRecordedAsync(
         McpExternalContext context,
-        JsonObject args,
+        string source,
+        string? scope,
+        string name,
+        JsonObject callArgs,
         CancellationToken token
     )
     {
-        Keys(args, "toolId", "args");
-        var id = Text(args, "toolId", true)!;
-        var callArgs = !args.ContainsKey("args")
-            ? new JsonObject()
-            : args["args"] as JsonObject
-                ?? throw new McpInboundSafeException("Invalid tool call arguments.");
-        if (id is "builtin:node_pair_list" or "builtin:node_pair_approve")
-            return Result(await PairAsync(context, id[8..], callArgs, token));
-        var colon = id.IndexOf(':');
-        var slash = id.IndexOf('/', colon + 1);
-        if (colon <= 0 || slash <= colon + 1 || slash == id.Length - 1)
+        var started = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        JsonObject? called = null;
+        try
+        {
+            return called = await CallConcreteAsync(context, source, scope, name, callArgs, token);
+        }
+        finally
+        {
+            RecordExternal(context, source, scope, name, callArgs, started, called);
+        }
+    }
+
+    private async Task<JsonObject> CallConcreteAsync(
+        McpExternalContext context,
+        string source,
+        string? scope,
+        string name,
+        JsonObject callArgs,
+        CancellationToken token
+    )
+    {
+        if (source == "builtin" && scope is null && name is "node_pair_list" or "node_pair_approve")
+            return Result(await PairAsync(context, name, callArgs, token));
+        if (scope is null)
             throw new McpInboundSafeException("Invalid tool ID.");
-        var source = id[..colon];
-        var scope = id[(colon + 1)..slash];
-        var name = id[(slash + 1)..];
         if (source == "mcp")
             return await mcp.CallExternalAsync(
                 context,

@@ -15,16 +15,22 @@ export function ctlRegistryPlugin(): Plugin {
   }
 }
 
+const forModel = (item: { ingress?: string[] }) => !item.ingress || item.ingress.includes('model')
+
 export function slimCtlRegistry(registry: { commands: Array<Record<string, any>> }) {
   return {
-    commands: registry.commands.map(command => ({
-      path: command.path,
-      ...(command.aliases ? { aliases: command.aliases } : {}),
-      target: command.target,
-      params: (command.params || []).map((parameter: Record<string, any>) => {
-        const { help: _help, ...shape } = parameter
-        return shape
-      }),
-    })),
+    // Only the model's commands, parameters and aliases: the timeline shows model calls.
+    commands: registry.commands.filter(forModel).map(command => {
+      const aliases = (command.aliases || []).filter((alias: unknown) => typeof alias === 'string')
+      return {
+        path: command.path,
+        ...(aliases.length ? { aliases } : {}),
+        target: command.target,
+        params: (command.params || []).filter(forModel).map((parameter: Record<string, any>) => {
+          const { help: _help, ingress: _ingress, ...shape } = parameter
+          return shape
+        }),
+      }
+    }),
   }
 }

@@ -106,6 +106,16 @@ for (const runtime of ['source', 'dotnet']) {
     assert.equal(execCall(running.execId).sessionCwd, join(cwd, 'next'))
     assert((await call(beta, 'foxwarm_exec_result', { execId: running.execId })).isError)
     assert.equal(value(await call(alpha, 'foxwarm_exec_result', { execId: running.execId })).state, 'running')
+    if (runtime === 'dotnet') {
+      // ctl is a syntax layer over the same wrappers: ownership, Node selection and calls are theirs.
+      const ctl = (client, command, values) => call(client, 'ctl', values ? { command, values } : { command })
+      assert((await ctl(beta, 'exec result @id', { id: running.execId })).isError)
+      assert.equal(value(await ctl(alpha, 'exec result @id', { id: running.execId })).state, 'running')
+      assert(value(await ctl(alpha, 'exec result --limit 20')).executions.some(entry => entry.execId === running.execId))
+      assert.equal(value(await ctl(alpha, 'node status')).cwd, join(cwd, 'next'))
+      assert.match(JSON.stringify(await ctl(alpha, 'tool call node:external-cli/read --args @args', { args: { filePath: '../owned.txt' } })), /three/)
+      assert.match(JSON.stringify(await ctl(alpha, 'tool call --source node --name read --node-id external-cli --args \'{"filePath":"../owned.txt"}\'')), /three/)
+    }
     assert(wire.some(row => row.direction === 'main' && row.value.type === 'external_exec_result_request' && row.value.execId === running.execId), 'actual Main query caller was exercised')
     const next = join(cwd, 'next'); await writeFile(join(next, 'go'), '')
     const event = await until(() => wire.find(row => row.value.type === 'external_exec_completed' && row.value.execId === running.execId)?.value, 'actual signed completion')
