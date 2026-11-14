@@ -12,6 +12,7 @@ import { join, resolve } from 'node:path'
 import puppeteer from 'puppeteer-core'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
 import { NEW_SESSION_DIALOG_TRIGGER, mainHostLaunch } from './mainHostFixture.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 
 const root = await mkdtemp(join(tmpdir(), 'foxwarm-wait-e2e-'))
 const dataRoot = join(root, 'data'); const workRoot = join(dataRoot, 'agents', 'main'); const globalRoot = join(root, 'global-skills')
@@ -22,7 +23,7 @@ const plans = new Map(); const requests = []; const errors = []; const counts = 
 const sleep = ms => new Promise(done => setTimeout(done, ms))
 const signal = () => { let release; const promise = new Promise(done => { release = done }); return { promise, release } }
 const text = value => ({ type: 'message', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: value }] })
-const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
+const call = functionCall
 const messageText = body => body.input.filter(item => item.type === 'message').flatMap(item => item.content || []).map(part => part.text || '').join('\n')
 let host, browser, provider, port, firstPid, secondPid
 async function until(fn, label, timeout = 20000) {
@@ -89,7 +90,7 @@ try {
       const chunks = []; for await (const chunk of req) chunks.push(chunk)
       const body = JSON.parse(Buffer.concat(chunks).toString())
       assert.equal(req.headers.authorization, `Bearer ${providerToken}`); assert.equal(req.url, '/responses')
-      assert(body.tools.some(tool => tool.name === 'skill'))
+      assert(body.tools.some(tool => tool.name === 'ctl')); assert(!body.tools.some(tool => tool.name === 'skill'))
       const id = /currentSessionId="([^"]+)"/.exec(messageText(body))?.[1]
       assert(id, 'Real snapshot Session identity'); const n = counts.get(id) || 0; counts.set(id, n + 1)
       requests.push({ id, n, body })

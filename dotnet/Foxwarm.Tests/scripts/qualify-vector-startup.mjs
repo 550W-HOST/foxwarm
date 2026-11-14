@@ -30,7 +30,7 @@ const peer = createServer(async (request, response) => {
   const toolResult = body.input.slice(lastUser + 1).some(row => row.type === 'function_call_output')
   const semantic = JSON.stringify(body.input).includes('SEMANTIC:') && !toolResult
   const output = semantic
-    ? [{ type: 'function_call', call_id: 'startup-recall', name: 'recall', arguments: JSON.stringify({ vector_query: 'synthetic query', scope: 'current-session' }) }]
+    ? [{ type: 'function_call', call_id: 'startup-recall', name: 'ctl', arguments: JSON.stringify({ command: "history recall --vector-query 'synthetic query' --scope current-session" }) }]
     : [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Synthetic startup answer.' }] }]
   response.writeHead(200, { 'content-type': 'text/event-stream' })
   response.end('data: ' + JSON.stringify({ type: 'response.completed', response: { output } }) + '\n\n')
@@ -83,9 +83,9 @@ async function exchange(f, id, marker, code) {
     return !value.busy && value.history.some(isInput) ? value : null
   }, 'committed exchange ' + marker)
   const inputIndex = state.history.findIndex(isInput)
-  const toolIndex = state.history.findIndex((row, index) => index > inputIndex && row.role === 'tool' && row.parts.some(part => part.functionResponse?.name === 'recall'))
+  const toolIndex = state.history.findIndex((row, index) => index > inputIndex && row.role === 'tool' && row.parts.some(part => part.functionResponse?.tool_use_id === 'startup-recall'))
   assert(toolIndex > inputIndex, 'Current input must be followed by its recall response: ' + marker)
-  const tool = state.history[toolIndex].parts.find(part => part.functionResponse?.name === 'recall').functionResponse.response
+  const tool = state.history[toolIndex].parts.find(part => part.functionResponse?.tool_use_id === 'startup-recall').functionResponse.response
   assert.equal(tool.code, code, JSON.stringify(tool))
   assert.equal(tool.retryable === true, code === 'VECTOR_UNAVAILABLE')
   const answerIndex = state.history.findIndex((row, index) => index > toolIndex && row.role === 'model' && row.parts.some(part => part.text === 'Synthetic startup answer.'))

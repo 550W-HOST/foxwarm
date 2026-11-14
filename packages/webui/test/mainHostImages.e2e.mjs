@@ -8,6 +8,7 @@ import sharp from 'sharp'
 import { WebSocketServer } from 'ws'
 import { createHostFixture, until, sleep } from './mainHostFixture.mjs'
 import { writeModelFixture } from './mainModelFixture.mjs'
+import { ctlCalls } from './ctlModelCalls.mjs'
 const options = { env: {} }, fixture = await createHostFixture('input-images', options), records = [], failures = [], sockets = [], frames = [], counts = new Map()
 const home = join(fixture.root, 'home'); await mkdir(home); options.env.HOME = home; options.cwd = fixture.root
 const png = await sharp({ create: { width: 3, height: 2, channels: 4, background: { r: 200, g: 20, b: 90, alpha: 1 } } }).png().toBuffer(), imagePath = join(fixture.work, 'pixel.png')
@@ -15,7 +16,7 @@ await writeFile(imagePath, png); await mkdir(join(fixture.work, 'memory'), { rec
 await writeFile(join(fixture.data, 'state/mcp.json'), JSON.stringify({ servers: { image: { transport: 'stdio', command: process.execPath, args: [resolve(import.meta.dirname, 'mainHostImages.peer.mjs'), fixture.root, imagePath], timeoutSeconds: 20, enable: true } } }))
 const route = id => '/api/sessions/' + encodeURIComponent(id), authority = id => readFile(join(fixture.data, 'state/sessions', id + '.json'), 'utf8').then(JSON.parse)
 let releaseHold, stagingAlias; const held = new Promise(resolve => { releaseHold = resolve })
-const calls = key => [{ id: key + '-read', name: 'read', args: { filePath: imagePath } }, { id: key + '-sdk', name: 'call_tool', args: { toolId: 'mcp:image/image', args: { corrupt: key === 'corrupt', carrier: key === 'carrier' } } }]
+const calls = key => ctlCalls([{ id: key + '-read', name: 'read', args: { filePath: imagePath } }, { id: key + '-sdk', name: 'call_tool', args: { toolId: 'mcp:image/image', args: { corrupt: key === 'corrupt', carrier: key === 'carrier' } } }])
 const responseCalls = key => calls(key).map(call => ({ type: 'function_call', call_id: call.id, name: call.name, arguments: JSON.stringify(call.args) }))
 const final = key => [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'DONE-IMAGES-' + key }] }]
 const textOf = body => JSON.stringify(body)

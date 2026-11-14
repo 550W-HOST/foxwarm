@@ -8,6 +8,7 @@ import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
 import { createHostFixture, until } from './mainHostFixture.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 
 const fixtures = [], requests = [], failures = []
 const peer = createServer(async (request, response) => {
@@ -15,7 +16,7 @@ const peer = createServer(async (request, response) => {
     let raw = ''; for await (const chunk of request) raw += chunk
     const body = JSON.parse(raw); requests.push(body)
     for (const item of body.input.filter(item => item.type === 'function_call')) assert(body.input.some(value => value.type === 'function_call_output' && value.call_id === item.call_id))
-    const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
+    const call = functionCall
     const output = body.input.at(-1)?.type === 'function_call_output'
       ? [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'DONE-ARCHIVE-IDENTITY' }] }]
       : [call('agent', 'create_agent', { agentName: 'archive-proof', createMainSession: false }), call('old', 'create_session', { agentName: 'main', sessionName: 'archive_old' }), call('middle', 'create_session', { agentName: 'main', sessionName: 'archive_middle' }),

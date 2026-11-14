@@ -5,6 +5,7 @@ import { once } from 'node:events'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { createHostFixture, until } from './mainHostFixture.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 
 const env = {}, options = { env, }
 const fixture = await createHostFixture('provider-lifecycle', options)
@@ -23,7 +24,7 @@ await writeFile(configPath, JSON.stringify({ url: fixture.origin, bot: { httpPor
   unicode: { type: 'executable', command: 'python3', args: [resolve('dotnet/Foxwarm.Tests/Tools/Fixtures/node-provider.py'), unicodeTarget], timeoutSeconds: 3 }
 } }))
 const failures = [], requests = [], scripts = new Map()
-const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
+const call = functionCall
 const model = createServer(async (request, response) => {
   try {
     let raw = ''; for await (const chunk of request) raw += chunk
@@ -31,8 +32,8 @@ const model = createServer(async (request, response) => {
     const text = body.input.filter(row => row.role === 'user').flatMap(row => row.content || []).map(part => part.text || '').join('\n')
     const key = [...text.matchAll(/LIFECYCLE:([\w-]+)/g)].at(-1)?.[1], calls = scripts.get(key)
     assert(calls, key)
-    const definition = body.tools.find(tool => tool.name === 'node')
-    assert(definition.parameters.properties.action.enum.includes('create'))
+    // Provider lifecycle actions are reached through ctl (`node create`, `node destroy`, ...).
+    assert(body.tools.some(tool => tool.name === 'ctl')); assert(!body.tools.some(tool => tool.name === 'node'))
     const output = calls.every(item => body.input.some(row => row.type === 'function_call_output' && row.call_id === item.call_id))
       ? [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'DONE-' + key }] }] : calls
     response.writeHead(200, { 'content-type': 'text/event-stream' })

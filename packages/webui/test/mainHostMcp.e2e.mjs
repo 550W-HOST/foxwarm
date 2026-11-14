@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import puppeteer from 'puppeteer-core'
 import { mainHostLaunch } from './mainHostFixture.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 
 const root = await mkdtemp(join(tmpdir(), 'foxwarm-unified-mcp-'))
 const data = join(root, 'data'); const work = join(data, 'agents', 'main'); const peerRoot = join(root, 'peer')
@@ -21,7 +22,7 @@ assert(process.env.DOTNET_ROOT, 'Set DOTNET_ROOT to a .NET 10 SDK')
 const sleep = ms => new Promise(done => setTimeout(done, ms))
 const exists = file => access(file).then(() => true, () => false)
 const text = value => ({ type: 'message', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: value }] })
-const fn = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
+const fn = functionCall
 const invoke = (id, target, args = {}) => fn(id, 'call_tool', typeof target === 'string' ? { toolId: target, args } : { ...target, args })
 const requests = []; const failures = []; const scripts = new Map(); const pids = []; let serial = 0
 let provider, browser, page, host, httpPeer, port, httpPort, current
@@ -59,7 +60,8 @@ async function task(calls, { owner = current, final = true, browserSend = false 
   }
   return key
 }
-async function perform(target, args, id, owner = current) { await task([invoke(id, target, args)], { owner }); return pair(id, owner) }
+// Discovery is `ctl tool search`; every other target is `ctl tool call`.
+async function perform(target, args, id, owner = current) { await task([target === 'builtin:search_tools' ? fn(id, 'search_tools', args) : invoke(id, target, args)], { owner }); return pair(id, owner) }
 async function lines(file) { return (await readFile(join(peerRoot, file), 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line)) }
 async function startHost() {
   await mkdir(join(data, 'state'), { recursive: true })
@@ -83,7 +85,7 @@ try {
     try {
       const chunks = []; for await (const chunk of req) chunks.push(chunk)
       const body = JSON.parse(Buffer.concat(chunks).toString()); assert.equal(req.headers.authorization, `Bearer ${providerToken}`)
-      assert(body.tools.some(tool => tool.name === 'call_tool')); assert(body.tools.some(tool => tool.name === 'search_tools'))
+      assert(body.tools.some(tool => tool.name === 'ctl')); assert(!body.tools.some(tool => tool.name === 'call_tool' || tool.name === 'search_tools'))
       assert(!body.tools.some(tool => tool.name === 'mcp_config' || tool.name === 'list_mcp_servers' || tool.name === 'echo_effect'))
       for (const tool of body.tools) {
         const fields = tool.parameters.properties
@@ -153,10 +155,13 @@ try {
   assert(!await exists(join(data, 'agents', 'team', 'cancel-one.txt')))
   const controls = (await history()).flatMap(row => row.parts || []).find(part => part.functionCall?.id === 'single-cancel').functionCall
   assert.equal(controls.args.__cancelTool, true)
-  await task([fn('primary-object-wins', 'call_tool', { toolId: 'node:master/write', args: { filePath: 'fallback.txt', content: 'primary' }, argsJson: '{malformed-ignored' }),
-    fn('invalid-primary-json-fallback', 'call_tool', { toolId: 'node:master/read', args: 'not-object', argsJson: JSON.stringify({ filePath: 'fallback.txt' }) }),
-    fn('bad-json-fallback', 'call_tool', { toolId: 'node:master/write', argsJson: '[1,2]' })])
-  assert.match((await pair('invalid-primary-json-fallback')).output, /primary/); assert((await pair('bad-json-fallback')).error)
+  // ctl envelope: values or valuesJson supply @name arguments; both at once or a non-object is rejected.
+  const ctl = (id, args) => ({ type: 'function_call', call_id: id, name: 'ctl', arguments: JSON.stringify(args) })
+  await task([ctl('values-json-write', { command: 'tool call node:master/write --args @a', valuesJson: JSON.stringify({ a: { filePath: 'fallback.txt', content: 'primary' } }) }),
+    ctl('values-json-read', { command: 'tool call node:master/read --args @a', valuesJson: JSON.stringify({ a: { filePath: 'fallback.txt' } }) }),
+    ctl('values-and-json', { command: 'tool call node:master/write --args @a', values: { a: { filePath: 'fallback.txt', content: 'both' } }, valuesJson: '{}' }),
+    ctl('bad-values-json', { command: 'tool call node:master/write --args @a', valuesJson: '[1,2]' })])
+  assert.match((await pair('values-json-read')).output, /primary/); assert((await pair('values-and-json')).error); assert((await pair('bad-values-json')).error)
   const discovery = await perform('builtin:search_tools', { sources: ['mcp'], server: 'local', limit: 1, query: 'echo_effect' }, 'discover-real')
   assert.match(discovery.output, /mcp:local\/echo_effect/)
   const echo = await perform('mcp:local/echo_effect', { tag: 'inner-data', value: { nested: true }, __cancelTool: true }, 'echo-inner')
@@ -204,7 +209,7 @@ try {
   assert(meta.output.length <= 32000); assert(!meta.output.includes('\u202e')); assert(meta.output.includes('schema omitted'))
   const unsafe = 'unsafe*/\nline\u202e'
   const dangerous = await perform('builtin:search_tools', { query: 'unsafe', sources: ['mcp'], server: 'local' }, 'unsafe-schema')
-  assert.match(dangerous.output, /source: "mcp"/); assert(!dangerous.output.includes('\nDO-NOT-EXECUTE')); assert(dangerous.output.includes('\\u202e'))
+  assert.match(dangerous.output, /--source "mcp"/); assert(!dangerous.output.includes('\nDO-NOT-EXECUTE')); assert(dangerous.output.includes('\\u202e'))
   assert.equal((await perform({ source: 'mcp', server: 'local', name: unsafe }, { tag: 'unsafe-name', 'key*/\nname': 'exact' }, 'call-unsafe')).args['key*/\nname'], 'exact')
   for (const [query, expected] of [['schema_required_open', /extra: number/], ['schema_required_closed', /never/], ['schema_many', /required keys omitted/], ['schema_ref', /Record<string, unknown>/]])
     assert.match((await perform('builtin:search_tools', { sources: ['mcp'], server: 'local', query, limit: 1 }, 'schema-' + query)).output, expected)

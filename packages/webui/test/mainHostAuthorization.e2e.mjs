@@ -4,6 +4,7 @@ import { once } from 'node:events'
 import { mkdir, readFile, writeFile, access } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { createHostFixture, until, sleep } from './mainHostFixture.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 
 const fixture = await createHostFixture('authorization'), records = [], failures = [], scripts = new Map(), held = new Map()
 const policy = join(fixture.data, 'state/tool-authorization.yaml'), peerRoot = join(fixture.root, 'peer')
@@ -12,7 +13,7 @@ const route = id => '/api/sessions/' + encodeURIComponent(id)
 const exists = file => access(file).then(() => true, () => false)
 const textOf = item => (item.content || []).map(part => part.text || '').join('')
 const final = text => [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] }]
-const tool = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
+const tool = functionCall
 const invoke = (id, target, args = {}) => tool(id, 'call_tool', { toolId: target, args })
 const history = async id => (await fixture.api('GET', route(id) + '/history')).body
 const authority = async id => JSON.parse(await readFile(join(fixture.data, 'state/sessions', id + '.json'), 'utf8'))
@@ -49,7 +50,7 @@ const provider = createServer(async (request, response) => {
     record.followup = calls.length && calls.every(call => body.input.some(item => item.type === 'function_call_output' && item.call_id === call.call_id))
     if (key === 'held-background') { held.set(key, () => complete(final('DONE-' + key))); return }
     if (key === 'visibility') {
-      assert(body.tools.some(value => value.name === 'exec')); assert(body.tools.some(value => value.name === 'write')); assert(body.tools.some(value => value.name === 'call_tool')); assert(!body.tools.some(value => value.name === 'set_config'))
+      assert(body.tools.some(value => value.name === 'exec')); assert(body.tools.some(value => value.name === 'write')); assert(body.tools.some(value => value.name === 'ctl')); assert(!body.tools.some(value => value.name === 'set_config'))
     }
     if (key === 'compact-schema' || key === 'held-background') assert(!body.tools.some(value => value.name === 'submit_compact_plan'))
     complete(record.followup || !calls.length ? final('DONE-' + key) : calls)

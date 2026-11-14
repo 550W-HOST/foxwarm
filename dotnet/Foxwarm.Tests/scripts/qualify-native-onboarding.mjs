@@ -75,7 +75,7 @@ async function stop(pid) {
 }
 async function execute(id, key, cwd) {
   const session = (await post('/api/sessions', { agentId: 'main', sessionId: key })).sessionId
-  plans.set(key, [[call(key + '-select', 'node', { action: 'select', nodeId: id })], [call(key + '-exec', 'exec', { command: 'printf native > ' + quote(key + '.txt') + '; pwd', timeout: 5 })]])
+  plans.set(key, [[call(key + '-select', 'ctl', { command: 'node select ' + id })], [call(key + '-exec', 'exec', { command: 'printf native > ' + quote(key + '.txt') + '; pwd', timeout: 5 })]])
   const response = await api('POST', '/api/sessions/' + encodeURIComponent(session) + '/message', { text: 'BOOTSTRAP:' + key })
   assert.equal(response.status, 202)
   const state = await until(async () => {

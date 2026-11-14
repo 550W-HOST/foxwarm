@@ -7,9 +7,10 @@ import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { createHostFixture, until } from './mainHostFixture.mjs'
 import { writeModelFixture } from './mainModelFixture.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 const fixtures = [], requests = [], failures = [], counts = new Map()
 const route = id => '/api/sessions/' + encodeURIComponent(id)
-const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
+const call = functionCall
 const peer = createServer(async (request, response) => {
   try {
     let raw = ''; for await (const chunk of request) raw += chunk

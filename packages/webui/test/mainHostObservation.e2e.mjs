@@ -12,6 +12,7 @@ import { join, resolve } from 'node:path'
 import puppeteer from 'puppeteer-core'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
 import { mainHostLaunch } from './mainHostFixture.mjs'
+import { functionCall, ctlHint } from './ctlModelCalls.mjs'
 
 const root = await mkdtemp(join(tmpdir(), 'foxwarm-observation-e2e-'))
 const dataRoot = join(root, 'data'); const workRoot = join(dataRoot, 'agents', 'main')
@@ -21,7 +22,7 @@ const plans = new Map(); const requests = []; const errors = []; const counts = 
 const sleep = ms => new Promise(done => setTimeout(done, ms))
 const signal = () => { let release; const promise = new Promise(done => { release = done }); return { promise, release } }
 const text = value => ({ type: 'message', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: value }] })
-const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
+const call = functionCall
 const messageText = body => body.input.filter(item => item.type === 'message').flatMap(item => item.content || []).map(part => part.text || '').join('\n')
 let host, browser, provider, port, firstPid, secondPid, plannerTarget, plannerCount = 0
 async function until(fn, label, timeout = 20000) {
@@ -82,7 +83,7 @@ try {
       const chunks = []; for await (const chunk of req) chunks.push(chunk)
       const body = JSON.parse(Buffer.concat(chunks).toString())
       assert.equal(req.headers.authorization, `Bearer ${providerToken}`); assert.equal(req.url, '/responses')
-      assert(body.tools.some(tool => tool.name === 'view_session'))
+      assert(body.tools.some(tool => tool.name === 'ctl')); assert(!body.tools.some(tool => tool.name === 'view_session'))
       assert(!body.tools.some(tool => tool.name === 'get_session_messages'))
       const compact = body.input.filter(item => item.type === 'message').flatMap(item => item.content || []).map(part => part.text || '').findLast(item => item.includes('COMPACTION STARTED:'))
       if (compact) {
@@ -197,12 +198,13 @@ try {
     assert(output.includes(toolName), id + ' selects the hidden-content match')
     assert(output.includes('#' + selected[index].__meta.seq), id + ' identifies the original source')
     assert(!output.includes(needleContent), id + ' keeps original bodies folded')
-    const examples = [...output.matchAll(/recall\((\{[^\n]+\})\)/g)].map(match => JSON.parse(match[1]))
+    const examples = [...output.matchAll(/Archive example: (ctl history recall [^\n]+)/g)].map(match => match[1])
     assert.equal(examples.length, 1, id + ' supplies one usable Archive expansion')
-    assert.equal(examples[0].sessionId, target)
-    assert.equal(examples[0].target, 'msg#' + selected[index].__meta.seq)
-    assert.equal(examples[0].toolDetail, 'full')
-    drilldowns.push(call(id + '-original', 'recall', examples[0]))
+    const example = ctlHint(examples[0])
+    assert.deepEqual(example.positional, ['ctl', 'history', 'recall', 'msg#' + selected[index].__meta.seq])
+    assert.equal(example.options['session-id'], target)
+    assert.equal(example.options['tool-detail'], 'full')
+    drilldowns.push({ type: 'function_call', call_id: id + '-original', name: 'ctl', arguments: JSON.stringify({ command: examples[0] }) })
   }
   assert(!value(pages, 'argument-fold').output.includes('HIDDEN_ARGUMENT_NEEDLE'))
   assert(!value(pages, 'argument-miss').output.includes('msg#' + selected[argumentIndex].__meta.seq))

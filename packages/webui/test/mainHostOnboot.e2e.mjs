@@ -9,10 +9,11 @@ import { randomUUID } from 'node:crypto'
 import { pathToFileURL } from 'node:url'
 import { WebSocket } from 'ws'
 import { createHostFixture, until, saveModelsInOriginalApp } from './mainHostFixture.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 
 const fixtures = [], requests = [], failures = []
 const text = value => ({ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: value }] })
-const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
+const call = functionCall
 const peer = createServer(async (request, response) => {
   try {
     let raw = ''; for await (const chunk of request) raw += chunk

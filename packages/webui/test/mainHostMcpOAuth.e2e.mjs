@@ -14,6 +14,7 @@ import puppeteer from 'puppeteer-core'
 import { writeModelFixture } from './mainModelFixture.mjs'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
 import { mainHostLaunch } from './mainHostFixture.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 const require = createRequire(import.meta.url)
 const { createMcpOAuthFixture } = require(resolve('lib/mcpOAuthTestFixture.js'))
 assert(process.env.DOTNET_ROOT, 'Set DOTNET_ROOT to a .NET 10 SDK')
@@ -155,7 +156,7 @@ async function callbackSecurity(page) {
     }
   } finally { await attacker.close() }
 }
-const fn = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
+const fn = functionCall
 async function toolTurn(owner, calls) {
   const key = 'OAUTH-TURN-' + (++serial); scripts.set(key, calls)
   assert.equal((await api('POST', `/api/sessions/${encodeURIComponent(owner)}/message`, { text: key })).status, 202)

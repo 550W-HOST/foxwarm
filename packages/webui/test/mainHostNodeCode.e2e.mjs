@@ -9,6 +9,7 @@ import { createRequire } from 'node:module'
 import WebSocket, { WebSocketServer } from 'ws'
 import { createHostFixture, until } from './mainHostFixture.mjs'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 
 const require = createRequire(import.meta.url)
 const { initializeTestEnvironment, isolatedApplicationEnv } = require('../../../scripts/test/test-process-env.cjs')
@@ -62,7 +63,7 @@ const model = createServer(async (request, response) => {
   try {
     let raw = ''; for await (const chunk of request) raw += chunk
     const body = JSON.parse(raw), round = modelRound++
-    const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
+    const call = functionCall
     const output = round === 0 ? [call('select-code', 'node', { action: 'select', nodeId: 'official-code' })]
       : round === 1 ? [call('read-code', 'read', { filePath: join(repo, 'renamed.txt'), startLine: 2, endLine: 3 }), call('read-ambiguous', 'read', { filePath: '~/not-present.txt' })]
       : [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: `NODE-CODE-DONE\n\n<foxwarm-commit node="official-code" path="${repo}" id="${commit}" />` }] }]

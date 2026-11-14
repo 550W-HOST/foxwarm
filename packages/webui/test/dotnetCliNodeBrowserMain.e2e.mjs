@@ -9,6 +9,7 @@ import { createRequire } from 'node:module'
 import sharp from 'sharp'
 import { createHostFixture, until, sleep } from './mainHostFixture.mjs'
 import { browserEnvironment } from '../../browser-host/test/fixture.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 
 const chromium = await browserEnvironment()
 assert(chromium.available, 'A Chromium installation is required: ' + chromium.reason)
@@ -16,7 +17,7 @@ assert(chromium.available, 'A Chromium installation is required: ' + chromium.re
 const require = createRequire(import.meta.url)
 const { initializeTestEnvironment, isolatedApplicationEnv } = require('../../../scripts/test/test-process-env.cjs')
 initializeTestEnvironment()
-const call = (id, name, args) => ({ type: 'function_call', call_id: id, name: name.startsWith('browser_') ? 'call_tool' : name, arguments: JSON.stringify(name.startsWith('browser_') ? { source: 'node', name, args } : args) })
+const call = (id, name, args) => name.startsWith('browser_') ? functionCall(id, 'call_tool', { source: 'node', name, args }) : functionCall(id, name, args)
 const dll = resolve('dotnet/Foxwarm.CliNode/bin/Debug/net10.0/Foxwarm.CliNode.dll')
 for (const runtime of ['dotnet']) {
   const env = {}, fixture = await createHostFixture('browser-cli-' + runtime, { runtime, env })

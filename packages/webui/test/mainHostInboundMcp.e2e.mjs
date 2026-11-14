@@ -10,6 +10,7 @@ import WebSocket from 'ws'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { createHostFixture, until } from './mainHostFixture.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 
 const options = { env: {} }
 const host = await createHostFixture('inbound-mcp', options)
@@ -30,7 +31,7 @@ const model = createServer(async (request, response) => {
     const marker = [...JSON.stringify(body.input).matchAll(/INSTALL-RULES-(\d+)/g)].at(-1)?.[1]
     const install = marker && ruleInstalls.get(marker)
     const already = install && body.input.some(item => item.type === 'function_call' && item.call_id === 'rules-' + marker)
-    const output = install && !already ? [{ type: 'function_call', call_id: 'rules-' + marker, name: 'set_config', arguments: JSON.stringify({ target: 'tool-rules', filePath: install }) }]
+    const output = install && !already ? [functionCall('rules-' + marker, 'set_config', { target: 'tool-rules', filePath: install })]
       : [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'DURABLY-RECEIVED' }] }]
     response.writeHead(200, { 'content-type': 'text/event-stream' })
     response.end('data: ' + JSON.stringify({ type: 'response.completed', response: { output, usage: { input_tokens: 20, output_tokens: 3 } } }) + '\n\n')

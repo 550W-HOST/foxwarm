@@ -4,6 +4,7 @@ import { once } from 'node:events'
 import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createHostFixture, until } from './mainHostFixture.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 
 const fixture = await createHostFixture('handoff'), requests = [], failures = [], scripts = new Map(), shellPids = []
 await mkdir(join(fixture.work, 'memory'), { recursive: true }); await writeFile(join(fixture.work, 'memory', 'ONBOOT.md'), ' \n')
@@ -15,7 +16,7 @@ const route = id => '/api/sessions/' + encodeURIComponent(id)
 const history = async id => (await fixture.api('GET', route(id) + '/history')).body
 const saved = id => readFile(join(fixture.data, 'state/sessions', id + '.json'), 'utf8').then(JSON.parse)
 const exists = path => access(path).then(() => true, () => false)
-const tool = (id, name, args, raw) => ({ type: 'function_call', id: 'output-' + id, call_id: id, name, arguments: raw ?? JSON.stringify(args) })
+const tool = (id, name, args, raw) => raw === undefined ? { ...functionCall(id, name, args), id: 'output-' + id } : { type: 'function_call', id: 'output-' + id, call_id: id, name, arguments: raw }
 const wrapped = (id, name, args, controls = {}) => tool(id, 'call_tool', { toolId: 'builtin:' + name, args, ...controls })
 const idle = id => until(async () => { const value = await history(id); return !value.session.busy && !value.session.runtimeState.queueLength }, 'idle ' + id)
 const response = async (id, callId) => (await history(id)).messages.flatMap(row => row.parts || []).map(part => part.functionResponse).find(value => value?.tool_use_id === callId)

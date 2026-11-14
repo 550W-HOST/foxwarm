@@ -6,11 +6,12 @@ import { spawn } from 'node:child_process'
 import { mkdir, readFile, writeFile, access } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { createHostFixture, until } from './mainHostFixture.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 
 const fixture = await createHostFixture('remote-exec-schemas')
 const plans = new Map(), rounds = new Map(), failures = [], schemaEvidence = []
 let canonicalTools
-const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
+const call = functionCall
 const done = key => [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'SCHEMA-DONE-' + key }] }]
 const peer = createServer(async (request, response) => {
   try {

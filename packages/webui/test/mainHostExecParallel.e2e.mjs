@@ -6,6 +6,7 @@ import { access, chmod, mkdir, readFile, readdir, writeFile } from 'node:fs/prom
 import { join } from 'node:path'
 import { createHostFixture, until, sleep } from './mainHostFixture.mjs'
 import testEnvironment from '../../../scripts/test/test-process-env.cjs'
+import { functionCall } from './ctlModelCalls.mjs'
 
 const fixture = await createHostFixture('exec-parallel'), records = [], errors = [], scripts = new Map(), hostPids = fixture.hostPids, shellPids = [], releases = new Set()
 Object.assign(process.env, testEnvironment.isolatedApplicationEnv(fixture.data))
@@ -15,7 +16,7 @@ const exists = path => access(path).then(() => true, () => false)
 const history = async id => (await fixture.api('GET', route(id) + '/history')).body
 const saved = id => readFile(join(fixture.data, 'state/sessions', id + '.json'), 'utf8').then(JSON.parse)
 const own = join(fixture.data, 'agents/team'), marks = join(own, 'marks')
-const tool = (id, name, args, raw) => ({ type: 'function_call', id: 'output-' + id, call_id: id, name, arguments: raw ?? JSON.stringify(args) })
+const tool = (id, name, args, raw) => raw === undefined ? { ...functionCall(id, name, args), id: 'output-' + id } : { type: 'function_call', id: 'output-' + id, call_id: id, name, arguments: raw }
 const call = (id, command, args = {}) => tool(id, 'exec', { command, timeout: 60, ...args })
 function shell(id, extra = '') {
   releases.add(id)

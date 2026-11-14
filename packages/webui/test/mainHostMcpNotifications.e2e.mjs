@@ -8,6 +8,7 @@ import WebSocket from 'ws'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { createHostFixture, until } from './mainHostFixture.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 
 const a = await createHostFixture('notification-a', { })
 const b = await createHostFixture('notification-b', { })
@@ -22,7 +23,7 @@ const model = createServer(async (request, response) => {
     const command = marker && commands.get(marker)
     const invoked = command && body.input.some(item => item.type === 'function_call' && item.call_id === command.callId)
     const output = command && !invoked
-      ? [{ type: 'function_call', call_id: command.callId, name: command.name, arguments: JSON.stringify(command.args) }]
+      ? [functionCall(command.callId, command.name, command.args)]
       : [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'ORDINARY-ASSISTANT-NOT-FORWARDED' }] }]
     response.writeHead(200, { 'content-type': 'text/event-stream' })
     response.end('data: ' + JSON.stringify({ type: 'response.completed', response: { output, usage: { input_tokens: 20, output_tokens: 3 } } }) + '\n\n')

@@ -8,6 +8,7 @@ import { join, resolve } from 'node:path'
 import { createRequire } from 'node:module'
 import WebSocket, { WebSocketServer } from 'ws'
 import { createHostFixture, until } from './mainHostFixture.mjs'
+import { functionCallFor } from './ctlModelCalls.mjs'
 
 const require = createRequire(import.meta.url)
 const { initializeTestEnvironment, isolatedApplicationEnv } = require('../../../scripts/test/test-process-env.cjs')
@@ -35,7 +36,7 @@ for (const runtime of ['source', 'dotnet']) {
     for (const [source, target] of [[downstream, upstream], [upstream, downstream]]) { source.on('close', () => { sockets.delete(source); if (target.readyState === WebSocket.OPEN) target.close() }); source.on('error', () => {}) }
   })
   let round = 0, page, cli, cliOutput = ''
-  const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
+  const call = functionCallFor(runtime)
   const model = createServer(async (request, response) => {
     try {
       let raw = ''; for await (const bytes of request) raw += bytes

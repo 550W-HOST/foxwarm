@@ -11,11 +11,12 @@ import { DatabaseSync } from 'node:sqlite'
 import { WebSocket } from 'ws'
 import { createHostFixture, until, sleep } from './mainHostFixture.mjs'
 import { writeModelFixture } from './mainModelFixture.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 
 const fixture = await createHostFixture('admission-app'), route = id => '/api/sessions/' + encodeURIComponent(id)
 const requests = [], errors = [], counts = new Map(), sockets = []
 const text = value => ({ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: value }] })
-const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
+const call = functionCall
 const inputText = body => JSON.stringify(body.input)
 const peer = createServer(async (request, response) => {
   try {

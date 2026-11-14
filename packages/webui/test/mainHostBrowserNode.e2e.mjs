@@ -9,6 +9,7 @@ import puppeteer from 'puppeteer-core';
 import sharp from 'sharp';
 import yaml from 'js-yaml';
 import { createHostFixture, until, sleep } from './mainHostFixture.mjs';
+import { functionCall } from './ctlModelCalls.mjs';
 
 const ownedXvfb = process.argv.slice(2).includes('--owned-xvfb');
 assert(
@@ -96,12 +97,7 @@ let browser,
   startupPairingToken,
   stage = 'owned Main startup',
   count = 0;
-const call = (id, name, args) => ({
-  type: 'function_call',
-  call_id: id,
-  name,
-  arguments: JSON.stringify(args),
-});
+const call = functionCall;
 const saved = async (id = sessionId) =>
   JSON.parse(await readFile(join(fixture.data, 'state/sessions', id + '.json'), 'utf8'));
 const pair = (state, id) =>

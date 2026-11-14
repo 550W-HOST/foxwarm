@@ -7,6 +7,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createHostFixture, until } from './mainHostFixture.mjs'
 import { writeModelFixture } from './mainModelFixture.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 const options = { env: {}, }, owned = await createHostFixture('webui-disabled', options)
 options.cwd = owned.root; options.env.HOME = join(owned.root, 'home'); await mkdir(options.env.HOME)
 await mkdir(join(owned.work, 'memory')); await writeFile(join(owned.work, 'memory/ONBOOT.md'), ' \n'); await writeFile(join(owned.work, 'delivery.txt'), 'owned delivery\n')
@@ -19,7 +20,7 @@ const peer = createServer(async (request, response) => {
     let raw = ''; for await (const chunk of request) raw += chunk
     const body = JSON.parse(raw); requests.push(body)
     const triggered = JSON.stringify(body.input).includes('DISABLED-DELIVERY'), completed = body.input.some(row => row.type === 'function_call_output' && row.call_id === 'disabled-delivery')
-    const output = triggered && !completed ? [{ type: 'function_call', call_id: 'disabled-delivery', name: 'send_file', arguments: JSON.stringify({ filePath: 'delivery.txt' }) }] : [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: triggered ? 'DISABLED-DELIVERY-DONE' : 'BOUND-DONE' }] }]
+    const output = triggered && !completed ? [functionCall('disabled-delivery', 'send_file', { filePath: 'delivery.txt' })] : [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: triggered ? 'DISABLED-DELIVERY-DONE' : 'BOUND-DONE' }] }]
     response.writeHead(200, { 'content-type': 'text/event-stream' }); response.end('data: ' + JSON.stringify({ type: 'response.completed', response: { output, usage: { input_tokens: 30, output_tokens: 3 } } }) + '\n\n')
   } catch (error) { failures.push(error.stack); response.destroy() }
 })

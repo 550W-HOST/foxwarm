@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { WebSocketServer } from 'ws'
 import sharp from 'sharp'
 import { createHostFixture, until } from './mainHostFixture.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 
 const options = { env: {} }
 const host = await createHostFixture('wework', options)
@@ -30,8 +31,8 @@ const peer = createServer(async (request, response) => {
       else if (index === 1) output = [
         { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'working with explicit tools' }] },
         { type: 'function_call', call_id: 'native', name: 'run_script', arguments: JSON.stringify({ code: `call_tool('builtin:send_to_channel', {'channelTargetId':'work:explicit-native','message':'native text'})\nreturn call_tool('builtin:send_file', {'channelTargetId':'work:explicit-native','filePath':${JSON.stringify(report)},'caption':'native file'})` }) },
-        { type: 'function_call', call_id: 'direct', name: 'send_to_channel', arguments: JSON.stringify({ channelTargetId: 'work:explicit-direct', message: 'direct text' }) },
-        { type: 'function_call', call_id: 'unified', name: 'call_tool', arguments: JSON.stringify({ toolId: 'builtin:send_to_channel', args: { channelTargetId: 'work:explicit-unified', message: 'unified text' } }) }
+        { type: 'function_call', call_id: 'direct', name: 'ctl', arguments: JSON.stringify({ command: 'channel send work:explicit-direct direct text' }) },
+        functionCall('unified', 'call_tool', { toolId: 'builtin:send_to_channel', args: { channelTargetId: 'work:explicit-unified', message: 'unified text' } })
       ]
       else output = [
         { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'WeWork combined final' }] },
@@ -95,8 +96,8 @@ try {
   assert(final.content.includes('intermediate before steering'))
   assert(final.content.includes('working with explicit tools'))
   assert(final.content.includes('☑️ run_script'))
-  assert(final.content.includes('☑️ send_to_channel'))
-  assert(final.content.includes('☑️ call_tool'))
+  // Both explicit sends are ctl calls (`channel send` and `tool call builtin:send_to_channel`).
+  assert(final.content.includes('☑️ ctl ×2'), final.content)
   assert(final.content.endsWith('WeWork combined final'))
   assert(!final.content.includes('Tools:'))
   assert(models[1].input.some(row => JSON.stringify(row).includes('late steering')))

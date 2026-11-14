@@ -56,7 +56,7 @@ const provider = createServer(async (req, res) => {
     } else if (!seenCommands.has(latest) && /^(image|skill|large|continue|threshold)/.test(latest)) {
       seenCommands.add(latest)
       if (latest.startsWith('threshold')) items = [call('threshold-setting', 'set_session_compact_threshold', { thresholdTokens: 30000 })]
-      else if (latest.startsWith('skill')) items = [call('genuine-skill', 'skill', { action: 'load', skillName: 'fixture' })]
+      else if (latest.startsWith('skill')) items = [call('genuine-skill', 'ctl', { command: 'skill load fixture' })]
       else items = [call(latest.startsWith('large') ? 'ordinary-read' : latest.startsWith('continue') ? 'continued-read-' + seenCommands.size : 'image-' + body.model,
         'read', { filePath: latest.startsWith('large') ? join(work, 'large.txt') : latest.startsWith('continue') ? join(work, 'small.txt') : join(work, 'image.png') })]
       if (latest.startsWith('continue')) usage = { input_tokens: 21000, output_tokens: 1 }

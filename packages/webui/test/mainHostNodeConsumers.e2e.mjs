@@ -8,6 +8,7 @@ import { join, resolve } from 'node:path'
 import WebSocket from 'ws'
 import { createHostFixture, until } from './mainHostFixture.mjs'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 
 const env = {  }
 const options = { env, }
@@ -22,7 +23,7 @@ const host = fixture.origin + prefix, plans = new Map(), requests = [], failures
 let releaseHeld
 const route = id => '/api/sessions/' + encodeURIComponent(id)
 const saved = id => readFile(join(fixture.data, 'state/sessions', id + '.json'), 'utf8').then(JSON.parse)
-const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
+const call = functionCall
 const pair = (state, id) => state.history.flatMap(row => row.parts || []).find(part => part.functionResponse?.tool_use_id === id)?.functionResponse?.response
 const final = key => [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'CONSUMER-DONE-' + key }] }]
 const model = createServer(async (request, response) => {

@@ -9,6 +9,7 @@ import sharp from 'sharp';
 import yaml from 'js-yaml';
 import { createHostFixture, until, sleep } from './mainHostFixture.mjs';
 import { launchFirefox } from './firefoxWebDriver.mjs';
+import { functionCall } from './ctlModelCalls.mjs'
 const fixture = await createHostFixture('firefox-node', {
   ...(process.env.FOXWARM_PUBLISHED_CORE ? { corePath: join(process.env.FOXWARM_PUBLISHED_CORE, 'Foxwarm.dll') } : {}),
 });
@@ -41,7 +42,7 @@ const origin = `http://127.0.0.1:${peer.address().port}`, base = fixture.origin 
 await writeFile(join(fixture.data, 'state/config.yaml'), (await readFile(join(fixture.data, 'state/config.yaml'), 'utf8')) + 'url: ' + base + '\n');
 await writeFile(fixture.modelPath, JSON.stringify({ default: 'local', providers: { local: { providerType: 'openai-responses', baseUrl: origin, models: ['wire'] } } }));
 let browser, sessionId, count = 0, stage = 'Main startup';
-const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) });
+const call = functionCall;
 const saved = async (id = sessionId) => JSON.parse(await readFile(join(fixture.data, 'state/sessions', id + '.json'), 'utf8'));
 const pair = (state, id) => state.history.flatMap(row => row.parts || []).find(part => part.functionResponse?.tool_use_id === id)?.functionResponse?.response;
 async function begin(key, calls, id = sessionId) {

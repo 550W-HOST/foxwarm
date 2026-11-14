@@ -9,6 +9,7 @@ import puppeteer from 'puppeteer-core'
 import WebSocket from 'ws'
 import sharp from 'sharp'
 import { createHostFixture, requiredCompactOperations, until } from './mainHostFixture.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 
 const options = { env: {} }, host = await createHostFixture('scoped-access', options)
 options.cwd = host.root
@@ -21,7 +22,7 @@ let candidatePath = join(host.work, 'candidate.yaml')
 const admitted = new Promise(done => { enteredAdmitted = done })
 const release = new Promise(done => { releaseAdmitted = done })
 const final = text => [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] }]
-const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
+const call = functionCall
 const peer = createServer(async (request, response) => {
   try {
     let raw = ''; for await (const chunk of request) raw += chunk

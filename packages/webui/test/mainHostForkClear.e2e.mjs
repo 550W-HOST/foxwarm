@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import yaml from 'js-yaml'
 import { WebSocketServer } from 'ws'
 import { createHostFixture, requiredCompactOperations, saveModelsInOriginalApp, until } from './mainHostFixture.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 
 const fixture = await createHostFixture('fork-clear'), records = [], errors = [], connections = [], held = new Map(), heldOnce = new Set(), commandNotices = []
 const route = id => '/api/sessions/' + encodeURIComponent(id)
@@ -21,7 +22,7 @@ const inputText = input => {
   const forked = forkedCallIds(input)
   return input.map(item => item.role === 'user' ? textOf(item.content) : item.type === 'function_call' && forked.has(item.call_id) ? item.arguments : '').filter(Boolean).join('\n')
 }
-const tool = (id, name, args) => ({ type: 'function_call', id: 'output-' + id, call_id: id, name, arguments: JSON.stringify(args) })
+const tool = (id, name, args) => ({ ...functionCall(id, name, args), id: 'output-' + id })
 const final = text => [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] }]
 const replay = output => output.map(item => { const copy = { ...item }; delete copy.id; delete copy.status; return copy })
 let sequence = 0, planCount = 0, holdPlan = false, crossAgent = 'team'

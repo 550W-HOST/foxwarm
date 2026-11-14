@@ -6,6 +6,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import sharp from 'sharp'
 import { createHostFixture, until } from './mainHostFixture.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 
 const options = { env: {} }
 const host = await createHostFixture('matrix-weixin', options)
@@ -27,7 +28,7 @@ const peer = createServer(async (request, response) => {
       const input = JSON.stringify(body.input), outputs = body.input.filter(row => row.type === 'function_call_output')
       let output
       if (input.includes('native-delivery') && !outputs.length) output = [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: '**Weixin** intermediate' }] }, { type: 'function_call', call_id: 'native-delivery', name: 'run_script', arguments: JSON.stringify({ code: "return call_tool('builtin:send_to_channel', {'channelTargetId':'matrix-b:!room:fixture','message':'native direct'})" }) }]
-      else if (input.includes('missing-context') && !outputs.some(row => row.call_id === 'missing-send')) output = [{ type: 'function_call', call_id: 'missing-send', name: 'send_to_channel', arguments: JSON.stringify({ channelTargetId: 'weixin:owner', message: 'must fail after process restart' }) }]
+      else if (input.includes('missing-context') && !outputs.some(row => row.call_id === 'missing-send')) output = [functionCall('missing-send', 'send_to_channel', { channelTargetId: 'weixin:owner', message: 'must fail after process restart' })]
       else {
         output = [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: input.includes('missing-context') ? 'missing-context reported' : input.includes('native-delivery') ? '**Weixin** final' : '**Matrix** final' }] }]
         if (input.includes('native-delivery')) output.push({ type: 'image_generation_call', id: 'generated-fixture', status: 'completed', output_format: 'jpeg', result: jpeg.toString('base64') })

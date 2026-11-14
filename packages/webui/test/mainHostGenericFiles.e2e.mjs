@@ -7,6 +7,7 @@ import { dirname, join } from 'node:path'
 import sharp from 'sharp'
 import { createHostFixture, until } from './mainHostFixture.mjs'
 import { writeModelFixture } from './mainModelFixture.mjs'
+import { ctlCalls } from './ctlModelCalls.mjs'
 const options = { env: {} }, f = await createHostFixture('generic-files', options), records = [], errors = [], counts = new Map(), releases = new Map()
 const home = join(f.root, 'home'); await mkdir(home); options.env.HOME = home; options.cwd = f.root
 const canonical = id => ({ cross: 'other/cross', isolation: 'isolated/isolation', remote: 'bound/remote' })[id] || id
@@ -24,7 +25,7 @@ const peer = createServer(async (request,response)=>{
   if(n===0&&!key.startsWith('hold-')) { for(const file of files.filter(file=>/\.(?:txt|json)$/i.test(file.name)))calls.push({id:key+'-read-'+calls.length,name:'read',args:{filePath:file.path}});if(files[0])calls.push({id:key+'-send',name:'send_file',args:{filePath:files[0].path}}) }
   if(key==='picker'&&n===1){const result=body.input.find(item=>item.type==='function_call_output'&&item.call_id==='picker-read-0');const text=typeof result.output==='string'?result.output:result.output.find(part=>part.type==='input_text'&&part.text.includes('\n---\n')).text;calls.push({id:'picker-write',name:'write',args:{filePath:files[0].path+'.roundtrip.txt',content:text.split('\n---\n')[0]}})}
   if(key==='picker'&&n===2)calls.push({id:'picker-roundtrip-send',name:'send_file',args:{filePath:files[0].path+'.roundtrip.txt'}})
-  const output=calls.length?calls.map(call=>({type:'function_call',call_id:call.id,name:call.name,arguments:JSON.stringify(call.args)})):[{type:'message',role:'assistant',content:[{type:'output_text',text:'DONE-GENERIC-'+key}]}]
+  const output=calls.length?ctlCalls(calls).map(call=>({type:'function_call',call_id:call.id,name:call.name,arguments:JSON.stringify(call.args)})):[{type:'message',role:'assistant',content:[{type:'output_text',text:'DONE-GENERIC-'+key}]}]
   response.writeHead(200,{'content-type':'text/event-stream'});response.end('data: '+JSON.stringify({type:'response.completed',response:{id:'generic-'+records.length,status:'completed',output,usage:{input_tokens:80,output_tokens:8}}})+'\n\n')
  } catch(error) { errors.push(error.stack);response.destroy() }
 })

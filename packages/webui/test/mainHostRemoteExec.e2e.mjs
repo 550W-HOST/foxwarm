@@ -7,13 +7,14 @@ import { mkdir, readFile, writeFile, access } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import WebSocket, { WebSocketServer } from 'ws'
 import { createHostFixture, until } from './mainHostFixture.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 
 const fixture = await createHostFixture('remote-exec', { env: {} })
 const plans = new Map(), rounds = new Map(), failures = [], wire = [], clients = [], connections = new Set()
 const exists = file => access(file).then(() => true, () => false)
 const saved = id => readFile(join(fixture.data, 'state/sessions', id + '.json'), 'utf8').then(JSON.parse)
 const route = id => '/api/sessions/' + encodeURIComponent(id)
-const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
+const call = functionCall
 const pair = (state, id) => state.history.flatMap(row => row.parts || []).find(part => part.functionResponse?.tool_use_id === id)?.functionResponse?.response
 const done = key => [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'EXEC-DONE-' + key }] }]
 const callsFor = id => wire.filter(entry => entry.direction === 'request' && entry.value.type === 'tool_call' && entry.value.sessionId === id)

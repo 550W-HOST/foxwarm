@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import yaml from 'js-yaml'
 import { WebSocketServer } from 'ws'
 import { createHostFixture, requiredCompactOperations, saveModelsInOriginalApp, until, sleep } from './mainHostFixture.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 
 const fixture = await createHostFixture('async-compact'), records = [], errors = [], held = new Map(), connections = []
 const route = id => '/api/sessions/' + encodeURIComponent(id)
@@ -16,7 +17,7 @@ const textOf = item => (item.content || []).map(part => part.text || '').join(''
 const inputText = input => input.filter(item => item.role === 'user').map(textOf).join('\n')
 const isInput = (row, text) => row.role === 'user' && row.parts?.some(part => part.text === text || part.system?.split('\n').includes(text))
 const final = text => [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] }]
-const tool = (id, name, args) => ({ type: 'function_call', id: 'output-' + id, call_id: id, name, arguments: JSON.stringify(args) })
+const tool = (id, name, args) => ({ ...functionCall(id, name, args), id: 'output-' + id })
 const replay = output => output.map(item => { const value = { ...item }; delete value.id; delete value.status; return value })
 const sha = value => createHash('sha256').update(value).digest('hex')
 let responseSequence = 0, plans = 0, mode = 'hold', crossTarget

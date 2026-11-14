@@ -7,6 +7,7 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { WebSocket } from 'ws'
 import { createHostFixture, until } from './mainHostFixture.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 
 const engine = process.env.FOXWARM_TEST_CONTAINER_ENGINE, image = process.env.FOXWARM_TEST_CONTAINER_IMAGE
 // Optional: an image built with `--target with-code` adds the Code/Terminal profile checks.
@@ -21,7 +22,7 @@ const fixture = await createHostFixture('provider-container', options)
 options.cwd = fixture.root
 let model, route
 const failures = [], scripts = new Map(), requests = []
-const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
+const call = functionCall
 // Structured exec results come from native ToolScript, as in the SSH qualification.
 const exec = (id, command, timeout) => call(id, 'run_script', { code: 'return call_tool(' + "'exec'" + ', ' + JSON.stringify({ command, timeout }) + ')' })
 const result = (state, id) => state.messages.flatMap(row => row.parts || []).find(part => part.functionResponse?.tool_use_id === id)?.functionResponse.response

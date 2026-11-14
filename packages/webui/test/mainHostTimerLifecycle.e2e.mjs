@@ -8,11 +8,12 @@ import { mkdir, readFile, writeFile, access } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { createHostFixture, until, sleep } from './mainHostFixture.mjs'
 import { writeModelFixture } from './mainModelFixture.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 const options = { env: {} }, fixture = await createHostFixture('timer-lifecycle', options), requests = [], failures = [], rounds = new Map(), held = new Map()
 const home = join(fixture.root, 'home'); await mkdir(home); options.env.HOME = home; options.cwd = fixture.root
 await mkdir(join(fixture.work, 'memory'), { recursive: true }); await writeFile(join(fixture.work, 'memory/ONBOOT.md'), ' \n')
 const route = id => '/api/sessions/' + encodeURIComponent(id), authority = async id => JSON.parse(await readFile(join(fixture.data, 'state/sessions', id + '.json'), 'utf8')), timerPath = join(fixture.data, 'state/timers.json'), rows = async () => JSON.parse(await readFile(timerPath, 'utf8')).timers
-const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) }), timerCall = (id, name, args) => call(id, 'call_tool', { toolId: 'builtin:' + name, args }), text = value => ({ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: value }] })
+const call = functionCall, timerCall = (id, name, args) => call(id, 'call_tool', { toolId: 'builtin:' + name, args }), text = value => ({ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: value }] })
 const peer = createServer(async (request, response) => {
   try {
     let raw = ''; for await (const chunk of request) raw += chunk; const body = JSON.parse(raw), user = JSON.stringify(body.input.findLast(item => item.role === 'user' && /LIFECYCLE:|FIRE:|wait-timeout/.test(JSON.stringify(item))) || {}), task = [...user.matchAll(/LIFECYCLE:([a-z-]+)/g)].at(-1)?.[1] || 'ordinary', fire = /<foxwarm-message[^>]*type=\\?"timer/.test(user), payload = [...user.matchAll(/FIRE:([a-z-]+)/g)].at(-1)?.[1], wait = user.includes('wait-timeout'), n = rounds.get(task) || 0

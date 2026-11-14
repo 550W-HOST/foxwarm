@@ -8,6 +8,7 @@ import { join, resolve } from 'node:path'
 import sharp from 'sharp'
 import { createHostFixture, requiredCompactOperations, until } from './mainHostFixture.mjs'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 
 const options = { env: {} }, host = await createHostFixture('continuous-downloads', options)
 options.cwd = host.root
@@ -16,7 +17,7 @@ options.publicRoot = host.origin + '/nested/app/#session/continuous-parent'
 await writeFile(join(host.data, 'state/config.yaml'), (await readFile(join(host.data, 'state/config.yaml'), 'utf8')) + 'url: ' + host.origin + '/nested/app' + '\n')
 const requests = [], failures = [], pages = [], http = [], browserErrors = [], nativeRequests = [], signRequests = [], paused = [], requestFailures = []
 const route = id => '/api/sessions/' + encodeURIComponent(id)
-const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
+const call = functionCall
 const peer = createServer(async (request, response) => {
   try {
     let raw = ''; for await (const chunk of request) raw += chunk

@@ -6,6 +6,7 @@ import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createHostFixture, until, sleep } from './mainHostFixture.mjs'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 
 const fixture = await createHostFixture('october-alignment')
 const adminAuth = { role: 'admin', features: Object.fromEntries(['chat', 'attachments', 'commands', 'terminal', 'workspace', 'setup', 'settings', 'sessionManagement', 'debug', 'modelSelection', 'sidebar'].map(name => [name, true])) }
@@ -13,7 +14,7 @@ const route = id => '/api/sessions/' + encodeURIComponent(id)
 const records = [], errors = [], scripts = new Map(), rounds = new Map(), plannerRequests = [], releases = new Set()
 const exists = path => access(path).then(() => true, () => false)
 const saved = id => readFile(join(fixture.data, 'state/sessions', id + '.json'), 'utf8').then(JSON.parse)
-const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
+const call = functionCall
 const final = text => [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] }]
 const sourceText = body => (body.input || []).filter(row => row.role === 'user').flatMap(row => row.content || []).map(part => part.text || '').join('\n')
 const received = (body, id) => {

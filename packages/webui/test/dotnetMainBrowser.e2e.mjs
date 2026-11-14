@@ -10,6 +10,7 @@ import { createRequire } from 'node:module'
 import sharp from 'sharp'
 import { createHostFixture, until, sleep } from './mainHostFixture.mjs'
 import { browserEnvironment } from '../../browser-host/test/fixture.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 
 const require = createRequire(import.meta.url)
 const { initializeTestEnvironment, isolatedApplicationEnv } = require('../../../scripts/test/test-process-env.cjs')
@@ -18,7 +19,7 @@ const chromium = await browserEnvironment()
 assert(chromium.available, 'A Chromium installation is required: ' + chromium.reason)
 
 const names = ['browser_tabs', 'browser_open', 'browser_close', 'browser_navigate', 'browser_read', 'browser_screenshot', 'browser_click', 'browser_fill', 'browser_type', 'browser_press', 'browser_select', 'browser_scroll', 'browser_wait', 'browser_evaluate']
-const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
+const call = functionCall
 const tool = (id, name, args = {}, nodeId) => call(id, 'call_tool', { source: 'node', name, ...(nodeId ? { nodeId } : {}), args })
 
 const env = {}, options = { runtime: 'dotnet', env }

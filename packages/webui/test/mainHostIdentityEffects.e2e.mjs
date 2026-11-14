@@ -6,10 +6,11 @@ import { mkdir, readFile, writeFile, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createHostFixture, until, sleep } from './mainHostFixture.mjs'
 import { writeModelFixture } from './mainModelFixture.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 const owned = await createHostFixture('identity-effects'), requests = [], failures = [], counts = new Map(), processes = []
 const route = id => '/api/sessions/' + encodeURIComponent(id)
 const execRecords = async () => JSON.parse(await readFile(join(owned.data, 'state/running-exec.json'), 'utf8')).execs
-const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
+const call = functionCall
 const final = text => [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] }]
 let backgroundId, backgroundLog
 const preparationControl = process.env.IDENTITY_PREPARATION_CONTROL === '1', concreteControl = process.env.IDENTITY_CONCRETE_CONTROL === '1', deniedLate = preparationControl || concreteControl

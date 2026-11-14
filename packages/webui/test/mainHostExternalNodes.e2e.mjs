@@ -8,6 +8,7 @@ import { join, resolve } from 'node:path'
 import WebSocket from 'ws'
 import puppeteer from 'puppeteer-core'
 import { createHostFixture, until, sleep } from './mainHostFixture.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 
 const env = {}
 const fixture = await createHostFixture('external-nodes', { env })
@@ -18,7 +19,7 @@ let browser
 const exists = path => access(path).then(() => true, () => false)
 const saved = id => readFile(join(fixture.data, 'state/sessions', id + '.json'), 'utf8').then(JSON.parse)
 const route = id => '/api/sessions/' + encodeURIComponent(id)
-const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
+const call = functionCall
 const final = key => [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'NODE-DONE-' + key }] }]
 const pair = (state, id) => state.history.flatMap(row => row.parts || []).find(part => part.functionResponse?.tool_use_id === id)?.functionResponse?.response
 const peer = createServer(async (request, response) => {

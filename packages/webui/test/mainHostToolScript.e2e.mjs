@@ -8,6 +8,7 @@ import sharp from 'sharp'
 import { createHostFixture, until } from './mainHostFixture.mjs'
 import { writeModelFixture } from './mainModelFixture.mjs'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 // Three real stdio peers have sequential bounded SDK disposal; allow that actual drain workload.
 const options = { env: {}, stopTimeout: 30000 }, owned = await createHostFixture('toolscript', options), requests = [], failures = [], scripts = new Map()
 const home = join(owned.root, 'home'), sdk = join(owned.root, 'sdk'), image = join(owned.work, 'pixel.png')
@@ -21,7 +22,7 @@ await writeFile(join(owned.data, 'state/mcp.json'), JSON.stringify({ servers: {
 } }))
 const route = id => '/api/sessions/' + encodeURIComponent(id), authority = async id => JSON.parse(await readFile(join(owned.data, 'state/sessions', id + '.json'), 'utf8'))
 const result = (state, id) => state.history.flatMap(row => row.parts || []).find(part => part.functionResponse?.tool_use_id === id)?.functionResponse
-const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
+const call = functionCall
 const final = text => [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] }]
 const peer = createServer(async (request, response) => {
   try {
@@ -88,7 +89,7 @@ try {
   state = await turn('main', 'nested', [call('nested', 'run_script', { summary: 'Inspect native nested script values', code: "x=call_tool('run_script', {'code':'return False'})\nreturn [x['result'], x['status']]" })])
   assert.deepEqual(result(state, 'nested').response.result, [false, 'completed'], 'nested calls receive native values, not presentation sections')
   assert.equal((await readFile(join(sdk, 'calls.ndjson'), 'utf8')).split('\n').filter(line => line.includes('"tag":"opaque"')).length, 1)
-  state = await turn('main', 'schemas', [call('script-schemas', 'run_script', { summary: 'Discover and invoke the schema peer', code: "discovery=call_tool('search_tools', {'sources':['mcp'],'server':'schema','query':'schema_echo'})\nx=call_tool({'toolId':'mcp:schema/schema_echo','args':{}})\nreturn {'row':discovery['tools'][0], 'structured':x}\n" })])
+  state = await turn('main', 'schemas', [call('script-schemas', 'run_script', { summary: 'Discover and invoke the schema peer', code: "discovery=call_tool('ctl', {'command':'tool search schema_echo --source mcp --server schema'})\nx=call_tool({'toolId':'mcp:schema/schema_echo','args':{}})\nreturn {'row':discovery['tools'][0], 'structured':x}\n" })])
   const discovered = result(state, 'script-schemas').response; assert.equal(discovered.status, 'completed', JSON.stringify(discovered)); assert.equal(discovered.result.row.toolId, 'mcp:schema/schema_echo'); assert.deepEqual(discovered.result.row.outputSchema.required, ['data']); assert.equal(discovered.result.row.inputSchema.properties.value.description, 'Escaped */\nmetadata\u202e'); assert.equal(discovered.result.structured._meta.retained, true); assert.deepEqual(discovered.result.structured.structuredContent.data, { flag: false, zero: 0, nothing: null }); assert(!('output' in discovered.result.row))
   state = await turn('main', 'images', [call('script-images', 'run_script', { summary: 'Read native and MCP images', code: "native=call_tool('read', {'filePath':'pixel.png'})\nsdk=call_tool({'toolId':'mcp:image/image','args':{}})\nreturn {'parts':native['parts']+sdk['parts'], 'business':sdk['business']}\n" })])
   const imageRow = state.history.find(row => row.parts?.some(part => part.functionResponse?.tool_use_id === 'script-images')), imageResult = result(state, 'script-images').response

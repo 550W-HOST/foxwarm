@@ -6,13 +6,14 @@ import { access, mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { createHostFixture, until } from './mainHostFixture.mjs'
 import { writeModelFixture } from './mainModelFixture.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 const options = { env: {} }, owned = await createHostFixture('native-paths', options), requests = [], failures = [], counts = new Map(), held = new Map()
 const home = join(owned.root, 'home'), changed = join(owned.root, 'changed'), relative = join(owned.root, 'relative')
 for (const directory of [home, changed, join(relative, 'relative')]) await mkdir(directory, { recursive: true })
 options.cwd = owned.root
 options.env = { HOME: home, fw_agentdir: 'inherited-lower-wrong', fw_tmp: 'inherited-lower-wrong', FW_AGENTDIR: 'owned-upper-sentinel', OPENAI_API_KEY: 'owned-provider-sentinel', FOXWARM_API_TOKEN: 'owned-api-sentinel' }
 const route = id => '/api/sessions/' + encodeURIComponent(id), authority = async id => JSON.parse(await readFile(join(owned.data, 'state/sessions', id + '.json'), 'utf8'))
-const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
+const call = functionCall
 const final = text => [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] }]
 const peer = createServer(async (request, response) => {
   try {

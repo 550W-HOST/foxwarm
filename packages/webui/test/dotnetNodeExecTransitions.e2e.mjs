@@ -9,15 +9,17 @@ import { join, resolve } from 'node:path'
 import { createRequire } from 'node:module'
 import WebSocket, { WebSocketServer } from 'ws'
 import { createHostFixture, until } from './mainHostFixture.mjs'
+import { functionCallFor } from './ctlModelCalls.mjs'
 
 const require = createRequire(import.meta.url)
 const { initializeTestEnvironment, isolatedApplicationEnv } = require('../../../scripts/test/test-process-env.cjs')
 initializeTestEnvironment()
-const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
+let call
 const exists = path => access(path).then(() => true, () => false)
 const coreRoot = resolve('.')
 const sourceRoot = resolve(process.env.FOXWARM_TS_ROOT || '.')
 for (const runtime of ['source', 'dotnet']) for (const clientRuntime of ['source', 'dotnet']) {
+  call = functionCallFor(runtime)
   process.chdir(runtime === 'source' ? sourceRoot : coreRoot)
   const env = {}, fixture = await createHostFixture('cli-exec-' + runtime, { runtime, env })
   Object.assign(env, isolatedApplicationEnv(fixture.data), { FOXWARM_SYNC_FILE_LOG: '', FOXWARM_NO_CONSOLE_LOG: '' })

@@ -7,6 +7,7 @@ import { join, resolve } from 'node:path'
 import { WebSocket } from 'ws'
 import { createHostFixture, until, sleep } from './mainHostFixture.mjs'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 
 const options = { env: {}, onPage: page => page.evaluateOnNewDocument(() => {
   localStorage.setItem('foxwarm_timeline_view_v1', 'conversation')
@@ -21,7 +22,7 @@ await writeFile(configPath, `url: ${fixture.origin}/nested\nbot:\n  httpPort: ${
 const route = id => '/api/sessions/' + encodeURIComponent(id)
 const history = async id => { const value = await fixture.api('GET', route(id) + '/history?tail=100'); assert.equal(value.status, 200, JSON.stringify(value)); return value.body }
 const text = value => ({ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: value }] })
-const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
+const call = functionCall
 const requests = [], errors = [], held = new Map(), scripts = new Map(), counts = new Map()
 let planMode = 'retry-hold', planFailures = 0, usage = 30
 const peer = createServer(async (request, response) => {
@@ -155,7 +156,7 @@ try {
   const gate = join(fixture.work, 'tool-release'), born = join(fixture.work, 'tool-born')
   scripts.set('tool', [call('held-tool', 'call_tool', { toolId: 'node:master/exec', args: { command: `printf born > '${born}'; while [ ! -f '${gate}' ]; do sleep 0.05; done; printf real-effect`, timeout: 60 } })])
   await send(source, 'CASE:tool'); await until(() => access(born).then(() => true, () => false), 'actual launched tool')
-  await projections(source, state => { assert.equal(state.state, 'running-tool'); assert.equal(state.tool.name, 'exec'); assert.equal(state.tool.source, 'node'); assert.equal(state.tool.invocationName, 'call_tool'); assert.equal(state.tool.index, 0); assert.equal(state.tool.total, 1); assert(state.tool.argsPreview.length <= 200) })
+  await projections(source, state => { assert.equal(state.state, 'running-tool'); assert.equal(state.tool.name, 'exec'); assert.equal(state.tool.source, 'node'); assert.equal(state.tool.invocationName, 'ctl'); assert.equal(state.tool.index, 0); assert.equal(state.tool.total, 1); assert(state.tool.argsPreview.length <= 200) })
   await control(source, '/stop', 'accepted', 'stop'); await settled(source)
   await writeFile(gate, 'release')
   // Ordinary input still has independent composer acknowledgement metadata.

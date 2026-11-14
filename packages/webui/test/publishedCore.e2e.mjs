@@ -12,6 +12,7 @@ import { waitForWebUiReady } from './webuiReadiness.mjs'
 import { until } from './mainHostFixture.mjs'
 import { publishedToolOutcomes } from './publishedToolOutcomes.mjs'
 import { browserEnvironment } from '../../browser-host/test/fixture.mjs'
+import { functionCall } from './ctlModelCalls.mjs'
 
 const payload = process.env.FOXWARM_PUBLISHED_CORE
 assert(payload, 'Set FOXWARM_PUBLISHED_CORE to an owned complete Core publish directory.')
@@ -64,7 +65,7 @@ const peer = createServer(async (request, response) => {
       : requests.length === 3
       ? [{ type: 'function_call', call_id: 'packaged-browser-image', name: 'browser_screenshot', arguments: JSON.stringify({ tabId: 1 }) }]
       : requests.length === 4
-      ? [{ type: 'function_call', call_id: 'packaged-react-artifact', name: 'artifact', arguments: JSON.stringify({ action: 'publish', filePath: join(payload, 'skills/react-artifacts/examples/sorting.json') }) }]
+      ? [functionCall('packaged-react-artifact', 'artifact', { action: 'publish', filePath: join(payload, 'skills/react-artifacts/examples/sorting.json') })]
       : [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'PACKAGED-NATIVE-DONE' }] }]
     lastProviderReply = outputRows[0].name || outputRows[0].type
     response.writeHead(200, { 'content-type': 'text/event-stream' })
