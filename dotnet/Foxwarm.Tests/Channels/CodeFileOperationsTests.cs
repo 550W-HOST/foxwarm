@@ -41,7 +41,11 @@ public sealed class CodeFileOperationsTests
         var before = Directory.GetFileSystemEntries(drive).Length;
         var root = CodeNativePaths.Native("/");
         Assert.True(CodeNativePaths.IsVirtualRoot(root));
-        Assert.Equal(drive, CodeNativePaths.Native("/" + char.ToLowerInvariant(drive[0]) + ":"));
+        Assert.Equal(
+            drive,
+            CodeNativePaths.Native("/" + char.ToLowerInvariant(drive[0]) + ":"),
+            ignoreCase: true
+        );
         Assert.Throws<CodeServiceException>(() => CodeNativePaths.NativeDirectory("/"));
         Assert.Equal("/", CodeNativePaths.Transport("/"));
 

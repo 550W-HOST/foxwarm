@@ -101,9 +101,32 @@ public sealed class NodeCodeServicesPathTests
     {
         if (!OperatingSystem.IsWindows())
             return;
+        var presented = new JsonObject { ["workspace"] = "C:/repo", ["topLevel"] = "c:/repo/sub" };
+        CodeNativePaths.TransportWorkspace(presented);
+        Assert.Equal("/C:/repo", presented["workspace"]!.ToString());
+        Assert.Equal("/C:/repo/sub", presented["topLevel"]!.ToString());
+        var root = await Assert.ThrowsAsync<CodeServiceException>(() =>
+            NodeCodeServices.Execute("vscode-git", "status", new() { ["workspace"] = "/" })
+        );
+        Assert.Equal("InvalidPath", root.Code);
+
         using var temp = new TempDirectory();
-        using (var init = Process.Start(new ProcessStartInfo("git", "init -q") { WorkingDirectory = temp.Path }))
+        using (
+            var init = Process.Start(
+                new ProcessStartInfo("git", "init -q") { WorkingDirectory = temp.Path }
+            )
+        )
             await init!.WaitForExitAsync();
+        using var probe = Process.Start(
+            new ProcessStartInfo("git", "rev-parse --show-toplevel")
+            {
+                WorkingDirectory = temp.Path,
+                RedirectStandardOutput = true,
+            }
+        );
+        // An MSYS Git prints /c/... instead of the drive path that Git for Windows prints.
+        if ((await probe!.StandardOutput.ReadToEndAsync()).StartsWith('/'))
+            return;
         await File.WriteAllTextAsync(Path.Combine(temp.Path, "tracked.txt"), "x");
         var mapped = CodeNativePaths.Transport(temp.Path);
         var status = await NodeCodeServices.Execute(
@@ -120,10 +143,6 @@ public sealed class NodeCodeServicesPathTests
             new() { ["workspace"] = temp.Path }
         );
         Assert.False(native["workspace"]!.ToString().StartsWith('/'));
-        var root = await Assert.ThrowsAsync<CodeServiceException>(() =>
-            NodeCodeServices.Execute("vscode-git", "status", new() { ["workspace"] = "/" })
-        );
-        Assert.Equal("InvalidPath", root.Code);
     }
 
     [Fact]
@@ -132,7 +151,28 @@ public sealed class NodeCodeServicesPathTests
         if (!OperatingSystem.IsWindows() || !Foxwarm.Terminal.TerminalNative.IsSupported)
             return;
         using var temp = new TempDirectory();
-        await using var service = new NodePtyService(temp.Path);
+        // CreateProcess does not search PATH, so name the shell as the CLI e2e fixtures do.
+        var shell = Path.Combine(
+            Environment.SystemDirectory,
+            "WindowsPowerShell",
+            "v1.0",
+            "powershell.exe"
+        );
+        var previousShell = Environment.GetEnvironmentVariable("FOXWARM_NODE_PTY_SHELL");
+        Environment.SetEnvironmentVariable("FOXWARM_NODE_PTY_SHELL", shell);
+        try
+        {
+            await AssertTerminalPaths(temp.Path);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("FOXWARM_NODE_PTY_SHELL", previousShell);
+        }
+    }
+
+    private static async Task AssertTerminalPaths(string folder)
+    {
+        await using var service = new NodePtyService(folder);
         var owner = new object();
 
         async Task<string> Cwd(string requested)
@@ -151,9 +191,9 @@ public sealed class NodeCodeServicesPathTests
             return response!["terminal"]!["cwd"]!.ToString();
         }
 
-        var mapped = CodeNativePaths.Transport(temp.Path);
+        var mapped = CodeNativePaths.Transport(folder);
         Assert.Equal(mapped, await Cwd(mapped), ignoreCase: true);
-        Assert.Equal(temp.Path, await Cwd(temp.Path), ignoreCase: true);
+        Assert.Equal(folder, await Cwd(folder), ignoreCase: true);
         Assert.Equal(Path.GetPathRoot(Environment.CurrentDirectory), await Cwd("/"));
     }
 }
