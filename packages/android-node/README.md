@@ -4,7 +4,7 @@ A sideloadable Android app that connects a phone directly to a Foxwarm Main serv
 
 ## Pair a phone
 
-1. Install the debug APK from the Android Node CI artifact, or build it below.
+1. Download the release APK from [foxwarm.net/android](https://foxwarm.net/android), or scan the download QR code in WebUI onboarding. Open it and allow your browser to install apps when prompted.
 2. In Foxwarm, open **System → Nodes → New nodes → Android**. Enter an address reachable from the phone and a Node ID, then choose **Create**.
 3. In the app, scan the QR code or enter the Main server address, Node ID and credential manually. Check the address before connecting. Use HTTPS outside a trusted local network.
 4. Enable **Foxwarm Node** in Android Accessibility settings. On Android 13 or later, a sideloaded app may first require **App info → ⋮ → Allow restricted settings**. The app links to both settings screens.
@@ -40,7 +40,9 @@ packages/android-node/gradlew -p packages/android-node \
   :core:test :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
 ```
 
-Output: `packages/android-node/app/build/outputs/apk/debug/app-debug.apk`. Gradle creates a local debug signing key automatically. CI builds the same debug variant and uploads it without signing secrets. Debug keys can differ between builds; uninstalling a differently signed APK erases its saved credential. Release signing and distribution are not configured.
+Output: `packages/android-node/app/build/outputs/apk/debug/app-debug.apk`. Gradle creates a local debug signing key automatically. CI builds the same debug variant and uploads it without signing secrets. Debug keys can differ between builds; uninstalling a differently signed APK erases its saved credential. Public releases use a dedicated release key; switching from a debug build requires uninstalling and pairing again. See the [installation guide](https://foxwarm.net/docs/installing/#android-node) for the release certificate fingerprint.
+
+The Release workflow also assembles the release variant. By default, it is debug-signed and named `<root package version>-dev`. Tagged builds pass `-PreleaseVersion=<version>` and produce `app-release-unsigned.apk`, which the workflow signs and verifies before publication. An explicit signing qualification uses `-PreleaseSigning=true` without a release version and produces an unsigned `-dev` APK for the same signing step. See the [release contract](../../docs/code-index/units/release-packages.md#android-node-apk) for version codes, secrets and certificate checks.
 
 `core` is the production JVM-compatible pairing/protocol/WebSocket client. Its tests exercise registration, protocol negotiation, result/error correlation, heartbeat, reconnect, stale-work fencing and quarantine. Robolectric checks Android component startup and connection controls after process loss. Neither test environment substitutes for physical-device qualification.
 

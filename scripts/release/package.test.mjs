@@ -61,7 +61,7 @@ with tarfile.open(sys.argv[1]) as archive:
 
 test('checksum aggregation replaces partial lists and covers all platform assets', unix, t => {
   const work = scratch(t)
-  const files = ['foxwarm-linux-x64.tar.gz', 'foxwarm-win-x64.zip', 'foxwarm-osx-arm64.tar.gz', 'foxwarm-osx-arm64-native.tar.gz', codeAssetName]
+  const files = ['foxwarm-linux-x64.tar.gz', 'foxwarm-win-x64.zip', 'foxwarm-osx-arm64.tar.gz', 'foxwarm-osx-arm64-native.tar.gz', 'foxwarm-android-node.apk', codeAssetName]
   for (const name of files) fs.writeFileSync(path.join(work, name), name)
   fs.writeFileSync(path.join(work, 'SHA256SUMS'), 'partial build list\n')
   writeChecksums(work)

@@ -252,7 +252,7 @@ with open(out, 'wb') as raw:
 }
 
 export function writeChecksums(output) {
-  const lines = fs.readdirSync(output).filter(file => /\.(zip|tar\.gz|fwassets)$/.test(file)).sort().map(file =>
+  const lines = fs.readdirSync(output).filter(file => /\.(zip|tar\.gz|fwassets|apk)$/.test(file)).sort().map(file =>
     `${createHash('sha256').update(fs.readFileSync(path.join(output, file))).digest('hex')}  ${file}`)
   fs.writeFileSync(path.join(output, 'SHA256SUMS'), lines.join('\n') + '\n')
 }

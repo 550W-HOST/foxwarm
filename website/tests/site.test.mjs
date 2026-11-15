@@ -195,3 +195,19 @@ test('public content has no unresolved installer host placeholders', async () =>
     assert.doesNotMatch(text, /YOUR_PUBLIC_FOXWARM_HOST|YOUR_DOMAIN/, path.relative(repositoryRoot, filePath));
   }
 });
+
+
+test('Android download redirects to the release APK and both install locales include its QR and certificate', async () => {
+  const redirect = await readFile(routeToFile('/android/'), 'utf8');
+  assert.match(redirect, /http-equiv="refresh"[^>]*content="0;url=https:\/\/github\.com\/550W-HOST\/foxwarm\/releases\/latest\/download\/foxwarm-android-node\.apk"/i);
+  const qr = await readFile(path.join(distRoot, 'android-download.svg'), 'utf8');
+  assert.match(qr, /<svg[^>]*viewBox=/);
+  const fingerprint = (await readFile(path.join(repositoryRoot, 'packages/android-node/release-certificate.sha256'), 'utf8')).trim();
+  for (const locale of ['', '/zh']) {
+    const html = await readFile(routeToFile(`${locale}/docs/installing/`), 'utf8');
+    assert.match(html, /href="https:\/\/foxwarm\.net\/android"/);
+    assert.match(html, /src="\/android-download\.svg"/);
+    assert.ok(html.includes('foxwarm-android-node.apk'));
+    assert.ok(html.includes(fingerprint));
+  }
+});

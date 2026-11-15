@@ -3,6 +3,7 @@ import testEnvironment from '../../../scripts/test/test-process-env.cjs'
 testEnvironment.initializeTestEnvironment()
 import assert from 'node:assert/strict'
 import puppeteer from 'puppeteer-core'
+import QRCode from 'qrcode'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
@@ -35,6 +36,20 @@ async function click(text) {
   await page.waitForFunction(text => [...document.querySelectorAll('button')].some(button => (button.textContent.trim() === text || button.getAttribute('aria-label') === text) && !button.disabled), {}, text)
   const button = await page.evaluateHandle(text => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === text || button.getAttribute('aria-label') === text), text)
   assert(button.asElement(), 'Button: ' + text); await button.asElement().click(); await button.dispose()
+}
+async function assertQr(selector, value) {
+  const { modules } = QRCode.create(value, { errorCorrectionLevel: 'M' })
+  const actual = await page.$eval(selector, (image, size) => {
+    const canvas = document.createElement('canvas')
+    canvas.width = image.naturalWidth; canvas.height = image.naturalHeight
+    const context = canvas.getContext('2d'); context.drawImage(image, 0, 0)
+    const scale = canvas.width / (size + 8), pixels = []
+    for (let row = 0; row < size; row++) for (let col = 0; col < size; col++) {
+      pixels.push(context.getImageData(Math.floor((col + 4.5) * scale), Math.floor((row + 4.5) * scale), 1, 1).data[0] < 128 ? 1 : 0)
+    }
+    return pixels
+  }, modules.size)
+  assert.deepEqual(actual, [...modules.data], `QR pixels encode the expected payload: ${selector}`)
 }
 async function replace(label, value) {
   await page.$eval(`input[aria-label="${label}"]`, input => { input.focus(); input.select() })
@@ -219,6 +234,13 @@ try {
   assert.equal(await page.$eval('[role="dialog"]', dialog => dialog.scrollWidth > dialog.clientWidth), false)
   await screenshot('browser-onboarding-narrow.png')
   await click('Android')
+  await page.waitForSelector('[data-android-download] img')
+  const downloadQr = await page.$eval('[data-android-download] img', image => image.src)
+  await assertQr('[data-android-download] img', 'https://foxwarm.net/android')
+  assert.equal(await page.$eval('[data-android-download] a', link => link.href), 'https://foxwarm.net/android')
+  assert.equal(await page.$('[data-android-pairing]'), null, 'download is available before creating a credential')
+  assert.equal(await page.$eval('[data-android-download]', download => !!(download.compareDocumentPosition(document.querySelector('[aria-label="Main server address"]')) & Node.DOCUMENT_POSITION_FOLLOWING)), true)
+  await screenshot('android-download-narrow.png')
   assert.equal(await page.$('[data-node-command]'), null)
   assert.equal(await page.$('input[name="node-authentication"]'), null)
   assert.equal(requests.filter(request => request.url.endsWith('/onboarding/create')).length, 1, 'choosing Android does not create trust')
@@ -231,7 +253,8 @@ try {
   assert.equal(await page.$eval('[aria-label="Main server address"]', input => input.value), host)
   assert.equal(await page.$eval('[aria-label="Node ID"]', input => input.value), 'browser-phone')
   assert.equal(await page.$eval('[aria-label="Android credential"]', input => input.value), android.authToken)
-  assert.match(await page.$eval('[data-android-pairing] img', image => image.src), /^data:image\/png;base64,/)
+  await assertQr('[data-android-pairing] img', JSON.stringify(android.androidPairing))
+  assert.equal(await page.$eval('[data-android-download] img', image => image.src), downloadQr, 'creating a credential keeps the public download QR unchanged')
   await click('Copy credential')
   assert.equal(await page.evaluate(() => window.fixtureClipboard), android.authToken)
   assert.equal(await page.$eval('[role="dialog"]', dialog => dialog.scrollWidth > dialog.clientWidth), false)

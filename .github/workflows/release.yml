@@ -7,6 +7,11 @@ on:
     branches: [testing, main]
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      signAndroid:
+        description: Sign and verify the Android workflow artifact with the release key
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -380,9 +385,72 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  android:
+    name: Build Android Node release APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Select JDK 17
+        run: |
+          echo "JAVA_HOME=$JAVA_HOME_17_X64" >> "$GITHUB_ENV"
+          echo "$JAVA_HOME_17_X64/bin" >> "$GITHUB_PATH"
+      - name: Cache Gradle dependencies and wrapper
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: android-gradle-${{ runner.os }}-${{ runner.arch }}-jdk17-${{ hashFiles('packages/android-node/**/*.gradle.kts', 'packages/android-node/gradle.properties', 'packages/android-node/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            android-gradle-${{ runner.os }}-${{ runner.arch }}-jdk17-
+      - name: Assemble the release variant
+        run: |
+          args=()
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            version="$(node -p 'require("./package.json").version')"
+            [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "Tag does not match package.json"; exit 1; }
+            args+=("-PreleaseVersion=$version")
+          fi
+          if [[ "$GITHUB_REF" == refs/tags/* || "${{ github.event_name == 'workflow_dispatch' && inputs.signAndroid }}" == true ]]; then
+            args+=("-PreleaseSigning=true")
+          fi
+          packages/android-node/gradlew -p packages/android-node :app:assembleRelease "${args[@]}"
+      - name: Sign and verify the release certificate
+        if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.signAndroid)
+        env:
+          ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
+          ANDROID_RELEASE_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
+        run: |
+          : "${ANDROID_RELEASE_KEYSTORE_BASE64:?Missing release keystore secret}"
+          : "${ANDROID_RELEASE_KEYSTORE_PASSWORD:?Missing release keystore password secret}"
+          umask 077
+          keystore="$(mktemp "$RUNNER_TEMP/android-release.XXXXXX.p12")"
+          trap 'rm -f "$keystore"' EXIT
+          printf '%s' "$ANDROID_RELEASE_KEYSTORE_BASE64" | base64 --decode > "$keystore"
+          bash scripts/release/sign-android.sh \
+            packages/android-node/app/build/outputs/apk/release/app-release-unsigned.apk \
+            dist/foxwarm-android-node.apk "$keystore" packages/android-node/release-certificate.sha256
+          echo 'Android APK signed and verified against the pinned certificate. Non-tag runs keep it as a workflow artifact only.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Keep the development APK without release signing
+        if: ${{ !startsWith(github.ref, 'refs/tags/') && !(github.event_name == 'workflow_dispatch' && inputs.signAndroid) }}
+        run: |
+          mkdir -p dist
+          cp packages/android-node/app/build/outputs/apk/release/app-release.apk dist/foxwarm-android-node.apk
+          echo 'Release signing skipped: this non-tag release-variant APK is debug-signed, has a -dev version name, and is a workflow artifact only.' >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-packages-android
+          path: dist/foxwarm-android-node.apk
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
   aggregate:
     name: Aggregate release assets and checksums
-    needs: [packages, macos, macos-desktop, native-cli, windows]
+    needs: [packages, macos, macos-desktop, native-cli, windows, android]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -422,7 +490,9 @@ jobs:
             *) echo "::warning::$version publishes no self-contained macOS or Windows alias; remove this step." ;;
           esac
       - name: Write one checksum list covering every platform
-        run: node scripts/release/package.mjs --output dist --checksums-only
+        run: |
+          test -f dist/foxwarm-android-node.apk
+          node scripts/release/package.mjs --output dist --checksums-only
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-packages

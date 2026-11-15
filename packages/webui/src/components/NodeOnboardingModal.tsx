@@ -2,6 +2,7 @@ import { createPortal } from 'react-dom'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Check, Copy, Plus, RefreshCw, X } from 'lucide-react'
 import AndroidPairingDetails from './AndroidPairingDetails'
+import NodeSetupQr from './NodeSetupQr'
 import { API_BASE_PATH } from '../config'
 
 type PendingRequest = { id: string; requestedName: string; nodeType: string; requestedAt: number; connected: boolean }
@@ -195,6 +196,16 @@ export default function NodeOnboardingModal({ pending, onClose, onNodesChanged }
           </div>
         </div> : null}
         {method !== 'browser' ? <>
+        {method === 'android' ? <>
+          <div className="mt-4 space-y-3" data-android-download>
+            <h3 className="text-sm font-semibold text-fw-text-strong">1. Install the app</h3>
+            <p className="text-sm">Scan with your phone’s camera to download Foxwarm Node. Requires Android 11 or later. Allow installation from your browser when prompted.</p>
+            <NodeSetupQr value="https://foxwarm.net/android" alt="Download Foxwarm Node for Android" failure="Could not create the QR code. Open the download link on your phone." />
+            <a href="https://foxwarm.net/android" target="_blank" rel="noopener noreferrer" className="block break-all text-sm text-fw-accent underline">https://foxwarm.net/android</a>
+          </div>
+          <h3 className="mt-5 text-sm font-semibold text-fw-text-strong">2. Connect to your Main server</h3>
+          <p className="mt-2 text-sm">Create a credential below, then scan the pairing QR code in the app or enter the fields manually.</p>
+        </> : null}
         {!shellOnly && method !== 'android' ? <fieldset disabled={busy} className="mt-3 flex flex-wrap gap-4 text-sm"><legend className="mb-1 text-xs font-medium">Authentication</legend>{[{ value: false, label: 'Pairing approval' }, { value: true, label: 'Pre-created token' }].map(mode => <label key={mode.label} className="flex items-center gap-2"><input type="radio" name="node-authentication" checked={tokenMode === mode.value} onChange={() => { setTokenMode(mode.value); setCopied(false); setError('') }} />{mode.label}</label>)}</fieldset> : null}
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
           <label className="text-xs font-medium">{method === 'android' ? 'Main server address' : 'Reachable address'}<input aria-label={method === 'android' ? 'Main server address' : 'Reachable address'} readOnly={method === 'android' && !!created} disabled={busy || (direct && !!created && method !== 'android')} value={address} onChange={event => { setBaseUrl(event.target.value); setCommands({}); setCopied(false) }} className={fieldClass} /></label>
@@ -208,7 +219,6 @@ export default function NodeOnboardingModal({ pending, onClose, onNodesChanged }
           {busy ? <span role="status" className="text-xs text-fw-text-muted">Loading…</span> : null}
         </div>
         {method === 'android' ? <>
-          <p className="mt-3 text-sm">Install the Foxwarm Node APK on your phone. Create a credential here, then scan the QR code in the app or enter the fields manually.</p>
           {created ? <AndroidPairingDetails pairing={created.androidPairing} /> : null}
         </> : direct && created ? <p className="mt-2 text-sm">{created.nodeId} created. Copy its command before closing.</p> : null}
         {error ? <p role="alert" className="mt-3 text-sm text-fw-danger">{error}</p> : null}

@@ -1,4 +1,18 @@
+import groovy.json.JsonSlurper
+
 plugins { id("com.android.application"); kotlin("android") }
+// Release builds receive the checked tag version; local and CI builds stay identifiable.
+val releaseVersion = providers.gradleProperty("releaseVersion").orNull
+val sourceVersion = (JsonSlurper().parse(rootProject.file("../../package.json")) as Map<*, *>)["version"] as String
+val version = releaseVersion ?: sourceVersion
+require(Regex("(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)").matches(version)) {
+    "Android versions must be stable major.minor.patch versions: $version"
+}
+val (major, minor, patch) = version.split('.').map { it.toLong() }
+val androidVersionCode = major * 1_000_000 + minor * 1_000 + patch
+require(major <= 2100 && minor < 1000 && patch < 1000 && androidVersionCode in 1..2_100_000_000) {
+    "Android version exceeds the supported versionCode range: $version"
+}
 android {
     namespace = "io.foxwarm.android"
     compileSdk = 35
@@ -6,8 +20,14 @@ android {
         applicationId = "io.foxwarm.android"
         minSdk = 30
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = androidVersionCode.toInt()
+        versionName = releaseVersion ?: "$sourceVersion-dev"
+    }
+    buildTypes {
+        getByName("release") {
+            // Tagged builds and explicit signing qualifications are signed outside Gradle.
+            if (releaseVersion == null && !providers.gradleProperty("releaseSigning").getOrElse("false").toBoolean()) signingConfig = signingConfigs.getByName("debug")
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

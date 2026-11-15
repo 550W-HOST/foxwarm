@@ -7,6 +7,7 @@ const github = 'https://github.com/550W-HOST/foxwarm';
 export default defineConfig({
   site: 'https://foxwarm.net',
   output: 'static',
+  redirects: { '/android': `${github}/releases/latest/download/foxwarm-android-node.apk` },
   integrations: [
     sitemap({ filter: (page) => page !== 'https://foxwarm.net/404/' && !page.startsWith('https://foxwarm.net/demo/') }),
     starlight({

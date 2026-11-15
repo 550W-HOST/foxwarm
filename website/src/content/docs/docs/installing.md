@@ -32,6 +32,7 @@ Each [release](https://github.com/550W-HOST/foxwarm/releases/latest) provides:
 | [`foxwarm-win-x64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-win-x64.zip) | Windows server; uses the installed ASP.NET Core 10 runtime |
 | [`foxwarm-desktop-win-x64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-win-x64.zip) | Windows desktop app, .NET runtime included |
 | [`foxwarm-desktop-osx-arm64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-osx-arm64.zip) | Apple Silicon Mac desktop app compiled to native code; needs no .NET runtime |
+| [`foxwarm-android-node.apk`](https://foxwarm.net/android) | Android Node app; Android 11 or later, sideload installation; see [Android Node](#android-node) |
 | [`SHA256SUMS`](https://github.com/550W-HOST/foxwarm/releases/latest/download/SHA256SUMS) | Checksums of the release files |
 
 Each release also includes:
@@ -43,6 +44,22 @@ Each release also includes:
 Older versions are on the [releases page](https://github.com/550W-HOST/foxwarm/releases); replace `latest/download` in a link with `download/v<version>` to fetch a specific version.
 
 The installers use the native package; `--framework-dependent` (`-FrameworkDependent` on Windows) selects the package that uses the installed ASP.NET Core 10 runtime. The native packages replaced the self-contained ones, which also included .NET: on Linux in 0.9.4, on macOS and Windows in 0.9.6.
+
+## Android Node
+
+Scan this code on an Android 11 or later phone, or open [foxwarm.net/android](https://foxwarm.net/android), to download `foxwarm-android-node.apk`. Open the APK and allow your browser to install apps when prompted. This sideloaded app connects your phone as a Node and needs an existing Foxwarm server.
+
+<a href="https://foxwarm.net/android"><img src="/android-download.svg" width="240" height="240" alt="QR code to download Foxwarm Android Node" /></a>
+
+In the WebUI, open **System → Nodes → New nodes → Android**, create a credential, and scan the pairing QR code in step 2 with the app. Follow the app’s prompts to enable accessibility and connect.
+
+Before installing, verify the signature with the Android SDK’s `apksigner verify --print-certs foxwarm-android-node.apk`. The signer certificate SHA-256 fingerprint is:
+
+```text
+F9:E3:C6:5A:44:F3:08:23:D2:FF:23:DE:F4:70:8F:6E:8B:0C:42:42:18:70:85:69:3C:72:45:36:D9:34:65:D6
+```
+
+Later releases use the same signing key and can update the app in place while keeping its data. If you installed a debug-signed development build, uninstall it before installing the release and pair again; uninstalling clears the saved credential.
 
 ## Requirements
 

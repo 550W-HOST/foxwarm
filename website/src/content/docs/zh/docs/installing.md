@@ -30,6 +30,7 @@ Foxwarm 服务器支持 **Linux x64**（包括 x64 WSL）、**macOS arm64**（Ap
 | [`foxwarm-win-x64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-win-x64.zip) | Windows 服务器，使用系统已安装的 ASP.NET Core 10 运行时 |
 | [`foxwarm-desktop-win-x64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-win-x64.zip) | Windows 桌面版，自带 .NET 运行时 |
 | [`foxwarm-desktop-osx-arm64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-osx-arm64.zip) | Apple Silicon Mac 桌面版，编译为原生代码，不需要 .NET 运行时 |
+| [`foxwarm-android-node.apk`](https://foxwarm.net/android) | Android Node 应用；需要 Android 11 或更新版本，通过 APK 侧载安装，见 [Android Node](#android-node) |
 | [`SHA256SUMS`](https://github.com/550W-HOST/foxwarm/releases/latest/download/SHA256SUMS) | Release 中各文件的校验和 |
 
 每个 Release 还包含：
@@ -41,6 +42,22 @@ Foxwarm 服务器支持 **Linux x64**（包括 x64 WSL）、**macOS arm64**（Ap
 旧版本见 [Releases 页面](https://github.com/550W-HOST/foxwarm/releases)；把链接里的 `latest/download` 换成 `download/v<版本>` 即可下载指定版本。
 
 安装脚本使用原生安装包；`--framework-dependent`（Windows 上为 `-FrameworkDependent`）选择使用系统 ASP.NET Core 10 运行时的安装包。原生安装包取代了同样不需要安装 .NET 的自带运行时安装包：Linux 从 0.9.4 起，macOS 和 Windows 从 0.9.6 起。
+
+## Android Node
+
+在 Android 11 或更新版本的手机上扫描二维码，或打开 [foxwarm.net/android](https://foxwarm.net/android)，下载 `foxwarm-android-node.apk`。打开 APK，并按提示允许浏览器安装应用。此应用把手机连接为 Node；需要已有的 Foxwarm 服务器。
+
+<a href="https://foxwarm.net/android"><img src="/android-download.svg" width="240" height="240" alt="下载 Foxwarm Android Node 的二维码" /></a>
+
+在 WebUI 中打开 **System → Nodes → New nodes → Android**，创建凭据后，用应用扫描第二步的配对二维码。按应用提示启用无障碍服务并连接。
+
+安装前，可用 Android SDK 的 `apksigner verify --print-certs foxwarm-android-node.apk` 验证签名。签名证书的 SHA-256 指纹为：
+
+```text
+F9:E3:C6:5A:44:F3:08:23:D2:FF:23:DE:F4:70:8F:6E:8B:0C:42:42:18:70:85:69:3C:72:45:36:D9:34:65:D6
+```
+
+后续 Release 使用同一签名密钥，可直接安装更新并保留应用数据。若已安装使用调试密钥签名的开发版，需要先卸载再安装正式版，然后重新配对；卸载会清除保存的凭据。
 
 ## 环境要求
 
