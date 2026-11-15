@@ -458,7 +458,8 @@ public sealed class ToolScriptTerminalWaitTests
     [InlineData("batch-error")]
     [InlineData("later")]
     [InlineData("old")]
-    [InlineData("denied")]
+    // A deny rule on wait no longer stops the resumed wait: wait is self-scoped.
+    [InlineData("denied-self")]
     [InlineData("invalid-source")]
     public async Task Actual_checkpoint_fresh_runtime_and_canonical_finalization(string mode)
     {
@@ -507,7 +508,7 @@ public sealed class ToolScriptTerminalWaitTests
             var deleted = await f.Manager.DeleteAsync(target!);
             Assert.Null(deleted["error"]);
         }
-        if (mode == "denied")
+        if (mode == "denied-self")
         {
             await File.WriteAllTextAsync(
                 Path.Combine(f.Data, "state", "tool-authorization.yaml"),
@@ -541,13 +542,16 @@ public sealed class ToolScriptTerminalWaitTests
                 ["timeoutSecs"] = 30,
             }
         );
-        if (mode is "denied" or "invalid-source")
+        if (mode is "invalid-source")
             Assert.NotNull(done["error"]);
         else
             Assert.True(SessionWait.Text(done["result"]) == "kept", done.ToJsonString());
-        Assert.Equal(mode is "normal" or "batch-error", f.Owner.WaitSnapshot() is not null);
         Assert.Equal(
-            mode == "normal" ? TurnBatchEnding.Suspended : TurnBatchEnding.Continue,
+            mode is "normal" or "batch-error" or "denied-self",
+            f.Owner.WaitSnapshot() is not null
+        );
+        Assert.Equal(
+            mode is "normal" or "denied-self" ? TurnBatchEnding.Suspended : TurnBatchEnding.Continue,
             await tools.CompleteBatchAsync(Batch(done, mode == "batch-error"), false)
         );
         if (mode == "batch-error")
