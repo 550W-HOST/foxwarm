@@ -69,7 +69,6 @@ const manualGroups = new Map([
   ['test/toolscriptPhase1Smoke.js', 'manual-smoke'],
   ['test/llmToolSerializationTest.js', 'manual-regression'],
   ['test/toolscriptSkillAgentTrial.js', 'manual-skill-trial'],
-  ['packages/android-node/test.py', 'manual-hardware-smoke'],
 ])
 
 function normalize(value) {
@@ -91,7 +90,6 @@ function classify(file) {
   if (/^packages\/shared\/src\/.*\.test\.ts$/.test(file)) return 'shared'
   if (/^packages\/cli-node\/src\/.*\.test\.ts$/.test(file)) return 'cli-node'
   if (/^packages\/browser-(?:node|host)\/test\/.*\.test\.mjs$/.test(file)) return 'browser-node'
-  if (/^packages\/android-node\/test_[^/]+\.py$/.test(file)) return 'python'
   if (/^docs\/code-index\/scripts\/tests\/test_[^/]+\.py$/.test(file)) return 'python'
   if (/^scripts\/.*\.test\.(?:js|mjs)$/.test(file)) return 'scripts'
   if (/^skills\/.*\/tests\/test_[^/]+\.py$/.test(file)) return 'python'

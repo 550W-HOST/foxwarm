@@ -99,7 +99,7 @@ Managed frozen-source comparisons additionally require the pinned ancestor commi
 
 - The VS Code YAML browser test requires separately prepared VS Code and YAML-extension assets.
 - Website tests remain owned by the website package and workflow.
-- The Android `test.py` driver requires explicitly assigned live hardware and remains a manual hardware smoke check.
+- Android Node has a separate Gradle/CI lane for JVM protocol tests, Robolectric component lifecycle tests, lint and debug APK assembly. `node packages/android-node/node-test/main-host.mjs` exercises its production JVM transport against a disposable Main with synthetic device operations. Real-phone checks are listed in `packages/android-node/PHONE-TESTING.md`.
 - Stateful `test/*Smoke.js` scripts remain manual checks; their entry points now allocate owned disposable data before loading the backend.
 - The historical LLM serialization script remains a manual regression check; canonical shared response-formatting assertions live in the shared package suite.
 - The historical ToolScript skill Agent trial remains outside the maintained baseline. Its entry point now isolates state and clears inherited provider credentials; it has no maintained synthetic provider setup and must not be used to exercise a live installation.

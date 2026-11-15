@@ -137,6 +137,16 @@ internal sealed partial class NodeBootstrap(
         };
     }
 
+    internal static JsonObject AndroidPairing(string baseUrl, string nodeId, string authToken) =>
+        new()
+        {
+            ["type"] = "foxwarm-node",
+            ["version"] = 1,
+            ["baseUrl"] = baseUrl,
+            ["nodeId"] = nodeId,
+            ["authToken"] = authToken,
+        };
+
     // Browser command suggestions and downloaded-script defaults have different owners.
     internal static string OnboardingBaseUrl(JsonObject body, string? configured)
     {

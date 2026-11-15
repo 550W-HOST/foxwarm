@@ -219,6 +219,12 @@ public sealed partial class NodeOnboardingHttpTests
         );
         var token = created["authToken"]!.GetValue<string>();
         Assert.Equal(url, created["baseUrl"]!.GetValue<string>());
+        var androidPairing = created["androidPairing"]!.AsObject();
+        Assert.Equal("foxwarm-node", androidPairing["type"]!.GetValue<string>());
+        Assert.Equal(1, androidPairing["version"]!.GetValue<int>());
+        Assert.Equal(url, androidPairing["baseUrl"]!.GetValue<string>());
+        Assert.Equal("owned-node", androidPairing["nodeId"]!.GetValue<string>());
+        Assert.Equal(token, androidPairing["authToken"]!.GetValue<string>());
         var commands = created["commands"]!.AsObject();
         Assert.Equal(9, commands.Count);
         foreach (var command in commands)

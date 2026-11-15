@@ -154,6 +154,11 @@ internal static class NodeRoutes
                 };
             created["baseUrl"] = commands["baseUrl"]!.DeepClone();
             created["commands"] = commands["commands"]!.DeepClone();
+            created["androidPairing"] = NodeBootstrap.AndroidPairing(
+                commands["baseUrl"]!.GetValue<string>(),
+                created["nodeId"]!.GetValue<string>(),
+                created["authToken"]!.GetValue<string>()
+            );
             return created;
         }
         MapPost(

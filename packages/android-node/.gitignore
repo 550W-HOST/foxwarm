@@ -1,1 +1,6 @@
-/.venv
+.gradle/
+.kotlin/
+**/build/
+local.properties
+*.iml
+.idea/

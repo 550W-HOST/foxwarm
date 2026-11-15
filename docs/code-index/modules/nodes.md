@@ -23,6 +23,8 @@ Main-owned generic Node discovery/provider resolution plus authenticated remote-
 - [src-nodes-misc](../units/src-nodes-misc.md) — WebSocket handler, heartbeat, bootstrap HTTP routes/info, and local node session events.
 - [src-nodes-registry](../units/src-nodes-registry.md) — pending/approved registry, pairing lifecycle, credential hashes, rename/removal, and durable storage.
 
+The [Android Node app](../units/android-node-app.md) runs directly on a phone, with QR/manual per-Node credentials and accessibility tools.
+
 Client implementations are separate modules: [CLI node](./cli-node.md) and [browser node](./browser-node.md). Cross-module protocol: [node communication](../threads/node-communication.md).
 
 ## Public interfaces
@@ -76,7 +78,7 @@ The operator-facing deployment/configuration workflow is documented by the singl
 ## Compatibility
 
 - Missing core protocol metadata is explicitly classified as compatible legacy generation 1 rather than assumed current. Operators update/restart only an explicitly malformed or disjoint upgrade-required Node; credentials and pairing approval remain valid.
-- Current CLI advertises 1-3 and selects generation 3; browser-extension and Android clients advertise 1-2 and select generation 2. All retain omitted-field generation-1 compatibility for Node-first rolling upgrades. Removing the informational six-digit pairing display code does not alter authentication or supported protocol ranges.
+- Current CLI and Android app advertise 1-3 and select generation 3; browser-extension clients advertise 1-2 and select generation 2. All retain omitted-field generation-1 compatibility for Node-first rolling upgrades. Removing the informational six-digit pairing display code does not alter authentication or supported protocol ranges.
 - Approved-node rename is server-side registry migration plus old-runtime disconnect. The current client has no credential-rewrite protocol; the operator updates/restarts/re-pairs the node.
 - `/node/run-cli-node.sh` remains a bootstrap route alias for the current interactive script.
 - `nodes.json` keeps the Source backup layout: each write rotates three numbered backups plus the legacy `.bak`, and a corrupt registry loads the first readable backup through the [durable state-file helper](../units/dotnet-node-primitives.md#durable-state-files).
@@ -111,12 +113,7 @@ Bootstrap distributes one minimal dynamic source archive with prebuilt CLI bundl
 
 Generic Node/provider ownership is canonical in [D-dispatch-generic-node-providers](../threads/tool-dispatch-node-execution.md#d-dispatch-generic-node-providers).
 
-### D-node-android-adb-host
-
-[2026-08-06] The current `packages/android-node` implementation is an unpublished ADB host-run node. Inline screenshots are JPEG quality 80. Connection configuration reads only the current `FOXWARM_*` environment variables; removed predecessor aliases are not accepted. It is not the unimplemented Termux/standalone accessibility-and-capture architecture.
-
-Like the other official Nodes, it advertises core protocol range 1-2, selects generation 2 with a current Master, and accepts an unversioned old-Master registration as generation 1.
-Its explicit Master response validator enforces the same strict bounded plain-data shape as the shared TypeScript contract. A `node_incompatible` response keeps the authenticated socket and heartbeat alive for diagnostics, rejects application work while quarantined, and suppresses reconnect spinning if that socket later closes.
+Android on-device delivery and replacement of the ADB host client are canonical in [D-node-android-on-device](../units/android-node-app.md#d-node-android-on-device).
 
 ## Canonical ownership
 
