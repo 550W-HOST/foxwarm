@@ -479,9 +479,9 @@ var positiveInteger = {
 var openaiWebSearchOptions = {
   type: "object",
   additionalProperties: true,
-  description: "Opt-in OpenAI Responses hosted web search settings. Ignored by non-Responses providers.",
+  description: "Hosted web search for Responses and Anthropic Messages. Domain and location settings apply to both protocols.",
   properties: {
-    enabled: { type: "boolean", description: "Enable the hosted web_search tool for eligible Responses requests." },
+    enabled: { type: "boolean", description: "Enable hosted web search for eligible conversation and compaction requests." },
     toolChoice: { enum: ["auto", "required"], description: "Responses tool-selection mode when hosted search is enabled." },
     searchContextSize: { enum: ["low", "medium", "high"], description: "Amount of search context requested from OpenAI." },
     allowedDomains: { type: "array", items: { type: "string", minLength: 1 }, description: "Optional domain filter for web search." },
@@ -503,7 +503,7 @@ var openaiWebSearchConfig = {
     { type: "boolean" },
     openaiWebSearchOptions
   ],
-  description: "Opt-in OpenAI Responses hosted web search settings. Use true/false for defaults or an object for tuning. Ignored by non-Responses providers."
+  description: "Hosted web search for Responses and Anthropic Messages. Use true/false for defaults or an object for tuning."
 };
 var openaiImageGenerationOptions = {
   type: "object",
