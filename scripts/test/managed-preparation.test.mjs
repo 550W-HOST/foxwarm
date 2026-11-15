@@ -21,7 +21,7 @@ async function fixture(t) {
   await fs.mkdir(bin)
   const timerPreload = path.join(root, 'timer.cjs')
   await fs.writeFile(timerPreload, `const original = global.setTimeout;
-global.setTimeout = (callback, delay, ...args) => original(callback, delay === 1_800_000 ? 1000 : delay, ...args);
+global.setTimeout = (callback, delay, ...args) => original(callback, delay === 2_400_000 ? 1000 : delay, ...args);
 `)
   await fs.writeFile(path.join(bin, 'dotnet'), `#!${process.execPath}
 const fs = require('node:fs'), path = require('node:path'), assert = require('node:assert/strict');
@@ -34,6 +34,7 @@ if (args[0] === 'restore') {
 } else {
   assert.equal(args[0], 'test');
   assert(args.includes('--no-restore'));
+  assert.deepEqual(args.slice(-2), ['--', 'RunConfiguration.TreatNoTestsAsError=true']);
   assert.equal(fs.readFileSync(path.join(root, 'prepared'), 'utf8'), 'dependencies acquired');
   assert.equal(process.env.HTTPS_PROXY, 'http://127.0.0.1:9');
   assert.equal(process.env.HTTP_PROXY, 'http://127.0.0.1:9');
@@ -50,9 +51,9 @@ if (args[0] === 'restore') {
   } else console.log('Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1, Duration: 1 ms - Fixture.Tests.dll (net10.0)');
 }
 `, { mode: 0o755 })
-  async function run({ fail = false, pending = false } = {}) {
+  async function run({ fail = false, pending = false, filter } = {}) {
     try {
-      const result = await execFileAsync(process.execPath, ['scripts/test/run-tests.mjs', 'managed'], {
+      const result = await execFileAsync(process.execPath, ['scripts/test/run-tests.mjs', 'managed', ...(filter ? [`--filter=${filter}`] : [])], {
         cwd: repo, timeout: 20_000,
         env: { ...process.env, PATH: bin + path.delimiter + process.env.PATH,
           NODE_OPTIONS: pending ? `--require=${timerPreload}` : '', FIXTURE_TEST_PENDING: pending ? '1' : '',
@@ -96,4 +97,13 @@ test('a managed runtime deadline fails even when the child handles termination w
   const runtime = (await f.summary()).at(-1)
   assert.equal(runtime.timedOut, true)
   assert.equal(runtime.code, 1)
+})
+
+test('managed selections pass the complete VSTest filter as one argument', unix, async t => {
+  const f = await fixture(t)
+  const filter = 'FullyQualifiedName~Foxwarm.Tests.Alpha&FullyQualifiedName!~Foxwarm.Tests.Beta'
+  const result = await f.run({ filter })
+  assert.equal(result.code, 0, result.stdout + result.stderr)
+  const args = (await f.calls())[1].args
+  assert.equal(args[args.indexOf('--filter') + 1], filter)
 })

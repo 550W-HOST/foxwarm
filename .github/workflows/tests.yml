@@ -56,7 +56,71 @@ jobs:
     needs: native-test-resources
     name: Core, packages, and quality
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.21.0
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            packages/webui/package-lock.json
+      - name: Set up .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+      - name: Install dependencies
+        run: |
+          npm ci
+          npm --prefix packages/webui ci
+      - name: Build managed delivery and explicit Source reference
+        run: |
+          npm run build
+          npm run build:reference
+      - name: Restore shared HEIF prerequisite
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/heif-test/prefix
+          key: ${{ needs.native-test-resources.outputs.cache-key }}
+          fail-on-cache-miss: true
+      - name: Check HEIF prerequisite
+        run: |
+          test -s "$RUNNER_TEMP/heif-test/prefix/lib/libheif.so"
+          test -s "$RUNNER_TEMP/heif-test/prefix/lib/libde265.so"
+      - name: Run maintained core and component tests
+        env:
+          LD_LIBRARY_PATH: ${{ runner.temp }}/heif-test/prefix/lib
+          FOXWARM_TEST_ARTIFACT_DIR: ${{ runner.temp }}/foxwarm-test-artifacts
+        run: npm run test:unit:components
+      - name: Run quality checks
+        run: |
+          npm run quality:code-index
+          npm run quality:unused
+      - name: Upload failure diagnostics
+        if: ${{ failure() || cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: diagnostics-core
+          path: |
+            ${{ runner.temp }}/foxwarm-test-artifacts/*/inventory.json
+            ${{ runner.temp }}/foxwarm-test-artifacts/*/summary.json
+            ${{ runner.temp }}/foxwarm-test-artifacts/*/logs/**/*.log
+            ${{ runner.temp }}/foxwarm-test-artifacts/*/screenshots/**/*
+          if-no-files-found: ignore
+          include-hidden-files: false
+          retention-days: 7
+
+  managed:
+    needs: native-test-resources
+    name: Managed .NET tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -96,20 +160,16 @@ jobs:
           test -s "$RUNNER_TEMP/heif-test/prefix/lib/libde265.so"
       # Source is still needed by managed oracles and fixture producers; the
       # retired Main unit suite is available separately through test:reference.
-      - name: Run maintained core and component tests
+      - name: Run managed tests
         env:
           LD_LIBRARY_PATH: ${{ runner.temp }}/heif-test/prefix/lib
           FOXWARM_TEST_ARTIFACT_DIR: ${{ runner.temp }}/foxwarm-test-artifacts
-        run: npm run test:unit
-      - name: Run quality checks
-        run: |
-          npm run quality:code-index
-          npm run quality:unused
+        run: npm run test:managed
       - name: Upload failure diagnostics
         if: ${{ failure() || cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: diagnostics-core
+          name: diagnostics-managed
           path: |
             ${{ runner.temp }}/foxwarm-test-artifacts/*/inventory.json
             ${{ runner.temp }}/foxwarm-test-artifacts/*/summary.json

@@ -26,12 +26,18 @@ npm test
 # Equivalent after the build prerequisite:
 npm run test:unit
 
+# The same component groups without managed tests (the parallel Core CI lane).
+npm run test:unit:components
+
 # Retired TypeScript Main tests, their nested isolation regressions and two selftests.
 # Requires build:reference; does not run managed or active component groups.
 npm run test:reference
 
 # Managed solution only (includes optional HEIC coverage with its prerequisite).
 npm run test:managed
+
+# Optional VSTest selection; a selection matching no tests fails.
+npm run test:managed -- --filter="FullyQualifiedName~Foxwarm.Tests.ToolScript"
 
 # Publish complete managed Main into owned artifacts and prove original App delivery.
 FOXWARM_E2E_CHROMIUM=/path/to/chromium npm run test:published
@@ -85,7 +91,7 @@ Other Source Node tests exercise the old Main registry, transports, command gene
 
 `build:reference` stays in every Ubuntu CI test job because managed oracle/migration fixtures, WebUI fixture producers and the App Archive seed still import compiled Source. It is separate from directly executing the retired unit suite. The old implementation and test sources remain available; retained comparisons follow the managed [compatibility boundary](code-index/units/dotnet-tests.md#contract-boundary).
 
-Managed frozen-source comparisons additionally require the pinned ancestor commits in the reference checkout's Git history. Core CI checks out full history; see [managed source prerequisites](../dotnet/Foxwarm.Tests/README.md) for shallow-clone preparation. The build prerequisite remains necessary alongside those historical objects.
+Managed frozen-source comparisons additionally require the pinned ancestor commits in the reference checkout's Git history. The managed CI job checks out full history; see [managed source prerequisites](../dotnet/Foxwarm.Tests/README.md) for shallow-clone preparation. The build prerequisite remains necessary alongside those historical objects.
 
 ## Separately owned tests
 
@@ -105,10 +111,11 @@ The maintained `node-bootstrap` group has one expected non-Windows skip for the 
 
 ## GitHub Actions
 
-`.github/workflows/tests.yml` defines two shared resource-preparation jobs and eleven Ubuntu 24.04 test jobs: Core, Real app, Native Main smoke and eight Chromium matrix shards. Actual overlap depends on available GitHub runner capacity:
+`.github/workflows/tests.yml` defines two shared resource-preparation jobs and twelve Ubuntu 24.04 test jobs: Core, managed .NET, Real app, Native Main smoke and eight Chromium matrix shards. Actual overlap depends on available GitHub runner capacity:
 
 - **Prepare shared Code workbench / HEIF prerequisite** restore exact caches keyed on pinned inputs and build scripts, or build each missing resource once. Code caches include its YAML extension assets. Runtime-test jobs consume and validate these outputs before tests. Code uses a per-run archive from the shared Tests/Release producer; HEIF uses exact cache restores. A Code producer cache miss builds once, while consumers never independently rebuild. Code assets use the normal `packages/vscode-web/assets` location and are installed below the executable resource root by ordinary browser preparation. A corrupt cache must be deleted before retrying. HEIF cache eviction or unavailable storage can fail its consumers; Code artifact transfer is independent of cache retention after production. Managed and Source builds remain checkout-local.
-- **Core, packages, and quality** sets up .NET 10, builds managed delivery plus the explicit Source reference, restores the shared pinned HEIF test prerequisite, runs `npm run test:unit` (managed solution and maintained component tests), then runs Code Index and unused-code checks.
+- **Core, packages, and quality** sets up .NET 10, builds managed delivery plus the explicit Source reference, restores the shared pinned HEIF test prerequisite, runs `npm run test:unit:components` (all maintained component groups), then runs Code Index and unused-code checks. Its 10-minute limit leaves room beyond the roughly 5-minute setup/test/quality workload.
+- **Managed .NET tests** runs independently of Core after the same HEIF producer, with the same Node/.NET setup, managed delivery and Source reference builds, HEIF library path and failure/cancellation diagnostics. Its full-history checkout supplies frozen-source comparisons. `npm run test:managed` executes the complete solution once; the local `test:unit` command still combines managed and components. The managed build/test command has 40 minutes and the job has 45 minutes, versus a measured 27.5-minute managed step and roughly 29–30 minutes including setup. This separate job removes the managed suite from Core without adding a test partition. Optional `test:managed -- --filter=EXPRESSION` supports VSTest-filtered selections, records the filter in runner inventory, and fails on zero matches.
 - **Chromium fixtures (1–8)** each sets up .NET 10 and the pinned Chrome for Testing build, builds managed delivery and Source reference, restores shared Code assets and the pinned optional HEIF decoder, prepares the root-owned mode-0755 SSH privilege-separation directory, runs `npm run test:webui:e2e -- --shard=INDEX/8 --workers=2` with the HEIF library prefix. Each shard owns its checkout, resources and artifacts and prepares browser dependencies once. Shard 1 first runs `npm run test:published` against an owned complete publish; the other seven do not repeat that qualification. Matrix `fail-fast: false` lets sibling shards finish reporting after a failure, and each failed shard remains a failed job. The SSH fixture starts its own loopback-only daemon, not a system service. The publish proof covers original login/Setup, packaged Node archive/resources, real native ToolScript and Main browser screenshot/image references, plus ordinary stop/restart with preserved data.
 - **Real app with mock LLM** sets up .NET 10 and the same browser/build preparation and runs `npm run test:app:e2e`.
 - **Native Main smoke (Linux x64)** builds delivery assets, the Source reference and the CLI Node fixture, publishes NativeAOT Main once (`-r linux-x64 -p:PublishAot=true`), fails on new first-party NativeAOT warnings through `scripts/test/native-main-warnings.mjs`, then runs `npm run test:native`: the full-application harness and a bounded set of Main-host fixtures against that executable. It needs no Code or HEIF resources.

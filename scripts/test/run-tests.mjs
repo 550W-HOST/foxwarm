@@ -23,19 +23,23 @@ const repoRoot = path.resolve(scriptDir, '../..')
 // Keep this runner-local: retries do not apply to preparation, other groups, or shards.
 const BROWSER_FIXTURE_RETRY_COUNT = 8
 const target = process.argv[2] || 'unit'
-const validTargets = new Set(['inventory', 'unit', 'reference', 'managed', 'published', 'browser', 'app', 'native', 'all'])
+const validTargets = new Set(['inventory', 'unit', 'unit-components', 'reference', 'managed', 'published', 'browser', 'app', 'native', 'all'])
 let shard = null
 let browserWorkers = 1
+let managedFilter = null
 const options = new Set()
 for (const argument of process.argv.slice(3)) {
-  const match = /^(--shard|--workers)=(.+)$/.exec(argument)
-  if (target !== 'browser' || !match || options.has(match[1])) {
-    console.error(`Invalid test option: ${argument}. Browser options: --shard=INDEX/TOTAL --workers=COUNT`)
+  const match = /^(--shard|--workers|--filter)=(.+)$/.exec(argument)
+  const allowed = target === 'browser' ? ['--shard', '--workers'] : target === 'managed' ? ['--filter'] : []
+  if (!match || !allowed.includes(match[1]) || options.has(match[1]) || !match[2].trim()) {
+    console.error(`Invalid test option: ${argument}. Browser options: --shard=INDEX/TOTAL --workers=COUNT; managed option: --filter=EXPRESSION`)
     process.exit(2)
   }
   options.add(match[1])
   const positive = value => /^[1-9]\d*$/.test(value) && Number.isSafeInteger(Number(value))
-  if (match[1] === '--shard') {
+  if (match[1] === '--filter') {
+    managedFilter = match[2]
+  } else if (match[1] === '--shard') {
     const parts = match[2].split('/')
     if (parts.length !== 2 || !parts.every(positive) || Number(parts[0]) > Number(parts[1])) {
       console.error('Invalid browser shard; use INDEX/TOTAL with 1 <= INDEX <= TOTAL.')
@@ -51,7 +55,7 @@ for (const argument of process.argv.slice(3)) {
   }
 }
 if (!validTargets.has(target)) {
-  console.error(`Usage: node scripts/test/run-tests.mjs <${[...validTargets].join('|')}> [--shard=INDEX/TOTAL] [--workers=COUNT]`)
+  console.error(`Usage: node scripts/test/run-tests.mjs <${[...validTargets].join('|')}> [--shard=INDEX/TOTAL] [--workers=COUNT] [--filter=EXPRESSION]`)
   process.exit(2)
 }
 
@@ -94,7 +98,7 @@ const artifactParent = process.env.FOXWARM_TEST_ARTIFACT_DIR
 const runId = `${target}${shard ? `-shard-${shard.index}-of-${shard.total}` : ''}-${new Date().toISOString().replace(/[:.]/g, '-')}-${process.pid}`
 const runBase = path.join(artifactParent, runId)
 await fsp.mkdir(path.join(runBase, 'logs'), { recursive: true })
-await fsp.writeFile(path.join(runBase, 'inventory.json'), `${JSON.stringify({ inventory, standaloneSelftests, browserSelection }, null, 2)}\n`)
+await fsp.writeFile(path.join(runBase, 'inventory.json'), `${JSON.stringify({ inventory, standaloneSelftests, browserSelection, ...(target === 'managed' ? { managedFilter } : {}) }, null, 2)}\n`)
 const shortTempBase = path.join(os.tmpdir(), `fw-${process.pid}`)
 await fsp.rm(shortTempBase, { recursive: true, force: true })
 await fsp.mkdir(shortTempBase, { recursive: true })
@@ -136,8 +140,10 @@ function managedGroup() {
     name: 'managed',
     steps: [
       { ...directStep('restore', 'dotnet', ['restore', 'dotnet/Foxwarm.sln'], 600_000), prepareDependencies: true },
-      // Includes the build and serial suite; a complete CI invocation already takes nearly 20 minutes.
-      directStep('dotnet', 'dotnet', ['test', 'dotnet/Foxwarm.sln', '--no-restore', '--logger', 'console;verbosity=minimal'], 1_800_000),
+      // Build plus serial tests measured 27.5 minutes in CI; leave room for suite growth.
+      directStep('dotnet', 'dotnet', ['test', 'dotnet/Foxwarm.sln', '--no-restore', '--logger', 'console;verbosity=minimal',
+        ...(managedFilter ? ['--filter', managedFilter] : []),
+        '--', 'RunConfiguration.TreatNoTestsAsError=true'], 2_400_000),
     ],
     env: { FOXWARM_TS_ROOT: repoRoot },
   }
@@ -387,7 +393,7 @@ async function runStep(group, step, log) {
 const groups = [
   ...(target === 'managed' || target === 'unit' || target === 'all' ? [managedGroup()] : []),
   ...(target === 'published' || target === 'all' ? [publishedGroup()] : []),
-  ...(target === 'unit' || target === 'all' ? unitGroups() : []),
+  ...(target === 'unit' || target === 'unit-components' || target === 'all' ? unitGroups() : []),
   ...(target === 'reference' ? referenceTestGroups() : []),
   ...(target === 'browser' || target === 'all' ? [browserGroup()] : []),
   ...(target === 'app' || target === 'all' ? [appGroup()] : []),

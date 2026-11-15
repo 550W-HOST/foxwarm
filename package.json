@@ -22,6 +22,7 @@
     "test:code-index-audit": "python3 docs/code-index/scripts/tests/test_audit_index.py",
     "test:inventory": "node scripts/test/run-tests.mjs inventory",
     "test:unit": "node scripts/test/run-tests.mjs unit",
+    "test:unit:components": "node scripts/test/run-tests.mjs unit-components",
     "test:webui:e2e": "node scripts/test/run-tests.mjs browser",
     "test:app:e2e": "node scripts/test/run-tests.mjs app",
     "test:native": "node scripts/test/run-tests.mjs native",

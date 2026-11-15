@@ -64,7 +64,7 @@ test('resource cache keys change with pins, build inputs and runner/toolchain co
 
 test('only resource producers build pins; consumers require the exact validated cache', () => {
   for (const [producerId, consumerIds] of [
-    ['native-test-resources', ['core', 'chromium']],
+    ['native-test-resources', ['core', 'managed', 'chromium']],
   ]) {
     const producer = jobs[producerId]
     const cache = restore(producer)[0]
@@ -192,4 +192,28 @@ test('native Main publishes once, checks its warnings and runs the smoke against
   assert.ok(publish < warnings && warnings < smoke)
   assert.equal(job.steps[smoke].env.FOXWARM_TEST_MAIN_EXECUTABLE, '${{ runner.temp }}/native-main/Foxwarm')
   assert.ok(!job.steps.some(step => /npm run build(?:$|\s)|test:webui:e2e|test:app:e2e/.test(step.run || '')))
+})
+
+test('managed and component jobs preserve the unit environment and diagnostics without serializing each other', () => {
+  const core = jobs.core, managed = jobs.managed
+  assert.equal(core.needs, 'native-test-resources')
+  assert.equal(managed.needs, core.needs)
+  const run = (job, command) => job.steps.find(step => step.run === command)
+  const components = run(core, 'npm run test:unit:components')
+  const tests = run(managed, 'npm run test:managed')
+  assert.ok(components)
+  assert.ok(tests)
+  assert.deepEqual(tests.env, components.env)
+  assert.equal(tests.env.LD_LIBRARY_PATH, '${{ runner.temp }}/heif-test/prefix/lib')
+  assert.equal(tests.env.FOXWARM_TEST_ARTIFACT_DIR, '${{ runner.temp }}/foxwarm-test-artifacts')
+  for (const job of [core, managed]) {
+    assert.ok(job.steps.some(step => step.run === 'npm run build\nnpm run build:reference\n'))
+    assert.equal(job.steps.some(step => step.run === 'npm run test:unit'), false)
+  }
+  assert.equal(managed.steps.find(step => step.uses?.startsWith('actions/checkout@')).with['fetch-depth'], 0)
+  const upload = job => job.steps.find(step => step.uses?.startsWith('actions/upload-artifact@'))
+  assert.equal(upload(managed).if, '${{ failure() || cancelled() }}')
+  assert.deepEqual({ ...upload(managed).with, name: upload(core).with.name }, upload(core).with)
+  assert.notEqual(upload(managed).with.name, upload(core).with.name)
+  assert.equal(workflow.concurrency['cancel-in-progress'], "${{ github.event_name == 'pull_request' }}")
 })

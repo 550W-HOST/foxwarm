@@ -157,6 +157,19 @@ for (const target of ['unit', 'all']) {
   })
 }
 
+test('separate managed and component targets execute exactly the default unit selection once', unix, async t => {
+  const calls = {}
+  for (const target of ['unit', 'unit-components', 'managed']) {
+    const f = await fixture(t)
+    const result = await f.run(target)
+    assert.equal(result.code, 0, result.stdout + result.stderr)
+    calls[target] = await f.calls()
+  }
+  assert.equal(calls['unit-components'].some(call => call.startsWith('dotnet:')), false)
+  assert.ok(calls.managed.every(call => call.startsWith('dotnet:')))
+  assert.deepEqual([...calls.managed, ...calls['unit-components']].sort(), calls.unit.sort())
+})
+
 test('reference runs only retired Main, nested isolation and both selftests without maintained builds', unix, async t => {
   const f = await fixture(t)
   await fs.rm(path.join(f.root, 'lib/nodes'), { recursive: true })
@@ -225,14 +238,17 @@ test('browser shards are disjoint, complete and ordered, while the unsharded com
   assert.equal((await f.inventory()).browserSelection.shard, null)
 })
 
-test('browser options reject malformed or misplaced selections before creating artifacts or starting children', unix, async t => {
+test('test options reject malformed or misplaced selections before creating artifacts or starting children', unix, async t => {
   const f = await fixture(t)
   for (const [target, args] of [
     ['browser', ['--shard=0/8']], ['browser', ['--shard=9/8']], ['browser', ['--shard=1/0']],
     ['browser', ['--shard=1.5/8']], ['browser', ['--shard=1/9007199254740992']],
     ['browser', ['--shard=1/8', '--shard=2/8']], ['browser', ['--workers=0']],
     ['browser', ['--workers=-1']], ['browser', ['--workers=2', '--workers=2']],
-    ['browser', ['--unknown=1']], ['unit', ['--shard=1/8']], ['all', ['--workers=2']],
+    ['browser', ['--unknown=1']], ['managed', ['--filter=']], ['managed', ['--filter=   ']],
+    ['managed', ['--filter=A', '--filter=B']], ['managed', ['--shard=1/2']],
+    ['unit-components', ['--filter=A']], ['unit', ['--filter=A']], ['browser', ['--filter=A']],
+    ['unit', ['--shard=1/8']], ['all', ['--workers=2']],
   ]) {
     const result = await f.run(target, false, args)
     assert.equal(result.code, 2, `${target} ${args}: ${result.stdout}${result.stderr}`)
