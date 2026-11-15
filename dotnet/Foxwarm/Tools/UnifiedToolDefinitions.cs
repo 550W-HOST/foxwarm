@@ -13,7 +13,7 @@ internal static class UnifiedToolDefinitions
     "type": "function",
     "strict": false,
     "name": "ctl",
-    "description": "Run a Foxwarm runtime command, such as `session list`, `memory read MEMORY.md` or `timer create …`. Commands act on Sessions, Agents, Nodes, memory, history, skills, timers, configuration and MCP or Node tools with this Session's permissions; they don't run in a shell. Start with `help`, or add `--help` to any command. Pass long text or JSON as `@name` and supply it in `values`.",
+    "description": "Run a Foxwarm runtime command with this Session's permissions; it is not a shell. Write `<noun> <verb> [arguments]`. Nouns: session, history (open CTX-BLOCKs and archived messages, search earlier context by meaning), agent, node, memory, skill, file, image, artifact, channel, timer, script, config, secret, mcp, tool (find commands and tools; call MCP and Node tools). Add `--help` to a noun or command for its verbs and arguments. Pass long text or JSON as `@name` and supply it in `values`.",
     "parameters": {
       "type": "object",
       "properties": {
