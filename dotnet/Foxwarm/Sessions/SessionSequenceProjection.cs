@@ -388,7 +388,7 @@ internal sealed partial class SessionSequenceProjection
     {
         var calls = new Dictionary<
             string,
-            (long Seq, int Call, int Total, string Name, string Preview)
+            (long Seq, int Call, int Total, string Name, string Label, string Preview)
         >(StringComparer.Ordinal);
         if (lane.Page!.Context is { } context)
             NormalizeModel(new Lane(lane.Id, lane.Span), context, calls);
@@ -412,7 +412,7 @@ internal sealed partial class SessionSequenceProjection
     private static void NormalizeModel(
         Lane lane,
         ArchiveSequenceRow row,
-        Dictionary<string, (long Seq, int Call, int Total, string Name, string Preview)> calls
+        Dictionary<string, (long Seq, int Call, int Total, string Name, string Label, string Preview)> calls
     )
     {
         var list = (row.Data["calls"] as JsonArray)?.OfType<JsonObject>().ToArray() ?? [];
@@ -420,7 +420,14 @@ internal sealed partial class SessionSequenceProjection
         {
             var (name, args) = Concrete(list[index]);
             if (Str(list[index]["id"]) is { } callId)
-                calls[callId] = (row.Seq, index + 1, list.Length, name, ArgsPreview(name, args));
+                calls[callId] = (
+                    row.Seq,
+                    index + 1,
+                    list.Length,
+                    name,
+                    Label(list[index], name),
+                    ArgsPreview(name, args)
+                );
         }
         var text = Preview(Str(row.Data["text"]));
         // Text-only rows without request timing (for example external runtime output) still show.
@@ -450,7 +457,7 @@ internal sealed partial class SessionSequenceProjection
     private static void NormalizeTool(
         Lane lane,
         ArchiveSequenceRow row,
-        Dictionary<string, (long Seq, int Call, int Total, string Name, string Preview)> calls
+        Dictionary<string, (long Seq, int Call, int Total, string Name, string Label, string Preview)> calls
     )
     {
         var responses = (row.Data["responses"] as JsonArray)?.OfType<JsonObject>().ToArray() ?? [];
@@ -530,6 +537,10 @@ internal sealed partial class SessionSequenceProjection
                 ["call"] = position,
                 ["preview"] = known ? call.Preview : "",
             };
+            // A ctl command is labelled by its command path, like the timeline tag; the name
+            // stays the concrete tool for its icon and grouping by capability.
+            if (known && call.Label != name)
+                item["label"] = call.Label;
             if (callSeq is long anchor)
                 item["callSeq"] = anchor;
             if (callDelivery is not null)

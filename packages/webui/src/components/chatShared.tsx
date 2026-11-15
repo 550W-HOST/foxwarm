@@ -30,7 +30,7 @@ import type { LucideIcon } from 'lucide-react'
 export { formatCompactObjectPreview } from '../../../shared/src/toolResponseFormatting'
 import { parseSessionLinkText } from '../../../shared/src/webuiToolRendering'
 import { isTaskReminderMessage } from '../../../shared/src/sessionContinuation'
-import { ctlDescriptor } from '../ctlCall'
+import { ctlCommandName, ctlConcrete } from '../ctlCall'
 export {
   renderAssistantMarkdownSegments,
   renderAssistantMarkdownSegmentsWithSanitizer,
@@ -109,13 +109,12 @@ const normalizeToolLabelValue = (value: unknown): string | null => {
 
 export const formatToolLabel = (name: string, args?: any): string => {
   if (name === 'ctl') {
-    // Commands show the capability they run; help, discovery and malformed commands stay ctl.
-    const descriptor = ctlDescriptor(args)
-    const toolId = typeof descriptor?.toolId === 'string' ? descriptor.toolId : undefined
-    if (toolId?.startsWith('builtin:')) return toolId.slice(8)
-    if (!descriptor) return 'ctl'
-    name = 'call_tool'
-    args = descriptor
+    // Commands show their command path (`memory edit`); `tool call` of an MCP or Node tool
+    // shows that tool like a direct call; help, discovery and malformed commands stay ctl.
+    const command = ctlCommandName(args)
+    if (command) return command
+    const concrete = ctlConcrete({ name, args })
+    return formatToolLabel(concrete.name, concrete.args)
   }
   if (name === 'call_tool') {
     const toolId = normalizeToolLabelValue(args?.toolId)

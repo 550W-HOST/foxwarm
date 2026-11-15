@@ -18,7 +18,7 @@ const { slimCtlRegistry } = await load('../build/ctlRegistry.ts', 'slim.mjs')
 const slim = { name: 'slim', setup(b) { b.onLoad({ filter: /CtlCommands\.json$/ }, async args => ({ contents: JSON.stringify(slimCtlRegistry(JSON.parse(await readFile(args.path, 'utf8')))), loader: 'json' })) } }
 const corpus = JSON.parse(await readFile(new URL('../../../dotnet/Foxwarm.Tests/Tools/Fixtures/ctl-conformance.json', import.meta.url), 'utf8'))
 globalThis.window ??= { location: { pathname: '/', origin: 'http://localhost' } }
-const { ctlDescriptor, ctlAsUnified, ctlConcrete } = await load('../src/ctlCall.ts', 'ctl.mjs')
+const { ctlDescriptor, ctlAsUnified, ctlConcrete, ctlCommandName } = await load('../src/ctlCall.ts', 'ctl.mjs')
 const slimCtl = await load('../src/ctlCall.ts', 'ctl-slim.mjs', [slim])
 
 // The same corpus is checked by the C# parser (CtlCommandTests.Conformance_corpus_matches_the_parser).
@@ -67,4 +67,80 @@ test('communication and question cards recognize their tools through ctl', () =>
     message('tool', [{ functionResponse: { tool_use_id: 'c1', name: 'ctl', response: { output: 'sent' } } }]),
   ])
   assert.equal([...projected.values()].flat().some(item => item.message === 'hello'), true)
+})
+
+// Tags name a ctl call by its command path; the icon (name) stays the tool it runs.
+const shared = await load('../src/components/chatShared.tsx', 'shared.mjs')
+const rows = await load('../src/components/timelineRows.ts', 'rows.mjs')
+const ctl = (command, values) => ({ command, ...(values ? { values } : {}) })
+
+test('ctl calls are tagged with their command path', () => {
+  const cases = [
+    [ctl('memory edit MEMORY.md --old-text a --new-text b'), 'memory edit'],
+    [ctl('node copy master a box b'), 'node copy'],
+    [ctl('history recall msg#12'), 'history recall'],
+    [ctl('session view a/b --count 3'), 'session view'],
+    [ctl('node select box'), 'node select'],
+    [ctl('node destroy box'), 'node destroy'],
+    // `tool call builtin:x`: the command path of x, chosen by its fixed arguments, else its name.
+    [ctl('tool call builtin:edit_memory --args @a', { a: { filePath: 'M.md', oldText: 'a', newText: 'b' } }), 'memory edit'],
+    [ctl('tool call builtin:node --args @a', { a: { action: 'select', nodeId: 'box' } }), 'node select'],
+    [ctl('tool call builtin:node --args @a', { a: {} }), 'node'],
+    [ctl('tool call builtin:task --args @a', { a: { action: 'list' } }), 'task'],
+    // Help, discovery, --help and malformed calls stay ctl.
+    [ctl('help'), 'ctl'],
+    [ctl('session --help'), 'ctl'],
+    [ctl('session list --help'), 'ctl'],
+    [ctl('tool search memory'), 'ctl'],
+    [ctl('tool call mcp:srv/probe --help'), 'ctl'],
+    [ctl('session list "unclosed'), 'ctl'],
+    [ctl('bogus verb'), 'ctl'],
+  ]
+  for (const [args, expected] of cases) {
+    assert.equal(ctlCommandName(args), expected, args.command)
+    assert.equal(slimCtl.ctlCommandName(args), expected, args.command)
+    assert.equal(shared.formatToolLabel('ctl', args), expected, args.command)
+  }
+  // MCP and Node tools given to `tool call` are tagged like the direct call.
+  for (const [args, direct] of [
+    [ctl('tool call node:box/read --args @a', { a: { filePath: 'x' } }), shared.formatToolLabel('read', { filePath: 'x' })],
+    [ctl('tool call mcp:srv/probe --args @a', { a: {} }), shared.formatToolLabel('call_tool', { toolId: 'mcp:srv/probe', args: {} })],
+  ]) {
+    assert.equal(ctlCommandName(args), undefined, args.command)
+    assert.equal(shared.formatToolLabel('ctl', args), direct, args.command)
+  }
+  assert.equal(shared.formatToolLabel('edit_memory', {}), 'edit_memory')
+})
+
+test('collapsed tag summaries count ctl calls by command path with the target icon', () => {
+  let n = 0
+  const call = (name, args, status = 'ok') => {
+    const id = 'c' + ++n
+    return [
+      { role: 'model', parts: [{ functionCall: { id, name, args } }], __meta: { seq: n * 2, timestamp: 1700000000000 + n * 1000 } },
+      { role: 'tool', parts: [{ functionResponse: { tool_use_id: id, name, response: status === 'ok' ? { output: 'ok' } : { error: { type: 'x', message: 'no' } } } }], __meta: { seq: n * 2 + 1 } },
+    ]
+  }
+  const messages = [
+    ...call('ctl', ctl('memory edit A.md --old-text a --new-text b')),
+    ...call('ctl', ctl('memory edit B.md --old-text a --new-text b')),
+    ...call('ctl', ctl('tool call builtin:edit_memory --args @a', { a: { filePath: 'C.md', oldText: 'a', newText: 'b' } })),
+    ...call('ctl', ctl('node select box')),
+    ...call('ctl', ctl('node destroy box')),
+    ...call('ctl', ctl('tool search memory')),
+    ...call('edit_memory', { filePath: 'D.md', oldText: 'a', newText: 'b' }),
+    { role: 'model', parts: [{ text: 'Done' }], __meta: { seq: 100, timestamp: 1700000100000 } },
+  ]
+  const base = { isMobile: false, showUsageBadge: false, showTimeDividers: false, nestedDepth: 0, expandedGroupKeys: new Set() }
+  const result = rows.buildTimelineRows({ ...base, messages, timelineView: 'grouped' }, null)
+  const group = result.rows.find(row => row.group)?.group
+  assert(group, 'tool group')
+  const counted = shared.summarizeToolTagCounts(group.summaryItems).map(item => [item.name, item.label])
+  assert.deepEqual(counted, [
+    ['edit_memory', 'memory edit ×3'],
+    ['node', 'node select ×1'],
+    ['node', 'node destroy ×1'],
+    ['ctl', 'ctl ×1'],
+    ['edit_memory', 'edit_memory ×1'],
+  ])
 })

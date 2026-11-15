@@ -97,8 +97,8 @@ try {
   assert(final.content.includes('working with explicit tools'))
   assert(final.content.includes('☑️ run_script'))
   // Both explicit sends are ctl calls (`channel send` and `tool call builtin:send_to_channel`);
-  // progress names the capability they resolve to.
-  assert(final.content.includes('☑️ send_to_channel ×2'), final.content)
+  // progress names them by the command path, like the timeline tag.
+  assert(final.content.includes('☑️ channel send ×2'), final.content)
   assert(final.content.endsWith('WeWork combined final'))
   assert(!final.content.includes('Tools:'))
   assert(models[1].input.some(row => JSON.stringify(row).includes('late steering')))

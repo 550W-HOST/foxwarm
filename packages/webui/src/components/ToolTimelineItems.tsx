@@ -874,7 +874,8 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
   const primaryResponse = responses[0]
   const invocationDurationMs = getToolInvocationDuration(primaryResponse?.executionTiming)
   const primaryName = call?.name || primaryResponse?.name || (imageParts.length > 0 ? 'image' : 'tool')
-  const primaryLabel = call ? getToolDisplayLabel(call) : primaryName
+  // A ctl command is tagged with its command path; the icon stays the tool it runs.
+  const primaryLabel = storedCall ? getToolDisplayLabel(storedCall) : primaryName
   const hasResponseContent = responses.length > 0 || imageParts.length > 0
   const runningCallIds = useContext(ToolCallActivityContext)
   const showRunning = (runningCallIds ? !!call?.id && runningCallIds.has(call.id) : runningTool) && !!call && !hasResponseContent && !partialToolCall
@@ -976,7 +977,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
       <ThreadLineButton
         expanded={expanded}
         onToggle={toggle}
-        label={expanded ? `Collapse ${primaryName} tool` : `Expand ${primaryName} tool`}
+        label={expanded ? `Collapse ${primaryLabel} tool` : `Expand ${primaryLabel} tool`}
         className={`foxwarm-tool-thread-line ${toolThreadLineToneClasses[tagTone]}`}
       />
 

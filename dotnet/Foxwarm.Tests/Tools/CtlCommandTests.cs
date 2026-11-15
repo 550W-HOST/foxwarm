@@ -490,12 +490,23 @@ public sealed class CtlCommandTests
         }
     }
 
-    // Channel progress and verbose broadcasts name the capability a ctl call resolves to.
+    // Channel progress and verbose broadcasts name a ctl call like its timeline tag: the command
+    // path, or for `tool call` the builtin's command path or the MCP or Node tool.
     [Theory]
-    [InlineData("memory edit MEMORY.md --old-text a --new-text b", "edit_memory")]
-    [InlineData("tool call builtin:send_to_channel --args @args", "send_to_channel")]
+    [InlineData("memory edit MEMORY.md --old-text a --new-text b", "memory edit")]
+    [InlineData("tool call builtin:send_to_channel --args @args", "channel send")]
     [InlineData("tool call node:master/exec --args @args", "exec")]
-    [InlineData("channel send webui:x hello", "send_to_channel")]
+    [InlineData("tool call mcp:srv/probe --args @args", "probe")]
+    [InlineData("channel send webui:x hello", "channel send")]
+    [InlineData("node select box", "node select")]
+    [InlineData("node destroy box", "node destroy")]
+    [InlineData("history recall msg#12", "history recall")]
+    [InlineData("session view a/b", "session view")]
+    [InlineData("tool call builtin:node --args @args", "node")]
+    [InlineData("tool call builtin:task --args @args", "task")]
+    [InlineData("tool call builtin:missing_builtin --args @args", "missing_builtin")]
+    [InlineData("tool call mcp:srv/probe --help", "ctl")]
+    [InlineData("node --help", "ctl")]
     [InlineData("help", "ctl")]
     [InlineData("session --help", "ctl")]
     [InlineData("tool search memory", "ctl")]
@@ -507,8 +518,22 @@ public sealed class CtlCommandTests
         if (!command.Contains("@args"))
             args.Remove("values");
         Assert.Equal(expected, ToolActivity.ProgressName("ctl", args));
+        // The activity target keeps the concrete capability.
+        if (CtlParser.Describe(args) is { } described)
+            Assert.Equal(described.Name, ToolActivity.Target("ctl", args).Name);
         Assert.Equal("write", ToolActivity.ProgressName("write", new JsonObject { ["filePath"] = "x" }));
         Assert.Equal("tool", ToolActivity.ProgressName(null, null));
+    }
+
+    // `tool call builtin:<name>` with the fixed arguments of one of its commands is that command.
+    [Fact]
+    public void Builtin_tool_calls_are_named_by_the_command_their_arguments_select()
+    {
+        JsonObject Call(JsonObject args) => Args("tool call builtin:node --args @args", new() { ["args"] = args });
+        Assert.Equal("node select", CtlParser.DisplayName(Call(new JsonObject { ["action"] = "select", ["nodeId"] = "box" })));
+        Assert.Equal("node destroy", CtlParser.DisplayName(Call(new JsonObject { ["action"] = "destroy" })));
+        Assert.Equal("node", CtlParser.DisplayName(Call(new JsonObject())));
+        Assert.Equal("session list", CtlParser.DisplayName(Args("tool call builtin:session --args @args", new() { ["args"] = new JsonObject { ["action"] = "list" } })));
     }
 
     // Hints in tool output name commands from the registry and read back to the same call.

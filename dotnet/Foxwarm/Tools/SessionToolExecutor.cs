@@ -693,10 +693,12 @@ internal sealed partial class SessionToolExecutor(
             ? SessionWait.Text(call["rawArgsText"])
             : null;
         var args = call["args"] as JsonObject ?? new JsonObject();
-        // ctl and call_tool calls are shown as the capability they resolve to.
+        // ctl and call_tool calls are named like their timeline tag (a ctl command's path) and
+        // previewed with the arguments of the capability they resolve to.
+        var label = raw is null ? ToolActivity.ProgressName(name, args) : name;
         if (raw is null)
             (name, args) = ToolActivity.Target(name, args);
-        sessions.BroadcastTransientText(hosted, $"🛠 *[{name}]*: `{ToolArgsPreview(name, args, raw)}`");
+        sessions.BroadcastTransientText(hosted, $"🛠 *[{label}]*: `{ToolArgsPreview(name, args, raw)}`");
     }
 
     internal static string ToolArgsPreview(string name, JsonObject args, string? rawArgsText = null)

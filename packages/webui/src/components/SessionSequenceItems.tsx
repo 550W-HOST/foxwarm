@@ -44,7 +44,8 @@ const TextItem = ({ item }: { item: Extract<SequenceItem, { type: 'text' }> }) =
   </p>
 )
 
-const toolTag = (tool: { name?: string; status?: string }): ToolTagItem => ({ name: tool.name || 'tool', label: tool.name || 'tool', tone: tool.status === 'error' ? 'error' : 'neutral', toolCall: true })
+// A ctl command is labelled by its command path (`label`); its icon is the tool it runs.
+const toolTag = (tool: { name?: string; label?: string; status?: string }): ToolTagItem => ({ name: tool.name || 'tool', label: tool.label || tool.name || 'tool', tone: tool.status === 'error' ? 'error' : 'neutral', toolCall: true })
 
 const ToolsItem = memo(function ToolsItem({ item, onOpen }: { item: Extract<SequenceItem, { type: 'tools' }>; onOpen: SequenceItemActions['onOpen'] }) {
   const [expanded, setExpanded] = useState(false)

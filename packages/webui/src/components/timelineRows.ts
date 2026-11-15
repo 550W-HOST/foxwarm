@@ -25,6 +25,7 @@ import { applyConversationTiming, readConversationWorkInterval, getConversationA
 import { isCompactCompletionMaintenanceMessage } from '../../../shared/src/sessionContinuation'
 import { getWebSearchAction } from '../webSearchAction'
 import { askUserArgs, isAskUserCall } from '../sessionQuestions'
+import { ctlConcrete } from '../ctlCall'
 
 /**
  * Explicit view model for one `ChatTimeline` render pass.
@@ -471,7 +472,8 @@ const deriveGroup = (messages: Message[], scan: GroupScan, requestTimings: Deriv
       if (part.functionCall) {
         const status = part.functionCall.id ? toolStatusById.get(part.functionCall.id) : undefined
         items.push({
-          name: part.functionCall.name,
+          // The icon is the tool a ctl command runs; the label is its command path.
+          name: ctlConcrete(part.functionCall).name,
           toolCall: true,
           label: formatToolLabel(part.functionCall.name, part.functionCall.args),
           tone: status === 'error' ? 'error' : status === 'success' ? 'success' : 'neutral',

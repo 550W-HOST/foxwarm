@@ -4,10 +4,11 @@ import { createServer } from 'node:http'
 import { build } from './browserFixtureBundle.mjs'
 import puppeteer from 'puppeteer-core'
 
-// A ctl call renders like the call it runs (diff controls, downloads), with its command shown.
+// A ctl call renders like the call it runs (diff controls, downloads, icon), tagged with its
+// command path and with its command shown.
 const chromiumPath = process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium'
 const toolEntry = new URL('../src/components/ToolTimelineItems.tsx', import.meta.url).pathname
-const ids = ['direct', 'ctl', 'sendDirect', 'sendCtl']
+const ids = ['direct', 'ctl', 'sendDirect', 'sendCtl', 'readDirect', 'readCtl', 'search']
 let browser
 let server
 let page
@@ -23,6 +24,9 @@ before(async () => {
       ctl: { name: 'ctl', args: { command: 'memory edit MEMORY.md --old-text @old --new-text @new', values: { old: edit.oldText, new: edit.newText } } },
       sendDirect: { name: 'send_file', args: { filePath: '/workspace/report.txt' } },
       sendCtl: { name: 'ctl', args: { command: 'file send /workspace/report.txt' } },
+      readDirect: { name: 'read', args: { filePath: 'notes.txt' } },
+      readCtl: { name: 'ctl', args: { command: 'tool call node:master/read --args @a', values: { a: { filePath: 'notes.txt' } } } },
+      search: { name: 'ctl', args: { command: 'tool search memory' } },
     }
     for (const [id, base] of Object.entries(fixtures)) {
       const call = { id, ...base }
@@ -62,6 +66,9 @@ const card = id => page.evaluate(root => {
     text: element.innerText,
     buttons: [...element.querySelectorAll('button')].map(button => button.title).filter(title => !/^(Collapse|Expand) /.test(title)),
     tag: element.querySelector('.foxwarm-tool-tag')?.textContent,
+    icon: element.querySelector('.foxwarm-tool-tag svg')?.getAttribute('class'),
+    toggle: [...element.querySelectorAll('[aria-label]')].map(node => node.getAttribute('aria-label')).find(label => /^(Collapse|Expand) /.test(label)),
+    preview: element.querySelector('.foxwarm-tool-header')?.innerText,
     command: element.querySelector('[data-ctl-command]')?.textContent,
   }
 }, id)
@@ -69,7 +76,10 @@ const card = id => page.evaluate(root => {
 test('a ctl edit renders the diff view of the edit it runs', async () => {
   const [direct, ctl] = [await card('direct'), await card('ctl')]
   assert.deepEqual(ctl.buttons, direct.buttons)
-  assert.equal(ctl.tag, direct.tag)
+  assert.equal(direct.tag, 'edit_memory')
+  assert.equal(ctl.tag, 'memory edit')
+  assert.equal(ctl.icon, direct.icon)
+  assert.equal(ctl.toggle, 'Collapse memory edit tool')
   assert.equal(ctl.command, 'ctl memory edit MEMORY.md --old-text @old --new-text @new')
   for (const text of ['original line', 'replacement line']) assert.ok(ctl.text.includes(text), ctl.text)
 })
@@ -79,4 +89,14 @@ test('a ctl file send offers the same download', async () => {
   assert.deepEqual(ctl.buttons, direct.buttons)
   assert.ok(ctl.buttons.some(title => title.startsWith('Download')), JSON.stringify(ctl.buttons))
   assert.equal(ctl.command, 'ctl file send /workspace/report.txt')
+  assert.equal(ctl.tag, 'file send')
+  assert.equal(ctl.icon, direct.icon)
+})
+
+test('tool call of a Node tool is tagged like the direct call; discovery stays ctl', async () => {
+  const [direct, ctl, search] = [await card('readDirect'), await card('readCtl'), await card('search')]
+  assert.equal(ctl.tag, direct.tag)
+  assert.equal(ctl.icon, direct.icon)
+  assert.equal(ctl.toggle, direct.toggle)
+  assert.equal(search.tag, 'ctl')
 })

@@ -125,7 +125,7 @@ internal sealed partial class SessionSequenceProjection
         var name = Str(call["name"]) ?? "tool";
         var args = call["args"] as JsonObject ?? new JsonObject();
         if (name == "ctl")
-            return Foxwarm.Tools.CtlParser.Describe(args) is { } described
+            return Foxwarm.Tools.CtlParser.Describe(CtlArgs(call)) is { } described
                 ? (described.Name, described.Args)
                 : (name, args);
         if (name != "call_tool")
@@ -139,6 +139,22 @@ internal sealed partial class SessionSequenceProjection
         if (concrete.Contains('/', StringComparison.Ordinal))
             concrete = concrete[(concrete.LastIndexOf('/') + 1)..];
         return (concrete, inner);
+    }
+
+    // The tag label of a call: a ctl command's path, otherwise its concrete name.
+    private static string Label(JsonObject call, string concrete) =>
+        Str(call["name"]) == "ctl" ? Foxwarm.Tools.CtlParser.DisplayName(CtlArgs(call)) : concrete;
+
+    // The stored ctl arguments the sequence row keeps: command and values, without the
+    // absent fields of the generic argument projection.
+    private static JsonObject CtlArgs(JsonObject call)
+    {
+        var args = new JsonObject();
+        if (call["ctl"] is JsonObject ctl)
+            foreach (var key in new[] { "command", "values", "valuesJson" })
+                if (ctl[key] is { } value)
+                    args[key] = value.DeepClone();
+        return args;
     }
 
     private static string ArgsPreview(string name, JsonObject args)

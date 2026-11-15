@@ -6,7 +6,7 @@ import registry from '../../../dotnet/Foxwarm/Tools/Ctl/CtlCommands.json'
  * apply unchanged. Main resolves and authorizes commands; this grants nothing.
  */
 interface Parameter { name: string; arg?: string; type: string; items?: string; kind?: string; variadic?: boolean }
-interface Command { path: string; aliases?: string[]; target: { source?: string; name?: string; fixed?: Record<string, unknown>; local?: string }; params?: Parameter[] }
+interface Command { path: string; aliases?: string[]; ingress?: string[]; target: { source?: string; name?: string; fixed?: Record<string, unknown>; local?: string }; params?: Parameter[] }
 
 const commands = (registry as { commands: Command[] }).commands
 const kebab = (name: string) => name.replace(/_/g, '-').replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase()
@@ -65,6 +65,11 @@ const typed = (parameter: Parameter, value: unknown, element = false): unknown =
 
 /** The unified descriptor (toolId plus args) a ctl call names, or undefined for help and malformed commands. */
 export function ctlDescriptor(args: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+  return parse(args)?.descriptor
+}
+
+/** The registry command a ctl call runs and the descriptor it names; undefined for help, discovery and malformed commands. */
+function parse(args: Record<string, unknown> | undefined): { entry: Command; descriptor: Record<string, unknown> } | undefined {
   if (!args || typeof args.command !== 'string') return undefined
   let values: Record<string, unknown> = {}
   if (args.values && typeof args.values === 'object' && !Array.isArray(args.values)) values = args.values as Record<string, unknown>
@@ -142,9 +147,47 @@ export function ctlDescriptor(args: Record<string, unknown> | undefined): Record
   }
   const mapped: Record<string, unknown> = { ...(entry.target.fixed || {}) }
   for (const parameter of params) if (parameter.name in assigned) setPath(mapped, parameter.arg || parameter.name, assigned[parameter.name])
-  if (entry.target.local === 'tool-call') return { ...mapped, args: mapped.args ?? {} }
+  if (entry.target.local === 'tool-call') return { entry, descriptor: { ...mapped, args: mapped.args ?? {} } }
   if (entry.target.local) return undefined
-  return { toolId: `${entry.target.source}:${entry.target.name}`, args: mapped }
+  return { entry, descriptor: { toolId: `${entry.target.source}:${entry.target.name}`, args: mapped } }
+}
+
+/** The identity and arguments a unified descriptor names. */
+function target(descriptor: Record<string, unknown>): { source: string; name: string; args: Record<string, unknown> } {
+  const toolId = typeof descriptor.toolId === 'string' ? descriptor.toolId.trim() : ''
+  const colon = toolId.indexOf(':')
+  const source = colon > 0 ? toolId.slice(0, colon) : String(descriptor.source ?? '').trim()
+  const rest = toolId.slice(colon + 1)
+  const name = colon <= 0 ? String(descriptor.name ?? '')
+    : source === 'builtin' ? rest.trim()
+      : rest.slice((source === 'mcp' ? rest.indexOf('/') : rest.lastIndexOf('/')) + 1).trim()
+  const args = descriptor.args && typeof descriptor.args === 'object' && !Array.isArray(descriptor.args) ? descriptor.args as Record<string, unknown> : {}
+  return { source, name, args }
+}
+
+const sameJson = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right)
+
+/** The model command that runs a builtin with these arguments: the one whose fixed arguments they carry, or its only command. */
+function commandFor(builtin: string, args: Record<string, unknown>): Command | undefined {
+  const candidates = commands.filter(item => item.target.source === 'builtin' && item.target.name === builtin && (item.ingress ?? ['model']).includes('model'))
+  return candidates.find(item => item.target.fixed && Object.keys(item.target.fixed).length > 0
+    && Object.entries(item.target.fixed).every(([key, value]) => sameJson(value, args[key])))
+    ?? (candidates.length === 1 ? candidates[0] : undefined)
+}
+
+/**
+ * The tag name of a stored ctl call: the command path (`memory edit`) of a command naming a
+ * capability, the command path (or name) of a builtin given to `tool call`, and undefined for
+ * an MCP or Node tool, which is shown like a direct call. `ctl` for help, discovery and
+ * malformed commands. Display only, like `CtlParser.DisplayName` on Main.
+ */
+export function ctlCommandName(args: Record<string, unknown> | undefined): string | undefined {
+  const parsed = parse(args)
+  if (!parsed) return 'ctl'
+  if (parsed.entry.target.local !== 'tool-call') return parsed.entry.path
+  const { source, name, args: targetArgs } = target(parsed.descriptor)
+  if (source !== 'builtin') return undefined
+  return commandFor(name, targetArgs)?.path ?? name
 }
 
 /** Sets a target argument; a dotted path such as `model.modelId` fills a nested object. */
@@ -166,14 +209,7 @@ export function ctlConcrete<T extends { name: string; args?: any }>(call: T): T 
   if (call.name !== 'ctl') return call
   const descriptor = ctlDescriptor(call.args)
   if (!descriptor) return call
-  const toolId = typeof descriptor.toolId === 'string' ? descriptor.toolId.trim() : ''
-  const colon = toolId.indexOf(':')
-  const source = colon > 0 ? toolId.slice(0, colon) : String(descriptor.source ?? '').trim()
-  const rest = toolId.slice(colon + 1)
-  const name = colon <= 0 ? String(descriptor.name ?? '')
-    : source === 'builtin' ? rest.trim()
-      : rest.slice((source === 'mcp' ? rest.indexOf('/') : rest.lastIndexOf('/')) + 1).trim()
-  const args = descriptor.args && typeof descriptor.args === 'object' && !Array.isArray(descriptor.args) ? descriptor.args : {}
+  const { source, name, args } = target(descriptor)
   if ((source === 'builtin' || source === 'node') && name) return { ...call, name, args }
   return { ...call, name: 'call_tool', args: descriptor }
 }

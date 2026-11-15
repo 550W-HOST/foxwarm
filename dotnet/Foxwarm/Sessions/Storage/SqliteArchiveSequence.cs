@@ -193,6 +193,11 @@ internal static partial class SqliteArchiveSequence
 
     private const string Part = "p.fullkey";
 
+    // A ctl call keeps enough of its command and values to name the command it runs; a longer
+    // command or values are cut, and such a call is shown as ctl.
+    private const int CtlCommandLength = 4000;
+    private const int CtlValuesLength = 8192;
+
     private static readonly string Select = $"""
         SELECT seq,timestamp,role,CASE role
         WHEN 'model' THEN json_object(
@@ -210,7 +215,13 @@ internal static partial class SqliteArchiveSequence
               'id',json_extract(message_json,{Part}||'.functionCall.id'),
               'name',json_extract(message_json,{Part}||'.functionCall.name'),
               'args',{Args($"{Part}||'.functionCall.args'")},
-              'inner',{Args($"{Part}||'.functionCall.args.args'")}))
+              'inner',{Args($"{Part}||'.functionCall.args.args'")},
+              'ctl',json(CASE WHEN json_extract(message_json,{Part}||'.functionCall.name')='ctl' THEN json_object(
+                'command',{Text("message_json", $"{Part}||'.functionCall.args.command'", CtlCommandLength)},
+                'values',json(CASE WHEN json_type(message_json,{Part}||'.functionCall.args.values')='object'
+                  AND length(json_extract(message_json,{Part}||'.functionCall.args.values'))<={CtlValuesLength}
+                  THEN json_extract(message_json,{Part}||'.functionCall.args.values') END),
+                'valuesJson',{Text("message_json", $"{Part}||'.functionCall.args.valuesJson'", CtlValuesLength)}) END)))
             FROM json_each(message_json,'$.parts') p
             WHERE json_type(message_json,{Part}||'.functionCall')='object'))
         WHEN 'tool' THEN json_object(

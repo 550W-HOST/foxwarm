@@ -86,6 +86,34 @@ internal static partial class CtlParser
             _ => null,
         };
 
+    // The name a ctl call is shown under: the command path (noun verb) of a command naming a
+    // capability; for `tool call`, the command path of a builtin target (its name when it has
+    // no command) or the MCP or Node tool's name; `ctl` for help, discovery and calls that don't
+    // parse. Display only: activity records, policy and tool IDs keep the concrete target.
+    internal static string DisplayName(JsonObject args) =>
+        Parse(args) switch
+        {
+            CtlTarget target => target.Command.Path,
+            CtlCall call => DescribeCall(call.Descriptor) is { } described
+                ? described.Source == "builtin"
+                    ? CommandFor(described.Name, described.Args)?.Path ?? described.Name
+                    : described.Name
+                : "ctl",
+            _ => "ctl",
+        };
+
+    // The model command that runs a builtin with these arguments: the one whose fixed
+    // arguments they carry, or the builtin's only command.
+    internal static CtlCommand? CommandFor(string builtin, JsonObject args)
+    {
+        var commands = CtlRegistry.ForTarget("builtin", builtin).ToArray();
+        return commands.FirstOrDefault(command =>
+                command.Fixed is { Count: > 0 } fixedArgs
+                && fixedArgs.All(pair => JsonNode.DeepEquals(pair.Value, args[pair.Key]))
+            )
+            ?? (commands.Length == 1 ? commands[0] : null);
+    }
+
     // Whether a ctl call is an attempt to select a Node: `node select`, or `tool call` naming
     // builtin `node` with action select. An invalid call (bad values or envelope, unused values,
     // unknown options) is judged from its tokens with the parser's option and @name rules, so
