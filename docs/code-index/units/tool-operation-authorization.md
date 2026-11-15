@@ -2,7 +2,7 @@
 
 Files: `dotnet/Foxwarm/Tools/Authorization/OperationPlan.cs`, `dotnet/Foxwarm/Tools/Authorization/OperationAttribution.cs`, `dotnet/Foxwarm.Tests/Tools/OperationAttributionTests.cs`, `dotnet/Foxwarm.Tests/Tools/Fixtures/operation-decisions.json`
 
-Secondary files: `dotnet/Foxwarm/Tools/Authorization/ToolAuthorizationEvaluation.cs`, `dotnet/Foxwarm/Tools/Authorization/ToolAuthorizationToolDefinition.cs`, `dotnet/Foxwarm/Sessions/SessionManager.Authorization.cs`, `dotnet/Foxwarm/Sessions/SessionManager.AuthorizationExplain.cs`
+Secondary files: `dotnet/Foxwarm/Sessions/SessionManager.ApprovalPlan.cs`, `dotnet/Foxwarm/Tools/Authorization/ToolApprovalScope.cs`, `dotnet/Foxwarm/Tools/Authorization/ToolAuthorizationEvaluation.cs`, `dotnet/Foxwarm/Tools/Authorization/ToolAuthorizationToolDefinition.cs`, `dotnet/Foxwarm/Sessions/SessionManager.Authorization.cs`, `dotnet/Foxwarm/Sessions/SessionManager.AuthorizationExplain.cs`
 
 Operation rules let a tool authorization policy restrict or grant what a call does: read a path on a Node, send to a Session, select a Node. Today a rule can only name the capability that does it. This page owns that design and its delivery phases. Phase 1 (observational) is implemented; later phases are approved design. Declarations, the effect and obligation inventory and the conformance corpora are in the [operation catalog](./tool-operation-catalog.md). The evaluator, layers, secret facts and approvals described as "today" are owned by [tool authorization](./tool-authorization.md) and the [authorization thread](../threads/tool-dispatch-authorization.md).
 
@@ -128,7 +128,7 @@ Ordering among mixed rules is first match, never deny-wins:
 
 ## Approval staging
 
-This section applies from phase 2. Today a grant is bound to the fingerprint of the primary request. `ToolApprovalScope.Covers` compares the fingerprint only for that object. Every other check in the invocation, including detached work entered through `Detach`, is covered without comparison. Without a grant, an internal ask fails closed.
+Phase 2 applies these stages under version-1 rules; the implementation is described after the list.
 
 - **A. Protected inputs.** These are inputs that must be read before planning: the `set_config` candidate, explain policy and candidate files, `add_secret` sources and compaction plan files. They are assessed as their concrete sub-requests.
   - A deny stops the call.
@@ -141,6 +141,13 @@ This section applies from phase 2. Today a grant is bound to the fingerprint of 
   - A deny always stops, including a deny installed while the call waited.
   - A new or changed ask fails closed with `tool_approval_unavailable`, before the protected effect.
   - An unchanged operation never short-cuts current-policy evaluation. Effects that already completed are not rolled back.
+
+**Implementation (phase 2).** `SessionManager.AuthorizeCallAsync` (`SessionManager.ApprovalPlan.cs`) is the gate's assessment; `SessionToolExecutor.AuthorizeAsync` turns its `ToolApprovalRequiredException` into one approval request per stage and adds the grant to the invocation's `ToolApprovalScope`.
+
+- **Staging only where an ask is possible.** When no effective layer of the caller's Agent holds an enabled ask rule or an asking default (`PolicyCanAsk`), the gate assesses only the call's own request, exactly as before, and every other request is decided by its owner. With an ask possible, a call whose own request and planned checks all allow or deny still dispatches as before: a denied sub-request is left to its owner, which reports it in the existing form. A deny among the checks stops the call at the gate only when the call asks or already holds an approval, so it is never offered for approval or dispatched after one. `Calls_without_asks_decide_as_at_the_base_revision` (fixture `approval-staging-equality.json`, recorded at the base revision) checks this for real calls under no-ask and unrelated-ask policies.
+- **A today.** Stage A covers the `set_config` candidate of `config` and `models`, the only input whose content decides authorization facts under version-1 rules (its secret facts). Its read is assessed first; a deny stops derivation: a call that asks is denied at the gate and never offered for approval, and a call without any other ask is left to its owner, which reports the denial as before; asks become one input approval (`stage: input`). After admission, the gate captures the candidate bytes once (`ToolApprovalScope.Inputs`); `SecretFactsAsync` and `InstallConfigAsync` consume them, so the installed candidate is the one whose facts were approved and no re-read happens. The other reads named in A are assessed in stage B as concrete sub-requests (see Open Questions).
+- **B today.** `CallChecks` takes the requests of `OperationPlan.Derive` that can be built from the arguments and current facts (sub-requests, retained final requests such as each cascade member with its own `nodeId`, and the optional default-cwd probe), plus `create_session` prompt-file reads and `add_secret` `fromConfig` reads, built as their owners build them. Each is assessed as its owner will assess it; one whose assessment fails (invalid arguments, an unresolvable path) is left to its owner. Asking checks join one call approval with the call; the record lists them as `checks`, and the grant lists the fingerprint of each. Options combine across every asking check: shortest timeout, approver intersection. The optional default-cwd probe joins an approval the call needs anyway and never causes one; an explain probe view is skipped for the caller itself (aliases included) and for a missing Session, and its deny does not stop the call because the owner reports it as that probe's error. A new-Session timer that will ask is checked for its creation target before approval, which an ask or indeterminate outcome rejects, so it is never offered for approval.
+- **C today.** Every owner check runs `AuthorizeToolAsync` against current policy and facts; deny throws first; an ask passes only when a grant lists the request's fingerprint (`SessionManager.ApprovalFingerprint`: identity, raw arguments, path facts, Node targets, Session target and Task owner, resolved even when no rule needs them, and secret facts). The gate's re-check after each approval re-runs A and B: a deny installed during the wait stops the call before dispatch with its record `cancelled`/`notStarted`; a changed request asks again at most three times per stage. Changes after dispatch (a cascade member added before the registry mutation, changed destination secrets inside the configuration lane, a timer creation target that started asking) fail closed at that owner before its effect.
 
 Nested calls keep their own gates, and external principals cannot be asked, as today. Answer-time storage of an `ask_user` secret happens after the invocation, carries no tool approval scope, and keeps the existing rules for filling configured names.
 
@@ -235,9 +242,18 @@ Acceptance tests by phase:
 
 ## Tests
 
-Phase 1 adds `OperationAttributionTests` (attribution and decision equality) and the [catalog coverage tests](./tool-operation-catalog.md#coverage-and-conformance).
+Phase 1 adds `OperationAttributionTests` (attribution and decision equality) and the [catalog coverage tests](./tool-operation-catalog.md#coverage-and-conformance). Phase 2 adds, by acceptance item:
+
+- input and discovered-secret approvals with their approver intersections, a denied candidate read, admitted bytes and changed destination secrets: `AgentRulesTreeTests.ApprovalStaging.cs`;
+- cascade members in one approval, a denied member, a deny installed during the wait and a member added after approval: `NodeAuthorizationTreeTests.ApprovalStaging.cs`;
+- combined options for a script and its source read, an answerable sub-request ask, a deny installed on a listed check, unattended deadlines, Stop, nested calls in their own invocation and a detached scope carrying only its grants: `ToolApprovalGateTests.Staging.cs` (and `ToolApprovalGateTests.Covered_scope_passes_only_the_exact_requests_its_grant_lists`);
+- explain probe views and policy reads in the call approval, timer creation targets before and after approval, and the decision-equality corpus: `ToolAuthorizationEffectsTests.ApprovalStaging.cs` and `.StagingEquality.cs`;
+- the WebUI card's covered checks: `toolApproval.e2e.mjs` and `sessionQuestions.test.mjs`.
 
 ## Open Questions
+
+- Proposed (implementation of phase 2): stage A's list names "explain policy and candidate files, `add_secret` sources and compaction plan files" as protected inputs whose bytes are captured. Under version-1 rules none of them decides an authorization fact of the call; they are concrete sub-requests, assessed and approved in stage B, and their owners read them as before. Proposed wording for A: "These are inputs whose content decides facts of the call before it can be assessed: today the `set_config` candidate of `config` and `models`. … Other inputs read before the effect are concrete sub-requests of stage B." Phase 3 may add inputs to A if a normalizer or operation needs their content.
+- Proposed (implementation of phase 2): stage B says the fingerprint binds "raw and normalized arguments, operations and input digests". Under version-1 rules there is no normalizer or operation evaluator; the fingerprint binds identity, raw arguments and the request facts, and the captured input bytes are consumed instead of re-read, so their facts are bound through the secret facts. Proposed wording: "Its fingerprints bind each request's identity, raw arguments and facts; from phase 3 also normalized arguments and operations. Admitted input bytes are consumed, never re-read."
 
 - Unconfirmed: whether a version-1 `ask` on a script invocation should ask again for each `model.request` (phase 3), or once per slice.
 - Unconfirmed: whether templates gain operation rules, for example `op: node.select` deny for restricted workers, once phase 3 ships.
