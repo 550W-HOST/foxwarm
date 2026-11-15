@@ -177,10 +177,9 @@ internal sealed partial class MainToolScript
                 context.Owner.Entry.RequireIdentityAuthority();
                 if (progress.KindCase == ChildEvent.KindOneofCase.Complete)
                 {
-                    record["lastResult"] = MontyValues.ToJson(
-                        progress.Complete.Value,
-                        progressBudget
-                    );
+                    var completed = MontyValues.ToJson(progress.Complete.Value, progressBudget);
+                    record["resultImages"] = AdmitResultImages(context.Owner, record, completed);
+                    record["lastResult"] = completed;
                     record["status"] = "completed";
                     record["completedAt"] = Now();
                     record.Remove("waiting");

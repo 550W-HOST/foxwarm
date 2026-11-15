@@ -100,6 +100,7 @@ internal sealed partial class MainToolScript
                         context.RunSubCallOrdinal = previousRunOrdinal;
                     }
                     budget.JsonValue(result);
+                    NoteProducedImages(record, result);
                     (
                         record["executedTools"] as JsonArray
                         ?? throw new InvalidDataException("Missing ToolScript tool history.")
@@ -120,6 +121,7 @@ internal sealed partial class MainToolScript
                         );
                     var answer = await context.RequestModel(prompt, model, budget, run.Token);
                     budget.JsonValue(answer);
+                    NoteProducedImages(record, answer);
                     return answer;
                 case "session_create":
                 case "session_step":
@@ -325,10 +327,17 @@ internal sealed partial class MainToolScript
             }
             if (output["result"] is JsonObject result && result["parts"] is JsonArray parts)
             {
+                // Only references admitted when the run completed are promoted; a record
+                // without that list (an older run) promotes none.
+                var admitted = (record["resultImages"] as JsonArray ?? [])
+                    .Select(Text)
+                    .OfType<string>()
+                    .ToHashSet(StringComparer.Ordinal);
                 var images = parts
                     .OfType<JsonObject>()
                     .Where(part =>
-                        Foxwarm.Images.ImageBlobStore.NormalizeToolReference(part) is not null
+                        Foxwarm.Images.ImageBlobStore.NormalizeToolReference(part) is { } reference
+                        && admitted.Contains(Text(reference["blobId"])!)
                     )
                     .ToArray();
                 if (images.Length > 0)

@@ -524,6 +524,25 @@ internal sealed partial class SessionManager
         }
     }
 
+    // Whether a stored image blob is referenced in the Session's own history (live context or
+    // archive), as image tools find a Session's images.
+    internal static bool HistoryReferencesImage(SessionOwner owner, string blobId)
+    {
+        static bool Any(IEnumerable<JsonObject> messages, string blob) =>
+            messages.Any(message =>
+                (message["parts"] as JsonArray ?? [])
+                    .OfType<JsonObject>()
+                    .Any(part => SessionWait.Text(part["inlineDataRef"]?["blobId"]) == blob)
+            );
+        return Any(owner.History(), blobId)
+            || Any(
+                owner
+                    .Archive.ReadEffectiveMessagesRange(1, 9007199254740991L)
+                    .Select(row => row.Message),
+                blobId
+            );
+    }
+
     private static JsonObject? FindOwnedImage(IEnumerable<JsonObject> messages, string id)
     {
         foreach (var message in messages)
