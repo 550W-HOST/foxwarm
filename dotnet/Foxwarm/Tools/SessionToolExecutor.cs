@@ -1405,13 +1405,19 @@ internal sealed partial class SessionToolExecutor(
                 args,
                 token
             );
-        handlers["explain_tool_authorization"] = (owner, args, token) =>
-            owner.Manager.ExplainToolAuthorizationAsync(
+        handlers["explain_tool_authorization"] = async (owner, args, token) =>
+        {
+            var explanation = await owner.Manager.ExplainToolAuthorizationAsync(
                 owner.Hosted,
                 owner.Files ?? throw new NotSupportedException("This executor has no file reader."),
                 args,
                 token
             );
+            // ToolScript receives the structure; a model receives its JSON text.
+            return owner.Programmatic
+                ? explanation
+                : new JsonObject { ["output"] = explanation.ToJsonText() };
+        };
         handlers["node"] = (owner, args, token) =>
             owner.Manager.ExecuteNodeToolAsync(owner.Hosted, args, token, owner.Programmatic);
         handlers["node_create_auth_token"] = (owner, args, token) =>

@@ -6,6 +6,15 @@ namespace Foxwarm.Sessions;
 
 internal sealed partial class SessionManager
 {
+    private static bool Flag(JsonObject args, string name) =>
+        args[name] switch
+        {
+            null => false,
+            JsonValue value when value.TryGetValue<bool>(out var flag) => flag,
+            _ => throw new InvalidDataException($"{name} must be a boolean."),
+        };
+
+    // The structured explanation. Model callers receive it as JSON text, ToolScript as is.
     internal async Task<JsonObject> ExplainToolAuthorizationAsync(
         SessionOwner caller,
         WorkspaceTools files,
@@ -13,7 +22,7 @@ internal sealed partial class SessionManager
         CancellationToken token
     )
     {
-        ToolRegistry.Keys(args, ["probes", "policyFilePath", "compare"]);
+        ToolRegistry.Keys(args, ["probes", "policyFilePath", "compare", "compact"]);
         if (
             args["probes"] is not JsonArray probes
             || probes.Count is 0 or > ToolAuthorizationToolDefinition.MaxExplainProbes
@@ -22,12 +31,8 @@ internal sealed partial class SessionManager
             throw new InvalidDataException(
                 $"explain_tool_authorization requires 1 to {ToolAuthorizationToolDefinition.MaxExplainProbes} probe objects."
             );
-        var compare = args["compare"] switch
-        {
-            null => false,
-            JsonValue value when value.TryGetValue<bool>(out var flag) => flag,
-            _ => throw new InvalidDataException("compare must be a boolean."),
-        };
+        var compare = Flag(args, "compare");
+        var compact = Flag(args, "compact");
         var candidatePath = ToolRegistry.Text(args, "policyFilePath");
         if (
             candidatePath is not null
@@ -86,8 +91,12 @@ internal sealed partial class SessionManager
             variants.Add(("candidate", candidate));
 
         var results = new JsonArray();
+        var index = 0;
         foreach (var probe in probes.OfType<JsonObject>())
-            results.Add((JsonNode?)await ExplainProbeAsync(caller, probe, variants, token));
+            results.Add(
+                (JsonNode?)
+                    await ExplainProbeAsync(caller, index++, probe, variants, compact, token)
+            );
         var output = new JsonObject
         {
             ["policy"] =
@@ -98,20 +107,37 @@ internal sealed partial class SessionManager
         };
         if (compare)
             output["ruleDiff"] = ToolAuthorizationExplain.RuleDiff(active, candidate!);
-        return new JsonObject { ["output"] = output.ToJsonText() };
+        return output;
     }
 
     private async Task<JsonObject> ExplainProbeAsync(
         SessionOwner caller,
+        int index,
         JsonObject probe,
         IReadOnlyList<(string Name, ToolAuthorizationPolicy Policy)> variants,
+        bool compact,
         CancellationToken token
     )
     {
         var requested = ToolRegistry.Text(probe, "sessionId");
-        var result = new JsonObject { ["sessionId"] = requested };
+        var result = new JsonObject();
+        if (compact)
+            result["index"] = index;
+        result["sessionId"] = requested;
         try
         {
+            if (probe["label"] is { } label)
+            {
+                if (
+                    label is not JsonValue value
+                    || !value.TryGetValue<string>(out var text)
+                    || text.Length is 0 or > ToolAuthorizationToolDefinition.MaxExplainLabelLength
+                )
+                    throw new InvalidDataException(
+                        $"label must be a string of 1 to {ToolAuthorizationToolDefinition.MaxExplainLabelLength} characters."
+                    );
+                result["label"] = text;
+            }
             if (string.IsNullOrWhiteSpace(requested))
                 throw new InvalidDataException("Each probe requires sessionId.");
             var reference = requested.Trim();
@@ -154,6 +180,7 @@ internal sealed partial class SessionManager
             // Resolve exactly as `tool call` would for this caller's current Node.
             var call = (JsonObject)probe.DeepClone();
             call.Remove("sessionId");
+            call.Remove("label");
             if (!call.ContainsKey("args") && !call.ContainsKey("argsJson"))
                 call["args"] = new JsonObject();
             var resolved = tools.Resolve("call_tool", call, CurrentNode(target));
@@ -161,20 +188,31 @@ internal sealed partial class SessionManager
                 throw new InvalidDataException(
                     "ctl help, discovery and malformed commands are not authorized; probe a command's target instead."
                 );
-            result["tool"] = new JsonObject
-            {
-                ["source"] = resolved.Source,
-                ["name"] = resolved.Name,
-                ["server"] = resolved.Server,
-                ["executionNode"] = resolved.ExecutionNode,
-            };
+            if (compact)
+                result["toolId"] = ToolAuthorizationExplain.ToolId(resolved);
+            else
+                result["tool"] = new JsonObject
+                {
+                    ["source"] = resolved.Source,
+                    ["name"] = resolved.Name,
+                    ["server"] = resolved.Server,
+                    ["executionNode"] = resolved.ExecutionNode,
+                };
             var files = IdentityWorkspace(target);
+            var explained = new List<(string Name, ExplainedVariant Variant)>();
             foreach (var (name, policy) in variants)
-                result[name] = await ExplainVariantAsync(target, resolved, files, policy, token);
+                explained.Add(
+                    (name, await ExplainVariantAsync(target, resolved, files, policy, token))
+                );
+            if (compact && explained.Count == 1)
+                ToolAuthorizationExplain.CompactVariant(explained[0].Variant, result);
+            else
+                foreach (var (name, variant) in explained)
+                    result[name] = compact
+                        ? ToolAuthorizationExplain.CompactVariant(variant, new JsonObject())
+                        : ToolAuthorizationExplain.FullVariant(variant);
             if (variants.Count == 2)
-                result["changed"] =
-                    SessionWait.Text(result["active"]?["decision"])
-                    != SessionWait.Text(result["candidate"]?["decision"]);
+                result["changed"] = explained[0].Variant.Decision != explained[1].Variant.Decision;
         }
         catch (Exception error)
             when (error is InvalidDataException or InvalidOperationException
@@ -186,7 +224,7 @@ internal sealed partial class SessionManager
         return result;
     }
 
-    private async Task<JsonObject> ExplainVariantAsync(
+    private async Task<ExplainedVariant> ExplainVariantAsync(
         SessionOwner target,
         ResolvedTool resolved,
         WorkspaceTools files,
@@ -194,44 +232,16 @@ internal sealed partial class SessionManager
         CancellationToken token
     )
     {
-        AuthorizationAssessment assessment;
         try
         {
-            assessment = await AssessToolAsync(target, resolved, files, token, global: global);
+            return new(
+                await AssessToolAsync(target, resolved, files, token, global: global),
+                null
+            );
         }
         catch (ToolAuthorizationDeniedException denied)
         {
-            return new JsonObject
-            {
-                ["decision"] = "deny",
-                ["allowed"] = false,
-                ["deniedBy"] = "precheck",
-                ["precheck"] = denied.Message,
-            };
+            return new(null, denied.Message);
         }
-        var policyDenied = assessment.Denied is not null;
-        // Deny is decided before anyone would be asked.
-        var asked = !policyDenied && assessment.Effect == ToolAuthorizationEffect.Ask;
-        var result = new JsonObject
-        {
-            ["decision"] =
-                policyDenied ? "deny"
-                : asked ? "ask"
-                : "allow",
-            ["allowed"] = !policyDenied && !asked,
-            ["deniedBy"] = policyDenied ? "policy" : null,
-        };
-        if (asked)
-        {
-            result["askedBy"] = "policy";
-            result["approval"] = assessment.Approval.ToJson();
-        }
-        result["layers"] = new JsonArray(
-            assessment
-                .Layers.Select(layer => (JsonNode?)ToolAuthorizationExplain.Layer(layer))
-                .ToArray()
-        );
-        result["facts"] = ToolAuthorizationExplain.Facts(assessment.Request);
-        return result;
     }
 }

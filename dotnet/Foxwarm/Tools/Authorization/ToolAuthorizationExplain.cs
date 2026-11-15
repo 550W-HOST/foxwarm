@@ -3,10 +3,111 @@ using Foxwarm.Sessions;
 
 namespace Foxwarm.Tools;
 
+// One policy's outcome for one probe: the shared assessment, or the denial raised before
+// policy evaluation.
+internal sealed record ExplainedVariant(AuthorizationAssessment? Assessment, string? Precheck)
+{
+    internal bool PolicyDenied => Assessment?.Denied is not null;
+
+    // Deny is decided before anyone would be asked.
+    internal bool Asked =>
+        Assessment is { Denied: null } assessment
+        && assessment.Effect == ToolAuthorizationEffect.Ask;
+
+    internal string Decision =>
+        Assessment is null || PolicyDenied ? "deny"
+        : Asked ? "ask"
+        : "allow";
+}
+
 // Read-only projections for explain_tool_authorization. Decisions come from the shared
 // assessment; nothing here evaluates policy itself.
 internal static class ToolAuthorizationExplain
 {
+    internal static string ToolId(ResolvedTool resolved) =>
+        resolved.Source switch
+        {
+            "builtin" => "builtin:" + resolved.Name,
+            "mcp" => $"mcp:{resolved.Server}/{resolved.Name}",
+            _ => $"{resolved.Source}:{resolved.ExecutionNode}/{resolved.Name}",
+        };
+
+    internal static JsonObject FullVariant(ExplainedVariant variant)
+    {
+        if (variant.Assessment is not { } assessment)
+            return new JsonObject
+            {
+                ["decision"] = "deny",
+                ["allowed"] = false,
+                ["deniedBy"] = "precheck",
+                ["precheck"] = variant.Precheck,
+            };
+        var result = new JsonObject
+        {
+            ["decision"] = variant.Decision,
+            ["allowed"] = !variant.PolicyDenied && !variant.Asked,
+            ["deniedBy"] = variant.PolicyDenied ? "policy" : null,
+        };
+        if (variant.Asked)
+        {
+            result["askedBy"] = "policy";
+            result["approval"] = assessment.Approval.ToJson();
+        }
+        result["layers"] = new JsonArray(
+            assessment.Layers.Select(layer => (JsonNode?)Layer(layer)).ToArray()
+        );
+        result["facts"] = Facts(assessment.Request);
+        return result;
+    }
+
+    // The decision and, for each layer that matched a rule or did not allow, the layer, its
+    // deciding rule ID (null for the default) and its decision. A layer with secret facts also
+    // names how they were decided. A precheck denial has no layers and carries its message.
+    internal static JsonObject CompactVariant(ExplainedVariant variant, JsonObject result)
+    {
+        result["decision"] = variant.Decision;
+        if (variant.Assessment is not { } assessment)
+        {
+            result["precheck"] = variant.Precheck;
+            return result;
+        }
+        var rules = new JsonArray();
+        foreach (var layer in assessment.Layers)
+        {
+            var decision = layer.Decision;
+            var rule = (decision.Call ?? decision).Rule;
+            JsonObject? secrets = null;
+            if (decision.Secrets is { } detail)
+            {
+                var deciding = detail.Rule ?? detail.Fallback?.Rule;
+                secrets = new JsonObject
+                {
+                    ["decision"] = AuthorizationDecision.Name(detail.Effect),
+                    ["rule"] = deciding is null ? null : RuleId(deciding),
+                };
+            }
+            if (
+                rule is null
+                && secrets?["rule"] is null
+                && decision.Effect == ToolAuthorizationEffect.Allow
+            )
+                continue;
+            var entry = new JsonObject
+            {
+                ["layer"] = layer.Layer is null ? "global" : "agent:" + layer.Layer,
+                ["rule"] = rule is null ? null : RuleId(rule),
+                ["decision"] = AuthorizationDecision.Name(decision.Effect),
+            };
+            if (secrets is not null)
+                entry["secrets"] = secrets;
+            rules.Add(entry);
+        }
+        result["rules"] = rules;
+        return result;
+    }
+
+    private static JsonNode? RuleId(JsonObject rule) => rule["id"]?.DeepClone();
+
     private static JsonArray Rules(ToolAuthorizationPolicy policy) =>
         policy.Value["rules"]!.AsArray();
 

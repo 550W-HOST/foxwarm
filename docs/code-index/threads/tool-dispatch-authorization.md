@@ -56,6 +56,8 @@ Policy unavailability is fatal only to the current turn, not the Session or proc
 
 [2026-11-06] `explain_tool_authorization` evaluates probes through the same assessment that enforcement uses and reports each layer and the facts without executing the call. The user chose: tool-rules governs the builtin and the caller must also be able to read the active policy file (and any candidate), so an explanation reveals nothing beyond a direct read; only real Sessions are callers; candidate comparison includes a static rule ID diff. The builtin is hidden from default injection. Contract and output shape: [tool authorization unit](../units/tool-authorization.md#authorization-explanation).
 
+[2026-11-15] User request: the probe limit is 256 per call, because a real policy change already needs about 40 probes and policy-migration equivalence checks need hundreds. Added at the same time: an optional per-probe `label` echoed in every output, a compact one-row-per-probe mode (`compact`, `--compact`), and a structured ToolScript result in both modes. The default output is unchanged. Cost evidence and the remaining output limit are in the unit.
+
 ### D-dispatch-approval-ask
 
 **Directly requested capability with user-selected semantics.** It adds a human decision point to [generic authorization](#d-dispatch-generic-tool-authorization) without a second evaluator, a replay mechanism or a new permission principal.
