@@ -66,6 +66,10 @@ internal sealed partial class SessionManager
         private readonly HashSet<string> callerAliases;
         private readonly string callerMain;
         private readonly HashSet<string> literals;
+        // Canonical Session IDs and ID patterns operation rules name (targetSession.id,
+        // parent.id). They compare the target's canonical ID, not a spelling.
+        private readonly HashSet<string> operationIds;
+        private readonly string[] operationPatterns;
         private readonly Dictionary<string, bool> classes = new(StringComparer.Ordinal);
         private Dictionary<string, int>? hiddenPerAgent;
 
@@ -80,7 +84,43 @@ internal sealed partial class SessionManager
             callerMain = SessionIdentity.Build(owner.Agent, "main");
             // Reading the policies here makes an unavailable global policy fail the list.
             literals = Literals(context.Policies);
+            (operationIds, operationPatterns) = OperationIds(context.Policies);
+            literals.UnionWith(operationIds);
         }
+
+        // With an operation ID pattern, the Sessions outside the explicit set are not one class:
+        // lists scan their scope and count each row.
+        private bool Patterned => operationPatterns.Length > 0;
+
+        private static (HashSet<string> Ids, string[] Patterns) OperationIds(
+            IEnumerable<ToolAuthorizationPolicy> policies
+        )
+        {
+            var ids = new HashSet<string>(StringComparer.Ordinal);
+            var patterns = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var policy in policies)
+            foreach (var rule in policy.Value["rules"]!.AsArray().OfType<JsonObject>())
+            {
+                if (!OperationRules.IsOperationRule(rule))
+                    continue;
+                foreach (var key in new[] { "targetSession", "parent" })
+                {
+                    var selector = rule["resources"]?[key]?["id"];
+                    var values = selector is JsonArray list
+                        ? list.Select(SessionWait.Text)
+                        : [SessionWait.Text(selector)];
+                    foreach (var value in values.OfType<string>())
+                        (value.Contains('*') ? patterns : ids).Add(value);
+                }
+            }
+            return (ids, patterns.Order(StringComparer.Ordinal).ToArray());
+        }
+
+        // The operation patterns a canonical ID matches; the class of a Session they name.
+        private string[] PatternsOf(string id) =>
+            operationPatterns
+                .Where(pattern => ToolAuthorizationEvaluation.Pattern(pattern, id))
+                .ToArray();
 
         internal string Caller => context.Session;
         internal string Agent => context.Agent;
@@ -198,13 +238,21 @@ internal sealed partial class SessionManager
             }
             var agent = SessionCatalog.Text(row["agent"]);
             var named = forms.Where(literals.Contains).Order(StringComparer.Ordinal).ToArray();
+            // Operation rules compare the canonical ID: a named or pattern-matched one is part of
+            // the class and its representative.
+            var patterns = PatternsOf(id);
+            var canonical =
+                operationIds.Contains(id) || !patterns.SequenceEqual(PatternsOf(Unnamed))
+                    ? id
+                    : null;
             return Class(
                 parent,
                 Child(SessionCatalog.Text(row["parentSessionId"])),
                 agent == Agent,
                 named,
                 unnamed: forms.Any(form => !literals.Contains(form)),
-                references
+                references,
+                canonical
             );
         }
 
@@ -214,7 +262,8 @@ internal sealed partial class SessionManager
             bool sameAgent,
             IReadOnlyList<string> named,
             bool unnamed,
-            IReadOnlyList<string> references
+            IReadOnlyList<string> references,
+            string? canonical = null
         )
         {
             var key = string.Join(
@@ -224,11 +273,17 @@ internal sealed partial class SessionManager
                     .Concat(named)
                     .Append("\u0002")
                     .Concat(references)
+                    .Append("\u0003")
+                    .Concat(
+                        canonical is null ? []
+                        : operationIds.Contains(canonical) ? [canonical]
+                        : PatternsOf(canonical)
+                    )
             );
             if (classes.TryGetValue(key, out var known))
                 return known;
             var target = new AuthorizationTarget(
-                parent ? callerParent! : Unnamed,
+                parent ? callerParent! : canonical ?? Unnamed,
                 sameAgent ? Agent : OtherAgent,
                 child ? Caller : null
             );
@@ -245,13 +300,16 @@ internal sealed partial class SessionManager
         // True when some Session outside the explicit set (self, parent, children and Sessions a
         // rule names) might be listed, so the whole scope must be scanned.
         internal bool Broad(string? scopeAgent, bool? sameAgent = null) =>
-            SameAgentValues(scopeAgent)
+            Patterned
+            || SameAgentValues(scopeAgent)
                 .Where(value => sameAgent is null || value == sameAgent)
                 .Any(UnrelatedVisible);
 
         // True when every Session in scope is listed, so the unfiltered indexed page applies.
         internal bool Covers(string? scopeAgent)
         {
+            if (Patterned)
+                return false;
             foreach (var sameAgent in SameAgentValues(scopeAgent))
                 if (
                     !UnrelatedVisible(sameAgent)
@@ -331,6 +389,8 @@ internal sealed partial class SessionManager
                     group => group.Count(row => !Admits(row)),
                     StringComparer.Ordinal
                 );
+            if (Patterned)
+                return manager.Catalog.OffsetPage(int.MaxValue, 0, agent: agent).Count(Admits);
             if (UnrelatedVisible(agent == Agent))
                 return Math.Max(0, total - hiddenPerAgent.GetValueOrDefault(agent));
             return ExplicitRows()
