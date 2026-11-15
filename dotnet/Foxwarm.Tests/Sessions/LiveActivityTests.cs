@@ -180,6 +180,11 @@ public sealed partial class LiveActivityTests
             ToolActivity.CaptionSummary("ctl", new JsonObject { ["command"] = "tool call node:x/exec --args @args" })
         );
         Assert.Null(ToolActivity.CaptionSummary("ctl", new JsonObject { ["command"] = "session list" }));
+        // Tool help names the target but does not run it.
+        var help = Ctl("node:worker/exec");
+        help["command"] = "tool call node:worker/exec --help";
+        help.Remove("values");
+        Assert.Null(ToolActivity.CaptionSummary("ctl", help));
 
         foreach (
             var route in new JsonObject[]
