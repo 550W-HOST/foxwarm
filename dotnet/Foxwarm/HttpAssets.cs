@@ -90,7 +90,10 @@ internal sealed class HttpAssets(string root, string packName = "foxwarm.assets"
                 }
             }
             // A mounted/extracted optional Code tree can coexist with a packed Core.
-            file = OpenFile(Path.Combine(root, path!));
+            var loosePath = Path.Combine(root, path!);
+            if (Directory.Exists(loosePath))
+                return null;
+            file = OpenFile(loosePath);
             if (file is null)
                 return null;
             var modified = File.GetLastWriteTimeUtc(file.SafeFileHandle);

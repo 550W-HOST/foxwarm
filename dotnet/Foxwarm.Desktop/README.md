@@ -13,8 +13,8 @@ installer: its components link the C runtime statically or import only Windows D
    is not a substitute for this runtime.
 2. Download `foxwarm-desktop-win-x64.zip` from the repository's GitHub releases,
    extract the entire ZIP to a folder you can read, then open
-   **Foxwarm.Desktop.exe**. Keep the DLLs, native assets, templates and `webui-dist`
-   directory together. Configure a model/provider in the WebUI's Setup page.
+   **Foxwarm.Desktop.exe**. Keep `foxwarm.assets`, the DLLs, native assets and
+   templates together. Configure a model/provider in the WebUI's Setup page.
 
 To prepare image, chart or React artifacts, also install Node.js and make `node`
 available on PATH before starting Desktop. The package includes the collected

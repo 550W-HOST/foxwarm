@@ -28,7 +28,7 @@ The format is owned here because consumers need HTTP streams, not Node require/f
 
 Each response holds its own shared-delete file handle and bounded positional stream; no whole-pack load or shared seek cursor participates. An in-flight response keeps the old file across replacement. Only the parsed index is cached, refreshed on file length/modification changes; a newly installed optional pack is visible without restarting Main. Brotli decompression is streamed through `BrotliStream`. Encoded responses carry stored length; decoded responses carry original length. `Vary: Accept-Encoding` covers both. ETags derive from original hashes; Brotli entries use weak validators across encoded and decoded representations, while raw entries use strong validators. ASP.NET owns conditionals, HEAD and raw single-range handling. Packed responses bypass runtime compression, including decoded responses, so they are not immediately recompressed as gzip.
 
-The abstraction retains loose serving for ordinary development and old installations. It does not virtualize filesystem consumers or expose new public routes. Authentication, deployment prefixes, capability checks and no-store dynamic transformations precede or surround resource serving in their existing owners.
+The abstraction retains loose serving for ordinary development and old installations. Loose directory URLs return 404, as absent files do; unrelated permission and I/O errors retain their normal failure behavior. It does not virtualize filesystem consumers or expose new public routes. Authentication, deployment prefixes, capability checks and no-store dynamic transformations precede or surround resource serving in their existing owners.
 
 ## Tests
 

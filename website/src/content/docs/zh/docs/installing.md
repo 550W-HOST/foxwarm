@@ -34,7 +34,7 @@ Foxwarm 服务器支持 **Linux x64**（包括 x64 WSL）、**macOS arm64**（Ap
 
 每个 Release 还包含：
 
-- `foxwarm-code-<版本>.tar.gz`：服务器安装包使用的 Code 编辑器，Windows 桌面版已自带。缺少 Code 时，WebUI 的 Code 页面会给出安装命令。
+- `foxwarm-code-<版本>.fwassets`：服务器安装包使用的 Code 编辑器，Windows 桌面版已自带。缺少 Code 时，WebUI 的 Code 页面会给出安装命令。
 - `native-cli-node-*`：Linux、macOS 和 Windows 的独立 [Node](/docs/nodes/) 客户端，Node 的引导命令会自动下载。
 - Docker 镜像 `ghcr.io/550w-host/foxwarm`，标签有完整版本号（如 `0.9.4`）、次版本号（`0.9`）和 `latest`，见 [Docker](#docker)。
 

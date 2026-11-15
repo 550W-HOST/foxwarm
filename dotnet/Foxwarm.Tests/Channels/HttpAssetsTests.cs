@@ -93,7 +93,10 @@ public sealed class HttpAssetsTests
             WritePack(host.Pack, "asset.js", Text);
         else
             await File.WriteAllBytesAsync(Path.Combine(host.Temp.Path, "asset.js"), Text);
+        Directory.CreateDirectory(Path.Combine(host.Temp.Path, "assets"));
         await host.Start();
+        Assert.Equal(HttpStatusCode.NotFound, (await host.Client.GetAsync("assets")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await host.Client.GetAsync("assets/")).StatusCode);
         using var full = await host.Client.GetAsync("asset.js");
         Assert.Equal(Text, await full.Content.ReadAsByteArrayAsync());
         Assert.Equal("text/javascript", full.Content.Headers.ContentType!.MediaType);

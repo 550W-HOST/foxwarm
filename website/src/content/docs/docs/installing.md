@@ -36,7 +36,7 @@ Each [release](https://github.com/550W-HOST/foxwarm/releases/latest) provides:
 
 Each release also includes:
 
-- `foxwarm-code-<version>.tar.gz`: the Code editor for server packages. The Windows desktop app already includes it. When Code is missing, the WebUI's Code page shows the command that installs it.
+- `foxwarm-code-<version>.fwassets`: the Code editor for server packages. The Windows desktop app already includes it. When Code is missing, the WebUI's Code page shows the command that installs it.
 - `native-cli-node-*`: the standalone [Node](/docs/nodes/) client for Linux, macOS and Windows. Node bootstrap commands download it for you.
 - The Docker image `ghcr.io/550w-host/foxwarm`, tagged with the version (for example `0.9.4`), the minor version (`0.9`) and `latest`; see [Docker](#docker).
 
