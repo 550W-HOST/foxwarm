@@ -219,7 +219,7 @@ public sealed partial class AgentRulesTreeTests
             grand
         );
         Successful(discovered);
-        Assert.DoesNotContain("builtin:skill", discovered!["output"]!.GetValue<string>());
+        Assert.False(CtlTestArgs.ListsBuiltin(discovered!["output"]!.GetValue<string>(), "skill"));
         Denied(await f.ToolAsync("skill", new JsonObject { ["action"] = "list" }, grand));
         await f.Manager.SetAgentRulesAsync("child", new JsonArray());
         Assert.True(f.Manager.ToolVisible(grand, "builtin", "skill"));

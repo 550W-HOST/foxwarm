@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import puppeteer from 'puppeteer-core'
 import { mainHostLaunch } from './mainHostFixture.mjs'
-import { functionCall } from './ctlModelCalls.mjs'
+import { functionCall, listsBuiltin } from './ctlModelCalls.mjs'
 
 const root = await mkdtemp(join(tmpdir(), 'foxwarm-unified-mcp-'))
 const data = join(root, 'data'); const work = join(data, 'agents', 'main'); const peerRoot = join(root, 'peer')
@@ -122,11 +122,12 @@ try {
   await page.type('#token', token); await page.click('button[type="submit"]'); await page.waitForSelector('button[aria-label="New session"]'); await waitForWebUiReady(page)
 
   await task([fn('discover-builtin', 'search_tools', { query: 'MCP server', sources: ['builtin'], limit: 10 }), fn('discover-node', 'search_tools', { query: 'read', sources: ['node'], limit: 1 })], { browserSend: true })
-  assert.match((await pair('discover-builtin')).output, /builtin:mcp_config/); assert.match((await pair('discover-builtin')).output, /builtin:list_mcp_servers/)
-  assert.match((await pair('discover-node')).output, /node:master\/read/); assert(!(await pair('discover-node')).output.includes('builtin:read'))
+  for (const name of ['mcp_config', 'list_mcp_servers']) assert(listsBuiltin((await pair('discover-builtin')).output, name), (await pair('discover-builtin')).output)
+  // read runs on the current Node (master) and is listed once, as the declared tool.
+  assert.match((await pair('discover-node')).output, /\nread \(declared tool\) — /); assert(!(await pair('discover-node')).output.includes('node:master/read'))
   for (let index = 0; index < 2; index++) {
     const partial = await perform('builtin:search_tools', { sources: ['builtin', 'mcp'], query: 'session', limit: 1 }, 'config-unavailable-' + index)
-    assert.match(partial.output, /builtin:session/); assert.match(partial.output, /configuration is unavailable/); assert(!partial.output.includes('synthetic-private-transport'))
+    assert.match(partial.output, /\nsession [a-z-]+ /); assert.match(partial.output, /configuration is unavailable/); assert(!partial.output.includes('synthetic-private-transport'))
   }
   await stopHost(); await writeFile(configFile, JSON.stringify({ servers: {} })); await startHost()
   assert((await perform('builtin:skill', { action: 'load', skillName: 'mcp-management' }, 'guide')).output.includes('MCP management'))
@@ -205,14 +206,14 @@ try {
   const large = await perform('mcp:local/result_case', { kind: 'large' }, 'case-large')
   assert.equal(large.outputTruncated, true); assert(large.output.length < 40000); assert.match(await readFile(large.outputFullPath, 'utf8'), /^long: START-/)
   assert((await readFile(large.outputFullPath, 'utf8')).includes('-END')); assert(large.outputOriginalLengthChars > 100000)
-  const meta = await perform('builtin:search_tools', { sources: ['mcp'], server: 'local', limit: 200 }, 'all-metadata')
-  assert(meta.output.length <= 32000); assert(!meta.output.includes('\u202e')); assert(meta.output.includes('schema omitted'))
+  const meta = await perform('builtin:search_tools', { sources: ['mcp'], server: 'local', limit: 200, includeSchema: true }, 'all-metadata')
+  assert(meta.output.length <= 32000); assert(!meta.output.includes('\u202e')); assert(meta.output.split('\n').filter(line => line.startsWith('mcp:local/')).length > 10); assert.equal(meta.output.split('\n    args: ').length - 1, 10, 'schemas are shown for the first ten results only')
   const unsafe = 'unsafe*/\nline\u202e'
   const dangerous = await perform('builtin:search_tools', { query: 'unsafe', sources: ['mcp'], server: 'local' }, 'unsafe-schema')
   assert.match(dangerous.output, /--source mcp --name @name --server local with values \{"name": "/); assert(!dangerous.output.includes('\nDO-NOT-EXECUTE')); assert(dangerous.output.includes('\\u202e'))
   assert.equal((await perform({ source: 'mcp', server: 'local', name: unsafe }, { tag: 'unsafe-name', 'key*/\nname': 'exact' }, 'call-unsafe')).args['key*/\nname'], 'exact')
   for (const [query, expected] of [['schema_required_open', /extra: number/], ['schema_required_closed', /never/], ['schema_many', /required keys omitted/], ['schema_ref', /Record<string, unknown>/]])
-    assert.match((await perform('builtin:search_tools', { sources: ['mcp'], server: 'local', query, limit: 1 }, 'schema-' + query)).output, expected)
+    assert.match((await perform('builtin:search_tools', { sources: ['mcp'], server: 'local', query, limit: 1, includeSchema: true }, 'schema-' + query)).output, expected)
   const bad = await perform('mcp:missing-server/echo_effect', { tag: 'unknown-server' }, 'unknown-server')
   assert(bad.error); assert(!await exists(join(peerRoot, 'effect-unknown-server.txt')))
   for (let index = 0; index < 15; index++) assert.equal((await perform('mcp:local/echo_effect', { tag: 'repeat-' + index }, 'repeat-' + index)).pid, echo.pid)

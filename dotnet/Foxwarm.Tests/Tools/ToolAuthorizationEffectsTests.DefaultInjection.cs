@@ -48,7 +48,10 @@ public sealed partial class ToolAuthorizationEffectsTests
                     ["includeSchema"] = false,
                 })
             );
-            Assert.Contains("builtin:" + name, search["output"]!.GetValue<string>());
+            Assert.True(
+                CtlTestArgs.ListsBuiltin(search["output"]!.GetValue<string>(), name),
+                search["output"]!.GetValue<string>()
+            );
         }
         var result = await Call(
             execution.Tools,
@@ -93,9 +96,11 @@ public sealed partial class ToolAuthorizationEffectsTests
                 ["sources"] = new JsonArray("builtin"),
             })
         );
-        Assert.DoesNotContain(
-            "builtin:set_session_compact_threshold",
-            filtered["output"]!.GetValue<string>()
+        Assert.False(
+            CtlTestArgs.ListsBuiltin(
+                filtered["output"]!.GetValue<string>(),
+                "set_session_compact_threshold"
+            )
         );
         var explicitOverride = new JsonArray(
             new JsonObject { ["name"] = "set_session_compact_threshold" }

@@ -119,8 +119,10 @@ try {
   assert.match(pair(state, 'source').error.message, /ENOENT/)
   assert(pair(state, 'source').error.message.includes(join(remote, 'agents/main/not-main.py')), 'missing source is read on the selected Node')
   state = await turn(actor, 'search', [call('search', 'search_tools', { sources: ['node'], limit: 20 }), call('exec', 'call_tool', { toolId: 'node:official-cli/exec', args: { command: 'printf ordinary-exec > ordinary-exec' } })])
-  assert.match(JSON.stringify(pair(state, 'search')), /node:official-cli\/read/)
-  assert(JSON.stringify(pair(state, 'search')).includes('node:official-cli/exec'))
+  // The selected Node's declared tools are listed once, as declared tools; its other tools by tool ID.
+  const nodeSearch = pair(state, 'search').output
+  for (const name of ['read', 'exec']) assert(nodeSearch.includes(`\n${name} (declared tool) — `), nodeSearch)
+  assert(nodeSearch.includes('node:official-cli/get_default_cwd'), nodeSearch); assert(!nodeSearch.includes('node:official-cli/read'), nodeSearch)
   assert(!pair(state, 'exec').error, JSON.stringify(pair(state, 'exec')))
   assert.equal(state.currentNode, 'official-cli'); assert.equal(state.cwd, undefined)
   assert.equal(await readFile(join(remote, 'ordinary-exec'), 'utf8'), 'ordinary-exec')

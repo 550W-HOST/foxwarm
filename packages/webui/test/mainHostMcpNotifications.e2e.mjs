@@ -8,7 +8,7 @@ import WebSocket from 'ws'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { createHostFixture, until } from './mainHostFixture.mjs'
-import { functionCall } from './ctlModelCalls.mjs'
+import { functionCall, listsBuiltin } from './ctlModelCalls.mjs'
 
 const a = await createHostFixture('notification-a', { })
 const b = await createHostFixture('notification-b', { })
@@ -68,7 +68,7 @@ try {
   for (const [host, id] of [[a, 'receiver'], [b, 'target'], [b, 'other-sender']])
     assert.equal((await host.api('POST', '/api/sessions', { agentId: 'main', sessionId: id })).status, 200)
   const discovered = success(await run(a, 'receiver', 'search_tools', { sources: ['builtin'], query: 'mcp_notifications', limit: 1 }))
-  assert.match(discovered.output, /mcp_notifications/)
+  assert(listsBuiltin(discovered.output, 'mcp_notifications'), discovered.output)
   const ordinary = success(await run(a, 'receiver', 'call_tool', mcp(send('ordinary connection retained', false))))
   assert.equal(ordinary.accepted, true)
   const denied = await run(a, 'receiver', 'call_tool', mcp(send('UNSTARTED-REPLY-MUST-NOT-QUEUE')))

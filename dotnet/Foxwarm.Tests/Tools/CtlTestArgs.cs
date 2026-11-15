@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using Foxwarm.Tools;
 
 namespace Foxwarm.Tests;
 
@@ -118,6 +119,20 @@ internal static class CtlTestArgs
             words.Add(Quote(query));
         }
         return new JsonObject { ["command"] = string.Join(' ', words) };
+    }
+
+    // Whether `tool search` text lists a builtin: as the usage line of one of its model commands
+    // (`node remove <node-id> — …`), as a declared tool, or by its tool ID.
+    internal static bool ListsBuiltin(string output, string builtin)
+    {
+        var paths = CtlRegistry.ForTarget("builtin", builtin).Select(command => command.Path).ToArray();
+        return output
+            .Split('\n')
+            .Any(line =>
+                paths.Any(path => line.StartsWith(path + " ", StringComparison.Ordinal))
+                || line.StartsWith(builtin + " (declared tool)", StringComparison.Ordinal)
+                || line.StartsWith("builtin:" + builtin + " ", StringComparison.Ordinal)
+            );
     }
 
     // A function call object for the model: ctl with the given command.

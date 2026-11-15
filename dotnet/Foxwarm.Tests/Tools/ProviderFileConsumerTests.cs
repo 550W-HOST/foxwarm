@@ -275,7 +275,13 @@ public sealed partial class ProviderFileConsumerTests
             CtlTestArgs.Search(new JsonObject { ["sources"] = new JsonArray("node"), ["nodeId"] = f.Node })
         );
         Success(search);
-        Assert.Contains(f.Node, search["output"]!.GetValue<string>());
+        // The selected Node's tools are the declared read, write, edit and exec, listed once as
+        // declared tools rather than again under the Node's tool IDs.
+        var nodeTools = search["output"]!.GetValue<string>();
+        foreach (var name in new[] { "read", "write", "edit", "exec" })
+            Assert.Contains("\n" + name + " (declared tool)", nodeTools);
+        Assert.DoesNotContain("node:" + f.Node + "/", nodeTools);
+        Assert.DoesNotContain("Warning:", nodeTools);
         Success(
             await f.Call(
                 "write",

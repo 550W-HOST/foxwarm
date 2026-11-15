@@ -271,7 +271,7 @@ public sealed partial class NodeAuthorizationTreeTests
                 continue;
             var found = await f.Call(
                 "ctl",
-                CtlTestArgs.Search(Obj($$"""{"sources":["node"],"nodeId":"{{id}}","limit":200}"""))
+                CtlTestArgs.Search(Obj($$"""{"sources":["node"],"nodeId":"{{id}}","limit":200,"includeSchema":true}"""))
             );
             Success(found);
             var output = found!["output"]!.GetValue<string>();

@@ -8,7 +8,7 @@ import { join, resolve } from 'node:path'
 import sharp from 'sharp'
 import WebSocket, { WebSocketServer } from 'ws'
 import { createHostFixture, until, sleep } from './mainHostFixture.mjs'
-import { functionCall } from './ctlModelCalls.mjs'
+import { functionCall, listsBuiltin } from './ctlModelCalls.mjs'
 
 // Inspect historical transfer receipts through their original technical tool rows.
 const fixture = await createHostFixture('node-files', { env: {}, onPage: page => page.evaluateOnNewDocument(() => localStorage.setItem('foxwarm_timeline_view_v1', 'detailed')) })
@@ -352,7 +352,7 @@ rules:
   state = await turn(actor, 'clear-capability-denial', [[call('clear-capability-denial', 'call_tool', { toolId: 'builtin:set_config', args: { target: 'tool-rules', filePath: join(fixture.work, 'policy.yaml') } })]]); good(state, 'clear-capability-denial')
   const offline = (await fixture.api('POST', '/api/nodes/onboarding/create', { fallbackUrl: fixture.origin, nodeId: 'remove-offline' })).body
   state = await turn(actor, 'remove-offline', [[call('discover-remove', 'search_tools', { query: 'node_remove', sources: ['builtin'], limit: 1 }), call('remove-offline', 'run_script', { code: 'return call_tool("builtin:node_remove", {"nodeId":"remove-offline"})' })]])
-  assert(good(state, 'discover-remove').output.includes('builtin:node_remove')); assert.deepEqual(good(state, 'remove-offline').result, { nodeId: 'remove-offline', disconnected: false })
+  assert(listsBuiltin(good(state, 'discover-remove').output, 'node_remove'), good(state, 'discover-remove').output); assert.deepEqual(good(state, 'remove-offline').result, { nodeId: 'remove-offline', disconnected: false })
   assert(requests.every(request => !(request.body.tools || []).some(tool => tool.name === 'node_remove')))
   state = await turn(actor, 'remove-active', [[call('remove-active', 'call_tool', { toolId: 'builtin:node_remove', args: { nodeId: 'two' } })]])
   assert.deepEqual(good(state, 'remove-active'), { nodeId: 'two', disconnected: true }); assert.equal(clients[1].child.exitCode, null); assert.equal(clients[1].child.signalCode, null)

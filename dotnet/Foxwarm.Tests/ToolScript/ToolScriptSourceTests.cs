@@ -176,7 +176,10 @@ public sealed class ToolScriptSourceTests
             "ctl",
             CtlTestArgs.Search(new JsonObject { ["query"] = "run_script", ["sources"] = new JsonArray("builtin") })
         );
-        Assert.Contains("builtin:run_script", found["output"]!.GetValue<string>());
+        Assert.True(
+            CtlTestArgs.ListsBuiltin(found["output"]!.GetValue<string>(), "run_script"),
+            found["output"]!.GetValue<string>()
+        );
         var denied = await f.Call("run_script", new JsonObject { ["filePath"] = "missing.py" });
         Assert.Equal("tool_authorization_denied", denied["error"]!["type"]!.GetValue<string>());
     }

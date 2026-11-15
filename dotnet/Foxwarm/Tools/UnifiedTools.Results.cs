@@ -348,15 +348,20 @@ internal static partial class UnifiedTools
             case "node":
             {
                 scope = ToolRegistry.TargetNode(target.Node, currentNode);
-                if (scope == currentNode && DeclaredNodeTools(registry).Contains(target.Name))
-                    return visible is not null && !visible("node", target.Name, scope)
-                        ? null
-                        : Help(Declared(target.Name));
                 await registry.RefreshNodeAsync(scope, token);
                 definition = registry
                     .NodeDefinitions(scope)
                     .OfType<JsonObject>()
                     .FirstOrDefault(item => SessionWait.Text(item["name"]) == target.Name);
+                // A declared tool the current Node provides is described by its declaration.
+                if (
+                    definition is not null
+                    && scope == currentNode
+                    && DeclaredNodeTools(registry).ContainsKey(target.Name)
+                )
+                    return visible is not null && !visible("node", target.Name, scope)
+                        ? null
+                        : Help(Declared(target.Name));
                 break;
             }
             case "mcp":

@@ -8,7 +8,7 @@ import { join, resolve } from 'node:path'
 import WebSocket from 'ws'
 import { createHostFixture, until } from './mainHostFixture.mjs'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
-import { functionCall } from './ctlModelCalls.mjs'
+import { functionCall, listsBuiltin } from './ctlModelCalls.mjs'
 
 const env = {  }
 const options = { env, }
@@ -86,7 +86,7 @@ try {
   assert.equal((await fixture.api('GET', route('missing') + '/nodes')).status, 404)
   assert.equal((await fixture.api('POST', route('missing') + '/node', { nodeId: 'master' })).status, 404)
   let state = await turn(actor, 'discover', [call('discover', 'search_tools', { sources: ['builtin'], query: 'node_create_auth_token', limit: 1 })])
-  assert.match(pair(state, 'discover').output, /builtin:node_create_auth_token/)
+  assert(listsBuiltin(pair(state, 'discover').output, 'node_create_auth_token'), pair(state, 'discover').output)
   const cliToken = await privateCredential(actor, 'owned-cli', join(fixture.work, 'cli-token'))
   const remote = join(fixture.root, 'cli'); await mkdir(join(remote, 'agents/main'), { recursive: true })
   const credentials = join(remote, 'credentials.json'); await writeFile(credentials, JSON.stringify({ nodeId: 'owned-cli', authToken: cliToken }), { mode: 0o600 })

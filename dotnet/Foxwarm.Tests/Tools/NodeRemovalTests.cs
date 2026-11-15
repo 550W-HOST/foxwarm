@@ -67,7 +67,10 @@ public sealed class NodeRemovalTests
                 ["limit"] = 1,
             })
         );
-        Assert.Contains("builtin:node_remove", found["output"]!.GetValue<string>());
+        Assert.True(
+            CtlTestArgs.ListsBuiltin(found["output"]!.GetValue<string>(), "node_remove"),
+            found["output"]!.GetValue<string>()
+        );
         var credential = manager.Nodes.Registry.Create("offline");
         var auth = credential["authToken"]!.GetValue<string>();
         var marker = Path.Combine(work, "retained.txt");

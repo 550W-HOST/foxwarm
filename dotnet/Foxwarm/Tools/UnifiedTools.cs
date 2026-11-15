@@ -63,9 +63,17 @@ internal static partial class UnifiedTools
             == true;
         var collected = new List<SearchTool>();
         var warnings = new List<string>();
-        // Natively declared Node tools (read, write, edit, exec) run on the current Node; they
-        // are listed once, as declared tools, rather than also as tools of the current Node.
+        // Natively declared Node tools (read, write, edit, exec) run on the current Node. A Node
+        // search of the current Node lists the ones it provides as declared tools, not again by
+        // tool ID; a builtin search without it lists the declarations themselves.
         var declaredNode = DeclaredNodeTools(registry);
+        var namedNode = ToolRegistry.Text(args, "nodeId");
+        var searchesCurrentNode =
+            sources.Contains("node")
+            && (
+                string.IsNullOrWhiteSpace(namedNode)
+                || ToolRegistry.TargetNode(namedNode, currentNode) == currentNode
+            );
         foreach (
             var entry in registry.Entries.Where(entry =>
                 entry.Definition["name"]!.GetValue<string>() != "ctl"
@@ -75,7 +83,7 @@ internal static partial class UnifiedTools
             var nodeTool = entry.Source == "node";
             if (
                 nodeTool
-                    ? !entry.DefaultInject || !sources.Contains("builtin") && !sources.Contains("node")
+                    ? !entry.DefaultInject || !sources.Contains("builtin") || searchesCurrentNode
                     : entry.Source != "builtin" || !sources.Contains("builtin")
             )
                 continue;
@@ -134,9 +142,14 @@ internal static partial class UnifiedTools
                 foreach (var definition in registry.NodeDefinitions(nodeId).OfType<JsonObject>())
                 {
                     var name = SessionWait.Text(definition["name"])!;
-                    var description = SessionWait.Text(definition["description"]) ?? "";
-                    if (nodeId == currentNode && declaredNode.Contains(name))
-                        continue;
+                    var declared =
+                        nodeId == currentNode && declaredNode.TryGetValue(name, out var native)
+                            ? external
+                                ? ClaudeRuntimeToolSupport.Project(native)
+                                : native
+                            : null;
+                    var shown = declared ?? definition;
+                    var description = SessionWait.Text(shown["description"]) ?? "";
                     if (visible is not null && !visible("node", name, nodeId))
                         continue;
                     var score = Score(query, [name], [description, nodeId]);
@@ -146,10 +159,11 @@ internal static partial class UnifiedTools
                                 "node",
                                 name,
                                 description,
-                                definition["parameters"],
+                                shown["parameters"],
                                 nodeId,
-                                true,
-                                score
+                                declared is null,
+                                score,
+                                Kind: declared is null ? SearchKinds.Tool : SearchKinds.Declared
                             )
                         );
                 }
@@ -359,12 +373,15 @@ internal static partial class UnifiedTools
             ? "master"
             : SessionWait.Text(owner.Entry.Snapshot().AuthorityEnvelope["currentNode"]) ?? "master";
 
-    // Names of the natively declared tools that run on the current Node.
-    internal static HashSet<string> DeclaredNodeTools(ToolRegistry registry) =>
+    // The natively declared tools that run on the current Node, by name.
+    internal static Dictionary<string, JsonObject> DeclaredNodeTools(ToolRegistry registry) =>
         registry
             .Entries.Where(entry => entry.Source == "node" && entry.DefaultInject)
-            .Select(entry => entry.Definition["name"]!.GetValue<string>())
-            .ToHashSet(StringComparer.Ordinal);
+            .ToDictionary(
+                entry => entry.Definition["name"]!.GetValue<string>(),
+                entry => entry.Definition,
+                StringComparer.Ordinal
+            );
 
     // How a search result names its tool for `tool call`: the tool ID when every part is a
     // plain identifier; otherwise --source/--name/--server or --node-id with ctl quoting. A

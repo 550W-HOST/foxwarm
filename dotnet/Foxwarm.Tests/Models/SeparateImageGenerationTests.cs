@@ -465,7 +465,10 @@ public sealed class SeparateImageGenerationTests
                     ["sources"] = new JsonArray("builtin"),
                 })
             );
-            Assert.Equal(expected, discovery.ToJsonString().Contains("builtin:generate_image"));
+            Assert.Equal(
+                expected,
+                CtlTestArgs.ListsBuiltin(discovery["output"]!.GetValue<string>(), "generate_image")
+            );
             // An invalid owned image proves allowed dispatch reaches the effect owner, without I/O.
             var args = new JsonObject
             {

@@ -714,6 +714,16 @@ public sealed class CtlCommandTests
         Assert.StartsWith("No matching commands or tools.", exa);
         var exec = SessionWait.Text((await Run(tools, "ctl", Args("tool search exec --source builtin"))).Response!["output"])!;
         Assert.StartsWith("exec (declared tool) — ", exec.Split('\n')[2]);
+        // The current Node's declared tools are listed once, as declared tools; a search of
+        // another Node lists only that Node's tools.
+        foreach (var current in new[] { "tool search --source node --limit 200", "tool search --source node --node-id master --limit 200" })
+        {
+            var listed = SessionWait.Text((await Run(tools, "ctl", Args(current))).Response!["output"])!;
+            Assert.Contains("\nread (declared tool) — ", listed);
+            Assert.DoesNotContain("node:master/read", listed);
+        }
+        var other = SessionWait.Text((await Run(tools, "ctl", Args("tool search --source node --node-id elsewhere"))).Response!["output"])!;
+        Assert.DoesNotContain("(declared tool)", other);
         // `tool call builtin:<name> --help` names the commands instead of the tool ID.
         var help = SessionWait.Text((await Run(tools, "ctl", Args("tool call builtin:node --help"))).Response!["output"])!;
         Assert.Contains("\nnode select <node-id> — ", help);

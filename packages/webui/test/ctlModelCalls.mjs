@@ -27,6 +27,15 @@ function control(args) {
   return [rest, kept]
 }
 
+/**
+ * Whether `tool search` text lists a builtin: as the usage line of one of its model commands
+ * (`node remove <node-id> — …`), as a declared tool, or by its tool ID.
+ */
+export function listsBuiltin(output, name) {
+  const paths = registry.commands.filter(command => command.ingress.includes('model') && command.target?.source === 'builtin' && command.target.name === name).map(command => command.path)
+  return String(output).split('\n').some(line => paths.some(path => line.startsWith(path + ' ')) || line.startsWith(name + ' (declared tool)') || line.startsWith(`builtin:${name} `))
+}
+
 /** `ctl tool call` arguments for a former unified descriptor (toolId or source/name/server/nodeId, args or argsJson). */
 export function ctlToolCall(descriptor) {
   const [plain, kept] = control(descriptor || {})
@@ -55,6 +64,7 @@ export function ctlToolSearch(args) {
   if (typeof plain.nodeId === 'string') words.push('--node-id', quote(plain.nodeId))
   if (plain.limit !== undefined) words.push('--limit', String(plain.limit))
   if (plain.includeSchema === false) words.push('--no-schema')
+  if (plain.includeSchema === true) words.push('--schema')
   return { command: words.join(' '), ...kept }
 }
 

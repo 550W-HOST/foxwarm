@@ -79,10 +79,13 @@ public sealed partial class ClaudeRuntimeTests
         Assert.Throws<InvalidDataException>(() => f.Main.Manager.AgentDirectory("forbidden-agent"));
         Assert.Empty(f.Main.Target.Entry.Snapshot().Queue);
         Assert.Null(f.Owner.Entry.Snapshot().Meta["wait"]);
-        var discovery = results[^1].ToJsonString();
-        Assert.DoesNotContain("builtin:wait", discovery);
-        Assert.DoesNotContain("builtin:run_script", discovery);
-        Assert.DoesNotContain("builtin:submit_compact_plan", discovery);
+        var discovery = string.Concat(
+            results[^1]["result"]!["content"]!.AsArray().Select(part => SessionWait.Text(part?["text"]))
+        );
+        Assert.Contains("match(es)", discovery);
+        Assert.False(CtlTestArgs.ListsBuiltin(discovery, "wait"), discovery);
+        Assert.False(CtlTestArgs.ListsBuiltin(discovery, "run_script"), discovery);
+        Assert.False(CtlTestArgs.ListsBuiltin(discovery, "submit_compact_plan"), discovery);
         Assert.Equal(
             "complete",
             f.Owner.Entry.Snapshot().AuthorityEnvelope["externalRuntime"]![
