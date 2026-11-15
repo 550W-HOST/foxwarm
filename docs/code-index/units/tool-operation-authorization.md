@@ -1,6 +1,6 @@
 # Unit: Tool operation authorization
 
-Files: `dotnet/Foxwarm/Tools/Authorization/OperationPlan.cs`, `dotnet/Foxwarm/Tools/Authorization/OperationAttribution.cs`, `dotnet/Foxwarm.Tests/Tools/OperationAttributionTests.cs`, `dotnet/Foxwarm.Tests/Tools/OperationAttributionTests.Attribution.cs`, `dotnet/Foxwarm.Tests/Tools/Fixtures/operation-decisions.json`
+Files: `dotnet/Foxwarm/Tools/Authorization/OperationPlan.cs`, `dotnet/Foxwarm/Tools/Authorization/OperationAttribution.cs`, `dotnet/Foxwarm.Tests/Tools/OperationAttributionTests.cs`, `dotnet/Foxwarm.Tests/Tools/Fixtures/operation-decisions.json`
 
 Secondary files: `dotnet/Foxwarm/Tools/Authorization/ToolAuthorizationEvaluation.cs`, `dotnet/Foxwarm/Tools/Authorization/ToolAuthorizationToolDefinition.cs`, `dotnet/Foxwarm/Sessions/SessionManager.Authorization.cs`, `dotnet/Foxwarm/Sessions/SessionManager.AuthorizationExplain.cs`
 
@@ -69,14 +69,14 @@ A declaration keeps two lists apart:
 | Obligation kind | Examples | Evaluated as |
 | --- | --- | --- |
 | **Primary request** | the call's own `ToolAuthorizationRequest` | the call identity, with its effects as operations |
-| **Concrete sub-request** | the script file source and artifact file source, each read as `node:read`; `create_session` prompt files as `node:master/read`; the `set_config` candidate; `add_secret` file sources and `deleteFile` (`node:edit` delete patch); compaction plan reads and saves; explain policy reads | its own identity, with the operations it guards |
+| **Concrete sub-request** | the script file source and artifact file source, each read as `node:read`; `create_session` prompt files as `node:master/read`; the `set_config` candidate; `add_secret` file sources and `deleteFile` (`node:edit` delete patch); compaction plan reads, saves and repair edits; explain policy reads and views of other probed Sessions; the optional `node select` `get_default_cwd` probe | its own identity, with the operations it guards |
 | **Policy probe** | a new-Session timer's creation target: a `create_session` probe whose future facts are partly unknown; ask or an indeterminate outcome rejects registration | its own identity under unknown facts, never a match against the timer request |
-| **Retained final request** | `node_remove` cascade members, each a clone of the arguments with that member's `nodeId`; ensure's final identity; the detached copy transfer; the configuration-lane recheck; MCP notification reception | the same capability with its own raw arguments and current facts |
+| **Retained final request** | `node_remove` cascade members, each a clone of the arguments with that member's `nodeId`; the final Node identity of create, ensure and destroy; the detached copy transfer; the configuration-lane recheck; MCP notification reception | the same capability with its own raw arguments and current facts |
 | **Nested call** | ToolScript `call_tool`/`ctl()`, timer slices | its own invocation and gate |
 
 The obligation inventory is complete by construction. A coverage test enumerates every `AuthorizeToolAsync`, `AuthorizeNodeFileAsync`, `AssessToolAsync` and creation-target call site outside the dispatch gate, and fails when one has no declared obligation ([catalog coverage](./tool-operation-catalog.md#coverage-and-conformance)).
 
-Subsumed internal work belongs to an effect's purpose and changes no further protected resource. The declaration names it, with no separate check. Examples: the `get_default_cwd` probe of `node select`, the snapshot refresh of `set_agent_inherit`, Task notifications, and the staging of `send_file`.
+Subsumed internal work belongs to an effect's purpose and changes no further protected resource. The declaration names it, with no separate check. Examples: the snapshot refresh of `set_agent_inherit`, Task notifications, and the staging of `send_file`.
 
 ### Derivation
 

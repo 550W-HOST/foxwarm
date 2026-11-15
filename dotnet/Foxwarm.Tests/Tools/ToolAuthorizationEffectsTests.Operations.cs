@@ -97,7 +97,7 @@ public sealed partial class ToolAuthorizationEffectsTests
         );
         Assert.Equal("tool_authorization_denied", Error(timer));
         Assert.Equal(
-            "Tool authorization rules deny creating a Session in Agent 'beta'. Checked as the create_session creation target (`builtin:create_session`) for `builtin:create_timer`, called as `create_timer`, in the global policy.",
+            "Tool authorization rules deny creating a Session in Agent 'beta'. The global policy denied the create_session creation target (`builtin:create_session`) for `builtin:create_timer`, called as `create_timer`.",
             Message(timer)
         );
         Assert.Equal(

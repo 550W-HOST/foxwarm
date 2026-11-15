@@ -96,7 +96,7 @@ Notation:
 | `run_script`, `start_toolscript_run` | from a file: `env.read(source)`; inline: **Self** | P; S `node:read` of the file source (master and remote); N each `call_tool`/`ctl()`; `model.request` per host call |
 | `continue_script` | **Self** | N; `model.request` |
 | `list/get/cancel_toolscript_run`, `cancel_transfer`, `wait`, `image_crop` | **Self** (owner-scoped) | — |
-| `submit_compact_plan` | **Self** | S `argsFilePath` read and invalid-plan save as Node read/write |
+| `submit_compact_plan` | **Self** | S `argsFilePath` read, invalid-plan save and repair edit as Node read/write/edit |
 | `ctl` | front end | resolves to the target capability |
 | `ask_user` | `user.ask[(secret)]`; `[secret.manage(name)]` per secret question; `[secret.use]` for referenced names | P. Answer-time storage happens after the invocation, without its scope. |
 | `send_to_session` | `session.send` | P |
@@ -112,7 +112,7 @@ Notation:
 | `list_agents` / `skill` | `agent.list` / `agent.view` | P |
 | `create_agent` | `agent.create`; `[agent.view(inherit)]`; `[session.create(kind: session)]` for the main Session; existing source: `[session.view(source)]`; missing source: `[session.create(kind: source)]`; `[env.read/env.write]` of memory directories for `inheritMemory`; `[session.manage(move)]` for `convertSession` | P. The missing-source creation without a main Session is a known defect; its fix updates the corpus. |
 | `set_agent_rules` / `set_agent_inherit` | `agent.manage(rules)` / `agent.manage(inherit)`, `[agent.view(inherit)]` | P. Subsumed: the `refreshSnapshots` refresh of the target Agent and inheriting Agents. |
-| `node` (one branch per action) | list: `node.list` / inspect: `node.view` / select: `node.select` / create, ensure, destroy: `node.lifecycle(action)` | P; R ensure's final identity. Subsumed: `get_default_cwd` on select. |
+| `node` (one branch per action) | list: `node.list` / inspect: `node.view` / select: `node.select` / create, ensure, destroy: `node.lifecycle(action)` | P; S `node:<selected>/get_default_cwd` probe for a remote Node that advertises it (optional: a denial only omits the default cwd); R the final Node identity at the lifecycle effect (create: the Provider parent; ensure: the existing or parent identity; destroy: the Node) |
 | `copy_between_nodes` | `env.read(source)`, `env.write(target)` | P; R the detached transfer recheck |
 | `node_create_auth_token` / `node_bootstrap_info` | `node.trust(credential)`, `env.write(master, filePath)` | P |
 | `node_pair_list` / `node_pair_approve` | `node.trust(pending)` / `node.trust(approve)` | P |
@@ -123,10 +123,10 @@ Notation:
 | `generate_image` | `image.generate` | P |
 | `artifact` | prepare and publish (a file source is required): `env.read(node, filePath)`; `get`: **Self** | P; S `node:read` of the source file |
 | `send_to_channel` | `channel.send` | P |
-| `create_timer`, `update_timer` | `timer.manage(owner, change, kind)` | P; Pr `create_session` creation target for new-Session timers (Agent and prefix known, future ID unknown; ask or indeterminate rejects); R the persisted candidate on update |
+| `create_timer`, `update_timer` | `timer.manage(owner, change, kind)` | P; Pr `create_session` creation target for new-Session timers (Agent and prefix known, future ID unknown; ask or indeterminate rejects). On update the probe uses the persisted candidate row, so a plan cannot construct it from the arguments |
 | `delete_timer`, `list_timers` | `timer.manage` | P |
 | `set_config` | `config.write(target)`; `[secret.use]` derived from the candidate | P; S candidate read as `node:master/read` (phase 2: stage A); R the configuration-lane recheck |
-| `explain_tool_authorization` | `config.read(tool-rules)`; `[session.view(probe)]` | P; S policy and candidate reads |
+| `explain_tool_authorization` | `config.read(tool-rules)`; `[session.view(probe)]` | P; S policy and candidate reads; S `view_session` of each probed Session other than the caller |
 | `add_secret` | `secret.manage(name)`; `[secret.use(name)]` when referenced; with `fromConfig`, `[config.write]` and `[mcp.manage]` | P; S `filePath` read on its Node; S `fromConfig` source reads; S `deleteFile` as `node:edit` with the delete patch on the file's Node |
 | `list_secrets` / `list_mcp_servers` | `secret.list` / `mcp.list` | P |
 | `mcp_config` | `mcp.manage(server)`, `[secret.use]` | P |
@@ -143,7 +143,7 @@ Inbound front ends map through the [adapter](./tool-operation-authorization.md#i
 | Session send | `session.send` (canonical ID) |
 | `node list` | `node.list` |
 | external-only `node status` | `node.view` of the selected Node |
-| `node select` | `node.select`, with the `get_default_cwd` probe subsumed |
+| `node select` | `node.select`, with the optional `get_default_cwd` sub-request |
 | Node tools, exec and exec result | `env.*` |
 | pairing | `node.trust` |
 
@@ -152,7 +152,7 @@ Inbound front ends map through the [adapter](./tool-operation-authorization.md#i
 Phase-1 tests, which add no production rejection:
 
 1. **Registration coverage.** Every `ToolRegistry.Entries` item has a declaration, and **Self** is an explicit `None(reason)` naming its owner check. MCP and custom Node identities use the two opaque declarations.
-2. **Obligation inventory.** The test enumerates every `AuthorizeToolAsync`, `AuthorizeNodeFileAsync`, `AssessToolAsync` and creation-target call site outside the dispatch gate. Each must map to a declared obligation, and each declared obligation to a call site.
+2. **Obligation inventory.** The test enumerates every `AuthorizeToolAsync`, `AuthorizeNodeFileAsync`, `AssessToolAsync` and creation-target call site outside the dispatch gate. Each must map to a declared obligation, and each declared obligation to a call site. Assessments whose outcome is only reported (explain's probe evaluations, `list_secrets` `usable`) are listed as report-only, not as obligations; the gate and its wrappers are listed as plumbing.
 3. **Derivation corpus.** `operation-conformance.json` extends the `ctl` corpus with resolved facts and expected effects, obligations, branches and subsumed work. It contains only supported branches.
 4. **Decision equality.** For global, local and external requests, attribution reports the same decision, deciding rule, secret outcome and approval options as the existing evaluator. The corpus includes:
    - correlated delivery: A → A allowed, A → B denied;
@@ -181,7 +181,15 @@ Later-phase corpora:
 
 ## Phase-1 explanation and attribution
 
-`OperationPlan.Derive` builds the plan from the resolved call, the facts of the probe's own assessment (with its Session target resolved from the catalog when no rule needed it) and in-memory catalog lookups; it never throws, and what it cannot establish goes to `incomplete`. Each probe adds `invocation`, `capability`, `arguments.raw` and `arguments.normalized`, `branch`, `self`, `operations`, `obligations` and `subsumed`; each policy variant adds `obligations`, one entry per planned obligation with the existing decision and per-layer rule, or `evaluated: false` with the reason. Obligations the plan cannot construct as a request are never assessed. `ToolAuthorizationEffectsTests.Operations.cs` drives these through real dispatch and `explain_tool_authorization`. `OperationAttribution.Denial` appends to the existing denial message the deciding rule (position and ID) or default, its layer, the denied obligation with its capability and the call it serves, and the command (`ctl <command>` or the tool name). The scope's primary request (`ToolApprovalScope.Primary`) identifies the call; sub-requests are matched to declared obligations by capability.
+`OperationPlan.Derive` builds the plan from the resolved call, the facts of the probe's own assessment (with its Session target resolved from the catalog when no rule needed it) and in-memory catalog lookups; it never throws, and what it cannot establish goes to `incomplete`. Each probe adds `invocation`, `capability`, `arguments.raw` and `arguments.normalized`, `branch`, `self`, `operations`, `obligations` and `subsumed`; each policy variant adds `obligations`, one entry per planned obligation with the existing decision and per-layer rule, or `evaluated: false` with the reason. Obligations the plan cannot construct as a request are never assessed. `OperationAttributionTests.Attribution.cs` checks the attribution text and obligation matching, and `ToolAuthorizationEffectsTests.Operations.cs` drives both through real dispatch and `explain_tool_authorization`. `OperationAttribution.Denial` appends to the existing denial message the deciding rule (position and ID) or default, its layer, the denied obligation with its capability and the call it serves, and the command (`ctl <command>` or the tool name). The scope's primary request (`ToolApprovalScope.Primary`) identifies the call; sub-requests are matched to declared obligations by capability.
+
+## Notes for phase 2
+
+Phase 1 found these in the code; they are not decisions.
+
+- **Non-string actions.** The `session` handler reads a non-string `action` (for example `["list"]`) as absent and runs `status`, while `node` and `skill` reject it. A version-1 `action` rule never matches that spelling. The phase-1 normalizer mirrors each handler, and the phase-3 normalizer parity corpus needs the case.
+- **Call-level identity for stage C.** One call site can check several obligations, and one obligation can be checked at several sites: the timer primary is checked outside and inside the timer lane, `set_config`'s local check runs before install and again inside the configuration lane, and the `add_secret` store recheck runs in two members. Stage C needs an identity per assessed call, not per site.
+- **Checks without a primary call.** Checks entered through `ToolApprovalScope.Detach` (the detached copy transfer) or after the invocation (answer-time `ask_user` storage) have no current primary request, so phase 1 attributes them as their own capability. Stage C should carry the admitted plan's obligation ID into these paths.
 
 ## Visibility probe sets
 

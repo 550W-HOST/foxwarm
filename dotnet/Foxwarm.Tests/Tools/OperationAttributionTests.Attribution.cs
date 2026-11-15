@@ -109,6 +109,11 @@ public sealed partial class OperationAttributionTests
             "The default action of the global policy denied `builtin:send_file`, called as `send_file`.",
             OperationAttribution.Denial(send, null, fallback, null)
         );
+        var timer = new ResolvedTool("create_timer", "builtin", "create_timer", new JsonObject());
+        Assert.Equal(
+            "The rules of Agent `alpha` denied the create_session creation target (`builtin:create_session`) for `builtin:create_timer`, called as `create_timer`.",
+            OperationAttribution.CreationTarget(timer, "alpha")
+        );
         Assert.Equal(
             "no exec for beta. Rule x.",
             OperationAttribution.Append("no exec for beta", "Rule x.")

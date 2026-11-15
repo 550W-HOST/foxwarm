@@ -144,13 +144,15 @@ internal static class OperationAttribution
 
     // The attribution of a refused timer creation target.
     internal static string CreationTarget(ResolvedTool? primary, string? layer) =>
-        "Checked as the create_session creation target (`builtin:create_session`) "
+        $"{Capitalized(LayerName(layer))} denied the create_session creation target (`builtin:create_session`)"
         + (
             primary is null
-                ? ""
-                : $"for `{OperationPlan.CapabilityId(primary)}`, called as `{Invocation(primary)}`, "
-        )
-        + $"in {LayerName(layer)}.";
+                ? "."
+                : $" for `{OperationPlan.CapabilityId(primary)}`, called as `{Invocation(primary)}`."
+        );
+
+    private static string Capitalized(string text) =>
+        text.Length == 0 ? text : char.ToUpperInvariant(text[0]) + text[1..];
 
     internal static string Append(string message, string attribution) =>
         message.TrimEnd() is var trimmed && trimmed.Length > 0
