@@ -165,4 +165,27 @@ public sealed partial class AgentRulesTreeTests
         Assert.Equal("tool_approval_unavailable", error.ErrorType);
         Assert.Equal(before, File.ReadAllText(f.Configuration.ActivePath));
     }
+
+    [Fact]
+    public async Task Denied_call_is_reported_before_its_input_is_offered_for_approval()
+    {
+        var (f, candidate, _) = await StagedConfigFixture();
+        await using var fixture = f;
+        await StagedPolicy(
+            f,
+            """
+            version: 1
+            rules:
+              - {id: forbid-config, tool: {source: builtin, name: set_config}, action: deny}
+              - {id: read-input, tool: {source: node, name: read}, action: ask}
+            """
+        );
+        var before = File.ReadAllText(f.Configuration.ActivePath);
+        var result = await f.ToolAsync("set_config", ModelsCall(candidate)).WaitAsync(TimeSpan.FromSeconds(15));
+        Assert.Equal("tool_authorization_denied", ErrorType(result));
+        Assert.Contains("`forbid-config`", SessionWait.Text(result?["error"]?["message"]));
+        // Neither the input nor the call was offered for approval.
+        Assert.Empty(Records(f.Owner));
+        Assert.Equal(before, File.ReadAllText(f.Configuration.ActivePath));
+    }
 }

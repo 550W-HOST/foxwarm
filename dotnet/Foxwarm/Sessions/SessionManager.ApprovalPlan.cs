@@ -25,14 +25,16 @@ internal sealed record AssessedCheck(
 
 // Staged approval of one call under version-1 rules (phase 2 of operation authorization).
 //
+// The call's own request is assessed first, as before staging; its deny stops the call.
 // A. Protected inputs whose content decides facts of the call (the set_config candidate of
-//    config and models) are assessed first. A deny stops the call; asks become one input
-//    approval; the admitted bytes are captured for the effect.
+//    config and models) come next. A deny stops the call; asks become one input approval; the
+//    admitted bytes are captured for the effect.
 // B. The call's own request and every other request of its plan that can be built before it
 //    runs are assessed. Asks become one call approval whose grant lists each asking request.
 //    Any deny among required checks prevents the approval.
 // C. Each owner still checks its requests against the current policy and facts when it runs
-//    (AuthorizeToolAsync); a grant covers an ask only for a request it lists.
+//    (AuthorizeToolAsync); a grant covers an ask only for a request it lists. Each stage is
+//    requested once: a changed request after its approval fails closed.
 internal sealed partial class SessionManager
 {
     // Whether any effective layer of the Agent can produce an ask. Without one, a call is
@@ -79,6 +81,15 @@ internal sealed partial class SessionManager
             ToolApprovalScope.Current is { } current && ReferenceEquals(current.Owner, owner)
                 ? current
                 : null;
+        // The call's own request first, as before staging: its argument and path errors, an
+        // unavailable policy and its deny come before anything staging adds, so a denied call
+        // never asks for its inputs.
+        var primary = await AssessToolAsync(owner, resolved, files, token);
+        if (primary.Denied is not null)
+        {
+            observe?.Invoke(primary);
+            throw Denial(owner, resolved, primary);
+        }
         var staged = PolicyCanAsk(owner.Agent, await authorization.LoadAsync(token));
         // A denied input stops derivation: the call is never offered for approval. Without any
         // ask its owner reports the denial, as before staging.
@@ -91,11 +102,17 @@ internal sealed partial class SessionManager
             var asking = deniedInput is null ? Uncovered(owner, scope, inputs) : [];
             if (asking.Count > 0)
                 throw new ToolApprovalRequiredException(asking, resolved, ToolApprovalStage.Input);
-            if (scope is not null && deniedInput is null)
+            if (
+                scope is not null
+                && deniedInput is null
+                && CandidateInputPath(resolved, files) is not null
+            )
+            {
                 await AdmitInputsAsync(resolved, files, scope, token);
+                // Stage B: the call's own request again, with the facts of its admitted inputs.
+                primary = await AssessToolAsync(owner, resolved, files, token);
+            }
         }
-        // Stage B.
-        var primary = await AssessToolAsync(owner, resolved, files, token);
         observe?.Invoke(primary);
         if (primary.Denied is not null)
             throw Denial(owner, resolved, primary);
