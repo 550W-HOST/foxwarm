@@ -111,7 +111,7 @@ WebUI identity image rendering uses the same deployment-relative API helper but 
 
 ## Native hosted-search citations
 
-`getPartWebSearchAnnotations` selects the text part's original Responses annotations or Anthropic text-block citations. The shared safe Sources renderer accepts `web_search_result_location` without assigning OpenAI reference IDs or offsets. Exact inline-marker resolution still requires Responses span annotations. `webSearchCitations.e2e.mjs` covers the native citation/search-source distinction and excludes unsafe URLs and opaque replay fields from rendered prose.
+`getPartWebSearchAnnotations` selects the text part's original Responses annotations or aggregates citations from the text blocks in `providerMeta.anthropic.contentBlocks`. Native text-run ownership belongs to [the Anthropic converter](./model-anthropic-completions.md#d-anthropic-text-runs); the shared Markdown and Sources renderer consumes one canonical text part. The shared safe Sources renderer accepts `web_search_result_location` without assigning OpenAI reference IDs or offsets. Exact inline-marker resolution still requires Responses span annotations. `webSearchCitations.e2e.mjs` covers the native citation/search-source distinction and excludes unsafe URLs and opaque replay fields from rendered prose.
 
 ## Integration
 

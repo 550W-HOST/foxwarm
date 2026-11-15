@@ -1,6 +1,6 @@
 import { getMessageStableKey } from '../chatViewportState'
 import { isCommittedHistoryMessage } from '../chatHistoryState'
-import { getPartWebSearchAction } from '../webSearchAction'
+import { getPartWebSearchAction, getPartWebSearchOutputItem } from '../webSearchAction'
 import { parseFoxwarmMetadataLine, type FunctionCall, type FunctionResponse, type Message } from './chatShared'
 import { ctlAsUnified } from '../ctlCall'
 
@@ -35,7 +35,7 @@ export function buildConversationActivitySummary(messages: readonly Message[], h
   const countedHostedObjects = new WeakSet<object>()
   const numberFact = (value: unknown) => typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : 0
   const hosted = (part: Message['parts'][number]) => {
-    const item = part.providerMeta?.openaiResponses?.outputItem ?? part.providerMeta?.anthropic?.contentBlock
+    const item = getPartWebSearchOutputItem(part)
     return item?.type !== 'web_search_tool_result' && getPartWebSearchAction(part) ? item as Record<string, any> : undefined
   }
   for (const message of history) {

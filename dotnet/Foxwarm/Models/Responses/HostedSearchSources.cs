@@ -46,15 +46,16 @@ internal static class HostedSearchSources
     {
         var native = (part["providerMeta"] as JsonObject)?["anthropic"] as JsonObject;
         if (
-            SessionWait.Text(native?["contentBlock"]?["type"]) == "web_search_tool_result"
+            AnthropicSearchHistory.Block(part) is JsonObject block
+            && SessionWait.Text(block["type"]) == "web_search_tool_result"
             && ShortText(native?["sourceModelId"], 200) is string nativeModel
-            && native?["contentBlock"]?["content"] is JsonArray nativeSources
+            && block["content"] is JsonArray nativeSources
         )
         {
             var nativeEvidence = new JsonObject { ["source_model_id"] = nativeModel };
             if (ShortText(message["__meta"]?["llmRequestId"], 200) is string nativeRequest)
                 nativeEvidence["request_id"] = nativeRequest;
-            if (ShortText(native["contentBlock"]?["tool_use_id"], 200) is string nativeCall)
+            if (ShortText(block["tool_use_id"], 200) is string nativeCall)
                 nativeEvidence["call_id"] = nativeCall;
             return SearchRecords(nativeEvidence, nativeSources, "web_search_result");
         }

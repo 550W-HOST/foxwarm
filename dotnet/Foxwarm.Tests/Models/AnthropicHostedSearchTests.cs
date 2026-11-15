@@ -269,7 +269,7 @@ public sealed partial class AnthropicHostedSearchTests
             Search(),
             Obj("""{"type":"tool_use","id":"local","name":"task","input":{"action":"list"}}""")
         );
-        var paused = Reply("pause_turn", Sources(), Cited());
+        var paused = Reply("pause_turn", Sources(), Text("## Findings\n\n"), Text("- "), Cited(), Text("\n"));
         var final = Reply(
             "end_turn",
             Search("later"),
@@ -420,7 +420,7 @@ public sealed partial class AnthropicHostedSearchTests
         void Stored(IReadOnlyList<JsonObject> rows)
         {
             var native = rows.SelectMany(row => row["parts"]!.AsArray())
-                .Select(part => part?["providerMeta"]?["anthropic"]?["contentBlock"])
+                .SelectMany(part => part?["providerMeta"]?["anthropic"]?["contentBlocks"] as JsonArray ?? [])
                 .OfType<JsonObject>()
                 .ToArray();
             Assert.Contains(

@@ -5,22 +5,22 @@ namespace Foxwarm.Models;
 
 internal static class AnthropicSearchHistory
 {
-    internal static JsonObject? Block(JsonObject part)
+    internal static IEnumerable<JsonObject> NativeBlocks(JsonObject part)
     {
         var native = (part["providerMeta"] as JsonObject)?["anthropic"] as JsonObject;
-        if (
-            SessionWait.Text(native?["sourceModelId"]) is not string
-            || native?["contentBlock"] is not JsonObject block
-        )
-            return null;
-        return IsSearch(block) ? block : null;
+        return SessionWait.Text(native?["sourceModelId"]) is string
+            && native?["contentBlocks"] is JsonArray blocks
+                ? blocks.OfType<JsonObject>()
+                : [];
     }
+
+    internal static JsonObject? Block(JsonObject part) => NativeBlocks(part).FirstOrDefault(IsSearch);
 
     internal static IEnumerable<JsonObject> Blocks(JsonObject message) =>
         (message["parts"] as JsonArray ?? [])
             .OfType<JsonObject>()
-            .Select(Block)
-            .OfType<JsonObject>();
+            .SelectMany(NativeBlocks)
+            .Where(IsSearch);
 
     private static bool IsSearch(JsonObject block) =>
         SessionWait.Text(block["type"]) == "web_search_tool_result"

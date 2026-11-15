@@ -26,11 +26,44 @@ internal static class AnthropicCanonicalConverter
                     SessionWait.Text(block["type"]) is "server_tool_use" or "web_search_tool_result"
                 ) == true
             || SessionWait.Text((response as JsonObject)?["stop_reason"]) == "pause_turn";
+        var textBlocks = new List<JsonObject>();
+        void FlushText()
+        {
+            if (textBlocks.Count == 0)
+                return;
+            var text = string.Concat(
+                textBlocks.Select(block => SessionWait.Text(block["text"]) ?? "")
+            );
+            if (
+                nativeSearch
+                || textBlocks.Any(block => block["citations"] is JsonArray { Count: > 0 })
+            )
+            {
+                var part = NativePart(textBlocks, concreteModelId);
+                part["text"] = text;
+                parts.Add(part);
+            }
+            else if (TaggedThinking(text) is JsonArray tagged)
+                foreach (var part in tagged)
+                    parts.Add(part?.DeepClone());
+            else
+                parts.Add(new JsonObject { ["text"] = text });
+            textBlocks.Clear();
+        }
         foreach (var raw in content ?? [])
         {
             if (raw is not JsonObject block)
+            {
+                FlushText();
                 continue;
+            }
             var type = SessionWait.Text(block["type"]) ?? "";
+            if (type == "text")
+            {
+                textBlocks.Add(block);
+                continue;
+            }
+            FlushText();
             if (
                 (type == "server_tool_use" && SessionWait.Text(block["name"]) != "web_search")
                 || type == "mcp_tool_use"
@@ -49,23 +82,7 @@ internal static class AnthropicCanonicalConverter
             {
                 case "server_tool_use":
                 case "web_search_tool_result":
-                    parts.Add(NativePart(block, concreteModelId));
-                    break;
-                case "text":
-                    if (nativeSearch || block["citations"] is JsonArray { Count: > 0 })
-                    {
-                        var cited = NativePart(block, concreteModelId);
-                        cited["text"] = SessionWait.Text(block["text"]) ?? "";
-                        parts.Add(cited);
-                        break;
-                    }
-                    var text = SessionWait.Text(block["text"]) ?? "";
-                    var tagged = TaggedThinking(text);
-                    if (tagged is null)
-                        parts.Add(new JsonObject { ["text"] = text });
-                    else
-                        foreach (var part in tagged)
-                            parts.Add(part?.DeepClone());
+                    parts.Add(NativePart([block], concreteModelId));
                     break;
                 case "thinking":
                     var thinking = new JsonObject { ["thinking"] = block["thinking"]?.DeepClone() };
@@ -111,6 +128,7 @@ internal static class AnthropicCanonicalConverter
                     break;
             }
         }
+        FlushText();
         if (parts.Count == 0)
             return null;
         var meta = new JsonObject
@@ -195,7 +213,7 @@ internal static class AnthropicCanonicalConverter
         return result;
     }
 
-    private static JsonObject NativePart(JsonObject block, string model) =>
+    private static JsonObject NativePart(IEnumerable<JsonObject> blocks, string model) =>
         new()
         {
             ["providerMeta"] = new JsonObject
@@ -203,7 +221,9 @@ internal static class AnthropicCanonicalConverter
                 ["anthropic"] = new JsonObject
                 {
                     ["sourceModelId"] = model,
-                    ["contentBlock"] = block.DeepClone(),
+                    ["contentBlocks"] = new JsonArray(
+                        blocks.Select(block => block.DeepClone()).ToArray()
+                    ),
                 },
             },
         };

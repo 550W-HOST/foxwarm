@@ -240,7 +240,7 @@ public sealed partial class AnthropicHostedSearchTests
                     .AsArray()
                     .Any(part =>
                         SessionWait.Text(
-                            part?["providerMeta"]?["anthropic"]?["contentBlock"]?["type"]
+                            part?["providerMeta"]?["anthropic"]?["contentBlocks"]?[0]?["type"]
                         ) == "server_tool_use"
                     )
         );

@@ -10,6 +10,147 @@ public sealed partial class AnthropicHostedSearchTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task Text_runs_concatenate_exactly_preserve_boundaries_and_replay_after_persistence(
+        bool streaming
+    )
+    {
+        var response = Reply(
+            "tool_use",
+            Text("Before "),
+            Text("search.\n"),
+            Obj(
+                """{"type":"thinking","thinking":"signed reasoning","signature":"opaque-signature"}"""
+            ),
+            Search(),
+            Sources(),
+            Text("## Findings\n\n"),
+            Text("- "),
+            Cited(),
+            Text("\n- "),
+            Cited(),
+            Text("\n"),
+            Obj("""{"type":"redacted_thinking","data":"opaque-redacted"}"""),
+            Text("After "),
+            Text("thinking."),
+            Obj("""{"type":"tool_use","id":"local","name":"task","input":{"action":"list"}}"""),
+            Text("After "),
+            Text("tool."),
+            Obj("""{"type":"future"}"""),
+            Text("After unknown.")
+        );
+        await using var peer = new ScriptedResponsesSequenceServer(
+            1,
+            async (_, stream, _) => await Respond(stream, response, streaming)
+        );
+        var options = new ResponsesClientOptions(peer.BaseUri, "wire", "a/wire", "", "", 1000)
+        {
+            WebSearch = Obj("""{"enabled":true}"""),
+            ExtraFields = new JsonObject { ["stream"] = streaming },
+        };
+        using var http = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
+        var updates = new List<ResponsesStreamProgress>();
+        var result = await new AnthropicMessagesService(
+            http,
+            options,
+            progress: (_, update) => updates.Add(update)
+        ).ChatAsync("s", [], CancellationToken.None);
+        var canonical = result.AssistantMessage!;
+        var body = "## Findings\n\n- 😀 A supported claim.\n- 😀 A supported claim.\n";
+        var parts = canonical["parts"]!.AsArray();
+        Assert.Equal(
+            new[] { "Before search.\n", body, "After thinking.", "After tool.", "After unknown." },
+            parts.OfType<JsonObject>()
+                .Where(part => part["text"] is not null)
+                .Select(part => part["text"]!.ToString())
+        );
+        Assert.Equal(10, parts.Count);
+        Assert.NotNull(parts[1]!["thinking"]);
+        Assert.Equal(
+            "server_tool_use",
+            parts[2]!["providerMeta"]!["anthropic"]!["contentBlocks"]![0]!["type"]!.ToString()
+        );
+        Assert.Equal(
+            "web_search_tool_result",
+            parts[3]!["providerMeta"]!["anthropic"]!["contentBlocks"]![0]!["type"]!.ToString()
+        );
+        Assert.NotNull(parts[5]!["providerMeta"]!["redactedThinking"]);
+        Assert.NotNull(parts[7]!["functionCall"]);
+        Assert.Equal(6, parts[4]!["providerMeta"]!["anthropic"]!["contentBlocks"]!.AsArray().Count);
+        Assert.Equal("a/wire", parts[4]!["providerMeta"]!["anthropic"]!["sourceModelId"]!.ToString());
+        if (streaming)
+            Assert.Equal(
+                string.Concat(parts.OfType<JsonObject>().Select(part => SessionWait.Text(part["text"]))),
+                updates[^1].Text
+            );
+
+        canonical["__meta"]!["seq"] = 1;
+        canonical["__meta"]!["timestamp"] = 1000;
+        using var temp = new TempDirectory();
+        var archive = new SqliteArchiveMessageStore(Path.Combine(temp.Path, "archive.sqlite"), "s");
+        archive.WriteMessages([ArchiveMessageRecord.Create("s", "main", 1, 1000, canonical)]);
+        var reopened = new SqliteArchiveMessageStore(archive.DatabasePath, "s")
+            .ReadMessageBySeq(1)!
+            .Message;
+        Assert.True(JsonNode.DeepEquals(canonical, reopened));
+        var expected = new JsonArray(
+            response["content"]!.AsArray()
+                .Where(block => SessionWait.Text(block?["type"]) != "future")
+                .Select(block => block!.DeepClone())
+                .ToArray()
+        );
+        // Unknown provider blocks are already omitted by the adapter; they still bound text runs.
+        var native = AnthropicRequestSerializer.BuildRequest(
+            ConcreteRequestHistory.Prepare([reopened], "a/wire"),
+            options
+        );
+        Assert.True(JsonNode.DeepEquals(expected, native["messages"]![0]!["content"]));
+        var switched = ConcreteRequestHistory.Prepare([reopened], "other/wire");
+        Assert.DoesNotContain("opaque-", switched[0].ToJsonString());
+        var other = options with { ConcreteModelId = "other/wire" };
+        var anthropic = AnthropicRequestSerializer.BuildRequest(switched, other)["messages"]![0]!["content"]!
+            .AsArray();
+        Assert.Single(anthropic.OfType<JsonObject>(), block => SessionWait.Text(block["text"]) == body);
+        Assert.DoesNotContain(
+            anthropic.OfType<JsonObject>(),
+            block => SessionWait.Text(block["text"]) == "- "
+        );
+        var responses = ResponsesRequestSerializer.BuildRequest(
+            switched, "wire", "other/wire", "", 1000
+        )["input"]!.AsArray();
+        Assert.Single(
+            responses.OfType<JsonObject>().SelectMany(item => item["content"] as JsonArray ?? []),
+            block => SessionWait.Text(block?["text"]) == body
+        );
+        var completions = CompletionsRequestSerializer.BuildRequest(
+            switched, other, "reasoning_content", "cache"
+        )["messages"]![0]!["content"]!.AsArray();
+        Assert.Single(completions.OfType<JsonObject>(), block => SessionWait.Text(block["text"]) == body);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_single_cited_text_run_keeps_native_citations_on_replay_without_search_blocks(
+        bool multipleBlocks
+    )
+    {
+        var response = multipleBlocks
+            ? Reply("end_turn", Cited(), Text(" More."))
+            : Reply("end_turn", Cited());
+        var canonical = AnthropicCanonicalConverter.ConvertAssistant(response, "a/wire", 1000, 1)!;
+        Assert.Equal(
+            "😀 A supported claim." + (multipleBlocks ? " More." : ""),
+            Assert.Single(canonical["parts"]!.AsArray())!["text"]!.ToString()
+        );
+        var replay = AnthropicRequestSerializer.ConvertHistory(
+            [canonical], new Uri("http://localhost"), "a/wire"
+        );
+        Assert.True(JsonNode.DeepEquals(response["content"], replay[0]!["content"]));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task Search_errors_remain_native_results_not_client_calls_or_provider_retry_failures(
         bool streaming
     )

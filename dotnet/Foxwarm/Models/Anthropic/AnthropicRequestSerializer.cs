@@ -25,7 +25,7 @@ internal static class AnthropicRequestSerializer
                 : message.Role;
             var blocks = new JsonArray();
             var parts = (raw["parts"] as JsonArray ?? []).OfType<JsonObject>().ToArray();
-            JsonObject? Native(JsonObject part)
+            JsonArray? Native(JsonObject part)
             {
                 var metadata = (part["providerMeta"] as JsonObject)?["anthropic"] as JsonObject;
                 return
@@ -36,19 +36,20 @@ internal static class AnthropicRequestSerializer
                         source,
                         concreteModelId
                     )
-                    ? metadata?["contentBlock"] as JsonObject
+                    ? metadata?["contentBlocks"] as JsonArray
                     : null;
             }
-            var nativeSearch = parts.Any(part =>
-                SessionWait.Text(Native(part)?["type"])
-                    is "server_tool_use"
-                        or "web_search_tool_result"
-            );
+            var nativeSearch = parts
+                .SelectMany(part => (Native(part) ?? []).OfType<JsonObject>())
+                .Any(block =>
+                    SessionWait.Text(block["type"]) is "server_tool_use" or "web_search_tool_result"
+                );
             foreach (var part in parts)
             {
-                if (Native(part) is JsonObject native)
+                if (Native(part) is JsonArray native)
                 {
-                    blocks.Add(native.DeepClone());
+                    foreach (var block in native)
+                        blocks.Add(block?.DeepClone());
                     continue;
                 }
                 // Portable evidence is for other protocols/models. The native
@@ -173,7 +174,9 @@ internal static class AnthropicRequestSerializer
                 }
             }
             JsonNode content =
-                blocks.Count == 1 && SessionWait.Text(blocks[0]?["type"]) == "text"
+                blocks.Count == 1
+                && SessionWait.Text(blocks[0]?["type"]) == "text"
+                && !parts.Any(part => Native(part) is not null)
                     ? blocks[0]!["text"]!.DeepClone()
                 : blocks.Count == 0
                     ? CompletionsRequestSerializer.Truthy(raw["content"])

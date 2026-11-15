@@ -9,8 +9,10 @@ import { execFileSync } from 'node:child_process'
 import { gunzipSync } from 'node:zlib'
 import sharp from 'sharp'
 import { createHostFixture, until, sleep } from './mainHostFixture.mjs'
+import { waitForWebUiReady } from './webuiReadiness.mjs'
 
 const fixture = await createHostFixture('anthropic-stream', { onPage: page => page.evaluateOnNewDocument(() => {
+  localStorage.setItem('foxwarm_timeline_view_v1', 'detailed')
   const Native = window.WebSocket
   window.observedFrames = []
   window.WebSocket = class extends Native {
@@ -21,11 +23,27 @@ const route = id => '/api/sessions/' + encodeURIComponent(id)
 const records = [], errors = [], rounds = new Map(), holds = new Map(), closed = new Set(), intervals = new Set()
 const exists = path => access(path).then(() => true, () => false)
 const signature = 'synthetic-opaque-signature', redacted = 'synthetic-opaque-redacted'
+const citation = (url, title) => ({ type: 'web_search_result_location', url, title, encrypted_index: 'opaque-index' })
+const searchedBlocks = [
+  { type: 'text', text: 'I will search.\n' },
+  { type: 'server_tool_use', id: 'native-search', name: 'web_search', input: { query: 'synthetic release' } },
+  { type: 'web_search_tool_result', tool_use_id: 'native-search', content: [{ type: 'web_search_result', url: 'https://example.com/consulted', title: 'Consulted page', encrypted_content: 'opaque-result' }] },
+  { type: 'text', text: '## Findings\n\n' },
+  { type: 'text', text: '- ' },
+  { type: 'text', text: 'Alpha claim.', citations: [citation('https://example.com/alpha', 'Alpha source')] },
+  { type: 'text', text: '\n- ' },
+  { type: 'text', text: 'Beta claim.', citations: [citation('https://example.com/alpha', 'Alpha source'), citation('https://example.com/beta', 'Beta source'), citation('javascript:bad', 'Unsafe')] },
+  { type: 'text', text: '\n' },
+]
+const searchedText = searchedBlocks.slice(3).map(block => block.text).join('')
 const event = (response, data) => response.write('data: ' + JSON.stringify(data) + '\r\n\r\n')
 const start = response => { response.writeHead(200, { 'content-type': 'text/event-stream' }); event(response, { type: 'message_start', message: { id: 'local', role: 'assistant', usage: { input_tokens: 40, output_tokens: 1, cache_creation_input_tokens: 99, cache_read_input_tokens: 12 } } }) }
 function block(response, index, content, rawInput) {
-  event(response, { type: 'content_block_start', index, content_block: content.type === 'tool_use' ? { ...content, input: {} } : content })
-  if (content.type === 'tool_use') event(response, { type: 'content_block_delta', index, delta: { type: 'input_json_delta', partial_json: rawInput ?? JSON.stringify(content.input) } })
+  const tool = ['tool_use', 'server_tool_use'].includes(content.type)
+  const { citations, ...startContent } = content
+  event(response, { type: 'content_block_start', index, content_block: tool ? { ...startContent, input: {} } : startContent })
+  if (tool) event(response, { type: 'content_block_delta', index, delta: { type: 'input_json_delta', partial_json: rawInput ?? JSON.stringify(content.input) } })
+  for (const citation of citations ?? []) event(response, { type: 'content_block_delta', index, delta: { type: 'citations_delta', citation } })
   event(response, { type: 'content_block_stop', index })
 }
 function stop(response, reason = 'end_turn', end = true, blank = true) {
@@ -41,7 +59,7 @@ const peer = createServer(async (request, response) => {
     const bytes = Buffer.concat(chunks), body = JSON.parse(request.headers['content-encoding'] === 'gzip' ? gunzipSync(bytes) : bytes)
     assert.equal(request.url, '/v1/messages'); assert.equal(request.headers['x-api-key'], 'local-provider-token'); assert(!request.headers.authorization)
     assert.equal(body.max_tokens, 911); assert.equal(body.model, 'wire'); assert(!('prompt_cache_key' in body))
-    assert(body.tools.every(tool => tool.input_schema && !('parameters' in tool)))
+    assert(body.tools.every(tool => (tool.type === 'web_search_20250305' || tool.input_schema) && !('parameters' in tool)))
     const texts = body.messages.filter(row => row.role === 'user').flatMap(row => typeof row.content === 'string' ? [row.content] : row.content.filter(block => block.type === 'text').map(block => block.text))
     const key = texts.map(value => /^ANTH:([a-z-]+)$/m.exec(value)?.[1]).findLast(Boolean), round = (rounds.get(key) || 0) + 1
     assert(key, 'The current user marker is inside its canonical channel wrapper')
@@ -52,6 +70,16 @@ const peer = createServer(async (request, response) => {
     }
     assert.equal(body.stream, true); assert.deepEqual(body.cache_control, { type: 'ephemeral' })
     const replay = body.messages.filter(row => row.role === 'assistant').flatMap(row => Array.isArray(row.content) ? row.content : [])
+    if (key === 'search') {
+      assert(body.tools.some(tool => tool.type === 'web_search_20250305'))
+      start(response); searchedBlocks.forEach((content, index) => block(response, index, content))
+      holds.set(key, () => stop(response)); return
+    }
+    if (key === 'search-follow') {
+      assert.deepEqual(replay, searchedBlocks)
+      assert(!JSON.stringify(body.messages).includes('hosted_web_search_sources'))
+      answer(response, 'SEARCH-REPLAY-DONE'); return
+    }
     if (key === 'cross') { assert(!JSON.stringify(body.messages).includes(signature)); assert(!JSON.stringify(body.messages).includes(redacted)); assert(replay.some(block => block.type === 'tool_use')); answer(response, 'CROSS-DONE'); return }
     if (key === 'same' || key === 'restart') { assert(replay.some(block => block.type === 'thinking' && block.thinking === '' && block.signature === 'signed-empty')); assert(replay.some(block => block.type === 'redacted_thinking' && block.data === redacted)); answer(response, key.toUpperCase() + '-DONE'); return }
     if (key === 'flow' && round === 1) {
@@ -103,7 +131,7 @@ const peer = createServer(async (request, response) => {
 })
 peer.listen(0, '127.0.0.1'); await once(peer, 'listening')
 const leaf = extra => ({ providerType: 'anthropic', baseUrl: `http://127.0.0.1:${peer.address().port}`, apiKey: 'local-provider-token', requestCompression: 'gzip', maxOutput: 137, providerImageOutputFormat: 'webp', extraFields: { max_tokens: 911, ...extra }, streamContentInactivityTimeoutMs: 60000, models: ['wire'] })
-await writeFile(fixture.modelPath, JSON.stringify({ default: 'a', providers: { a: leaf({}), b: leaf({}), json: leaf({ stream: false, cache_control: { type: 'ephemeral', ttl: '1h' } }), watchdog: { ...leaf({}), streamContentInactivityTimeoutMs: 200 } } }))
+await writeFile(fixture.modelPath, JSON.stringify({ default: 'a', providers: { a: leaf({}), b: leaf({}), search: { ...leaf({}), webSearch: true }, json: leaf({ stream: false, cache_control: { type: 'ephemeral', ttl: '1h' } }), watchdog: { ...leaf({}), streamContentInactivityTimeoutMs: 200 } } }))
 const history = async id => (await fixture.api('GET', route(id) + '/history')).body
 const saved = id => readFile(join(fixture.data, 'state/sessions', id + '.json'), 'utf8').then(JSON.parse)
 async function create(name, model = 'a') {
@@ -142,6 +170,42 @@ try {
   await send(actor, 'same'); await fixture.api('POST', route(actor) + '/model', { model: 'b' }); await send(actor, 'cross')
   assert.deepEqual((await saved(actor)).history.find(row => row.__meta.seq === assistant.__meta.seq), assistant); assert.deepEqual(fixture.sql('SELECT message_json FROM archive_messages WHERE session_id=? AND seq=?', [actor, assistant.__meta.seq]), archive)
   await send(await create('json', 'json'), 'json'); await send(await create('eof'), 'eof-final')
+  await page.setViewport({ width: 1400, height: 900 })
+  const searched = await create('search', 'search')
+  await page.evaluate(id => window.foxwarmTest.switchToSession(id), searched)
+  await page.waitForFunction(id => document.querySelector('[data-session-header-subtitle]')?.textContent.includes('session ' + id), {}, searched)
+  await page.evaluate(() => window.foxwarmTest.sendMessage('ANTH:search'))
+  await until(() => holds.has('search'), 'fragmented cited text before terminal')
+  await page.waitForFunction(() => [...document.querySelectorAll('.foxwarm-assistant-message-markdown li')].some(item => item.textContent === 'Beta claim.'))
+  assert(!(await saved(searched)).history.some(row => row.role === 'model'))
+  holds.get('search')()
+  await until(async () => !(await history(searched)).session.busy, 'native search completion')
+  const searchMessage = (await saved(searched)).history.find(row => row.role === 'model')
+  assert.deepEqual(searchMessage.parts.filter(part => part.text !== undefined).map(part => part.text), ['I will search.\n', searchedText])
+  assert.deepEqual(searchMessage.parts.flatMap(part => part.providerMeta?.anthropic?.contentBlocks ?? []), searchedBlocks)
+  async function assertSearchedBody() {
+    await page.waitForSelector('[data-web-search-citation]')
+    const bodyCards = await page.$$eval('.foxwarm-assistant-message-card', cards => cards.filter(card => card.querySelector('h2')?.textContent === 'Findings').map(card => ({
+      list: [...card.querySelectorAll('li')].map(item => item.textContent),
+      citations: [...card.querySelectorAll('[data-web-search-citation]')].map(link => link.getAttribute('href')),
+      sourceLabels: [...card.querySelectorAll('span')].filter(span => span.textContent === 'Sources:').length,
+    })))
+    assert.deepEqual(bodyCards, [{ list: ['Alpha claim.', 'Beta claim.'], citations: ['https://example.com/alpha', 'https://example.com/beta'], sourceLabels: 1 }])
+    assert.equal((await page.$$('.foxwarm-assistant-message-card')).length, 2, 'commentary and one complete answer, no fragment cards')
+    assert.equal(await page.$('[data-web-search-ref]'), null)
+    assert.equal(await page.$('a[href^="javascript:"]'), null)
+  }
+  await assertSearchedBody()
+  await page.evaluate(() => Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async text => { window.copiedSearchText = text } } }))
+  await page.evaluate(() => [...document.querySelectorAll('.foxwarm-assistant-message-card')].find(card => card.querySelector('h2')?.textContent === 'Findings').querySelector('[title="Copy Raw Text"]').click())
+  assert.equal(await page.evaluate(() => window.copiedSearchText), searchedText)
+  await page.reload({ waitUntil: 'networkidle0' })
+  await waitForWebUiReady(page)
+  await page.waitForFunction(() => !!window.foxwarmTest?.switchToSession)
+  await page.evaluate(id => window.foxwarmTest.switchToSession(id), searched)
+  await assertSearchedBody()
+  if (process.env.FOXWARM_E2E_SCREENSHOT_DIR) await page.screenshot({ path: join(process.env.FOXWARM_E2E_SCREENSHOT_DIR, 'merged-answer.png'), fullPage: true })
+  await send(searched, 'search-follow')
   for (const key of ['refusal', 'pause', 'server', 'partial', 'watchdog']) {
     const id = await create(key, key === 'watchdog' ? 'watchdog' : 'a'), before = records.length; state = await send(id, key)
     assert(!state.history.some(row => row.role === 'model' && row.modelVisible !== false)); assert.equal(records.length - before, ['partial', 'watchdog'].includes(key) ? 2 : 1)
@@ -158,6 +222,6 @@ try {
   const beforeImage = records.length; const imageSend = await fixture.api('POST', route(image) + '/message', { text: 'ANTH:image', uploadedFiles: [uploaded] }); assert.equal(imageSend.status, 202, JSON.stringify(imageSend.body)); await until(() => records.length > beforeImage, 'physical image request'); await until(async () => !(await history(image)).session.busy, 'image settled')
   await fixture.api('POST', route(actor) + '/model', { model: 'a' }); await fixture.stop(); await fixture.start(); await send(actor, 'restart')
   assert.equal(await readFile(join(fixture.data, 'agents/team/note.txt'), 'utf8'), 'héllo'); assert.equal(errors.length, 0, errors.join('\n'))
-  await fixture.stop(); console.log(JSON.stringify({ result: 'ok', requests: records.length, originalAppStreaming: true, terminalWithoutSocketEOF: true, invalidToolNonexecution: true, signatureReplay: true, JSONOptOut: true, journalAndArchive: true, hostPids: fixture.hostPids }))
+  await fixture.stop(); console.log(JSON.stringify({ result: 'ok', requests: records.length, originalAppStreaming: true, terminalWithoutSocketEOF: true, invalidToolNonexecution: true, signatureReplay: true, JSONOptOut: true, mergedSearchText: true, journalAndArchive: true, hostPids: fixture.hostPids }))
 } catch (error) { console.error('OWNED_ROOT', fixture.root); console.error('HOST_OUTPUT', fixture.output); console.error('PEER_ERRORS', errors); throw error }
 finally { for (const interval of intervals) clearInterval(interval); await fixture.cleanup(); peer.closeAllConnections(); await new Promise(done => peer.close(done)) }

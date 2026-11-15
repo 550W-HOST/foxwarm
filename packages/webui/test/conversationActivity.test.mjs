@@ -96,7 +96,7 @@ for (const [label, args, counted] of [
 }
 
 test('native hosted search counts the server call once across a deferred result message', () => {
-  const search = { role: 'model', parts: [{ providerMeta: { anthropic: { contentBlock: { type: 'server_tool_use', name: 'web_search', id: 'srv-a', input: { query: 'native query' } } } } }] }
-  const result = { role: 'model', parts: [{ providerMeta: { anthropic: { contentBlock: { type: 'web_search_tool_result', tool_use_id: 'srv-a', content: [] } } } }] }
+  const search = { role: 'model', parts: [{ providerMeta: { anthropic: { contentBlocks: [ { type: 'server_tool_use', name: 'web_search', id: 'srv-a', input: { query: 'native query' } }] } } }] }
+  const result = { role: 'model', parts: [{ providerMeta: { anthropic: { contentBlocks: [ { type: 'web_search_tool_result', tool_use_id: 'srv-a', content: [] }] } } }] }
   assert.equal(summary([search, result]), '1 call')
 })

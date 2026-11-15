@@ -72,11 +72,11 @@ test('retains only safe deduplicated sources on their own search action, without
 
 test('native Anthropic search matches only its own result ID and keeps errors separate from local tools', () => {
   const call = { type: 'server_tool_use', name: 'web_search', id: 'srv-a', input: { query: 'native query' } }
-  const parts = [{ providerMeta: { anthropic: { contentBlock: { type: 'web_search_tool_result', tool_use_id: 'srv-b', content: [{ url: 'https://example.com/unrelated' }] } } } },
-    { providerMeta: { anthropic: { contentBlock: { type: 'web_search_tool_result', tool_use_id: 'srv-a', content: [{ type: 'web_search_result', url: 'https://example.com/native', title: 'Native source' }, { url: 'javascript:bad' }] } } } }]
+  const parts = [{ providerMeta: { anthropic: { contentBlocks: [ { type: 'web_search_tool_result', tool_use_id: 'srv-b', content: [{ url: 'https://example.com/unrelated' }] }] } } },
+    { providerMeta: { anthropic: { contentBlocks: [ { type: 'web_search_tool_result', tool_use_id: 'srv-a', content: [{ type: 'web_search_result', url: 'https://example.com/native', title: 'Native source' }, { url: 'javascript:bad' }] }] } } }]
   assert.deepEqual(getWebSearchAction(call, parts), { type: 'search', query: 'native query', queries: ['native query'], sources: [{ url: 'https://example.com/native', title: 'Native source' }] })
   assert.equal(getWebSearchAction({ ...call, name: 'code_execution' }, parts), null)
-  assert.equal(getWebSearchAction(call, [{ providerMeta: { anthropic: { contentBlock: { type: 'web_search_tool_result', tool_use_id: 'srv-a', content: { type: 'web_search_tool_result_error', error_code: 'too_many_requests' } } } } }]).error, 'too_many_requests')
+  assert.equal(getWebSearchAction(call, [{ providerMeta: { anthropic: { contentBlocks: [ { type: 'web_search_tool_result', tool_use_id: 'srv-a', content: { type: 'web_search_tool_result_error', error_code: 'too_many_requests' } }] } } }]).error, 'too_many_requests')
 })
 
 test('a deferred native result has its own sources or error without an invented query', () => {

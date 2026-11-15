@@ -107,6 +107,7 @@ export const prepareWebSearchCitations = (text: string, options: CitationRenderO
   return { text: prepared, lexemes, prefix }
 }
 
-/** Anthropic citations belong to the complete text block and carry no OpenAI marker IDs or offsets. */
+/** Anthropic citations belong to the complete text run and carry no OpenAI marker IDs or offsets. */
 export const getPartWebSearchAnnotations = (part: MessagePart): OpenAIResponsesAnnotation[] | undefined =>
-  part.providerMeta?.openaiResponses?.annotations ?? part.providerMeta?.anthropic?.contentBlock?.citations
+  part.providerMeta?.openaiResponses?.annotations ?? part.providerMeta?.anthropic?.contentBlocks
+    ?.filter(block => block.type === 'text').flatMap(block => block.citations ?? [])

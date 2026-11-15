@@ -37,7 +37,7 @@ export const getWebSearchAction = (outputItem: unknown, parts: readonly MessageP
     const input = item.input as Record<string, unknown> | undefined
     const query = cleanString(input?.query)
     if (!query) return null
-    const result = parts.map(part => part.providerMeta?.anthropic?.contentBlock).find(block =>
+    const result = parts.flatMap(part => part.providerMeta?.anthropic?.contentBlocks ?? []).find(block =>
       block?.type === 'web_search_tool_result' && block.tool_use_id === item.id)
     const content = result?.content
     const error = content && !Array.isArray(content) && content.type === 'web_search_tool_result_error'
@@ -72,12 +72,14 @@ export const getWebSearchAction = (outputItem: unknown, parts: readonly MessageP
   return null
 }
 
+export const getPartWebSearchOutputItem = (part: MessagePart): Record<string, any> | undefined =>
+  part.providerMeta?.openaiResponses?.outputItem ?? part.providerMeta?.anthropic?.contentBlocks
+    ?.find(block => ['server_tool_use', 'web_search_tool_result'].includes(block.type))
+
 /** Native records keep their original protocol identity; only the display action is shared. */
 export const getPartWebSearchAction = (part: MessagePart, parts: readonly MessagePart[] = []): WebSearchAction | null => {
-  const block = part.providerMeta?.anthropic?.contentBlock
-  if (block?.type === 'web_search_tool_result' && parts.some(candidate => {
-    const call = candidate.providerMeta?.anthropic?.contentBlock
-    return call?.type === 'server_tool_use' && call.name === 'web_search' && call.id === block.tool_use_id
-  })) return null
-  return getWebSearchAction(part.providerMeta?.openaiResponses?.outputItem ?? block, parts)
+  const block = getPartWebSearchOutputItem(part)
+  if (block?.type === 'web_search_tool_result' && parts.some(candidate => candidate.providerMeta?.anthropic?.contentBlocks?.some(call =>
+    call.type === 'server_tool_use' && call.name === 'web_search' && call.id === block.tool_use_id))) return null
+  return getWebSearchAction(block, parts)
 }

@@ -163,12 +163,12 @@ test('stream completion and later math keep earlier artifact, selection and spec
 test('Anthropic native text citations and search results use separate safe sources without invented marker mappings', async () => {
   await reload()
   await page.evaluate(() => window.fixture.setMessages([{ role: 'model', __meta: { seq: 11 }, parts: [
-    { providerMeta: { anthropic: { sourceModelId: 'a/wire', contentBlock: { type: 'server_tool_use', id: 'srv-a', name: 'web_search', input: { query: 'native query' } } } } },
-    { providerMeta: { anthropic: { sourceModelId: 'a/wire', contentBlock: { type: 'web_search_tool_result', tool_use_id: 'srv-a', content: [{ type: 'web_search_result', url: 'https://example.com/consulted', title: 'Consulted source', encrypted_content: 'opaque-result' }] } } } },
-    { text: '😀 Cited claim.', providerMeta: { anthropic: { sourceModelId: 'a/wire', contentBlock: { type: 'text', text: '😀 Cited claim.', citations: [
+    { providerMeta: { anthropic: { sourceModelId: 'a/wire', contentBlocks: [ { type: 'server_tool_use', id: 'srv-a', name: 'web_search', input: { query: 'native query' } }] } } },
+    { providerMeta: { anthropic: { sourceModelId: 'a/wire', contentBlocks: [ { type: 'web_search_tool_result', tool_use_id: 'srv-a', content: [{ type: 'web_search_result', url: 'https://example.com/consulted', title: 'Consulted source', encrypted_content: 'opaque-result' }] }] } } },
+    { text: '😀 Cited claim.', providerMeta: { anthropic: { sourceModelId: 'a/wire', contentBlocks: [ { type: 'text', text: '😀 Cited claim.', citations: [
       { type: 'web_search_result_location', url: 'https://example.com/cited', title: 'Cited source', encrypted_index: 'opaque-index' },
       { type: 'web_search_result_location', url: 'javascript:bad', title: 'Unsafe' },
-    ] } } } },
+    ] }] } } },
   ] }]))
   await page.waitForSelector('[data-web-search-citation]')
   assert.deepEqual(await page.$$eval('[data-web-search-citation]', nodes => nodes.map(node => node.getAttribute('href'))), ['https://example.com/cited'])
@@ -184,8 +184,8 @@ test('Anthropic native text citations and search results use separate safe sourc
 test('a deferred native search error stays visible after its original call message', async () => {
   await reload()
   await page.evaluate(() => window.fixture.setMessages([
-    { role: 'model', __meta: { seq: 20 }, parts: [{ providerMeta: { anthropic: { contentBlock: { type: 'server_tool_use', name: 'web_search', id: 'srv-a', input: { query: 'deferred search' } } } } }] },
-    { role: 'model', __meta: { seq: 21 }, parts: [{ providerMeta: { anthropic: { contentBlock: { type: 'web_search_tool_result', tool_use_id: 'srv-a', content: { type: 'web_search_tool_result_error', error_code: 'max_uses_exceeded' } } } } }] },
+    { role: 'model', __meta: { seq: 20 }, parts: [{ providerMeta: { anthropic: { contentBlocks: [ { type: 'server_tool_use', name: 'web_search', id: 'srv-a', input: { query: 'deferred search' } }] } } }] },
+    { role: 'model', __meta: { seq: 21 }, parts: [{ providerMeta: { anthropic: { contentBlocks: [ { type: 'web_search_tool_result', tool_use_id: 'srv-a', content: { type: 'web_search_tool_result_error', error_code: 'max_uses_exceeded' } }] } } }] },
   ]))
   await page.waitForFunction(() => document.querySelectorAll('[data-model-thread-card="web-search"]').length === 2)
   const cards = await page.$$('[data-model-thread-card="web-search"]')
