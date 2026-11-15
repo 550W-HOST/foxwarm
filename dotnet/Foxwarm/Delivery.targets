@@ -16,12 +16,14 @@
       CopyToPublishDirectory="PreserveNewest"
     />
     <Content
+      Condition="'$(FoxwarmPackAssets)' != 'true'"
       Include="../../packages/webui/dist/**/*"
       Link="webui-dist/%(RecursiveDir)%(Filename)%(Extension)"
       CopyToOutputDirectory="PreserveNewest"
       CopyToPublishDirectory="PreserveNewest"
     />
     <Content
+      Condition="'$(FoxwarmPackAssets)' != 'true'"
       Include="../../packages/webui/public/login.html"
       Link="packages/webui/login.html"
       CopyToOutputDirectory="PreserveNewest"
@@ -118,72 +120,84 @@
       CopyToPublishDirectory="PreserveNewest"
     />
     <Content
+      Condition="'$(FoxwarmPackAssets)' != 'true'"
       Include="../../packages/vscode-web/foxwarm-fs/package.json"
       Link="packages/vscode-web/foxwarm-fs/%(RecursiveDir)%(Filename)%(Extension)"
       CopyToOutputDirectory="PreserveNewest"
       CopyToPublishDirectory="PreserveNewest"
     />
     <Content
+      Condition="'$(FoxwarmPackAssets)' != 'true'"
       Include="../../packages/vscode-web/foxwarm-fs/dist/**/*"
       Link="packages/vscode-web/foxwarm-fs/dist/%(RecursiveDir)%(Filename)%(Extension)"
       CopyToOutputDirectory="PreserveNewest"
       CopyToPublishDirectory="PreserveNewest"
     />
     <Content
+      Condition="'$(FoxwarmPackAssets)' != 'true'"
       Include="../../packages/vscode-web/foxwarm-fs/media/**/*"
       Link="packages/vscode-web/foxwarm-fs/media/%(RecursiveDir)%(Filename)%(Extension)"
       CopyToOutputDirectory="PreserveNewest"
       CopyToPublishDirectory="PreserveNewest"
     />
     <Content
+      Condition="'$(FoxwarmPackAssets)' != 'true'"
       Include="../../packages/vscode-web/foxwarm-scm/package.json"
       Link="packages/vscode-web/foxwarm-scm/%(RecursiveDir)%(Filename)%(Extension)"
       CopyToOutputDirectory="PreserveNewest"
       CopyToPublishDirectory="PreserveNewest"
     />
     <Content
+      Condition="'$(FoxwarmPackAssets)' != 'true'"
       Include="../../packages/vscode-web/foxwarm-scm/dist/**/*"
       Link="packages/vscode-web/foxwarm-scm/dist/%(RecursiveDir)%(Filename)%(Extension)"
       CopyToOutputDirectory="PreserveNewest"
       CopyToPublishDirectory="PreserveNewest"
     />
     <Content
+      Condition="'$(FoxwarmPackAssets)' != 'true'"
       Include="../../packages/vscode-web/foxwarm-scm/media/**/*"
       Link="packages/vscode-web/foxwarm-scm/media/%(RecursiveDir)%(Filename)%(Extension)"
       CopyToOutputDirectory="PreserveNewest"
       CopyToPublishDirectory="PreserveNewest"
     />
     <Content
+      Condition="'$(FoxwarmPackAssets)' != 'true'"
       Include="../../packages/vscode-web/foxwarm-terminal/package.json"
       Link="packages/vscode-web/foxwarm-terminal/%(RecursiveDir)%(Filename)%(Extension)"
       CopyToOutputDirectory="PreserveNewest"
       CopyToPublishDirectory="PreserveNewest"
     />
     <Content
+      Condition="'$(FoxwarmPackAssets)' != 'true'"
       Include="../../packages/vscode-web/foxwarm-terminal/dist/**/*"
       Link="packages/vscode-web/foxwarm-terminal/dist/%(RecursiveDir)%(Filename)%(Extension)"
       CopyToOutputDirectory="PreserveNewest"
       CopyToPublishDirectory="PreserveNewest"
     />
     <Content
+      Condition="'$(FoxwarmPackAssets)' != 'true'"
       Include="../../packages/vscode-web/foxwarm-terminal/media/**/*"
       Link="packages/vscode-web/foxwarm-terminal/media/%(RecursiveDir)%(Filename)%(Extension)"
       CopyToOutputDirectory="PreserveNewest"
       CopyToPublishDirectory="PreserveNewest"
     />
     <Content
+      Condition="'$(FoxwarmPackAssets)' != 'true'"
       Include="../../packages/vscode-web/foxwarm-webui/package.json"
       Link="packages/vscode-web/foxwarm-webui/%(RecursiveDir)%(Filename)%(Extension)"
       CopyToOutputDirectory="PreserveNewest"
       CopyToPublishDirectory="PreserveNewest"
     />
     <Content
+      Condition="'$(FoxwarmPackAssets)' != 'true'"
       Include="../../packages/vscode-web/foxwarm-webui/dist/**/*"
       Link="packages/vscode-web/foxwarm-webui/dist/%(RecursiveDir)%(Filename)%(Extension)"
       CopyToOutputDirectory="PreserveNewest"
       CopyToPublishDirectory="PreserveNewest"
     />
     <Content
+      Condition="'$(FoxwarmPackAssets)' != 'true'"
       Include="../../packages/vscode-web/foxwarm-webui/media/**/*"
       Link="packages/vscode-web/foxwarm-webui/media/%(RecursiveDir)%(Filename)%(Extension)"
       CopyToOutputDirectory="PreserveNewest"
@@ -197,6 +211,8 @@
       >$(NETCoreSdkPortableRuntimeIdentifier)</ArtifactTargetRid>
     <ArtifactRuntimeOutput>$(MSBuildProjectDirectory)/obj/artifact-runtime/$(ArtifactTargetRid)</ArtifactRuntimeOutput>
   </PropertyGroup>
+  <!-- Exclude loose HTTP Content at evaluation time above. SDK project-reference and
+       WinUI copy targets can consume Content before this pack-building target runs. -->
   <Target Name="CollectHttpAssets" BeforeTargets="AssignTargetPaths" Condition="'$(FoxwarmPackAssets)' == 'true'">
     <PropertyGroup>
       <HttpAssetOutput>$(MSBuildProjectDirectory)/obj/http-assets/$(Configuration)/$(ArtifactTargetRid)/$(FoxwarmBundleCodeAssets)/foxwarm.assets</HttpAssetOutput>
@@ -204,7 +220,6 @@
     </PropertyGroup>
     <Exec Command="node &quot;$(MSBuildProjectDirectory)/../../scripts/asset-pack.mjs&quot; build &quot;$(HttpAssetOutput)&quot; $(HttpAssetCodeArgument)" />
     <ItemGroup>
-      <Content Remove="../../packages/webui/dist/**/*;../../packages/webui/public/login.html;../../packages/vscode-web/foxwarm-*/package.json;../../packages/vscode-web/foxwarm-*/dist/**/*;../../packages/vscode-web/foxwarm-*/media/**/*" />
       <Content Include="$(HttpAssetOutput)" Link="foxwarm.assets" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     </ItemGroup>
   </Target>
