@@ -27,7 +27,8 @@ internal sealed partial class SessionManager
         );
         var id = owner.Id;
         var generation = owner.McpGeneration;
-        // Reception continues under an approved start; an ask outcome needs that approval.
+        // Reception continues under the admitted plan of a start: an ask outcome passes only when
+        // the start's approval covered the reception request.
         var approved = action == "start" ? ToolApprovalScope.Detach(owner) : null;
         var receptionArgs = new JsonObject { ["action"] = "start", ["server"] = server };
         var resolved = new ResolvedTool(
@@ -59,7 +60,11 @@ internal sealed partial class SessionManager
             var decision = EffectiveDecision(policies, request);
             if (
                 !decision.Allowed
-                && !(decision.Effect == ToolAuthorizationEffect.Ask && approved is not null)
+                && !(
+                    decision.Effect == ToolAuthorizationEffect.Ask
+                    && approved?.Covers(owner, ApprovalFingerprint(owner, resolved, request))
+                        == true
+                )
             )
                 throw new ToolAuthorizationDeniedException(
                     "MCP notification reception is not permitted."

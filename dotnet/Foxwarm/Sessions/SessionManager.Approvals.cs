@@ -10,10 +10,11 @@ internal sealed record ToolApprovalOrigin(string Kind, string? ToolCallId, strin
 
 internal sealed record PendingToolApproval(
     string Id,
-    string Fingerprint,
+    IReadOnlySet<string> Fingerprints,
     long? TimeoutSeconds,
     ToolApprovalWaiters.Waiter Waiter,
-    ResolvedTool Resolved
+    ResolvedTool Resolved,
+    ToolApprovalStage Stage = ToolApprovalStage.Call
 );
 
 internal sealed class ToolApprovalNotPendingException(string message)
@@ -31,9 +32,35 @@ internal sealed partial class SessionManager
         return args;
     }
 
+    // The facts of a request as approvers read them.
+    private static JsonObject RecordFacts(ToolAuthorizationRequest request)
+    {
+        var facts = ToolAuthorizationExplain.Facts(request);
+        var recordFacts = new JsonObject();
+        foreach (var key in new[] { "paths", "nodeTargets", "sessionTarget", "secrets" })
+            if (facts[key] is { } fact)
+                recordFacts[key] = fact.DeepClone();
+        return recordFacts;
+    }
+
+    private static JsonObject RecordTool(ResolvedTool resolved, bool invocation = true)
+    {
+        var tool = new JsonObject
+        {
+            ["source"] = resolved.Source,
+            ["name"] = resolved.Name,
+            ["server"] = resolved.Server,
+            ["executionNode"] = resolved.ExecutionNode,
+        };
+        if (invocation && resolved.InvocationName != resolved.Name)
+            tool["invocationName"] = resolved.InvocationName;
+        return tool;
+    }
+
     /// <summary>
-    /// Records a pending approval for a call that matched an ask rule and registers its live
-    /// waiter. The record is committed before anyone can see or decide it.
+    /// Records a pending approval for a call whose checks matched ask rules and registers its
+    /// live waiter. One record covers every asking check of the stage. The record is committed
+    /// before anyone can see or decide it.
     /// </summary>
     internal async Task<PendingToolApproval> BeginToolApprovalAsync(
         SessionOwner owner,
@@ -43,33 +70,25 @@ internal sealed partial class SessionManager
         string? workingDirectory = null
     )
     {
-        var assessment = required.Assessment;
         var resolved = required.Resolved;
         var shown = ApprovalArgs(resolved);
-        var options = assessment.Approval;
+        var options = required.Approval;
         var timeout =
             options.TimeoutSeconds
             ?? (unattended ? SessionApprovals.UnattendedTimeoutSeconds : null);
         var id = SessionApprovals.NewId();
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        var tool = new JsonObject
-        {
-            ["source"] = resolved.Source,
-            ["name"] = resolved.Name,
-            ["server"] = resolved.Server,
-            ["executionNode"] = resolved.ExecutionNode,
-        };
-        if (resolved.InvocationName != resolved.Name)
-            tool["invocationName"] = resolved.InvocationName;
         var record = new JsonObject
         {
             ["id"] = id,
             ["status"] = "pending",
             ["createdAt"] = now,
             ["origin"] = origin.Kind,
-            ["tool"] = tool,
+            ["tool"] = RecordTool(resolved),
             ["summary"] = SessionToolExecutor.ToolArgsPreview(resolved.Name, shown),
         };
+        if (required.Stage == ToolApprovalStage.Input)
+            record["stage"] = "input";
         if (timeout is long seconds)
         {
             record["timeoutSeconds"] = seconds;
@@ -93,27 +112,42 @@ internal sealed partial class SessionManager
                     : args;
             record["argsTruncated"] = true;
         }
-        var facts = ToolAuthorizationExplain.Facts(assessment.Request);
-        var recordFacts = new JsonObject();
-        foreach (var key in new[] { "paths", "nodeTargets", "sessionTarget", "secrets" })
-            if (facts[key] is { } fact)
-                recordFacts[key] = fact.DeepClone();
-        record["facts"] = recordFacts;
-        record["rules"] = new JsonArray(
-            assessment
-                .Asking.Select(layer =>
-                {
-                    var rule = new JsonObject
-                    {
-                        ["layer"] = layer.Layer is null ? "global" : "agent:" + layer.Layer,
-                        ["id"] = SessionWait.Text(layer.Decision.Rule?["id"]) ?? "defaultAction",
-                    };
-                    if (SessionWait.Text(layer.Decision.Rule?["reason"]) is { } reason)
-                        rule["reason"] = reason;
-                    return (JsonNode?)rule;
-                })
-                .ToArray()
-        );
+        // The call's own facts, then every other check the approval covers with its facts.
+        if (required.CallFacts is { } callFacts)
+            record["facts"] = RecordFacts(callFacts);
+        var others = required.Checks.Where(check => !check.Primary).ToArray();
+        if (others.Length > 0)
+            record["checks"] = new JsonArray(
+                others
+                    .Select(check =>
+                        (JsonNode?)
+                            new JsonObject
+                            {
+                                ["id"] = check.Id,
+                                // A check is named by its capability, not by the call it serves.
+                                ["tool"] = RecordTool(check.Resolved, invocation: false),
+                                ["facts"] = RecordFacts(check.Facts),
+                            }
+                    )
+                    .ToArray()
+            );
+        // The asking rules of every check, each layer and rule once.
+        var rules = new JsonArray();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var layer in required.Checks.SelectMany(check => check.Assessment.Asking))
+        {
+            var rule = new JsonObject
+            {
+                ["layer"] = layer.Layer is null ? "global" : "agent:" + layer.Layer,
+                ["id"] = SessionWait.Text(layer.Decision.Rule?["id"]) ?? "defaultAction",
+            };
+            if (!seen.Add($"{rule["layer"]}\n{rule["id"]}"))
+                continue;
+            if (SessionWait.Text(layer.Decision.Rule?["reason"]) is { } reason)
+                rule["reason"] = reason;
+            rules.Add((JsonNode?)rule);
+        }
+        record["rules"] = rules;
         record["approvers"] = new JsonArray(
             options.Approvers.Select(value => (JsonNode?)JsonValue.Create(value)).ToArray()
         );
@@ -152,17 +186,30 @@ internal sealed partial class SessionManager
             );
         }
         // External channels cannot decide; they only learn that the WebUI has a request.
-        BroadcastTransientText(
-            owner,
-            $"A tool call is waiting for approval in the WebUI: `{resolved.Name}` — {SessionWait.Text(record["summary"])}"
-        );
+        BroadcastTransientText(owner, ChannelApprovalText(required, record));
         return new(
             id,
-            ToolApprovalScope.Fingerprint(resolved, assessment.Request),
+            required.Checks.Select(check => check.Fingerprint).ToHashSet(StringComparer.Ordinal),
             timeout,
             waiter,
-            resolved
+            resolved,
+            required.Stage
         );
+    }
+
+    // The one-line channel notice of a pending approval.
+    internal static string ChannelApprovalText(
+        ToolApprovalRequiredException required,
+        JsonObject record
+    )
+    {
+        var call = $"`{required.Resolved.Name}` — {SessionWait.Text(record["summary"])}";
+        if (required.Stage == ToolApprovalStage.Input)
+            return $"A tool call is waiting for approval in the WebUI to read its input: {call}";
+        var others = required.Checks.Count(check => !check.Primary);
+        return others == 0
+            ? $"A tool call is waiting for approval in the WebUI: {call}"
+            : $"A tool call is waiting for approval in the WebUI: {call} (also covers {others} related {(others == 1 ? "check" : "checks")})";
     }
 
     /// <summary>
@@ -307,7 +354,7 @@ internal sealed partial class SessionManager
         var note = SessionWait.Text(record["note"]);
         return SessionApprovals.Status(record) switch
         {
-            "approved" => new(pending.Id, pending.Fingerprint, note),
+            "approved" => new(pending.Id, pending.Fingerprints, note, pending.Stage),
             // Cancellation settles only after the call's own token was cancelled.
             "cancelled" => throw new ToolApprovalOutcomeException(
                 "tool_call_cancelled",

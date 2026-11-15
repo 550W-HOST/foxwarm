@@ -8,7 +8,7 @@ namespace Foxwarm.Tests;
 
 // The in-call approval gate: a call that matches an ask rule waits inside its own invocation
 // for a decision, its deadline or cancellation, and starts only after an approved decision.
-public sealed class ToolApprovalGateTests
+public sealed partial class ToolApprovalGateTests
 {
     private const string AskWrite = """
         version: 1
@@ -639,7 +639,7 @@ public sealed class ToolApprovalGateTests
     }
 
     [Fact]
-    public async Task Covered_scope_compares_the_primary_call_facts_but_not_internal_steps()
+    public async Task Covered_scope_passes_only_the_exact_requests_its_grant_lists()
     {
         await using var f = await ScriptFixture.Create();
         await Policy(f.Manager, AskWrite);
@@ -648,24 +648,31 @@ public sealed class ToolApprovalGateTests
         var required = await Assert.ThrowsAsync<ToolApprovalRequiredException>(() =>
             f.Manager.AuthorizeToolAsync(f.Owner, primary, files, CancellationToken.None)
         );
-        var fingerprint = ToolApprovalScope.Fingerprint(primary, required.Assessment.Request);
-        var scope = new ToolApprovalScope(f.Owner)
-        {
-            Grant = new("ap-fixture", fingerprint, null),
-            Primary = primary,
-        };
-        using var entered = ToolApprovalScope.Enter(scope);
-        await f.Manager.AuthorizeToolAsync(f.Owner, primary, files, CancellationToken.None);
-        // The approved call with other facts is not covered; an internal step is.
-        scope.Primary = new ResolvedTool("write", "node", "write", Write("two.txt"));
-        await Assert.ThrowsAsync<ToolApprovalRequiredException>(() =>
-            f.Manager.AuthorizeToolAsync(f.Owner, scope.Primary, files, CancellationToken.None)
+        var scope = new ToolApprovalScope(f.Owner) { Primary = primary };
+        scope.Add(
+            new(
+                "ap-fixture",
+                new HashSet<string>([required.Checks.Single().Fingerprint], StringComparer.Ordinal),
+                null
+            )
         );
+        using var entered = ToolApprovalScope.Enter(scope);
+        // Another check of the same request, built anew, is covered.
         await f.Manager.AuthorizeToolAsync(
             f.Owner,
-            new ResolvedTool("write", "node", "write", Write("three.txt")),
+            new ResolvedTool("write", "node", "write", Write("one.txt")),
             files,
             CancellationToken.None
         );
+        // The approved call with other facts, and any request the grant does not list, are not.
+        foreach (var other in new[] { "two.txt", "three.txt" })
+            await Assert.ThrowsAsync<ToolApprovalRequiredException>(() =>
+                f.Manager.AuthorizeToolAsync(
+                    f.Owner,
+                    new ResolvedTool("write", "node", "write", Write(other)),
+                    files,
+                    CancellationToken.None
+                )
+            );
     }
 }

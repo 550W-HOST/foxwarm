@@ -6,49 +6,89 @@ using Foxwarm.Sessions;
 
 namespace Foxwarm.Tools;
 
-internal sealed record ToolApprovalGrant(string ApprovalId, string Fingerprint, string? Note);
+// An approver's decision for one approval request. Fingerprints are the exact requests it
+// covers: the call and every other check of the call that asked when it was requested.
+internal sealed record ToolApprovalGrant(
+    string ApprovalId,
+    IReadOnlySet<string> Fingerprints,
+    string? Note,
+    ToolApprovalStage Stage = ToolApprovalStage.Call
+);
 
-// One scope per tool invocation. The approval gate records the grant here before dispatch, so
-// effect-owner rechecks and internal steps of the same invocation accept the ask outcome. Every
-// nested invocation (ToolScript calls, later turns) installs its own scope without a grant.
+// Stage A approves reading inputs whose content decides the facts of the call; stage B
+// approves the call's complete plan.
+internal enum ToolApprovalStage
+{
+    Input,
+    Call,
+}
+
+// One scope per tool invocation. The approval gate records its grants here before dispatch. A
+// check inside the invocation passes an ask outcome only when a grant covers that exact request
+// (identity, raw arguments and facts); every check still evaluates the current policy first.
+// Every nested invocation (ToolScript calls, later turns) installs its own scope without a grant.
 internal sealed class ToolApprovalScope(SessionOwner owner)
 {
     private static readonly AsyncLocal<ToolApprovalScope?> current = new();
+    private readonly List<ToolApprovalGrant> grants = [];
 
     internal static ToolApprovalScope? Current => current.Value;
 
     internal SessionOwner Owner => owner;
 
-    internal ToolApprovalGrant? Grant { get; set; }
+    // The grants of this invocation, in the order they were given.
+    internal IReadOnlyList<ToolApprovalGrant> Grants
+    {
+        get
+        {
+            lock (grants)
+                return grants.ToArray();
+        }
+    }
+
+    // The latest grant: the call approval when there is one.
+    internal ToolApprovalGrant? Grant => Grants.LastOrDefault();
+
+    internal void Add(ToolApprovalGrant grant)
+    {
+        lock (grants)
+            grants.Add(grant);
+    }
+
+    internal void Remove(ToolApprovalGrant grant)
+    {
+        lock (grants)
+            grants.Remove(grant);
+    }
 
     // Set when the invocation dispatches its call. An approved call that never dispatched is
     // recorded as not started.
     internal bool Dispatched { get; set; }
 
-    // The call the gate authorizes. A grant covers it only for the facts the approver saw;
-    // other checks inside the invocation are its internal steps.
+    // The call the gate authorizes, for attribution of the checks made on its behalf.
     internal ResolvedTool? Primary { get; set; }
 
-    internal bool Covers(
-        SessionOwner caller,
-        ResolvedTool resolved,
-        ToolAuthorizationRequest request
-    ) =>
-        Grant is { } grant
-        && ReferenceEquals(owner, caller)
-        && (
-            !ReferenceEquals(resolved, Primary)
-            || grant.Fingerprint == Fingerprint(resolved, request)
-        );
+    // Input bytes admitted before the plan was derived, which the effect consumes instead of
+    // reading again. Keyed by input kind and path.
+    internal Dictionary<string, byte[]> Inputs { get; } = new(StringComparer.Ordinal);
 
-    // The grant of the current invocation for effect work that continues outside its flow, such
-    // as a detached transfer task or a later reception callback. That work must enter the
-    // returned scope explicitly: the ambient value does not reach it. Every check inside it is
-    // an internal step of the approved call.
-    internal static ToolApprovalScope? Detach(SessionOwner owner) =>
-        current.Value is { Grant: { } grant } scope && ReferenceEquals(scope.Owner, owner)
-            ? new ToolApprovalScope(owner) { Grant = grant }
-            : null;
+    internal bool Covers(SessionOwner caller, string fingerprint) =>
+        ReferenceEquals(owner, caller)
+        && Grants.Any(grant => grant.Fingerprints.Contains(fingerprint));
+
+    // The admitted plan of the current invocation for effect work that continues outside its
+    // flow, such as a detached transfer task or a later reception callback: its grants and the
+    // call they belong to. That work must enter the returned scope explicitly: the ambient value
+    // does not reach it. A check inside it passes an ask only for a request the grants cover.
+    internal static ToolApprovalScope? Detach(SessionOwner owner)
+    {
+        if (current.Value is not { } scope || !ReferenceEquals(scope.Owner, owner))
+            return null;
+        var detached = new ToolApprovalScope(owner) { Primary = scope.Primary };
+        foreach (var grant in scope.Grants)
+            detached.Add(grant);
+        return detached;
+    }
 
     // Synchronous so the value stays visible to the calling async method and its callees.
     internal static IDisposable Enter(ToolApprovalScope? scope)

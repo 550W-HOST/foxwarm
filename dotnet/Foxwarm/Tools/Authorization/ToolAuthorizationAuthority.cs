@@ -30,20 +30,63 @@ internal class ToolAuthorizationDeniedException(string message) : InvalidOperati
     }
 }
 
-// A matching ask rule that no approval covers. The interactive gate turns the primary call into
-// an approval request; anywhere else (an internal step of an allowed call, a recheck outside the
-// approved invocation) it is refused.
-internal sealed class ToolApprovalRequiredException(
-    AuthorizationAssessment assessment,
-    ResolvedTool resolved
+// One asking check of a call: the call itself or another request it must pass, with its
+// assessment and the fingerprint an approval of it covers.
+internal sealed record ApprovalCheck(
+    string Id,
+    ResolvedTool Resolved,
+    AuthorizationAssessment Assessment,
+    string Fingerprint,
+    bool Primary
 )
-    : ToolAuthorizationDeniedException(
-        $"This call needs approval for an internal step ({resolved.Source} `{resolved.Name}`, rule {RuleId(assessment)}), but approval can't be requested for internal steps. It was not executed."
-    )
 {
-    internal AuthorizationAssessment Assessment => assessment;
+    // The facts the fingerprint binds, as the approver sees them.
+    internal ToolAuthorizationRequest Facts { get; init; } = Assessment.Request;
+}
+
+// Asking checks that no approval covers. The dispatch gate turns them into one approval request
+// for the call (Resolved), at the stage they were found; anywhere else (a check after the
+// approval, a recheck outside the approved invocation) they are refused.
+internal sealed class ToolApprovalRequiredException(
+    IReadOnlyList<ApprovalCheck> checks,
+    ResolvedTool resolved,
+    ToolApprovalStage stage = ToolApprovalStage.Call,
+    ToolAuthorizationRequest? callFacts = null
+) : ToolAuthorizationDeniedException(Text(checks[0]))
+{
+    internal ToolApprovalRequiredException(
+        AuthorizationAssessment assessment,
+        ResolvedTool resolved,
+        string fingerprint
+    )
+        : this(
+            [new("primary", resolved, assessment, fingerprint, true)],
+            resolved,
+            callFacts: assessment.Request
+        ) { }
+
+    internal IReadOnlyList<ApprovalCheck> Checks => checks;
+
+    // The first asking check: the call itself when it asks.
+    internal AuthorizationAssessment Assessment => checks[0].Assessment;
+
+    // The call the approval is for.
     internal ResolvedTool Resolved => resolved;
+
+    internal ToolApprovalStage Stage => stage;
+
+    // The call's own facts when its request was assessed, whether or not it asked itself.
+    internal ToolAuthorizationRequest? CallFacts => callFacts;
+
+    // The combined options of every asking check: the shortest deadline, and only the
+    // identities every asking rule admits.
+    internal ToolApprovalOptions Approval =>
+        ToolApprovalOptions.Combine(checks.SelectMany(check => check.Assessment.Asking));
+
     internal override string ErrorType => "tool_approval_unavailable";
+
+    private static string Text(ApprovalCheck check) =>
+        $"This call needs approval for a step its approval does not cover ({check.Resolved.Source} `{check.Resolved.Name}`, rule {RuleId(check.Assessment)}), and approval can't be requested at this point. It was not executed.";
 
     private static string RuleId(AuthorizationAssessment assessment) =>
         assessment.Asking.FirstOrDefault() is { } layer

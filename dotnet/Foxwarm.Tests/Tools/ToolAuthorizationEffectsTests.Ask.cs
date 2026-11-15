@@ -21,6 +21,16 @@ public sealed partial class ToolAuthorizationEffectsTests
             approval: {timeoutSeconds: 600, approvers: [ops]}
         """;
 
+    private static ToolApprovalScope Granted(
+        ToolApprovalScope scope,
+        string id,
+        params string[] fingerprints
+    )
+    {
+        scope.Add(new(id, fingerprints.ToHashSet(StringComparer.Ordinal), null));
+        return scope;
+    }
+
     private static ResolvedTool Exec(string command) =>
         new("exec", "node", "exec", new JsonObject { ["command"] = command });
 
@@ -46,16 +56,18 @@ public sealed partial class ToolAuthorizationEffectsTests
             required.Assessment.Asking.Single().Decision.Rule!["id"]!.GetValue<string>()
         );
         Assert.Equal(
-            "This call needs approval for an internal step (node `exec`, rule confirm-exec), but approval can't be requested for internal steps. It was not executed.",
+            "This call needs approval for a step its approval does not cover (node `exec`, rule confirm-exec), and approval can't be requested at this point. It was not executed.",
             required.Message
         );
+        var fingerprint = required.Checks.Single().Fingerprint;
 
         // An empty scope, or a grant recorded for another owner, does not cover the call.
         foreach (
             var scope in new[]
             {
                 new ToolApprovalScope(beta),
-                new ToolApprovalScope(alpha) { Grant = new("ap-other", "fingerprint", null) },
+                Granted(new ToolApprovalScope(alpha), "ap-other", fingerprint),
+                Granted(new ToolApprovalScope(beta), "ap-another", "another-request"),
             }
         )
             using (ToolApprovalScope.Enter(scope))
@@ -68,7 +80,7 @@ public sealed partial class ToolAuthorizationEffectsTests
                     )
                 );
 
-        var approved = new ToolApprovalScope(beta) { Grant = new("ap-test", "fingerprint", null) };
+        var approved = Granted(new ToolApprovalScope(beta), "ap-test", fingerprint);
         using (ToolApprovalScope.Enter(approved))
         {
             await manager.AuthorizeToolAsync(
@@ -88,10 +100,7 @@ public sealed partial class ToolAuthorizationEffectsTests
             );
             Assert.Equal("tool_authorization_denied", denied.ErrorType);
             // Legacy isolation is decided before approval and is not overridden by it.
-            var alphaApproved = new ToolApprovalScope(alpha)
-            {
-                Grant = new("ap-alpha", "fingerprint", null),
-            };
+            var alphaApproved = Granted(new ToolApprovalScope(alpha), "ap-alpha", fingerprint);
             using var alphaScope = ToolApprovalScope.Enter(alphaApproved);
             var alphaExecution = Executor(manager, alpha, temp.Path);
             await using var alphaMcp = alphaExecution.Mcp;
@@ -183,7 +192,7 @@ public sealed partial class ToolAuthorizationEffectsTests
         );
 
     [Fact]
-    public async Task Ask_on_an_internal_step_of_an_allowed_call_fails_closed_without_a_request()
+    public async Task Ask_on_a_sub_request_of_an_allowed_call_is_answerable_before_the_call_runs()
     {
         using var temp = new TempDirectory();
         await Seed(temp.Path);
@@ -200,19 +209,21 @@ public sealed partial class ToolAuthorizationEffectsTests
               - id: confirm-read
                 action: ask
                 tool: {source: node, name: read}
+                approval: {approvers: [ops]}
             """
         );
-        var response = await Call(
-            execution.Tools,
-            "explain_tool_authorization",
-            ExplainTaskProbe()
-        );
-        Assert.Equal("tool_approval_unavailable", Error(response));
-        Assert.Equal(
-            "This call needs approval for an internal step (node `read`, rule confirm-read), but approval can't be requested for internal steps. It was not executed.",
-            response["error"]!["message"]!.GetValue<string>()
-        );
-        Assert.Equal(0, ApprovalCount(caller));
+        var call = Call(execution.Tools, "explain_tool_authorization", ExplainTaskProbe());
+        var pending = await PendingApprovalAsync(caller);
+        // The approval is for the call; the asking policy read is listed as a check it covers.
+        Assert.Equal("explain_tool_authorization", pending["tool"]!["name"]!.GetValue<string>());
+        var check = Assert.Single(pending["checks"]!.AsArray())!.AsObject();
+        Assert.Equal("policy-read", check["id"]!.GetValue<string>());
+        Assert.Equal("read", check["tool"]!["name"]!.GetValue<string>());
+        Assert.Equal("confirm-read", Assert.Single(pending["rules"]!.AsArray())!["id"]!.GetValue<string>());
+        Assert.Equal(["ops"], pending["approvers"]!.AsArray().Select(item => item!.GetValue<string>()));
+        await Approve(manager, caller, pending["id"]!.GetValue<string>());
+        Assert.Null(Error(await call.WaitAsync(TimeSpan.FromSeconds(30))));
+        Assert.Equal(1, ApprovalCount(caller));
     }
 
     [Fact]
@@ -239,6 +250,8 @@ public sealed partial class ToolAuthorizationEffectsTests
         var call = Call(execution.Tools, "explain_tool_authorization", ExplainTaskProbe());
         var pending = await PendingApprovalAsync(caller);
         Assert.Equal("explain_tool_authorization", pending["tool"]!["name"]!.GetValue<string>());
+        // One request lists the call and its asking policy read.
+        Assert.Equal("policy-read", Assert.Single(pending["checks"]!.AsArray())!["id"]!.GetValue<string>());
         await Approve(manager, caller, pending["id"]!.GetValue<string>());
         var response = await call.WaitAsync(TimeSpan.FromSeconds(30));
         Assert.Null(Error(response));
@@ -310,7 +323,7 @@ public sealed partial class ToolAuthorizationEffectsTests
         var response = await call.WaitAsync(TimeSpan.FromSeconds(30));
         Assert.Null(Error(response));
         Assert.Equal("copied", await File.ReadAllTextAsync(Path.Combine(workspace, "target.txt")));
-        // The transfer's recheck and its Node read are internal steps of the approved call.
+        // The detached transfer's recheck is the approved request itself.
         Assert.Equal(1, ApprovalCount(owner));
     }
 

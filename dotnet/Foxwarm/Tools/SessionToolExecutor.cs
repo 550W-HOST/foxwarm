@@ -58,20 +58,24 @@ internal sealed partial class SessionToolExecutor(
             : resolved.Name == "exec" ? ExecFiles
             : Files;
         // This is the dispatch gate of the invocation's own call: only here may an ask outcome
-        // become an approval request. Every other check inside the invocation fails closed.
+        // become an approval request, for the call's inputs (stage A) and then for its whole
+        // plan (stage B). Every later check inside the invocation passes an ask only for a
+        // request a grant lists, and otherwise fails closed.
         var gate =
             ToolApprovalScope.Current is { } scope && ReferenceEquals(scope.Owner, hosted)
                 ? scope
                 : null;
         if (gate is not null)
             gate.Primary = resolved;
-        for (var attempt = 0; ; attempt++)
+        var requests = new Dictionary<ToolApprovalStage, int>();
+        while (true)
             try
             {
-                await sessions.AuthorizeToolAsync(
+                await sessions.AuthorizeCallAsync(
                     hosted,
                     resolved,
                     files,
+                    ExecutionNode,
                     token,
                     observe: assessment =>
                     {
@@ -83,16 +87,22 @@ internal sealed partial class SessionToolExecutor(
             }
             // A grant whose facts no longer match the call is replaced by a new request.
             catch (ToolApprovalRequiredException required)
-                when (gate is not null && attempt < MaxApprovalRequests)
+                when (
+                    gate is not null
+                    && requests.GetValueOrDefault(required.Stage) < MaxApprovalRequests
+                )
             {
-                // The superseded approval's call never ran with the facts it showed.
-                if (gate.Grant is { } superseded)
+                requests[required.Stage] = requests.GetValueOrDefault(required.Stage) + 1;
+                // The superseded approval of this stage never ran with the facts it showed.
+                foreach (var superseded in gate.Grants.Where(grant => grant.Stage == required.Stage))
+                {
                     await sessions.AbandonApprovedToolAsync(
                         hosted,
                         superseded.ApprovalId,
                         "notStarted"
                     );
-                gate.Grant = null;
+                    gate.Remove(superseded);
+                }
                 var pending = await sessions.BeginToolApprovalAsync(
                     hosted,
                     required,
@@ -103,7 +113,7 @@ internal sealed partial class SessionToolExecutor(
                 var record = await AwaitApprovalAsync(pending, token);
                 if (invocation.Value is { } current)
                     current.Approval = SessionManager.ApprovalMeta(record);
-                gate.Grant = SessionManager.ApprovalOutcome(pending, record);
+                gate.Add(SessionManager.ApprovalOutcome(pending, record));
             }
             catch (ToolApprovalRequiredException) when (gate is not null)
             {
@@ -115,6 +125,7 @@ internal sealed partial class SessionToolExecutor(
         RequireRuntime();
     }
 
+    // Approval requests per stage of one call, including those replacing a superseded grant.
     private const int MaxApprovalRequests = 3;
 
     // Audit evidence of what a call resolved to. Display data, never routing or policy authority.
@@ -534,7 +545,9 @@ internal sealed partial class SessionToolExecutor(
         };
         invocation.Value = current;
         // Each invocation gets its own approval scope; nested calls never inherit a grant.
-        var scope = new ToolApprovalScope(hosted) { Grant = approved?.Grant };
+        var scope = new ToolApprovalScope(hosted);
+        if (approved?.Grant is { } prepared)
+            scope.Add(prepared);
         using var approvalScope = ToolApprovalScope.Enter(scope);
         try
         {
@@ -545,11 +558,13 @@ internal sealed partial class SessionToolExecutor(
             }
             catch when (scope is { Grant: not null, Dispatched: false })
             {
-                await AbandonApprovalAsync(scope.Grant, token);
+                foreach (var grant in scope.Grants)
+                    await AbandonApprovalAsync(grant, token);
                 throw;
             }
-            if (scope is { Grant: { } grant, Dispatched: false })
-                current.Approval = await AbandonApprovalAsync(grant, token) ?? current.Approval;
+            if (scope is { Grant: not null, Dispatched: false })
+                foreach (var grant in scope.Grants)
+                    current.Approval = await AbandonApprovalAsync(grant, token) ?? current.Approval;
             if (!unattended && !Programmatic && current.Receipt is not null)
                 turnReceipts.Add(current.Receipt);
             return new(
@@ -839,7 +854,11 @@ internal sealed partial class SessionToolExecutor(
                 // values are never altered.
                 if (
                     !Programmatic
-                    && ToolApprovalScope.Current?.Grant?.Note is { } note
+                    && ToolApprovalScope.Current?.Grants is { } grants
+                    && string.Join(
+                        "\n",
+                        grants.Select(grant => grant.Note).OfType<string>()
+                    ) is { Length: > 0 } note
                     && result is JsonObject value
                 )
                     value["approvalNote"] = note;

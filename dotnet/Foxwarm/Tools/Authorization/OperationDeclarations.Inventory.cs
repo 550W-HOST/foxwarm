@@ -29,6 +29,7 @@ internal static partial class OperationDeclarations
 
     private const string Agent = "Sessions/SessionManager.AgentTools.cs";
     private const string Auth = "Sessions/SessionManager.Authorization.cs";
+    private const string Staging = "Sessions/SessionManager.ApprovalPlan.cs";
     private const string Explain = "Sessions/SessionManager.AuthorizationExplain.cs";
     private const string Secrets = "Sessions/SessionManager.Secrets.cs";
     private const string Timers = "Sessions/SessionManager.Timers.cs";
@@ -65,6 +66,13 @@ internal static partial class OperationDeclarations
             "builtin:compact_session#primary"
         ),
         Site(Auth, "SecretFactsAsync", 1, Assess, "builtin:set_config#candidate-read"),
+        Site(
+            Staging,
+            "RequireCreationTargetAsync",
+            1,
+            "AuthorizeCreateSessionTargetAsync",
+            "builtin:create_timer#creation-target"
+        ),
         Site(Auth, "SetAgentRulesAsync", 1, Tool, "builtin:set_agent_rules#primary"),
         Site(Auth, "AuthorizePromptFilesAsync", 1, Tool, "builtin:create_session#prompt-file-read"),
         Site(Auth, "InstallConfigAsync", 1, Tool, "builtin:set_config#primary", "builtin:set_config#install"),
@@ -276,7 +284,12 @@ internal static partial class OperationDeclarations
     // Sites that are the gate or the plumbing of the calls above, not obligations of their own.
     internal static readonly IReadOnlyList<(string File, string Member, string Reason)> Plumbing =
     [
-        (Executor, "AuthorizeAsync", "the dispatch gate of every invocation"),
+        (Staging, "AuthorizeCallAsync", "the dispatch gate of every invocation: its staged assessment"),
+        (
+            Staging,
+            "AssessChecksAsync",
+            "the gate's assessment of each planned check, as its owner will check it"
+        ),
         (Executor, "ExecuteCoreAsync", "dispatch of the invocation's own call"),
         (Auth, "AuthorizeToolAsync", "enforcement of the shared assessment"),
         (Auth, "AuthorizeCreateSessionTargetAsync", "the creation-target probe itself"),

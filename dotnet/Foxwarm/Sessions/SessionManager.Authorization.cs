@@ -154,40 +154,99 @@ internal sealed partial class SessionManager
             secrets: secrets
         );
         observe?.Invoke(assessment);
-        if (assessment.Denied is { } denied)
-            throw new ToolAuthorizationDeniedException(
-                // The existing message, then which rule denied which obligation of which call.
-                OperationAttribution.Append(
-                    denied.Decision
-                        is {
-                            Secrets.Effect: ToolAuthorizationEffect.Deny,
-                            Call.Effect: not ToolAuthorizationEffect.Deny
-                        }
-                        ? SessionWait.Text(denied.Decision.Secrets.Rule?["reason"])
-                            ?? Foxwarm.Secrets.SecretConfigurationChanges.DeniedMessage(
-                                assessment.Request.Secrets!
-                            )
-                        : SessionWait.Text(denied.Decision.Rule?["reason"])
-                            ?? $"Tool authorization rule denies {resolved.Source} capability `{resolved.Name}`.",
-                    OperationAttribution.Denial(
-                        resolved,
-                        OperationAttribution.Primary(owner),
-                        denied,
-                        assessment.Request.Secrets
-                    )
-                )
-            );
-        // Deny is final above. An ask outcome passes only within the invocation a
-        // person approved, including its internal steps and effect-owner rechecks.
-        if (
-            assessment.Effect == ToolAuthorizationEffect.Ask
-            && ToolApprovalScope.Current?.Covers(owner, resolved, assessment.Request) != true
-        )
-            throw new ToolApprovalRequiredException(assessment, resolved);
+        if (assessment.Denied is not null)
+            throw Denial(owner, resolved, assessment);
+        // Deny is final above: the current policy is always evaluated first. An ask outcome
+        // passes only when a grant of this invocation covers this exact request.
+        if (assessment.Effect == ToolAuthorizationEffect.Ask)
+        {
+            var fingerprint = ApprovalFingerprint(owner, resolved, assessment.Request);
+            if (ToolApprovalScope.Current?.Covers(owner, fingerprint) != true)
+                throw new ToolApprovalRequiredException(assessment, resolved, fingerprint);
+        }
         if (!IsCurrentOwner(owner))
             throw new InvalidOperationException(
                 "Tool source is no longer the current Session owner."
             );
+    }
+
+    // The denial of a request: the existing message, then which rule denied which obligation of
+    // which call.
+    internal static ToolAuthorizationDeniedException Denial(
+        SessionOwner owner,
+        ResolvedTool resolved,
+        AuthorizationAssessment assessment
+    )
+    {
+        var denied = assessment.Denied!;
+        return new ToolAuthorizationDeniedException(
+            OperationAttribution.Append(
+                denied.Decision
+                    is {
+                        Secrets.Effect: ToolAuthorizationEffect.Deny,
+                        Call.Effect: not ToolAuthorizationEffect.Deny
+                    }
+                    ? SessionWait.Text(denied.Decision.Secrets.Rule?["reason"])
+                        ?? Foxwarm.Secrets.SecretConfigurationChanges.DeniedMessage(
+                            assessment.Request.Secrets!
+                        )
+                    : SessionWait.Text(denied.Decision.Rule?["reason"])
+                        ?? $"Tool authorization rule denies {resolved.Source} capability `{resolved.Name}`.",
+                OperationAttribution.Denial(
+                    resolved,
+                    OperationAttribution.Primary(owner),
+                    denied,
+                    assessment.Request.Secrets
+                )
+            )
+        );
+    }
+
+    // The identity an approval binds and a later check must match: the request with its Session
+    // target and Task owner resolved even when no rule needed them, so a check that names its
+    // concrete target and one that resolves it from the arguments agree. Resolution failures
+    // leave the fact absent; a check that resolves it differently is then not covered.
+    internal string ApprovalFingerprint(
+        SessionOwner owner,
+        ResolvedTool resolved,
+        ToolAuthorizationRequest request
+    ) => ToolApprovalScope.Fingerprint(resolved, ApprovalRequest(owner, request));
+
+    // The request with the facts an approval binds, as approvers see them.
+    internal ToolAuthorizationRequest ApprovalRequest(
+        SessionOwner owner,
+        ToolAuthorizationRequest request
+    )
+    {
+        if (request.SessionTarget is null)
+            try
+            {
+                request = PopulateAuthorizationTargets(request, owner);
+            }
+            catch (Exception error) when (error is not OperationCanceledException)
+            {
+                // The fact stays absent: a check that resolves it is then not covered.
+            }
+        if (
+            request.TaskOwnerSession is null
+            && SessionWait.Text(request.Args["taskId"]) is { Length: > 0 and <= 128 } taskId
+            && !string.IsNullOrWhiteSpace(taskId)
+        )
+            try
+            {
+                var taskOwner = Tasks.OwnerSessionId(taskId.Trim());
+                request = request with
+                {
+                    TaskOwnerSession = taskOwner is null
+                        ? null
+                        : SessionWait.Text(Catalog.Resolve(taskOwner)["sessionId"]),
+                };
+            }
+            catch (Exception error) when (error is not OperationCanceledException)
+            {
+                // The fact stays absent: a check that resolves it is then not covered.
+            }
+        return request;
     }
 
     // Shared by enforcement and explanation: structural prechecks, fact construction and
@@ -410,17 +469,29 @@ internal sealed partial class SessionManager
             return null;
         try
         {
+            var readTool = CandidateRead(path);
             var read = await AssessToolAsync(
                 owner,
-                new("set_config", "node", "read", new JsonObject { ["filePath"] = path }),
+                readTool,
                 files,
                 token,
                 global: global,
                 secrets: []
             );
-            if (read.Effect != ToolAuthorizationEffect.Allow)
+            // An asking read counts only when an approval of this invocation covers it.
+            if (
+                read.Effect == ToolAuthorizationEffect.Deny
+                || read.Effect == ToolAuthorizationEffect.Ask
+                    && ToolApprovalScope.Current?.Covers(
+                        owner,
+                        ApprovalFingerprint(owner, readTool, read.Request)
+                    ) != true
+            )
                 return null;
-            var bytes = await files.CaptureConfigCandidateAsync(path, false, token);
+            // The bytes admitted before the plan, which the installation consumes.
+            var bytes =
+                AdmittedCandidate(owner, path)
+                ?? await files.CaptureConfigCandidateAsync(path, false, token);
             return Foxwarm.Secrets.SecretConfigurationChanges.ForConfiguration(
                 configuration,
                 SessionWait.Text(resolved.Args["target"])!,
@@ -750,6 +821,19 @@ internal sealed partial class SessionManager
         return paths;
     }
 
+    // The protected input of set_config: its candidate, read on master as the caller.
+    internal static ResolvedTool CandidateRead(string path) =>
+        new("set_config", "node", "read", new JsonObject { ["filePath"] = path });
+
+    internal static string CandidateInput(string path) => "set_config:" + path;
+
+    private static byte[]? AdmittedCandidate(SessionOwner owner, string path) =>
+        ToolApprovalScope.Current is { } scope
+        && ReferenceEquals(scope.Owner, owner)
+        && scope.Inputs.TryGetValue(CandidateInput(path), out var bytes)
+            ? bytes
+            : null;
+
     internal async Task<JsonObject> InstallConfigAsync(
         SessionOwner owner,
         WorkspaceTools files,
@@ -777,15 +861,14 @@ internal sealed partial class SessionManager
                 current,
                 secrets: secrets
             );
-            await AuthorizeToolAsync(
-                owner,
-                new("set_config", "node", "read", new JsonObject { ["filePath"] = path }),
-                files,
-                current
-            );
+            await AuthorizeToolAsync(owner, CandidateRead(path), files, current);
         }
         await Authorize(token);
-        var bytes = await files.CaptureConfigCandidateAsync(path, target == "tool-rules", token);
+        // The candidate the plan was derived from, when it was admitted before planning;
+        // otherwise read now.
+        var bytes =
+            (target is "config" or "models" ? AdmittedCandidate(owner, path) : null)
+            ?? await files.CaptureConfigCandidateAsync(path, target == "tool-rules", token);
         var text = new UTF8Encoding(false).GetString(bytes).TrimStart('\uFEFF');
         if (target is "config" or "models" && models.ConfigurationOwner is { } current)
             Foxwarm.Secrets.SecretMarkerGuard.Require(text, current.Secrets.Redactor.HasLabel);
