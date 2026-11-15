@@ -100,7 +100,7 @@ Subsumed internal work belongs to an effect's purpose and changes no further pro
   - for a new-Session timer, an Agent and prefix with a future unknown ID.
 
   A fresh Provider create is authorized on its parent and the requested facts, never on a provider-generated ID that does not exist yet.
-- **Unresolved resources.** From phase 3, an op whose required resource cannot be established fails derivation. The call is rejected before dispatch with `tool_authorization_unresolved`, and never reaches a default allow. Before phase 3, an incomplete plan is only reported.
+- **Unresolved resources.** From phase 3, an op whose required resource cannot be established fails derivation. The call is rejected before dispatch with `tool_authorization_unresolved`, and never reaches a default allow. Before phase 3, an incomplete plan is only reported. The rejection applies only in layers that contain operation rules; version-1-only layers keep their version-1 semantics, consistent with version 1 staying (coordinator decision, 2026-11-16; an implementation fact, not a user decision).
 
 ### Model requests from scripts
 
@@ -121,7 +121,7 @@ Approval staging (stages A–C) and its phase-2 implementation are owned by [too
 
 ## Visibility
 
-Each declaration has **action branches**: the normalized constraints that select a branch, plus its operation templates. A template is unconditional or conditional, and its resources are known or unknown. A branch is possible when every unconditional template is possible in every layer. A capability is visible when any branch is possible. Conditional templates never hide a branch. Raw facts are kept apart from branch constraints: version-1 rules are walked against only the raw arguments an actual command supplies (`ctl session status` supplies `action: status`; native declarations and `tool search` supply none). For version-1-only policies, capability-level projection equals the version-1 projection except for the self exemption, and command-level help uses the command's fixed raw arguments, which is the help fix. Default declarations keep their fixed order and contract ([D-tools-node-independent-default-declarations](./tools-registry.md#d-tools-node-independent-default-declarations)): their inputs are persisted policy and process-fixed definitions, never the current Node, Node inventory, connectivity or cwd. Help, explain and approval output are tool results, and no operation content is added to requests, so request-prefix stability is unchanged. Mechanics: [operation rules](./tool-operation-rules.md#visibility).
+Each declaration has **action branches**: the normalized constraints that select a branch, plus its operation templates. A template is unconditional or conditional, and its resources are known or unknown. A branch is possible when every unconditional template is possible in every layer. A capability is visible when any branch is possible. Conditional templates never hide a branch. Raw facts are kept apart from branch constraints: version-1 rules are walked against only the raw arguments an actual command supplies (`ctl session status` supplies `action: status`; native declarations and `tool search` supply none). For version-1-only policies, capability-level projection equals the version-1 projection except for the self exemption, and command-level help uses the command's fixed raw arguments, which is the help fix. Default declarations keep their fixed order and contract ([D-tools-node-independent-default-declarations](./tools-registry.md#d-tools-node-independent-default-declarations)): their inputs are persisted policy and process-fixed definitions, never the current Node, Node inventory, connectivity or cwd. Help, explain and approval output are tool results, and no operation content is added to requests, so request-prefix stability is unchanged. Visibility is conservative: it never hides a command that could be called, and may list one that dispatch then refuses, because each layer is projected separately; enforcement stays at dispatch (coordinator decision, 2026-11-16; an implementation fact, not a user decision). Mechanics: [operation rules](./tool-operation-rules.md#visibility).
 
 ## Explanation and denials
 
@@ -135,8 +135,9 @@ Phase 3:
 - per operation, `{decision, rule, position, ruleKind}`, with version-1 winners marked `whole-call`;
 - unreached rules;
 - per-name secret decisions with `owned` or `fallback`;
-- the `self` result;
-- compare inputs: `layers: [{agent, filePath}]` for candidate Agent-local layers, and `external: [{externalId, …}]` for inbound identities.
+- the `self` result.
+
+Phase 4: compare inputs `layers: [{agent, filePath}]` for candidate Agent-local layers, and `external: [{externalId, …}]` for inbound identities, which the converter needs.
 
 Probes run at existing Sessions or external identities only.
 
@@ -171,9 +172,9 @@ Phase 3 changes generated-layer decisions in two ways. Artifact `get` becomes se
 | **1. Observational** | Declarations, effect plans, obligation inventory and branches as metadata. Explain additions and denial attribution. Coverage tests. | None. The existing evaluator, assessment sequence, guards, approval scope, visibility, self restrictions and grammar stay authoritative. The plan cannot authorize, deny or read. |
 | **2. Planning and staged approvals** | Protected-input capture, stages A–C, retained obligations, under version-1 rules | When input and sub-call asks can be answered. Changed final asks fail closed. |
 | **3. Operation rules** (implemented) | Parsing and writing `op` rules, reader marker 2, two-domain evaluator, handler-consumed normalizer, self exemption with the `model.request` gate, fail-closed derivation and mandatory declarations, operation-aware visibility | Operation rules, self exemption, unresolved rejection, per-command help |
-| **4. Authoring aids** | Placement diagnostics and the optional converter | None to stored policies |
+| **4. Authoring aids** | Placement diagnostics, the optional converter and explain compare inputs for candidate Agent-local layers and external identities | None to stored policies |
 
-Phase 3 does not yet include two items of its scope: handlers do not consume the normalizer's output (the plan's normalizer mirrors each handler's parsing, checked by the conformance corpus), and explain has no compare inputs for candidate Agent-local layers or external identities. The version-1 changes it makes are listed per case in `version1-equality.json`.
+Coordinator decisions (2026-11-16; implementation facts, not user decisions): handlers do not yet consume the normalizer's output, which stays deferred (the plan's normalizer mirrors each handler's parsing, checked by the conformance corpus); explain compare inputs for candidate Agent-local layers and external identities move to phase 4, which needs them for the converter. The version-1 changes phase 3 makes are listed per case in `version1-equality.json`.
 
 Acceptance tests by phase:
 
@@ -200,6 +201,7 @@ Acceptance tests by phase:
    - Correlated, untranslatable, dormant and secret rules are retained, and asks are never widened.
    - Source selectors are parsed correctly, and overflow blocks without producing a candidate.
    - Normalization and composition differences are labeled, and unchanged rules are preserved on write.
+   - Explain compares candidate Agent-local layers and external identities.
 
 ## Tests
 
@@ -207,4 +209,4 @@ Phase 1 adds `OperationAttributionTests` (attribution and decision equality) and
 
 ## Open Questions
 
-- Unconfirmed: whether unresolved rejection also applies when no layer has operation rules. Phase 3 rejects only where a layer with operation rules cannot decide, which keeps version-1-only layers exact.
+None.
