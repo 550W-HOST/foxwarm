@@ -47,7 +47,12 @@ internal sealed record ObligationTemplate(
     string Description,
     string? When = null,
     bool Optional = false
-);
+)
+{
+    // The argument of the call that names the file this check reads, when one does. It tells
+    // apart obligations with the same capability, such as a policy read and a candidate read.
+    internal string? PathArg { get; init; }
+}
 
 // The branch of a capability selected by its normalized action (null: any action) and an
 // optional condition. Self names the owner check of a branch that acts only on the caller's own

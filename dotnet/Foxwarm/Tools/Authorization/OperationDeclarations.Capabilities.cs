@@ -77,7 +77,7 @@ internal static partial class OperationDeclarations
                     "node:read",
                     "read of the script source file on its Node",
                     "file-source"
-                ),
+                ) with { PathArg = "filePath" },
                 Nested("each call_tool or ctl() call, and each model request, under its own gate"),
             ]
         ),
@@ -94,7 +94,7 @@ internal static partial class OperationDeclarations
                     "node:read",
                     "read of the script source file on its Node",
                     "file-source"
-                ),
+                ) with { PathArg = "filePath" },
                 Nested("each call_tool or ctl() call, and each model request, under its own gate"),
             ]
         ),
@@ -143,7 +143,7 @@ internal static partial class OperationDeclarations
                     "node:read",
                     "read of the plan file named by argsFilePath on the current Node",
                     "arg:argsFilePath"
-                ),
+                ) with { PathArg = "argsFilePath" },
                 Sub(
                     "plan-save",
                     "node:write",
@@ -525,7 +525,7 @@ internal static partial class OperationDeclarations
                     "node:read",
                     "read of the artifact source file on its Node",
                     "file-action"
-                ),
+                ) with { PathArg = "filePath" },
             ]
         ),
         Simple("builtin:send_to_channel", Op("channel.send", "channel=arg:channelTargetId")),
@@ -546,7 +546,10 @@ internal static partial class OperationDeclarations
             [Call(Op("config.write", "with.target=arg:target"), SecretUse())],
             [
                 Primary(),
-                Sub("candidate-read", "node:read", "read of the candidate file on master"),
+                Sub("candidate-read", "node:read", "read of the candidate file on master") with
+                {
+                    PathArg = "filePath",
+                },
                 Retained(
                     "install",
                     "same",
@@ -570,7 +573,7 @@ internal static partial class OperationDeclarations
                     "node:read",
                     "read of the candidate policy file on master",
                     "arg:policyFilePath"
-                ),
+                ) with { PathArg = "policyFilePath" },
                 Sub(
                     "probe-view",
                     "builtin:view_session",
@@ -595,7 +598,7 @@ internal static partial class OperationDeclarations
                     "node:read",
                     "read of filePath on the current Node",
                     "arg:filePath"
-                ),
+                ) with { PathArg = "filePath" },
                 Sub(
                     "config-read",
                     "node:read",

@@ -138,6 +138,26 @@ public sealed partial class OperationAttributionTests
             OperationAttribution.Obligation(select, new("node", "node", "get_default_cwd", new JsonObject(), ExecutionNode: "box"))!.Id
         );
         Assert.Equal("ctl node select", OperationAttribution.Invocation(select with { Command = "node select" }));
+
+        // Checks with the same capability are told apart by the file they read.
+        var secret = new ResolvedTool(
+            "add_secret",
+            "builtin",
+            "add_secret",
+            new JsonObject { ["name"] = "k", ["filePath"] = "token.txt" }
+        );
+        ResolvedTool Read(string path) =>
+            new("read", "node", "read", new JsonObject { ["filePath"] = path });
+        Assert.Equal("file-read", OperationAttribution.Obligation(secret, Read("token.txt"))!.Id);
+        Assert.Equal("config-read", OperationAttribution.Obligation(secret, Read("/c/config.yaml"))!.Id);
+        var explain = new ResolvedTool(
+            "explain_tool_authorization",
+            "builtin",
+            "explain_tool_authorization",
+            new JsonObject { ["policyFilePath"] = "candidate.yaml" }
+        );
+        Assert.Equal("candidate-read", OperationAttribution.Obligation(explain, Read("candidate.yaml"))!.Id);
+        Assert.Equal("policy-read", OperationAttribution.Obligation(explain, Read("/p/rules.yaml"))!.Id);
         Assert.Equal("run_script", OperationAttribution.Invocation(script));
     }
 }

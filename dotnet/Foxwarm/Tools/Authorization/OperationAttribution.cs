@@ -80,7 +80,17 @@ internal static class OperationAttribution
                 : declaration?.Obligations.FirstOrDefault(item =>
                     item.Kind == ObligationKind.Retained && item.Capability == "same"
                 );
-        return declaration?.Obligations.FirstOrDefault(item => Matches(item.Capability, check))
+        var candidates = declaration
+            ?.Obligations.Where(item => Matches(item.Capability, check))
+            .ToArray() ?? [];
+        var path = SessionWait.Text(check.Args["filePath"])?.Trim();
+        return candidates.FirstOrDefault(item =>
+                item.PathArg is { } arg
+                && path is not null
+                && SessionWait.Text(primary.Args[arg])?.Trim() == path
+            )
+            ?? candidates.FirstOrDefault(item => item.PathArg is null)
+            ?? candidates.FirstOrDefault()
             ?? OperationDeclarations.Common.FirstOrDefault(item =>
                 item.Id == "output-spill" && check is { Source: "node", Name: "read" or "write" }
             );
