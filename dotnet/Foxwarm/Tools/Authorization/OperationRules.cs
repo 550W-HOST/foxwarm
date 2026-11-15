@@ -401,14 +401,23 @@ internal static class OperationRules
                 // An MCP tool is {server, tool}; a managed or subscribed server is its name.
                 var server = SessionWait.Text(value) ?? SessionWait.Text(value["server"]);
                 var tool = value is JsonObject identity ? SessionWait.Text(identity["tool"]) : null;
-                return Of(
-                    matcher
-                        .AsObject()
-                        .All(pair =>
-                            (pair.Key == "server" ? server : tool) is string text
-                            && ToolAuthorizationEvaluation.Pattern(pair.Value!, text)
-                        )
-                );
+                // A discovered server's tool name is unknown: only its server can decide.
+                var toolUnknown = value is JsonObject named && named.ContainsKey("tool") && named["tool"] is null;
+                var unknownTool = false;
+                foreach (var (part, pattern) in matcher.AsObject())
+                {
+                    if (part == "tool" && toolUnknown)
+                    {
+                        unknownTool = true;
+                        continue;
+                    }
+                    if (
+                        (part == "server" ? server : tool) is not string name
+                        || !ToolAuthorizationEvaluation.Pattern(pattern!, name)
+                    )
+                        return OperationMatch.No;
+                }
+                return unknownTool ? OperationMatch.Unknown : OperationMatch.Yes;
             }
             case "secret":
             {

@@ -12,14 +12,40 @@ internal sealed partial class SessionManager
     internal IReadOnlyList<AuthorizationOperation> AuthorizationOperations(
         SessionOwner owner,
         ResolvedTool resolved,
-        ToolAuthorizationRequest request
-    )
-    {
-        var context = new PlanContext(CurrentNode(owner))
+        ToolAuthorizationRequest request,
+        WorkspaceTools? files = null
+    ) =>
+        OperationPlan
+            .AuthorizationOperations(resolved, request, OperationContext(owner, files))
+            .Select(operation => WithFacts(owner, operation, request))
+            .ToArray();
+
+    // The facts the plan reads beyond the request, from their owners: catalog lookups, Agent
+    // defaults, the Node forest and the caller's working directory. Enforcement, explain and
+    // staging use the same context.
+    internal PlanContext OperationContext(
+        SessionOwner owner,
+        WorkspaceTools? files,
+        AuthorizationAssessment? assessment = null
+    ) =>
+        new(CurrentNode(owner))
         {
             PolicyPath = authorization.PolicyPath,
+            Subtree = id =>
+            {
+                try
+                {
+                    return Nodes.Registry.Forest().Subtree(id);
+                }
+                catch (InvalidDataException)
+                {
+                    return null;
+                }
+            },
             SessionExists = id => AuthorizationTarget(id) is not null,
             SessionAgent = id => AuthorizationTarget(id)?.Agent,
+            DefaultCwdProbe = DefaultCwdProbe,
+            SecretsUnknown = assessment?.SecretsUnknown == true,
             MemoryDirectory = agent =>
             {
                 try
@@ -31,12 +57,32 @@ internal sealed partial class SessionManager
                     return null;
                 }
             },
+            AgentDefaultNode = agent =>
+            {
+                try
+                {
+                    AgentCatalog.ValidateName(agent);
+                    return agents.Exists(agent) ? agents.EffectiveDefaultNode(agent) ?? "master" : null;
+                }
+                catch (Exception error) when (error is InvalidDataException or ArgumentException)
+                {
+                    return null;
+                }
+            },
+            DefaultExecCwd = files is null
+                ? null
+                : () =>
+                {
+                    try
+                    {
+                        return files.AuthorizationFacts("exec", new JsonObject { ["cwd"] = files.Paths.ExecCwd(null) }).FirstOrDefault();
+                    }
+                    catch (Exception error) when (error is InvalidDataException or ArgumentException or IOException)
+                    {
+                        return null;
+                    }
+                },
         };
-        return OperationPlan
-            .AuthorizationOperations(resolved, request, context)
-            .Select(operation => WithFacts(owner, operation, request))
-            .ToArray();
-    }
 
     private AuthorizationOperation WithFacts(
         SessionOwner owner,

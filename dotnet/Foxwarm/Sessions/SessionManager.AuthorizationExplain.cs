@@ -322,24 +322,7 @@ internal sealed partial class SessionManager
     }
 
     private PlanContext PlanContextFor(SessionOwner target, AuthorizationAssessment? assessment) =>
-        new(CurrentNode(target))
-        {
-            PolicyPath = authorization.PolicyPath,
-            Subtree = id =>
-            {
-                try
-                {
-                    return Nodes.Registry.Forest().Subtree(id);
-                }
-                catch (InvalidDataException)
-                {
-                    return null;
-                }
-            },
-            SessionExists = id => AuthorizationTarget(id) is not null,
-            DefaultCwdProbe = DefaultCwdProbe,
-            SecretsUnknown = assessment?.SecretsUnknown == true,
-        };
+        OperationContext(target, null, assessment);
 
     // Whether node select probes the Node's default cwd, as SelectNodeAsync decides it: a remote
     // Node that is not Provider-backed and advertises get_default_cwd. The handler reaches that

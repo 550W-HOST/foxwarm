@@ -260,7 +260,10 @@
     "branch": "list",
     "operations": [
      {
-      "op": "session.list"
+      "op": "session.list",
+      "with": {
+       "scope": "current-agent"
+      }
      }
     ],
     "obligations": [
@@ -1465,6 +1468,7 @@
       "op": "session.create",
       "resources": {
        "targetAgent": "beta",
+       "node": "box",
        "parent": "alpha-1",
        "targetSession": {
         "prospective": true
@@ -1472,7 +1476,9 @@
       },
       "with": {
        "kind": "child",
-       "placement": "inherited"
+       "placement": "inherited",
+       "runtime": "foxwarm",
+       "fork": false
       }
      },
      {
@@ -1505,6 +1511,11 @@
     },
     "evaluated": {
      "primary": "primary"
+    }
+   },
+   "context": {
+    "agentDefaultNode": {
+     "beta": "box"
     }
    }
   },
@@ -1601,6 +1612,16 @@
      {
       "op": "session.create",
       "resources": {
+       "targetAgent": "gamma"
+      },
+      "with": {
+       "kind": "session"
+      },
+      "conditional": true
+     },
+     {
+      "op": "session.create",
+      "resources": {
        "targetAgent": "gamma",
        "targetSession": "gamma-src"
       },
@@ -1638,6 +1659,16 @@
       "resources": {
        "targetAgent": "gamma"
       }
+     },
+     {
+      "op": "session.create",
+      "resources": {
+       "targetAgent": "gamma"
+      },
+      "with": {
+       "kind": "session"
+      },
+      "conditional": true
      }
     ],
     "obligations": [
@@ -1825,13 +1856,15 @@
       "op": "session.create",
       "resources": {
        "targetAgent": "beta",
+       "node": "master",
        "targetSession": {
         "prospective": true
        }
       },
       "with": {
        "kind": "session",
-       "placement": "inherited"
+       "placement": "inherited",
+       "runtime": "foxwarm"
       }
      }
     ],
@@ -1858,6 +1891,11 @@
     "evaluated": {
      "primary": "primary",
      "prompt-file-read": null
+    }
+   },
+   "context": {
+    "agentDefaultNode": {
+     "beta": "master"
     }
    }
   },

@@ -277,9 +277,11 @@ internal static class OperationEvaluation
         ToolAuthorizationRequest request,
         Func<JsonObject, (bool Skip, bool Conditional)> wholeCall,
         bool unknownNodes,
-        bool actionKnown
+        IReadOnlySet<string>? knownArgs,
+        bool unknownName
     )
     {
+        var actionKnown = knownArgs?.Contains("action") == true;
         var declaration = OperationDeclarations.Find(request.Source, request.Name);
         var rules = Rules(policy);
         var branches = declaration is null
@@ -296,7 +298,9 @@ internal static class OperationEvaluation
                         request.TargetNode ?? "master"
                     ),
                     request,
-                    actionKnown
+                    actionKnown,
+                    knownArgs,
+                    unknownName
                 )
                 .ToArray();
         if (branches.Length == 0)

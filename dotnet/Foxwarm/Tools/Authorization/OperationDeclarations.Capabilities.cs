@@ -181,14 +181,14 @@ internal static partial class OperationDeclarations
                 Call(
                     Op(
                         "session.create",
-                        "targetAgent=arg?:agentName",
-                        "node=arg?:node",
+                        "targetAgent=agent-or-caller",
+                        "node=child-node",
                         "parent=caller",
                         "targetSession=prospective",
                         "with.kind==child",
                         "with.placement=placement",
-                        "with.runtime=arg?:runtime",
-                        "with.fork=arg?:fork"
+                        "with.runtime=arg?:runtime??foxwarm",
+                        "with.fork=arg?:fork??false"
                     ),
                     OpIf(
                         "arg:taskId",
@@ -209,13 +209,13 @@ internal static partial class OperationDeclarations
                 Call(
                     Op(
                         "session.create",
-                        "targetAgent=arg?:agentName",
-                        "node=arg?:node",
+                        "targetAgent=arg:agentName",
+                        "node=session-node",
                         "parent=arg?:parentSessionId",
                         "targetSession=prospective",
                         "with.kind==session",
                         "with.placement=placement",
-                        "with.runtime=arg?:runtime"
+                        "with.runtime=arg?:runtime??foxwarm"
                     )
                 ),
             ],
@@ -238,7 +238,7 @@ internal static partial class OperationDeclarations
                     Op("task.create", "with.assigned=has:ownerSessionId"),
                     OpIf("arg:ownerSessionId", "task.assign", "targetSession=arg:ownerSessionId")
                 ),
-                Branch("list", "list", Op("task.list", "with.scope=arg?:scope")),
+                Branch("list", "list", Op("task.list", "with.scope=arg?:scope??current-session")),
                 Branch("get", "get", Op("task.read", "task=arg:taskId")),
                 Branch(
                     "claim",
@@ -261,7 +261,7 @@ internal static partial class OperationDeclarations
             "builtin:session",
             [
                 Branch("status", "status", Op("session.view", "targetSession=target-session")),
-                Branch("list", "list", Op("session.list", "with.scope=arg?:scope")),
+                Branch("list", "list", Op("session.list", "with.scope=session-scope")),
                 Branch(
                     "rename",
                     "update-display-name",
@@ -297,10 +297,10 @@ internal static partial class OperationDeclarations
                     Op(
                         "session.manage",
                         "targetSession=target-session",
-                        "targetAgent=arg?:newAgentName",
+                        "targetAgent=move-agent",
                         "with.change==move"
                     ),
-                    OpIf("arg:createAgent", "agent.create", "targetAgent=arg?:newAgentName")
+                    OpIf("arg:createAgent", "agent.create", "targetAgent=arg:newAgentName")
                 ),
             ],
             [Primary()]
@@ -349,12 +349,12 @@ internal static partial class OperationDeclarations
             "builtin:create_agent",
             [
                 Call(
-                    Op("agent.create", "targetAgent=arg?:agentName"),
+                    Op("agent.create", "targetAgent=arg:agentName"),
                     OpIf("arg:inherit", "agent.view", "targetAgent=arg:inherit"),
                     OpIf(
-                        "arg:createMainSession",
+                        "default-true:createMainSession",
                         "session.create",
-                        "targetAgent=arg?:agentName",
+                        "targetAgent=arg:agentName",
                         "with.kind==session"
                     ),
                     OpIf(
@@ -365,7 +365,7 @@ internal static partial class OperationDeclarations
                     OpIf(
                         "source-missing",
                         "session.create",
-                        "targetAgent=arg?:agentName",
+                        "targetAgent=arg:agentName",
                         "targetSession=arg:sourceSessionId",
                         "with.kind==source"
                     ),
@@ -383,13 +383,13 @@ internal static partial class OperationDeclarations
         ),
         Simple(
             "builtin:set_agent_rules",
-            Op("agent.manage", "targetAgent=arg?:agentName", "with.change==rules")
+            Op("agent.manage", "targetAgent=arg:agentName", "with.change==rules")
         ),
         Declare(
             "builtin:set_agent_inherit",
             [
                 Call(
-                    Op("agent.manage", "targetAgent=arg?:agentName", "with.change==inherit"),
+                    Op("agent.manage", "targetAgent=arg:agentName", "with.change==inherit"),
                     OpIf(
                         "arg:inheritAgentName",
                         "agent.view",
@@ -409,7 +409,7 @@ internal static partial class OperationDeclarations
                 Branch("select", "select", Op("node.select", "node=node-target")),
                 // External-only: inbound `node status` views the selected Node; the model's
                 // node tool has no such action.
-                Branch("status", "status", Op("node.view", "node=node-target")),
+                Branch("status", "status", Op("node.view", "node=status-node")),
                 Branch(
                     "create",
                     "create",
@@ -479,7 +479,7 @@ internal static partial class OperationDeclarations
         Simple("builtin:node_pair_list", Op("node.trust", "with.action==pending")),
         Simple(
             "builtin:node_pair_approve",
-            Op("node.trust", "node=arg?:nodeId", "with.action==approve")
+            Op("node.trust", "node=arg:nodeId", "with.action==approve")
         ),
         Declare(
             "builtin:node_remove",
@@ -590,7 +590,7 @@ internal static partial class OperationDeclarations
             "builtin:add_secret",
             [
                 Call(
-                    Op("secret.manage", "secret=arg?:name"),
+                    Op("secret.manage", "secret=arg:name"),
                     SecretUse(),
                     OpEachIf("arg:fromConfig", "from-config-files", "config.write", "with.target=each"),
                     OpEachIf("arg:fromConfig", "from-config-servers", "mcp.manage", "mcp=each")
@@ -631,7 +631,7 @@ internal static partial class OperationDeclarations
         Simple("builtin:list_mcp_servers", Op("mcp.list")),
         Declare(
             "builtin:mcp_config",
-            [Call(Op("mcp.manage", "mcp=arg?:name"), SecretUse())],
+            [Call(Op("mcp.manage", "mcp=arg:name"), SecretUse())],
             [
                 Primary(),
                 Retained(

@@ -901,7 +901,8 @@ internal static class ToolAuthorizationEvaluation
                 request,
                 WholeCall,
                 unknownNode || unknownNodeTargets,
-                knownArgs?.Contains("action") == true
+                knownArgs,
+                unknownName
             );
         foreach (var rule in policy.Value["rules"]!.AsArray().OfType<JsonObject>())
         {

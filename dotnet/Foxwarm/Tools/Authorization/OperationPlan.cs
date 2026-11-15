@@ -24,6 +24,13 @@ internal sealed record PlanContext(string CurrentNode)
     // The memory directory of an Agent, and the Agent of a Session; null when unknown.
     internal Func<string, string?>? MemoryDirectory { get; init; }
     internal Func<string, string?>? SessionAgent { get; init; }
+
+    // The Node a new Session of an Agent starts on without an explicit or inherited Node (its
+    // default, the installation default, then master); null when unknown.
+    internal Func<string, string?>? AgentDefaultNode { get; init; }
+
+    // The effective working directory of an exec without cwd on master; null when unknown.
+    internal Func<AuthorizationPath?>? DefaultExecCwd { get; init; }
 }
 
 internal sealed record PlannedOperation(
@@ -53,7 +60,7 @@ internal sealed record PlannedObligation(
 // assessment already established. It never authorizes, denies or reads, and handlers do not
 // consume its normalized arguments. Derive never throws; what it cannot establish is reported in
 // Incomplete.
-internal sealed record OperationPlan(
+internal sealed partial record OperationPlan(
     string Capability,
     OperationDeclaration? Declaration,
     JsonObject Raw,
@@ -235,7 +242,9 @@ internal sealed record OperationPlan(
         OperationDeclaration declaration,
         ResolvedTool resolved,
         ToolAuthorizationRequest facts,
-        bool actionKnown
+        bool actionKnown,
+        IReadOnlySet<string>? knownArgs = null,
+        bool unknownName = false
     )
     {
         var known = actionKnown
@@ -261,7 +270,16 @@ internal sealed record OperationPlan(
                 facts,
                 new PlanContext(facts.CurrentNode ?? "master"),
                 args,
-                []
+                [],
+                // What the caller does not state stays unknown: the action a branch assumes is
+                // the only argument this projection adds.
+                branch.Action is null
+                    ? knownArgs ?? new HashSet<string>()
+                    : new HashSet<string>(knownArgs ?? new HashSet<string>(), StringComparer.Ordinal)
+                    {
+                        "action",
+                    },
+                unknownName
             );
             var operations = new List<AuthorizationOperation>();
             foreach (var template in branch.Operations.Where(item => !item.Conditional))
@@ -337,9 +355,16 @@ internal sealed record OperationPlan(
         ToolAuthorizationRequest? facts,
         PlanContext context,
         JsonObject args,
-        List<string> gaps
+        List<string> gaps,
+        IReadOnlySet<string>? known = null,
+        bool unknownName = false
     )
     {
+        // Whether an argument is outside what a visibility projection knows. Authorization and
+        // planning know every argument the call states (and that it omits the rest).
+        private bool Unknown(params string[] names) =>
+            known is not null && names.Any(name => !known.Contains(name));
+
         private string? Text(string name) =>
             SessionWait.Text(args[name]) is string text && SessionGoal.Trim(text).Length > 0
                 ? text
@@ -365,8 +390,18 @@ internal sealed record OperationPlan(
         {
             if (when.StartsWith('!'))
                 return Holds(when[1..]) is bool value ? !value : null;
+            if (Unknown(ConditionArgs(when)))
+                return null;
             if (when.StartsWith("arg:", StringComparison.Ordinal))
                 return Present(when[4..]);
+            if (when.StartsWith("default-true:", StringComparison.Ordinal))
+                // An omitted boolean the handler defaults to true; a non-boolean is rejected.
+                return args[when[13..]] switch
+                {
+                    null => true,
+                    JsonValue value when value.TryGetValue<bool>(out var flag) => flag,
+                    _ => null,
+                };
             if (when.StartsWith("action:", StringComparison.Ordinal))
                 return when[7..].Split('|').Contains(Action);
             switch (when)
@@ -420,6 +455,8 @@ internal sealed record OperationPlan(
         // The items a template expands over.
         private IReadOnlyList<JsonNode?>? Items(string each)
         {
+            if (Unknown(ItemArgs(each)))
+                return null;
             if (each.StartsWith("path:", StringComparison.Ordinal))
             {
                 if (facts is null)
@@ -494,9 +531,21 @@ internal sealed record OperationPlan(
                 value = expression[1..];
                 return true;
             }
+            if (Unknown(ValueArgs(expression)))
+                return false;
+            if (expression == "server-tool" && unknownName)
+            {
+                // Discovery knows the server, not which of its tools will be called.
+                value = new JsonObject { ["server"] = resolved.Server, ["tool"] = null };
+                return true;
+            }
             if (expression.StartsWith("arg?:", StringComparison.Ordinal))
             {
-                value = args[expression[5..]]?.DeepClone();
+                // `arg?:name??default`: the handler's default for an omitted argument.
+                var (name, fallback) = Defaulted(expression[5..]);
+                value = args[name]?.DeepClone();
+                if (value is null && fallback is not null)
+                    value = fallback;
                 omit = value is null;
                 return true;
             }
@@ -514,6 +563,22 @@ internal sealed record OperationPlan(
             {
                 var path = facts?.Paths.FirstOrDefault(fact => fact.Arg == expression[6..]);
                 value = path is null ? null : path.Resolved ?? path.Raw;
+                if (value is null && expression == "path?:cwd" && Text("cwd") is null)
+                {
+                    // An exec without cwd runs in the Session's working directory on master. On
+                    // another Node it runs in that Node's directory, which no path selector
+                    // matches (they hold only for resolved master paths); an inbound caller's
+                    // paths are never resolved either.
+                    if (resolved.ExecutionNode != "master" || facts is { Principal: not "internal" })
+                    {
+                        value = ".";
+                        return true;
+                    }
+                    if (context.DefaultExecCwd?.Invoke() is not { } cwd)
+                        return false;
+                    value = cwd.Resolved ?? cwd.Raw;
+                    return true;
+                }
                 omit = value is null;
                 return true;
             }
@@ -552,14 +617,75 @@ internal sealed record OperationPlan(
                     value = NodeTarget ?? Text("nodeId")?.Trim();
                     return value is not null;
                 case "target-session":
-                    // Inbound front ends pass the canonical Session ID they resolved.
+                    // Inbound front ends pass the canonical Session ID they resolved. Internal
+                    // calls use the request's Session target; a capability without a registered
+                    // resolver names its target in sessionId, which some default to the caller.
                     value =
                         facts?.SessionTarget?.Id
                         ?? (
-                            facts is { Principal: not "internal" }
-                                ? Text("sessionId")?.Trim()
-                                : null
+                            facts is { Principal: not "internal" } ? Text("sessionId")?.Trim()
+                            : facts is null
+                            || ToolAuthorizationPolicy.TargetResolvers.ContainsKey(resolved.Name)
+                                ? null
+                            : CallerDefaultTargets.Contains(resolved.Name)
+                                ? Text("sessionId")?.Trim() ?? facts.Session
+                            : ArgumentTargets.Contains(resolved.Name) ? Text("sessionId")?.Trim()
+                            : null
                         );
+                    return value is not null;
+                case "child-node":
+                {
+                    // create_child_session: the explicit Node, else the caller's current Node in
+                    // its own Agent, else the target Agent's default.
+                    if (args["node"] is JsonNode explicitNode)
+                    {
+                        value = explicitNode.DeepClone();
+                        return true;
+                    }
+                    var agent = SessionWait.Text(args["agentName"]) ?? facts?.Agent;
+                    value =
+                        agent is null ? null
+                        : agent == facts?.Agent ? context.CurrentNode
+                        : context.AgentDefaultNode?.Invoke(agent);
+                    return value is not null;
+                }
+                case "session-node":
+                {
+                    // create_session: the explicit Node, else the Agent's default.
+                    if (args["node"] is JsonNode explicitNode)
+                    {
+                        value = explicitNode.DeepClone();
+                        return true;
+                    }
+                    value = SessionWait.Text(args["agentName"]) is string agent
+                        ? context.AgentDefaultNode?.Invoke(agent)
+                        : null;
+                    return value is not null;
+                }
+                case "move-agent":
+                {
+                    // move_session: the new Agent when one is named, else the moved Session's.
+                    if (SessionWait.Text(args["newAgentName"]) is { Length: > 0 } named)
+                    {
+                        value = named;
+                        return true;
+                    }
+                    if (Present("createAgent"))
+                        return false;
+                    var moved = Text("sessionId")?.Trim() ?? facts?.Session;
+                    value = moved is null ? null : context.SessionAgent?.Invoke(moved);
+                    return value is not null;
+                }
+                case "session-scope":
+                    // The model's list defaults to the caller's Agent; an inbound list has no
+                    // scope argument and lists every Session.
+                    value =
+                        facts is { Principal: not "internal" } ? "all"
+                        : args["scope"]?.DeepClone() ?? "current-agent";
+                    return true;
+                case "status-node":
+                    // Inbound `node status` views the caller's selected Node.
+                    value = NodeTarget ?? facts?.TargetNode;
                     return value is not null;
                 case "caller":
                     value = facts?.Session;
@@ -603,6 +729,15 @@ internal sealed record OperationPlan(
                 default:
                     return false;
             }
+        }
+
+        private static (string Name, JsonNode? Fallback) Defaulted(string spec)
+        {
+            var index = spec.IndexOf("??", StringComparison.Ordinal);
+            if (index < 0)
+                return (spec, null);
+            var text = spec[(index + 2)..];
+            return (spec[..index], text is "true" or "false" ? JsonValue.Create(text == "true") : JsonValue.Create(text));
         }
 
         // A template as operation rules decide it: an unknown condition or missing per-item
@@ -709,6 +844,11 @@ internal sealed record OperationPlan(
                 {
                     Path =
                         facts?.Paths.FirstOrDefault(path => (path.Resolved ?? path.Raw) == text)
+                        ?? (
+                            template.Resources["path"] == "path?:cwd"
+                                ? context.DefaultExecCwd?.Invoke()
+                                : null
+                        )
                         ?? new AuthorizationPath(
                             "path",
                             text,

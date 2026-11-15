@@ -441,7 +441,7 @@ internal sealed partial class SessionManager
         if (operations is not null)
             request = request with { Operations = operations };
         else if (layers.Any(layer => layer.Policy.HasOperationRules))
-            request = request with { Operations = AuthorizationOperations(owner, resolved, request) };
+            request = request with { Operations = AuthorizationOperations(owner, resolved, request, files) };
         return new(
             request,
             layers

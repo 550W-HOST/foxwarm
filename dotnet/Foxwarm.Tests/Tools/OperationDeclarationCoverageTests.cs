@@ -54,7 +54,7 @@ public sealed partial class OperationDeclarationCoverageTests
     public void Declarations_use_catalog_operations_selectors_and_explicit_self_reasons()
     {
         var conditions = new Regex(
-            "^!?(arg:[A-Za-z_]+|action:[a-z|-]+|secrets|file-source|file-action|channel|agent-scope|default-cwd-probe|legacy-node|invalid-plan|model-request|source-exists|source-missing)$"
+            "^!?(arg:[A-Za-z_]+|default-true:[A-Za-z_]+|action:[a-z|-]+|secrets|file-source|file-action|channel|agent-scope|default-cwd-probe|legacy-node|invalid-plan|model-request|source-exists|source-missing)$"
         );
         foreach (var declaration in OperationDeclarations.Capabilities)
         {

@@ -20,7 +20,15 @@ public sealed partial class OperationRulesTests
     );
 
     private static ToolAuthorizationRequest Exec(string command, string[] secrets, string[] owned) =>
-        Request("node", "exec", $$"""{"command":"{{command}}"}""", secrets: secrets, owned: owned);
+        // A master exec states its cwd; without it the enforcement context supplies the Session's.
+        Request(
+            "node",
+            "exec",
+            $$"""{"command":"{{command}}","cwd":"/synthetic"}""",
+            secrets: secrets,
+            owned: owned,
+            paths: [new AuthorizationPath("cwd", "/synthetic", "/synthetic")]
+        );
 
     private static ToolAuthorizationRequest Copy(string source, string target) =>
         Request(
