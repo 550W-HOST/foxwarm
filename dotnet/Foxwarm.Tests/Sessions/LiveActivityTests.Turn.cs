@@ -36,7 +36,12 @@ public sealed partial class LiveActivityTests
                     "exec",
                     new JsonObject { ["summary"] = "First command", ["command"] = "true" }
                 ),
-                ActivityIndexTests.Call("second", "exec", new JsonObject { ["command"] = "true" }),
+                // A non-exec call keeps the batch sequential; adjacent execs share a parallel segment.
+                ActivityIndexTests.Call(
+                    "second",
+                    "write",
+                    new JsonObject { ["filePath"] = "note.txt", ["content"] = "x" }
+                ),
                 ActivityIndexTests.Call(
                     "third",
                     "exec",
@@ -61,5 +66,60 @@ public sealed partial class LiveActivityTests
         // After the batch, the next request keeps the latest summary.
         Assert.Contains(observed, item => item.State == "requesting-model" && item.Tool == "Third command");
         Assert.DoesNotContain(f.Owner.History(), row => row.ToJsonString().Contains("\"activity\""));
+    }
+
+    [Fact]
+    public async Task A_parallel_exec_segment_keeps_each_call_summary_and_the_latest_one_once_identity_is_gone()
+    {
+        if (!LocalExecManager.IsSupported || OperatingSystem.IsWindows())
+            return;
+        await using var f = await ActivityIndexTests.Fixture.Create();
+        f.Owner.Registry.TriggerOverride = _ => Task.CompletedTask;
+        var running = new List<(string? Call, string? Tool)>();
+        f.Owner.Changed += item =>
+        {
+            if (item.Kind != SessionEventKind.StateChanged)
+                return;
+            var runtime = f.Owner.RuntimeSnapshot();
+            if (SessionWait.Text(runtime["state"]) == "running-tool")
+                lock (running)
+                    running.Add(
+                        (
+                            SessionWait.Text(runtime["tool"]?["id"]),
+                            SessionWait.Text(runtime["activity"]?["tool"])
+                        )
+                    );
+        };
+        await f.InputAsync(QueueItem.UserText("Run the segment"));
+        await f.TurnAsync(
+            [
+                ActivityIndexTests.Call(
+                    "first",
+                    "exec",
+                    new JsonObject { ["summary"] = "First command", ["command"] = "true" }
+                ),
+                ActivityIndexTests.Call("second", "exec", new JsonObject { ["command"] = "true" }),
+                ActivityIndexTests.Call(
+                    "third",
+                    "exec",
+                    new JsonObject { ["summary"] = "Third command", ["command"] = "true" }
+                ),
+            ]
+        );
+        // Concurrent members share one foreground projection. While a member runs as that
+        // projection, the caption is its own position; after the last-started member ends while
+        // others still run, the runtime has no tool identity and the caption is the latest summary.
+        var expected = new Dictionary<string, string>
+        {
+            ["first"] = "First command",
+            ["second"] = "First command",
+            ["third"] = "Third command",
+        };
+        Assert.NotEmpty(running);
+        Assert.All(
+            running,
+            item =>
+                Assert.Equal(item.Call is { } call ? expected[call] : "Third command", item.Tool)
+        );
     }
 }
