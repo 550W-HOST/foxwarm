@@ -156,7 +156,7 @@ internal sealed partial class McpOAuthService
             Text(config["url"])!,
             registration,
             HttpMethod.Post,
-            new StringContent(clientMetadata.ToJsonString(), Encoding.UTF8, "application/json"),
+            new StringContent(clientMetadata.ToJsonText(), Encoding.UTF8, "application/json"),
             null,
             token
         );

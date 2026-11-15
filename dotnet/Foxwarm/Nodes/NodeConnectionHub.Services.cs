@@ -193,7 +193,7 @@ internal sealed partial class NodeConnectionHub
                     );
                 beforeSend?.Invoke();
                 send = connection.Socket.SendAsync(
-                    System.Text.Encoding.UTF8.GetBytes(message.ToJsonString()),
+                    System.Text.Encoding.UTF8.GetBytes(message.ToJsonText()),
                     System.Net.WebSockets.WebSocketMessageType.Text,
                     true,
                     token

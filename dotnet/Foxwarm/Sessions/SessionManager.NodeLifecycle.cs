@@ -292,7 +292,7 @@ internal sealed partial class SessionManager
             }
             if (SessionWait.Text(summary["displayName"]) is { Length: > 0 and <= 256 } label)
                 node["label"] = label;
-            var size = Encoding.UTF8.GetByteCount(node.ToJsonString());
+            var size = Encoding.UTF8.GetByteCount(node.ToJsonText());
             if (totalBytes + size > 256 * 1024)
                 break;
             totalBytes += size;

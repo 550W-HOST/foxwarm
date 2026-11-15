@@ -14,8 +14,10 @@ internal sealed partial class WeWorkChannel
         var builder = WebApplication.CreateSlimBuilder(new WebApplicationOptions { Args = [] });
         builder.Logging.ClearProviders();
         builder.Services.ConfigureHttpJsonOptions(options =>
-            options.SerializerOptions.TypeInfoResolver = MainJsonContext.Default
-        );
+        {
+            options.SerializerOptions.Encoder = JsonText.Encoder;
+            options.SerializerOptions.TypeInfoResolver = MainJsonContext.Default;
+        });
         builder.WebHost.ConfigureKestrel(options =>
         {
             options.Limits.MaxRequestBodySize = 100 * 1024; // Express json/text default.
@@ -199,7 +201,7 @@ internal sealed partial class WeWorkChannel
                         && timestamp.Length > 0
                         && nonce.Length > 0
                         && crypto is not null
-                            ? crypto.EncryptCallback(result.ToJsonString(), timestamp, nonce)
+                            ? crypto.EncryptCallback(result.ToJsonText(), timestamp, nonce)
                             : result
                     )
                 );
@@ -398,7 +400,7 @@ internal sealed partial class WeWorkChannel
                         ["username"] = username,
                         ["isAIBot"] = messageIsAibot,
                         ["hasResponseUrl"] = responseUrl.Length > 0,
-                    }.ToJsonString()
+                    }.ToJsonText()
             );
         }
         if (oldPush is not null)

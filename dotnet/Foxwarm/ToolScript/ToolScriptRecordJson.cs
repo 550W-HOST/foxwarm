@@ -12,7 +12,7 @@ internal static class ToolScriptRecordJson
 
     internal static void Write(Stream stream, JsonNode? value, ToolScriptDataBudget budget)
     {
-        using var writer = new Utf8JsonWriter(stream);
+        using var writer = new Utf8JsonWriter(stream, new() { Encoder = JsonText.Encoder });
         WriteValue(writer, value, budget);
         writer.Flush();
     }

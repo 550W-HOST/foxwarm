@@ -126,14 +126,14 @@ internal static partial class CtlCommandText
         if (value is JsonValue scalar && scalar.TryGetValue<string>(out var text))
             return Quote(text.StartsWith('@') ? "@" + text : text);
         if (value is JsonValue number && number.GetValueKind() == System.Text.Json.JsonValueKind.Number)
-            return number.ToJsonString();
-        return Quote(value.ToJsonString());
+            return number.ToJsonText();
+        return Quote(value.ToJsonText());
     }
 
     private static string RestText(JsonNode value) =>
         value is JsonValue scalar && scalar.TryGetValue<string>(out var text)
             ? text.StartsWith('@') ? "@" + text : text
-            : value.ToJsonString();
+            : value.ToJsonText();
 
     // A literal word: quoted when needed, with a leading @ doubled so it doesn't bind.
     internal static string Literal(string text) => Quote(text.StartsWith('@') ? "@" + text : text);

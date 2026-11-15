@@ -413,7 +413,7 @@ internal static class SetupProviderRequests
                     && !scalar.TryGetValue<double>(out _)
             )
                 throw Invalid("extraHeaders values must be scalar.");
-            var valueText = SessionWait.Text(raw) ?? raw!.ToJsonString().Trim('"');
+            var valueText = SessionWait.Text(raw) ?? raw!.ToJsonText().Trim('"');
             if (valueText.Length > MaxHeaderValueLength)
                 throw Invalid("extraHeaders contains a value that is too long.");
             result[name] = valueText;

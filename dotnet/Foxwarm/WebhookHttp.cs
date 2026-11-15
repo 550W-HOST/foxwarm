@@ -806,7 +806,7 @@ internal sealed class WebhookHttp
         context.Response.StatusCode = status;
         context.Response.Headers.CacheControl = "no-store";
         context.Response.ContentType = "application/json; charset=utf-8";
-        await context.Response.WriteAsync(body.ToJsonString(), context.RequestAborted);
+        await context.Response.WriteAsync(body.ToJsonText(), context.RequestAborted);
     }
 }
 

@@ -249,7 +249,7 @@ internal sealed partial class SessionManager
                     : "An incomplete body is not published; a completed body may already have been published.";
             var message =
                 "<foxwarm-system kind=\"event\" type=\"background-transfer-finished\">\n"
-                + details.ToJsonString()
+                + details.ToJsonText()
                 + "\n</foxwarm-system>";
             await CommitBackgroundEventAsync(transfer.Owner, transfer.Id, message);
         }

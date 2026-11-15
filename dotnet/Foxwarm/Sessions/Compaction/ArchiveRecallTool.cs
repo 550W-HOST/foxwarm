@@ -310,7 +310,7 @@ internal static class ArchiveRecallTool
                         }
                     )
                         binding[field] = args[field]?.DeepClone();
-                    var fingerprint = binding.ToJsonString();
+                    var fingerprint = binding.ToJsonText();
                     RecallWindowStore.RecallWindow window;
                     Foxwarm.Vector.StructuredVectorRecall selected;
                     var offset = 0;

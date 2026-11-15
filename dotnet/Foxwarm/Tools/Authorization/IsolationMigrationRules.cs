@@ -1,5 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Encodings.Web;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
 
@@ -46,12 +48,19 @@ internal static class IsolationMigrationRules
     /// <summary>Rule ID prefix of the generated <c>session</c> status allows.</summary>
     internal const string SessionStatusRule = "isolation-session-status";
 
+    // Persisted startup digests must keep the original bytes: changing the encoder
+    // can make a generated layer look administrator-edited and skip fence reconciliation.
+    private static readonly JsonSerializerOptions DigestJson = new()
+    {
+        Encoder = JavaScriptEncoder.Default,
+    };
+
     /// <summary>
     /// SHA-256 of a layer's JSON, used to tell a stored layer from the one migration wrote.
     /// </summary>
     internal static string Digest(JsonArray rules) =>
         Convert
-            .ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rules.ToJsonString())))
+            .ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rules.ToJsonString(DigestJson))))
             .ToLowerInvariant();
 
     /// <summary>

@@ -267,7 +267,7 @@ internal sealed partial class ExecutableNodeProvider(string id, JsonObject confi
 
     private static double JsonNumber(JsonValue value) =>
         SessionWait.Number(value)
-        ?? double.Parse(value.ToJsonString(), CultureInfo.InvariantCulture);
+        ?? double.Parse(value.ToJsonText(), CultureInfo.InvariantCulture);
 
     private static long JsonStringBytes(string text)
     {
@@ -328,7 +328,7 @@ internal sealed partial class ExecutableNodeProvider(string id, JsonObject confi
             if (request is not null)
                 envelope["request"] = request.DeepClone();
             ValidateJson(envelope, 32, 100_000);
-            var encoded = Encoding.UTF8.GetBytes(envelope.ToJsonString());
+            var encoded = Encoding.UTF8.GetBytes(envelope.ToJsonText());
             if (encoded.Length > 4 * 1024 * 1024)
                 throw new NodeProviderException(
                     "NODE_PROVIDER_REQUEST_LIMIT",

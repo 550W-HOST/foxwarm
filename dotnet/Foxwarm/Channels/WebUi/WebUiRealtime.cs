@@ -14,6 +14,7 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
     private static readonly JsonSerializerOptions SendJson = new()
     {
         MaxDepth = 1000,
+        Encoder = JsonText.Encoder,
         TypeInfoResolver = MainJsonContext.Default,
     };
 
@@ -113,7 +114,7 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
         )>();
         void Queue(long? expected, JsonObject data, string? topic = null)
         {
-            var bytes = Encoding.UTF8.GetByteCount(data.ToJsonString());
+            var bytes = Encoding.UTF8.GetByteCount(data.ToJsonText());
             Interlocked.Add(ref queuedBytes, bytes);
             if (!output.Writer.TryWrite((expected, data, bytes, topic)))
                 Interlocked.Add(ref queuedBytes, -bytes);

@@ -48,7 +48,7 @@ internal sealed class ResponsesWsChatService(
         if (options.Token.Length > 0)
             headers["Authorization"] = "Bearer " + options.Token;
         foreach (var (key, value) in options.ExtraHeaders ?? new JsonObject())
-            headers[key] = SessionWait.Text(value) ?? (value?.ToJsonString() ?? "");
+            headers[key] = SessionWait.Text(value) ?? (value?.ToJsonText() ?? "");
         var started = Stopwatch.GetTimestamp();
         WsPendingCompletion? pending = null;
         using var attempt = new ResponsesAttempt(

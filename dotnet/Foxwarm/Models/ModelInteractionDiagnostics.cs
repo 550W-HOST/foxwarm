@@ -363,7 +363,7 @@ internal sealed class ModelInteractionDiagnostics(string dataRoot)
                         {
                             var structured = JsonNode.Parse(text);
                             if (structured is JsonObject or JsonArray)
-                                return JsonValue.Create(Redact(structured)!.ToJsonString());
+                                return JsonValue.Create(Redact(structured)!.ToJsonText());
                         }
                         catch (JsonException) { }
                     return JsonValue.Create(SafeText(text));
@@ -517,7 +517,7 @@ internal sealed class ModelInteractionDiagnostics(string dataRoot)
             if (frame["item"] is JsonObject outputItem)
                 ObserveImage(
                     outputItem,
-                    frame["output_index"]?.ToJsonString() ?? "unknown",
+                    frame["output_index"]?.ToJsonText() ?? "unknown",
                     redact
                 );
         }

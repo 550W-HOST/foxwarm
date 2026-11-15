@@ -446,7 +446,7 @@ public static partial class ResponsesRequestSerializer
                 return text;
             if (output.TryGetValue<bool>(out var boolean))
                 return boolean ? "true" : "false";
-            return output.ToJsonString();
+            return output.ToJsonText();
         }
         if (
             response.Count == 1
@@ -476,7 +476,7 @@ public static partial class ResponsesRequestSerializer
                 item.Key is "target" or "offset" or "text" or "totalCharacters" or "nextOffset"
             )
         )
-            return response.ToJsonString();
+            return response.ToJsonText();
         if (
             response.Count == 6
             && response["status"] is JsonValue status
@@ -512,7 +512,7 @@ public static partial class ResponsesRequestSerializer
                         or "totalBytes"
             )
         )
-            return response.ToJsonString();
+            return response.ToJsonText();
         return Foxwarm.Tools.ToolResponseFormatting.Format(response);
     }
 

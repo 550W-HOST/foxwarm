@@ -592,7 +592,7 @@ internal sealed partial class NodeClient
         await using (var stream = new FileStream(path, fileOptions))
             await stream.WriteAsync(
                 System.Text.Encoding.UTF8.GetBytes(
-                    content.ToJsonString(new() { WriteIndented = true })
+                    content.ToJsonText(indented: true)
                 )
             );
         if (!OperatingSystem.IsWindows())
@@ -801,7 +801,7 @@ internal sealed partial class NodeClient
                     throw new IOException("Remote node is not connected to master");
                 if (Socket.State == WebSocketState.Open)
                     await Socket.SendAsync(
-                        System.Text.Encoding.UTF8.GetBytes(frame.ToJsonString()).AsMemory(),
+                        System.Text.Encoding.UTF8.GetBytes(frame.ToJsonText()).AsMemory(),
                         WebSocketMessageType.Text,
                         true,
                         CancellationToken.None

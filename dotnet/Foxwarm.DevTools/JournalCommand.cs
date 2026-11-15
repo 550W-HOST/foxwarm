@@ -1,4 +1,4 @@
-using System.Text.Json;
+using System.Text.Json.Nodes;
 using Foxwarm.Models;
 
 namespace Foxwarm.DevTools;
@@ -18,13 +18,19 @@ internal static class JournalCommand
         {
             case "export" when args.Length == 3:
                 await store.ExportJsonlAsync(args[2]);
-                Console.WriteLine(JsonSerializer.Serialize(new { exported = args[2] }));
+                Console.WriteLine(new JsonObject { ["exported"] = args[2] }.ToJsonText());
                 break;
             case "import" when args.Length == 3:
                 var imported = await store.MigrateLegacyAsync(args[2]);
                 if (imported)
                     await store.MarkSqliteAuthorityAsync(LlmRequestJournalStore.MigrationId);
-                Console.WriteLine(JsonSerializer.Serialize(new { imported, authority = imported }));
+                Console.WriteLine(
+                    new JsonObject
+                    {
+                        ["imported"] = imported,
+                        ["authority"] = imported,
+                    }.ToJsonText()
+                );
                 break;
             case "reconstruct" when args.Length == 3:
                 Console.WriteLine(

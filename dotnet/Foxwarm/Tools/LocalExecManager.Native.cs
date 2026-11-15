@@ -256,7 +256,7 @@ internal sealed partial class LocalExecManager
             ["error"] = ExecOutput.MissingStatusError,
         };
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        await AtomicWriteAsync(path, fallback.ToJsonString());
+        await AtomicWriteAsync(path, fallback.ToJsonText());
         return fallback;
     }
 

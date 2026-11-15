@@ -81,7 +81,7 @@ internal sealed partial class SessionManager
             record["toolCallId"] = origin.ToolCallId;
         if (!string.IsNullOrEmpty(origin.RunId))
             record["runId"] = origin.RunId;
-        var args = shown.ToJsonString();
+        var args = shown.ToJsonText();
         if (Encoding.UTF8.GetByteCount(args) <= SessionApprovals.MaxArgsBytes)
             record["args"] = shown.DeepClone();
         else

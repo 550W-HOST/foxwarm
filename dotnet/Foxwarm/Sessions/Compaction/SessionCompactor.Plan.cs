@@ -224,7 +224,7 @@ internal sealed partial class SessionCompactor
                 var controlledPlan = ToolCallControls.Plan([submitted])[0];
                 if (controlledPlan.Preset is not null)
                 {
-                    AppendToolFeedback(detached, submitted, controlledPlan.Preset.ToJsonString());
+                    AppendToolFeedback(detached, submitted, controlledPlan.Preset.ToJsonText());
                     continue;
                 }
                 JsonObject repairInput = submitted;

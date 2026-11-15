@@ -151,7 +151,7 @@ internal sealed partial class VectorRuntime : IAsyncDisposable
         using var response = await embeddings.PostAsJsonAsync(
             uri.Uri,
             new JsonObject { ["model"] = "qwen3-embedding:0.6b", ["input"] = input },
-            MainJsonContext.Default.JsonObject
+            MainJsonContext.Text.JsonObject
         );
         var bodyText = await response.Content.ReadAsStringAsync();
         JsonObject? body;
@@ -171,7 +171,7 @@ internal sealed partial class VectorRuntime : IAsyncDisposable
                     + (
                         body?["error"] is JsonObject error
                             ? Text(error["message"])
-                            : body?["error"]?.ToJsonString() ?? bodyText
+                            : body?["error"]?.ToJsonText() ?? bodyText
                     )
             );
         if (

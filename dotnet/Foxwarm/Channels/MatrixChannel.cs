@@ -332,7 +332,7 @@ internal sealed partial class MatrixChannel : IManagedChannel
     {
         using var content = body is null
             ? null
-            : new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");
+            : new StringContent(body.ToJsonText(), Encoding.UTF8, "application/json");
         return await RequestContentAsync(method, path, content, token, localTimeout);
     }
 

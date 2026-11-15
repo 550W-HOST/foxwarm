@@ -224,7 +224,7 @@ internal static class AnthropicRequestSerializer
             : new JsonArray(
                 Text(
                     SessionWait.Text(value)
-                        ?? (value is JsonObject ? "[object Object]" : value?.ToJsonString() ?? "")
+                        ?? (value is JsonObject ? "[object Object]" : value?.ToJsonText() ?? "")
                 )
             );
 }

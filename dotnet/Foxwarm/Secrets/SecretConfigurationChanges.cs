@@ -277,7 +277,7 @@ internal static class SecretConfigurationChanges
                             ["args"] = server["args"]?.DeepClone(),
                             ["cwd"] = server["cwd"]?.DeepClone(),
                             ["env"] = server["env"]?.DeepClone(),
-                        }.ToJsonString()
+                        }.ToJsonText()
                     : "mcp " + transport + " " + SessionWait.Text(server["url"]);
             foreach (var field in SecretSinks.McpServer.Fields(server))
                 Add(routes, destination, Field(field, ""), field.Value);

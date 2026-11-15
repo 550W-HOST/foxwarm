@@ -1,4 +1,3 @@
-using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
@@ -25,7 +24,7 @@ internal static class TextRedactionProjection
     private static readonly JsonSerializerOptions ArgumentJson = new()
     {
         TypeInfoResolver = MainJsonContext.Default,
-        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        Encoder = JsonText.Encoder,
     };
 
     internal static string Serialize(JsonNode? node) => node?.ToJsonString(ArgumentJson) ?? "null";

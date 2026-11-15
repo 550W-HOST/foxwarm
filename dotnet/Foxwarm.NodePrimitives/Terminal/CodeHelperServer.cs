@@ -267,7 +267,7 @@ internal sealed class CodeHelperServer : IAsyncDisposable
         try
         {
             var response = Encoding.UTF8.GetBytes(
-                ResultJson(result, requestId).ToJsonString() + "\n"
+                ResultJson(result, requestId).ToJsonText() + "\n"
             );
             await SendAllAsync(stream, response, timeout.Token);
         }
@@ -492,7 +492,7 @@ internal static class CodeHelperClient
                 ["args"] = new JsonArray(
                     args.Skip(1).Select(arg => (JsonNode?)JsonValue.Create(arg)).ToArray()
                 ),
-            }.ToJsonString() + "\n";
+            }.ToJsonText() + "\n";
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(25));
         Stream connection;
         if (OperatingSystem.IsWindows())
@@ -541,7 +541,7 @@ internal static class CodeHelperClient
             ?? throw new InvalidOperationException("Invalid response from Foxwarm Code bridge.");
         if (CodeHelperServer.Text(result["requestId"]) != requestId)
             throw new InvalidOperationException("Invalid response from Foxwarm Code bridge.");
-        if (result["ok"]?.ToJsonString() != "true")
+        if (result["ok"]?.ToJsonText() != "true")
             throw new InvalidOperationException(
                 CodeHelperServer.Text(result["error"]) ?? "Foxwarm Code request failed."
             );

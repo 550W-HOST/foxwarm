@@ -456,7 +456,7 @@ internal sealed partial class NodeConnectionHub : IDisposable
         {
             beforeSend?.Invoke();
             await connection.Socket.SendAsync(
-                Encoding.UTF8.GetBytes(value.ToJsonString()),
+                Encoding.UTF8.GetBytes(value.ToJsonText()),
                 WebSocketMessageType.Text,
                 true,
                 token

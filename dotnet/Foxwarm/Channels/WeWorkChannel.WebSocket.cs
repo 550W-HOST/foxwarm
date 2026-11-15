@@ -319,7 +319,7 @@ internal sealed partial class WeWorkChannel
                     try
                     {
                         await current.Socket.SendAsync(
-                            Encoding.UTF8.GetBytes(payload.ToJsonString()),
+                            Encoding.UTF8.GetBytes(payload.ToJsonText()),
                             WebSocketMessageType.Text,
                             true,
                             timeout.Token
@@ -385,7 +385,7 @@ internal sealed partial class WeWorkChannel
                         ["reqId"] = reqId,
                         ["command"] = ack.Command,
                         ["errcode"] = payload["errcode"]?.DeepClone(),
-                    }.ToJsonString()
+                    }.ToJsonText()
             );
             if (payload.ContainsKey("errcode") && !Zero(payload["errcode"]))
                 ack.Completion.TrySetException(

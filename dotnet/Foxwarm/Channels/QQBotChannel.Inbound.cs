@@ -46,7 +46,7 @@ internal sealed partial class QQBotChannel
     private long bufferGeneration;
     private readonly int groupLimit;
     private readonly int batchWindow;
-    private bool RequireMention => config["requireMention"]?.ToJsonString() != "false";
+    private bool RequireMention => config["requireMention"]?.ToJsonText() != "false";
 
     private int GroupOption(string key, int fallback, int min, int max, bool zero = false)
     {
@@ -165,7 +165,7 @@ internal sealed partial class QQBotChannel
             && entries
                 .Take(64)
                 .OfType<JsonObject>()
-                .Any(entry => entry["is_you"]?.ToJsonString() == "true");
+                .Any(entry => entry["is_you"]?.ToJsonText() == "true");
 
     internal Task RouteInboundAsync(string type, JsonObject body)
     {

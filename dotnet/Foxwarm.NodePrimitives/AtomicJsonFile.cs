@@ -127,7 +127,7 @@ public sealed class AtomicJsonFile
     }
 
     internal void WritePayload(System.Text.Json.Nodes.JsonObject payload) =>
-        WriteText(payload.ToJsonString(), default);
+        WriteText(payload.ToJsonText(), default);
 
     internal void WriteTextPayload(string payload, CancellationToken cancellationToken) =>
         WriteText(payload, cancellationToken);

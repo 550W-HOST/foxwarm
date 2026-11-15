@@ -27,7 +27,7 @@ internal sealed class ModelRetryNotice(SessionOwner hosted)
         if (state.Committed is null)
             text = "⚠️ LLM Error: " + text;
         var initial = state.Committed is null;
-        var before = state.Committed?.ToJsonString();
+        var before = state.Committed?.ToJsonText();
         var update = state.Committed is not null;
         try
         {
@@ -37,7 +37,7 @@ internal sealed class ModelRetryNotice(SessionOwner hosted)
         {
             hosted.Entry.RecordBestEffortFailure(error);
         }
-        if (state.Committed is null || state.Committed.ToJsonString() == before)
+        if (state.Committed is null || state.Committed.ToJsonText() == before)
             return false;
         previous = (value.Status, value.Reason);
         try

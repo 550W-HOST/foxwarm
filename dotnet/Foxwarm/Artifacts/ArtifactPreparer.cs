@@ -94,7 +94,7 @@ internal sealed class ArtifactPreparer
                 bound.Token
             );
             var errors = ReadBounded(child.StandardError.BaseStream, 16384, bound.Token);
-            await child.StandardInput.WriteAsync(request.ToJsonString().AsMemory(), bound.Token);
+            await child.StandardInput.WriteAsync(request.ToJsonText().AsMemory(), bound.Token);
             child.StandardInput.Close();
             var bytes = await output;
             var stderr = await errors;

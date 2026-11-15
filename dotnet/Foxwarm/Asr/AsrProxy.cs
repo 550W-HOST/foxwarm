@@ -148,8 +148,8 @@ internal sealed partial class AsrProxy : IDisposable
                         || !ok.TryGetValue<bool>(out var healthy)
                         || !healthy
                     )
-                || body["qwenAsrBinExists"]?.ToJsonString() == "false"
-                || body["modelDirExists"]?.ToJsonString() == "false"
+                || body["qwenAsrBinExists"]?.ToJsonText() == "false"
+                || body["modelDirExists"]?.ToJsonText() == "false"
             )
                 throw new FormatException();
             status["available"] = true;

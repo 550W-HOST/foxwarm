@@ -3,7 +3,6 @@ using System.Collections.Concurrent;
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
@@ -22,7 +21,7 @@ internal sealed partial class WeixinApi
     private static readonly HttpClient DefaultHttp = new() { Timeout = Timeout.InfiniteTimeSpan };
     private static readonly JsonSerializerOptions WireJson = new()
     {
-        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        Encoder = JsonText.Encoder,
     };
     private readonly HttpClient http;
     private readonly Func<TimeSpan, CancellationToken, Task> delay;

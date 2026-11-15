@@ -23,7 +23,7 @@ internal static class QQBotUpload
         value is JsonValue scalar
         && scalar.GetValueKind() == System.Text.Json.JsonValueKind.Number
         && double.TryParse(
-            value.ToJsonString(),
+            value.ToJsonText(),
             System.Globalization.NumberStyles.Float,
             System.Globalization.CultureInfo.InvariantCulture,
             out var number

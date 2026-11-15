@@ -36,7 +36,11 @@ internal sealed partial class MainTimers : IAsyncDisposable
 
     /// <summary>Raised after a committed store change, including recorded run results.</summary>
     internal event Action? Changed;
-    private static readonly JsonSerializerOptions JsonOptions = new() { MaxDepth = int.MaxValue };
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        Encoder = JsonText.Encoder,
+        MaxDepth = int.MaxValue,
+    };
     private static readonly JsonDocumentOptions ReadOptions = new() { MaxDepth = int.MaxValue };
 
     internal MainTimers(string root, Func<JsonObject, Task> deliver)

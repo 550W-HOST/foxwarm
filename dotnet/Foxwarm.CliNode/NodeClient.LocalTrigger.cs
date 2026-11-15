@@ -113,7 +113,7 @@ internal sealed partial class NodeClient
                 ["tokenFile"] = tokenFile,
                 ["scriptFile"] = scriptFile,
                 ["nodeId"] = nodeId,
-            }.ToJsonString(new() { WriteIndented = true })
+            }.ToJsonText(indented: true)
         );
         var script =
             "#!/bin/sh\nset -eu\n"
@@ -264,7 +264,7 @@ internal sealed partial class NodeClient
     {
         response.StatusCode = status;
         response.ContentType = "application/json";
-        await response.WriteAsync(body.ToJsonString());
+        await response.WriteAsync(body.ToJsonText());
     }
 
     private async Task StopLocalTriggerServer()

@@ -99,7 +99,7 @@ internal sealed partial class SessionCatalog
                             {
                                 WriteDurably(
                                     staged,
-                                    Encoding.UTF8.GetBytes(authority.ToJsonString())
+                                    Encoding.UTF8.GetBytes(authority.ToJsonText())
                                 );
                             }
                             catch

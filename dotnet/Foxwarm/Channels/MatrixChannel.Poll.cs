@@ -39,7 +39,7 @@ internal sealed partial class MatrixChannel
                     var queryTimeout = catchingUp || reconnecting ? 0 : 30000;
                     var query =
                         "filter="
-                        + Uri.EscapeDataString(cursor is null ? initial.ToJsonString() : filterId)
+                        + Uri.EscapeDataString(cursor is null ? initial.ToJsonText() : filterId)
                         + "&timeout="
                         + queryTimeout
                         + "&org.matrix.msc4222.use_state_after=true"

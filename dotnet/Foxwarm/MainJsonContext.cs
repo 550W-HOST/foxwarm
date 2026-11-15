@@ -32,4 +32,8 @@ namespace Foxwarm;
 [JsonSerializable(typeof(ArchiveBlockRecord))]
 [JsonSerializable(typeof(LogWindow))]
 [JsonSerializable(typeof(Microsoft.AspNetCore.Mvc.ProblemDetails))]
-internal partial class MainJsonContext : JsonSerializerContext;
+internal partial class MainJsonContext : JsonSerializerContext
+{
+    internal static MainJsonContext Text { get; } =
+        new(new JsonSerializerOptions { Encoder = JsonText.Encoder });
+}

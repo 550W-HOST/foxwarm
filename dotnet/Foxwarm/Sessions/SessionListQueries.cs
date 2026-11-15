@@ -175,12 +175,12 @@ internal sealed partial class SessionListQueries
                     .SequenceCompareTo(Encoding.UTF8.GetBytes(right[index]!.GetValue<string>()));
             else
                 result = double.Parse(
-                        left[index]!.ToJsonString(),
+                        left[index]!.ToJsonText(),
                         System.Globalization.CultureInfo.InvariantCulture
                     )
                     .CompareTo(
                         double.Parse(
-                            right[index]!.ToJsonString(),
+                            right[index]!.ToJsonText(),
                             System.Globalization.CultureInfo.InvariantCulture
                         )
                     );
@@ -192,7 +192,7 @@ internal sealed partial class SessionListQueries
 
     private static string Encode(JsonObject value) =>
         Convert
-            .ToBase64String(Encoding.UTF8.GetBytes(value.ToJsonString()))
+            .ToBase64String(Encoding.UTF8.GetBytes(value.ToJsonText()))
             .TrimEnd('=')
             .Replace('+', '-')
             .Replace('/', '_');

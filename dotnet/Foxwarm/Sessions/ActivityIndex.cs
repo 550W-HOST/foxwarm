@@ -823,7 +823,7 @@ internal sealed class ActivityIndex : IAsyncDisposable
             Term(
                 "session_id IN (SELECT value FROM json_each($sessions))",
                 "$sessions",
-                new JsonArray(sessions.Select(id => (JsonNode?)id).ToArray()).ToJsonString()
+                new JsonArray(sessions.Select(id => (JsonNode?)id).ToArray()).ToJsonText()
             );
         if (query.ExecutionAgent is { } agent)
             Term("agent=$agent", "$agent", agent);
@@ -931,7 +931,7 @@ internal sealed class ActivityIndex : IAsyncDisposable
             $"SELECT count(*) FROM {ArchiveToolEffects.Table} WHERE session_id IN (SELECT value FROM json_each($sessions))";
         command.Parameters.AddWithValue(
             "$sessions",
-            new JsonArray(sessions.Select(id => (JsonNode?)id).ToArray()).ToJsonString()
+            new JsonArray(sessions.Select(id => (JsonNode?)id).ToArray()).ToJsonText()
         );
         var scoped = Number(command.ExecuteScalar());
         return scoped * scoped <= (long)limit * Math.Max(total, 1)

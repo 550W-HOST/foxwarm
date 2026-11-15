@@ -17,15 +17,17 @@ internal static class ResponsesStreamCommand
         var corpus =
             JsonSerializer.Deserialize<List<CorpusCase>>(
                 await File.ReadAllTextAsync(corpusPath),
-                new JsonSerializerOptions { PropertyNameCaseInsensitive = true }
+                new JsonSerializerOptions { Encoder = JsonText.Encoder, PropertyNameCaseInsensitive = true }
             ) ?? [];
         var results = new JsonArray();
         var jsonOptions = new JsonSerializerOptions
         {
+            Encoder = JsonText.Encoder,
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         };
         var partOptions = new JsonSerializerOptions
         {
+            Encoder = JsonText.Encoder,
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
             DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
         };
@@ -138,7 +140,7 @@ internal static class ResponsesStreamCommand
             }
             results.Add(new JsonObject { ["name"] = item.Name, ["observation"] = observation });
         }
-        Console.Write(results.ToJsonString(new JsonSerializerOptions { WriteIndented = false }));
+        Console.Write(results.ToJsonText());
     }
 
     sealed record CorpusCase(

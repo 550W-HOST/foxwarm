@@ -129,7 +129,7 @@ internal static class ProviderImageParts
                     ["type"] = textType,
                     ["text"] =
                         "[IMAGE: id="
-                        + JsonValue.Create(id)!.ToJsonString()
+                        + JsonValue.Create(id)!.ToJsonText()
                         + size
                         + resized
                         + "]"

@@ -71,7 +71,7 @@ internal sealed partial class McpInboundCatalog
                     ["type"] = "text",
                     ["text"] = value is null
                         ? "null"
-                        : SessionWait.Text(value) ?? value.ToJsonString(),
+                        : SessionWait.Text(value) ?? value.ToJsonText(),
                 }
             ),
         };
@@ -580,14 +580,14 @@ internal sealed partial class McpInboundCatalog
         foreach (var item in sorted)
         {
             var tool = item.Tool;
-            var cost = Encoding.UTF8.GetByteCount(tool.ToJsonString());
+            var cost = Encoding.UTF8.GetByteCount(tool.ToJsonText());
             if (cost + size > 512 * 1024 && includeSchema)
             {
                 tool.Remove("inputSchema");
                 tool.Remove("annotations");
                 tool["schemaOmitted"] = true;
                 schemaOmitted = true;
-                cost = Encoding.UTF8.GetByteCount(tool.ToJsonString());
+                cost = Encoding.UTF8.GetByteCount(tool.ToJsonText());
             }
             if (cost + size > 512 * 1024)
                 break;
@@ -603,7 +603,7 @@ internal sealed partial class McpInboundCatalog
         var textCount = 0;
         foreach (var tool in tools.OfType<JsonObject>())
         {
-            var line = "\n- " + tool["toolId"]!.ToJsonString();
+            var line = "\n- " + tool["toolId"]!.ToJsonText();
             var bytes = Encoding.UTF8.GetByteCount(line);
             if (textBytes + bytes > maxTextBytes)
                 break;

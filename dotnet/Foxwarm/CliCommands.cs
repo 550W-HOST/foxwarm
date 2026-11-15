@@ -138,7 +138,7 @@ internal static class CliCommands
                     ["text"] = text,
                     ["modelId"] = result.AssistantMessage?["__meta"]?["modelId"]?.DeepClone(),
                     ["usage"] = result.Usage?.DeepClone(),
-                }.ToJsonString(new JsonSerializerOptions(JsonData.Options) { WriteIndented = true })
+                }.ToJsonText(indented: true)
             );
         else
         {

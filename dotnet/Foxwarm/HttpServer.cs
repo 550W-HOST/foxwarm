@@ -100,6 +100,7 @@ internal sealed class HttpServer
         );
         builder.Services.ConfigureHttpJsonOptions(options =>
         {
+            options.SerializerOptions.Encoder = JsonText.Encoder;
             options.SerializerOptions.TypeInfoResolver = MainJsonContext.Default;
             options.SerializerOptions.Converters.Add(
                 new Foxwarm.Images.ImageTransportConverterFactory()
@@ -299,7 +300,7 @@ internal sealed class HttpServer
                 context.Response.Headers.CacheControl = "private, no-store";
                 context.Response.Headers.Vary = "Cookie";
                 context.Response.ContentType = "application/manifest+json";
-                await context.Response.WriteAsync(manifest.ToJsonString(), context.RequestAborted);
+                await context.Response.WriteAsync(manifest.ToJsonText(), context.RequestAborted);
             });
             app.UseWhen(
                 context => context.Request.Path != "/manifest.json" && IsBrandAsset(context.Request.Path),

@@ -373,7 +373,7 @@ internal sealed class BrowserHost(string bundlePath, string? nodeExecutable = nu
             await writer.WaitAsync();
             try
             {
-                await process.StandardInput.WriteLineAsync(message.ToJsonString());
+                await process.StandardInput.WriteLineAsync(message.ToJsonText());
                 await process.StandardInput.FlushAsync();
             }
             catch (Exception error) when (error is IOException or ObjectDisposedException)

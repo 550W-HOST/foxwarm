@@ -133,12 +133,12 @@ internal sealed class McpInboundHttp : IAsyncDisposable, IHostedService
                     var tools = catalog.Tools(connection.Context);
                     if (
                         tools.Count > 64
-                        || Encoding.UTF8.GetByteCount(tools.ToJsonString()) > 256 * 1024
+                        || Encoding.UTF8.GetByteCount(tools.ToJsonText()) > 256 * 1024
                     )
                         throw new InvalidOperationException("Tool catalog exceeds size limit.");
                     return ValueTask.FromResult(
                         JsonData.Deserialize<ListToolsResult>(
-                            new JsonObject { ["tools"] = tools }.ToJsonString(),
+                            new JsonObject { ["tools"] = tools }.ToJsonText(),
                             McpJsonUtilities.DefaultOptions
                         )!
                     );
@@ -182,7 +182,7 @@ internal sealed class McpInboundHttp : IAsyncDisposable, IHostedService
                             "Tool call was cancelled or timed out; a running tool may have an unknown outcome. Do not retry automatically."
                         );
                     }
-                    if (Encoding.UTF8.GetByteCount(result.ToJsonString()) > MaxResultBytes)
+                    if (Encoding.UTF8.GetByteCount(result.ToJsonText()) > MaxResultBytes)
                         result = McpInboundCatalog.Error(
                             "Tool may have completed; its result exceeded the size limit. Do not retry automatically."
                         );

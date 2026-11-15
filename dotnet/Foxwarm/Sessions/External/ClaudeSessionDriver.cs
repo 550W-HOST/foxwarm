@@ -203,7 +203,7 @@ internal sealed class ClaudeSessionDriver(
                             },
                         },
                     },
-                }.ToJsonString()
+                }.ToJsonText()
             );
             await PrivateFileAsync(
                 settingsFile,
@@ -214,7 +214,7 @@ internal sealed class ClaudeSessionDriver(
                     ["disableBundledSkills"] = true,
                     ["disableSkillShellExecution"] = true,
                     ["permissions"] = new JsonObject { ["defaultMode"] = "dontAsk" },
-                }.ToJsonString()
+                }.ToJsonText()
             );
             // The external runtime is a model-facing request: apply the same secret stage.
             await PrivateFileAsync(
@@ -259,7 +259,7 @@ internal sealed class ClaudeSessionDriver(
             await host.AppendHistoryMessageStrictAsync(null, externalRuntime: checkpoint);
             inputMayBeAccepted = true;
             var submitted = manager.Secrets?.Redact(input, "model-request", owner.Id) ?? input;
-            await process.StandardInput.WriteLineAsync(submitted.ToJsonString());
+            await process.StandardInput.WriteLineAsync(submitted.ToJsonText());
             await process.StandardInput.FlushAsync();
             process.StandardInput.Close();
             var resultSeen = false;

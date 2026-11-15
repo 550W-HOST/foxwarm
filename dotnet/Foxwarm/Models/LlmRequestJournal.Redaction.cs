@@ -151,8 +151,8 @@ public sealed partial class LlmRequestJournalStore
             Add(command, "$failure", record.FailureKind);
             Add(command, "$detected", record.Detected);
             Add(command, "$literal", record.Literal);
-            Add(command, "$detectedLabels", record.DetectedLabels.ToJsonString());
-            Add(command, "$literalLabels", record.LiteralLabels.ToJsonString());
+            Add(command, "$detectedLabels", record.DetectedLabels.ToJsonText());
+            Add(command, "$literalLabels", record.LiteralLabels.ToJsonText());
             Add(command, "$slots", record.Slots);
             Add(command, "$detectedSlots", record.DetectedSlots);
             Add(command, "$cachedSlots", record.CachedSlots);

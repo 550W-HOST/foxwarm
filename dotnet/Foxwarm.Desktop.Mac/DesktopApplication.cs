@@ -147,7 +147,7 @@ internal sealed partial class DesktopApplication : NSApplicationDelegate
             );
             ruleList = await rulesStore.CompileContentRuleListAsync(
                 "FoxwarmLocalResources",
-                rules.ToJsonString()
+                rules.ToJsonText()
             );
             if (exiting)
                 return;
@@ -198,7 +198,7 @@ internal sealed partial class DesktopApplication : NSApplicationDelegate
         using var response = await client.PostAsJsonAsync(
             "api/auth",
             new JsonObject { ["token"] = token },
-            MainJsonContext.Default.JsonObject
+            MainJsonContext.Text.JsonObject
         );
         response.EnsureSuccessStatusCode();
         using var properties = new NSMutableDictionary

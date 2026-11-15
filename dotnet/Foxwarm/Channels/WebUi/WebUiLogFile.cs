@@ -28,6 +28,7 @@ internal sealed record LogWindow(
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
+        Encoder = JsonText.Encoder,
         TypeInfoResolver = MainJsonContext.Default,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
     };

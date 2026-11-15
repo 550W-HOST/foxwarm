@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.Numerics;
-using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -84,7 +83,7 @@ public sealed class SessionAuthorityDocument
         root.ToJsonString(
             new JsonSerializerOptions
             {
-                Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+                Encoder = JsonText.Encoder,
                 WriteIndented = indented,
             }
         );
@@ -99,7 +98,7 @@ public sealed class SessionAuthorityDocument
             stream,
             new JsonWriterOptions
             {
-                Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+                Encoder = JsonText.Encoder,
                 Indented = true,
                 // Match ToJson's JsonSerializerOptions default, including unknown nested values.
                 MaxDepth = 64,
@@ -723,7 +722,7 @@ public static class EcmaJson
 {
     private static readonly JsonSerializerOptions CompactOptions = new()
     {
-        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        Encoder = JsonText.Encoder,
         WriteIndented = false,
     };
 

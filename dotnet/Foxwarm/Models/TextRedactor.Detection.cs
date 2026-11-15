@@ -125,7 +125,7 @@ internal sealed partial class TextRedactor
             var body = new JsonObject { ["text"] = text, ["threshold"] = options.Threshold };
             using var request = new HttpRequestMessage(HttpMethod.Post, options.Endpoint)
             {
-                Content = new ByteArrayContent(Encoding.UTF8.GetBytes(body.ToJsonString())),
+                Content = new ByteArrayContent(Encoding.UTF8.GetBytes(body.ToJsonText())),
             };
             request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
             if (!string.IsNullOrEmpty(options.ApiKey))

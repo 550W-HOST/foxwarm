@@ -648,7 +648,7 @@ internal static class CompactCandidateBuilder
                 pieces.Add(content);
             if (part["functionCall"] is JsonObject call)
                 pieces.Add(
-                    $"[call:{call["name"]?.GetValue<string>()}] {call["rawArgsText"]?.GetValue<string>() ?? call["args"]?.ToJsonString() ?? ""}"
+                    $"[call:{call["name"]?.GetValue<string>()}] {call["rawArgsText"]?.GetValue<string>() ?? call["args"]?.ToJsonText() ?? ""}"
                 );
             if (part["functionResponse"] is JsonObject response)
             {
@@ -661,14 +661,14 @@ internal static class CompactCandidateBuilder
                                 error is JsonValue stringError
                                 && stringError.TryGetValue<string>(out var message)
                                     ? message
-                                    : error.ToJsonString()
+                                    : error.ToJsonText()
                             )
                     : value?["output"] is JsonValue outputValue
                     && outputValue.TryGetValue<string>(out var textOutput)
                         ? textOutput
-                    : value?["output"]?.ToJsonString()
-                        ?? value?["content"]?.ToJsonString()
-                        ?? source?.ToJsonString()
+                    : value?["output"]?.ToJsonText()
+                        ?? value?["content"]?.ToJsonText()
+                        ?? source?.ToJsonText()
                         ?? "";
                 pieces.Add($"[tool:{response["name"]?.GetValue<string>() ?? "unknown"}] {output}");
             }

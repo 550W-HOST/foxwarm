@@ -201,7 +201,7 @@ internal sealed partial class QQBotChannel : IManagedChannel
         value?.GetValueKind() == System.Text.Json.JsonValueKind.Number ? Number(value) : null;
 
     private static StringContent JsonContent(JsonObject body) =>
-        new(body.ToJsonString(), Encoding.UTF8, "application/json");
+        new(body.ToJsonText(), Encoding.UTF8, "application/json");
 
     private async Task<JsonObject> ApiAsync(
         string path,

@@ -271,7 +271,7 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
                 ["recentExecIds"] = new JsonArray(
                     recent.Select(id => (JsonNode?)JsonValue.Create(id)).ToArray()
                 ),
-            }.ToJsonString(new() { WriteIndented = true }) + "\n",
+            }.ToJsonText(indented: true) + "\n",
             default
         );
     }

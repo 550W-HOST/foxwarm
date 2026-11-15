@@ -30,7 +30,7 @@ internal static class ProviderHttpRequest
         HttpRequestMessage? request = null;
         try
         {
-            var bytes = Encoding.UTF8.GetBytes(body.ToJsonString());
+            var bytes = Encoding.UTF8.GetBytes(body.ToJsonText());
             if (options.RequestCompression is string compression)
             {
                 using var buffer = new MemoryStream();

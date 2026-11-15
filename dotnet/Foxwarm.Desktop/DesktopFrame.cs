@@ -143,13 +143,13 @@ internal sealed class DesktopFrame
             ["right"] = Math.Round(bar.RightInset / scale, 2),
             ["top"] = Math.Round(bar.Height / scale, 2),
             ["state"] = tokens,
-        }.ToJsonString();
+        }.ToJsonText();
     }
 
     // Top-level documents of the owned origin only; frames and other origins see nothing.
     private string DocumentScript(string json) =>
         "if (window === window.top && location.origin === "
-        + JsonValue.Create(origin)!.ToJsonString()
+        + JsonValue.Create(origin)!.ToJsonText()
         + ") window.foxwarmFrame = "
         + json
         + ";";

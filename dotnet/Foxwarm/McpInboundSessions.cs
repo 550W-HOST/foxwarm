@@ -217,7 +217,7 @@ internal sealed class McpInboundSessions(
             ["type"] = "user",
             ["parts"] = new JsonArray(item.Parts!.Select(p => (JsonNode?)p.DeepClone()).ToArray()),
         };
-        if (Encoding.UTF8.GetByteCount(serialized.ToJsonString()) > 1024 * 1024)
+        if (Encoding.UTF8.GetByteCount(serialized.ToJsonText()) > 1024 * 1024)
             throw new McpInboundSafeException("Message exceeds the Session input limit.");
         try
         {

@@ -16,7 +16,7 @@ internal static class TimerArguments
         var text =
             MainTimers.Text(node)
             ?? (
-                node is JsonValue ? node.ToJsonString()
+                node is JsonValue ? node.ToJsonText()
                 : node is JsonArray array ? string.Join(',', array.Select(Optional))
                 : "[object Object]"
             );

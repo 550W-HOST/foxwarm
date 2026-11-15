@@ -359,7 +359,7 @@ internal sealed partial class MessageRouter
             ?? throw new UserCommandException($"❌ Node `{id}` not found.");
         await command.Reply(
             $"Node inspection: `{id}`\n```json\n"
-                + summary.ToJsonString(new JsonSerializerOptions { WriteIndented = true })
+                + summary.ToJsonText(indented: true)
                 + "\n```"
         );
     }

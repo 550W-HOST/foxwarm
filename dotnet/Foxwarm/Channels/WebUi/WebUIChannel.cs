@@ -683,7 +683,7 @@ internal sealed partial class WebUIChannel(
     {
         WebUiAccess.Request(context)?.Require();
         await context.Response.WriteAsync(
-            "data: " + Foxwarm.Images.ImageTransport.Project(payload)!.ToJsonString() + "\n\n",
+            "data: " + Foxwarm.Images.ImageTransport.Project(payload)!.ToJsonText() + "\n\n",
             context.RequestAborted
         );
         await context.Response.Body.FlushAsync(context.RequestAborted);

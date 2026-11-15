@@ -76,7 +76,7 @@ internal sealed class RemoteExecAuthority
             ["execId"] = id,
             ["issuedAt"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
         };
-        var encoded = Encode(Encoding.UTF8.GetBytes(payload.ToJsonString()));
+        var encoded = Encode(Encoding.UTF8.GetBytes(payload.ToJsonText()));
         return encoded
             + "."
             + Encode(HMACSHA256.HashData(secret, Encoding.ASCII.GetBytes(encoded)));
@@ -125,7 +125,7 @@ internal sealed class RemoteExecAuthority
             ["execId"] = execId,
             ["issuedAt"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
         };
-        var encoded = Encode(Encoding.UTF8.GetBytes(payload.ToJsonString()));
+        var encoded = Encode(Encoding.UTF8.GetBytes(payload.ToJsonText()));
         return encoded
             + "."
             + Encode(HMACSHA256.HashData(secret, Encoding.ASCII.GetBytes(encoded)));

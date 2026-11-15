@@ -71,7 +71,7 @@ internal sealed partial class SessionCompactor
                     .Any(part =>
                         part["functionResponse"] is JsonObject response
                         && SessionWait.Text(response["tool_use_id"]) == submission.CallId
-                        && response["response"]?["accepted"]?.ToJsonString() == "true"
+                        && response["response"]?["accepted"]?.ToJsonText() == "true"
                         && SessionWait.Text(response["response"]?["operationId"]) == run.OperationId
                     ) != true
             )

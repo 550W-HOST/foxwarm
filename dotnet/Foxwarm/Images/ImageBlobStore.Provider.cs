@@ -391,7 +391,7 @@ internal sealed partial class ImageBlobStore
                 };
                 await using (var file = new FileStream(temp, FileMode.CreateNew, FileAccess.Write))
                 {
-                    await file.WriteAsync(Encoding.UTF8.GetBytes(header.ToJsonString() + "\n"));
+                    await file.WriteAsync(Encoding.UTF8.GetBytes(header.ToJsonText() + "\n"));
                     if (!passthrough)
                         await file.WriteAsync(converted.Bytes);
                 }

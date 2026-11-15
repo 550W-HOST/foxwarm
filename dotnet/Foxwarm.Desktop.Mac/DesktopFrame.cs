@@ -150,12 +150,12 @@ internal sealed class DesktopFrame : NSObject, IWKScriptMessageHandler
             ["right"] = 0,
             ["top"] = top,
             ["state"] = tokens,
-        }.ToJsonString();
+        }.ToJsonText();
     }
 
     private string Script(string json) =>
         "if (window === window.top && location.origin === "
-        + JsonValue.Create(origin!.GetLeftPart(UriPartial.Authority))!.ToJsonString()
+        + JsonValue.Create(origin!.GetLeftPart(UriPartial.Authority))!.ToJsonText()
         + ") window.foxwarmFrame = "
         + json
         + ";";

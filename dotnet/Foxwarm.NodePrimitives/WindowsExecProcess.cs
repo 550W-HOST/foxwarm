@@ -88,7 +88,7 @@ internal static class WindowsExecProcess
         // Do not include the launch-receipt stream in PowerShell's handle list.
         // The helper exits immediately; disposing it never terminates the command.
         using var writer = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false));
-        writer.WriteLine(receipt.ToJsonString());
+        writer.WriteLine(receipt.ToJsonText());
         return 0;
     }
 

@@ -145,7 +145,7 @@ internal sealed class NodePtyService : IAsyncDisposable
                     {
                         pending.Remove(requestId);
                         callback.Completion.TrySetResult(
-                            args["ok"]?.ToJsonString() == "true"
+                            args["ok"]?.ToJsonText() == "true"
                                 ? new(true, NodeFileTools.Text(args["message"]), null)
                                 : new(
                                     false,
@@ -191,7 +191,7 @@ internal sealed class NodePtyService : IAsyncDisposable
         {
             var text =
                 NodeFileTools.Text(value)
-                ?? (value is JsonArray array ? ArrayString(array) : value.ToJsonString());
+                ?? (value is JsonArray array ? ArrayString(array) : value.ToJsonText());
             text = NodePaths.TrimSpace(text);
             if (text.Length == 0)
                 number = 0;
@@ -243,7 +243,7 @@ internal sealed class NodePtyService : IAsyncDisposable
             array.Select(item =>
                 item is JsonArray nested
                     ? ArrayString(nested)
-                    : NodeFileTools.Text(item) ?? item?.ToJsonString() ?? ""
+                    : NodeFileTools.Text(item) ?? item?.ToJsonText() ?? ""
             )
         );
 

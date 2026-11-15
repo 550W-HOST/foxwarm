@@ -112,7 +112,7 @@ internal sealed class RuntimeMcpService(SessionRuntimeCredentialStore credential
                         );
                         return ValueTask.FromResult(
                             JsonData.Deserialize<ListToolsResult>(
-                                new JsonObject { ["tools"] = declarations }.ToJsonString(),
+                                new JsonObject { ["tools"] = declarations }.ToJsonText(),
                                 McpJsonUtilities.DefaultOptions
                             )!
                         );
@@ -139,7 +139,7 @@ internal sealed class RuntimeMcpService(SessionRuntimeCredentialStore credential
                             )
                         )(name, args, operation.Token);
                         if (
-                            System.Text.Encoding.UTF8.GetByteCount(rawResult.ToJsonString())
+                            System.Text.Encoding.UTF8.GetByteCount(rawResult.ToJsonText())
                             > McpInboundHttp.MaxResultBytes
                         )
                             rawResult = McpInboundCatalog.Error(

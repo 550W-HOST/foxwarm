@@ -140,7 +140,7 @@ internal sealed partial class NodeExecManager(
                 ["recentExecIds"] = new JsonArray(
                     recent.Select(id => (JsonNode?)JsonValue.Create(id)).ToArray()
                 ),
-            }.ToJsonString(new() { WriteIndented = true }),
+            }.ToJsonText(indented: true),
             default
         );
 
@@ -205,7 +205,7 @@ internal sealed partial class NodeExecManager(
         var args = frame["args"] as JsonObject ?? new JsonObject();
         var command =
             Text(args, "command")
-            ?? (args["command"] is JsonObject ? "[object Object]" : args["command"]?.ToJsonString())
+            ?? (args["command"] is JsonObject ? "[object Object]" : args["command"]?.ToJsonText())
             ?? "";
         if (string.IsNullOrWhiteSpace(command))
             throw new InvalidDataException("exec requires command");
@@ -435,7 +435,7 @@ internal sealed partial class NodeExecManager(
         };
         Directory.CreateDirectory(Path.GetDirectoryName(file)!);
         var temporary = file + ".tmp." + Environment.ProcessId + "." + Guid.NewGuid().ToString("N");
-        await File.WriteAllTextAsync(temporary, fallback.ToJsonString());
+        await File.WriteAllTextAsync(temporary, fallback.ToJsonText());
         AtomicFileReplace.Replace(temporary, file);
         return fallback;
     }

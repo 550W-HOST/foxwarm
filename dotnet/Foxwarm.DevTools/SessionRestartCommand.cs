@@ -386,7 +386,7 @@ internal static class SessionRestartCommand
         return;
 
         async Task WriteResultAsync(JsonObject result) =>
-            await File.WriteAllTextAsync(resultPath, result.ToJsonString());
+            await File.WriteAllTextAsync(resultPath, result.ToJsonText());
 
         static void RequireIdle(
             SessionSnapshot snapshot,

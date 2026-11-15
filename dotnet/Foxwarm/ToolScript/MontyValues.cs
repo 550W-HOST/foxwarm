@@ -253,7 +253,7 @@ internal static class MontyValues
             ),
             JsonObject => "[object Object]",
             JsonValue value when value.TryGetValue<string>(out var text) => text,
-            _ => node.ToJsonString(),
+            _ => node.ToJsonText(),
         };
 
     private static void ValidateDate(int year, uint month, uint day)

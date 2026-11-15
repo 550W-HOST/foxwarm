@@ -96,7 +96,7 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
         return
             node?.GetValueKind() == System.Text.Json.JsonValueKind.Number
             && double.TryParse(
-                node.ToJsonString(),
+                node.ToJsonText(),
                 System.Globalization.NumberStyles.Float,
                 System.Globalization.CultureInfo.InvariantCulture,
                 out var number

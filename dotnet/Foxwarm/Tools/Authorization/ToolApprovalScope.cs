@@ -99,7 +99,7 @@ internal sealed class ToolApprovalScope(SessionOwner owner)
             value["ownedSecrets"] = new JsonArray(
                 owned.Select(name => (JsonNode?)JsonValue.Create(name)).ToArray()
             );
-        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value.ToJsonString())));
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value.ToJsonText())));
     }
 
     private sealed class Restore(Action restore) : IDisposable

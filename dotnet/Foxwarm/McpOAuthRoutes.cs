@@ -177,8 +177,8 @@ internal static class McpOAuthRoutes
                     "default-src 'none'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'";
                 try
                 {
-                    var complete = JsonData.Serialize(service.PublicUrl("/api/mcp/oauth/complete"));
-                    var home = JsonData.Serialize(service.PublicUrl(""));
+                    var complete = service.PublicUrl("/api/mcp/oauth/complete");
+                    var home = service.PublicUrl("");
                     // No request/query value enters this document; the authenticated first-party POST exchanges the code.
                     return Results.Content(
                         CallbackDocument(complete, home),
@@ -196,19 +196,19 @@ internal static class McpOAuthRoutes
         );
     }
 
-    private static string CallbackDocument(string complete, string home) =>
+    internal static string CallbackDocument(string complete, string home) =>
         $$$"""
             <!doctype html><html lang="en"><meta charset="utf-8"><title>Completing authorization</title>
             <body><h1 id="status">Completing authorization…</h1><p id="detail"></p><a id="home">Return to Foxwarm</a><script>(async()=>{
             const query=new URLSearchParams(window.location.search);const keys=[...query.keys()];
             window.history.replaceState(null,'',window.location.pathname);
             let success=false;if(new Set(keys).size===keys.length){try{
-            const response=await fetch({{{complete}}},{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.fromEntries(query))});success=response.ok;
+            const response=await fetch({{{JsonValue.Create(complete)!.ToHtmlJson()}}},{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.fromEntries(query))});success=response.ok;
             }catch{}}
             document.title=success?'Authorization complete':'Authorization not completed';
             document.getElementById('status').textContent=document.title;
             document.getElementById('detail').textContent=success?'You can close this window and return to Authorizations.':'Review the server settings in Authorizations and start again.';
-            document.getElementById('home').href={{{home}}};
+            document.getElementById('home').href={{{JsonValue.Create(home)!.ToHtmlJson()}}};
             if(window.opener)window.opener.postMessage({type:'foxwarm-mcp-oauth',success},window.location.origin);
             })()</script></body></html>
             """;

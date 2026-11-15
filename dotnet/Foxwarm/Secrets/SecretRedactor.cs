@@ -1,5 +1,4 @@
 using System.Text;
-using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
@@ -223,7 +222,7 @@ internal sealed class SecretRedactor
     {
         yield return value;
         yield return JsonEncodedText
-            .Encode(value, JavaScriptEncoder.UnsafeRelaxedJsonEscaping)
+            .Encode(value, JsonText.Encoder)
             .Value;
         yield return JsonEncodedText.Encode(value).Value;
         var percent = Uri.EscapeDataString(value);

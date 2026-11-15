@@ -800,7 +800,7 @@ public sealed class ResponsesEventAccumulator
     private static string? Scalar(JsonNode? node) =>
         node is null ? null
         : node is JsonValue v && v.TryGetValue<string>(out var s) ? s
-        : node.ToJsonString();
+        : node.ToJsonText();
 
     private static string? String(JsonObject? obj, string name) =>
         obj?[name] is JsonValue v && v.TryGetValue<string>(out var value) ? value : null;

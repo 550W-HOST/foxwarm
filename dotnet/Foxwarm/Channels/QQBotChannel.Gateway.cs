@@ -367,7 +367,7 @@ internal sealed partial class QQBotChannel
         {
             if (Current(connection))
                 health.Log(new QQBotGatewayException("invalid session; reconnecting"));
-            ReconnectSocket(connection, 3000, frame["d"]?.ToJsonString() != "true");
+            ReconnectSocket(connection, 3000, frame["d"]?.ToJsonText() != "true");
             return;
         }
         if (op != 0 || Text(frame["t"]) is not { } type)
@@ -446,7 +446,7 @@ internal sealed partial class QQBotChannel
             )
                 return;
             await connection.Socket.SendAsync(
-                Encoding.UTF8.GetBytes(frame.ToJsonString()),
+                Encoding.UTF8.GetBytes(frame.ToJsonText()),
                 WebSocketMessageType.Text,
                 true,
                 connection.Ended.Token

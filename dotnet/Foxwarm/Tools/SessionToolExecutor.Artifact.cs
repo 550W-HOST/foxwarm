@@ -47,7 +47,7 @@ internal sealed partial class SessionToolExecutor
             metadata["createdAt"] = record["createdAt"]?.DeepClone();
             return new JsonObject
             {
-                ["output"] = metadata.ToJsonString(),
+                ["output"] = metadata.ToJsonText(),
                 ["marker"] = ArtifactMarker(record["receipt"]!),
             };
         }

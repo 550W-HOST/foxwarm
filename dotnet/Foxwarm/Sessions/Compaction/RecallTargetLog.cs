@@ -65,7 +65,7 @@ internal sealed class RecallTargetLog(string dataRoot)
             var info = new FileInfo(path);
             if (info.Exists && info.Length >= MaxBytes)
                 File.Move(path, Path.ChangeExtension(path, ".1.jsonl"), overwrite: true);
-            await File.AppendAllTextAsync(path, record.ToJsonString() + "\n", Encoding.UTF8)
+            await File.AppendAllTextAsync(path, record.ToJsonText() + "\n", Encoding.UTF8)
                 .ConfigureAwait(false);
         }
         catch (IOException) { }

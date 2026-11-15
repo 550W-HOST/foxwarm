@@ -85,6 +85,42 @@ public sealed class NodeOnboardingHttpTests
     }
 
     [Fact]
+    public async Task Bootstrap_API_and_nested_tool_output_keep_shell_commands_readable()
+    {
+        await using var fixture = await Fixture.Start();
+        var directory = "/work/" + SerializationTests.ReadableText;
+        using var response = await fixture.Admin.PostAsJsonAsync(
+            "api/nodes/onboarding/commands",
+            new { baseUrl = "https://example.invalid", installDir = directory }
+        );
+        response.EnsureSuccessStatusCode();
+        var raw = await response.Content.ReadAsStringAsync();
+        SerializationTests.AssertReadable(raw);
+        var decoded = JsonNode.Parse(raw)!;
+        var expected = fixture.Sessions.Bootstrap!.Commands(
+            "https://example.invalid",
+            directory: directory
+        );
+        Assert.Equal(
+            expected["commands"]!["bareMetal"]!.GetValue<string>(),
+            decoded["commands"]!["bareMetal"]!.GetValue<string>()
+        );
+        var tokenPath = Path.Combine(fixture.Temp.Path, "中文+'token");
+        var nested = await fixture.Sessions.NodeBootstrapInfoAsync(
+            new JsonObject { ["filePath"] = tokenPath },
+            default
+        );
+        Assert.Contains("中文+'token", nested["output"]!.GetValue<string>());
+        Assert.DoesNotContain("\\u", nested["output"]!.GetValue<string>());
+        Assert.Equal(
+            tokenPath,
+            JsonNode.Parse(nested["output"]!.GetValue<string>())![
+                "pairingTokenFile"
+            ]!.GetValue<string>()
+        );
+    }
+
+    [Fact]
     public async Task Unconfigured_help_uses_the_assigned_listener_port_without_advertising_loopback()
     {
         await using var fixture = await Fixture.Start();

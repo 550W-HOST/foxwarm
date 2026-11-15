@@ -152,7 +152,7 @@ internal sealed class ProviderServiceChannel : IAsyncDisposable
             await NdjsonLineReader
                 .WriteAsync(
                     child.StandardInput.BaseStream,
-                    Encoding.UTF8.GetBytes(envelope.ToJsonString()),
+                    Encoding.UTF8.GetBytes(envelope.ToJsonText()),
                     deadline.Token
                 )
                 .WaitAsync(deadline.Token);
@@ -444,7 +444,7 @@ internal sealed class ProviderServiceChannel : IAsyncDisposable
         Action? beforeSend
     )
     {
-        var bytes = Encoding.UTF8.GetBytes(message.ToJsonString());
+        var bytes = Encoding.UTF8.GetBytes(message.ToJsonText());
         if (bytes.Length > FrameLimit)
             throw new CodeServiceException(
                 "PayloadTooLarge",

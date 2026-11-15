@@ -166,7 +166,7 @@ internal sealed partial class DesktopWindow : Window
         };
         using var client = new HttpClient(handler) { BaseAddress = endpoint };
         using var response = await client.PostAsJsonAsync(
-            "api/auth", new JsonObject { ["token"] = token }, MainJsonContext.Default.JsonObject
+            "api/auth", new JsonObject { ["token"] = token }, MainJsonContext.Text.JsonObject
         );
         response.EnsureSuccessStatusCode();
         var cookie = core.CookieManager.CreateCookie(

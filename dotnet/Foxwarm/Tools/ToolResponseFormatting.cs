@@ -1,5 +1,4 @@
 using System.Text;
-using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
@@ -14,7 +13,7 @@ internal static class ToolResponseFormatting
     private static readonly JsonSerializerOptions QuotedOptions = new()
     {
         TypeInfoResolver = MainJsonContext.Default,
-        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        Encoder = JsonText.Encoder,
     };
 
     internal static string Format(JsonNode? value)
@@ -29,7 +28,7 @@ internal static class ToolResponseFormatting
         if (value is null)
             return "";
         if (value is JsonValue leaf)
-            return leaf.TryGetValue<string>(out var text) ? text : leaf.ToJsonString();
+            return leaf.TryGetValue<string>(out var text) ? text : leaf.ToJsonText();
         if (value is JsonObject { Count: 0 })
             return "{}";
         if (value is JsonObject obj)
@@ -115,7 +114,7 @@ internal static class ToolResponseFormatting
             JsonValue leaf when leaf.TryGetValue<string>(out var text) => text,
             JsonValue leaf when leaf.TryGetValue<bool>(out var flag) => flag,
             JsonValue leaf when leaf.TryGetValue<long>(out var integer) => integer,
-            _ => JsonData.Deserialize<JsonElement>(value.ToJsonString()).GetDouble(),
+            _ => JsonData.Deserialize<JsonElement>(value.ToJsonText()).GetDouble(),
         };
 
     private static string Flow(JsonNode? value) =>
@@ -127,7 +126,7 @@ internal static class ToolResponseFormatting
                 + "}",
             JsonArray array => "[" + string.Join(", ", array.Select(Flow)) + "]",
             JsonValue leaf when leaf.TryGetValue<string>(out var text) => Scalar(text),
-            _ => value.ToJsonString(),
+            _ => value.ToJsonText(),
         };
 
     private static string Scalar(string text)

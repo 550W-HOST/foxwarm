@@ -306,7 +306,7 @@ internal sealed partial class AgentCatalog
             AuthorityCommittedException? durabilityFailure = null;
             try
             {
-                AtomicIndexWrite(indexPath, payload.ToJsonString());
+                AtomicIndexWrite(indexPath, payload.ToJsonText());
             }
             catch (AuthorityCommittedException error)
             {

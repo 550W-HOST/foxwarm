@@ -133,7 +133,7 @@ internal sealed partial class SessionManager
                     ["output"] =
                         list.Count == 0
                             ? "No timers found for session '" + requested + "'."
-                            : "Found " + list.Count + " timer(s):\n" + list.ToJsonString(),
+                            : "Found " + list.Count + " timer(s):\n" + list.ToJsonText(),
                     ["timers"] = list,
                 };
             }
@@ -224,7 +224,7 @@ internal sealed partial class SessionManager
                     + SessionWait.Text(timer["id"])
                     + (existing is null ? "' created." : "' updated.")
                     + "\n"
-                    + timer.ToJsonString(),
+                    + timer.ToJsonText(),
                 ["timer"] = timer,
             };
         }
@@ -286,7 +286,7 @@ internal sealed partial class SessionManager
                     "Timer ToolScript failed: "
                         + SessionWait.Text(timer["id"])
                         + " "
-                        + result.ToJsonString()
+                        + result.ToJsonText()
                 );
             return outcome;
         }

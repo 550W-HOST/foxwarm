@@ -72,7 +72,7 @@ internal sealed partial class AgentCatalog
         new AtomicJsonFile(
             Path.GetDirectoryName(path)!,
             InstallationFileName
-        ).WriteTextPayload(document.ToJsonString(), default);
+        ).WriteTextPayload(document.ToJsonText(), default);
     }
 
     /// <summary>
@@ -133,7 +133,7 @@ internal sealed partial class AgentCatalog
             {
                 AtomicIndexWrite(
                     indexPath,
-                    Payload(List().Where(id => id != "main"), next).ToJsonString()
+                    Payload(List().Where(id => id != "main"), next).ToJsonText()
                 );
             }
             catch (AuthorityCommittedException)
@@ -181,7 +181,7 @@ internal sealed partial class AgentCatalog
             {
                 AtomicIndexWrite(
                     indexPath,
-                    Payload(List().Where(id => id != "main"), next).ToJsonString()
+                    Payload(List().Where(id => id != "main"), next).ToJsonText()
                 );
             }
             catch (AuthorityCommittedException)

@@ -300,7 +300,7 @@ internal sealed partial class WeWorkChannel : IManagedChannel
     {
         var result = await PostAsync(
             url,
-            JsonContent.Create(Markdown(text), MainJsonContext.Default.JsonObject),
+            JsonContent.Create(Markdown(text), MainJsonContext.Text.JsonObject),
             10000,
             token
         );
@@ -320,7 +320,7 @@ internal sealed partial class WeWorkChannel : IManagedChannel
             {
                 var result = await PostAsync(
                     url,
-                    JsonContent.Create(payload, MainJsonContext.Default.JsonObject),
+                    JsonContent.Create(payload, MainJsonContext.Text.JsonObject),
                     10000,
                     token
                 );

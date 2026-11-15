@@ -16,7 +16,7 @@ internal static class CompactPlanInput
             throw new InvalidDataException(
                 "Raw compact arguments are unavailable; submit corrected direct plan fields."
             );
-        return args.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+        return args.ToJsonText(indented: true);
     }
 
     internal static JsonObject Arguments(JsonObject call)

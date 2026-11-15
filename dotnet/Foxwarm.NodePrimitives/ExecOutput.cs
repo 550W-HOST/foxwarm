@@ -283,7 +283,7 @@ internal static class ExecOutput
         var lines = new List<string>
         {
             "---",
-            "Exit code: " + (status["exitCode"]?.ToJsonString() ?? "unknown"),
+            "Exit code: " + (status["exitCode"]?.ToJsonText() ?? "unknown"),
             "Duration: " + CompletedDuration(entry, status),
         };
         if (Text(status, "error") is { } error)
@@ -446,7 +446,7 @@ internal static class ExecOutput
         }
         var node = Text(entry, "nodeId");
         var error = Text(status, "error");
-        return $"Background Process Finished\nexecId: {Text(entry, "id")}\ncommand: `{command.Replace("`", "\\`", StringComparison.Ordinal)}`{(node is not null && node != "master" ? $"\nNode: `{node}`" : "")}\nExit code: {status["exitCode"]?.ToJsonString() ?? "unknown"}\nDuration: {CompletedDuration(entry, status)}{(error is null ? "" : "\nError: " + error)}\nCommand output in {Text(entry, "logPath")}";
+        return $"Background Process Finished\nexecId: {Text(entry, "id")}\ncommand: `{command.Replace("`", "\\`", StringComparison.Ordinal)}`{(node is not null && node != "master" ? $"\nNode: `{node}`" : "")}\nExit code: {status["exitCode"]?.ToJsonText() ?? "unknown"}\nDuration: {CompletedDuration(entry, status)}{(error is null ? "" : "\nError: " + error)}\nCommand output in {Text(entry, "logPath")}";
     }
 
     private static async Task<string> ProcessTree(int root)

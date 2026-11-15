@@ -226,12 +226,12 @@ internal sealed partial class SessionManager
             await file.WriteAsync(System.Text.Encoding.UTF8.GetBytes(pairing + "\n"), token);
             await file.FlushAsync(token);
         }
-        var text = info.ToJsonString();
+        var text = info.ToJsonText();
         if (pairing.Length > 0)
             text = text.Replace(pairing, "PAIRING_TOKEN", StringComparison.Ordinal);
         var result = JsonNode.Parse(text)!.AsObject();
         result["pairingTokenFile"] = path;
-        return new() { ["output"] = result.ToJsonString() };
+        return new() { ["output"] = result.ToJsonText() };
     }
 
     internal JsonObject NodePairList(JsonObject args)
@@ -245,7 +245,7 @@ internal sealed partial class SessionManager
                     .Where(value => value?["approvedNodeId"] is null)
                     .Select(value => value?.DeepClone())
                     .ToArray()
-            ).ToJsonString(),
+            ).ToJsonText(),
         };
     }
 
@@ -276,6 +276,6 @@ internal sealed partial class SessionManager
             ToolRegistry.Text(args, "nodeId"),
             RequireCaller
         );
-        return new() { ["output"] = result.ToJsonString() };
+        return new() { ["output"] = result.ToJsonText() };
     }
 }

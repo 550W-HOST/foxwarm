@@ -160,7 +160,12 @@ internal sealed class ToolScriptDataBudget(long limit = ToolScriptDataBudget.Def
                 Charge(checked(8L * Encoding.UTF8.GetByteCount(text)));
                 break;
             case JsonValue scalar when scalar.TryGetValue<JsonElement>(out var element):
-                using (var writer = new Utf8JsonWriter(new ToolScriptBudgetBuffer(this)))
+                using (
+                    var writer = new Utf8JsonWriter(
+                        new ToolScriptBudgetBuffer(this),
+                        new() { Encoder = JsonText.Encoder }
+                    )
+                )
                 {
                     element.WriteTo(writer);
                     writer.Flush();

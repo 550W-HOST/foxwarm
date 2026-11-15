@@ -95,7 +95,7 @@ internal static class HostedSearchSources
         // Omit whole trailing records rather than truncating JSON or URL strings.
         while (
             records.Count > 1
-            && Encoding.UTF8.GetByteCount(evidence.ToJsonString()) > MaxCallEvidenceBytes
+            && Encoding.UTF8.GetByteCount(evidence.ToHtmlJson()) > MaxCallEvidenceBytes
         )
             records.RemoveAt(records.Count - 1);
         return evidence;
@@ -108,7 +108,7 @@ internal static class HostedSearchSources
             ["kind"] = "hosted_web_search_sources",
             ["citation_reference_mapping"] = null,
             ["calls"] = new JsonArray(entries.Select(entry => entry.DeepClone()).ToArray()),
-        }.ToJsonString(); // Default JSON escaping keeps external titles out of prompt markup.
+        }.ToHtmlJson(); // Keep external titles out of prompt markup.
 
     // Prefix stability: each call's projected text depends only on that call's
     // stored item and on earlier calls (deduplication keeps the first occurrence).
@@ -135,7 +135,7 @@ internal static class HostedSearchSources
                 var key =
                     (SessionWait.Text(evidence["request_id"]) ?? $"message:{index}")
                     + "\0"
-                    + evidence.ToJsonString();
+                    + evidence.ToHtmlJson();
                 if (seen.Add(key))
                     entries.Add(evidence);
             }

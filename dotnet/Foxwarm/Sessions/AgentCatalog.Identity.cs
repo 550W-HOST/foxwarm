@@ -122,7 +122,7 @@ internal sealed partial class AgentCatalog
                     AtomicIndexWrite(
                         indexPath,
                         Payload(List().Where(id => id is not "main" && id != name), next)
-                            .ToJsonString()
+                            .ToJsonText()
                     );
                 }
                 catch (AuthorityCommittedException)

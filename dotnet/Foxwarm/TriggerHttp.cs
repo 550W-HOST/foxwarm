@@ -33,7 +33,7 @@ internal static class TriggerHttp
                     var id = Truthy(target) ? SessionWait.Text(target) : "main";
                     if (id is null || runtime.Catalog.Resolve(id)["sessionId"] is null)
                         throw new InvalidDataException(
-                            $"Session \"{id ?? target?.ToJsonString()}\" is unavailable. Choose an existing session or create one first."
+                            $"Session \"{id ?? target?.ToJsonText()}\" is unavailable. Choose an existing session or create one first."
                         );
                     if (SessionWait.Text(text) is not { Length: > 0 } message)
                         throw new InvalidDataException("text must be a non-empty string.");

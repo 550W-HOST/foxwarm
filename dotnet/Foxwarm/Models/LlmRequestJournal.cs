@@ -2014,7 +2014,7 @@ public sealed partial class LlmRequestJournalStore : IDisposable, IAsyncDisposab
                 builder.Append(']');
                 return;
             }
-            var json = value.ToJsonString();
+            var json = value.ToJsonText();
             if (value is JsonValue scalar && scalar.TryGetValue<string>(out var text))
             {
                 JsonStringQuoting.Append(builder, text);

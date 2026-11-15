@@ -151,7 +151,7 @@ internal static class WeixinInbound
             null => "",
             JsonObject => "[object Object]",
             JsonArray array => string.Join(",", array.Select(String)),
-            _ => SessionWait.Text(value) ?? value.ToJsonString(),
+            _ => SessionWait.Text(value) ?? value.ToJsonText(),
         };
 
     private static string Body(JsonArray? items)

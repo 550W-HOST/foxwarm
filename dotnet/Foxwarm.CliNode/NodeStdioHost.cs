@@ -143,7 +143,7 @@ internal sealed class NodeStdioHost(Stream input, Stream output)
 
     private async Task Send(JsonObject frame)
     {
-        var bytes = Encoding.UTF8.GetBytes(frame.ToJsonString());
+        var bytes = Encoding.UTF8.GetBytes(frame.ToJsonText());
         await writeGate.WaitAsync();
         try
         {

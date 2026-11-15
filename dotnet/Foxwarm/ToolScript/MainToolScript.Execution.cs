@@ -255,7 +255,7 @@ internal sealed partial class MainToolScript
                     var text =
                         question is JsonValue q && q.TryGetValue<string>(out var str)
                             ? str
-                            : question?.ToJsonString() ?? "null";
+                            : question?.ToJsonText() ?? "null";
                     record["hostCallCount"] = (int)Number(record["hostCallCount"], 0) + 1;
                     record["lastHostCall"] = new JsonObject
                     {

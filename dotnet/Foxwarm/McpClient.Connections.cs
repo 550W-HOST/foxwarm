@@ -80,7 +80,7 @@ internal sealed partial class McpClient
         var settings = new JsonObject();
         foreach (var key in new[] { "command", "args", "env", "cwd", "stderr" })
             settings[key] = config[key]?.DeepClone();
-        return settings.ToJsonString();
+        return settings.ToJsonText();
     }
 
     private async Task<T> WithClientAsync<T>(

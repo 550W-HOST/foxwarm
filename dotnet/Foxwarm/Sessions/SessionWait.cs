@@ -44,7 +44,7 @@ internal static class SessionWait
             ? ""
             : string.Concat(
                 attributes.Select(pair =>
-                    $" {pair.Key}=\"{Escape(pair.Value is JsonValue value && value.TryGetValue<string>(out var s) ? s : pair.Value?.ToJsonString() ?? "")}\""
+                    $" {pair.Key}=\"{Escape(pair.Value is JsonValue value && value.TryGetValue<string>(out var s) ? s : pair.Value?.ToJsonText() ?? "")}\""
                 )
             );
         var wrapper =

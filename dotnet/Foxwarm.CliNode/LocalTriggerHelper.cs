@@ -36,7 +36,7 @@ internal static class LocalTriggerHelper
                     ["sessionId"] = args[3],
                     ["message"] = args[4],
                     ["eventType"] = args.Length > 5 && args[5].Length > 0 ? args[5] : "trigger",
-                }.ToJsonString(),
+                }.ToJsonText(),
                 Encoding.UTF8,
                 "application/json"
             );

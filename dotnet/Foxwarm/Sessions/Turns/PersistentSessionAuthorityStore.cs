@@ -469,7 +469,7 @@ public sealed class PersistentSessionAuthorityStore
     // JsonDocument. Reparse each retained non-history branch once at cold ingress so small
     // envelope/meta/queue values cannot keep the authority's unrelated history buffer alive.
     private static JsonObject DetachDocument(JsonObject value) =>
-        (JsonObject)JsonNode.Parse(value.ToJsonString())!;
+        (JsonObject)JsonNode.Parse(value.ToJsonText())!;
 
     internal static JsonObject ToQueueJson(QueueItem item)
     {

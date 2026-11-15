@@ -37,7 +37,7 @@ internal static class RequestSizeDiagnostics
         );
         var memoryTokens = CompactCandidateBuilder.Tokens(memory);
         var toolTokens = tools is { Count: > 0 }
-            ? CompactCandidateBuilder.Tokens(tools.ToJsonString())
+            ? CompactCandidateBuilder.Tokens(tools.ToJsonText())
             : 0;
         var remainder = RequestHistoryRepair
             .SelectAndRepair(history)

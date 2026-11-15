@@ -98,7 +98,7 @@ internal sealed partial class SessionManager
         };
         if (compare)
             output["ruleDiff"] = ToolAuthorizationExplain.RuleDiff(active, candidate!);
-        return new JsonObject { ["output"] = output.ToJsonString() };
+        return new JsonObject { ["output"] = output.ToJsonText() };
     }
 
     private async Task<JsonObject> ExplainProbeAsync(

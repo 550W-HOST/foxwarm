@@ -148,9 +148,9 @@ internal sealed partial class SessionCompactor
             if (key == "output")
                 continue;
             if (
-                key is "content" or "error" && value?.ToJsonString().EnumerateRunes().Count() <= 512
+                key is "content" or "error" && value?.ToJsonText().EnumerateRunes().Count() <= 512
                 || RetainedResponseMetadata.Contains(key)
-                    && value?.ToJsonString().EnumerateRunes().Count() <= 512
+                    && value?.ToJsonText().EnumerateRunes().Count() <= 512
             )
                 pruned[key] = value?.DeepClone();
         }
@@ -184,7 +184,7 @@ internal sealed partial class SessionCompactor
             {
                 tokens += CompactCandidateBuilder.Tokens(call["name"]?.GetValue<string>() ?? "");
                 tokens += CompactCandidateBuilder.Tokens(
-                    call["rawArgsText"]?.GetValue<string>() ?? call["args"]?.ToJsonString() ?? "{}"
+                    call["rawArgsText"]?.GetValue<string>() ?? call["args"]?.ToJsonText() ?? "{}"
                 );
             }
             if (part["functionResponse"] is JsonObject response)
@@ -193,7 +193,7 @@ internal sealed partial class SessionCompactor
                     response["name"]?.GetValue<string>() ?? ""
                 );
                 tokens += CompactCandidateBuilder.Tokens(
-                    response["response"]?.ToJsonString() ?? "{}"
+                    response["response"]?.ToJsonText() ?? "{}"
                 );
             }
         }

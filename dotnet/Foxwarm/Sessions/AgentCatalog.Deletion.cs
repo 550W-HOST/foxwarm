@@ -54,7 +54,7 @@ internal sealed partial class AgentCatalog
             }
             try
             {
-                AtomicIndexWrite(indexPath, Payload(names, next).ToJsonString());
+                AtomicIndexWrite(indexPath, Payload(names, next).ToJsonText());
             }
             catch (AuthorityCommittedException)
             {
@@ -96,7 +96,7 @@ internal sealed partial class AgentCatalog
             {
                 AtomicIndexWrite(
                     indexPath,
-                    Payload(List().Where(id => id is not "main" && id != name), next).ToJsonString()
+                    Payload(List().Where(id => id is not "main" && id != name), next).ToJsonText()
                 );
             }
             catch (AuthorityCommittedException)

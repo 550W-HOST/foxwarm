@@ -118,7 +118,7 @@ internal sealed class InstanceKeys
                 options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
             using (var stream = new FileStream(temporary, options))
             {
-                stream.Write(new UTF8Encoding(false).GetBytes(document.ToJsonString() + "\n"));
+                stream.Write(new UTF8Encoding(false).GetBytes(document.ToJsonText() + "\n"));
                 stream.Flush(true);
             }
             try

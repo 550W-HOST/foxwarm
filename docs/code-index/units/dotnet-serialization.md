@@ -1,6 +1,20 @@
 # Unit: Main serialization
 
-Files: `dotnet/Foxwarm/JsonData.cs`, `dotnet/Foxwarm/MainJsonContext.cs`, `dotnet/Foxwarm/FrontMatterYaml.cs`, `dotnet/Foxwarm.Tests/SerializationTests.cs`, `scripts/test/native-main-warnings.baseline`
+Files: `dotnet/Foxwarm.NodePrimitives/JsonText.cs`, `dotnet/Foxwarm/JsonData.cs`, `dotnet/Foxwarm/MainJsonContext.cs`, `dotnet/Foxwarm/FrontMatterYaml.cs`, `dotnet/Foxwarm.Tests/SerializationTests.cs`, `scripts/test/native-main-warnings.baseline`
+
+## Design Decisions
+
+### D-json-text-encoding — readable JSON with explicit HTML boundaries (2026-11-15)
+
+First-party JSON text uses `JsonText.Encoder` (`JavaScriptEncoder.UnsafeRelaxedJsonEscaping`). This preserves readable non-ASCII text and characters such as `+`, apostrophes, `<`, `>` and `&`; double quotes, backslashes and control characters retain required JSON escaping. DOM callers use `ToJsonText`, including nested JSON strings in tool results, state files, Node transports/bootstrap output and Desktop frames/probes. `JsonData` options, direct `MainJsonContext.Text` metadata, HTTP hosts and specialized streaming writers use the same encoder while retaining their own metadata, converters, depth and naming policies.
+
+JSON embedded in HTML script text uses `ToHtmlJson` with the default safe encoder: Code workbench script literals and the OAuth callback document. Code configuration in an HTML attribute additionally uses `WebUtility.HtmlEncode`. The login page is a static file with no server-interpolated JSON. Desktop script evaluation is passed directly to the browser scripting API, not inserted into an HTML document. Hosted-search evidence retains safe escaping to keep external titles out of prompt markup. These contexts must not accept relaxed JSON as raw HTML.
+
+Persisted isolation migration digests (`fenceDigest`, `rulesDigest`, `confirmedDigest`) retain the original default encoder. Startup compares them to distinguish generated layers from administrator edits; changing their bytes could skip reconciliation of a later legacy deny. This is a fixed-encoding exception, not a second migration path.
+
+The MCP SDK owns its outer protocol/SSE serialization and keeps its own encoding and metadata. Foxwarm-owned MCP HTTP errors and text content inside MCP results use the shared encoder; no transport re-encoding adapter is used.
+
+JSON readers need no migration. Affected serialized text and provider request bytes may change once at upgrade; subsequent requests use the same deterministic encoding. Already committed raw history is not rewritten solely for encoding. The existing canonical ECMAScript serializers for history identity, model routing fingerprints and journal object hashes retain their own normalization and byte contracts.
 
 ## Contracts
 
@@ -14,10 +28,11 @@ Frontmatter retains YamlDotNet's original untyped scalar, alias, sequence and ma
 
 ## Primary files
 
+- `dotnet/Foxwarm.NodePrimitives/JsonText.cs` — shared encoder, compact/indented DOM text and explicit HTML-safe literals.
 - `dotnet/Foxwarm/JsonData.cs` — dynamic JSON conversion and explicit metadata serialization.
 - `dotnet/Foxwarm/MainJsonContext.cs` — first-party DTO and scalar metadata.
 - `dotnet/Foxwarm/FrontMatterYaml.cs` — untyped frontmatter collection construction.
-- `dotnet/Foxwarm.Tests/SerializationTests.cs` — envelope ownership/value parity, web DTO round trips and original YAML semantic parity.
+- `dotnet/Foxwarm.Tests/SerializationTests.cs` — envelope ownership/value parity, readable JSON/state/tool round trips, HTML-safe script literals, web DTO round trips and original YAML semantic parity.
 
 ## Integration references
 

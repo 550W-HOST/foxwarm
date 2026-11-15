@@ -32,11 +32,7 @@ internal sealed partial class ModelConfiguration
             if (JsonNode.Parse(currentRaw) is JsonObject json)
             {
                 json["channels"] = channels.DeepClone();
-                return Encoding.UTF8.GetBytes(
-                    json.ToJsonString(
-                        new System.Text.Json.JsonSerializerOptions { WriteIndented = true }
-                    )
-                );
+                return Encoding.UTF8.GetBytes(json.ToJsonText(indented: true));
             }
         }
         catch (System.Text.Json.JsonException) { }

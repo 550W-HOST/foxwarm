@@ -11,11 +11,13 @@ internal static class JsonData
 {
     internal static readonly JsonSerializerOptions Options = new()
     {
+        Encoder = JsonText.Encoder,
         TypeInfoResolver = MainJsonContext.Default,
     };
 
     internal static readonly JsonSerializerOptions WebOptions = new(JsonSerializerDefaults.Web)
     {
+        Encoder = JsonText.Encoder,
         TypeInfoResolver = MainJsonContext.Default,
     };
 

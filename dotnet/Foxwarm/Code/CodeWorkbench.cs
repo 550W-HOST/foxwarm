@@ -154,7 +154,7 @@ internal sealed partial class CodeWorkbench
         new AtomicJsonFile(
             Path.GetDirectoryName(path)!,
             Path.GetFileName(path)
-        ).WriteTextPayload(workspace.ToJsonString(new() { WriteIndented = true }), default);
+        ).WriteTextPayload(workspace.ToJsonText(indented: true), default);
 
     private void MigrateWorkspace()
     {
@@ -301,14 +301,14 @@ internal sealed partial class CodeWorkbench
         using var reader = new StreamReader(resource);
         return reader
             .ReadToEnd()
-            .Replace("@@CONFIGURATION@@", WebUtility.HtmlEncode(configuration.ToJsonString()))
+            .Replace("@@CONFIGURATION@@", WebUtility.HtmlEncode(configuration.ToJsonText()))
             .Replace(
                 "@@ASSETBASE@@",
                 context.Request.Path.Value?.EndsWith('/') == true ? "./static" : route + "/static"
             )
-            .Replace("@@BASEURL@@", JsonValue.Create(baseUrl)!.ToJsonString())
-            .Replace("@@WEBVIEWROUTE@@", JsonValue.Create(capabilityRoute)!.ToJsonString())
-            .Replace("@@CALLBACK@@", JsonValue.Create(route + "/callback")!.ToJsonString())
+            .Replace("@@BASEURL@@", JsonValue.Create(baseUrl)!.ToHtmlJson())
+            .Replace("@@WEBVIEWROUTE@@", JsonValue.Create(capabilityRoute)!.ToHtmlJson())
+            .Replace("@@CALLBACK@@", JsonValue.Create(route + "/callback")!.ToHtmlJson())
             .Replace("@@HASYAML@@", HasYaml ? "true" : "false")
             .Replace("@@HASPTY@@", hasPty ? "true" : "false");
     }

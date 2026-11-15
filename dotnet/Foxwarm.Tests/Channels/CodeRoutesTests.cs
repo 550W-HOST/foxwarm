@@ -89,6 +89,34 @@ public sealed class CodeRoutesTests
     }
 
     [Fact]
+    public async Task Workbench_configuration_stays_inside_its_HTML_attribute()
+    {
+        await using var f = await Fixture.Create();
+        foreach (
+            var file in new[]
+            {
+                "out/nls.messages.js",
+                "out/vs/workbench/workbench.web.main.internal.css",
+                "out/vs/workbench/workbench.web.main.internal.js",
+            }
+        )
+        {
+            var path = Path.Combine(f.Assets, file);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            await File.WriteAllTextAsync(path, "metadata fixture");
+        }
+        const string attack = "</script><img onerror> + ' \" & 中文";
+        var folder = "foxwarm://node+master/" + attack;
+        var html = await f.Client.GetStringAsync(
+            "/vscode-web/?folderUri=" + Uri.EscapeDataString(folder)
+        );
+        Assert.DoesNotContain("<img", html);
+        var match = System.Text.RegularExpressions.Regex.Match(html, "data-settings=\"([^\"]+)\"");
+        var configuration = JsonNode.Parse(WebUtility.HtmlDecode(match.Groups[1].Value))!;
+        Assert.Equal("/" + attack, configuration["folderUri"]!["path"]!.GetValue<string>());
+    }
+
+    [Fact]
     public async Task Missing_Code_assets_return_the_actionable_noncacheable_setup_page()
     {
         await using var f = await Fixture.Create(separateInstallation: true);

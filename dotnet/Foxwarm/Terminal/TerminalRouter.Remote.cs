@@ -351,7 +351,7 @@ internal sealed partial class TerminalRouter
                         || path is null
                         || !path.StartsWith('/')
                         || path.Contains('\0')
-                        || Encoding.UTF8.GetByteCount(request!.ToJsonString()) > 64 * 1024
+                        || Encoding.UTF8.GetByteCount(request!.ToJsonText()) > 64 * 1024
                     )
                         rejectId = id;
                     else

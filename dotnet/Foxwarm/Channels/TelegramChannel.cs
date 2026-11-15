@@ -314,7 +314,7 @@ internal sealed class TelegramChannel : IManagedChannel
     }
 
     private static string Identity(JsonValue value) =>
-        SessionWait.Text(value) ?? value.ToJsonString();
+        SessionWait.Text(value) ?? value.ToJsonText();
 
     internal async Task SendAsync(string conversation, string text, CancellationToken token)
     {
@@ -357,7 +357,7 @@ internal sealed class TelegramChannel : IManagedChannel
                 async () =>
                 {
                     using var body = new MultipartFormDataContent();
-                    body.Add(new StringContent(Chat(conversation).ToJsonString()), "chat_id");
+                    body.Add(new StringContent(Chat(conversation).ToJsonText()), "chat_id");
                     if (caption is not null)
                         body.Add(new StringContent(caption), "caption");
                     if (parseMode is not null)
@@ -423,7 +423,7 @@ internal sealed class TelegramChannel : IManagedChannel
     private async Task<JsonNode?> ApiAsync(string method, JsonObject body, CancellationToken token)
     {
         using var content = new StringContent(
-            body.ToJsonString(),
+            body.ToJsonText(),
             Encoding.UTF8,
             "application/json"
         );
