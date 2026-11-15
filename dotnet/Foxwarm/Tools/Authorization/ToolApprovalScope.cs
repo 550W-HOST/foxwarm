@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
@@ -94,9 +93,10 @@ internal sealed class ToolApprovalScope(SessionOwner owner)
     }
 
     // The approved identity of a call: what it is, where it runs, and every fact of the request
-    // the evaluator receives. The request is projected property by property, so a fact added to
-    // ToolAuthorizationRequest is bound without a change here; a value this projection cannot
-    // represent throws instead of being skipped.
+    // the evaluator receives. The projection names each fact explicitly (it must hold in a
+    // trimmed native build, where reflection could lose members);
+    // Approval_fingerprint_binds_every_fact_of_the_request enumerates the request and its nested
+    // fact types and fails when a property is not bound here.
     internal static string Fingerprint(ResolvedTool resolved, ToolAuthorizationRequest request)
     {
         var value = new JsonObject
@@ -114,68 +114,55 @@ internal sealed class ToolApprovalScope(SessionOwner owner)
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value.ToJsonText())));
     }
 
-    // Every public property of the request, by name.
-    internal static JsonObject FingerprintFacts(ToolAuthorizationRequest request)
-    {
-        var facts = new JsonObject();
-        foreach (
-            var property in typeof(ToolAuthorizationRequest)
-                .GetProperties(BindingFlags.Public | BindingFlags.Instance)
-                .OrderBy(property => property.Name, StringComparer.Ordinal)
-        )
-            facts[property.Name] = FingerprintValue(property.Name, property.GetValue(request), request);
-        return facts;
-    }
-
-    private static JsonNode? FingerprintValue(
-        string name,
-        object? value,
-        ToolAuthorizationRequest request
-    ) =>
-        value switch
+    // Every property of the request; an empty collection is an absent fact to the evaluator.
+    internal static JsonObject FingerprintFacts(ToolAuthorizationRequest request) =>
+        new()
         {
-            null => null,
-            string text => JsonValue.Create(text),
-            bool flag => JsonValue.Create(flag),
-            int or long => JsonValue.Create(Convert.ToInt64(value)),
-            Enum member => JsonValue.Create(member.ToString()),
-            JsonNode node => node.DeepClone(),
-            // The evaluator matches a Node target by its ancestry chain.
-            Foxwarm.Nodes.NodeAuthorizationForest forest => NodeAncestry(forest, request),
-            // An empty collection is an absent fact to the evaluator.
-            System.Collections.IEnumerable items => items.Cast<object?>().ToArray() is
-            { Length: > 0 } list
-                ? new JsonArray(list.Select(item => FingerprintValue(name, item, request)).ToArray())
-                : null,
-            AuthorizationTarget or AuthorizationPath => FingerprintRecord(name, value, request),
-            _ => throw new InvalidOperationException(
-                $"Approval fingerprints cannot bind request fact {name} of type {value.GetType().Name}."
-            ),
+            ["source"] = request.Source,
+            ["name"] = request.Name,
+            ["server"] = request.Server,
+            ["args"] = request.Args.DeepClone(),
+            ["paths"] = Facts(request.Paths, PathFact),
+            ["agent"] = request.Agent,
+            ["session"] = request.Session,
+            ["targetNode"] = request.TargetNode,
+            ["workspace"] = request.Workspace,
+            ["agentDirectory"] = request.AgentDirectory,
+            ["memoryDirectory"] = request.MemoryDirectory,
+            ["sourceParent"] = request.SourceParent,
+            ["sessionTarget"] = request.SessionTarget is { } target ? TargetFact(target) : null,
+            ["principal"] = request.Principal,
+            ["externalId"] = request.ExternalId,
+            ["taskOwnerSession"] = request.TaskOwnerSession,
+            ["nodeTargets"] = Facts(request.NodeTargets, node => JsonValue.Create(node)),
+            ["currentNode"] = request.CurrentNode,
+            ["nodeForest"] = request.NodeForest is { } forest ? NodeAncestry(forest, request) : null,
+            ["secrets"] = Facts(request.Secrets, name => JsonValue.Create(name)),
+            ["ownedSecrets"] = Facts(request.OwnedSecrets, name => JsonValue.Create(name)),
         };
 
-    private static JsonObject FingerprintRecord(
-        string name,
-        object value,
-        ToolAuthorizationRequest request
-    )
-    {
-        var record = new JsonObject();
-        foreach (
-            var property in value
-                .GetType()
-                .GetProperties(BindingFlags.Public | BindingFlags.Instance)
-                .OrderBy(property => property.Name, StringComparer.Ordinal)
-        )
-            record[property.Name] = FingerprintValue(
-                name + "." + property.Name,
-                property.GetValue(value),
-                request
-            );
-        return record;
-    }
+    private static JsonArray? Facts<T>(IEnumerable<T>? items, Func<T, JsonNode?> project) =>
+        items?.ToArray() is { Length: > 0 } list ? new(list.Select(project).ToArray()) : null;
 
-    // The ancestry of each Node target, as the evaluator reads it; an invalid ancestry is bound
-    // as such (the evaluator rejects it).
+    private static JsonObject PathFact(AuthorizationPath path) =>
+        new()
+        {
+            ["arg"] = path.Arg,
+            ["raw"] = path.Raw,
+            ["resolved"] = path.Resolved,
+            ["node"] = path.Node,
+        };
+
+    private static JsonObject TargetFact(AuthorizationTarget target) =>
+        new()
+        {
+            ["id"] = target.Id,
+            ["agent"] = target.Agent,
+            ["parent"] = target.Parent,
+        };
+
+    // The ancestry chain of each Node target, as the evaluator matches it. An ancestry the
+    // evaluator rejects (a cycle or a missing ancestor) is bound as invalid.
     private static JsonObject NodeAncestry(
         Foxwarm.Nodes.NodeAuthorizationForest forest,
         ToolAuthorizationRequest request
