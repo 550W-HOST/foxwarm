@@ -595,7 +595,7 @@ public sealed partial class ToolApprovalGateTests
     }
 
     [Fact]
-    public async Task Approval_of_a_call_whose_targets_change_while_waiting_asks_again_then_fails()
+    public async Task Approval_of_a_call_whose_target_changes_while_waiting_fails_closed()
     {
         await using var f = await ScriptFixture.Create();
         await Policy(f.Manager, AskWrite);
@@ -604,27 +604,26 @@ public sealed partial class ToolApprovalGateTests
         var link = Path.Combine(f.Work, "current");
         File.CreateSymbolicLink(link, "a");
         var call = Start(f, "call-moving", "write", Write("current/out.txt"));
-        var settled = new HashSet<string>(StringComparer.Ordinal);
-        for (var round = 0; round < 3; round++)
-        {
-            var pending = (await PendingAsync(f.Owner)).Single(record =>
-                !settled.Contains(record["id"]!.GetValue<string>())
-            );
-            var id = pending["id"]!.GetValue<string>();
-            settled.Add(id);
-            // The write's target moves before every decision.
-            File.Delete(link);
-            File.CreateSymbolicLink(link, round % 2 == 0 ? "b" : "a");
-            await f.Manager.DecideToolApprovalAsync(f.Owner, id, true, null, Administrator);
-        }
+        var pending = Assert.Single(await PendingAsync(f.Owner));
+        // The write's target moves before the decision; the approval showed the old one.
+        File.Delete(link);
+        File.CreateSymbolicLink(link, "b");
+        await f.Manager.DecideToolApprovalAsync(
+            f.Owner,
+            pending["id"]!.GetValue<string>(),
+            true,
+            null,
+            Administrator
+        );
         var result = (await call.WaitAsync(TimeSpan.FromSeconds(30))).Response!.AsObject();
         Assert.Equal("tool_approval_unavailable", result["error"]!["type"]!.GetValue<string>());
         Assert.Equal(
-            "This call's targets changed while it was waiting for approval. It was not executed.",
+            "This call changed while it waited for approval: node `write` now needs approval under rule confirm-write, which the approval did not cover. It was not executed.",
             result["error"]!["message"]!.GetValue<string>()
         );
-        Assert.Equal(3, Approvals(f.Owner).Length);
-        // Each approval was for facts the call no longer had; none of them ran.
+        // The approval was for facts the call no longer had; it never ran, and no other was
+        // requested.
+        Assert.Single(Approvals(f.Owner));
         Assert.All(
             Approvals(f.Owner),
             record =>

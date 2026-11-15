@@ -88,6 +88,17 @@ internal sealed class ToolApprovalRequiredException(
     private static string Text(ApprovalCheck check) =>
         $"This call needs approval for a step its approval does not cover ({check.Resolved.Source} `{check.Resolved.Name}`, rule {RuleId(check.Assessment)}), and approval can't be requested at this point. It was not executed.";
 
+    // The failure of a call whose re-check after approval finds an ask the approval did not
+    // list: policy or the call's facts changed while it waited.
+    internal ToolApprovalOutcomeException ChangedAfterApproval()
+    {
+        var check = checks[0];
+        return new(
+            "tool_approval_unavailable",
+            $"This call changed while it waited for approval: {check.Resolved.Source} `{check.Resolved.Name}` now needs approval under rule {RuleId(check.Assessment)}, which the approval did not cover. It was not executed."
+        );
+    }
+
     private static string RuleId(AuthorizationAssessment assessment) =>
         assessment.Asking.FirstOrDefault() is { } layer
             ? SessionWait.Text(layer.Decision.Rule?["id"]) ?? "defaultAction"

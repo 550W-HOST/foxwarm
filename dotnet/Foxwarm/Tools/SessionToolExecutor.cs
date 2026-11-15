@@ -67,7 +67,6 @@ internal sealed partial class SessionToolExecutor(
                 : null;
         if (gate is not null)
             gate.Primary = resolved;
-        var requests = new Dictionary<ToolApprovalStage, int>();
         while (true)
             try
             {
@@ -85,24 +84,12 @@ internal sealed partial class SessionToolExecutor(
                 );
                 break;
             }
-            // A grant whose facts no longer match the call is replaced by a new request.
+            // Each stage is requested once, inputs before the call. An ask the re-check after an
+            // approval finds in that stage or an earlier one is a changed request, which fails
+            // closed rather than asking again.
             catch (ToolApprovalRequiredException required)
-                when (
-                    gate is not null
-                    && requests.GetValueOrDefault(required.Stage) < MaxApprovalRequests
-                )
+                when (gate is not null && !gate.Grants.Any(grant => grant.Stage >= required.Stage))
             {
-                requests[required.Stage] = requests.GetValueOrDefault(required.Stage) + 1;
-                // The superseded approval of this stage never ran with the facts it showed.
-                foreach (var superseded in gate.Grants.Where(grant => grant.Stage == required.Stage))
-                {
-                    await sessions.AbandonApprovedToolAsync(
-                        hosted,
-                        superseded.ApprovalId,
-                        "notStarted"
-                    );
-                    gate.Remove(superseded);
-                }
                 var pending = await sessions.BeginToolApprovalAsync(
                     hosted,
                     required,
@@ -115,18 +102,12 @@ internal sealed partial class SessionToolExecutor(
                     current.Approval = SessionManager.ApprovalMeta(record);
                 gate.Add(SessionManager.ApprovalOutcome(pending, record));
             }
-            catch (ToolApprovalRequiredException) when (gate is not null)
+            catch (ToolApprovalRequiredException required) when (gate is not null)
             {
-                throw new ToolApprovalOutcomeException(
-                    "tool_approval_unavailable",
-                    "This call's targets changed while it was waiting for approval. It was not executed."
-                );
+                throw required.ChangedAfterApproval();
             }
         RequireRuntime();
     }
-
-    // Approval requests per stage of one call, including those replacing a superseded grant.
-    private const int MaxApprovalRequests = 3;
 
     // Audit evidence of what a call resolved to. Display data, never routing or policy authority.
     // The action and argument summary let the activity index read a tool row on its own.

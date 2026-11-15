@@ -55,12 +55,6 @@ internal sealed class ToolApprovalScope(SessionOwner owner)
             grants.Add(grant);
     }
 
-    internal void Remove(ToolApprovalGrant grant)
-    {
-        lock (grants)
-            grants.Remove(grant);
-    }
-
     // Set when the invocation dispatches its call. An approved call that never dispatched is
     // recorded as not started.
     internal bool Dispatched { get; set; }
