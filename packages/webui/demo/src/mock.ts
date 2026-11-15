@@ -116,6 +116,43 @@ export function createDemoServer(snapshot: DemoSnapshot) {
     return { ...page, messages, firstSeq: messages.length ? seqOf(messages[0]) : undefined, lastSeq: messages.length ? seqOf(messages[messages.length - 1]) : undefined, hasMore: false }
   }
 
+  // The recording holds the default (tree) Sidebar; the Time and Flat modes are computed from
+  // its rows the way the server orders them. Phones open the Flat mode by default.
+  const compareIds = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0
+  const listKey = (row: Json, activity: boolean) => [
+    row.pinned ? 0 : 1,
+    row.archived ? 1 : 0,
+    -(activity ? Math.max(row.lastMessageTime || 0, row.subtreeActivityTime || 0) : row.lastMessageTime || 0),
+  ]
+  const byListKey = (activity: boolean) => (a: Json, b: Json) => {
+    const left = listKey(a, activity)
+    const right = listKey(b, activity)
+    for (let index = 0; index < left.length; index++) if (left[index] !== right[index]) return left[index] - right[index]
+    return compareIds(a.id, b.id)
+  }
+  function computedSidebar(params: URLSearchParams): Json | null {
+    const mode = params.get('mode')
+    if (mode !== 'time' && mode !== 'flat-time') return null
+    const recordedParams = new URLSearchParams(params)
+    recordedParams.set('mode', 'default')
+    const sidebar = getIndex.get('/session-list/sidebar')
+    let recorded = sidebar?.get(sortedQuery(recordedParams))
+    if (!recorded) {
+      recordedParams.delete('focusSessionId')
+      recorded = sidebar?.get(sortedQuery(recordedParams))
+    }
+    if (!recorded || recorded.status !== 200) return null
+    const limit = Number(params.get('limit')) || 50
+    if (mode === 'time') {
+      const sessions = [...recorded.body.sessions].sort(byListKey(true)).slice(0, limit)
+      const children = recorded.body.children.map((group: Json) => ({ ...group, sessions: [...group.sessions].sort(byListKey(true)) }))
+      return { ...recorded.body, mode, sessions, children }
+    }
+    // Flat lists every Session at the top level by its own last message time.
+    const sessions = snapshot.sessions.map(id => snapshot.rows[id]).filter(Boolean).sort(byListKey(false)).slice(0, limit)
+    return { ...recorded.body, mode, scope: 'flat', sessions, children: [], nextCursor: null }
+  }
+
   function answerGet(url: URL): Response {
     const path = url.pathname.slice(apiBase.length)
     if (path === '/auth/session') return json({ role: 'admin' })
@@ -131,6 +168,10 @@ export function createDemoServer(snapshot: DemoSnapshot) {
     if (history && url.searchParams.has('tail')) {
       const entry = getIndex.get(path)?.get('tail=100')
       if (entry) return json(entry.body, entry.status)
+    }
+    if (path === '/session-list/sidebar') {
+      const computed = computedSidebar(url.searchParams)
+      if (computed) return json(computed)
     }
     if (path === '/session-list/sidebar' || path === '/session-list/architecture') {
       const params = new URLSearchParams(url.searchParams)
