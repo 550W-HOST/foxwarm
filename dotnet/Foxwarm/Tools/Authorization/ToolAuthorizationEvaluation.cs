@@ -168,7 +168,21 @@ internal enum CreationTargetDecision
     Indeterminate,
 }
 
-internal sealed record CreationTargetOutcome(CreationTargetDecision Decision, JsonObject? Rule);
+// One effect a creation-target evaluation took into account: a matching rule (null for the
+// default action) and whether it depends on arguments known only when the Session is created.
+internal sealed record CreationContribution(
+    JsonObject? Rule,
+    ToolAuthorizationEffect Effect,
+    bool Conditional
+);
+
+// The creation-target decision, the rule traversal stopped at (null for the default action) and
+// every effect that made up the decision, in policy order; the last is never conditional.
+internal sealed record CreationTargetOutcome(
+    CreationTargetDecision Decision,
+    JsonObject? Rule,
+    IReadOnlyList<CreationContribution> Contributions
+);
 
 // How a layer decided the secret facts of a call: by the first matching rule with a `secrets`
 // selector; otherwise allowed when the caller's Agent owns every one of them; otherwise by the
@@ -415,8 +429,8 @@ internal static class ToolAuthorizationEvaluation
         ToolAuthorizationRequest request
     ) => EvaluateCreationTargetOutcome(policy, request).Decision;
 
-    // The creation-target decision and the rule it was settled at: the first matching rule
-    // whose conditions are all known, or null when the default action settled it.
+    // The creation-target decision with the rule traversal stopped at (the first matching rule
+    // whose conditions are all known, or null for the default action) and every contribution.
     internal static CreationTargetOutcome EvaluateCreationTargetOutcome(
         ToolAuthorizationPolicy policy,
         ToolAuthorizationRequest request
@@ -431,6 +445,7 @@ internal static class ToolAuthorizationEvaluation
         var allow = false;
         var ask = false;
         var deny = false;
+        var contributions = new List<CreationContribution>();
         CreationTargetDecision Outcome() =>
             allow && (ask || deny) ? CreationTargetDecision.Indeterminate
             : allow ? CreationTargetDecision.Allow
@@ -464,14 +479,16 @@ internal static class ToolAuthorizationEvaluation
             allow |= effect == ToolAuthorizationEffect.Allow;
             ask |= effect == ToolAuthorizationEffect.Ask;
             deny |= effect == ToolAuthorizationEffect.Deny;
+            contributions.Add(new(rule, effect, unknown));
             if (!unknown)
-                return new(Outcome(), rule);
+                return new(Outcome(), rule, contributions);
         }
         var fallback = Default(policy, request);
         allow |= fallback == ToolAuthorizationEffect.Allow;
         ask |= fallback == ToolAuthorizationEffect.Ask;
         deny |= fallback == ToolAuthorizationEffect.Deny;
-        return new(Outcome(), null);
+        contributions.Add(new(null, fallback, false));
+        return new(Outcome(), null, contributions);
     }
 
     // Whether the caller may run any command in any directory on master. Rules that depend on
@@ -801,9 +818,51 @@ internal static class ToolAuthorizationEvaluation
             );
 }
 
+// A path explain would have to inspect on master that this explanation has not inspected yet.
+internal sealed class PathNotEstablishedException(string path)
+    : Exception($"its path facts are not established by the probe (`{path}`)");
+
+// Explain's record of master path inspection. While recording, each canonical result is kept;
+// while replaying, a recorded path returns its recorded result and any other path raises
+// PathNotEstablishedException without being inspected. Outside explain there is no record.
+internal sealed class PathInspectionRecord
+{
+    internal readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> Inspected =
+        new(StringComparer.Ordinal);
+}
+
 internal static class AuthorizationPaths
 {
+    private static readonly AsyncLocal<(PathInspectionRecord Record, bool Replay)?> inspection =
+        new();
+
+    // Records (or replays) inspection in the current flow until disposed.
+    internal static IDisposable Inspecting(PathInspectionRecord record, bool replay)
+    {
+        var previous = inspection.Value;
+        inspection.Value = (record, replay);
+        return new Restore(() => inspection.Value = previous);
+    }
+
+    private sealed class Restore(Action restore) : IDisposable
+    {
+        public void Dispose() => restore();
+    }
+
     internal static string CanonicalPotential(string path)
+    {
+        if (inspection.Value is not { } current)
+            return Inspect(path);
+        if (current.Replay)
+            return current.Record.Inspected.TryGetValue(path, out var known)
+                ? known
+                : throw new PathNotEstablishedException(path);
+        var result = Inspect(path);
+        current.Record.Inspected[path] = result;
+        return result;
+    }
+
+    private static string Inspect(string path)
     {
         var seen = new HashSet<string>(StringComparer.Ordinal);
         string Resolve(string candidate)

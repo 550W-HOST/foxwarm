@@ -142,24 +142,78 @@ internal static class OperationAttribution
         return $"{who} denied {what}, called as `{Invocation(call)}`.";
     }
 
-    // The attribution of a refused timer creation target, in the form of a rule denial.
+    // What a creation-target outcome is attributed to. A deny or ask the stopping rule (or
+    // default) gives itself is definite. Otherwise the outcome is conservative: the rules that
+    // contributed the deny or ask are named, never an allowing rule or default.
+    internal static (IReadOnlyList<CreationContribution> Causes, bool Conservative) CreationCauses(
+        CreationTargetOutcome outcome
+    )
+    {
+        var settling = outcome.Contributions[^1];
+        var effect = outcome.Decision switch
+        {
+            CreationTargetDecision.Deny => ToolAuthorizationEffect.Deny,
+            CreationTargetDecision.Ask => ToolAuthorizationEffect.Ask,
+            CreationTargetDecision.Allow => ToolAuthorizationEffect.Allow,
+            _ => (ToolAuthorizationEffect?)null,
+        };
+        if (effect is { } definite && settling.Effect == definite)
+            return ([settling], false);
+        return (
+            outcome
+                .Contributions.Where(item =>
+                    effect is { } wanted
+                        ? item.Effect == wanted
+                        : item.Effect != ToolAuthorizationEffect.Allow
+                )
+                .ToArray(),
+            true
+        );
+    }
+
+    // The attribution of a refused timer creation target: one sentence naming what denied it,
+    // required approval, or may do either depending on arguments known only at creation.
     internal static string CreationTarget(
         ResolvedTool? primary,
         string? layer,
         ToolAuthorizationPolicy policy,
-        JsonObject? rule
-    ) =>
-        (
-            rule is null
-                ? $"The default action of {LayerName(layer)}"
-                : $"{RuleName(policy, rule)} in {LayerName(layer)}"
-        )
-        + " denied the create_session creation target (`builtin:create_session`)"
-        + (
-            primary is null
-                ? "."
-                : $" for `{OperationPlan.CapabilityId(primary)}`, called as `{Invocation(primary)}`."
-        );
+        CreationTargetOutcome outcome
+    )
+    {
+        var (causes, conservative) = CreationCauses(outcome);
+        var rules = causes
+            .Where(item => item.Rule is not null)
+            .Select(item => RuleName(policy, item.Rule!))
+            .ToArray();
+        var fallback = causes.Any(item => item.Rule is null);
+        var listed = rules.Length switch
+        {
+            0 => "",
+            1 => rules[0],
+            _ => "Rules "
+                + string.Join(", ", rules[..^1].Select(name => name["Rule ".Length..]))
+                + " and "
+                + rules[^1]["Rule ".Length..],
+        };
+        var who =
+            rules.Length == 0 ? $"The default action of {LayerName(layer)}"
+            : fallback ? $"{listed} in {LayerName(layer)} and its default action"
+            : $"{listed} in {LayerName(layer)}";
+        var deny = causes.Any(item => item.Effect == ToolAuthorizationEffect.Deny);
+        var ask = causes.Any(item => item.Effect == ToolAuthorizationEffect.Ask);
+        var verb =
+            !conservative ? (deny ? "denied" : "requires approval for")
+            : deny && ask ? "may deny or require approval for"
+            : deny ? "may deny"
+            : "may require approval for";
+        return $"{who} {verb} the create_session creation target (`builtin:create_session`)"
+            + (conservative ? ", depending on arguments known only when the Session is created" : "")
+            + (
+                primary is null ? "."
+                : (conservative ? "," : "")
+                    + $" for `{OperationPlan.CapabilityId(primary)}`, called as `{Invocation(primary)}`."
+            );
+    }
 
     internal static string Append(string message, string attribution) =>
         message.TrimEnd() is var trimmed && trimmed.Length > 0
@@ -179,8 +233,9 @@ internal static class OperationAttribution
         return result;
     }
 
-    // One layer of a creation-target probe: its decision and the rule that settled it, or null
-    // with the default action.
+    // One layer of a creation-target probe: its decision and the rule (or default) it is
+    // attributed to. A conservative outcome lists, as rules and default, every contribution of
+    // its deny or ask instead.
     internal static JsonObject CreationLayer(
         string? layer,
         ToolAuthorizationPolicy policy,
@@ -192,7 +247,29 @@ internal static class OperationAttribution
             ["layer"] = layer is null ? "global" : "agent:" + layer,
             ["decision"] = outcome.Decision.ToString().ToLowerInvariant(),
         };
-        RuleReference(result, policy, outcome.Rule);
+        var (causes, conservative) = CreationCauses(outcome);
+        if (!conservative)
+        {
+            RuleReference(result, policy, causes[0].Rule);
+            return result;
+        }
+        result["conservative"] = true;
+        result["rules"] = new JsonArray(
+            causes
+                .Where(item => item.Rule is not null)
+                .Select(item =>
+                    (JsonNode?)
+                        new JsonObject
+                        {
+                            ["index"] = policy.Value["rules"]!.AsArray().IndexOf(item.Rule!) + 1,
+                            ["id"] = item.Rule!["id"]?.DeepClone(),
+                            ["action"] = AuthorizationDecision.Name(item.Effect),
+                        }
+                )
+                .ToArray()
+        );
+        if (causes.Any(item => item.Rule is null))
+            result["default"] = policy.Value["defaultAction"]?.DeepClone();
         return result;
     }
 

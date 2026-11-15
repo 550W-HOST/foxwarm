@@ -116,18 +116,48 @@ public sealed partial class OperationAttributionTests
                 "version: 1\ndefaultAction: deny\nrules:\n- id: other\n  tool: {source: builtin, name: wait}\n  action: allow\n- id: no-new-session\n  tool: {source: builtin, name: create_session}\n  action: deny\n"
             )
         );
+        var first = creation.Value["rules"]![0]!.AsObject();
+        var second = creation.Value["rules"]![1]!.AsObject();
+        const ToolAuthorizationEffect Deny = ToolAuthorizationEffect.Deny;
+        const ToolAuthorizationEffect Ask = ToolAuthorizationEffect.Ask;
+        static CreationTargetOutcome Settled(JsonObject? rule, ToolAuthorizationEffect effect) =>
+            new(
+                effect == ToolAuthorizationEffect.Deny
+                    ? CreationTargetDecision.Deny
+                    : CreationTargetDecision.Ask,
+                rule,
+                [new(rule, effect, false)]
+            );
         Assert.Equal(
             "Rule `no-new-session` (#2) in the rules of Agent `alpha` denied the create_session creation target (`builtin:create_session`) for `builtin:create_timer`, called as `create_timer`.",
-            OperationAttribution.CreationTarget(
-                timer,
-                "alpha",
-                creation,
-                creation.Value["rules"]![1]!.AsObject()
-            )
+            OperationAttribution.CreationTarget(timer, "alpha", creation, Settled(second, Deny))
         );
         Assert.Equal(
             "The default action of the global policy denied the create_session creation target (`builtin:create_session`).",
-            OperationAttribution.CreationTarget(null, null, creation, null)
+            OperationAttribution.CreationTarget(null, null, creation, Settled(null, Deny))
+        );
+        // Conservative outcomes name only the rules (and default) contributing the deny or ask.
+        Assert.Equal(
+            "Rules `other` (#1) and `no-new-session` (#2) in the global policy and its default action may deny or require approval for the create_session creation target (`builtin:create_session`), depending on arguments known only when the Session is created, for `builtin:create_timer`, called as `create_timer`.",
+            OperationAttribution.CreationTarget(
+                timer,
+                null,
+                creation,
+                new(
+                    CreationTargetDecision.Indeterminate,
+                    null,
+                    [new(first, Deny, true), new(second, Ask, true), new(null, Deny, false)]
+                )
+            )
+        );
+        Assert.Equal(
+            "The default action of the global policy requires approval for the create_session creation target (`builtin:create_session`).",
+            OperationAttribution.CreationTarget(
+                null,
+                null,
+                creation,
+                new(CreationTargetDecision.Ask, null, [new(first, Ask, true), new(null, Ask, false)])
+            )
         );
         Assert.Equal(
             "no exec for beta. Rule x.",

@@ -218,10 +218,15 @@ internal sealed partial class SessionManager
                 : "ctl tool call";
             var files = IdentityWorkspace(target);
             var explained = new List<(string Name, ExplainedVariant Variant)>();
-            foreach (var (name, policy) in variants)
-                explained.Add(
-                    (name, await ExplainVariantAsync(target, resolved, files, policy, token))
-                );
+            // The probe's own assessment inspects master paths as it always has; the record keeps
+            // what it inspected, and the additions below may use only that.
+            var inspected = new PathInspectionRecord();
+            using (AuthorizationPaths.Inspecting(inspected, replay: false))
+                foreach (var (name, policy) in variants)
+                    explained.Add(
+                        (name, await ExplainVariantAsync(target, resolved, files, policy, token))
+                    );
+            using var replay = AuthorizationPaths.Inspecting(inspected, replay: true);
             // Each policy variant has its own plan, from the facts its own assessment established
             // (a candidate policy can allow a read that reveals more facts); the plan reads
             // nothing itself.
@@ -393,25 +398,30 @@ internal sealed partial class SessionManager
                 if (obligation.Kind != ObligationKind.Primary)
                     entry["sameAs"] = "primary";
             }
-            else if (obligation.Request is { } request)
-                entry = Unadmitted(request, primary, out var reused) is { } reason
-                    ? new JsonObject
-                    {
-                        ["id"] = obligation.Id,
-                        ["evaluated"] = false,
-                        ["reason"] = reason,
-                    }
-                    : await ExplainObligationAsync(
-                        target,
-                        obligation,
-                        request,
-                        files,
-                        global,
-                        reused,
-                        token
-                    );
-            else if (obligation.CreationAgent is { } agent)
-                entry = ExplainCreationTarget(target, obligation, agent, global);
+            else if (obligation.Request is not null || obligation.CreationAgent is not null)
+                // An addition never changes or fails the probe's result: whatever stops it is
+                // reported as this obligation's reason.
+                try
+                {
+                    entry =
+                        obligation.Request is { } request
+                            ? Unadmitted(request, primary, out var reused) is { } reason
+                                ? NotEvaluated(obligation, reason)
+                                : await ExplainObligationAsync(
+                                    target,
+                                    obligation,
+                                    request,
+                                    files,
+                                    global,
+                                    reused,
+                                    token
+                                )
+                            : ExplainCreationTarget(target, obligation, obligation.CreationAgent!, global);
+                }
+                catch (Exception error) when (error is not OperationCanceledException)
+                {
+                    entry = NotEvaluated(obligation, error.Message);
+                }
             else
                 entry = new JsonObject
                 {
@@ -423,6 +433,14 @@ internal sealed partial class SessionManager
         }
         return results;
     }
+
+    private static JsonObject NotEvaluated(PlannedObligation obligation, string? reason) =>
+        new()
+        {
+            ["id"] = obligation.Id,
+            ["evaluated"] = false,
+            ["reason"] = reason,
+        };
 
     private async Task<JsonObject> ExplainObligationAsync(
         SessionOwner target,
@@ -450,11 +468,6 @@ internal sealed partial class SessionManager
                 ["deniedBy"] = "precheck",
                 ["precheck"] = denied.Message,
             };
-        }
-        catch (Exception error)
-            when (error is InvalidDataException or InvalidOperationException or NotSupportedException)
-        {
-            return new JsonObject { ["id"] = obligation.Id, ["error"] = error.Message };
         }
     }
 

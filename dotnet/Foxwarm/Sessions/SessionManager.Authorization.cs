@@ -487,8 +487,8 @@ internal sealed partial class SessionManager
         );
         var layers = EffectiveLayers(source.Agent, await authorization.LoadAsync(token));
         var primary = OperationAttribution.Primary(source);
-        (string? Layer, ToolAuthorizationPolicy Policy, JsonObject? Rule)? indeterminate = null;
-        (string? Layer, ToolAuthorizationPolicy Policy, JsonObject? Rule)? ask = null;
+        (string? Layer, ToolAuthorizationPolicy Policy, CreationTargetOutcome Outcome)? indeterminate = null;
+        (string? Layer, ToolAuthorizationPolicy Policy, CreationTargetOutcome Outcome)? ask = null;
         foreach (var (layer, policy) in layers)
         {
             var outcome = ToolAuthorizationEvaluation.EvaluateCreationTargetOutcome(policy, request);
@@ -497,13 +497,13 @@ internal sealed partial class SessionManager
                 throw new ToolAuthorizationDeniedException(
                     OperationAttribution.Append(
                         $"Tool authorization rules deny creating a Session in Agent '{agent}'.",
-                        OperationAttribution.CreationTarget(primary, layer, policy, outcome.Rule)
+                        OperationAttribution.CreationTarget(primary, layer, policy, outcome)
                     )
                 );
             if (decision == CreationTargetDecision.Indeterminate)
-                indeterminate ??= (layer, policy, outcome.Rule);
+                indeterminate ??= (layer, policy, outcome);
             if (decision == CreationTargetDecision.Ask)
-                ask ??= (layer, policy, outcome.Rule);
+                ask ??= (layer, policy, outcome);
         }
         if (indeterminate is { } unsettled)
             throw new ToolAuthorizationDeniedException(
@@ -514,7 +514,7 @@ internal sealed partial class SessionManager
                         primary,
                         unsettled.Layer,
                         unsettled.Policy,
-                        unsettled.Rule
+                        unsettled.Outcome
                     )
                 )
             );
@@ -527,7 +527,7 @@ internal sealed partial class SessionManager
                         primary,
                         asking.Layer,
                         asking.Policy,
-                        asking.Rule
+                        asking.Outcome
                     )
                 )
             );

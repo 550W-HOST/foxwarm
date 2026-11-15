@@ -130,12 +130,26 @@ internal static class ToolAuthorizationExplain
         var layer = (deciding["layers"] as JsonArray)
             ?.OfType<JsonObject>()
             .FirstOrDefault(item => SessionWait.Text(item["decision"]) == decision);
-        result["obligation"] = new JsonObject
+        var entry = new JsonObject
         {
             ["id"] = deciding["id"]?.DeepClone(),
             ["decision"] = decision,
-            ["rule"] = layer?["rule"]?["id"]?.DeepClone(),
         };
+        if (layer?["conservative"] is not null)
+        {
+            // A conservative creation target lists the IDs of the rules that contributed.
+            entry["conservative"] = true;
+            entry["rules"] = new JsonArray(
+                (layer["rules"] as JsonArray ?? [])
+                    .Select(item => item?["id"]?.DeepClone())
+                    .ToArray()
+            );
+            if (layer["default"] is { } fallback)
+                entry["default"] = fallback.DeepClone();
+        }
+        else
+            entry["rule"] = layer?["rule"]?["id"]?.DeepClone();
+        result["obligation"] = entry;
     }
 
     private static JsonNode? RuleId(JsonObject rule) => rule["id"]?.DeepClone();
