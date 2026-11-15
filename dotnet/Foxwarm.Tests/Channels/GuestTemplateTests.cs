@@ -79,9 +79,32 @@ public sealed class GuestTemplateTests
         // One edit of the template updates every guest.
         await f.Manager.SetAgentRulesAsync(
             "guest",
+            new JsonArray(
+                new JsonObject
+                {
+                    ["id"] = "allow-agents",
+                    ["action"] = "allow",
+                    ["match"] = new JsonObject
+                    {
+                        ["tool"] = new JsonObject
+                        {
+                            ["source"] = "builtin",
+                            ["name"] = "list_agents",
+                        },
+                    },
+                },
+                new JsonObject { ["id"] = "guest-deny", ["action"] = "deny" }
+            )
+        );
+        Assert.True(await Allowed(f.Manager, created, "list_agents"));
+        await f.Manager.SetAgentRulesAsync(
+            "guest",
             new JsonArray(new JsonObject { ["id"] = "guest-deny", ["action"] = "deny" })
         );
-        Assert.False(await Allowed(f.Manager, created, "wait"));
+        Assert.False(await Allowed(f.Manager, created, "list_agents"));
+        // wait acts only on the guest's own turn: no rule denies it (operation authorization
+        // phase 3 self exemption).
+        Assert.True(await Allowed(f.Manager, created, "wait"));
     }
 
     [Fact]

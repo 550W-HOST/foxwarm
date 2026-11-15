@@ -385,14 +385,14 @@ public sealed partial class ToolAuthorizationEffectsTests
             )
         );
         Assert.Equal("compare", result["policy"]!.GetValue<string>());
-        var wait = result["probes"]![0]!;
-        Assert.True(wait["active"]!["allowed"]!.GetValue<bool>());
-        Assert.False(wait["candidate"]!["allowed"]!.GetValue<bool>());
+        var listed = result["probes"]![0]!;
+        Assert.True(listed["active"]!["allowed"]!.GetValue<bool>());
+        Assert.False(listed["candidate"]!["allowed"]!.GetValue<bool>());
         Assert.Equal(
             "alpha-no-list",
-            wait["candidate"]!["layers"]![0]!["rule"]!["id"]!.GetValue<string>()
+            listed["candidate"]!["layers"]![0]!["rule"]!["id"]!.GetValue<string>()
         );
-        Assert.True(wait["changed"]!.GetValue<bool>());
+        Assert.True(listed["changed"]!.GetValue<bool>());
         var exec = result["probes"]![1]!;
         Assert.False(exec["changed"]!.GetValue<bool>());
         Assert.Equal(2, exec["candidate"]!["layers"]![0]!["rule"]!["index"]!.GetValue<int>());

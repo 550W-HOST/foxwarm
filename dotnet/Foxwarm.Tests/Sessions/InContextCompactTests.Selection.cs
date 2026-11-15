@@ -230,22 +230,61 @@ public sealed partial class InContextCompactTests
         Assert.Null(fixture.Owner.Entry.LastBackgroundProcessorFailure);
     }
 
+    // submit_compact_plan compacts only the caller's own context, so a rule on it no longer
+    // applies (operation authorization phase 3). The hidden opt-in still bypasses nothing that
+    // stays authorizable: reading the plan file is a gated node:read obligation.
     [Fact]
     public async Task Hidden_opt_in_does_not_bypass_the_existing_tool_policy()
     {
+        const string DenyPlan =
+            "{id: deny-plan, action: deny, match: {tool: {source: builtin, name: submit_compact_plan}}}";
+        await using (
+            var self = await Fixture.CreateAsync(
+                2,
+                (f, index, _) =>
+                    Task.FromResult(
+                        index == 0
+                            ? new JsonArray(Call("self", "submit_compact_plan", Plan()))
+                            : Final()
+                    )
+            )
+        )
+        {
+            await File.WriteAllTextAsync(
+                Path.Combine(self.Data, "state", "tool-authorization.yaml"),
+                "version: 1\nrules: [" + DenyPlan + "]\n"
+            );
+            self.Manager.Authorization.Invalidate();
+            await self.RunAsync();
+            var response = self.ToolResponse("self")["response"]!;
+            Assert.Null(response["error"]);
+            Assert.True(response["accepted"]!.GetValue<bool>());
+            Assert.Equal(1, self.Owner.Entry.Snapshot().HistoryVersion);
+        }
+
         await using var fixture = await Fixture.CreateAsync(
             2,
-            (f, index, _) =>
-                Task.FromResult(
-                    index == 0
-                        ? new JsonArray(Call("denied", "submit_compact_plan", Plan()))
-                        : Final()
-                )
+            async (f, index, _) =>
+            {
+                if (index > 0)
+                    return Final();
+                await File.WriteAllTextAsync(Path.Combine(f.Work, "plan.json"), Plan().ToJsonString());
+                return new JsonArray(
+                    Call(
+                        "denied",
+                        "submit_compact_plan",
+                        new JsonObject
+                        {
+                            ["inContext"] = true,
+                            ["argsFilePath"] = Path.Combine(f.Work, "plan.json"),
+                        }
+                    )
+                );
+            }
         );
-        var policy = Path.Combine(fixture.Data, "state", "tool-authorization.yaml");
         await File.WriteAllTextAsync(
-            policy,
-            "version: 1\nrules: [{id: deny-plan, action: deny, match: {tool: {source: builtin, name: submit_compact_plan}}}]\n"
+            Path.Combine(fixture.Data, "state", "tool-authorization.yaml"),
+            "version: 1\nrules: [{id: deny-read, action: deny, match: {tool: {source: node, name: read}}}]\n"
         );
         fixture.Manager.Authorization.Invalidate();
         await fixture.RunAsync();
