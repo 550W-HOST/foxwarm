@@ -112,6 +112,8 @@ Less frequently used builtins, MCP tools, and node tools are discovered through 
 
 [2026-11-06] Discovery without `server` lists at most six servers concurrently under one 15-second deadline shared by the whole search; a server still waiting or listing at the deadline is cancelled and reported as an ordinary per-server warning that suggests passing `server`. Results and warnings keep server order. Searching one named server keeps the [60-second per-request discovery timeout](../units/mcp.md#connection-and-cancellation-contract). There is no discovery cache; per-Session connection ownership is unchanged.
 
+[2026-11-15] The text rendering, matching and schema default above are superseded by [discovery rendering](../units/ctl-command-registry.md#discovery-rendering) (user decision): builtins with commands are listed as commands, declared tools by name, MCP and Node tools by tool ID and one-line summary; matching is on whole words with names weighted above descriptions; text shows argument types only with `--schema`, while programmatic callers keep receiving `inputSchema` unless they pass `--no-schema`. Budgets, visibility, the server prefilter and the broad MCP deadline are unchanged.
+
 Agent-level authorization and filtered discovery are canonical in [D-dispatch-exact-agent-tool-rules](../threads/tool-dispatch-authorization.md#d-dispatch-exact-agent-tool-rules).
 
 ### D-tools-write-parent-policy

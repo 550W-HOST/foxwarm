@@ -6,17 +6,6 @@ using Foxwarm.Sessions;
 
 namespace Foxwarm.Tools;
 
-internal sealed record SearchTool(
-    string Source,
-    string Name,
-    string Description,
-    JsonNode? Schema,
-    string? Scope,
-    bool Hidden,
-    int Score,
-    JsonNode? OutputSchema = null
-);
-
 internal static partial class UnifiedTools
 {
     internal static async Task<JsonObject> SearchAsync(
@@ -47,7 +36,11 @@ internal static partial class UnifiedTools
             throw new InvalidDataException(
                 "Invalid sources. Supported sources: builtin, mcp, node."
             );
-        var schema = args["includeSchema"] is null || args["includeSchema"]!.GetValue<bool>();
+        // Text shows argument schemas only when asked; programs keep receiving them unless
+        // they opt out.
+        var schema = args["includeSchema"] is null
+            ? budget is not null
+            : args["includeSchema"]!.GetValue<bool>();
         var numeric = SessionWait.Number(args["limit"]);
         if (
             numeric is null
@@ -64,28 +57,58 @@ internal static partial class UnifiedTools
             numeric is double number && double.IsFinite(number)
                 ? (int)Math.Clamp(Math.Truncate(number), 1, 200)
                 : 5;
+        var currentNode = CurrentNode(owner);
+        var external =
+            owner?.Entry.WithState(state => ClaudeRuntimeState.IsExternal(state.AuthorityEnvelope))
+            == true;
         var collected = new List<SearchTool>();
         var warnings = new List<string>();
+        // Natively declared Node tools (read, write, edit, exec) run on the current Node; they
+        // are listed once, as declared tools, rather than also as tools of the current Node.
+        var declaredNode = DeclaredNodeTools(registry);
         foreach (
             var entry in registry.Entries.Where(entry =>
                 entry.Definition["name"]!.GetValue<string>() != "ctl"
-                && sources.Contains(entry.Source)
             )
         )
         {
-            if (entry.Source == "node")
+            var nodeTool = entry.Source == "node";
+            if (
+                nodeTool
+                    ? !entry.DefaultInject || !sources.Contains("builtin") && !sources.Contains("node")
+                    : entry.Source != "builtin" || !sources.Contains("builtin")
+            )
                 continue;
-            var definition =
-                owner?.Entry.WithState(state =>
-                    ClaudeRuntimeState.IsExternal(state.AuthorityEnvelope)
-                ) == true
-                    ? ClaudeRuntimeToolSupport.Project(entry.Definition)
-                    : entry.Definition;
+            var definition = external
+                ? ClaudeRuntimeToolSupport.Project(entry.Definition)
+                : entry.Definition;
             var name = SessionWait.Text(definition["name"])!;
             var description = SessionWait.Text(definition["description"]) ?? "";
-            if (visible is not null && !visible(entry.Source, name, null))
+            if (
+                visible is not null
+                && !visible(entry.Source, name, nodeTool ? currentNode : null)
+            )
                 continue;
-            var score = Score(query, name, description);
+            var commands = nodeTool ? [] : CommandMatches(query, name).ToArray();
+            if (commands.Length > 0 || !nodeTool && CtlRegistry.ForTarget("builtin", name).Any())
+            {
+                foreach (var (command, commandScore) in commands)
+                    collected.Add(
+                        new(
+                            entry.Source,
+                            name,
+                            description,
+                            definition["parameters"],
+                            null,
+                            !entry.DefaultInject,
+                            commandScore,
+                            Kind: SearchKinds.Command,
+                            Command: command
+                        )
+                    );
+                continue;
+            }
+            var score = Score(query, [name], [description]);
             if (score >= 0)
                 collected.Add(
                     new(
@@ -93,9 +116,12 @@ internal static partial class UnifiedTools
                         name,
                         description,
                         definition["parameters"],
-                        null,
+                        nodeTool ? currentNode : null,
                         !entry.DefaultInject,
-                        score
+                        score,
+                        // A builtin without a command or declaration is still listed by its
+                        // tool ID; the registry coverage test keeps real builtins out of this.
+                        Kind: entry.DefaultInject ? SearchKinds.Declared : SearchKinds.Tool
                     )
                 );
         }
@@ -103,21 +129,17 @@ internal static partial class UnifiedTools
         {
             try
             {
-                var nodeId = ToolRegistry.TargetNode(
-                    ToolRegistry.Text(args, "nodeId"),
-                    owner is null
-                        ? "master"
-                        : SessionWait.Text(owner.Entry.Snapshot().AuthorityEnvelope["currentNode"])
-                            ?? "master"
-                );
+                var nodeId = ToolRegistry.TargetNode(ToolRegistry.Text(args, "nodeId"), currentNode);
                 await registry.RefreshNodeAsync(nodeId, token);
                 foreach (var definition in registry.NodeDefinitions(nodeId).OfType<JsonObject>())
                 {
                     var name = SessionWait.Text(definition["name"])!;
                     var description = SessionWait.Text(definition["description"]) ?? "";
+                    if (nodeId == currentNode && declaredNode.Contains(name))
+                        continue;
                     if (visible is not null && !visible("node", name, nodeId))
                         continue;
-                    var score = Score(query, name, description, nodeId);
+                    var score = Score(query, [name], [description, nodeId]);
                     if (score >= 0)
                         collected.Add(
                             new(
@@ -184,7 +206,7 @@ internal static partial class UnifiedTools
                         var description = SessionWait.Text(tool["description"]) ?? "";
                         if (visible is not null && !visible("mcp", name, server))
                             continue;
-                        var score = Score(query, name, description, server);
+                        var score = Score(query, [name], [description, server]);
                         if (score >= 0)
                             collected.Add(
                                 new(
@@ -214,14 +236,7 @@ internal static partial class UnifiedTools
                 }
             }
         }
-        var comparer = StringComparer.Create(CultureInfo.GetCultureInfo("en-US"), false);
-        var sorted = collected
-            .OrderByDescending(tool => tool.Score)
-            .ThenBy(tool => tool.Source, comparer)
-            .ThenBy(tool => tool.Scope ?? "", comparer)
-            .ThenBy(tool => tool.Name, comparer)
-            .Take(limit)
-            .ToArray();
+        var sorted = Rank(collected).Take(limit).ToArray();
         var response = budget is null
             ? new JsonObject { ["output"] = Render(sorted, collected.Count, warnings, schema) }
             : new JsonObject();
@@ -248,6 +263,7 @@ internal static partial class UnifiedTools
                     row["nodeId"] = tool.Scope;
                 else if (tool.Source == "mcp")
                     row["server"] = tool.Scope;
+                Describe(row, tool);
                 if (schema && index < 10 && tool.Schema is not null)
                     row["inputSchema"] = tool.Schema.DeepClone();
                 if (schema && index < 10 && tool.OutputSchema is not null)
@@ -338,90 +354,17 @@ internal static partial class UnifiedTools
         return results;
     }
 
-    internal static int Score(string query, params string[] fields)
-    {
-        query = query.Trim().ToLowerInvariant();
-        if (query.Length == 0)
-            return 0;
-        var terms = Regex.Split(query, "\\s+").Distinct(StringComparer.Ordinal).ToArray();
-        var normalized = fields.Select(field => field.ToLowerInvariant()).ToArray();
-        var primary = normalized[0];
-        var score =
-            primary == query ? 400
-            : primary.StartsWith(query, StringComparison.Ordinal) ? 260
-            : primary.Contains(query, StringComparison.Ordinal) ? 180
-            : normalized.Any(field => field.Contains(query, StringComparison.Ordinal)) ? 120
-            : 0;
-        var matches = 0;
-        foreach (var term in terms)
-            for (var index = 0; index < normalized.Length; index++)
-                if (normalized[index].Contains(term, StringComparison.Ordinal))
-                {
-                    matches++;
-                    score += index == 0 ? 40 : 24;
-                    if (normalized[index].StartsWith(term, StringComparison.Ordinal))
-                        score += index == 0 ? 16 : 8;
-                    break;
-                }
-        return matches == 0
-            ? -1
-            : score + matches * 12 + (matches == terms.Length && terms.Length > 1 ? 90 : 0);
-    }
+    internal static string CurrentNode(SessionOwner? owner) =>
+        owner is null
+            ? "master"
+            : SessionWait.Text(owner.Entry.Snapshot().AuthorityEnvelope["currentNode"]) ?? "master";
 
-    private static string Render(
-        SearchTool[] tools,
-        int total,
-        IReadOnlyList<string> warnings,
-        bool schema
-    )
-    {
-        var lines = new List<string>();
-        var omitted = 0;
-        for (var index = 0; index < tools.Length; index++)
-        {
-            var tool = tools[index];
-            var type =
-                schema && index < 10 ? SchemaType(tool.Schema, 0) : "unknown /* schema omitted */";
-            var descriptor = Descriptor(tool.Source, tool.Name, tool.Scope);
-            var commands =
-                tool.Source == "builtin"
-                    ? CtlRegistry
-                        .ForTarget("builtin", tool.Name)
-                        .Where(command => command.Available(CtlRegistry.Ingress))
-                        .Select(command => command.Path)
-                        .ToArray()
-                    : [];
-            var line =
-                descriptor
-                + " args: "
-                + type
-                + " /* "
-                + Comment(tool.Description)
-                + " */"
-                + (commands.Length == 0 ? "" : " Command: " + string.Join(", ", commands) + ".");
-            if (lines.Sum(item => item.Length + 1) + line.Length > 27_800)
-            {
-                omitted++;
-                continue;
-            }
-            lines.Add(line);
-        }
-        var header =
-            $"Found {lines.Count} tool(s); {total} total match(es). Call one with `tool call <toolId> --args @args` and its arguments in values.args.";
-        if (omitted > 0)
-            lines.Add($"{omitted} selected tool(s) omitted by declaration/output limits.");
-        var builder = new StringBuilder(header + "\n\n" + string.Join('\n', lines));
-        foreach (var warning in warnings)
-        {
-            var line = "\nWarning: " + Comment(warning, 500);
-            if (builder.Length + line.Length > 31_800)
-                break;
-            builder.Append(line);
-        }
-        if (total > tools.Length)
-            builder.Append("\nIncrease limit or narrow query/source to inspect more matches.");
-        return builder.ToString();
-    }
+    // Names of the natively declared tools that run on the current Node.
+    internal static HashSet<string> DeclaredNodeTools(ToolRegistry registry) =>
+        registry
+            .Entries.Where(entry => entry.Source == "node" && entry.DefaultInject)
+            .Select(entry => entry.Definition["name"]!.GetValue<string>())
+            .ToHashSet(StringComparer.Ordinal);
 
     // How a search result names its tool for `tool call`: the tool ID when every part is a
     // plain identifier; otherwise --source/--name/--server or --node-id with ctl quoting. A

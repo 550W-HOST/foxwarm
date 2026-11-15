@@ -84,7 +84,7 @@ Do not guess a URL, executable, arguments, or authentication format. Use the MCP
 
 1. Configure or enable the server with `ctl mcp set`.
 2. Run `ctl tool search --source mcp` and, when known, `--server <name>`.
-3. Prefer the returned `toolId`, such as `mcp:example/tool_name`.
+3. Prefer the returned tool ID, such as `mcp:example/tool_name`. Results show each tool's ID and a one-line summary; `ctl tool call <tool-id> --help` shows its arguments, and `--schema` adds argument types to the search results.
 4. Run it with `ctl tool call <tool-id> --args @args`, passing the target arguments as `values.args`.
 5. If discovery fails, safely list servers and verify enabled state, transport, endpoint/command, and secret presence without exposing values.
 

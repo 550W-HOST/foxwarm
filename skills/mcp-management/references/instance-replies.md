@@ -24,7 +24,7 @@ mcp set peer --transport streamable-http --url https://peer.example.invalid/foxw
 
 This outbound update is live and needs no restart. Create or change B's identity through B's Setup Config or `set_config` with `target: config`; supported identity changes apply live when B already has an HTTP listener. The outbound update does not create the identity. Use [outbound connections](outbound.md) for safe summaries and discovery.
 
-Check `ctl mcp notifications --help` and B's `foxwarm_session` schema (`ctl tool search foxwarm_session --source mcp --server peer --limit 1`) for current options and permitted visibility.
+Check `ctl mcp notifications --help` and B's `foxwarm_session` arguments (`ctl tool call mcp:peer/foxwarm_session --help`) for current options and permitted visibility.
 
 ## 2. Start A's current-Session receiver, then send with `allowReply: true`
 

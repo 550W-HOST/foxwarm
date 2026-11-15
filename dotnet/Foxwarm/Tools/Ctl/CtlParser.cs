@@ -33,6 +33,9 @@ internal sealed record CtlSearch(CtlCommand Command, JsonObject Args) : CtlInvoc
 // `tool call`: a descriptor in the former unified-call shape (toolId/source/name/server/nodeId/args).
 internal sealed record CtlCall(CtlCommand Command, JsonObject Descriptor) : CtlInvocation;
 
+// `tool call <tool-id> --help`: the arguments and description of the tool a descriptor names.
+internal sealed record CtlToolHelp(CtlCommand Command, JsonObject Descriptor) : CtlInvocation;
+
 // A command handled by its ingress itself (Local names it), with normalized arguments.
 internal sealed record CtlLocal(CtlCommand Command, string Local, JsonObject Args) : CtlInvocation;
 
@@ -575,6 +578,22 @@ internal static partial class CtlParser
         if (help)
         {
             bound.RequireAllUsed();
+            // `tool call <tool-id> --help` describes that tool; without a tool it is the
+            // command's own help.
+            if (
+                command.Local == "tool-call"
+                && (
+                    assigned.ContainsKey("toolId")
+                    || assigned.ContainsKey("source") && assigned.ContainsKey("name")
+                )
+            )
+            {
+                var identity = new JsonObject();
+                foreach (var parameter in command.Parameters.Where(parameter => parameter.Name != "args"))
+                    if (assigned.TryGetPropertyValue(parameter.Name, out var value))
+                        SetPath(identity, parameter.Arg, value?.DeepClone());
+                return new CtlToolHelp(command, Descriptor(identity));
+            }
             return new CtlHelpRequest(command.Noun, command.Verb);
         }
         bound.RequireAllUsed();

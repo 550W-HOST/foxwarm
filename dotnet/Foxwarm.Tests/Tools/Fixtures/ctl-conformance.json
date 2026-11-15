@@ -35,6 +35,8 @@
     { "command": "help", "descriptor": null },
     { "command": "session", "descriptor": null },
     { "command": "tool search memory --source builtin", "descriptor": null },
+    { "command": "tool call mcp:srv/probe --help", "descriptor": null },
+    { "command": "tool call --help builtin:node --args @a", "values": { "a": { "action": "select" } }, "descriptor": null },
     { "command": "sesion list", "descriptor": null }
   ]
 }

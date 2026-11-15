@@ -70,7 +70,7 @@
     },
     {
       "name": "script",
-      "summary": "Inspect and cancel ToolScript runs."
+      "summary": "Start, inspect and cancel ToolScript runs."
     },
     {
       "name": "config",
@@ -86,7 +86,7 @@
     },
     {
       "name": "tool",
-      "summary": "Find and call any builtin, MCP or Node tool.",
+      "summary": "Find commands and tools; call MCP and Node tools.",
       "copy": {
         "external": "Find and call the MCP and Node tools available to this connection."
       }
@@ -3407,6 +3407,60 @@
       }
     },
     {
+      "path": "script start",
+      "summary": "Start a background ToolScript run.",
+      "help": "Retained for existing automation; for new scripts use `run_script` with mode background. Supply --code or --file-path. `ctl script get <run-id>` shows the run's progress.",
+      "ingress": [
+        "model"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "start_toolscript_run"
+      },
+      "params": [
+        {
+          "name": "code",
+          "type": "string",
+          "kind": "flag",
+          "help": "Inline ToolScript, usually @code. A defined main(args) is called automatically."
+        },
+        {
+          "name": "filePath",
+          "type": "string",
+          "kind": "flag",
+          "help": "Script path on the source Node, instead of --code."
+        },
+        {
+          "name": "node",
+          "type": "string",
+          "kind": "flag",
+          "help": "Node containing --file-path. Omit or use current for this Session's current Node."
+        },
+        {
+          "name": "args",
+          "type": "object",
+          "kind": "flag",
+          "help": "Input object available to the script as args, usually @args."
+        },
+        {
+          "name": "mode",
+          "type": "enum",
+          "values": [
+            "foreground",
+            "background"
+          ],
+          "kind": "flag",
+          "help": "Run mode. Defaults to background."
+        },
+        {
+          "name": "timeoutSecs",
+          "type": "number",
+          "kind": "flag",
+          "help": "Time budget in seconds for this run segment. Defaults to 30; a run that reaches it pauses for continue_script."
+        }
+      ]
+    },
+    {
       "path": "script list",
       "summary": "List this Session's ToolScript runs.",
       "help": "Shows each run's status and progress summary.",
@@ -3755,8 +3809,8 @@
     },
     {
       "path": "tool search",
-      "summary": "Find builtin, MCP and Node tools and their argument schemas.",
-      "help": "Matches tool names and descriptions. Results show each tool's ID, its arguments and, for builtins, the matching command. Call a result with `ctl tool call <tool-id> --args @args`.",
+      "summary": "Find commands and tools by name or description.",
+      "help": "Matches whole words in names and descriptions; results matching more words, and words in names, rank first. A builtin capability is listed as the commands that run it, a declared tool by its name, and an MCP or Node tool by its tool ID and summary. Call such a tool with `ctl tool call <tool-id> --args @args`; `ctl tool call <tool-id> --help` shows its arguments.",
       "ingress": [
         "model",
         "external"
@@ -3769,7 +3823,7 @@
           "name": "query",
           "type": "string",
           "kind": "positional",
-          "help": "Words to match in tool names and descriptions. Results matching more words rank higher. Omit to list tools.",
+          "help": "Words to match in names and descriptions. Results matching more words rank higher. Omit to list everything.",
           "variadic": true
         },
         {
@@ -3808,26 +3862,26 @@
           "arg": "includeSchema",
           "type": "boolean",
           "kind": "flag",
-          "help": "Include argument schemas for up to the first 10 results. Defaults to true; --no-schema shows short summaries."
+          "help": "Also show the argument types of MCP and Node tools, for up to the first 10 results. Defaults to false; `ctl tool call <tool-id> --help` shows one tool's arguments."
         }
       ],
       "copy": {
         "external": {
-          "summary": "Find MCP and Node tools available to this connection, with their argument schemas.",
-          "help": "Matches tool names and descriptions. The text result lists tool IDs; the structured result describes each tool. Call one with `tool call <tool-id> --args @args`.",
+          "summary": "Find commands and the MCP and Node tools available to this connection.",
+          "help": "Matches whole words in names and descriptions. Results list commands by their usage and tools by their tool ID and summary; the structured result describes each one. Call a tool with `tool call <tool-id> --args @args`; `tool call <tool-id> --help` shows its arguments.",
           "params": {
             "source": "Source to search; repeat for several. Defaults to builtin, mcp and node.",
             "nodeId": "Limit Node results to this Node.",
             "limit": "Maximum results, 1–50. Defaults to 5.",
-            "schema": "Include argument schemas. Defaults to true; --no-schema leaves them out."
+            "schema": "Include argument schemas of MCP and Node tools. Defaults to false."
           }
         }
       }
     },
     {
       "path": "tool call",
-      "summary": "Call a builtin, MCP or Node tool by its tool ID.",
-      "help": "Give a <tool-id> from `ctl tool search`, or identify the tool with --source and --name plus --server or --node-id when needed. Pass the tool's arguments as one object with --args @args. The target tool's normal checks apply.",
+      "summary": "Call an MCP or Node tool by its tool ID.",
+      "help": "Give a <tool-id> from `ctl tool search`, or identify the tool with --source and --name plus --server or --node-id when needed. Pass the tool's arguments as one object with --args @args. `ctl tool call <tool-id> --help` shows the tool's description and arguments. The target tool's normal checks apply.",
       "ingress": [
         "model",
         "external"
@@ -3840,7 +3894,7 @@
           "name": "toolId",
           "type": "string",
           "kind": "positional",
-          "help": "Tool ID from `ctl tool search`, such as builtin:session, mcp:server/tool or node:master/read."
+          "help": "Tool ID from `ctl tool search`, such as mcp:server/tool or node:master/read."
         },
         {
           "name": "source",
@@ -3881,7 +3935,7 @@
       "copy": {
         "external": {
           "summary": "Call an MCP or Node tool by its tool ID.",
-          "help": "Give a <tool-id> from `tool search`, or identify the tool with --source and --name plus --server or --node-id. Pass the tool's arguments as one object with --args @args. Permission is checked for the resolved tool, target and arguments.",
+          "help": "Give a <tool-id> from `tool search`, or identify the tool with --source and --name plus --server or --node-id. Pass the tool's arguments as one object with --args @args; `tool call <tool-id> --help` shows the tool's description and arguments. Permission is checked for the resolved tool, target and arguments.",
           "params": {
             "toolId": "Tool ID from `tool search`, such as mcp:server/tool or node:my-node/read.",
             "nodeId": "Node for `--source node`."

@@ -146,6 +146,16 @@ public sealed class InboundMcpCtlTests
             "builtin:node_pair_list",
             search["structuredContent"]!["tools"]!.AsArray().Select(tool => tool!["toolId"]!.GetValue<string>())
         );
+        // Builtins appear as their external commands; the structured rows keep the tool ID.
+        Assert.Contains("node pending — ", Text(search));
+        Assert.DoesNotContain("builtin:", Text(search));
+        Assert.DoesNotContain("tool call", Text(search));
+        var pendingRow = search["structuredContent"]!["tools"]!.AsArray().Single(tool => tool!["command"]?.GetValue<string>() == "node pending")!;
+        Assert.Equal("command", pendingRow["kind"]!.GetValue<string>());
+        Assert.False(pendingRow.AsObject().ContainsKey("inputSchema"));
+        var helped = Text(await Ctl(client, "tool call builtin:node_pair_list --help"));
+        Assert.Contains("node pending — ", helped);
+        Assert.DoesNotContain("builtin:", helped);
         Assert.Contains("Invalid tool ID", Text(await Ctl(client, "tool call builtin:session")));
         Assert.Contains("--node-id", Text(await Ctl(client, "tool call --source node --name read")));
         Assert.True(Failed(await Ctl(client, "exec result missing")));
@@ -174,5 +184,57 @@ public sealed class InboundMcpCtlTests
         }
         Assert.Equal(3, rows.Length);
         Assert.Single(rows, row => SessionWait.Text(row["outcome"]) != "ok");
+    }
+
+    // External `tool search` follows the model's rules: whole-word matches, tool IDs with a
+    // summary, schemas only with --schema, and `tool call <tool-id> --help` for arguments. The
+    // foxwarm_discover wrapper keeps its tool-ID list and default schemas.
+    [Fact]
+    public async Task Ctl_tool_search_shows_ids_and_summaries_and_tool_help()
+    {
+        await using var f = await InboundMcpFixture.CreateAsync();
+        await using var peer = await OutboundSdkPeer.StartAsync(Path.Combine(f.Temp.Path, "peer"));
+        await f.Manager.OutboundMcp.ConfigureAsync(
+            new JsonObject
+            {
+                ["name"] = "peer",
+                ["url"] = peer.Url + "/mcp",
+                ["transport"] = "streamable-http",
+            },
+            default
+        );
+        await using var client = await f.ClientAsync();
+
+        var search = await Ctl(client, "tool search probe --source mcp");
+        Assert.False(Failed(search), search.ToJsonString());
+        Assert.Contains("\nmcp:peer/probe — Synthetic outbound qualification\n", Text(search));
+        Assert.Contains("`tool call <tool-id> --help`", Text(search));
+        Assert.DoesNotContain("args:", Text(search));
+        var row = search["structuredContent"]!["tools"]![0]!.AsObject();
+        Assert.Equal("mcp:peer/probe", row["toolId"]!.GetValue<string>());
+        Assert.Equal("tool", row["kind"]!.GetValue<string>());
+        Assert.False(row.ContainsKey("inputSchema"));
+        var schema = await Ctl(client, "tool search probe --source mcp --schema");
+        Assert.Contains("    args: ", Text(schema));
+        Assert.True(schema["structuredContent"]!["tools"]![0]!.AsObject().ContainsKey("inputSchema"));
+        // Whole words only.
+        Assert.StartsWith("No matching", Text(await Ctl(client, "tool search prob --source mcp")));
+
+        var wrapper = await InboundMcpFixture.CallAsync(
+            client,
+            "foxwarm_discover",
+            new JsonObject { ["query"] = "probe", ["sources"] = new JsonArray("mcp") }
+        );
+        Assert.Contains("- \"mcp:peer/probe\"", Text(wrapper));
+        Assert.True(wrapper["structuredContent"]!["tools"]![0]!.AsObject().ContainsKey("inputSchema"));
+
+        var help = await Ctl(client, "tool call mcp:peer/probe --help");
+        Assert.False(Failed(help), help.ToJsonString());
+        Assert.StartsWith("Tool: mcp:peer/probe\n", Text(help));
+        Assert.Contains("Synthetic outbound qualification", Text(help));
+        Assert.Equal("mcp:peer/probe", help["structuredContent"]!["tool"]!["toolId"]!.GetValue<string>());
+        Assert.True(Failed(await Ctl(client, "tool call mcp:peer/missing --help")));
+        Assert.True(Failed(await Ctl(client, "tool call --source mcp --name probe --help")));
+        Assert.DoesNotContain(await peer.EventsAsync(), item => item["kind"]?.ToString() == "call");
     }
 }

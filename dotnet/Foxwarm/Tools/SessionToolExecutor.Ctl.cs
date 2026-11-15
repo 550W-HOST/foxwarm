@@ -43,6 +43,36 @@ internal sealed partial class SessionToolExecutor
                     hosted,
                     BroadMcpServerVisible(sessions, hosted)
                 );
+            case CtlToolHelp toolHelp:
+            {
+                var target = CtlParser.DescribeCall(toolHelp.Descriptor);
+                var described = target is null
+                    ? null
+                    : await UnifiedTools.ToolHelpAsync(
+                        registry,
+                        target,
+                        token,
+                        (source, name, scope) =>
+                            sessions.ToolVisible(
+                                hosted,
+                                source,
+                                name,
+                                source == "mcp" ? scope : null,
+                                node: source == "node" ? scope : null
+                            ),
+                        ScriptBudget,
+                        hosted
+                    );
+                if (described is not null)
+                    return described;
+                var message =
+                    target is { Source: "mcp", Server: null or "" }
+                        ? "Give the MCP server with --server or in the tool ID."
+                        : "Unknown tool. Find tools with `tool search`.";
+                if (Programmatic)
+                    throw new InvalidDataException(message);
+                return UnsupportedTurnToolExecutor.ToolError("unknown_tool", message);
+            }
             default:
                 // Commands naming a capability resolve to it before dispatch.
                 throw new InvalidOperationException("ctl command was not resolved to its target.");

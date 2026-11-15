@@ -634,8 +634,8 @@ public sealed class CtlCommandTests
                     command.Path + " leaves required " + required + " optional"
                 );
         }
-        // Every builtin outside the native default set has a specific command; the rest stay
-        // reachable through `tool call`.
+        // Every builtin outside the native default set has a specific command, so none is
+        // reachable only through `tool call`.
         var uncovered = registered
             .Values.Where(entry =>
                 entry.Source == "builtin"
@@ -645,7 +645,96 @@ public sealed class CtlCommandTests
             .Select(entry => entry.Definition["name"]!.GetValue<string>())
             .Order(StringComparer.Ordinal)
             .ToArray();
-        Assert.Equal(["start_toolscript_run"], uncovered);
+        Assert.Empty(uncovered);
+    }
+
+    // Builtins show as their commands or as declared tools: no tool IDs, schemas, raw builtin
+    // descriptions or `tool call` hints, and no names of builtins that are not declared.
+    [Fact]
+    public async Task Builtin_search_results_are_commands_and_declared_tools()
+    {
+        await using var f = await ScriptFixture.Create();
+        var tools = Executor(f);
+        var undeclared = f
+            .Manager.ToolRegistry.Entries.Where(entry => !entry.DefaultInject)
+            .Select(entry => entry.Definition["name"]!.GetValue<string>())
+            .Where(name => name.Contains('_'))
+            .ToArray();
+        foreach (var command in new[] { "tool search --source builtin --limit 200", "tool search --source builtin --limit 200 --schema", "tool search node --source builtin --limit 200" })
+        {
+            var output = SessionWait.Text((await Run(tools, "ctl", Args(command))).Response!["output"])!;
+            Assert.DoesNotContain("builtin:", output);
+            Assert.DoesNotContain("args:", output);
+            Assert.DoesNotContain("`tool call", output);
+            foreach (var name in undeclared)
+                Assert.DoesNotMatch("(?<![A-Za-z0-9_-])" + name + "(?![A-Za-z0-9_])", output);
+            foreach (var line in output.Split('\n').Skip(2).TakeWhile(line => line.Length > 0))
+                Assert.True(
+                    line.Contains(" (declared tool)")
+                        || CtlRegistry.Commands.Any(item => line.StartsWith(item.Path + " ", StringComparison.Ordinal) || line.StartsWith(item.Path + " —", StringComparison.Ordinal)),
+                    line
+                );
+        }
+        var all = SessionWait.Text((await Run(tools, "ctl", Args("tool search --source builtin --limit 200"))).Response!["output"])!;
+        Assert.Contains("\nnode copy <source-node> <source-path> <target-node> <target-path> [options] — Copy a file between Nodes, including master.\n", all);
+        Assert.Contains("\nscript start [options] — Start a background ToolScript run.\n", all);
+        Assert.Contains("\nexec (declared tool) — ", all);
+        Assert.Contains("\ntask (declared tool) — ", all);
+        // A multi-command builtin lists the commands that match.
+        var select = SessionWait.Text((await Run(tools, "ctl", Args("tool search select node --source builtin"))).Response!["output"])!;
+        Assert.StartsWith("node select <node-id> — ", select.Split('\n')[2]);
+        var copy = SessionWait.Text((await Run(tools, "ctl", Args("tool search \"copy file between nodes\""))).Response!["output"])!;
+        Assert.StartsWith("node copy ", copy.Split('\n')[2]);
+        var exa = SessionWait.Text((await Run(tools, "ctl", Args("tool search exa"))).Response!["output"])!;
+        Assert.StartsWith("No matching commands or tools.", exa);
+        var exec = SessionWait.Text((await Run(tools, "ctl", Args("tool search exec --source builtin"))).Response!["output"])!;
+        Assert.StartsWith("exec (declared tool) — ", exec.Split('\n')[2]);
+        // `tool call builtin:<name> --help` names the commands instead of the tool ID.
+        var help = SessionWait.Text((await Run(tools, "ctl", Args("tool call builtin:node --help"))).Response!["output"])!;
+        Assert.Contains("\nnode select <node-id> — ", help);
+        Assert.DoesNotContain("builtin:", help);
+        Assert.Contains("declared tool", SessionWait.Text((await Run(tools, "ctl", Args("tool call builtin:task --help"))).Response!["output"])!);
+    }
+
+    // Help, search and parse errors never suggest `tool call builtin:<name>`.
+    [Fact]
+    public async Task Help_never_suggests_builtin_tool_ids()
+    {
+        await using var f = await ScriptFixture.Create();
+        var tools = Executor(f);
+        foreach (var command in new[] { "help", "tool", "tool --help", "tool search --help", "tool call --help", "tool call", "tool call builtin:x --args notjson", "tool frob" })
+        {
+            var response = (await Run(tools, "ctl", Args(command))).Response!;
+            var text = SessionWait.Text(response["output"]) ?? SessionWait.Text(response["error"]?["message"])!;
+            Assert.DoesNotContain("builtin:", text);
+        }
+        foreach (var ingress in new[] { "model", "external" })
+            foreach (var command in CtlRegistry.ForNoun("tool", ingress))
+                Assert.DoesNotContain("builtin:", CtlHelp.Command(command, ingress));
+    }
+
+    [Theory]
+    [InlineData("tool call mcp:srv/probe --help", "mcp", "probe", "srv", null)]
+    [InlineData("tool call --help node:box/read", "node", "read", null, "box")]
+    [InlineData("tool call --source mcp --server srv --name probe --help", "mcp", "probe", "srv", null)]
+    [InlineData("tool call builtin:node --args @a --help", "builtin", "node", null, null)]
+    public void Tool_call_help_parses_to_the_named_tool_and_runs_nothing(
+        string command,
+        string source,
+        string name,
+        string? server,
+        string? node
+    )
+    {
+        var args = Args(command, command.Contains("@a") ? new() { ["a"] = new JsonObject { ["action"] = "select" } } : null);
+        var help = Assert.IsType<CtlToolHelp>(CtlParser.Parse(args));
+        var described = CtlParser.DescribeCall(help.Descriptor)!;
+        Assert.Equal((source, name, server, node), (described.Source, described.Name, described.Server, described.Node));
+        Assert.Null(CtlParser.Describe(args));
+        Assert.False(CtlParser.SelectsNode(args));
+        Assert.Equal("ctl", ToolActivity.ProgressName("ctl", args));
+        Assert.IsType<CtlHelpRequest>(CtlParser.Parse(Args("tool call --help")));
+        Assert.IsType<CtlHelpRequest>(CtlParser.Parse(Args("tool call --source mcp --help")));
     }
 
     [Fact]
@@ -768,7 +857,9 @@ public sealed class CtlCommandTests
         Assert.Equal("tool_authorization_denied", SessionWait.Text(denied.Response!["error"]!["type"]));
         Assert.Equal("read_memory", SessionWait.Text(denied.Target!["name"]));
         var discovered = SessionWait.Text((await Run(tools, "ctl", Args("tool search memory --source builtin --limit 50"))).Response!["output"])!;
-        Assert.DoesNotContain("builtin:read_memory", discovered);
+        Assert.DoesNotContain("memory read", discovered);
+        Assert.Contains("timer list", SessionWait.Text((await Run(tools, "ctl", Args("tool search timer --source builtin --limit 50"))).Response!["output"])!);
+        Assert.DoesNotContain("timer create", SessionWait.Text((await Run(tools, "ctl", Args("tool search timer --source builtin --limit 50"))).Response!["output"])!);
         // A rule naming the removed discovery builtin loads, with a warning, and matches nothing.
         var policy = ToolAuthorizationYaml.Parse(
             Encoding.UTF8.GetBytes("version: 1\nrules:\n- action: allow\n  tool: search_tools\n")
@@ -799,6 +890,19 @@ public sealed class CtlCommandTests
         var result = run.Response!["result"]!.AsObject();
         Assert.True(result["same"]!.GetValue<bool>(), run.Response.ToJsonString());
         Assert.Contains("builtin:skill", result["found"]!.AsArray().Select(value => value!.GetValue<string>()));
+        // Programs receive the command form next to the existing fields.
+        var rows = await Run(
+            tools,
+            "run_script",
+            new JsonObject { ["code"] = "return ctl('tool search skill load --source builtin --limit 1')['tools']" }
+        );
+        var row = rows.Response!["result"]![0]!.AsObject();
+        Assert.Equal("builtin:skill", SessionWait.Text(row["toolId"]));
+        Assert.Equal("command", SessionWait.Text(row["kind"]));
+        Assert.Equal("skill load", SessionWait.Text(row["command"]));
+        Assert.Equal(CtlHelp.Synopsis(CtlRegistry.Find("skill", "load")!, compact: true), SessionWait.Text(row["usage"]));
+        Assert.Equal(CtlRegistry.Find("skill", "load")!.Summary, SessionWait.Text(row["summary"]));
+        Assert.True(row.ContainsKey("description") && row.ContainsKey("hidden") && row.ContainsKey("inputSchema"));
         Assert.Contains("Usage: session list", result["bad"]!.GetValue<string>());
     }
 

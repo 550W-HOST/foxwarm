@@ -219,13 +219,18 @@ internal static class CtlRegistry
             .Where(command => command.Noun == noun && command.Available(ingress))
             .Select(command => command.View(ingress));
 
-    // Model commands resolving to one canonical builtin, for discovery hints.
-    internal static IEnumerable<CtlCommand> ForTarget(string source, string name) =>
+    // Commands of one ingress (the model's by default) resolving to one canonical capability,
+    // for discovery and output hints.
+    internal static IEnumerable<CtlCommand> ForTarget(
+        string source,
+        string name,
+        string ingress = Ingress
+    ) =>
         Commands
             .Where(command =>
-                command.Source == source && command.Name == name && command.Available(Ingress)
+                command.Source == source && command.Name == name && command.Available(ingress)
             )
-            .Select(command => command.View(Ingress));
+            .Select(command => command.View(ingress));
 
     // Validates the registry shape so a malformed entry fails at first use and in tests.
     internal static (

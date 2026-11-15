@@ -29,7 +29,17 @@ internal sealed partial class McpInboundCatalog
             case CtlError error:
                 return Error(CtlHelp.Error(error, visible, Ingress));
             case CtlSearch search:
-                return await CallAsync(context, "foxwarm_discover", search.Args, token);
+                return await DiscoverAsync(context, search.Args, token, commands: true);
+            case CtlToolHelp toolHelp:
+            {
+                if (CtlParser.DescribeCall(toolHelp.Descriptor) is not { } target)
+                    return Error(CtlHelp.Error(new CtlError("Invalid tool ID.", toolHelp.Command), visible, Ingress));
+                if (target.Source == "node" && target.Node is null or "current")
+                    return Error("Give the Node with --node-id or in the tool ID.");
+                if (target.Source == "mcp" && string.IsNullOrEmpty(target.Server))
+                    return Error("Give the MCP server with --server or in the tool ID.");
+                return await ToolHelpAsync(context, target, token);
+            }
             case CtlCall call:
                 if (CtlParser.DescribeCall(call.Descriptor) is not { } described)
                     return Error(CtlHelp.Error(new CtlError("Invalid tool ID.", call.Command), visible, Ingress));

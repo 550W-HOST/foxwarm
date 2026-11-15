@@ -171,10 +171,7 @@ pattern is:
 
 ```python
 def main(args):
-    created = call_tool(
-        toolId="builtin:node_create_auth_token",
-        args={"nodeId": "my-node", "filePath": "/secure/new-node.token"},
-    )
+    created = ctl("node token my-node --file-path /secure/new-node.token")
     # Run this on master, using the existing exec/SSH facilities. The command
     # reads the protected file as needed; do not print its contents or return
     # the nested exec result.
@@ -388,7 +385,7 @@ Use the normal Node selector or `/node select my-shell`; ordinary `exec` then ta
 
 The foreground wait defaults to 15 seconds, clamps above 60, and rounds fractions upward to a whole second. Timeout returns an exec ID without killing the command. Normal `wait` can use that ID; completion goes to the originating Session and includes bounded first/last 4096-byte samples, total output bytes and exit code. The initial background response contains the continuation notice, not a running-output snapshot. Full logs and a read-exec API do not exist. The FIFO collector continuously drains output without growing a full log or closing the command pipe during truncation.
 
-Each command's wrapper owns its foreground budget, background transition and report retries independently; the main loop keeps polling while jobs run. There is no additional client concurrency cap; Main bounds unfinished dispatches and output stays bounded per command. Network errors retry reports only, never the command itself. Main/client restart can leave an unknown outcome; there is no durable queue, outbox or crash continuation. Revocation/stop does not kill active commands. The existing 24-hour completion boundary stops reporting but does not remove a still-running FIFO/collector. Restart the client explicitly after a lost registration. For agent-managed revocation when finished, use `call_tool({ toolId: "builtin:node_remove", args: { nodeId: "my-shell" } })`; users can still run `/node remove my-shell`. See [Node client quick start](../../docs/node-client.md#shell-only-node) for the complete limitations.
+Each command's wrapper owns its foreground budget, background transition and report retries independently; the main loop keeps polling while jobs run. There is no additional client concurrency cap; Main bounds unfinished dispatches and output stays bounded per command. Network errors retry reports only, never the command itself. Main/client restart can leave an unknown outcome; there is no durable queue, outbox or crash continuation. Revocation/stop does not kill active commands. The existing 24-hour completion boundary stops reporting but does not remove a still-running FIFO/collector. Restart the client explicitly after a lost registration. For agent-managed revocation when finished, run `ctl node remove my-shell`; users can still run `/node remove my-shell`. See [Node client quick start](../../docs/node-client.md#shell-only-node) for the complete limitations.
 
 ## Manual docker-compose template flow
 
