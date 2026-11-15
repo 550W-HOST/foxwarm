@@ -260,10 +260,11 @@ internal sealed partial class SessionManager
                 );
             if (compact)
             {
-                // Compact rows name the call and the first non-primary check that denies, else
-                // asks; the full plan is left out.
-                result["invocation"] = invocation;
-                result["capability"] = plan.Capability;
+                // toolId already names the capability. A command probe adds the command it
+                // ran as, and any row adds the first other check that denies, else asks; the
+                // full plan is left out.
+                if (resolved.Command is not null)
+                    result["invocation"] = invocation;
                 if (explained.Count == 1)
                 {
                     ToolAuthorizationExplain.CompactVariant(explained[0].Variant, result);
@@ -281,19 +282,21 @@ internal sealed partial class SessionManager
                     }
             }
             else
-            {
-                result["invocation"] = invocation;
-                foreach (var pair in plan.ToJson())
-                    result[pair.Key] = pair.Value?.DeepClone();
                 for (var item = 0; item < explained.Count; item++)
                 {
                     var full = ToolAuthorizationExplain.FullVariant(explained[item].Variant);
                     full["obligations"] = obligations[item];
                     result[explained[item].Name] = full;
                 }
-            }
             if (variants.Count == 2)
                 result["changed"] = explained[0].Variant.Decision != explained[1].Variant.Decision;
+            // The plan follows the existing fields, which keep their order.
+            if (!compact)
+            {
+                result["invocation"] = invocation;
+                foreach (var pair in plan.ToJson())
+                    result[pair.Key] = pair.Value?.DeepClone();
+            }
         }
         catch (Exception error)
             when (error is InvalidDataException or InvalidOperationException

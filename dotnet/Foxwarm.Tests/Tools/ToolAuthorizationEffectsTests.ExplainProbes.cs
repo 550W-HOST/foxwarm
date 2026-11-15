@@ -374,18 +374,19 @@ public sealed partial class ToolAuthorizationEffectsTests
             Assert.False(rows[2]!.AsObject().ContainsKey("label"));
         }
 
-        // Without labels or compact, the output is the one it was before.
+        // Without labels or compact, the earlier fields come first, in their order, and the
+        // operation plan and per-check decisions follow them.
         var plain = await Explain(
             execution.Tools,
             new JsonObject { ["probes"] = Probes(Probe("outside", "node:master/exec", ExecArgs)) }
         );
         var row = plain["probes"]![0]!.AsObject();
         Assert.Equal(
-            ["sessionId", "tool", "active"],
-            row.Select(property => property.Key).ToArray()
+            ["sessionId", "tool", "active", "invocation", "capability", "arguments", "branch"],
+            row.Select(property => property.Key).Take(7).ToArray()
         );
         Assert.Equal(
-            ["decision", "allowed", "deniedBy", "layers", "facts"],
+            ["decision", "allowed", "deniedBy", "layers", "facts", "obligations"],
             row["active"]!.AsObject().Select(property => property.Key).ToArray()
         );
 

@@ -199,5 +199,39 @@ public sealed partial class ToolAuthorizationEffectsTests
         );
         Assert.Equal("allow", malformed["active"]!["decision"]!.GetValue<string>());
         Assert.Empty(malformed["active"]!["obligations"]!.AsArray());
+
+        // Compact rows add the command of a command probe and the first other check that does
+        // not allow; the plan is left out.
+        var compact = (
+            await Explain(
+                execution.Tools,
+                Obj(
+                    """
+                    {"compact":true,"probes":[
+                      {"sessionId":"opaque","toolId":"builtin:run_script","args":{"filePath":"job.py"}},
+                      {"sessionId":"opaque","command":"session status"},
+                      {"sessionId":"opaque","toolId":"node:master/exec","args":{"command":"true","cwd":"open"}}
+                    ]}
+                    """
+                )
+            )
+        )["probes"]!.AsArray();
+        Assert.True(
+            JsonNode.DeepEquals(
+                Obj(
+                    """
+                    {"index":0,"sessionId":"opaque","toolId":"builtin:run_script","decision":"allow","rules":[],
+                     "obligation":{"id":"source-read","decision":"deny","rule":"no-script-read"}}
+                    """
+                ),
+                compact[0]
+            ),
+            compact[0]!.ToJsonString()
+        );
+        Assert.Equal("ctl session status", compact[1]!["invocation"]!.GetValue<string>());
+        Assert.Null(compact[1]!["obligation"]);
+        Assert.Null(compact[2]!["invocation"]);
+        Assert.Null(compact[2]!["obligation"]);
+        Assert.Null(compact[2]!["operations"]);
     }
 }

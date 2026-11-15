@@ -87,7 +87,7 @@ internal static class ToolAuthorizationToolDefinition
                       },
                       "compact": {
                         "type": "boolean",
-                        "description": "Return one short row per probe: its index, Session, tool ID, decision, and the layer and rule ID of each layer that matched a rule or did not allow, plus the invocation, the capability and the first other authorization check that does not allow. With compare, the active and candidate rows and changed. Facts and rule details are omitted."
+                        "description": "Return one short row per probe: its index, Session, tool ID, decision, and the layer and rule ID of each layer that matched a rule or did not allow, the command of a command probe, and the first other authorization check that does not allow. With compare, the active and candidate rows and changed. Facts and rule details are omitted."
                       }
                     },
                     "required": ["probes"]
