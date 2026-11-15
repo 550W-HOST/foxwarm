@@ -228,7 +228,7 @@ internal sealed class SessionChatService(
     /// </summary>
     private async Task<bool> AppendTaskReminderAsync(CancellationToken cancellationToken)
     {
-        if (tasks is null)
+        if (tasks is null || hosted.Entry.ProviderContinuationPending)
             return false;
         cancellationToken.ThrowIfCancellationRequested();
         var visible = hosted.Entry.WithState(state => TaskProgress.Sequences(state.History));

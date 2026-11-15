@@ -25,9 +25,12 @@ internal sealed partial class SessionCompactor
             }
         if (split < 0)
             throw new CompactPlanInvalidException("The current tool exchange is no longer active.");
-        // The entire executing assistant/tool exchange stays outside the source region.
+        // The executing exchange includes an earlier deferred server call when
+        // its result and the local compact submission share this assistant row.
+        var history = snapshot.History.Select(row => row.ToJson()).ToArray();
+        split = CompactCandidateBuilder.WholeExchangeStart(history, split);
         var candidates = CompactCandidateBuilder.Build(
-            snapshot.History.Take(split).Select(row => row.ToJson()).ToArray(),
+            history.Take(split).ToArray(),
             inContext: true
         );
         var plan = CompactPlanValidator.Validate(args, candidates);

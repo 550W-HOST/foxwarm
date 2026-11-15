@@ -378,6 +378,8 @@ internal sealed partial class SessionCompactor
     private static double UsageTotal(ChatResult result)
     {
         var usage = result.Usage ?? result.AssistantMessage?["__meta"]?["usage"] as JsonObject;
+        if (CompactCandidateBuilder.Finite(usage?["contextTokens"]) is double context)
+            return context;
         return (CompactCandidateBuilder.Finite(usage?["cachedTokens"]) ?? 0)
             + (CompactCandidateBuilder.Finite(usage?["inputTokens"]) ?? 0)
             + (CompactCandidateBuilder.Finite(usage?["outputTokens"]) ?? 0);

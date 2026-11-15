@@ -149,6 +149,7 @@ public sealed partial class LocalSessionTurnHost
                         .ConfigureAwait(false);
                 try
                 {
+                    entry.ProviderContinuationPending = result.ProviderContinuationPending;
                     entry.WithState(state => DeferredQueueInput.Mark(state.Queue));
                     if (result.AssistantMessage is null)
                     {
@@ -209,6 +210,12 @@ public sealed partial class LocalSessionTurnHost
                     var calls = ExtractFunctionCalls(assistant);
                     if (calls.Count == 0)
                     {
+                        if (result.ContinueTurn)
+                        {
+                            await ContinueAfterResultAsync(result, registered.Token)
+                                .ConfigureAwait(false);
+                            continue;
+                        }
                         await FinalizeAssistantControlsAsync(assistant).ConfigureAwait(false);
                         if (
                             Closing
@@ -352,6 +359,7 @@ public sealed partial class LocalSessionTurnHost
         }
         finally
         {
+            entry.ProviderContinuationPending = false;
             if (handle is not null)
                 entry.ClearCancellation(handle);
             else
@@ -397,6 +405,8 @@ public sealed partial class LocalSessionTurnHost
                 throw new OperationCanceledException(token);
         }
         AssertCanRetry();
+        if (entry.ProviderContinuationPending)
+            return false;
         var context = entry.WithState(state => (state.HistoryVersion, state.NextMessageSeq));
         // Existing Main ingress already publishes to this owner; join its pending save lane.
         await entry.SaveLane.SaveBestEffortAsync(token).ConfigureAwait(false);
@@ -478,6 +488,9 @@ public sealed partial class LocalSessionTurnHost
     private async Task ContinueAfterResultAsync(ChatResult result, CancellationToken token)
     {
         AssertCanContinue();
+        token.ThrowIfCancellationRequested();
+        if (entry.ProviderContinuationPending)
+            return;
         if (beforeContinuation is not null)
         {
             await beforeContinuation(
@@ -497,6 +510,8 @@ public sealed partial class LocalSessionTurnHost
     )
     {
         AssertCanContinue();
+        if (entry.ProviderContinuationPending)
+            return;
         await (continuationSafePoint?.Invoke() ?? SafePointAsync()).ConfigureAwait(false);
         AssertCanContinue();
         if (entry.WithState(state => state.Stopping || !state.Queue.Any(SessionCompactor.Ordinary)))

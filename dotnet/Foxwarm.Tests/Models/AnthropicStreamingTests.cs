@@ -162,7 +162,7 @@ public sealed class AnthropicStreamingTests
     [InlineData("pause_turn", "text")]
     [InlineData("end_turn", "server_tool_use")]
     [InlineData("end_turn", "mcp_tool_use")]
-    [InlineData("end_turn", "web_search_tool_result")]
+    [InlineData("end_turn", "web_fetch_tool_result")]
     public async Task JSON_and_SSE_terminal_failures_are_nonretryable_and_noncountable(
         string reason,
         string type

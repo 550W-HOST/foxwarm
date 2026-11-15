@@ -55,18 +55,20 @@ internal sealed partial class SessionCompactor
         // A plan rejected only for over-budget summaries is accepted, and the overrun recorded,
         // after this many budget repair rounds.
         var budgetRejections = 0;
+        var continuing = false;
         try
         {
             for (var round = 0; round < 15; round++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                detached.Add(
-                    new JsonObject
-                    {
-                        ["role"] = "user",
-                        ["parts"] = new JsonArray(new JsonObject { ["system"] = prompt }),
-                    }
-                );
+                if (!continuing)
+                    detached.Add(
+                        new JsonObject
+                        {
+                            ["role"] = "user",
+                            ["parts"] = new JsonArray(new JsonObject { ["system"] = prompt }),
+                        }
+                    );
                 var catalog = models.Capture();
                 ChatResult result;
                 try
@@ -153,6 +155,9 @@ internal sealed partial class SessionCompactor
                 var usage = result.Usage ?? assistant?["__meta"]?["usage"] as JsonObject;
                 if (usage is not null)
                     plannerUsage = CompactionPlannerDebug.AddUsage(plannerUsage, usage);
+                continuing = result.ProviderContinuationPending;
+                if (result.ContinueTurn)
+                    continue;
                 var wrongName = calls
                     .FirstOrDefault(call =>
                         call?["name"]?.GetValue<string>() != "submit_compact_plan"

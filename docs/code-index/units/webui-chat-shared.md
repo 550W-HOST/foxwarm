@@ -109,6 +109,10 @@ Shared utilities, types, and rendering helpers for the chat UI components. Provi
 
 WebUI identity image rendering uses the same deployment-relative API helper but selects the bound Session-scoped blob route from `WebUiImageSessionContext`; administrator image references keep their existing global blob route.
 
+## Native hosted-search citations
+
+`getPartWebSearchAnnotations` selects the text part's original Responses annotations or Anthropic text-block citations. The shared safe Sources renderer accepts `web_search_result_location` without assigning OpenAI reference IDs or offsets. Exact inline-marker resolution still requires Responses span annotations. `webSearchCitations.e2e.mjs` covers the native citation/search-source distinction and excludes unsafe URLs and opaque replay fields from rendered prose.
+
 ## Integration
 
 - Consumed by chat UI components (message rendering, tool call display, input autocomplete). `chatShared.tsx` re-exports the Markdown renderer from `markdownRenderer.ts` to keep existing imports stable.

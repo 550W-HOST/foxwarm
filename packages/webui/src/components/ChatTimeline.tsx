@@ -1,3 +1,4 @@
+import { getPartWebSearchAnnotations } from './webSearchCitations'
 import ArtifactView from '../artifacts/ArtifactView'
 import { buildArtifactGroups } from '../artifacts/projection'
 import SessionMessageCard from './SessionMessageCard'
@@ -39,7 +40,7 @@ import ReasoningTokenBadge from './ReasoningTokenBadge'
 import MarkdownHtmlSegment from './MarkdownHtmlSegment'
 import WebSearchCard from './WebSearchCard'
 import { uniqueWebSearchCitations, type CitationRenderOptions } from './webSearchCitations'
-import { getWebSearchAction, type WebSearchAction } from '../webSearchAction'
+import { getPartWebSearchAction, type WebSearchAction } from '../webSearchAction'
 import ContextBlockCard, { getContextBlockMetaFromMessage } from './ContextBlockCard'
 import JsonInspectorDialog from './JsonInspectorDialog'
 import { useThreadCardOverflowFade } from './useThreadCardOverflowFade'
@@ -1003,7 +1004,7 @@ const MessageRow = memo(function MessageRow({
       // Mixed-field parts retain their ordinary output alongside their reasoning.
       if (part.text || part.system) visible.push({ part, webSearchAction: null, partIndex })
       const webSearchAction = msg.role === 'model'
-        ? getWebSearchAction(part.providerMeta?.openaiResponses?.outputItem)
+        ? getPartWebSearchAction(part, msg.parts)
         : null
       if (webSearchAction) visible.push({ part, webSearchAction, partIndex })
     }
@@ -1120,7 +1121,7 @@ const MessageRow = memo(function MessageRow({
               if (contextBlock && partIndex === firstTextPartIndex && part.text) {
                 return <ContextBlockCard key={`ctx-block-${contextBlock.id}`} sessionId={sessionId} messageKey={messageKey} block={contextBlock} text={part.text} nestedDepth={nestedDepth} renderNestedMessages={renderNestedMessages} searchPartIndex={partIndex} searchReveal={rowSearchTarget?.surface === 'ctx' && rowSearchTarget.partIndex === partIndex} />
               }
-              return <AssistantTextCard sessionId={sessionId} reasoningBadges={!hideMetrics && row.reasoningPresentation[partIndex]?.target === 'text' ? row.reasoningPresentation[partIndex]?.badges : undefined} conversation={conversationDetails || row.conversationPartIndex !== undefined} key={`assistant-text-${partIdx}`} text={part.text || ''} message={msg} annotations={part.providerMeta?.openaiResponses?.annotations} onOpenCodeCommit={onOpenCodeCommit} searchPartIndex={partIndex} searchReveal={rowSearchTarget?.surface === 'model' && rowSearchTarget.partIndex === partIndex} />
+              return <AssistantTextCard sessionId={sessionId} reasoningBadges={!hideMetrics && row.reasoningPresentation[partIndex]?.target === 'text' ? row.reasoningPresentation[partIndex]?.badges : undefined} conversation={conversationDetails || row.conversationPartIndex !== undefined} key={`assistant-text-${partIdx}`} text={part.text || ''} message={msg} annotations={getPartWebSearchAnnotations(part)} onOpenCodeCommit={onOpenCodeCommit} searchPartIndex={partIndex} searchReveal={rowSearchTarget?.surface === 'model' && rowSearchTarget.partIndex === partIndex} />
             })}
             {(surface !== 'grouped' || msg.role !== 'model') && <ImageParts imageParts={imageParts} keyPrefix={`message-${messageKey}`} />}
             {row.conversationPartIndex === undefined && surface !== 'ordinary' && !collapsedGroup && (interleavedToolGroup && pairedToolResponse ? <InterleavedToolGroup {...toolDisclosure} runningTool={runningTool} msg={msg} nextMsg={pairedToolResponse} messageKeyPrefix={messageKey} onOpenCodeFile={onOpenCodeFile} searchTarget={rowSearchTarget} /> : <ToolCallsBlock {...toolDisclosure} runningTool={runningTool} msg={msg} onOpenCodeFile={onOpenCodeFile} searchTarget={rowSearchTarget} />)}

@@ -23,7 +23,7 @@ import { isCommittedHistoryMessage } from '../chatHistoryState'
 import { buildConversationActivitySummary } from './conversationActivity'
 import { applyConversationTiming, readConversationWorkInterval, getConversationActivityStart, getConversationLiveRequestStart, type ConversationTimingContext } from './conversationTiming'
 import { isCompactCompletionMaintenanceMessage } from '../../../shared/src/sessionContinuation'
-import { getWebSearchAction } from '../webSearchAction'
+import { getPartWebSearchAction } from '../webSearchAction'
 import { askUserArgs, isAskUserCall } from '../sessionQuestions'
 import { ctlConcrete } from '../ctlCall'
 
@@ -40,6 +40,8 @@ import { ctlConcrete } from '../ctlCall'
 interface TokenUsage {
   cost?: number
   cachedTokens?: number | null
+  contextTokens?: number
+  contextTokensSource?: string
   inputTokens?: number | null
   outputTokens?: number | null
   cachedContentTokenCount?: number | null
@@ -316,7 +318,7 @@ const conversationRequests = (history: readonly Message[], visible: readonly Mes
     const request = id ? requests.get(id) || { messages: [], tools: false, complete: false } : { messages: [], tools: false, complete: false }
     if (id) requests.set(id, request)
     request.messages.push(message)
-    request.tools ||= message.parts.some(part => !!part.functionCall || !!getWebSearchAction(part.providerMeta?.openaiResponses?.outputItem))
+    request.tools ||= message.parts.some(part => !!part.functionCall || !!getPartWebSearchAction(part, message.parts))
     request.complete ||= !message.__meta?.streaming && isCommittedHistoryMessage(message) && message.__meta?.llmSegment?.complete !== false
     byMessage.set(message, request)
   }
@@ -924,7 +926,7 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
           emitRow(index, null, false, null, { key: `${messageKeys[index]}-question-${call.id || partIndex}`, partIndex, question: call })
           return
         }
-        const technical = foldedText || part.system || part.functionCall || part.functionResponse || part.toolUseId || isReasoningPart(part) || getWebSearchAction(part.providerMeta?.openaiResponses?.outputItem) || !hasConversationText(part) && !image && part.text === undefined && Object.keys(part).length > 0
+        const technical = foldedText || part.system || part.functionCall || part.functionResponse || part.toolUseId || isReasoningPart(part) || getPartWebSearchAction(part, msg.parts) || !hasConversationText(part) && !image && part.text === undefined && Object.keys(part).length > 0
         if (technical) {
           const fragment = textBody || image ? { ...part, text: foldedText ? part.text : undefined, inlineData: undefined, inlineDataRef: undefined, inlineDataUnavailable: undefined } : part
           // Mixed-field technical fragments keep the original part's presentation ownership.

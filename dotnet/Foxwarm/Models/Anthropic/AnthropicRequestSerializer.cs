@@ -6,7 +6,12 @@ namespace Foxwarm.Models;
 
 internal static class AnthropicRequestSerializer
 {
-    internal static JsonArray ConvertHistory(IEnumerable<JsonObject> history, Uri baseUri)
+    internal static JsonArray ConvertHistory(
+        IEnumerable<JsonObject> history,
+        Uri baseUri,
+        string? concreteModelId = null,
+        ModelHistoryCompatibility? compatibility = null
+    )
     {
         var messages = new JsonArray();
         foreach (var raw in history)
@@ -20,8 +25,39 @@ internal static class AnthropicRequestSerializer
                 : message.Role;
             var blocks = new JsonArray();
             var parts = (raw["parts"] as JsonArray ?? []).OfType<JsonObject>().ToArray();
+            JsonObject? Native(JsonObject part)
+            {
+                var metadata = (part["providerMeta"] as JsonObject)?["anthropic"] as JsonObject;
+                return
+                    message.Role == "model"
+                    && concreteModelId is not null
+                    && SessionWait.Text(metadata?["sourceModelId"]) is string source
+                    && (compatibility ?? ModelHistoryCompatibility.Exact).Matches(
+                        source,
+                        concreteModelId
+                    )
+                    ? metadata?["contentBlock"] as JsonObject
+                    : null;
+            }
+            var nativeSearch = parts.Any(part =>
+                SessionWait.Text(Native(part)?["type"])
+                    is "server_tool_use"
+                        or "web_search_tool_result"
+            );
             foreach (var part in parts)
             {
+                if (Native(part) is JsonObject native)
+                {
+                    blocks.Add(native.DeepClone());
+                    continue;
+                }
+                // Portable evidence is for other protocols/models. The native
+                // continuation must replay the returned assistant blocks unchanged.
+                if (
+                    nativeSearch
+                    && part["providerMeta"]?["anthropicSearchEvidence"]?.GetValue<bool>() == true
+                )
+                    continue;
                 if (
                     message.Role == "tool"
                     && ProviderImageParts.IsImage(part)
@@ -172,7 +208,12 @@ internal static class AnthropicRequestSerializer
             ["stream"] = true,
             ["cache_control"] = new JsonObject { ["type"] = "ephemeral" },
             ["system"] = options.Instructions,
-            ["messages"] = ConvertHistory(history, options.BaseUri),
+            ["messages"] = ConvertHistory(
+                history,
+                options.BaseUri,
+                options.ConcreteModelId,
+                options.HistoryCompatibility
+            ),
         };
         if (options.Tools is { Count: > 0 })
             body["tools"] = new JsonArray(
@@ -189,6 +230,13 @@ internal static class AnthropicRequestSerializer
                     )
                     .ToArray()
             );
+        if (BuildSearchTool(options.WebSearch) is JsonObject search)
+        {
+            var tools = body["tools"] as JsonArray ?? new JsonArray();
+            tools.Add(search);
+            if (tools.Parent is null)
+                body["tools"] = tools;
+        }
         if (options.ExtraFields is not null)
             foreach (var (key, value) in options.ExtraFields)
                 body[key] = value?.DeepClone();
@@ -215,6 +263,30 @@ internal static class AnthropicRequestSerializer
         }
         return body;
     }
+
+    internal static JsonObject? BuildSearchTool(JsonObject? config)
+    {
+        if (config?["enabled"]?.GetValue<bool>() != true)
+            return null;
+        // Basic direct search; newer versions implicitly enable code execution.
+        var tool = new JsonObject { ["type"] = "web_search_20250305", ["name"] = "web_search" };
+        if (config["allowedDomains"] is JsonArray domains)
+            tool["allowed_domains"] = domains.DeepClone();
+        if (config["userLocation"] is JsonObject location)
+        {
+            tool["user_location"] = location.DeepClone();
+            tool["user_location"]!["type"] = "approximate";
+        }
+        return tool;
+    }
+
+    internal static bool HasSearchTool(JsonObject body) =>
+        (body["tools"] as JsonArray)
+            ?.OfType<JsonObject>()
+            .Any(tool =>
+                SessionWait.Text(tool["type"]) == "web_search_20250305"
+                && SessionWait.Text(tool["name"]) == "web_search"
+            ) == true;
 
     private static JsonObject Text(string value) => new() { ["type"] = "text", ["text"] = value };
 

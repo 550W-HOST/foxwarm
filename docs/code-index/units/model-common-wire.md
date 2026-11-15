@@ -10,7 +10,7 @@ Ordinary and detached BTW instruction composition follows the [stable request-pr
 
 ## Stable methods and callers
 
-- `ConcreteRequestHistory` selects canonical history/prompt-visible parts for a concrete request without changing active Session JSON. Before native metadata filtering and `__meta` removal, it uses [hosted search evidence](./model-responses.md) to project per-call, portable URL data, including across model/protocol switches.
+- `ConcreteRequestHistory` selects canonical history/prompt-visible parts for a concrete request without changing active Session JSON. Before native metadata filtering and `__meta` removal, it uses [hosted search evidence](../threads/web-search-citations.md) to project per-call, portable URL data from Responses and Anthropic result records, including across model/protocol switches. Incompatible Anthropic native blocks are removed after evidence projection; native replay omits the added portable text.
 - `ConcreteRequestHistory.ProjectDisplayMetadata` removes top-level message `compaction` diagnostics and function-response display metadata from request copies. Trusted `toolScriptSubCalls` presence projects the outer native response into `{ output: formattedExecutionText }`, including empty subcall arrays. `LlmRequestJournalStore.CanonicalMessage` applies the same projection before canonical journaling; concrete preparation applies it before image hydration and provider serialization. Ordinary MCP values and result-owned metadata are not classifiers. Session/Archive/run history stays native; pruned historical outputs and guard summaries retain their existing formatter fallback.
 - `RequestHistory.FromSnapshot` materializes the exact captured immutable history with per-record provenance; `FromMutable` and request-only context deliberately carry none. Repair transfers that provenance only for unchanged selected rows; synthetic responses have none. `Messages` remains a request-owned projection, never active Session JSON.
 - `RequestHistoryRepair` repairs provider retry inputs at the supported safe point; it does not rebuild a missing Session authority.
@@ -33,6 +33,8 @@ Provider input is derived from Session state and request scope. The neutral repa
 Concrete native-history filtering uses the request-captured catalog [compatibility projection](./model-configuration.md#native-history-compatibility). It preserves original source IDs for downstream serializers and generated-image admission; canonical/Archive records are never rewritten. Low-level configured wrappers and ordinary/compact/BTW/one-shot request owners use the same comparison.
 
 Before stripping message `__meta`, concrete preparation projects a positive canonical tool-row seq onto the request-owned function-response envelope as `contextSeq`. The shared `OpenAIRequestText.PreviousRequest` prefix exposes it beside existing timing (or as seq-only tool metadata), covering Responses, Completions and Anthropic tool groups. Multiple results in one row share its seq; synthetic repaired responses without canonical seq receive none. Tool business payloads, canonical Session/Archive records and neutral journal history are unchanged. These cues locate a record, not a complete exchange; active source validation stays in the compactor.
+
+The shared request repair also delegates abandoned native-search filtering to [AnthropicSearchHistory](./model-anthropic-completions.md#native-hosted-web-search). It modifies only request-owned copies and clears journal provenance for changed rows.
 
 ## Tests
 

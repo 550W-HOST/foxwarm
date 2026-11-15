@@ -40,6 +40,7 @@ export type ContextScrollbarContextUsage = {
   freeTokens: number
   capacityTokens: number
   usageAnchorKey: string | null
+  estimated?: boolean
 }
 
 const stringify = (value: unknown): string => {
@@ -266,8 +267,9 @@ export const getContextScrollbarLegendStats = (segments: ContextScrollbarSegment
 
 const getMeasuredContextTokens = (message: Message): number | null => {
   if (message.role !== 'model') return null
-  const usage = message.__meta?.usage as { cachedTokens?: unknown; inputTokens?: unknown; outputTokens?: unknown; cachedContentTokenCount?: unknown; promptTokenCount?: unknown; candidatesTokenCount?: unknown } | undefined
+  const usage = message.__meta?.usage as { contextTokens?: unknown; contextTokensSource?: unknown; cachedTokens?: unknown; inputTokens?: unknown; outputTokens?: unknown; cachedContentTokenCount?: unknown; promptTokenCount?: unknown; candidatesTokenCount?: unknown } | undefined
   if (!usage || typeof usage !== 'object') return null
+  if (typeof usage.contextTokens === 'number' && Number.isFinite(usage.contextTokens) && usage.contextTokens >= 0) return usage.contextTokens
   const input = typeof usage.inputTokens === 'number' ? usage.inputTokens : typeof usage.promptTokenCount === 'number' ? usage.promptTokenCount : null
   const cached = typeof usage.cachedTokens === 'number' ? usage.cachedTokens : typeof usage.cachedContentTokenCount === 'number' ? usage.cachedContentTokenCount : 0
   const output = typeof usage.outputTokens === 'number' ? usage.outputTokens : typeof usage.candidatesTokenCount === 'number' ? usage.candidatesTokenCount : 0
@@ -295,6 +297,7 @@ export const getContextScrollbarContextUsage = (messages: Message[], capacityTok
     freeTokens: Math.max(0, capacityTokens - usedTokens),
     capacityTokens,
     usageAnchorKey: usageIndex >= 0 ? getMessageStableKey(committed[usageIndex], usageIndex) : null,
+    ...(committed[usageIndex].__meta?.usage?.contextTokensSource === 'estimated' ? { estimated: true } : {}),
   }
 }
 

@@ -1,4 +1,4 @@
-import type { OpenAIResponsesAnnotation } from './chatShared'
+import type { MessagePart, OpenAIResponsesAnnotation } from './chatShared'
 
 export type WebSearchCitation = { url: string; title: string }
 export type CitationRenderOptions = {
@@ -20,7 +20,7 @@ export const safeWebSearchUrl = (value: unknown): string | null => {
 }
 
 export const normalizeWebSearchCitation = (annotation: OpenAIResponsesAnnotation): WebSearchCitation | null => {
-  if (!annotation || typeof annotation !== 'object' || (annotation.type && annotation.type !== 'url_citation')) return null
+  if (!annotation || typeof annotation !== 'object' || (annotation.type && !['url_citation', 'web_search_result_location'].includes(annotation.type))) return null
   const nested = annotation.url_citation && typeof annotation.url_citation === 'object' ? annotation.url_citation : annotation
   const url = safeWebSearchUrl(nested.url)
   if (!url) return null
@@ -106,3 +106,7 @@ export const prepareWebSearchCitations = (text: string, options: CitationRenderO
   if (pending) prepared += replace(pending[0], pending.index, true)
   return { text: prepared, lexemes, prefix }
 }
+
+/** Anthropic citations belong to the complete text block and carry no OpenAI marker IDs or offsets. */
+export const getPartWebSearchAnnotations = (part: MessagePart): OpenAIResponsesAnnotation[] | undefined =>
+  part.providerMeta?.openaiResponses?.annotations ?? part.providerMeta?.anthropic?.contentBlock?.citations

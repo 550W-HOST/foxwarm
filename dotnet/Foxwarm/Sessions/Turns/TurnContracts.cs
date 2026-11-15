@@ -122,6 +122,8 @@ public sealed record ChatResult(
     internal HistoryAppendFinalizer? HistoryAppend { get; init; }
     internal IReadOnlyList<JsonObject> CommittedSegments { get; init; } = [];
     internal bool Terminal { get; init; }
+    internal bool ContinueTurn { get; init; }
+    internal bool ProviderContinuationPending { get; init; }
     internal bool Suspended { get; init; }
     internal bool ContextCompacted { get; init; }
     internal string? TruncatedStopReason { get; init; }

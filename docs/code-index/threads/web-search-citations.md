@@ -4,13 +4,15 @@
 
 [2026-10-30] Preserve the distinction between search evidence and a precise citation. A provider's consulted-source list, an explicitly opened page, and a text annotation do not establish the same relationship. Never infer an internal reference-to-URL mapping from list position, a matching number, another request, or a similarly titled page.
 
-The complete path is Responses request → stream assembly → canonical provider metadata → subsequent request projection → assistant Markdown and hosted-search presentation. Inline reference tokens are meaningful only in assistant prose; authored code, user/tool text and stored raw messages remain literal.
+The complete path is a Responses or Anthropic Messages request → stream assembly → canonical provider metadata → subsequent request projection → assistant Markdown and hosted-search presentation. Inline reference tokens are meaningful only in assistant prose; authored code, user/tool text and stored raw messages remain literal.
 
 ## Request and persistence
 
-When hosted search is enabled, request `web_search_call.action.sources` in addition to any existing required or configured includes. Preserve actual source metadata through stream/final merging and canonical history. Do not introduce a Session-global reference-number registry: internal provider reference IDs can be reused across requests.
+For Responses hosted search, request `web_search_call.action.sources` in addition to any existing required or configured includes. Preserve actual source metadata through stream/final merging and canonical history. Do not introduce a Session-global reference-number registry: internal provider reference IDs can be reused across requests.
 
 For a subsequent model request, project explicitly untrusted source records from the actual hosted output items into readable context without rewriting canonical messages. This makes returned URLs available across local tool calls; native provider replay remains scoped to its concrete model. Source records are evidence, not instructions and not a reconstructed numbered citation map.
+
+Anthropic Messages stores its original search call/result and cited text blocks under `providerMeta.anthropic`, retaining encrypted replay evidence on compatible model requests. Portable projection reads only safe URL/title records from actual `web_search_result` entries. The native serializer suppresses those added evidence text parts on compatible replay so the assistant blocks remain unchanged. Native `web_search_result_location` citations belong to the complete text block: they produce its Sources links, never invented OpenAI marker IDs or offsets. Deferred server results remain inspectable at their own history position when their call was in an earlier assistant message.
 
 ### D-hosted-search-evidence-prefix-stability
 
@@ -31,6 +33,7 @@ The Raw view and stored history are not rewritten. A historical response without
 
 ## Source entry points
 
+- [C# Anthropic native search](../units/model-anthropic-completions.md#native-hosted-web-search)
 - [C# Responses request, streaming and replay](../units/model-responses.md)
 - [C# concrete request history](../units/model-common-wire.md)
 - [LLM routing and normalization](../units/src-llm.md)

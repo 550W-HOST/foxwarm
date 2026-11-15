@@ -79,6 +79,7 @@ internal static class ConcreteRequestHistory
                             "encryptedThinking",
                             "signature",
                             "redactedThinking",
+                            "anthropic",
                         }
                     )
                         metadata.Remove(key);

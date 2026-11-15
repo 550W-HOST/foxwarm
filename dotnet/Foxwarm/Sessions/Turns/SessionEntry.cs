@@ -59,6 +59,9 @@ public sealed class SessionEntry
         Task<ChatResult>
     >? ExternalTurn { get; set; }
     internal Action? RevokeExternalRun { get; set; }
+
+    // Owned by the active turn; never part of a persisted snapshot.
+    internal bool ProviderContinuationPending { get; set; }
     internal bool HasProcessor => Volatile.Read(ref processorClaim) != 0;
     internal Action<JsonObject, bool>? ToolProgress { get; set; }
     internal Action<Foxwarm.Channels.ChannelTurnProgress>? StructuredProgress { get; set; }

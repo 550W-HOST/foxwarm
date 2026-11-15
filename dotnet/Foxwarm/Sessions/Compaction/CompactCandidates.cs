@@ -117,17 +117,28 @@ internal static class CompactCandidateBuilder
                 split--;
             }
         }
-        if (keepTokens > 0 && split < history.Count)
+        return keepTokens > 0 && split < history.Count
+            ? WholeExchangeStart(history, split, seqCounts)
+            : split;
+    }
+
+    internal static int WholeExchangeStart(IReadOnlyList<JsonObject> history, int split) =>
+        WholeExchangeStart(history, split, RawSequenceCounts(history));
+
+    private static int WholeExchangeStart(
+        IReadOnlyList<JsonObject> history,
+        int split,
+        IReadOnlyDictionary<long, int> seqCounts
+    )
+    {
+        for (var cursor = 0; cursor < split; cursor++)
         {
-            var cursor = split;
-            while (cursor > 0 && (Role(history[cursor]) == "tool" || Transparent(history[cursor])))
-                cursor--;
-            if (
-                Role(history[cursor]) == "model"
-                && Calls(history[cursor])
-                && RawExchangeEnd(history, cursor, seqCounts) >= split
-            )
-                split = cursor;
+            if (Role(history[cursor]) != "model" || !StartsExchange(history[cursor]))
+                continue;
+            var end = RawExchangeEnd(history, cursor, seqCounts);
+            if (end >= split)
+                return cursor;
+            cursor = end;
         }
         return split;
     }
@@ -155,8 +166,7 @@ internal static class CompactCandidateBuilder
         }
         var entries = new List<CompactCandidate>();
         var preserved = new List<PreservedCompactMessage>();
-        var preservedExchanges =
-            new List<(HashSet<string> Calls, List<PreservedCompactMessage> Items, int EndIndex)>();
+        var preservedByIndex = new Dictionary<int, PreservedCompactMessage>();
         var segment = 1;
         string? priorKind = null;
         int priorLevel = 0;
@@ -185,22 +195,7 @@ internal static class CompactCandidateBuilder
                         Preview(message, true)
                     );
                     preserved.Add(item);
-                    var prior = preservedExchanges.LastOrDefault();
-                    if (
-                        Role(message) == "tool"
-                        && prior.Items is { Count: > 0 }
-                        && FollowsAcrossTransparentRows(older, prior.EndIndex, index, seqCounts)
-                        && ToolIds(message, "functionResponse", "tool_use_id")
-                            .Any(prior.Calls.Contains)
-                    )
-                    {
-                        prior.Items.Add(item);
-                        preservedExchanges[^1] = (prior.Calls, prior.Items, index);
-                    }
-                    else
-                        preservedExchanges.Add(
-                            (ToolIds(message, "functionCall", "id").ToHashSet(), [item], index)
-                        );
+                    preservedByIndex[index] = item;
                 }
                 segment++;
                 priorKind = null;
@@ -288,7 +283,7 @@ internal static class CompactCandidateBuilder
             if (priorKind is not null && priorKind != "message")
                 segment++;
             var endIndex =
-                Role(message) == "model" && Calls(message)
+                Role(message) == "model" && StartsExchange(message)
                     ? RawExchangeEnd(older, index, seqCounts)
                     : index;
             var grouped = older.Skip(index).Take(endIndex - index + 1).ToArray();
@@ -340,9 +335,23 @@ internal static class CompactCandidateBuilder
         var eligible = inContext || rawTokens > 2000;
         if (!eligible)
             entries.RemoveAll(item => item.Kind == "message");
-        foreach (var (_, items, _) in preservedExchanges)
-        foreach (var item in items)
-            item.Exchange = items.Select(member => member.Seq).ToArray();
+        foreach (var (index, item) in preservedByIndex)
+        {
+            if (item.Exchange.Count > 0)
+                continue;
+            var end =
+                Role(older[index]) == "model" && StartsExchange(older[index])
+                    ? RawExchangeEnd(older, index, seqCounts, matchToolIds: true)
+                    : index;
+            var members = Enumerable
+                .Range(index, end - index + 1)
+                .Where(preservedByIndex.ContainsKey)
+                .Select(member => preservedByIndex[member])
+                .ToArray();
+            var sequences = members.Select(member => member.Seq).ToArray();
+            foreach (var member in members)
+                member.Exchange = sequences;
+        }
         return new CompactCandidates(
             history,
             split,
@@ -360,20 +369,9 @@ internal static class CompactCandidateBuilder
         var members = new HashSet<int>();
         for (var start = 0; start < history.Count; start++)
         {
-            if (Role(history[start]) != "model" || !Calls(history[start]))
+            if (Role(history[start]) != "model" || !StartsExchange(history[start]))
                 continue;
-            var end = start;
-            for (var next = start + 1; next < history.Count; next++)
-            {
-                var row = history[next];
-                if (
-                    Meta(row)?["contextBlock"] is not null
-                    || Role(row) != "tool" && !Transparent(row)
-                )
-                    break;
-                if (Role(row) == "tool")
-                    end = next;
-            }
+            var end = RawExchangeEnd(history, start, seqCounts: null);
             if (
                 end > start
                 && Enumerable
@@ -399,15 +397,27 @@ internal static class CompactCandidateBuilder
         return counts;
     }
 
+    // Both client tools and deferred native search share the same history range.
+    // A result closes only its actual server call ID. While a search remains
+    // pending, keep its contiguous assistant/tool continuation together; a user
+    // message or summary block still ends the exchange.
     private static int RawExchangeEnd(
         IReadOnlyList<JsonObject> history,
         int start,
-        IReadOnlyDictionary<long, int> seqCounts
+        IReadOnlyDictionary<long, int>? seqCounts,
+        bool matchToolIds = false
     )
     {
         var end = start;
         var walkedSeq = Number(Meta(history[start])?["seq"]);
         var preserved = Number(Meta(history[start])?["preservedFromBlockId"]) is > 0;
+        var pendingSearch = new HashSet<string>();
+        AnthropicSearchHistory.UpdatePending(
+            AnthropicSearchHistory.Blocks(history[start]),
+            pendingSearch
+        );
+        var localBatch = Calls(history[start]);
+        var localIds = ToolIds(history[start], "functionCall", "id").ToHashSet();
         for (var next = start + 1; next < history.Count; next++)
         {
             var row = history[next];
@@ -416,47 +426,49 @@ internal static class CompactCandidateBuilder
             if (
                 meta?["contextBlock"] is not null
                 || !preserved && Number(meta?["preservedFromBlockId"]) is > 0
-                || seq is null
-                || seqCounts.GetValueOrDefault(seq.Value) != 1
-                || seq <= walkedSeq
-                || Role(row) != "tool" && !Transparent(row)
+                || seqCounts is not null
+                    && (
+                        seq is null
+                        || seqCounts.GetValueOrDefault(seq.Value) != 1
+                        || seq <= walkedSeq
+                    )
             )
                 break;
             walkedSeq = seq;
-            // A trailing presentation notice alone does not extend a call-only source.
-            if (Role(row) == "tool")
+            if (Role(row) == "tool" && (localBatch || pendingSearch.Count > 0))
+            {
+                if (
+                    matchToolIds
+                    && !ToolIds(row, "functionResponse", "tool_use_id").Any(localIds.Contains)
+                )
+                    break;
                 end = next;
+            }
+            else if (Transparent(row))
+                continue;
+            else if (Role(row) == "model" && pendingSearch.Count > 0)
+            {
+                AnthropicSearchHistory.UpdatePending(
+                    AnthropicSearchHistory.Blocks(row),
+                    pendingSearch
+                );
+                localBatch = Calls(row);
+                localIds.UnionWith(ToolIds(row, "functionCall", "id"));
+                end = next;
+            }
+            else
+                break;
         }
         return end;
     }
 
-    private static bool Transparent(JsonObject row) => !Visible(row) || Completion(row);
+    private static bool StartsExchange(JsonObject row) =>
+        Calls(row)
+        || AnthropicSearchHistory
+            .Blocks(row)
+            .Any(block => SessionWait.Text(block["type"]) == "server_tool_use");
 
-    private static bool FollowsAcrossTransparentRows(
-        IReadOnlyList<JsonObject> history,
-        int previousIndex,
-        int currentIndex,
-        IReadOnlyDictionary<long, int> seqCounts
-    )
-    {
-        var previousSeq = Number(Meta(history[previousIndex])?["seq"]);
-        for (var index = previousIndex + 1; index <= currentIndex; index++)
-        {
-            var row = history[index];
-            var meta = Meta(row);
-            var seq = Number(meta?["seq"]);
-            if (
-                seq is null
-                || seqCounts.GetValueOrDefault(seq.Value) != 1
-                || seq <= previousSeq
-                || meta?["contextBlock"] is not null
-                || index < currentIndex && !Transparent(row)
-            )
-                return false;
-            previousSeq = seq;
-        }
-        return true;
-    }
+    private static bool Transparent(JsonObject row) => !Visible(row) || Completion(row);
 
     public static long? Number(JsonNode? node)
     {

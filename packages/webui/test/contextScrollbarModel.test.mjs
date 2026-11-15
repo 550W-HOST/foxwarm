@@ -190,3 +190,13 @@ test('scale model uses log1p, semantic hidden height, measured replacement, and 
   assert.equal(snapshotRendered.find(segment => segment.category === 'snapshot').estimatedTokens, 36)
   assert.equal(snapshotRendered.find(segment => segment.key === 'seq-local-1-message').estimatedTokens, 100)
 })
+
+test('hosted cumulative bills do not fill the context overview when a separate measurement is saved', () => {
+  for (const contextTokensSource of ['reported-iteration', 'estimated']) {
+    const rows = [message('model', 'Search answer.', 2, { usage: { inputTokens: 300000, cachedTokens: 10000, outputTokens: 5000, contextTokens: 150000, contextTokensSource } })]
+    const usage = getContextScrollbarContextUsage(rows, 200000)
+    assert.equal(usage.usedTokens, 150000)
+    assert.equal(usage.freeTokens, 50000)
+    assert.equal(usage.estimated === true, contextTokensSource === 'estimated')
+  }
+})

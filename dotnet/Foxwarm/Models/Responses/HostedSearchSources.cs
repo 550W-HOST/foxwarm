@@ -44,6 +44,20 @@ internal static class HostedSearchSources
 
     private static JsonObject? Evidence(JsonObject part, JsonObject message)
     {
+        var native = (part["providerMeta"] as JsonObject)?["anthropic"] as JsonObject;
+        if (
+            SessionWait.Text(native?["contentBlock"]?["type"]) == "web_search_tool_result"
+            && ShortText(native?["sourceModelId"], 200) is string nativeModel
+            && native?["contentBlock"]?["content"] is JsonArray nativeSources
+        )
+        {
+            var nativeEvidence = new JsonObject { ["source_model_id"] = nativeModel };
+            if (ShortText(message["__meta"]?["llmRequestId"], 200) is string nativeRequest)
+                nativeEvidence["request_id"] = nativeRequest;
+            if (ShortText(native["contentBlock"]?["tool_use_id"], 200) is string nativeCall)
+                nativeEvidence["call_id"] = nativeCall;
+            return SearchRecords(nativeEvidence, nativeSources, "web_search_result");
+        }
         var metadata = (part["providerMeta"] as JsonObject)?["openaiResponses"] as JsonObject;
         if (
             ShortText(metadata?["sourceModelId"], 200) is not string model
@@ -71,12 +85,21 @@ internal static class HostedSearchSources
             || action["sources"] is not JsonArray sources
         )
             return null;
+        return SearchRecords(evidence, sources, "url");
+    }
+
+    private static JsonObject? SearchRecords(
+        JsonObject evidence,
+        JsonArray sources,
+        string sourceType
+    )
+    {
         var records = new JsonArray();
         var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var source in sources.OfType<JsonObject>())
         {
             if (
-                SessionWait.Text(source["type"]) != "url"
+                SessionWait.Text(source["type"]) != sourceType
                 || SafeUrl(source["url"]) is not string url
                 || !seen.Add(url)
             )
@@ -162,10 +185,17 @@ internal static class HostedSearchSources
                     var callIndex = Enumerable
                         .Range(0, parts.Count)
                         .FirstOrDefault(i => parts[i]?["functionCall"] is not null, parts.Count);
-                    parts.Insert(
-                        callIndex,
-                        new JsonObject { ["text"] = text, ["phase"] = "commentary" }
-                    );
+                    var evidencePart = new JsonObject { ["text"] = text, ["phase"] = "commentary" };
+                    if (
+                        parts
+                            .OfType<JsonObject>()
+                            .Any(part => part["providerMeta"]?["anthropic"] is JsonObject)
+                    )
+                        evidencePart["providerMeta"] = new JsonObject
+                        {
+                            ["anthropicSearchEvidence"] = true,
+                        };
+                    parts.Insert(callIndex, evidencePart);
                     return copy;
                 }
             )

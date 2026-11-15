@@ -172,6 +172,10 @@ export interface OpenAIResponsesAnnotation {
 }
 
 export interface MessagePartProviderMeta {
+  anthropic?: {
+    sourceModelId?: string
+    contentBlock?: Record<string, any>
+  }
   thinkingSummaries?: string[]
   encryptedThinking?: string
   encryptedThinkingLength?: number
