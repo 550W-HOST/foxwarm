@@ -156,9 +156,32 @@ internal static class SessionStatus
             if (SessionWait.Strings(wait["waitQuestionIds"]) is { Length: > 0 } questions)
                 name += "; questions: " + string.Join(", ", questions);
         }
+        if (Activity(state) is { } activity)
+            name += "; activity: " + Quote(activity);
         var queued = SessionWait.Number(state["queueLength"]) ?? 0;
         return "Session execution state: " + name + (queued > 0 ? "; queue: " + queued : "") + ".";
     }
+
+    // The later of the live reasoning heading and tool summary, already bounded to one line.
+    private static string? Activity(JsonObject state)
+    {
+        if (state["activity"] is not JsonObject activity)
+            return null;
+        var reasoning = SessionWait.Text(activity["reasoning"]);
+        var tool = SessionWait.Text(activity["tool"]);
+        var text = SessionWait.Text(activity["latest"]) == "reasoning"
+            ? reasoning ?? tool
+            : tool ?? reasoning;
+        return string.IsNullOrWhiteSpace(text) ? null : ToolActivity.SingleLine(text);
+    }
+
+    private static string Quote(string text) =>
+        "\"" + text.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
+
+    // The newest message seq beside the active history count; seq numbers every message ever
+    // appended, while active history excludes compacted and archived rows.
+    internal static string Messages(long latestSeq, long active) =>
+        latestSeq > 0 ? $"msg#{latestSeq} latest · {active} active" : $"{active} active";
 
     internal static string Date(double value) =>
         value == 0
@@ -174,13 +197,13 @@ internal static class SessionStatus
         $"🤖 `{SessionWait.Text(dto["id"])}`"
         + (SessionWait.Text(dto["displayName"]) is { } name ? " (" + name + ")" : "")
         + (SessionWait.Text(dto["id"]) == current ? " **CURRENT**" : "")
-        + $" - {SessionWait.Number(dto["messageCount"]) ?? 0} messages - {Runtime(dto["runtimeState"]!.AsObject())} - Last: {Date(SessionWait.Number(dto["lastMessageTime"]) ?? 0)}";
+        + $" - {Messages((long)(SessionWait.Number(dto["latestMessageSeq"]) ?? 0), (long)(SessionWait.Number(dto["messageCount"]) ?? 0))} - {Runtime(dto["runtimeState"]!.AsObject())} - Last: {Date(SessionWait.Number(dto["lastMessageTime"]) ?? 0)}";
 
     internal static string Row(SessionOwner owner, SessionMetadata meta, string? current = null) =>
         $"🤖 `{meta.Id}`"
         + (meta.DisplayName is null ? "" : " (" + meta.DisplayName + ")")
         + (meta.Id == current ? " **CURRENT**" : "")
-        + $" - {meta.MessageCount} messages - {Runtime(owner.BuildDto(meta)["runtimeState"]!.AsObject())} - Last: {Date(meta.LastMessageTime)}";
+        + $" - {Messages(Math.Max(0, meta.NextMessageSeq - 1), meta.MessageCount)} - {Runtime(owner.BuildDto(meta)["runtimeState"]!.AsObject())} - Last: {Date(meta.LastMessageTime)}";
 }
 
 internal sealed partial class SessionManager
@@ -393,7 +416,7 @@ internal sealed partial class SessionManager
                 )
                 + (meta.Archived ? "- 📦 archived\n" : "")
                 + $"- model: `{leaf?.Key ?? catalog.DefaultKey}`\n- effort: raw={meta.Effort ?? "unset"}, effective={(SessionWait.Text(dto["effectiveEffort"]) ?? "per-leaf default")}, allowed={string.Join('|', leaf?.AllowedEfforts ?? HostModels.Efforts)}, default={(leaf is null ? "high" : leaf.DefaultEffort)}\n"
-                + $"- messages: {meta.MessageCount}\n- token estimate: ~{summary.Estimate} / {leaf?.ContextLimit ?? catalog.PresentationContextLimit}\n- images: {summary.Images}{(summary.Images > 0 && leaf?.ImageInput == false ? " (not sent: the current model does not support image input)" : "")}\n- last usage: {usageText}\n- last message: {SessionStatus.Date(meta.LastMessageTime)}\n- auto-compact threshold: ~{dto["effectiveCompactThresholdTokens"]} tokens ({(summary.Threshold is > 0 ? "override" : "model default")})\n"
+                + $"- messages: {SessionStatus.Messages(Math.Max(0, meta.NextMessageSeq - 1), meta.MessageCount)}\n- token estimate: ~{summary.Estimate} / {leaf?.ContextLimit ?? catalog.PresentationContextLimit}\n- images: {summary.Images}{(summary.Images > 0 && leaf?.ImageInput == false ? " (not sent: the current model does not support image input)" : "")}\n- last usage: {usageText}\n- last message: {SessionStatus.Date(meta.LastMessageTime)}\n- auto-compact threshold: ~{dto["effectiveCompactThresholdTokens"]} tokens ({(summary.Threshold is > 0 ? "override" : "model default")})\n"
                 + (
                     meta.Cost is double totalCost
                         ? $"- total estimated cost: {ModelUsageCost.FormatUsd(totalCost)}\n"

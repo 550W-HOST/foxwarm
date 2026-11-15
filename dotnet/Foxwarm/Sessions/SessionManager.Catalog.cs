@@ -356,7 +356,9 @@ internal sealed partial class SessionManager
                     subtreeTimes.GetValueOrDefault(id),
                     SessionCatalog.Number(row["meta"]?["lastMessageTime"]) ?? 0
                 );
-                dto["sequenceMessageCount"] = sequences.GetValueOrDefault(id);
+                var sequence = sequences.GetValueOrDefault(id);
+                dto["sequenceMessageCount"] = sequence.Count;
+                dto["latestMessageSeq"] = sequence.Latest;
                 return dto;
             })
             .ToArray();
@@ -505,9 +507,11 @@ internal sealed partial class SessionManager
         return true;
     }
 
-    private Dictionary<string, long> ArchiveSequenceCounts(string[] ids)
+    // Count is the Session's own messages (a fork's after its fork point); Latest is the seq of
+    // its newest message, inherited history included.
+    private Dictionary<string, (long Count, long Latest)> ArchiveSequenceCounts(string[] ids)
     {
-        var result = new Dictionary<string, long>(StringComparer.Ordinal);
+        var result = new Dictionary<string, (long Count, long Latest)>(StringComparer.Ordinal);
         var file = Path.Combine(root, "state", "archive-store.sqlite");
         if (!File.Exists(file))
             return result;
@@ -541,8 +545,11 @@ FROM requested LEFT JOIN local_max ON local_max.session_id=requested.session_id 
             using var reader = command.ExecuteReader();
             while (reader.Read())
                 result[reader.GetString(0)] = reader.IsDBNull(2)
-                    ? reader.GetInt64(1)
-                    : Math.Max(0, reader.GetInt64(1) - reader.GetInt64(3));
+                    ? (reader.GetInt64(1), reader.GetInt64(1))
+                    : (
+                        Math.Max(0, reader.GetInt64(1) - reader.GetInt64(3)),
+                        Math.Max(reader.GetInt64(1), reader.GetInt64(3))
+                    );
         }
         return result;
     }

@@ -1,6 +1,4 @@
 import type { Message, ModelStreamPart, ModelStreamToolCall, SessionStreamEvent } from './components/chatShared'
-import { extractOpenAIReasoningSummaryTitles } from './reasoningSummary'
-import { getStreamingToolSummary } from './streamingToolSummary'
 
 export type StreamingAssistantDraft = {
   streamId: string
@@ -14,32 +12,6 @@ export type StreamingAssistantDraft = {
   startedAt?: number
   llmRequestId?: string
   incompletePrefix?: boolean
-}
-
-export type StreamingCaption = { kind: 'reasoning' | 'tool'; text: string }
-
-/** Eligible captions in output order; ordinary output never cancels a previous caption. */
-export function getStreamingCaptions(draft: StreamingAssistantDraft | null | undefined): StreamingCaption[] {
-  if (!draft) return []
-  const captions: Array<StreamingCaption & { order: number }> = []
-  const reasoning = new Map<number, string[]>()
-  if (draft.parts) {
-    for (const part of draft.parts) {
-      if (part.kind !== 'reasoning') continue
-      const summaries = reasoning.get(part.outputIndex) || []
-      summaries[part.summaryIndex || 0] = part.text || ''
-      reasoning.set(part.outputIndex, summaries)
-    }
-  } else reasoning.set(-1, [draft.reasoning])
-  for (const [order, summaries] of reasoning) {
-    const text = extractOpenAIReasoningSummaryTitles(summaries.filter(Boolean).join('\n')).at(-1)
-    if (text) captions.push({ kind: 'reasoning', text, order })
-  }
-  for (const call of draft.toolCalls) {
-    const text = getStreamingToolSummary(call)
-    if (text) captions.push({ kind: 'tool', text, order: call.index })
-  }
-  return captions.sort((left, right) => left.order - right.order).map(({ kind, text }) => ({ kind, text }))
 }
 
 export function buildStreamingAssistantMessage(draft: StreamingAssistantDraft | null): Message | null {

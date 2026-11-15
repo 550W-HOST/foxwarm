@@ -133,6 +133,7 @@ internal sealed partial class SessionOwner
                 ["toolCalls"] = new JsonArray(),
             };
             latestDraftProgress = new ResponsesStreamProgress("", "", []);
+            ResetStreamActivity(startedAt);
             emittedDraft = (JsonObject)draft.DeepClone();
             lastDraftSent = lastToolArgsSent = draftClock.GetTimestamp();
             payload = new JsonObject
@@ -148,11 +149,14 @@ internal sealed partial class SessionOwner
             };
             Emit(SessionEventKind.ModelStream, payload);
         }
+        // A replaced attempt's uncommitted items are gone.
+        PublishActivityIfChanged();
         return requestId;
     }
 
     public void PublishDraftProgress(ResponsesStreamProgress progress)
     {
+        var activityChanged = false;
         lock (draftGate)
         {
             if (draft is null)
@@ -163,6 +167,7 @@ internal sealed partial class SessionOwner
             )
                 progress = ProjectDraft(progress, through);
             latestDraftProgress = progress;
+            activityChanged = UpdateStreamActivity(progress);
             draft["text"] = progress.Text;
             draft["reasoning"] = progress.Reasoning;
             draft["toolCalls"] = new JsonArray(
@@ -190,6 +195,9 @@ internal sealed partial class SessionOwner
                 ScheduleDraftLocked(arguments: false, delay);
             ScheduleToolArgsLocked();
         }
+        // Published as soon as a heading or summary completes, independent of the draft throttle.
+        if (activityChanged)
+            PublishActivityIfChanged();
     }
 
     private void NotifyDraftLocked(bool forceToolArgs)
@@ -510,6 +518,7 @@ internal sealed partial class SessionOwner
                     .ToArray()
             );
             latestDraftProgress = ProjectDraft(latestDraftProgress!, through);
+            UpdateStreamActivity(latestDraftProgress);
             emittedDraft = (JsonObject)draft.DeepClone();
             Emit(SessionEventKind.ModelStream, envelope);
             Emit(SessionEventKind.DraftChanged);
@@ -541,6 +550,7 @@ internal sealed partial class SessionOwner
             FlushDraftLocked();
             draft = emittedDraft = null;
             latestDraftProgress = null;
+            ResetStreamActivity(null);
             Emit(SessionEventKind.DraftChanged);
         }
     }
@@ -554,8 +564,10 @@ internal sealed partial class SessionOwner
             FlushDraftLocked();
             draft = emittedDraft = null;
             latestDraftProgress = null;
+            ResetStreamActivity(null);
             Emit(SessionEventKind.DraftChanged);
         }
+        PublishActivityIfChanged();
     }
 
     // An approval wait publishes its call without the tool-call activity of a started call.

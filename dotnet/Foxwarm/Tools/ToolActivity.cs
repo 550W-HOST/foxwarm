@@ -49,6 +49,39 @@ internal static class ToolActivity
         return (target, inner ?? new JsonObject());
     }
 
+    // The live activity summary of a call: the explicit summary of Node `exec` or builtin
+    // `run_script`, also when a ctl or call_tool call routes to one. MCP tools of the same name,
+    // calls without a summary and other tools have none.
+    internal static string? CaptionSummary(string? name, JsonObject args)
+    {
+        string? source;
+        string? target;
+        JsonObject? targetArgs;
+        if (name == "exec")
+        {
+            (source, target, targetArgs) = ("node", name, args);
+        }
+        else if (name == "run_script")
+        {
+            (source, target, targetArgs) = ("builtin", name, args);
+        }
+        else if (name is "ctl" or "call_tool")
+        {
+            var described = name == "ctl" ? CtlParser.Describe(args) : CtlParser.DescribeCall(args);
+            if (described is null)
+                return null;
+            (source, target, targetArgs) = (described.Source, described.Name, described.Args);
+        }
+        else
+        {
+            return null;
+        }
+        if (!(source == "node" && target == "exec" || source == "builtin" && target == "run_script"))
+            return null;
+        var summary = SessionWait.Text(targetArgs["summary"]);
+        return string.IsNullOrWhiteSpace(summary) ? null : SingleLine(summary);
+    }
+
     internal static string SingleLine(string text, int limit = 200) =>
         ContextPreviewRenderer.Clip(Regex.Replace(text, @"\s+", " ").Trim(), limit);
 

@@ -1,13 +1,10 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import RuntimeFox from './RuntimeFox'
 import FoxThinkingText from './FoxThinkingText'
 import type { TimelineView } from '../chatPreferences'
-import type { StreamingAssistantDraft } from '../streamingAssistantDraft'
-import type { Message } from './chatShared'
-import { getCaptionSegment, selectProcessingCaption } from '../processingCaption'
 import { isRuntimeStateInactiveName, type SessionRuntimeState } from '../sessionRuntimeState'
-import { getRuntimeStatusView, type RuntimeStatusView } from '../runtimeStatus'
+import { getRuntimeActivityText, getRuntimeStatusView, type RuntimeStatusView } from '../runtimeStatus'
 
 import type { SessionControlAction, SessionControlFeedback } from '../../../shared/src/sessionControlFeedback'
 
@@ -21,9 +18,6 @@ interface ProcessingStatusProps {
   pendingSend?: boolean
   isMobile: boolean
   timelineView?: TimelineView
-  /** Loaded latest history; the caption is derived from it and the live draft. */
-  history?: readonly Message[]
-  streamingAssistantDraft?: StreamingAssistantDraft | null
   pendingControl?: SessionControlAction | null
   controlFeedback?: SessionControlFeedback | null
   failure?: { title: string; details?: string } | null
@@ -35,7 +29,7 @@ const controlButtonClass = 'inline-flex shrink-0 items-center rounded-md px-2 te
 const toneClasses = { accent: 'text-fw-accent', special: 'text-fw-special', warning: 'text-fw-warning', danger: 'text-fw-danger', muted: 'text-fw-text-muted' }
 const useBrowserLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect
 
-const ProcessingStatus = memo(function ProcessingStatus({ sessionBusy, runtimeState, sessionQueueLength, turnIncomplete, loading, pendingSend = false, isMobile, timelineView, history, streamingAssistantDraft, pendingControl, controlFeedback, failure, onContinue, onCancelCompaction }: ProcessingStatusProps) {
+const ProcessingStatus = memo(function ProcessingStatus({ sessionBusy, runtimeState, sessionQueueLength, turnIncomplete, loading, pendingSend = false, isMobile, timelineView, pendingControl, controlFeedback, failure, onContinue, onCancelCompaction }: ProcessingStatusProps) {
   const [now, setNow] = useState(Date.now)
   const [open, setOpen] = useState(false)
   const [position, setPosition] = useState<{ left: number; bottom?: number; top?: number; width: number; maxHeight: number } | null>(null)
@@ -100,10 +94,8 @@ const ProcessingStatus = memo(function ProcessingStatus({ sessionBusy, runtimeSt
 
   useEffect(() => { if (open && position) panel.current?.focus({ preventScroll: true }) }, [open, position !== null])
 
-  const captionSegment = useMemo(() => getCaptionSegment(history), [history])
-  // Only ordinary requests and tool execution show the derived caption; other states keep their own labels.
-  const liveCaption = view?.playful || view?.kind === 'tool'
-    ? selectProcessingCaption(captionSegment, streamingAssistantDraft, runtimeState, timelineView) : undefined
+  // The owner's live activity: reasoning headings only in Conversation, tool summaries in every view.
+  const liveCaption = getRuntimeActivityText(runtimeState, view, timelineView === 'conversation' ? 'latest' : 'tool')
   const caption = view && <>
     <RuntimeFox kind={view.kind} />
     {liveCaption ? <span className="min-w-0 truncate" title={liveCaption}>{liveCaption}</span> : view.playful ? <FoxThinkingText label={view.label} title={view.label} /> : <span className="min-w-0 truncate" title={view.label}>{view.label}</span>}

@@ -91,3 +91,17 @@ export function getRuntimeStatusView(runtime: SessionRuntimeState | undefined, f
   if (state === 'idle' && runtime?.processing) return { kind: 'unknown', tone: 'muted', label: 'Running…', details }
   return null
 }
+
+/**
+ * The live activity text shown in place of an ordinary request or tool-execution caption. `latest`
+ * is the later of the reasoning heading and tool summary; `tool` is the tool summary only. Waiting,
+ * approval, retry, compaction, stopping and failure keep their own labels.
+ */
+export function getRuntimeActivityText(runtime: SessionRuntimeState | undefined, view: RuntimeStatusView | null,
+  include: 'latest' | 'tool' = 'latest'): string | undefined {
+  const activity = runtime?.activity
+  if (!activity || !view || !(view.playful || view.kind === 'tool')) return undefined
+  const text = include === 'tool' ? activity.tool
+    : activity.latest === 'reasoning' ? activity.reasoning ?? activity.tool : activity.tool ?? activity.reasoning
+  return text?.trim() || undefined
+}

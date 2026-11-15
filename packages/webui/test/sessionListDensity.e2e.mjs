@@ -769,3 +769,62 @@ test('failed sessions use static danger indicators in both list densities and th
     }
   } finally { await page.close() }
 })
+
+test('live activity replaces the runtime label in detailed rows and joins the normal status tooltip', async () => {
+  const page = await open()
+  try {
+    const long = 'Rebuild the delivery bundle and compare the generated assets against the baseline '.repeat(3).trim()
+    const node = 'provider/build-worker'
+    const live = (id, runtimeState) => ({ id: 'demo/' + id, displayName: id, parentSessionId: null, busy: true, messageCount: 4, sequenceMessageCount: 80, runtimeState: { busy: true, queueLength: 0, ...runtimeState } })
+    const cases = activity => [
+      live('tool', { state: 'running-tool', tool: { name: 'exec', source: 'node', executionNode: node, startedAt: 1 }, activity }),
+      live('think', { state: 'requesting-model', active: { phase: 'normal-turn' }, activity: { reasoning: 'Planning the change', latest: 'reasoning' } }),
+      live('request', { state: 'requesting-model', active: { phase: 'normal-turn' } }),
+      live('retry', { state: 'requesting-model', active: { phase: 'normal-turn' }, retry: { attempt: 1, maxAttempts: 3 }, activity }),
+      live('compact', { state: 'requesting-model', active: { phase: 'compaction' }, activity }),
+      live('approval', { state: 'running-tool', tool: { name: 'exec', source: 'node', approval: { id: 'a', status: 'pending' }, startedAt: 1 }, activity }),
+      { ...live('wait', { state: 'waiting', busy: false, waiting: { waitId: 'w', waitingFor: 'input' } }), busy: false },
+    ]
+    await page.evaluate(sessions => window.fixtureSetSessions(sessions), cases({ reasoning: 'Planning', tool: 'Doing A', latest: 'tool' }))
+    await page.waitForSelector(row('tool'))
+    // Normal density: the status tooltip and label name the operation, its Node and the activity.
+    const status = id => page.$eval(`${row(id)} [data-session-status]`, e => [e.getAttribute('aria-label'), e.title])
+    assert.deepEqual(await status('tool'), [`Status: Executing exec · ${node} · Doing A`, `Executing exec · ${node} · Doing A`])
+    assert.deepEqual(await status('think'), ['Status: Requesting model… · Planning the change', 'Requesting model… · Planning the change'])
+    assert.deepEqual(await status('request'), ['Status: Requesting model…', 'Requesting model…'])
+    assert.deepEqual(await status('retry'), ['Status: Retrying · 1/3', 'Retrying · 1/3'])
+    assert.deepEqual(await status('compact'), ['Status: Compacting context…', 'Compacting context…'])
+    assert.deepEqual(await status('approval'), ['Status: Waiting for approval · exec', 'Waiting for approval · exec'])
+    // Detailed rows show the activity with the state indicator and tone; identity and Node move to the hover title.
+    await toggleDetailed(page)
+    await page.waitForSelector('[data-session-list-density="detailed"]')
+    const summary = id => page.$eval(`${row(id)} [data-session-runtime-summary]`, e => ({
+      text: e.textContent, title: e.title, tone: [...e.classList].find(name => name.startsWith('text-fw-')),
+      activity: !!e.querySelector('[data-session-activity]'), spinner: !!e.querySelector('.runtime-busy-spinner'),
+    }))
+    assert.deepEqual(await summary('tool'), { text: 'Doing A', title: `Executing exec · ${node} · Doing A`, tone: 'text-fw-special', activity: true, spinner: true })
+    assert.deepEqual(await summary('think'), { text: 'Planning the change', title: 'Requesting model… · Planning the change', tone: 'text-fw-accent', activity: true, spinner: true })
+    assert.deepEqual(await summary('request'), { text: 'Requesting model…', title: '', tone: 'text-fw-accent', activity: false, spinner: true })
+    assert.equal((await summary('retry')).text, 'Retrying · 1/3')
+    assert.equal((await summary('compact')).text, 'Compacting context…')
+    assert.equal((await summary('approval')).text, 'Waiting for approval · exec')
+    assert.equal((await summary('wait')).text, 'Waiting for input')
+    assert.equal(await page.$('[data-fox-thinking-copy]'), null, 'the list never shows decorative thinking text')
+    assert.equal(await page.$eval(row('tool'), e => e.textContent.includes('80 msgs')), true)
+    // The reasoning heading is always eligible in the list, and a later value replaces the text immediately.
+    await page.evaluate(sessions => window.fixtureSetSessions(sessions), cases({ reasoning: 'Reviewing the diff', tool: 'Doing A', latest: 'reasoning' }))
+    await page.waitForFunction(selector => document.querySelector(selector)?.textContent === 'Reviewing the diff', {}, `${row('tool')} [data-session-activity]`)
+    await page.evaluate(sessions => window.fixtureSetSessions(sessions), cases({ tool: long, latest: 'tool' }))
+    await page.waitForFunction((selector, long) => document.querySelector(selector)?.textContent === long, {}, `${row('tool')} [data-session-activity]`, long)
+    assert.equal(await page.$eval(row('tool'), e => e.scrollWidth <= e.clientWidth), true, 'long activity truncates inside the row')
+    assert.equal(await page.$eval(`${row('tool')} [data-session-activity]`, e => e.scrollWidth > e.clientWidth), true)
+    const output = process.env.FOXWARM_E2E_SCREENSHOT_DIR
+    if (output) {
+      await mkdir(output, { recursive: true })
+      await page.evaluate(sessions => window.fixtureSetSessions(sessions), cases({ reasoning: 'Planning', tool: 'Doing A', latest: 'tool' }))
+      await page.waitForFunction(selector => document.querySelector(selector)?.textContent === 'Doing A', {}, `${row('tool')} [data-session-activity]`)
+      await page.mouse.move(800, 650)
+      await page.screenshot({ path: path.join(output, 'sidebar-detailed-activity.png'), clip: { x: 0, y: 0, width: 340, height: 700 } })
+    }
+  } finally { await page.close() }
+})

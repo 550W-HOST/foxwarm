@@ -2,7 +2,7 @@ import { Archive, GitBranch, MessageCircleQuestion, Server, ShieldAlert } from '
 import type { ReactNode } from 'react'
 import type { Session } from './SessionListCore'
 import RuntimeBusySpinner from './RuntimeBusySpinner'
-import { getSessionRuntimeStateName, getSessionRuntimeSummary, getSessionRuntimeTone } from '../sessionRuntimeState'
+import { getSessionRuntimeActivity, getSessionRuntimeStateName, getSessionRuntimeSummary, getSessionRuntimeTone } from '../sessionRuntimeState'
 import { getResolvedSessionNodeId } from '../sessionNode'
 import { getSessionQuestionAttention, questionAttentionLabel } from '../sessionQuestions'
 
@@ -68,6 +68,11 @@ export default function SessionRowContent({
   const runtimeStateName = getSessionRuntimeStateName(session)
   const showRuntimeBadge = session.runtimeState ? runtimeStateName !== 'idle' || !!session.runtimeState.compaction : !!session.busy
   const resolvedNodeId = getResolvedSessionNodeId(session)
+  // The owner's live activity names what the Session is doing; the runtime summary keeps the
+  // operation, tool and Node, and is the only text for states with their own labels.
+  const runtimeSummary = getSessionRuntimeSummary(session)
+  const runtimeActivity = getSessionRuntimeActivity(session)
+  const runtimeNote = session.runtimeState?.note ? ` · ${session.runtimeState.note}` : ''
 
   // The title truncates first; the tag keeps up to 45% of the row so the Agent stays readable.
   const agentTagBadge = agentTag && (
@@ -126,8 +131,8 @@ export default function SessionRowContent({
         {showRuntimeBadge && (
           <span
             role="img"
-            aria-label={`Status: ${getSessionRuntimeSummary(session)}`}
-            title={`${getSessionRuntimeSummary(session)}${session.runtimeState?.note ? ` · ${session.runtimeState.note}` : ''}`}
+            aria-label={`Status: ${runtimeSummary}${runtimeActivity ? ` · ${runtimeActivity}` : ''}`}
+            title={`${runtimeSummary}${runtimeActivity ? ` · ${runtimeActivity}` : ''}${runtimeNote}`}
             {...hook('data-session-status', runtimeStateName)}
             className={`session-compact-status ${getRuntimeBadgeTone(session)}`}
           >
@@ -166,9 +171,11 @@ export default function SessionRowContent({
           {resolvedNodeId !== 'master' && <span>•</span>}
           {showRuntimeBadge && (
             <>
-              <span className={`inline-flex items-center gap-1 ${getRuntimeBadgeTone(session)}`} title={session.runtimeState?.note || undefined}>
+              <span className={`inline-flex min-w-0 max-w-full items-center gap-1 ${getRuntimeBadgeTone(session)}`}
+                title={runtimeActivity ? `${runtimeSummary} · ${runtimeActivity}${runtimeNote}` : session.runtimeState?.note || undefined}
+                {...hook('data-session-runtime-summary')}>
                 <RuntimeActivityIndicator state={runtimeStateName} />
-                <span>{getSessionRuntimeSummary(session)}</span>
+                <span className="min-w-0 truncate" {...(runtimeActivity ? hook('data-session-activity') : {})}>{runtimeActivity ?? runtimeSummary}</span>
               </span>
               <span>•</span>
             </>

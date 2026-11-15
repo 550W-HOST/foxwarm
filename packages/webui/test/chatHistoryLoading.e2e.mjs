@@ -1597,30 +1597,26 @@ test('real Chat routes per-call activity without refetching history or flashing 
 })
 
 const captionStart = { role: 'user', parts: [{ text: 'Start the caption turn' }], __meta: { seq: 1, timestamp: 10 } }
+const requesting = activity => ({ state: 'requesting-model', busy: true, queueLength: 0, active: { phase: 'normal-turn' }, ...(activity ? { activity } : {}) })
+const executing = (activity, tool = { id: 'script', name: 'run_script', source: 'builtin', argsPreview: 'Arguments preview', startedAt: 200 }) =>
+  ({ state: 'running-tool', busy: true, queueLength: 0, tool, ...(activity ? { activity } : {}) })
 
 async function captionChat(t) {
   const page = await browser.newPage()
   t.after(() => page.close())
   await page.setViewport({ width: 390, height: 800 })
-  // A load is also the reload and Session-switch path: the caption is derived from the history it resolves.
-  const load = async (history = [captionStart], runtimeState = { state: 'requesting-model', busy: true, queueLength: 0 }) => {
+  // A load is also the reload and Session-switch path: the caption comes from the runtime state it resolves.
+  const load = async (runtimeState = requesting(), history = [captionStart]) => {
     await page.goto(`${fixtureUrl}?nodePicker=1`, { waitUntil: 'load' })
     await page.waitForFunction(() => window.fixtureHistoryRequestCount === 1)
     await page.evaluate((history, runtimeState) => {
       window.initializeFixtureTheme()
       window.fixtureTimelineView = 'conversation'
       window.renderFixtureChats()
-      window.captionHistory = history
       window.resolveFixtureHistory(0, history, 0, { busy: runtimeState.busy, runtimeState })
       window.setCaptionRuntime = runtimeState => window.emitFixtureEvent({ type: 'session-state', session: {
-        id: 'fixture/main', busy: runtimeState.busy, queueLength: 0, messageCount: window.captionHistory.length, historyVersion: 0, runtimeState,
+        id: 'fixture/main', busy: runtimeState.busy, queueLength: 0, messageCount: 1, historyVersion: 0, runtimeState,
       } })
-      window.commitCaptionMessage = message => {
-        const seq = window.captionHistory.length + 1
-        const committed = { ...message, __meta: { seq, timestamp: seq * 100, ...message.__meta } }
-        window.captionHistory = [...window.captionHistory, committed]
-        window.emitFixtureMessage(committed)
-      }
       // Caption commits as the browser makes them, so a brief fallback flash between transitions is recorded.
       window.captionTimeline = []
       new MutationObserver(() => {
@@ -1633,16 +1629,10 @@ async function captionChat(t) {
     }, history, runtimeState)
   }
   await load()
-  const runtime = state => page.evaluate(state => window.setCaptionRuntime({ queueLength: 0, busy: true, ...state }), state)
+  const runtime = state => page.evaluate(state => window.setCaptionRuntime(state), state)
   const emit = event => page.evaluate(event => window.emitFixtureEvent({ type: 'session-event', event }), event)
-  const commit = message => page.evaluate(message => window.commitCaptionMessage(message), message)
   // Color and pose belong to the committed runtime state; wait for that DOM transition before asserting them.
   const presentation = kind => page.waitForSelector(`[data-runtime-presentation="${kind}"]`)
-  const request = async id => {
-    await runtime({state:'requesting-model',active:{phase:'normal-turn',streamId:id}})
-    await emit({type:'model-stream-reset',streamVersion:2,streamId:id,llmRequestId:id,sequence:0})
-    await presentation('request')
-  }
   const caption = () => page.$eval('[data-runtime-caption]', el => el.querySelector('[data-fox-thinking-copy]') ? 'fallback' : el.textContent)
   const expect = text => text === 'fallback'
     ? page.waitForSelector('[data-runtime-caption] [data-fox-thinking-copy]')
@@ -1659,38 +1649,40 @@ async function captionChat(t) {
     assert.ok(start >= 0, `${from} was displayed: ${JSON.stringify(timeline)}`)
     return timeline.slice(start).map(entry => entry.text).filter((text, index, texts) => index === 0 || text !== texts[index - 1])
   }
-  return {page,load,runtime,emit,commit,presentation,request,caption,expect,mode,ink,shot,shownSince}
+  return {page,load,runtime,emit,presentation,caption,expect,mode,ink,shot,shownSince}
 }
 
-test('real Chat captions keep the last displayable item from turn start through execution into later requests', async t => {
-  const {page,runtime,emit,commit,presentation,request,caption,expect,mode,ink,shot,shownSince} = await captionChat(t)
-  // Turn start: nothing displayable has followed the opening input yet.
+test('real Chat captions show the owner activity through generation, execution and later requests in every view', async t => {
+  const {page,runtime,emit,presentation,caption,expect,mode,ink,shot,shownSince} = await captionChat(t)
+  // Turn start: the owner reports no activity yet.
   await presentation('request')
   await expect('fallback')
-  await request('first')
-  let sequence = 0
-  const update = delta => emit({type:'model-stream-update',streamVersion:2,streamId:'first',sequence:++sequence,...delta})
-  await update({partDeltas:[{outputIndex:0,kind:'reasoning',summaryIndex:0,textDelta:{offset:0,text:'**Inspecting the source**\nBody.'}}]})
+  // The live draft alone never becomes a caption; the owner reports what is displayable.
+  await emit({type:'model-stream-reset',streamVersion:2,streamId:'first',llmRequestId:'first',sequence:0})
+  await emit({type:'model-stream-update',streamVersion:2,streamId:'first',sequence:1,
+    partDeltas:[{outputIndex:0,kind:'reasoning',summaryIndex:0,textDelta:{offset:0,text:'**Draft heading**\nBody.'}},{outputIndex:1,kind:'text',contentIndex:0,textDelta:{offset:0,text:'Draft answer.'}}],
+    toolCallDeltas:[{index:2,id:'draft-call',name:'exec',argumentsDelta:{offset:0,text:'{"summary":"Draft summary","command":"true"}'}}]})
+  await page.waitForFunction(() => document.body.textContent.includes('Draft answer.'))
+  assert.equal(await caption(), 'fallback')
+  await runtime(requesting({reasoning:'Inspecting the source',latest:'reasoning'}))
   await expect('Inspecting the source')
   assert.equal(await page.$eval('[data-processing-runtime-state]', el => el.getAttribute('aria-label')), 'Requesting model…')
-  await update({partDeltas:[{outputIndex:1,kind:'reasoning',summaryIndex:0,textDelta:{offset:0,text:'**Next heading'}}]})
-  assert.equal(await caption(), 'Inspecting the source')
-  await update({partDeltas:[{outputIndex:1,kind:'reasoning',summaryIndex:0,textDelta:{offset:14,text:'**\nBody.'}}]})
-  await expect('Next heading')
-  await update({partDeltas:[{outputIndex:2,kind:'text',contentIndex:0,textDelta:{offset:0,text:'The answer begins.'}}]})
-  const prefix = '{"summary":"Validate streaming'
-  await update({partDeltas:[{outputIndex:3,kind:'tool-call'}],toolCallDeltas:[{index:3,id:'script',name:'run_script',argumentsDelta:{offset:0,text:prefix}}]})
-  assert.equal(await caption(), 'Next heading')
-  await update({toolCallDeltas:[{index:3,argumentsDelta:{offset:prefix.length,text:' updates","code":"unfinished'}}]})
+  // Detailed and Grouped use the tool summary only; without one they keep the decorative caption.
+  for (const view of ['detailed','grouped']) {
+    await mode(view)
+    await expect('fallback')
+  }
+  await mode('conversation')
+  await expect('Inspecting the source')
+  const generating = {reasoning:'Inspecting the source',tool:'Validate streaming updates',latest:'tool'}
+  await runtime(requesting(generating))
   await expect('Validate streaming updates')
   const requestInk = await ink()
   assert.ok(await page.$('[data-fox-loader="spinner"]'))
   await shot('caption-generation')
-  // The commit replaces the draft with the same committed call.
-  await commit({role:'model',parts:[{thinking:'**Inspecting the source**\nBody.'},{thinking:'**Next heading**\nBody.'},{text:'The answer begins.'},{functionCall:{id:'script',name:'run_script',args:{summary:'Validate streaming updates',code:'return 1'}}}],__meta:{llmRequestId:'first',llmSegment:{outputStart:0,outputEndExclusive:4,complete:true}}})
-  await runtime({state:'running-tool',tool:{id:'script',name:'run_script',source:'builtin',argsPreview:'Validate streaming upd...',startedAt:200}})
+  await runtime(executing(generating))
   await presentation('tool')
-  assert.equal(await caption(), 'Validate streaming updates', 'execution keeps the complete committed summary')
+  assert.equal(await caption(), 'Validate streaming updates', 'execution keeps the same text')
   assert.notEqual(await ink(), requestInk)
   assert.ok(await page.$('[data-runtime-fox="tool"]'))
   await shot('caption-execution')
@@ -1698,32 +1690,28 @@ test('real Chat captions keep the last displayable item from turn start through 
   await page.waitForSelector('[data-runtime-details]')
   assert.match(await page.$eval('[data-runtime-details]',el=>el.textContent),/run_script/)
   await page.keyboard.press('Escape')
-  await commit({role:'tool',parts:[{functionResponse:{tool_use_id:'script',name:'run_script',response:{output:'1'}}}]})
-  await request('second')
+  for (const view of ['detailed','grouped','conversation']) {
+    await mode(view)
+    await expect('Validate streaming updates')
+  }
+  await runtime(requesting(generating))
+  await presentation('request')
   assert.equal(await caption(), 'Validate streaming updates', 'retained after execution into the next request')
   assert.equal(await ink(), requestInk)
-  assert.ok(await page.$('[data-fox-loader="spinner"]'))
   await shot('caption-retained-next-request')
-  const next = (sequence, delta) => emit({type:'model-stream-update',streamVersion:2,streamId:'second',sequence,...delta})
-  await next(1,{partDeltas:[{outputIndex:0,kind:'text',contentIndex:0,textDelta:{offset:0,text:'Body output without a heading.'}}]})
-  await next(2,{partDeltas:[{outputIndex:1,kind:'reasoning',summaryIndex:0,textDelta:{offset:0,text:'**Incomplete later heading'}}]})
-  await page.waitForFunction(() => document.body.textContent.includes('Body output without a heading.'))
-  assert.equal(await caption(), 'Validate streaming updates', 'body output and incomplete headings keep the caption')
   const longTitle = 'Checking the implementation and its streaming lifecycle '.repeat(5).trim()
-  await next(3,{partDeltas:[{outputIndex:2,kind:'reasoning',summaryIndex:0,textDelta:{offset:0,text:'**'+longTitle+'**\nBody.'}}]})
+  await runtime(requesting({...generating,reasoning:longTitle,latest:'reasoning'}))
   await expect(longTitle)
   assert.equal(await page.$eval('[data-runtime-caption] span[title]',el=>el.title),longTitle)
   assert.equal(await page.$eval('[data-runtime-caption]',el=>el.getBoundingClientRect().right<=innerWidth),true)
-  assert.deepEqual(await shownSince('Inspecting the source'), ['Inspecting the source','Next heading','Validate streaming updates',longTitle], 'no fallback between generation, execution and the next request')
-  // Detailed and Grouped show only tool summaries under the same rule.
+  assert.deepEqual(await shownSince('Inspecting the source'), ['Inspecting the source','fallback','Inspecting the source','Validate streaming updates',longTitle], 'no fallback between generation, execution and the next request')
   for (const view of ['detailed','grouped']) {
     await mode(view)
     await expect('Validate streaming updates')
   }
   await mode('conversation')
   await expect(longTitle)
-  // Without new displayable content the caption stays until the turn ends: no timer replaces it. Virtual
-  // time runs the page's timers through ten minutes without waiting for them.
+  // The browser keeps no caption timer: virtual time runs the page's timers through ten minutes.
   const before = (await page.evaluate(() => window.captionTimeline)).length
   const clock = await page.evaluate(() => Date.now())
   const cdp = await page.createCDPSession()
@@ -1736,77 +1724,53 @@ test('real Chat captions keep the last displayable item from turn start through 
   assert.equal(await page.evaluate(()=>window.fixtureHistoryRequestCount),1)
 })
 
-test('real Chat captions reset at inserted input, yield to critical states, and match after reload and Session switch', async t => {
-  const {page,load,runtime,emit,commit,presentation,request,caption,expect,mode,ink} = await captionChat(t)
-  const call = (id, summary) => ({role:'model',parts:[{functionCall:{id,name:'exec',args:{summary,command:'true'}}}]})
-  const done = id => ({role:'tool',parts:[{functionResponse:{tool_use_id:id,name:'exec',response:{output:'ok'}}}]})
-  await commit(call('a','Doing A'))
-  await commit(done('a'))
+test('real Chat captions yield to critical states and match after reload and Session switch', async t => {
+  const {page,load,runtime,presentation,caption,expect,mode,ink} = await captionChat(t)
+  const activity = {tool:'Doing A',latest:'tool'}
+  await runtime(requesting(activity))
   await expect('Doing A')
   const requestInk = await ink()
-  // Critical states keep their own labels; the derived caption returns when the same segment resumes.
+  // Critical states keep their own labels; the caption returns when ordinary activity resumes.
   for (const [state, kind] of [
-    [{state:'waiting',busy:false,waiting:{waitId:'pause',waitingFor:'input'}}, 'waiting'],
-    [{state:'running-tool',tool:{id:'approval',name:'exec',source:'node',approval:{id:'ap',status:'pending'},startedAt:1}}, 'waiting'],
-    [{state:'running-tool',stopping:true}, 'stopping'],
-    [{state:'requesting-model',active:{phase:'compaction'}}, 'compact'],
-    [{state:'requesting-model',retry:{attempt:1,maxAttempts:3}}, 'retry'],
-    [{state:'llm-failed',busy:false}, 'error'],
+    [{state:'waiting',busy:false,queueLength:0,waiting:{waitId:'pause',waitingFor:'input'},activity}, 'waiting'],
+    [executing(activity,{id:'approval',name:'exec',source:'node',approval:{id:'ap',status:'pending'},startedAt:1}), 'waiting'],
+    [{...executing(activity),stopping:true}, 'stopping'],
+    [{...requesting(activity),active:{phase:'compaction'}}, 'compact'],
+    [{...requesting(activity),retry:{attempt:1,maxAttempts:3}}, 'retry'],
+    [{state:'llm-failed',busy:false,queueLength:0,activity}, 'error'],
   ]) {
     await runtime(state)
     await presentation(kind)
     assert.notEqual(await caption(), 'Doing A', kind)
-    await request('resume-'+kind)
+    await runtime(requesting(activity))
+    await presentation('request')
     await expect('Doing A')
     assert.equal(await ink(), requestInk)
   }
-  // Every delivered input opens a new segment with the decorative caption until something displayable follows.
-  const inputs = [
-    {role:'user',parts:[{text:'A correction while working'}]},
-    {role:'user',parts:[{system:'<foxwarm-message type="inter-agent" sourceSessionId="peer/one">\nPeer report\n</foxwarm-message>'}]},
-    {role:'user',parts:[{system:'<foxwarm-system kind="event" type="exec-completed">\nBackground command finished\n</foxwarm-system>'}]},
-  ]
-  for (const [index, input] of inputs.entries()) {
-    await commit(input)
-    await expect('fallback')
-    await request('after-input-'+index)
-    await expect('fallback')
-    await emit({type:'model-stream-update',streamVersion:2,streamId:'after-input-'+index,sequence:1,toolCallDeltas:[{index:0,id:'live-'+index,name:'call_tool',argumentsDelta:{offset:0,text:'{"toolId":"node:worker/exec","args":{"summary":"Handling input '+index+'","command":"unfinished'}}]})
-    await expect('Handling input '+index)
-    await commit({role:'model',parts:[{functionCall:{id:'live-'+index,name:'call_tool',args:{toolId:'node:worker/exec',args:{summary:'Handling input '+index,command:'true'}}}}],__meta:{llmRequestId:'after-input-'+index,llmSegment:{outputStart:0,outputEndExclusive:1,complete:true}}})
-    await commit(done('live-'+index))
-  }
-  // A batch executing its first call shows that call; reload and Session switch derive the same caption.
-  await commit({role:'model',parts:[{thinking:'**Planning the batch**\nBody.'},...call('b1','First in batch').parts,...call('b2','Second in batch').parts]})
-  await expect('Second in batch')
-  const executing = {state:'running-tool',busy:true,queueLength:0,tool:{id:'b1',name:'exec',source:'node',argsPreview:'First in batch',startedAt:1}}
-  await runtime(executing)
-  await presentation('tool')
-  await expect('First in batch')
-  const history = await page.evaluate(() => window.captionHistory)
-  await load(history, executing)
+  // A new input clears the owner activity: the decorative caption returns until something displayable follows.
+  await runtime(requesting())
+  await expect('fallback')
+  // Reload and Session switch show the caption of the runtime state they load.
+  const batch = executing({reasoning:'Planning the batch',tool:'First in batch',latest:'tool'},{id:'b1',name:'exec',source:'node',argsPreview:'First in batch',startedAt:1})
+  await load(batch)
   await presentation('tool')
   await expect('First in batch')
   for (const view of ['detailed','grouped','conversation']) {
     await mode(view)
     await expect('First in batch')
   }
-  await runtime({state:'requesting-model',active:{phase:'normal-turn'}})
-  await presentation('request')
-  await expect('Second in batch')
-  await mode('conversation')
   await page.evaluate(() => window.renderFixtureChats(1, 0, 'fixture/other'))
   await page.waitForFunction(() => window.fixtureHistoryRequestCount === 2)
-  await page.evaluate(() => window.resolveFixtureHistory(0, [
+  await page.evaluate(runtimeState => window.resolveFixtureHistory(0, [
     {role:'user',parts:[{text:'Other Session input'}],__meta:{seq:1,timestamp:10}},
-    {role:'model',parts:[{thinking:'**Working in the other Session**\nBody.'}],__meta:{seq:2,timestamp:20}},
-  ], 0, {sessionId:'fixture/other',busy:true}))
+  ], 0, {sessionId:'fixture/other',busy:true,runtimeState}), requesting({reasoning:'Working in the other Session',latest:'reasoning'}))
   await expect('Working in the other Session')
   await page.evaluate(() => window.renderFixtureChats(1, 0, 'fixture/main'))
   await page.waitForFunction(() => window.fixtureHistoryRequestCount === 3)
-  await page.evaluate(history => window.resolveFixtureHistory(0, history, 0, {busy:true}), history)
-  await expect('Second in batch')
+  await page.evaluate(runtimeState => window.resolveFixtureHistory(0, undefined, 0, {busy:true,runtimeState}), batch)
+  await presentation('tool')
+  await expect('First in batch')
   // The turn end retires the caption.
-  await runtime({state:'idle',busy:false})
-  await page.waitForFunction(() => document.querySelector('[data-runtime-caption]')?.textContent !== 'Second in batch')
+  await runtime({state:'idle',busy:false,queueLength:0})
+  await page.waitForFunction(() => document.querySelector('[data-runtime-caption]')?.textContent !== 'First in batch')
 })

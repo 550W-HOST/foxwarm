@@ -127,6 +127,9 @@ internal sealed partial class SessionOwner
                     ClearCommittedDraft(message);
                 }
             }
+            // Committed reasoning, calls and inputs change the live activity without a runtime transition.
+            if (messages.Count > 0)
+                PublishActivityIfChanged();
         };
         Entry.QueueHistoryAppended = (snapshot, messages) =>
         {
@@ -142,6 +145,7 @@ internal sealed partial class SessionOwner
                 );
                 foreach (var message in messages)
                     ClearCommittedDraft(message);
+                PublishActivityIfChanged();
             }
         };
         Entry.Committed = _ => Emit(SessionEventKind.StateChanged);
@@ -196,6 +200,8 @@ internal sealed partial class SessionOwner
                 finally
                 {
                     running.TryRemove(index, out _);
+                    if (running.IsEmpty)
+                        EndLiveActivity();
                     Emit(SessionEventKind.StateChanged);
                 }
             }

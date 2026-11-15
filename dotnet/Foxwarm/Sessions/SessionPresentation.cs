@@ -36,6 +36,7 @@ internal static class SessionPresentation
             ["queueLength"] = meta.QueueLength,
             ["messageCount"] = meta.MessageCount,
             ["sequenceMessageCount"] = Math.Max(0, meta.NextMessageSeq - 1),
+            ["latestMessageSeq"] = Math.Max(0, meta.NextMessageSeq - 1),
             ["historyVersion"] = meta.HistoryVersion,
             ["lastMessageTime"] = meta.LastMessageTime,
             ["archived"] = meta.Archived,
