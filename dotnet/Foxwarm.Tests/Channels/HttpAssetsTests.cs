@@ -1,5 +1,7 @@
 using System.Buffers.Binary;
 using System.IO.Compression;
+using System.Diagnostics;
+using Foxwarm.Code;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
@@ -198,6 +200,50 @@ public sealed class HttpAssetsTests
         WritePack(Path.Combine(optional, "foxwarm.assets"), "asset.js", Text, brotli: true);
         Assert.Equal(Encoding.UTF8.GetString(Text), await store.ReadTextAsync("asset.js", default));
         Assert.Equal("application", await store.ReadTextAsync("app.js", default));
+    }
+
+    [Fact]
+    public async Task Code_install_command_verifies_before_replacing_and_preserves_open_responses()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        using var temp = new TempDirectory();
+        var target = Path.Combine(temp.Path, "installed 'Code'");
+        var bin = Path.Combine(temp.Path, "bin");
+        Directory.CreateDirectory(target);
+        Directory.CreateDirectory(bin);
+        var download = $"foxwarm-code-{ProductVersion.Value}.fwassets";
+        WritePack(Path.Combine(temp.Path, download), "asset.js", Text, brotli: true);
+        var hash = Convert.ToHexStringLower(SHA256.HashData(await File.ReadAllBytesAsync(Path.Combine(temp.Path, download))));
+        await File.WriteAllTextAsync(Path.Combine(temp.Path, "SHA256SUMS"), $"{hash}  {download}\n");
+        var curl = Path.Combine(bin, "curl");
+        await File.WriteAllTextAsync(curl, "#!/bin/sh\ncp \"$INSTALL_SOURCE/${2##*/}\" \"$4\"\n");
+        File.SetUnixFileMode(curl, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        WritePack(Path.Combine(target, "foxwarm.assets"), "asset.js", "old"u8.ToArray());
+        var store = new HttpAssets(target);
+        using var old = store.Open("asset.js")!;
+        async Task<int> Install()
+        {
+            var info = new ProcessStartInfo("/bin/bash") { RedirectStandardOutput = true, RedirectStandardError = true };
+            info.ArgumentList.Add("-c");
+            info.ArgumentList.Add(CodeWorkbench.InstallCommand(target, powershell: false));
+            info.Environment["PATH"] = bin + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH");
+            info.Environment["INSTALL_SOURCE"] = temp.Path;
+            using var child = Process.Start(info)!;
+            var output = child.StandardOutput.ReadToEndAsync();
+            var errors = child.StandardError.ReadToEndAsync();
+            await child.WaitForExitAsync();
+            await Task.WhenAll(output, errors);
+            return child.ExitCode;
+        }
+        Assert.Equal(0, await Install());
+        Assert.Equal(Encoding.UTF8.GetString(Text), await store.ReadTextAsync("asset.js", default));
+        using var reader = new StreamReader(old.Stream);
+        Assert.Equal("old", await reader.ReadToEndAsync());
+        await File.AppendAllTextAsync(Path.Combine(temp.Path, download), "corrupt download");
+        Assert.NotEqual(0, await Install());
+        Assert.Equal(Encoding.UTF8.GetString(Text), await store.ReadTextAsync("asset.js", default));
+        Assert.Empty(Directory.EnumerateDirectories(target));
     }
 
     [Theory]

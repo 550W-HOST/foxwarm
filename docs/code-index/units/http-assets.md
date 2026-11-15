@@ -22,7 +22,7 @@ The format is owned here because consumers need HTTP streams, not Node require/f
 
 ## Serving and installation
 
-`HttpAssets` reads `foxwarm.assets` under its resource root, falling back to loose paths for absent entries. The separate Code pack is installed at `<application-root>/packages/vscode-web/assets/foxwarm.assets`; its keys use the same `packages/vscode-web/assets/` namespace as the application pack. Payload Code takes precedence over this stable optional installation. Ordinary runtime replacement therefore preserves separately installed Code.
+`HttpAssets` reads `foxwarm.assets` under its resource root, falling back to loose paths for absent entries. The separate Code pack is installed at `<application-root>/packages/vscode-web/assets/foxwarm.assets`; its keys use the same `packages/vscode-web/assets/` namespace as the application pack. Payload Code takes precedence over this stable optional installation. Ordinary runtime replacement therefore preserves separately installed Code. The setup commands download into an owned temporary directory beside the destination, verify the release checksum, and move the pack within the same filesystem; open responses keep their original file handle.
 
 `Open`, `Exists`, `ReadTextAsync` and `ServeAsync` serve all consumers, including Code readiness, built-in extension resources and the capability-protected webview pre route. Built-in extension descriptors are compiled into the upstream workbench; Main does not discover them by enumerating filesystem directories. Existing runtime JavaScript/HTML patches and dynamic WebUI manifest/index headers remain with their route owners.
 
