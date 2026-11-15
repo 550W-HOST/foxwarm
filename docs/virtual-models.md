@@ -13,32 +13,36 @@ Define concrete providers and reference their model keys from virtual entries:
 default: sticky
 providers:
   openai:
-    providerType: openai-completions
+    providerType: openai-responses
     baseUrl: https://api.openai.com/v1
     apiKey: your-openai-key
     models:
-      - gpt-5.6-sol
-      - gpt-5.6-terra
-      - gpt-5.6-luna
+      - gpt-6-astra
+      - gpt-6.1-sol
+      - gpt-6.1-terra
+      - gpt-6-luna
 
   anthropic:
     providerType: anthropic
     baseUrl: https://api.anthropic.com
     apiKey: your-anthropic-key
     models:
-      - claude-opus-5
+      - claude-opus-5-5
+      - claude-fable-5-2
+      - claude-sonnet-5-5
+      - claude-haiku-5-5
 
   sticky:
     providerType: session-hash
     targets:
-      - openai/gpt-5.6-sol
-      - anthropic/claude-opus-5
+      - openai/gpt-6-astra
+      - anthropic/claude-opus-5-5
 
   resilient:
     providerType: failover
     targets:
-      - openai/gpt-5.6-terra
-      - anthropic/claude-opus-5
+      - openai/gpt-6.1-terra
+      - anthropic/claude-opus-5-5
     failureThreshold: 5
     cooldownMs: 600000
 ```
@@ -50,16 +54,16 @@ shorthand:
 default: fast
 providers:
   openai:
-    providerType: openai-completions
+    providerType: openai-responses
     baseUrl: https://api.openai.com/v1
     apiKey: your-openai-key
-    models: [gpt-5.6-sol]
+    models: [gpt-6.1-terra]
 
-  fast: openai/gpt-5.6-sol
+  fast: openai/gpt-6.1-terra
 ```
 
-`fast: openai/gpt-5.6-sol` is normalized exactly like
-`fast: { providerType: session-hash, targets: [openai/gpt-5.6-sol] }`. The
+`fast: openai/gpt-6.1-terra` is normalized exactly like
+`fast: { providerType: session-hash, targets: [openai/gpt-6.1-terra] }`. The
 alias remains the selectable/displayed model key while routing and successful
 model attribution use the existing virtual-model behavior.
 

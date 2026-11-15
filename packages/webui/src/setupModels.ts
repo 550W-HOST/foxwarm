@@ -29,8 +29,8 @@ export type ProviderPreset = {
 export const CUSTOM_PRESET_ID = 'custom'
 
 export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
-  { id: 'openai', label: 'OpenAI', providerId: 'openai', providerType: 'openai-responses', baseUrl: 'https://api.openai.com/v1', models: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'] },
-  { id: 'anthropic', label: 'Anthropic', providerId: 'anthropic', providerType: 'anthropic', baseUrl: 'https://api.anthropic.com', models: ['claude-opus-5'] },
+  { id: 'openai', label: 'OpenAI', providerId: 'openai', providerType: 'openai-responses', baseUrl: 'https://api.openai.com/v1', models: ['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-luna'] },
+  { id: 'anthropic', label: 'Anthropic', providerId: 'anthropic', providerType: 'anthropic', baseUrl: 'https://api.anthropic.com', models: ['claude-opus-5-5', 'claude-fable-5-2', 'claude-sonnet-5-5', 'claude-haiku-5-5'] },
   { id: 'openrouter', label: 'OpenRouter', providerId: 'openrouter', providerType: 'openai-completions', baseUrl: 'https://openrouter.ai/api/v1', models: [] },
   { id: 'deepseek', label: 'DeepSeek', providerId: 'deepseek', providerType: 'openai-completions', baseUrl: 'https://api.deepseek.com', models: [] },
   { id: 'ollama', label: 'Ollama', providerId: 'ollama', providerType: 'openai-completions', baseUrl: 'http://localhost:11434/v1', models: [] },

@@ -41,7 +41,7 @@ Existing TypeScript installations should follow the [migration guide](https://fo
 In `state/models.yaml`, `default` selects a model, while `defaults` sets shared model parameters:
 
 ```yaml
-default: openai/gpt-5.6-sol
+default: openai/gpt-6-astra
 defaults:
   contextLimit: 200000
   maxOutput: 32768
