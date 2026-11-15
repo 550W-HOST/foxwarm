@@ -32,7 +32,24 @@ public sealed partial class ToolAuthorizationEffectsTests
             CurrentNode: "master",
             NodeForest: new(new Dictionary<string, string?> { ["root"] = null, ["child"] = "root" }),
             Secrets: ["key"],
-            OwnedSecrets: ["key"]
+            OwnedSecrets: ["key"],
+            Operations:
+            [
+                new AuthorizationOperation(
+                    "env.write",
+                    new JsonObject { ["node"] = "master", ["path"] = "/w/a.txt" },
+                    new JsonObject { ["change"] = "rules" }
+                )
+                {
+                    Path = new("filePath", "a.txt", "/w/a.txt", "master"),
+                    Target = new("beta/target", "beta", "beta/main"),
+                    ParentTarget = new("beta/main", "beta", null),
+                    AgentDescendant = true,
+                    TaskOwned = true,
+                    TaskCreated = false,
+                    SecretOwned = true,
+                },
+            ]
         );
 
     // A copy of a fact record; records expose init accessors, set through reflection here.
@@ -45,7 +62,10 @@ public sealed partial class ToolAuthorizationEffectsTests
     private static IEnumerable<(string Fact, object Changed)> ChangedFacts(object record, string prefix)
     {
         foreach (
-            var property in record.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            var property in record
+                .GetType()
+                .GetProperties(BindingFlags.Public | BindingFlags.Instance | BindingFlags.NonPublic)
+                .Where(Fact)
         )
         {
             var name = prefix + property.Name;
@@ -53,6 +73,21 @@ public sealed partial class ToolAuthorizationEffectsTests
             IEnumerable<(string Fact, object? Value)> variants = value switch
             {
                 null when property.PropertyType == typeof(string) => [(name, "set")],
+                null when property.PropertyType == typeof(bool?) => [(name, true)],
+                null when property.PropertyType == typeof(AuthorizationTarget) =>
+                [
+                    (name, new AuthorizationTarget("beta/set", "beta", null)),
+                ],
+                bool flag => [(name, !flag)],
+                AuthorizationPath path => ChangedFacts(path, name + ".")
+                    .Select(changed => (changed.Fact, (object?)changed.Changed)),
+                IReadOnlyList<AuthorizationOperation> operations => ChangedFacts(operations[0], name + "[0].")
+                    .Select(changed =>
+                        (
+                            changed.Fact,
+                            (object?)operations.Skip(1).Prepend((AuthorizationOperation)changed.Changed).ToArray()
+                        )
+                    ),
                 string text => [(name, text + "-changed")],
                 JsonObject => [(name, new JsonObject { ["filePath"] = "b.txt" })],
                 Foxwarm.Nodes.NodeAuthorizationForest =>
@@ -89,14 +124,27 @@ public sealed partial class ToolAuthorizationEffectsTests
 
     // The leaf facts of a fact record type, as ChangedFacts names them.
     private static IEnumerable<string> FactNames(Type type, string prefix) =>
-        type.GetProperties(BindingFlags.Public | BindingFlags.Instance)
+        type.GetProperties(BindingFlags.Public | BindingFlags.Instance | BindingFlags.NonPublic)
+            .Where(Fact)
             .SelectMany(property =>
                 property.PropertyType == typeof(AuthorizationTarget)
                     ? FactNames(typeof(AuthorizationTarget), prefix + property.Name + ".")
+                : property.PropertyType == typeof(AuthorizationPath)
+                    ? FactNames(typeof(AuthorizationPath), prefix + property.Name + ".")
                 : property.PropertyType == typeof(IReadOnlyList<AuthorizationPath>)
                     ? FactNames(typeof(AuthorizationPath), prefix + property.Name + "[0].")
+                : property.PropertyType == typeof(IReadOnlyList<AuthorizationOperation>)
+                    ? FactNames(typeof(AuthorizationOperation), prefix + property.Name + "[0].")
                 : [prefix + property.Name]
             );
+
+    // Settable data properties: the records' facts, not computed members or the record's
+    // equality contract.
+    private static bool Fact(PropertyInfo property) =>
+        property.CanWrite
+        && property.GetIndexParameters().Length == 0
+        && property.Name != "EqualityContract"
+        && (property.GetMethod?.IsPublic == true || property.GetMethod?.IsAssembly == true);
 
     [Fact]
     public void Approval_fingerprint_binds_every_fact_of_the_request()

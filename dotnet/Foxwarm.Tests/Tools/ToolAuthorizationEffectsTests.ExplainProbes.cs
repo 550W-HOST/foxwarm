@@ -181,13 +181,13 @@ public sealed partial class ToolAuthorizationEffectsTests
             ),
             rows[1]!.ToJsonString()
         );
-        // No layer matched a rule or refused: nothing to name.
+        // A self-scoped call is not assessed: nothing to name.
         Assert.True(
             JsonNode.DeepEquals(
                 Obj(
                     """
                     {"index":2,"label":"own wait","sessionId":"foreign","toolId":"builtin:wait",
-                     "decision":"allow","rules":[]}
+                     "decision":"allow","self":true,"rules":[]}
                     """
                 ),
                 rows[2]
@@ -243,7 +243,7 @@ public sealed partial class ToolAuthorizationEffectsTests
             new JsonObject
             {
                 ["compact"] = true,
-                ["probes"] = Probes(Probe("self", "builtin:wait", "{}")),
+                ["probes"] = Probes(Probe("self", "builtin:list_agents", "{}")),
             }
         );
         var row = result["probes"]![0]!;
@@ -272,7 +272,7 @@ public sealed partial class ToolAuthorizationEffectsTests
             defaultAction: deny
             rules:
             - {"id":"beta-no-exec","agent":"beta","tool":{"source":"node","name":"exec"},"action":"deny"}
-            - {"id":"alpha-no-wait","agent":"alpha","tool":{"source":"builtin","name":"wait"},"action":"deny"}
+            - {"id":"alpha-no-list","agent":"alpha","tool":{"source":"builtin","name":"list_agents"},"action":"deny"}
             """
         );
         var result = await Explain(
@@ -283,9 +283,9 @@ public sealed partial class ToolAuthorizationEffectsTests
                 ["compare"] = true,
                 ["policyFilePath"] = "candidate.yaml",
                 ["probes"] = Probes(
-                    Probe("self", "builtin:wait", "{}", "own wait"),
+                    Probe("self", "builtin:list_agents", "{}", "own list"),
                     Probe("outside", "node:master/exec", ExecArgs),
-                    Probe("missing", "builtin:wait", "{}")
+                    Probe("missing", "builtin:list_agents", "{}")
                 ),
             }
         );
@@ -296,9 +296,9 @@ public sealed partial class ToolAuthorizationEffectsTests
             JsonNode.DeepEquals(
                 Obj(
                     """
-                    {"index":0,"label":"own wait","sessionId":"opaque","toolId":"builtin:wait",
+                    {"index":0,"label":"own list","sessionId":"opaque","toolId":"builtin:list_agents",
                      "active":{"decision":"allow","rules":[]},
-                     "candidate":{"decision":"deny","rules":[{"layer":"global","rule":"alpha-no-wait","decision":"deny"}]},
+                     "candidate":{"decision":"deny","rules":[{"layer":"global","rule":"alpha-no-list","decision":"deny"}]},
                      "changed":true}
                     """
                 ),
@@ -331,7 +331,7 @@ public sealed partial class ToolAuthorizationEffectsTests
             {
                 ["compact"] = true,
                 ["policyFilePath"] = "candidate.yaml",
-                ["probes"] = Probes(Probe("self", "builtin:wait", "{}")),
+                ["probes"] = Probes(Probe("self", "builtin:list_agents", "{}")),
             }
         );
         Assert.Equal("candidate", result["policy"]!.GetValue<string>());

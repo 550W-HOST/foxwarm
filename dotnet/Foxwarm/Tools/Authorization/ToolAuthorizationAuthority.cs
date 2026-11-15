@@ -10,6 +10,14 @@ internal sealed class ToolAuthorizationUnavailableException()
     internal const string Code = "TOOL_AUTH_POLICY_UNAVAILABLE";
 }
 
+// A call operation rules cannot decide because a resource or fact they test, or the call's
+// operations themselves, could not be established. It is rejected before dispatch.
+internal sealed class ToolAuthorizationUnresolvedException(string message)
+    : ToolAuthorizationDeniedException(message)
+{
+    internal override string ErrorType => "tool_authorization_unresolved";
+}
+
 internal class ToolAuthorizationDeniedException(string message) : InvalidOperationException(message)
 {
     internal virtual string ErrorType => "tool_authorization_denied";

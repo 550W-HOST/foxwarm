@@ -78,7 +78,8 @@ internal static partial class OperationDeclarations
                     "read of the script source file on its Node",
                     "file-source"
                 ) with { PathArg = "filePath" },
-                Nested("each call_tool or ctl() call, and each model request, under its own gate"),
+                Nested("each call_tool or ctl() call under its own gate"),
+                ModelRequest(),
             ]
         ),
         Declare(
@@ -95,13 +96,14 @@ internal static partial class OperationDeclarations
                     "read of the script source file on its Node",
                     "file-source"
                 ) with { PathArg = "filePath" },
-                Nested("each call_tool or ctl() call, and each model request, under its own gate"),
+                Nested("each call_tool or ctl() call under its own gate"),
+                ModelRequest(),
             ]
         ),
         Declare(
             "builtin:continue_script",
             [SelfBranch("call", null, "continues a run owned by the caller")],
-            [Primary(), Nested("each call_tool or ctl() call, and each model request")]
+            [Primary(), Nested("each call_tool or ctl() call under its own gate"), ModelRequest()]
         ),
         Declare(
             "builtin:list_toolscript_runs",
@@ -367,8 +369,8 @@ internal static partial class OperationDeclarations
                         "targetSession=arg:sourceSessionId",
                         "with.kind==source"
                     ),
-                    OpIf("arg:inheritMemory", "env.read", "node==master", "path=memory-directory"),
-                    OpIf("arg:inheritMemory", "env.write", "node==master", "path=memory-directory"),
+                    OpIf("arg:inheritMemory", "env.read", "node==master", "path=memory-source"),
+                    OpIf("arg:inheritMemory", "env.write", "node==master", "path=memory-target"),
                     OpIf(
                         "arg:convertSession",
                         "session.manage",
@@ -590,8 +592,8 @@ internal static partial class OperationDeclarations
                 Call(
                     Op("secret.manage", "secret=arg?:name"),
                     SecretUse(),
-                    OpIf("arg:fromConfig", "config.write", "with.target=from-config"),
-                    OpIf("arg:fromConfig", "mcp.manage", "mcp=from-config-mcp")
+                    OpEachIf("arg:fromConfig", "from-config-files", "config.write", "with.target=each"),
+                    OpEachIf("arg:fromConfig", "from-config-servers", "mcp.manage", "mcp=each")
                 ),
             ],
             [
@@ -675,6 +677,16 @@ internal static partial class OperationDeclarations
             "read and write checks of the file that receives an oversized result"
         ),
     ];
+
+    // A ToolScript model request: model.request of the resolved model, assessed as the slice's
+    // own invocation in its own approval scope.
+    private static ObligationTemplate ModelRequest() =>
+        Retained(
+            "model-request",
+            "same",
+            "model.request of each request_model_without_context call, assessed as this invocation",
+            "model-request"
+        );
 
     private static OperationDeclaration Control(string name, string change) =>
         Simple(

@@ -134,6 +134,15 @@ internal sealed class TaskStore : IDisposable
         }
     }
 
+    internal string? CreatorSessionId(string taskId)
+    {
+        lock (gate)
+        {
+            var row = Read(Open(), taskId);
+            return row is null ? null : Canonical(Text(row["createdBySessionId"]));
+        }
+    }
+
     internal string? DefaultActor(JsonObject args)
     {
         var id = Text(args["taskId"]);

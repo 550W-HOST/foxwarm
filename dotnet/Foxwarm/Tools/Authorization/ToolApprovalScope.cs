@@ -139,7 +139,24 @@ internal sealed class ToolApprovalScope(SessionOwner owner)
             ["nodeForest"] = request.NodeForest is { } forest ? NodeAncestry(forest, request) : null,
             ["secrets"] = Facts(request.Secrets, name => JsonValue.Create(name)),
             ["ownedSecrets"] = Facts(request.OwnedSecrets, name => JsonValue.Create(name)),
+            ["operations"] = Facts(request.Operations, OperationFact),
         };
+
+    // An operation with every fact operation rules read: its resources and attributes (the
+    // normalized arguments they come from), path, resolved Sessions, Agent ancestry, Task
+    // authority and secret ownership.
+    private static JsonObject OperationFact(AuthorizationOperation operation)
+    {
+        var result = operation.ToJson();
+        result["path"] = operation.Path is { } path ? PathFact(path) : null;
+        result["target"] = operation.Target is { } target ? TargetFact(target) : null;
+        result["parentTarget"] = operation.ParentTarget is { } parent ? TargetFact(parent) : null;
+        result["agentDescendant"] = operation.AgentDescendant;
+        result["taskOwned"] = operation.TaskOwned;
+        result["taskCreated"] = operation.TaskCreated;
+        result["secretOwned"] = operation.SecretOwned;
+        return result;
+    }
 
     private static JsonArray? Facts<T>(IEnumerable<T>? items, Func<T, JsonNode?> project) =>
         items?.ToArray() is { Length: > 0 } list ? new(list.Select(project).ToArray()) : null;

@@ -113,6 +113,66 @@ internal sealed partial class SessionManager
         return text.Append("\n</foxwarm-system>").ToString();
     }
 
+    // The catalog key a ToolScript model request resolves to: the named model, else the Session's
+    // selection when the catalog has it, else the default.
+    internal string ToolScriptModelKey(SessionOwner owner, string? model)
+    {
+        if (model is "")
+            model = null;
+        var catalog = models.Capture();
+        if (model is not null && !catalog.Contains(model))
+            throw new InvalidDataException("Unknown model: " + model);
+        var selection = catalog.Select(owner.Entry.Snapshot());
+        return model
+            ?? (
+                selection.RawModel is not null && catalog.Contains(selection.RawModel)
+                    ? selection.RawModel
+                    : catalog.DefaultKey
+            );
+    }
+
+    // A ToolScript model request is the operation model.request of the resolved model, assessed
+    // as the invocation that runs the slice (its identity and raw arguments): version-1 rules
+    // match that invocation, operation rules the operation. SliceAsk is set when every asking
+    // rule is a version-1 rule, which an approval of the slice answers once per slice.
+    internal sealed record ModelRequestCheck(
+        AuthorizationAssessment Assessment,
+        string Fingerprint,
+        string SliceFingerprint,
+        bool SliceAsk
+    );
+
+    internal async Task<ModelRequestCheck> AssessToolScriptModelAsync(
+        SessionOwner owner,
+        ResolvedTool slice,
+        WorkspaceTools? files,
+        string model,
+        CancellationToken token
+    )
+    {
+        var assessment = await AssessToolAsync(
+            owner,
+            slice,
+            files,
+            token,
+            operations:
+            [
+                new AuthorizationOperation(
+                    "model.request",
+                    new JsonObject { ["model"] = model },
+                    []
+                ),
+            ]
+        );
+        var asking = assessment.Asking.SelectMany(layer => layer.Decision.AskingRules).ToArray();
+        return new(
+            assessment,
+            ApprovalFingerprint(owner, slice, assessment.Request),
+            ApprovalFingerprint(owner, slice, assessment.Request with { Operations = null }),
+            asking.Length > 0 && !asking.Any(OperationRules.IsOperationRule)
+        );
+    }
+
     internal async Task<JsonObject> RequestToolScriptModelAsync(
         SessionOwner owner,
         string prompt,

@@ -11,9 +11,11 @@ internal sealed partial class SessionToolExecutor
     internal static bool IsCtlFrontEnd(ResolvedTool resolved) =>
         resolved is { Source: "builtin", Name: "ctl" };
 
+    // A command is listed when its capability might be allowed with the command's fixed
+    // arguments (its action), so help for a permitted action does not list a denied one.
     private bool CtlVisible(CtlCommand command) =>
         command.Local is not null
-        || sessions.ToolVisible(hosted, command.Source!, command.Name!);
+        || sessions.ToolVisible(hosted, command.Source!, command.Name!, fixedArgs: command.Fixed);
 
     private async Task<JsonObject> ExecuteCtlAsync(JsonObject args, CancellationToken token)
     {

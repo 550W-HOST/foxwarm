@@ -4,7 +4,7 @@ Files: `dotnet/Foxwarm/Tools/Authorization/OperationPlan.cs`, `dotnet/Foxwarm/To
 
 Secondary files: `dotnet/Foxwarm/Tools/Authorization/ToolAuthorizationEvaluation.cs`, `dotnet/Foxwarm/Tools/Authorization/ToolAuthorizationToolDefinition.cs`, `dotnet/Foxwarm/Sessions/SessionManager.Authorization.cs`, `dotnet/Foxwarm/Sessions/SessionManager.AuthorizationExplain.cs`
 
-Operation rules let a tool authorization policy restrict or grant what a call does: read a path on a Node, send to a Session, select a Node. Today a rule can only name the capability that does it. This page owns that design and its delivery phases. Phase 1 (observational) and phase 2 (approval staging under version-1 rules) are implemented; phases 3 and later are approved design. Declarations, the effect and obligation inventory and the conformance corpora are in the [operation catalog](./tool-operation-catalog.md); approval staging is in [its own unit](./tool-operation-approval-staging.md). The evaluator, layers, secret facts and approvals described as "today" are owned by [tool authorization](./tool-authorization.md) and the [authorization thread](../threads/tool-dispatch-authorization.md).
+Operation rules let a tool authorization policy restrict or grant what a call does: read a path on a Node, send to a Session, select a Node. Today a rule can only name the capability that does it. This page owns that design and its delivery phases. Phase 1 (observational), phase 2 (approval staging under version-1 rules) and phase 3 ([operation rules](./tool-operation-rules.md)) are implemented, with the phase-3 exceptions listed under [delivery phases](#delivery-phases); phase 4 is approved design. Declarations, the effect and obligation inventory and the conformance corpora are in the [operation catalog](./tool-operation-catalog.md); approval staging is in [its own unit](./tool-operation-approval-staging.md). The evaluator, layers, secret facts and approvals described as "today" are owned by [tool authorization](./tool-authorization.md) and the [authorization thread](../threads/tool-dispatch-authorization.md).
 
 ## Design Decisions
 
@@ -23,9 +23,19 @@ Rationale: existing rules carry whole-call correlations, such as a delivery rule
 
 Structural failures still reject them: an unavailable policy, an invalid creator chain or an unreadable layer.
 
-The [legacy isolation](./isolation-migration.md) contract "not less restricted than its last enforced state" gains the exception "except for self-scoped operations" (**user decision, 2026-11-15**). Its owner is updated when phase 3 ships.
+The [legacy isolation](./isolation-migration.md) contract "not less restricted than its last enforced state" gains the exception "except for self-scoped operations" (**user decision, 2026-11-15**). Its owner records it.
 
 The exemption ships in phase 3, together with the ToolScript model-request gate ([model requests](#model-requests-from-scripts)). Exempting script containers without that gate would open an ungated provider call.
+
+### D-auth-operation-script-ask-once
+
+**User decision (2026-11-16).** A version-1 `ask` on a script invocation asks **once per script** (per slice), not again for each `model.request`. A deny on an individual request still applies.
+
+Mechanics: [model requests](./tool-operation-rules.md#model-requests).
+
+### D-auth-operation-templates-v1
+
+**User decision (2026-11-16).** Templates (for example `restricted-worker`) do **not** gain op rules in this phase. They stay version-1, and changing them is separate later work.
 
 ### D-auth-operation-copy-legs
 
@@ -94,37 +104,16 @@ Subsumed internal work belongs to an effect's purpose and changes no further pro
 
 ### Model requests from scripts
 
-ToolScript `request_model_without_context` calls a configured model directly, not through `call_tool`. From phase 3 it is the operation `model.request(model)`, with the resolved catalog key including the default selection. It is gated at the host call like a nested call: own approval scope, the run's unattended deadline and wait accounting, and never covered by an outer approval. Version-1 rules match it as the invocation that runs the slice: `run_script`, `start_toolscript_run` or `continue_script` with its raw arguments, or `run_script` with a timer's stored script arguments. Policies that deny that invocation therefore keep denying model requests.
+ToolScript `request_model_without_context` calls a configured model directly, not through `call_tool`. It is the operation `model.request(model)`, with the resolved catalog key including the default selection. It is gated at the host call like a nested call: own approval scope, the run's unattended deadline and wait accounting, and never covered by an outer approval. Version-1 rules match it as the invocation that runs the slice: `run_script`, `start_toolscript_run` or `continue_script` with its raw arguments, or `run_script` with a timer's stored script arguments. Policies that deny that invocation therefore keep denying model requests. A version-1 ask is answered once per slice ([decision](#d-auth-operation-script-ask-once)).
 
 ## Evaluation
 
-This section applies from phase 3. Until then the existing evaluator decides every request.
-
-Each obligation request is evaluated per layer:
-
-1. **Self.** A call with no ordinary operations and no secret names is not assessed (see the self-exempt decision).
-2. **Ordinary domain.** Each ordinary operation is decided by the first enabled rule that is one of:
-   - a version-1 rule without `secrets` whose whole-call predicate matches the request. This covers raw arguments, path all/any and Node endpoint "allow covers every endpoint, deny matches any";
-   - an operation rule whose `op`, caller and resource selectors match the operation.
-
-   With no match, the global policy applies `defaultAction` (deny for external principals), and an Agent-local layer passes.
-3. **Secret domain** (internal principals). Each name is decided by the first enabled rule that is one of:
-   - a version-1 `secrets` rule whose whole-set predicate matches the request and the **original complete** secret set. It decides only names without an earlier winner;
-   - an operation rule naming `secret.use` exactly whose `secret` selector covers the name. `*` and family patterns never include `secret.use`.
-
-   With no match:
-   - an owned name is allowed;
-   - an unowned name takes today's fallback: the decision for a synthetic unrestricted master exec. That decision comes from the first version-1 rule without `args` or `path`, or from an `env.exec` operation rule whose only conditions are callers and a `node` covering master. A rule with a path, argument, opaque-tool or other resource condition never establishes the fallback. An `op: "*"` grant of master exec does, by design, and explain shows that winner.
-4. **Layer effect.** The strictest decision over all operations and names: deny, then ask, then allow. Layers combine as today.
-
-**Approval options** come from the asking rules across every obligation, operation and layer, deduplicated by layer and rule: shortest timeout, intersection of approvers. An asking default is a rule-less entry with no named approvers. It is never dropped by deduplication, so a call it asks for can only be approved by the administrator, as today. Any deny prevents an approval request.
-
-For layers containing only version-1 rules, every operation of a request stops at the same rule. The decision, deciding rule and approval options therefore equal today's ([version-1 exactness corpus](./tool-operation-catalog.md#coverage-and-conformance)).
-
-Ordering among mixed rules is first match, never deny-wins:
+Each obligation request is evaluated per layer: a Self call is not assessed; each ordinary operation is decided by the first enabled version-1 rule matching the whole call or operation rule matching the operation; each secret name by the first version-1 `secrets` rule matching the original complete set or `secret.use` rule covering it, else owned, else the unrestricted master exec fallback; the layer takes the strictest. Ordering among mixed rules is first match, never deny-wins:
 - an operation deny placed below a broad version-1 allow is unreached for the calls that allow matches;
 - an operation allow below a terminal deny grants nothing;
 - a version-1 raw `action: select` deny keeps its raw meaning, so closing the spelling bypass needs `op: node.select` deny above it.
+
+**Approval options** come from the asking rules across every obligation, operation and layer, deduplicated by layer and rule: shortest timeout, intersection of approvers. An asking default is a rule-less entry with no named approvers, so a call it asks for can only be approved by the administrator. Any deny prevents an approval request. For layers containing only version-1 rules the decision, deciding rule and approval options equal the version-1 evaluator's. Mechanics, defaults and fallbacks: [operation rules](./tool-operation-rules.md#evaluation).
 
 ## Approval staging
 
@@ -132,12 +121,7 @@ Approval staging (stages A–C) and its phase-2 implementation are owned by [too
 
 ## Visibility
 
-This section applies from phase 3. Each declaration has **action branches**: the normalized constraints that select a branch, plus its operation templates. A template is unconditional or conditional, and its resources are known or unknown.
-
-- A branch is possible when every unconditional template is possible in every layer. A capability is visible when any branch is possible. Conditional templates never hide a branch.
-- **Raw facts are kept apart from branch constraints.** Version-1 rules are walked with today's `Visible` logic, against only the raw arguments an actual command supplies. `ctl session status` supplies `action: status`. Native declarations and `tool search` supply none, so every spelling- or default-sensitive raw field stays unknown there. Operation templates use the normalized branch constraints.
-- For version-1-only policies, capability-level projection equals today's. Command-level help equals today's `Visible` with the command's fixed raw arguments, which is the help fix.
-- Default declarations keep their fixed order and contract ([D-tools-node-independent-default-declarations](./tools-registry.md#d-tools-node-independent-default-declarations)). Their inputs are persisted policy and process-fixed definitions, never the current Node, Node inventory, connectivity or cwd. Help, explain and approval output are tool results. No operation content is added to requests, so request-prefix stability is unchanged.
+Each declaration has **action branches**: the normalized constraints that select a branch, plus its operation templates. A template is unconditional or conditional, and its resources are known or unknown. A branch is possible when every unconditional template is possible in every layer. A capability is visible when any branch is possible. Conditional templates never hide a branch. Raw facts are kept apart from branch constraints: version-1 rules are walked against only the raw arguments an actual command supplies (`ctl session status` supplies `action: status`; native declarations and `tool search` supply none). For version-1-only policies, capability-level projection equals the version-1 projection except for the self exemption, and command-level help uses the command's fixed raw arguments, which is the help fix. Default declarations keep their fixed order and contract ([D-tools-node-independent-default-declarations](./tools-registry.md#d-tools-node-independent-default-declarations)): their inputs are persisted policy and process-fixed definitions, never the current Node, Node inventory, connectivity or cwd. Help, explain and approval output are tool results, and no operation content is added to requests, so request-prefix stability is unchanged. Mechanics: [operation rules](./tool-operation-rules.md#visibility).
 
 ## Explanation and denials
 
@@ -162,11 +146,7 @@ Phase 3; phase 1 only inventories inbound enforcement sites. Inbound front ends 
 
 ## Policy format and older readers
 
-Operation rules are marked only by `op`, and the policy version stays 1. The maintained C# global and local parsers and the retained TypeScript parser reject `op` with `Unsupported policy field`, including on disabled rules. An older binary therefore makes the global policy unavailable, or refuses the affected Agent's layer. Agent-local layers stay JSON arrays.
-
-Every catalog write that stores an operation rule first raises `installation.json` `minimumReaderVersion` to 2. This covers `set_agent_rules`, `create_agent` with initial rules and administrator routes. A failed marker write prevents the layer write. A later metadata failure may leave the higher marker. Raw external edits get no marker update, and older parsers still fail them closed. Rejection is tested for each frozen release that is declared downgrade-supported.
-
-Selectors are listed in the [catalog](./tool-operation-catalog.md#selectors) and validated against the declarations at load. There is no `via` or `peer`: name-coupled and joint constraints are version-1 rules.
+Operation rules are marked only by `op`, and the policy version stays 1. Older readers reject `op`, including on disabled rules, so an older binary makes the global policy unavailable or refuses the affected Agent's layer. Every catalog write that stores an operation rule first raises `installation.json` `minimumReaderVersion` to 2 (`set_agent_rules`, `create_agent` with initial rules, administrator routes); a failed marker write prevents the layer write, and a later metadata failure may leave the higher marker. Raw external edits get no marker update, and older parsers still fail them closed. Selectors are listed in the [catalog](./tool-operation-catalog.md#selectors) and validated against the declarations at load. There is no `via` or `peer`: name-coupled and joint constraints are version-1 rules. Mechanics and the tested readers: [reader marker](./tool-operation-rules.md#reader-marker).
 
 ## Adoption
 
@@ -180,9 +160,9 @@ The converter keeps the following as version-1 rules:
 - dormant names;
 - secret rules, unless per-name composition is requested.
 
-It never widens an ask. A result over 256 rules or 256 KiB is a blocker, with no candidate produced. Templates keep their version-1 rules, and their `wait`/`submit_compact_plan` entries become inert once the exemption ships.
+It never widens an ask. A result over 256 rules or 256 KiB is a blocker, with no candidate produced. Templates keep their version-1 rules ([decision](#d-auth-operation-templates-v1)), and their `wait`/`submit_compact_plan` entries are inert under the exemption.
 
-The only phase-3 change to generated-layer decisions is artifact `get`, which becomes self-scoped. Generated layers already allow every other self capability. Fail-closed layers newly allow every self capability; their obligations, nested calls and model requests stay denied.
+Phase 3 changes generated-layer decisions in two ways. Artifact `get` becomes self-scoped. A translated exact deny of a self capability from the Agent's legacy `toolRules` (for example `image_crop`) no longer applies; generated layers already allow every other self capability. Fail-closed layers newly allow every self capability; their obligations, nested calls and model requests stay denied.
 
 ## Delivery phases
 
@@ -190,8 +170,10 @@ The only phase-3 change to generated-layer decisions is artifact `get`, which be
 | --- | --- | --- |
 | **1. Observational** | Declarations, effect plans, obligation inventory and branches as metadata. Explain additions and denial attribution. Coverage tests. | None. The existing evaluator, assessment sequence, guards, approval scope, visibility, self restrictions and grammar stay authoritative. The plan cannot authorize, deny or read. |
 | **2. Planning and staged approvals** | Protected-input capture, stages A–C, retained obligations, under version-1 rules | When input and sub-call asks can be answered. Changed final asks fail closed. |
-| **3. Operation rules** | Parsing and writing `op` rules, reader marker 2, two-domain evaluator, handler-consumed normalizer, self exemption with the `model.request` gate, fail-closed derivation and mandatory declarations, operation-aware visibility | Operation rules, self exemption, unresolved rejection, per-command help |
+| **3. Operation rules** (implemented) | Parsing and writing `op` rules, reader marker 2, two-domain evaluator, handler-consumed normalizer, self exemption with the `model.request` gate, fail-closed derivation and mandatory declarations, operation-aware visibility | Operation rules, self exemption, unresolved rejection, per-command help |
 | **4. Authoring aids** | Placement diagnostics and the optional converter | None to stored policies |
+
+Phase 3 does not yet include two items of its scope: handlers do not consume the normalizer's output (the plan's normalizer mirrors each handler's parsing, checked by the conformance corpus), and explain has no compare inputs for candidate Agent-local layers or external identities. The version-1 changes it makes are listed per case in `version1-equality.json`.
 
 Acceptance tests by phase:
 
@@ -221,9 +203,8 @@ Acceptance tests by phase:
 
 ## Tests
 
-Phase 1 adds `OperationAttributionTests` (attribution and decision equality) and the [catalog coverage tests](./tool-operation-catalog.md#coverage-and-conformance). Phase 2 tests are listed under [approval staging](./tool-operation-approval-staging.md#tests).
+Phase 1 adds `OperationAttributionTests` (attribution and decision equality) and the [catalog coverage tests](./tool-operation-catalog.md#coverage-and-conformance). Phase 2 tests are listed under [approval staging](./tool-operation-approval-staging.md#tests), phase 3 tests under [operation rules](./tool-operation-rules.md#tests).
 
 ## Open Questions
 
-- Unconfirmed: whether a version-1 `ask` on a script invocation should ask again for each `model.request` (phase 3), or once per slice.
-- Unconfirmed: whether templates gain operation rules, for example `op: node.select` deny for restricted workers, once phase 3 ships.
+- Unconfirmed: whether unresolved rejection also applies when no layer has operation rules. Phase 3 rejects only where a layer with operation rules cannot decide, which keeps version-1-only layers exact.

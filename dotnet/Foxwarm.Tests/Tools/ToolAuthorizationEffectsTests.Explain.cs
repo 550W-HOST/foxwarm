@@ -369,7 +369,7 @@ public sealed partial class ToolAuthorizationEffectsTests
             rules:
             - {"id":"beta-read","agent":"beta","tool":{"source":"node","name":"read"},"action":"allow","reason":"now explained"}
             - {"id":"beta-no-exec","agent":"beta","tool":{"source":"node","name":"exec"},"action":"deny","reason":"no exec for beta"}
-            - {"id":"alpha-no-wait","agent":"alpha","tool":{"source":"builtin","name":"wait"},"action":"deny"}
+            - {"id":"alpha-no-list","agent":"alpha","tool":{"source":"builtin","name":"list_agents"},"action":"deny"}
             - {"id":"alpha-rest","agent":"alpha","action":"allow"}
             """
         );
@@ -378,7 +378,7 @@ public sealed partial class ToolAuthorizationEffectsTests
             Obj(
                 """
                 {"policyFilePath":"candidate.yaml","compare":true,"probes":[
-                  {"sessionId":"opaque","toolId":"builtin:wait","args":{}},
+                  {"sessionId":"opaque","toolId":"builtin:list_agents","args":{}},
                   {"sessionId":"foreign","toolId":"node:master/exec","args":{"command":"true"}}
                 ]}
                 """
@@ -389,7 +389,7 @@ public sealed partial class ToolAuthorizationEffectsTests
         Assert.True(wait["active"]!["allowed"]!.GetValue<bool>());
         Assert.False(wait["candidate"]!["allowed"]!.GetValue<bool>());
         Assert.Equal(
-            "alpha-no-wait",
+            "alpha-no-list",
             wait["candidate"]!["layers"]![0]!["rule"]!["id"]!.GetValue<string>()
         );
         Assert.True(wait["changed"]!.GetValue<bool>());
@@ -400,7 +400,7 @@ public sealed partial class ToolAuthorizationEffectsTests
         var diff = result["ruleDiff"]!;
         Assert.Equal("deny", diff["defaultAction"]!["candidate"]!.GetValue<string>());
         Assert.Equal(
-            ["alpha-no-wait", "alpha-rest"],
+            ["alpha-no-list", "alpha-rest"],
             diff["added"]!.AsArray().Select(item => item!["id"]!.GetValue<string>())
         );
         Assert.Equal("obsolete", diff["removed"]![0]!["id"]!.GetValue<string>());
@@ -414,7 +414,7 @@ public sealed partial class ToolAuthorizationEffectsTests
         var candidateOnly = await Explain(
             execution.Tools,
             Obj(
-                """{"policyFilePath":"candidate.yaml","probes":[{"sessionId":"opaque","toolId":"builtin:wait"}]}"""
+                """{"policyFilePath":"candidate.yaml","probes":[{"sessionId":"opaque","toolId":"builtin:list_agents"}]}"""
             )
         );
         Assert.Equal("candidate", candidateOnly["policy"]!.GetValue<string>());
@@ -429,7 +429,7 @@ public sealed partial class ToolAuthorizationEffectsTests
             execution.Tools,
             "explain_tool_authorization",
             Obj(
-                """{"policyFilePath":"candidate.yaml","probes":[{"sessionId":"opaque","toolId":"builtin:wait"}]}"""
+                """{"policyFilePath":"candidate.yaml","probes":[{"sessionId":"opaque","toolId":"builtin:list_agents"}]}"""
             )
         );
         Assert.Contains(
@@ -442,7 +442,7 @@ public sealed partial class ToolAuthorizationEffectsTests
                     execution.Tools,
                     "explain_tool_authorization",
                     Obj(
-                        """{"compare":true,"probes":[{"sessionId":"opaque","toolId":"builtin:wait"}]}"""
+                        """{"compare":true,"probes":[{"sessionId":"opaque","toolId":"builtin:list_agents"}]}"""
                     )
                 )
             )

@@ -26,6 +26,65 @@ internal sealed partial class SessionToolExecutor
         return descriptor;
     }
     internal bool Programmatic => scriptScope.Value is not null;
+
+    // The gate of a ToolScript model request, in its own approval scope like a nested call: an
+    // outer approval never covers it, and a wait keeps the slice's deadline and wait accounting.
+    // Version-1 asks on the slice's invocation ask once per slice: an approval of the slice, or
+    // of an earlier model request of the slice, answers them. A deny always applies.
+    private async Task AuthorizeModelRequestAsync(
+        ResolvedTool slice,
+        ToolApprovalScope? sliceScope,
+        WorkspaceTools? files,
+        string model,
+        CancellationToken token
+    )
+    {
+        var scope = new ToolApprovalScope(hosted) { Primary = slice };
+        using var entered = ToolApprovalScope.Enter(scope);
+        while (true)
+        {
+            var check = await sessions.AssessToolScriptModelAsync(hosted, slice, files, model, token);
+            var assessment = check.Assessment;
+            if (assessment.Denied is not null)
+            {
+                var lead = $"Model request `{model}` was not sent.";
+                var denial = SessionManager.Denial(hosted, slice, assessment, lead);
+                if (denial is ToolAuthorizationUnresolvedException)
+                    throw new ToolAuthorizationUnresolvedException(lead + " " + denial.Message);
+                // A rule's own reason leads; the model request is named before it.
+                throw denial.Message.StartsWith(lead, StringComparison.Ordinal)
+                    ? denial
+                    : new ToolAuthorizationDeniedException($"Model request `{model}` was not sent: {denial.Message}");
+            }
+            if (
+                assessment.Effect != ToolAuthorizationEffect.Ask
+                || scope.Covers(hosted, check.Fingerprint)
+                || check.SliceAsk && sliceScope?.Covers(hosted, check.SliceFingerprint) == true
+            )
+                return;
+            var required = new ToolApprovalRequiredException(assessment, slice, check.Fingerprint);
+            if (scope.Grants.Count > 0)
+                throw required.ChangedAfterApproval();
+            var pending = await sessions.BeginToolApprovalAsync(
+                hosted,
+                required,
+                ApprovalOrigin(),
+                unattended
+            );
+            var record = await AwaitApprovalAsync(pending, token);
+            var grant = SessionManager.ApprovalOutcome(pending, record);
+            scope.Add(grant);
+            scope.Dispatched = true;
+            if (check.SliceAsk)
+                sliceScope?.Add(
+                    new ToolApprovalGrant(
+                        grant.ApprovalId,
+                        new HashSet<string>(StringComparer.Ordinal) { check.SliceFingerprint },
+                        grant.Note
+                    )
+                );
+        }
+    }
     internal ToolScriptDataBudget? ScriptBudget => scriptScope.Value?.Budget;
 
     // A detached run's calls no longer belong to the turn that started it.
@@ -38,6 +97,13 @@ internal sealed partial class SessionToolExecutor
     )
     {
         var rootCall = invocation.Value;
+        // The slice's own invocation and approval scope: model requests are assessed as it.
+        var slice = rootCall?.Resolved ?? new ResolvedTool(name, "builtin", name, args);
+        var sliceScope =
+            ToolApprovalScope.Current is { } owned && ReferenceEquals(owned.Owner, hosted)
+                ? owned
+                : null;
+        var sliceFiles = rootCall?.ScriptSource?.Files ?? Files;
         var nested = Programmatic;
         var literal = scriptScope.Value?.LiteralOwner ?? hosted.Id;
         var waitScope = scriptScope.Value?.WaitScope ?? new ToolScriptWaitScope();
@@ -182,8 +248,32 @@ internal sealed partial class SessionToolExecutor
                     scriptScope.Value = previous;
                 }
             },
-            (prompt, model, budget, currentToken) =>
-                sessions.RequestToolScriptModelAsync(hosted, prompt, model, budget, currentToken),
+            async (prompt, model, budget, currentToken) =>
+            {
+                // An unknown model is still authorized first, under the name the script gave, so
+                // a denied slice reports its denial rather than the model error.
+                string key;
+                InvalidDataException? unknown = null;
+                try
+                {
+                    key = sessions.ToolScriptModelKey(hosted, model);
+                }
+                catch (InvalidDataException error) when (model is { Length: > 0 })
+                {
+                    key = model;
+                    unknown = error;
+                }
+                await AuthorizeModelRequestAsync(slice, sliceScope, sliceFiles, key, currentToken);
+                if (unknown is not null)
+                    throw unknown;
+                return await sessions.RequestToolScriptModelAsync(
+                    hosted,
+                    prompt,
+                    key,
+                    budget,
+                    currentToken
+                );
+            },
             async (file, budget, currentToken) =>
             {
                 await sessions.WaitForIdentityMutationAsync(hosted.Id, currentToken);

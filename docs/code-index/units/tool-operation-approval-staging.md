@@ -14,7 +14,7 @@ Phase 2 of [tool operation authorization](./tool-operation-authorization.md#deli
   - Admitted bytes are captured, and the effect consumes them; they are never re-read.
 - **B. Plan assessment.** The plan is derived from normalized arguments, prospective facts and admitted inputs. Every obligation with known facts is assessed: the primary request, concrete sub-requests, policy probes, and retained final requests such as each cascade member.
   - One call approval lists every asking obligation and operation.
-  - Its fingerprints bind each request's identity, raw arguments and facts; from phase 3 also normalized arguments and operations. Admitted input bytes are consumed, never re-read.
+  - Its fingerprints bind each request's identity, raw arguments and facts, and from phase 3 the operations operation rules decide; normalized arguments are not bound, because handlers do not consume them yet. Admitted input bytes are consumed, never re-read.
 - **C. Final requests.** Each owner boundary re-evaluates its retained requests against **current policy and current facts**, inside the existing registry, configuration and timer lanes. The grant is consulted only when that evaluation asks. It covers the ask only if B approved an identical request: same identity, raw arguments and facts.
   - A deny always stops, including a deny installed while the call waited.
   - A new or changed ask fails closed with `tool_approval_unavailable`, before the protected effect.
@@ -37,7 +37,7 @@ Nested calls keep their own gates, and external principals cannot be asked, as t
 **Scope under version-1 rules** (coordinator decision, 2026-11-15; implementation facts, not user decisions):
 
 - Stage A captures only the `set_config` candidates of `config` and `models`, because only their content decides authorization facts under version-1 rules. Explain policy and candidate files, `add_secret` sources and compaction plan files are approved as stage-B path reads and read by their owners; `set_config` with `target: tool-rules` reads its candidate in its handler as before.
-- Fingerprints do not include normalized arguments or operations; there is no normalizer or operation evaluator until phase 3.
+- Fingerprints do not include normalized arguments. Since phase 3 they include the request's operations (op, resources and attributes) when some layer has operation rules or the host call states them ([operation rules](./tool-operation-rules.md#model-requests)).
 
 ## Catalog notes
 

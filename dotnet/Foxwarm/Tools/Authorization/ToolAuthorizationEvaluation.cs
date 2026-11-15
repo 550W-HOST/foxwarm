@@ -41,7 +41,11 @@ internal sealed record ToolAuthorizationRequest(
     // Stored secrets the call would send to a destination they were not sent to before.
     IReadOnlyList<string>? Secrets = null,
     // Those of Secrets that the caller's Agent owns.
-    IReadOnlyList<string>? OwnedSecrets = null
+    IReadOnlyList<string>? OwnedSecrets = null,
+    // The operations operation rules decide, with their facts, when the assessment derived
+    // them (or a host call stated them, such as a ToolScript model request). Null derives them
+    // from the request itself when a layer has operation rules.
+    IReadOnlyList<AuthorizationOperation>? Operations = null
 );
 
 internal enum ToolAuthorizationEffect
@@ -62,15 +66,30 @@ internal sealed record AuthorizationDecision(ToolAuthorizationEffect Effect, Jso
     internal AuthorizationDecision? Call { get; init; }
     internal SecretsDecision? Secrets { get; init; }
 
+    // Set by a layer with operation rules: how each ordinary operation and each secret name was
+    // decided, and every asking rule of both (null for an asking default), once each.
+    internal IReadOnlyList<OperationDecision>? Operations { get; init; }
+    internal IReadOnlyList<SecretNameDecision>? SecretNames { get; init; }
+    internal IReadOnlyList<JsonObject?>? Asking { get; init; }
+
+    // The operation that decided a deny because it could not be resolved, if any.
+    internal OperationDecision? Unresolved =>
+        Effect == ToolAuthorizationEffect.Deny
+        && Operations?.FirstOrDefault(item => item.Effect == ToolAuthorizationEffect.Deny) is
+            { Unresolved: true } unresolved
+        && (Secrets is null || Call?.Effect == ToolAuthorizationEffect.Deny)
+            ? unresolved
+            : null;
+
     // The rules whose ask this decision carries; null stands for an asking default.
     internal IEnumerable<JsonObject?> AskingRules =>
-        Secrets is null
+        Asking ?? (Secrets is null
             ? (Effect == ToolAuthorizationEffect.Ask ? [Rule] : [])
             : (Call?.Effect == ToolAuthorizationEffect.Ask ? new[] { Call.Rule } : []).Concat(
                 Secrets.Effect == ToolAuthorizationEffect.Ask
                     ? [Secrets.Rule ?? Secrets.Fallback?.Rule]
                     : []
-            );
+            ));
 
     internal static ToolAuthorizationEffect Parse(string? action) =>
         action switch
@@ -104,6 +123,10 @@ internal sealed record AuthorizationAssessment(
     // The call can have secret facts, but they could not be established (an unreadable
     // configuration candidate, rejected MCP arguments). Diagnostic only; never a decision input.
     internal bool SecretsUnknown { get; init; }
+
+    // Set for a Self call (its branch acts only on the caller's own turn, context, runs,
+    // transfers or history images): it is not authorizable, so every valid layer passes it.
+    internal string? Self { get; init; }
 
     internal AuthorizationLayerDecision? Denied =>
         Layers.FirstOrDefault(layer => layer.Decision.Effect == ToolAuthorizationEffect.Deny);
@@ -295,7 +318,7 @@ internal static class ToolAuthorizationEvaluation
             || NodeTargets(match["node"]!, request, deny)
         );
 
-    private static bool Pattern(JsonNode pattern, string? actual)
+    internal static bool Pattern(JsonNode pattern, string? actual)
     {
         if (actual is null)
             return false;
@@ -329,7 +352,16 @@ internal static class ToolAuthorizationEvaluation
     {
         if (request.NodeTargets is not { Count: > 0 } targets)
             return false;
-        bool Matches(string node)
+        return deny
+            ? targets.Any(node => NodeMatches(matcher, node, request))
+            : targets.All(node => NodeMatches(matcher, node, request));
+    }
+
+    // Whether a Node selector covers one Node: bare IDs and patterns cover the Node's
+    // ancestors, `exact` the Node itself, `current` the caller's current Node, `provider` the
+    // Node's Provider.
+    internal static bool NodeMatches(JsonNode matcher, string node, ToolAuthorizationRequest request)
+    {
         {
             if (matcher is not JsonObject map)
                 return request.NodeForest is { } forest && forest.Contains(node)
@@ -348,7 +380,6 @@ internal static class ToolAuthorizationEvaluation
                 : "authenticated-remote";
             return Pattern(map["provider"]!, provider);
         }
-        return deny ? targets.Any(Matches) : targets.All(Matches);
     }
 
     internal static AuthorizationFact Argument(JsonObject args, string path)
@@ -374,10 +405,18 @@ internal static class ToolAuthorizationEvaluation
         return new(true, current);
     }
 
-    private static bool SessionMatch(JsonObject match, ToolAuthorizationRequest request)
+    private static bool SessionMatch(JsonObject match, ToolAuthorizationRequest request) =>
+        request.SessionTarget is { } target && SessionCondition(match, target, request);
+
+    // A `{self, sameAgent, relation}` Session condition over one resolved target Session.
+    // External principals never match it.
+    internal static bool SessionCondition(
+        JsonObject match,
+        AuthorizationTarget target,
+        ToolAuthorizationRequest request
+    )
     {
-        var target = request.SessionTarget;
-        if (request.Principal != "internal" || target is null)
+        if (request.Principal != "internal")
             return false;
         if (
             match.ContainsKey("self") && target.Id != request.Session
@@ -451,9 +490,43 @@ internal static class ToolAuthorizationEvaluation
             : allow ? CreationTargetDecision.Allow
             : deny ? CreationTargetDecision.Deny
             : CreationTargetDecision.Ask;
+        // The operation the future creation performs: its Agent is known, everything else is
+        // decided when the Session is created.
+        var creation = new AuthorizationOperation(
+            "session.create",
+            new JsonObject
+            {
+                ["targetAgent"] = SessionWait.Text(request.Args["agentName"]),
+                ["node"] = null,
+                ["parent"] = null,
+                ["targetSession"] = new JsonObject { ["prospective"] = true },
+            },
+            new JsonObject
+            {
+                ["kind"] = "timer",
+                ["placement"] = null,
+                ["runtime"] = null,
+                ["fork"] = null,
+            }
+        );
         foreach (var rule in policy.Value["rules"]!.AsArray().OfType<JsonObject>())
         {
             var match = rule["match"]!.AsObject();
+            if (rule["enabled"]!.GetValue<bool>() && OperationRules.IsOperationRule(rule))
+            {
+                var result = OperationRules.Match(rule, creation, request, Restrictive(rule));
+                if (result == OperationMatch.No)
+                    continue;
+                var opEffect = RuleEffect(rule, request);
+                allow |= opEffect == ToolAuthorizationEffect.Allow;
+                ask |= opEffect == ToolAuthorizationEffect.Ask;
+                deny |= opEffect == ToolAuthorizationEffect.Deny;
+                var conditional = result == OperationMatch.Unknown;
+                contributions.Add(new(rule, opEffect, conditional));
+                if (!conditional)
+                    return new(Outcome(), rule, contributions);
+                continue;
+            }
             if (
                 !rule["enabled"]!.GetValue<bool>()
                 || !Ordinary(match)
@@ -501,7 +574,50 @@ internal static class ToolAuthorizationEvaluation
         ToolAuthorizationRequest request
     )
     {
-        var exec = request with
+        var exec = UnrestrictedExecRequest(request);
+        foreach (var rule in policy.Value["rules"]!.AsArray().OfType<JsonObject>())
+        {
+            if (
+                rule["enabled"]!.GetValue<bool>()
+                && Version1(rule)
+                && EstablishesUnrestrictedExec(rule, exec)
+            )
+                return new(RuleEffect(rule, exec), rule);
+        }
+        return new(Default(policy, exec), null);
+    }
+
+    // Rules with a `secrets` selector decide only the secret facts of a call; every other rule
+    // decides the call itself.
+    private static bool Ordinary(JsonObject match) => !match.ContainsKey("secrets");
+
+    // Version-1 rules; operation rules are decided by OperationEvaluation.
+    private static bool Version1(JsonObject rule) => !OperationRules.IsOperationRule(rule);
+
+    // Whether a version-1 rule without `secrets` matches the whole call.
+    internal static bool MatchesCall(JsonObject rule, ToolAuthorizationRequest request)
+    {
+        var match = rule["match"]!.AsObject();
+        return Ordinary(match)
+            && Identity(match, request, deny: Restrictive(rule))
+            && Arguments(match["args"] as JsonObject, request)
+            && Paths(match["path"] as JsonObject, request);
+    }
+
+    // Whether a version-1 `secrets` rule matches the call and its complete secret set.
+    internal static bool MatchesSecrets(JsonObject rule, ToolAuthorizationRequest request)
+    {
+        var match = rule["match"]!.AsObject();
+        return !Ordinary(match)
+            && Identity(match, request, deny: Restrictive(rule))
+            && SecretNames(match["secrets"]!, request, Restrictive(rule))
+            && Arguments(match["args"] as JsonObject, request)
+            && Paths(match["path"] as JsonObject, request);
+    }
+
+    // The request of an unrestricted exec on master with the caller's identity facts.
+    internal static ToolAuthorizationRequest UnrestrictedExecRequest(ToolAuthorizationRequest request) =>
+        request with
         {
             Source = "node",
             Name = "exec",
@@ -516,25 +632,27 @@ internal static class ToolAuthorizationEvaluation
             TaskOwnerSession = null,
             Secrets = null,
             OwnedSecrets = null,
+            Operations = null,
         };
-        foreach (var rule in policy.Value["rules"]!.AsArray().OfType<JsonObject>())
-        {
-            var match = rule["match"]!.AsObject();
-            if (
-                rule["enabled"]!.GetValue<bool>()
-                && Ordinary(match)
-                && match["args"] is not JsonObject { Count: > 0 }
-                && match["path"] is not JsonObject { Count: > 0 }
-                && Identity(match, exec, deny: Restrictive(rule))
-            )
-                return new(RuleEffect(rule, exec), rule);
-        }
-        return new(Default(policy, exec), null);
+
+    // Whether a version-1 rule decides unrestricted exec: it has no argument or path condition
+    // and matches exec on master.
+    internal static bool EstablishesUnrestrictedExec(JsonObject rule, ToolAuthorizationRequest exec)
+    {
+        var match = rule["match"]!.AsObject();
+        return Ordinary(match)
+            && match["args"] is not JsonObject { Count: > 0 }
+            && match["path"] is not JsonObject { Count: > 0 }
+            && Identity(match, exec, deny: Restrictive(rule));
     }
 
-    // Rules with a `secrets` selector decide only the secret facts of a call; every other rule
-    // decides the call itself.
-    private static bool Ordinary(JsonObject match) => !match.ContainsKey("secrets");
+    internal static ToolAuthorizationEffect DefaultEffect(
+        ToolAuthorizationPolicy policy,
+        ToolAuthorizationRequest request
+    ) => Default(policy, request);
+
+    internal static string? PolicyRoot(string text, ToolAuthorizationRequest request) =>
+        Base(text, request);
 
     private static HashSet<string> OwnedSecrets(ToolAuthorizationRequest request) =>
         new(
@@ -572,6 +690,7 @@ internal static class ToolAuthorizationEvaluation
             var match = rule["match"]!.AsObject();
             if (
                 rule["enabled"]!.GetValue<bool>()
+                && Version1(rule)
                 && !Ordinary(match)
                 && Identity(match, request, deny: Restrictive(rule))
                 && SecretNames(match["secrets"]!, request, Restrictive(rule))
@@ -600,7 +719,7 @@ internal static class ToolAuthorizationEvaluation
             ? AuthorizationDecision.Parse(SessionWait.Text(policy.Value["defaultAction"]))
             : ToolAuthorizationEffect.Deny;
 
-    private static ToolAuthorizationEffect RuleEffect(
+    internal static ToolAuthorizationEffect RuleEffect(
         JsonObject rule,
         ToolAuthorizationRequest request
     ) =>
@@ -690,6 +809,8 @@ internal static class ToolAuthorizationEvaluation
     )
     {
         ValidateNodeAncestry(request);
+        if (policy.HasOperationRules)
+            return OperationEvaluation.Evaluate(policy, request);
         var call = EvaluateCall(policy, request);
         if (request.Secrets is not { Count: > 0 })
             return call;
@@ -717,6 +838,7 @@ internal static class ToolAuthorizationEvaluation
             var match = rule["match"]!.AsObject();
             if (
                 rule["enabled"]!.GetValue<bool>()
+                && Version1(rule)
                 && Ordinary(match)
                 && Identity(match, request, deny: Restrictive(rule))
                 && Arguments(match["args"] as JsonObject, request)
@@ -738,12 +860,13 @@ internal static class ToolAuthorizationEvaluation
     {
         if (!unknownNodeTargets)
             ValidateNodeAncestry(request);
-        foreach (var rule in policy.Value["rules"]!.AsArray().OfType<JsonObject>())
+        // Raw arguments the caller states as known decide version-1 rules; the rest stay
+        // unresolved, whatever branch an operation template assumes.
+        (bool Skip, bool Conditional) WholeCall(JsonObject rule)
         {
             var match = rule["match"]!.AsObject();
             if (
-                !rule["enabled"]!.GetValue<bool>()
-                || !Ordinary(match)
+                !Ordinary(match)
                 || !Identity(
                     match,
                     request,
@@ -753,28 +876,40 @@ internal static class ToolAuthorizationEvaluation
                     unknownName
                 )
             )
-                continue;
+                return (true, false);
             // Arguments the caller states as known are matched exactly; the rest stay unresolved.
             var unknownArgs = false;
-            var argsMismatch = false;
             foreach (var pair in match["args"] as JsonObject ?? new())
             {
                 if (knownArgs?.Contains(pair.Key.Split('.')[0]) != true)
                     unknownArgs = true;
                 else if (!ArgumentMatches(pair.Key, pair.Value, request))
-                {
-                    argsMismatch = true;
-                    break;
-                }
+                    return (true, false);
             }
-            if (argsMismatch)
-                continue;
-            var conditional =
+            return (
+                false,
                 unknownName && NameConstrained(match["tool"])
-                || match.ContainsKey("path")
-                || unknownArgs
-                || unknownNode && match.ContainsKey("targetNode")
-                || unknownNodeTargets && match.ContainsKey("node");
+                    || match.ContainsKey("path")
+                    || unknownArgs
+                    || unknownNode && match.ContainsKey("targetNode")
+                    || unknownNodeTargets && match.ContainsKey("node")
+            );
+        }
+        if (policy.HasOperationRules)
+            return OperationEvaluation.Visible(
+                policy,
+                request,
+                WholeCall,
+                unknownNode || unknownNodeTargets,
+                knownArgs?.Contains("action") == true
+            );
+        foreach (var rule in policy.Value["rules"]!.AsArray().OfType<JsonObject>())
+        {
+            if (!rule["enabled"]!.GetValue<bool>())
+                continue;
+            var (skip, conditional) = WholeCall(rule);
+            if (skip)
+                continue;
             // A call that can proceed after approval remains discoverable.
             var possible = RuleEffect(rule, request) != ToolAuthorizationEffect.Deny;
             if (!conditional)
@@ -797,8 +932,11 @@ internal static class ToolAuthorizationEvaluation
             .Any(rule =>
                 rule["enabled"]!.GetValue<bool>()
                 && Identity(rule["match"]!.AsObject(), request, deny: Restrictive(rule))
-                && (rule["match"]?["args"] as JsonObject ?? new()).Any(pair =>
-                    pair.Value is JsonObject map && map.ContainsKey("task")
+                && (
+                    rule["resources"]?["task"] is not null
+                    || (rule["match"]?["args"] as JsonObject ?? new()).Any(pair =>
+                        pair.Value is JsonObject map && map.ContainsKey("task")
+                    )
                 )
             );
 
@@ -812,8 +950,11 @@ internal static class ToolAuthorizationEvaluation
             .Any(rule =>
                 rule["enabled"]!.GetValue<bool>()
                 && Identity(rule["match"]!.AsObject(), request, deny: Restrictive(rule))
-                && (rule["match"]?["args"] as JsonObject ?? new()).Any(pair =>
-                    pair.Value is JsonObject map && map.ContainsKey("session")
+                && (
+                    OperationRules.IsOperationRule(rule)
+                    || (rule["match"]?["args"] as JsonObject ?? new()).Any(pair =>
+                        pair.Value is JsonObject map && map.ContainsKey("session")
+                    )
                 )
             );
 }

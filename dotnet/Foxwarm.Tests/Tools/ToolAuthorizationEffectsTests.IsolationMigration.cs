@@ -62,7 +62,8 @@ public sealed partial class ToolAuthorizationEffectsTests
         ("builtin", "create_session", "{}", "master", null, false),
         ("builtin", "list_agents", "{}", "master", null, false),
         ("builtin", "task", """{"action":"list"}""", "master", null, false),
-        ("builtin", "image_crop", "{}", "master", null, false),
+        // Self-scoped: the translated legacy deny no longer applies (self exemption).
+        ("builtin", "image_crop", "{}", "master", null, true),
         ("builtin", "explain_tool_authorization", "{}", "master", null, false),
         ("builtin", "node", """{"action":"select","nodeId":"bound-node"}""", "master", null, false),
         ("mcp", "tool1", "{}", "master", "srv", true),
@@ -358,8 +359,9 @@ public sealed partial class ToolAuthorizationEffectsTests
         }
 
         var marker = Path.Combine(temp.Path, "data", "state", AgentCatalog.InstallationFileName);
+        // Level 1 (the inheritable flag); operation rules would need level 2.
         Assert.Equal(
-            AgentCatalog.ReaderVersion,
+            1,
             JsonNode.Parse(await File.ReadAllTextAsync(marker))![
                 "minimumReaderVersion"
             ]!.GetValue<int>()

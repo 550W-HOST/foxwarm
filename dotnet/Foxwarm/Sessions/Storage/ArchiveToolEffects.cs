@@ -284,7 +284,7 @@ internal static class ArchiveToolEffects
             if (value["error"] is JsonObject error)
                 return Text(error["type"]) switch
                 {
-                    "tool_authorization_denied" => "denied",
+                    "tool_authorization_denied" or "tool_authorization_unresolved" => "denied",
                     "tool_approval_rejected" => "approval-rejected",
                     "tool_approval_expired" or "tool_approval_unavailable" => "approval-expired",
                     "tool_call_skipped" => "skipped",

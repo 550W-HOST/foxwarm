@@ -800,6 +800,12 @@
       "id": "nested",
       "kind": "nested",
       "capability": "*"
+     },
+     {
+      "id": "model-request",
+      "kind": "retained",
+      "capability": "builtin:run_script",
+      "conditional": true
      }
     ],
     "normalized": {
@@ -808,7 +814,8 @@
     "evaluated": {
      "primary": "primary",
      "source-read": "node:master/read {\"filePath\":\"job.py\"}",
-     "nested": null
+     "nested": null,
+     "model-request": null
     }
    }
   },
@@ -856,6 +863,12 @@
       "id": "nested",
       "kind": "nested",
       "capability": "*"
+     },
+     {
+      "id": "model-request",
+      "kind": "retained",
+      "capability": "builtin:start_toolscript_run",
+      "conditional": true
      }
     ],
     "normalized": {
@@ -865,7 +878,8 @@
     "evaluated": {
      "primary": "primary",
      "source-read": "node:box/read {\"filePath\":\"job.py\"}",
-     "nested": null
+     "nested": null,
+     "model-request": null
     }
    }
   },
@@ -890,6 +904,12 @@
       "id": "nested",
       "kind": "nested",
       "capability": "*"
+     },
+     {
+      "id": "model-request",
+      "kind": "retained",
+      "capability": "builtin:run_script",
+      "conditional": true
      }
     ],
     "normalized": {
@@ -897,7 +917,8 @@
     },
     "evaluated": {
      "primary": "primary",
-     "nested": null
+     "nested": null,
+     "model-request": null
     }
    }
   },

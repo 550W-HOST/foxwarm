@@ -813,6 +813,8 @@ internal sealed partial class SessionToolExecutor(
                     files.ResolvedPaths = paths =>
                         invocation.Value!.ResolvedPaths = (JsonArray)paths.DeepClone();
                 }
+                if (invocation.Value is { } authorized)
+                    authorized.Resolved = resolved;
                 await AuthorizeAsync(resolved, cancellationToken, invocation.Value?.Target);
                 if (identity == hosted.Id)
                     break;
@@ -1512,6 +1514,10 @@ internal sealed record ToolScriptSourcePlacement(string Node, string? Cwd, Works
 
 internal sealed class TurnToolInvocation(string callId)
 {
+    // The call this invocation runs, as the dispatch gate authorized it. A ToolScript slice's
+    // model requests are assessed as this invocation.
+    internal ResolvedTool? Resolved { get; set; }
+
     // The ctl command a ToolScript call names, when it runs as the concrete capability.
     internal string? Command { get; init; }
 

@@ -184,15 +184,12 @@ public sealed partial class ToolApprovalGateTests
             f.Manager,
             AskScriptSource.Replace("name: read}", "name: write}", StringComparison.Ordinal)
         );
-        var call = Start(
-            f,
-            "call-nested",
-            "run_script",
-            new JsonObject
-            {
-                ["code"] = "call_tool('write', {'filePath': 'nested.txt', 'content': 'x'})\nreturn 'done'",
-            }
+        // A file-sourced script: an inline one is self-scoped and never asks.
+        await File.WriteAllTextAsync(
+            Path.Combine(f.Work, "nested.py"),
+            "call_tool('write', {'filePath': 'nested.txt', 'content': 'x'})\nreturn 'done'"
         );
+        var call = Start(f, "call-nested", "run_script", new JsonObject { ["filePath"] = "nested.py" });
         var outer = Assert.Single(await PendingAsync(f.Owner));
         Assert.Equal("run_script", outer["tool"]!["name"]!.GetValue<string>());
         // The script's own write is not part of its plan; the outer approval does not list it.

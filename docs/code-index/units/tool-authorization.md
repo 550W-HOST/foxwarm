@@ -117,7 +117,7 @@ The caller needs the generic grant for the builtin plus `node:master/read` of th
 
 ## Operation rules
 
-Planned rules over the operations a call performs, added to the same ordered lists, are owned by [tool operation authorization](./tool-operation-authorization.md). Phase 1 only adds explanation and denial attribution; this unit's evaluator stays authoritative.
+Rules over the operations a call performs, in the same ordered lists, are owned by [tool operation authorization](./tool-operation-authorization.md) and implemented in [operation rules](./tool-operation-rules.md). A layer without operation rules is decided by this unit's evaluator exactly as before; a layer with one by `OperationEvaluation`. Self-scoped calls are not assessed, and ToolScript model requests are gated as the slice's invocation.
 
 ## Open Questions
 

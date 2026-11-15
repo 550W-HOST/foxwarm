@@ -134,12 +134,74 @@ internal static class OperationAttribution
             : $"the {obligation.Description} ({capability}) for {called}";
         if (secretPart)
         {
-            var names = string.Join(", ", (secrets ?? []).Select(name => $"`{name}`"));
+            // With operation rules each name has its own decision; name the denied ones.
+            var refused = decision.SecretNames is { } perName
+                ? perName
+                    .Where(item => item.Effect == ToolAuthorizationEffect.Deny)
+                    .Select(item => item.Name)
+                    .ToArray()
+                : secrets ?? [];
+            var names = string.Join(", ", refused.Select(name => $"`{name}`"));
             what = $"the use of {names} by {what}";
             if (decision.Secrets?.Fallback is not null)
                 what += " through the unrestricted master exec fallback";
         }
+        else if (
+            decision.Operations?.FirstOrDefault(item => item.Effect == ToolAuthorizationEffect.Deny)
+            is { } operation
+        )
+            what = $"the operation {OperationText(operation.Operation)} of {what}";
         return $"{who} denied {what}, called as `{Invocation(call)}`.";
+    }
+
+    // An operation as denials name it: the op and its established resources.
+    internal static string OperationText(AuthorizationOperation operation)
+    {
+        var parts = new List<string>();
+        foreach (var (key, value) in operation.Resources)
+        {
+            var text = value switch
+            {
+                null => null,
+                JsonObject marker when marker["prospective"] is not null => "a new Session",
+                JsonObject identity => string.Join(
+                    "/",
+                    identity.Select(pair => SessionWait.Text(pair.Value)).OfType<string>()
+                ),
+                _ => SessionWait.Text(value) ?? value.ToJsonText(),
+            };
+            if (text is not null)
+                parts.Add($"{key} `{text}`");
+        }
+        return parts.Count == 0 ? $"`{operation.Op}`" : $"`{operation.Op}` ({string.Join(", ", parts)})";
+    }
+
+    // The rejection of a call operation rules could not decide: which operation, which facts
+    // were missing, and the rule (or default) that needed them.
+    internal static string Unresolved(
+        ResolvedTool check,
+        ResolvedTool? primary,
+        AuthorizationLayerDecision denied,
+        OperationDecision unresolved
+    )
+    {
+        var call = primary ?? check;
+        var capability = $"`{OperationPlan.CapabilityId(check)}`";
+        var who = unresolved.Rule is { } rule
+            ? $"{RuleName(denied.Policy, rule)} in {LayerName(denied.Layer)}"
+            : $"the operation rules of {LayerName(denied.Layer)}";
+        var operation = unresolved.Operation;
+        if (operation.Underivable is { } reason)
+            return $"Tool authorization can't determine what {capability} would do ({reason}), so {who} can't decide it. It was not executed. Called as `{Invocation(call)}`.";
+        var missing = operation
+            .Resources.Where(pair => pair.Value is null)
+            .Select(pair => pair.Key)
+            .Concat(operation.With.Where(pair => pair.Value is null).Select(pair => "with." + pair.Key))
+            .ToArray();
+        var facts = missing.Length == 0
+            ? "the facts its selectors test"
+            : "its " + string.Join(", ", missing.Select(name => $"`{name}`"));
+        return $"Tool authorization can't establish {facts} for the operation {OperationText(operation)} of {capability}, so {who} can't decide it. It was not executed. Called as `{Invocation(call)}`.";
     }
 
     // What a creation-target outcome is attributed to. A deny or ask the stopping rule (or

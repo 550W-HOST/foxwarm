@@ -10,6 +10,7 @@ Part of the [tool dispatch](./tool-dispatch.md) thread. Covers how a resolved ta
 - [isolation-migration](../units/isolation-migration.md)
 - [tool-operation-authorization](../units/tool-operation-authorization.md): operation rules, effects and obligations, delivery phases
 - [tool-operation-catalog](../units/tool-operation-catalog.md)
+- [tool-operation-rules](../units/tool-operation-rules.md): rules with `op`, the two-domain evaluator, self exemption, the model-request gate and operation-aware visibility (phase 3)
 - [tool-operation-approval-staging](../units/tool-operation-approval-staging.md): staged approvals of each call's plan (phase 2)
 - Historical: [src-isolated-check](../units/src-isolated-check.md), [src-permissions](../units/src-permissions.md)
 

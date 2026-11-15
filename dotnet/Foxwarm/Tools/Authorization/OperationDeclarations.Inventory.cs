@@ -37,6 +37,7 @@ internal static partial class OperationDeclarations
     private const string Plan = "Sessions/Compaction/CompactPlanInput.cs";
     private const string Output = "Tools/SessionToolExecutor.Output.cs";
     private const string Script = "Tools/SessionToolExecutor.ToolScript.cs";
+    private const string ScriptModel = "Sessions/SessionManager.ToolScript.cs";
     private const string Executor = "Tools/SessionToolExecutor.cs";
     private const string Tool = "AuthorizeToolAsync";
     private const string File = "AuthorizeNodeFileAsync";
@@ -211,6 +212,15 @@ internal static partial class OperationDeclarations
             1,
             Tool,
             "builtin:artifact#source-read"
+        ),
+        Site(
+            ScriptModel,
+            "AssessToolScriptModelAsync",
+            1,
+            Assess,
+            "builtin:run_script#model-request",
+            "builtin:start_toolscript_run#model-request",
+            "builtin:continue_script#model-request"
         ),
         Site(Output, "SaveToolOutputAsync", 1, File, "*#output-spill"),
         Site(Output, "SaveToolOutputAsync", 2, File, "*#output-spill"),

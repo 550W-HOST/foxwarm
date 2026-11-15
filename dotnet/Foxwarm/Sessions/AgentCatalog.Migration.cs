@@ -7,10 +7,12 @@ internal sealed partial class AgentCatalog
 {
     /// <summary>
     /// Installation reader level this binary understands. Level 1 adds the
-    /// <c>inheritable: false</c> flag and legacy-isolation migration markers. Binaries that
-    /// predate the marker ignore it, so it only protects downgrades between binaries that read it.
+    /// <c>inheritable: false</c> flag and legacy-isolation migration markers; level 2 adds
+    /// operation rules (rules with <c>op</c>) in Agent-local layers. Binaries that predate the
+    /// marker ignore it, so it only protects downgrades between binaries that read it; older
+    /// parsers also reject <c>op</c> itself.
     /// </summary>
-    internal const int ReaderVersion = 1;
+    internal const int ReaderVersion = 2;
 
     internal const string InstallationFileName = "installation.json";
 
@@ -48,11 +50,15 @@ internal sealed partial class AgentCatalog
     // binaries and raise nothing.
     internal static int RequiredReaderLevel(JsonObject metadata) =>
         metadata.Any(pair =>
+            pair.Value is JsonObject row && OperationRules.ContainsOperationRule(row["rules"])
+        )
+            ? 2
+        : metadata.Any(pair =>
             pair.Value is JsonObject row
             && (row.ContainsKey("legacyIsolation") || !Inheritable(row))
         )
             ? 1
-            : 0;
+        : 0;
 
     /// <summary>
     /// Raises the installation marker before metadata that depends on this reader is

@@ -104,7 +104,10 @@ internal static class IsolationMigrationRules
         if (rules is null)
             return false;
         var normalized = AgentRulePolicy.Parse(rules).Value["rules"] as JsonArray;
+        // An operation rule is never a terminal deny: no op pattern covers secret.use or Self
+        // calls, so it does not allow only what the layer lists.
         return normalized?.LastOrDefault() is JsonObject last
+            && !OperationRules.IsOperationRule(last)
             && last["enabled"]?.GetValue<bool>() == true
             && last["action"]?.GetValue<string>() == "deny"
             && last["match"] is JsonObject { Count: 0 };

@@ -37,7 +37,7 @@ internal sealed partial class SessionManager
     {
         var facts = ToolAuthorizationExplain.Facts(request);
         var recordFacts = new JsonObject();
-        foreach (var key in new[] { "paths", "nodeTargets", "sessionTarget", "secrets" })
+        foreach (var key in new[] { "paths", "nodeTargets", "sessionTarget", "secrets", "operations" })
             if (facts[key] is { } fact)
                 recordFacts[key] = fact.DeepClone();
         return recordFacts;

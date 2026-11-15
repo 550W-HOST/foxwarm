@@ -272,7 +272,8 @@ public sealed partial class ToolAuthorizationEffectsTests
                 )
             );
         }
-        Assert.False(manager.ToolVisible(owner, "builtin", "run_script"));
+        // Inline scripts are self-scoped, so run_script stays visible.
+        Assert.True(manager.ToolVisible(owner, "builtin", "run_script"));
         Assert.False(manager.ToolVisible(owner, "builtin", "session"));
         Assert.False(manager.ToolVisible(owner, "mcp", "read", "peer", node: "master"));
     }

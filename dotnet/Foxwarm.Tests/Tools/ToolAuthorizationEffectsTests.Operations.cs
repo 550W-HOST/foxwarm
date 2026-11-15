@@ -157,7 +157,10 @@ public sealed partial class ToolAuthorizationEffectsTests
             .AsArray()
             .Select(item => (item!["id"]!.GetValue<string>(), item["kind"]!.GetValue<string>()))
             .ToArray();
-        Assert.Equal([("primary", "primary"), ("source-read", "subRequest"), ("nested", "nested")], kinds);
+        Assert.Equal(
+            [("primary", "primary"), ("source-read", "subRequest"), ("nested", "nested"), ("model-request", "retained")],
+            kinds
+        );
         var read = script["active"]!["obligations"]!
             .AsArray()
             .Single(item => item!["id"]!.GetValue<string>() == "source-read")!;

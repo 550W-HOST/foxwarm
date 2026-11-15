@@ -53,6 +53,8 @@ internal static class ToolAuthorizationExplain
             result["askedBy"] = "policy";
             result["approval"] = assessment.Approval.ToJson();
         }
+        if (assessment.Self is { } self)
+            result["self"] = self;
         result["layers"] = new JsonArray(
             assessment.Layers.Select(layer => (JsonNode?)Layer(layer)).ToArray()
         );
@@ -71,6 +73,8 @@ internal static class ToolAuthorizationExplain
             result["precheck"] = variant.Precheck;
             return result;
         }
+        if (assessment.Self is not null)
+            result["self"] = true;
         var rules = new JsonArray();
         foreach (var layer in assessment.Layers)
         {
@@ -193,6 +197,66 @@ internal static class ToolAuthorizationExplain
                 Matched(detail, layer.Policy, secrets.Rule);
             result["secrets"] = detail;
         }
+        if (layer.Decision.Operations is { } operations)
+            result["operations"] = new JsonArray(
+                operations.Select(item => (JsonNode?)Operation(layer.Policy, item)).ToArray()
+            );
+        if (layer.Decision.SecretNames is { } names)
+            result["secretNames"] = new JsonArray(
+                names.Select(item => (JsonNode?)SecretName(layer.Policy, item)).ToArray()
+            );
+        return result;
+    }
+
+    // A rule as per-operation results name it: position, ID and kind.
+    private static JsonObject RuleRef(ToolAuthorizationPolicy policy, JsonObject rule) =>
+        new()
+        {
+            ["index"] = Rules(policy).IndexOf(rule) + 1,
+            ["id"] = rule["id"]?.DeepClone(),
+            ["ruleKind"] = OperationRules.IsOperationRule(rule) ? "operation" : "whole-call",
+        };
+
+    // How one operation was decided in a layer with operation rules: its first matching rule
+    // (or the default), the later rules that also match it, and whether it could not be
+    // resolved.
+    private static JsonObject Operation(ToolAuthorizationPolicy policy, OperationDecision item)
+    {
+        var result = item.Operation.ToJson();
+        result["decision"] = AuthorizationDecision.Name(item.Effect);
+        if (item.Rule is { } rule)
+            result["rule"] = RuleRef(policy, rule);
+        else
+        {
+            result["rule"] = null;
+            if (!item.Unresolved)
+                result["default"] = policy.Value["defaultAction"]?.DeepClone();
+        }
+        if (item.Unresolved)
+            result["unresolved"] = true;
+        if (item.Unreached.Count > 0)
+            result["unreached"] = new JsonArray(
+                item.Unreached.Select(other => (JsonNode?)RuleRef(policy, other)).ToArray()
+            );
+        return result;
+    }
+
+    private static JsonObject SecretName(ToolAuthorizationPolicy policy, SecretNameDecision item)
+    {
+        var result = new JsonObject
+        {
+            ["name"] = item.Name,
+            ["decision"] = AuthorizationDecision.Name(item.Effect),
+            ["rule"] = item.Rule is { } rule ? RuleRef(policy, rule) : null,
+        };
+        if (item.Owned)
+            result["owned"] = true;
+        if (item.Fallback is { } fallback)
+            result["fallback"] = new JsonObject
+            {
+                ["decision"] = AuthorizationDecision.Name(fallback.Effect),
+                ["rule"] = fallback.Rule is { } exec ? RuleRef(policy, exec) : null,
+            };
         return result;
     }
 
@@ -215,6 +279,17 @@ internal static class ToolAuthorizationExplain
         if (rule["approval"] is { } approval)
             matched["approval"] = approval.DeepClone();
         matched["match"] = rule["match"]?.DeepClone();
+        if (OperationRules.IsOperationRule(rule))
+        {
+            matched["ruleKind"] = "operation";
+            matched["op"] = rule["op"]?.DeepClone();
+            if (rule["resources"] is { } resources)
+                matched["resources"] = resources.DeepClone();
+            if (rule["with"] is { } with)
+                matched["with"] = with.DeepClone();
+        }
+        else if (policy.HasOperationRules)
+            matched["ruleKind"] = "whole-call";
         result["rule"] = matched;
     }
 
@@ -255,6 +330,10 @@ internal static class ToolAuthorizationExplain
             };
         if (request.TaskOwnerSession is not null)
             facts["taskOwnerSession"] = request.TaskOwnerSession;
+        if (request.Operations is { Count: > 0 } operations)
+            facts["operations"] = new JsonArray(
+                operations.Select(operation => (JsonNode?)operation.ToJson()).ToArray()
+            );
         if (request.Secrets is { Count: > 0 } secrets)
             facts["secrets"] = new JsonArray(
                 secrets.Select(name => (JsonNode?)JsonValue.Create(name)).ToArray()

@@ -141,7 +141,8 @@ internal sealed partial class SessionManager
         SessionOwner? concreteTarget = null,
         IReadOnlyList<string>? nodeEffects = null,
         Action<AuthorizationAssessment>? observe = null,
-        IReadOnlyList<string>? secrets = null
+        IReadOnlyList<string>? secrets = null,
+        IReadOnlyList<AuthorizationOperation>? operations = null
     )
     {
         var assessment = await AssessToolAsync(
@@ -151,7 +152,8 @@ internal sealed partial class SessionManager
             token,
             concreteTarget,
             nodeEffects,
-            secrets: secrets
+            secrets: secrets,
+            operations: operations
         );
         observe?.Invoke(assessment);
         if (assessment.Denied is not null)
@@ -175,10 +177,20 @@ internal sealed partial class SessionManager
     internal static ToolAuthorizationDeniedException Denial(
         SessionOwner owner,
         ResolvedTool resolved,
-        AuthorizationAssessment assessment
+        AuthorizationAssessment assessment,
+        string? lead = null
     )
     {
         var denied = assessment.Denied!;
+        if (denied.Decision.Unresolved is { } unresolved)
+            return new ToolAuthorizationUnresolvedException(
+                OperationAttribution.Unresolved(
+                    resolved,
+                    OperationAttribution.Primary(owner),
+                    denied,
+                    unresolved
+                )
+            );
         return new ToolAuthorizationDeniedException(
             OperationAttribution.Append(
                 denied.Decision
@@ -191,6 +203,7 @@ internal sealed partial class SessionManager
                             assessment.Request.Secrets!
                         )
                     : SessionWait.Text(denied.Decision.Rule?["reason"])
+                        ?? lead
                         ?? $"Tool authorization rule denies {resolved.Source} capability `{resolved.Name}`.",
                 OperationAttribution.Denial(
                     resolved,
@@ -262,7 +275,8 @@ internal sealed partial class SessionManager
         IReadOnlyList<string>? nodeEffects = null,
         ToolAuthorizationPolicy? global = null,
         IReadOnlyList<string>? secrets = null,
-        IReadOnlyList<AuthorizationPath>? paths = null
+        IReadOnlyList<AuthorizationPath>? paths = null,
+        IReadOnlyList<AuthorizationOperation>? operations = null
     )
     {
         owner.Entry.RequireIdentityAuthority();
@@ -378,6 +392,23 @@ internal sealed partial class SessionManager
                 NodeForest = await NodeProviders.PrepareAuthorizationForestAsync(endpoints, token),
             };
         var policy = global ?? await authorization.LoadAsync(token);
+        // A Self call is not authorizable: every valid layer passes it. Structural failures (an
+        // unavailable policy, an invalid creator chain, an unreadable layer) still reject it.
+        // Operations a host call states (a ToolScript model request) are never Self.
+        if (operations is null && OperationPlan.SelfReason(resolved) is { } self)
+            return new(
+                request,
+                EffectiveLayers(owner.Agent, policy)
+                    .Select(layer => new AuthorizationLayerDecision(
+                        layer.Name,
+                        layer.Policy,
+                        new(ToolAuthorizationEffect.Allow, null)
+                    ))
+                    .ToArray()
+            )
+            {
+                Self = self,
+            };
         var secretsUnknown = false;
         if (secrets is null)
         {
@@ -407,6 +438,10 @@ internal sealed partial class SessionManager
             layers.Select(layer => layer.Policy).ToArray(),
             concreteTarget
         );
+        if (operations is not null)
+            request = request with { Operations = operations };
+        else if (layers.Any(layer => layer.Policy.HasOperationRules))
+            request = request with { Operations = AuthorizationOperations(owner, resolved, request) };
         return new(
             request,
             layers
@@ -744,10 +779,11 @@ internal sealed partial class SessionManager
         string name,
         string? server = null,
         bool unknownNode = false,
-        string? node = null
+        string? node = null,
+        JsonObject? fixedArgs = null
     ) =>
         (source != "builtin" || name != "generate_image" || UsesSeparateImageGeneration(owner))
-        && ToolVisible(VisibilityFor(owner), source, name, server, unknownNode, node);
+        && ToolVisible(VisibilityFor(owner), source, name, server, unknownNode, node, fixedArgs);
 
     internal JsonArray ModelDefinitions(SessionOwner owner, JsonArray? explicitOverride = null)
     {

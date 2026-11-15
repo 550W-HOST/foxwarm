@@ -4,7 +4,7 @@ Files: `dotnet/Foxwarm/Tools/Authorization/OperationDeclarations.cs`, `dotnet/Fo
 
 Secondary files: `dotnet/Foxwarm/Tools/ToolRegistry.cs`, `dotnet/Foxwarm/Tools/Ctl/CtlCommands.json`, `dotnet/Foxwarm.Tests/Tools/Fixtures/ctl-conformance.json`
 
-This is the reference table for [tool operation authorization](./tool-operation-authorization.md). It lists the operations, the effects and obligations of each registered capability, their action branches, and the coverage and conformance corpora. Contracts, decisions and phases are owned there. In phase 1 the declarations are diagnostic metadata only: they never authorize, deny or read.
+This is the reference table for [tool operation authorization](./tool-operation-authorization.md). It lists the operations, the effects and obligations of each registered capability, their action branches, and the coverage and conformance corpora. Contracts, decisions and phases are owned there. In phases 1 and 2 the declarations were diagnostic metadata only. From phase 3 they also give the operations operation rules decide, the Self branches that are not assessed, and the branches visibility enumerates ([operation rules](./tool-operation-rules.md)).
 
 ## Operations
 
@@ -86,15 +86,15 @@ Notation:
 
 - `[x]` marks a conditional effect.
 - Obligations use the kinds defined in [effects and obligations](./tool-operation-authorization.md#operations-effects-and-obligations): **P** primary request, **S** concrete sub-request (with its identity), **Pr** policy probe, **R** retained final request, **N** nested call.
-- **Self** marks a call that will not be authorizable from phase 3. Until then it is assessed as today.
+- **Self** marks a call that is not authorizable (phase 3).
 
 | Capability | Effects (operations) | Obligations; subsumed work |
 | --- | --- | --- |
 | `node:read` / `node:write` / `node:edit` | `env.read` / `env.write` / `env.write` per file | P |
 | `node:exec` | `env.exec(node, cwd)`; `[secret.use]` per `secretEnv` | P |
 | `node:browser_*`; custom Node tool; MCP tool | `env.browser`; `env.tool`; `mcp.call` | P |
-| `run_script`, `start_toolscript_run` | from a file: `env.read(source)`; inline: **Self** | P; S `node:read` of the file source (master and remote); N each `call_tool`/`ctl()`; `model.request` per host call |
-| `continue_script` | **Self** | N; `model.request` |
+| `run_script`, `start_toolscript_run` | from a file: `env.read(source)`; inline: **Self** | P; S `node:read` of the file source (master and remote); N each `call_tool`/`ctl()`; R `model-request`: `model.request` per host call, assessed as this invocation |
+| `continue_script` | **Self** | N; R `model-request` |
 | `list/get/cancel_toolscript_run`, `cancel_transfer`, `wait`, `image_crop` | **Self** (owner-scoped) | — |
 | `submit_compact_plan` | **Self** | S `argsFilePath` read, invalid-plan save and repair edit as Node read/write/edit |
 | `ctl` | front end | resolves to the target capability |
@@ -110,7 +110,7 @@ Notation:
 | `recall` | `history.read(target, mode)`, or `history.search` for Agent scope | P |
 | `get_archived_messages/blocks` | `history.read(exact)` | P |
 | `list_agents` / `skill` | `agent.list` / `agent.view` | P |
-| `create_agent` | `agent.create`; `[agent.view(inherit)]`; `[session.create(kind: session)]` for the main Session; existing source: `[session.view(source)]`; missing source: `[session.create(kind: source)]`; `[env.read/env.write]` of memory directories for `inheritMemory`; `[session.manage(move)]` for `convertSession` | P. The missing-source creation without a main Session is a known defect; its fix updates the corpus. |
+| `create_agent` | `agent.create`; `[agent.view(inherit)]`; `[session.create(kind: session)]` for the main Session; existing source: `[session.view(source)]`; missing source: `[session.create(kind: source)]`; `[env.read]` of the source Agent's and `[env.write]` of the new Agent's memory directory for `inheritMemory`; `[session.manage(move)]` for `convertSession` | P. The missing-source creation without a main Session is a known defect; its fix updates the corpus. |
 | `set_agent_rules` / `set_agent_inherit` | `agent.manage(rules)` / `agent.manage(inherit)`, `[agent.view(inherit)]` | P. Subsumed: the `refreshSnapshots` refresh of the target Agent and inheriting Agents. |
 | `node` (one branch per action) | list: `node.list` / inspect: `node.view` / select: `node.select` / create, ensure, destroy: `node.lifecycle(action)` | P; S `node:<selected>/get_default_cwd` probe for a remote Node that advertises it (optional: a denial only omits the default cwd); R the final Node identity at the lifecycle effect (create: the Provider parent; ensure: the existing or parent identity; destroy: the Node) |
 | `copy_between_nodes` | `env.read(source)`, `env.write(target)` | P; R the detached transfer recheck |
@@ -127,7 +127,7 @@ Notation:
 | `delete_timer`, `list_timers` | `timer.manage` | P |
 | `set_config` | `config.write(target)`; `[secret.use]` derived from the candidate | P; S candidate read as `node:master/read` (phase 2: stage A); R the configuration-lane recheck |
 | `explain_tool_authorization` | `config.read(tool-rules)`; `[session.view(probe)]` | P; S policy and candidate reads; S `view_session` of each probed Session other than the caller |
-| `add_secret` | `secret.manage(name)`; `[secret.use(name)]` when referenced; with `fromConfig`, `[config.write]` and `[mcp.manage]` | P; S `filePath` read on its Node; S `fromConfig` source reads; S `deleteFile` as `node:edit` with the delete patch on the file's Node |
+| `add_secret` | `secret.manage(name)`; `[secret.use(name)]` when referenced; with `fromConfig`, `[config.write]` per rewritten configuration file and `[mcp.manage]` per rewritten MCP server | P; S `filePath` read on its Node; S `fromConfig` source reads; S `deleteFile` as `node:edit` with the delete patch on the file's Node |
 | `list_secrets` / `list_mcp_servers` | `secret.list` / `mcp.list` | P |
 | `mcp_config` | `mcp.manage(server)`, `[secret.use]` | P |
 | `mcp_notifications` | `mcp.subscribe(server, action)` | P; R reception recheck |

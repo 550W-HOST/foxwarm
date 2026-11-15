@@ -242,11 +242,15 @@ public sealed partial class ToolAuthorizationEffectsTests
             var (name, args) in new[]
             {
                 ("session", "{}"),
-                ("wait", "{}"),
                 ("read_memory", """{"filePath":"MEMORY.md"}"""),
             }
         )
             Assert.False(await PermitsBuiltin(manager, opaque, temp.Path, name, args), name);
+        // Self-scoped calls pass a fail-closed layer, but not an invalid creator chain.
+        Assert.Equal(
+            reason != "creator-cycle",
+            await PermitsBuiltin(manager, opaque, temp.Path, "wait", "{}")
+        );
         var execution = Executor(manager, opaque, temp.Path);
         await using (execution.Mcp)
         {

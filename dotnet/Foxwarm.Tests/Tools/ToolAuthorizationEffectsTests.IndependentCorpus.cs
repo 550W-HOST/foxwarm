@@ -115,12 +115,24 @@ public sealed partial class ToolAuthorizationEffectsTests
                 )
             )!
             .AsObject();
+        // Scheduled changes since the base revision (operation authorization phase 3): an
+        // inline script is self-scoped, so a deny of its invocation no longer stops it.
+        var scheduled = new Dictionary<string, string>
+        {
+            ["deny / script-inline"] = "ok",
+            ["staged-deny / script-inline"] = "ok",
+        };
         foreach (var p in policies)
-            foreach (var (call, outcome) in expected[p.Name]!.AsObject())
+            foreach (var (call, recorded) in expected[p.Name]!.AsObject())
+            {
+                var outcome = scheduled.TryGetValue($"{p.Name} / {call}", out var now)
+                    ? JsonValue.Create(now)
+                    : recorded;
                 Assert.True(
                     JsonNode.DeepEquals(outcome, result[p.Name]![call]),
                     $"{p.Name} / {call}: expected {outcome?.ToJsonString()}, got {result[p.Name]![call]?.ToJsonString()}"
                 );
+            }
     }
 
     // With the policy unavailable, calls whose arguments or paths are invalid report those

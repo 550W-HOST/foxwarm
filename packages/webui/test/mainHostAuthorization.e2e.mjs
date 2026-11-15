@@ -43,7 +43,8 @@ const provider = createServer(async (request, response) => {
     for (const call of body.input.filter(item => item.type === 'function_call')) assert(body.input.some(item => item.type === 'function_call_output' && item.call_id === call.call_id), call.call_id + ' historical full pair')
     if (planning) {
       const ranges = [...input.matchAll(/^- M#(\d+)(?:-#(\d+))?\s/gm)].map(match => [Number(match[1]), Number(match[2] || match[1])]); assert(ranges.length)
-      assert(!body.tools.some(value => value.name === 'submit_compact_plan'))
+      // Self-scoped: the deny rule in force no longer hides it from the shared declarations.
+      assert(body.tools.some(value => value.name === 'submit_compact_plan'))
       complete([tool('planning-result-' + sequence, 'submit_compact_plan', { replaceAsBlocks: [{ level: 1, sourceKind: 'message', sourceStart: ranges[0][0], sourceEnd: ranges.at(-1)[1], summary: 'Earlier owned dialogue preserved in exact candidate order.' }] })]); return
     }
     assert(key, 'Owned current user task'); const calls = scripts.get(key) || []
@@ -52,7 +53,9 @@ const provider = createServer(async (request, response) => {
     if (key === 'visibility') {
       assert(body.tools.some(value => value.name === 'exec')); assert(body.tools.some(value => value.name === 'write')); assert(body.tools.some(value => value.name === 'ctl')); assert(!body.tools.some(value => value.name === 'set_config'))
     }
-    if (key === 'compact-schema' || key === 'held-background') assert(!body.tools.some(value => value.name === 'submit_compact_plan'))
+    // submit_compact_plan is self-scoped: a deny rule no longer hides it; an unavailable policy still does.
+    if (key === 'compact-schema') assert(body.tools.some(value => value.name === 'submit_compact_plan'))
+    if (key === 'held-background') assert(!body.tools.some(value => value.name === 'submit_compact_plan'))
     complete(record.followup || !calls.length ? final('DONE-' + key) : calls)
   } catch (error) { failures.push(String(error.stack || error)); if (!response.headersSent) response.writeHead(500); response.end() }
 })

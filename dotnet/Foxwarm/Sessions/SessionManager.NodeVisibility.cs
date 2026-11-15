@@ -122,7 +122,8 @@ internal sealed partial class SessionManager
         string name,
         string? server = null,
         bool unknownNode = false,
-        string? node = null
+        string? node = null,
+        JsonObject? fixedArgs = null
     )
     {
         if (context.ExternalRuntime && !ClaudeRuntimeToolSupport.Visible(source, name))
@@ -159,7 +160,10 @@ internal sealed partial class SessionManager
                     or "node"
                     or "node_create_auth_token"
                     or "node_remove";
-        var args = new JsonObject();
+        // A ctl command's fixed arguments are raw facts every call through it supplies; native
+        // declarations and tool search supply none, so spelling- and default-sensitive raw
+        // fields stay unknown there.
+        var args = fixedArgs is null ? new JsonObject() : (JsonObject)fixedArgs.DeepClone();
         var targets =
             source == "builtin" && name == "node"
                 ? NodeProviders.AuthorizationTargets(args)
@@ -174,7 +178,7 @@ internal sealed partial class SessionManager
             targets,
             unknownNode,
             unknownNodeTargets,
-            null
+            fixedArgs is null ? null : fixedArgs.Select(pair => pair.Key).ToHashSet(StringComparer.Ordinal)
         );
     }
 
@@ -233,6 +237,10 @@ internal sealed partial class SessionManager
             return false;
         try
         {
+            // A Self branch is not authorizable, so a capability that can take one is visible
+            // to every caller whose layers are valid.
+            if (SelfBranchPossible(source, name, args, knownArgs))
+                return context.Policies.Length > 0;
             var request = new ToolAuthorizationRequest(
                 source,
                 name,
@@ -265,6 +273,28 @@ internal sealed partial class SessionManager
         {
             return false;
         }
+    }
+
+    // Whether a call of the capability can take a Self branch given the arguments the caller
+    // states: the action selects branches only when it is known.
+    private static bool SelfBranchPossible(
+        string source,
+        string name,
+        JsonObject args,
+        IReadOnlySet<string>? knownArgs
+    )
+    {
+        if (OperationDeclarations.Find(source, name) is not { FrontEnd: null } declaration)
+            return false;
+        var action =
+            knownArgs?.Contains("action") == true
+                ? SessionWait.Text(OperationPlan.Normalize(declaration, args)["action"])
+                : null;
+        return declaration.Branches.Any(branch =>
+            branch.Self is not null
+            && (action is null || branch.Action is null || branch.Action == action)
+            && (branch.When is null || !branch.When.StartsWith("action:", StringComparison.Ordinal))
+        );
     }
 
     // A builtin `node` action whose stated arguments are known; omitted ones remain unresolved.

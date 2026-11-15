@@ -41,6 +41,8 @@ internal sealed class TaskService : IDisposable
 
     internal string? OwnerSessionId(string taskId) => store.OwnerSessionId(taskId);
 
+    internal string? CreatorSessionId(string taskId) => store.CreatorSessionId(taskId);
+
     internal long? OwnerAssignedAt(string taskId) => store.OwnerAssignedAt(taskId);
 
     internal async Task<JsonObject> ExecuteAsUserAsync(JsonObject args)

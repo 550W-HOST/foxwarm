@@ -20,6 +20,10 @@ internal sealed record PlanContext(string CurrentNode)
 
     // The call can have secret facts that its assessment could not establish.
     internal bool SecretsUnknown { get; init; }
+
+    // The memory directory of an Agent, and the Agent of a Session; null when unknown.
+    internal Func<string, string?>? MemoryDirectory { get; init; }
+    internal Func<string, string?>? SessionAgent { get; init; }
 }
 
 internal sealed record PlannedOperation(
@@ -174,6 +178,101 @@ internal sealed record OperationPlan(
         }
     }
 
+    // The branch's Self reason when the call acts only on the caller's own turn, context, runs,
+    // transfers or history images (phase 3: such a call is not authorizable).
+    internal static string? SelfReason(ResolvedTool resolved) =>
+        OperationDeclarations.Find(resolved.Source, resolved.Name) is { FrontEnd: null }
+            ? Derive(resolved, null, new PlanContext(resolved.ExecutionNode)).Self
+            : null;
+
+    // The operations operation rules decide for a call: every ordinary op of its branch. What
+    // cannot be derived is kept as unresolved resources, or as an underivable stand-in
+    // operation, never dropped. A Self branch has none. Secret names are decided from the
+    // request's secret facts, not from here.
+    internal static IReadOnlyList<AuthorizationOperation> AuthorizationOperations(
+        ResolvedTool resolved,
+        ToolAuthorizationRequest? facts,
+        PlanContext context
+    )
+    {
+        var gaps = new List<string>();
+        var declaration = OperationDeclarations.Find(resolved.Source, resolved.Name);
+        if (declaration is null)
+            return [Underivable("no operation declaration for this capability")];
+        try
+        {
+            var normalized = Normalize(declaration, resolved.Args, gaps);
+            if (gaps.Count > 0)
+                return [Underivable(gaps[0])];
+            var derivation = new Derivation(resolved, facts, context, normalized, gaps);
+            var branch = declaration.Branches.FirstOrDefault(item =>
+                (item.Action is null || item.Action == SessionWait.Text(normalized["action"]))
+                && (item.When is null || derivation.Holds(item.When) == true)
+            );
+            if (branch is null)
+                return [
+                    Underivable(
+                        SessionWait.Text(normalized["action"]) is string action
+                            ? $"no declared branch for action `{action}`"
+                            : "no declared branch for this call"
+                    ),
+                ];
+            if (branch.Self is not null)
+                return [];
+            return branch
+                .Operations.SelectMany(template => derivation.ForAuthorization(template))
+                .ToArray();
+        }
+        catch (Exception error) when (error is not OperationCanceledException)
+        {
+            return [Underivable("derivation failed: " + error.Message)];
+        }
+    }
+
+    // The unconditional operations of each branch a call could take when only some of its
+    // arguments are known (visibility). The action selects branches only when it is known.
+    internal static IEnumerable<(ActionBranch Branch, IReadOnlyList<AuthorizationOperation> Operations)> BranchOperations(
+        OperationDeclaration declaration,
+        ResolvedTool resolved,
+        ToolAuthorizationRequest facts,
+        bool actionKnown
+    )
+    {
+        var known = actionKnown
+            ? SessionWait.Text(Normalize(declaration, resolved.Args)["action"])
+            : null;
+        foreach (var branch in declaration.Branches)
+        {
+            if (actionKnown && branch.Action is not null && branch.Action != known)
+                continue;
+            if (branch.Self is not null)
+            {
+                yield return (branch, []);
+                continue;
+            }
+            var args = (JsonObject)resolved.Args.DeepClone();
+            if (branch.Action is not null)
+                args["action"] = branch.Action;
+            var derivation = new Derivation(
+                resolved with
+                {
+                    Args = args,
+                },
+                facts,
+                new PlanContext(facts.CurrentNode ?? "master"),
+                args,
+                []
+            );
+            var operations = new List<AuthorizationOperation>();
+            foreach (var template in branch.Operations.Where(item => !item.Conditional))
+                operations.AddRange(derivation.ForAuthorization(template));
+            yield return (branch, operations);
+        }
+    }
+
+    private static AuthorizationOperation Underivable(string reason) =>
+        new("", [], []) { Underivable = reason };
+
     internal JsonObject ToJson()
     {
         var result = new JsonObject
@@ -302,6 +401,9 @@ internal sealed record OperationPlan(
                 case "invalid-plan":
                     // Known only after the plan is parsed and validated.
                     return null;
+                case "model-request":
+                    // Known only when the script calls the model.
+                    return null;
                 case "source-exists":
                 case "source-missing":
                     if (Text("sourceSessionId") is not string source)
@@ -348,6 +450,19 @@ internal sealed record OperationPlan(
                         .ToArray();
                 case "members":
                     return Members()?.Select(node => (JsonNode?)JsonValue.Create(node)).ToArray();
+                case "from-config-files":
+                case "from-config-servers":
+                    return Foxwarm
+                        .Secrets.SecretLiteralMove.Parse(args["fromConfig"])
+                        .Where(location =>
+                            (location.Target == "mcp") == (each == "from-config-servers")
+                        )
+                        .Select(location =>
+                            each == "from-config-servers" ? location.Path[0] : location.Target
+                        )
+                        .Distinct(StringComparer.Ordinal)
+                        .Select(value => (JsonNode?)JsonValue.Create(value))
+                        .ToArray();
                 case "probe-sessions":
                     return (args["probes"] as JsonArray ?? [])
                         .OfType<JsonObject>()
@@ -414,6 +529,20 @@ internal sealed record OperationPlan(
                 case "exec-node":
                     value = resolved.ExecutionNode;
                     return true;
+                case "memory-source":
+                {
+                    // create_agent copies the memory of the source Session's Agent, else main's.
+                    var agent = Text("sourceSessionId") is string source
+                        ? context.SessionAgent?.Invoke(SessionGoal.Trim(source))
+                        : "main";
+                    value = agent is null ? null : context.MemoryDirectory?.Invoke(agent);
+                    return value is not null;
+                }
+                case "memory-target":
+                    value = Text("agentName") is string name
+                        ? context.MemoryDirectory?.Invoke(name.Trim())
+                        : null;
+                    return value is not null;
                 case "node-target":
                 case "node-target?":
                     value = NodeTarget;
@@ -423,7 +552,14 @@ internal sealed record OperationPlan(
                     value = NodeTarget ?? Text("nodeId")?.Trim();
                     return value is not null;
                 case "target-session":
-                    value = facts?.SessionTarget?.Id;
+                    // Inbound front ends pass the canonical Session ID they resolved.
+                    value =
+                        facts?.SessionTarget?.Id
+                        ?? (
+                            facts is { Principal: not "internal" }
+                                ? Text("sessionId")?.Trim()
+                                : null
+                        );
                     return value is not null;
                 case "caller":
                     value = facts?.Session;
@@ -469,6 +605,139 @@ internal sealed record OperationPlan(
             }
         }
 
+        // A template as operation rules decide it: an unknown condition or missing per-item
+        // facts give an operation whose resources are unresolved instead of no operation.
+        internal IEnumerable<AuthorizationOperation> ForAuthorization(OperationTemplate template)
+        {
+            // Secret names are decided in their own domain from the request's secret facts.
+            if (template.Op == "secret.use")
+                yield break;
+            if (template.When is { } when)
+            {
+                var holds = Holds(when);
+                if (holds == false)
+                    yield break;
+                if (holds is null)
+                {
+                    yield return Unresolved(template);
+                    yield break;
+                }
+            }
+            if (template.Each is { } each && each.StartsWith("path:", StringComparison.Ordinal))
+            {
+                var arg = each[5..];
+                var paths = facts?.Paths.Where(path => arg == "*" || path.Arg == arg).ToArray();
+                if (paths is not { Length: > 0 })
+                {
+                    yield return Unresolved(template);
+                    yield break;
+                }
+                foreach (var path in paths)
+                {
+                    var item = new JsonObject
+                    {
+                        ["path"] = path.Resolved ?? path.Raw,
+                        ["node"] = path.Node,
+                    };
+                    yield return Build(template, item) with { Path = path };
+                }
+                yield break;
+            }
+            IReadOnlyList<JsonNode?> items = [null];
+            if (template.Each is { } other)
+            {
+                IReadOnlyList<JsonNode?>? expanded;
+                try
+                {
+                    expanded = Items(other);
+                }
+                catch (InvalidDataException)
+                {
+                    expanded = null;
+                }
+                if (
+                    expanded is null
+                    || expanded.Count == 0
+                        && other
+                            is not (
+                                "secret-questions"
+                                or "from-config-files"
+                                or "from-config-servers"
+                            )
+                )
+                {
+                    yield return Unresolved(template);
+                    yield break;
+                }
+                items = expanded;
+            }
+            foreach (var item in items)
+                yield return Build(template, item);
+        }
+
+        private static AuthorizationOperation Unresolved(OperationTemplate template)
+        {
+            var resources = new JsonObject();
+            foreach (var key in template.Resources.Keys)
+                resources[key] = null;
+            var with = new JsonObject();
+            foreach (var key in template.With.Keys)
+                with[key] = null;
+            return new(template.Op, resources, with);
+        }
+
+        private AuthorizationOperation Build(OperationTemplate template, JsonNode? item)
+        {
+            var resources = new JsonObject();
+            var with = new JsonObject();
+            foreach (var (key, expression) in template.Resources)
+                if (!Value(expression, item, out var value, out var omit))
+                    resources[key] = null;
+                else if (!omit)
+                    resources[key] = value;
+            foreach (var (key, expression) in template.With)
+                if (!Value(expression, item, out var value, out var omit))
+                    with[key] = null;
+                else if (!omit)
+                    with[key] = value;
+            var operation = new AuthorizationOperation(template.Op, resources, with);
+            // A path that is not one of the request's path facts (an Agent memory directory, an
+            // exec cwd) is matched as it is, on its Node; only an Agent memory directory is
+            // already a resolved master path.
+            if (SessionWait.Text(resources["path"]) is string text)
+                operation = operation with
+                {
+                    Path =
+                        facts?.Paths.FirstOrDefault(path => (path.Resolved ?? path.Raw) == text)
+                        ?? new AuthorizationPath(
+                            "path",
+                            text,
+                            template.Resources["path"].StartsWith("memory-", StringComparison.Ordinal)
+                                ? text
+                                : null,
+                            SessionWait.Text(resources["node"]) ?? "master"
+                        ),
+                };
+            if (
+                SessionWait.Text(resources["targetSession"]) is string target
+                && facts?.SessionTarget is { } session
+                && session.Id == target
+            )
+                operation = operation with { Target = session };
+            if (
+                resources.ContainsKey("task")
+                && facts?.TaskOwnerSession is { } owner
+                && facts.Session is { } caller
+            )
+                operation = operation with { TaskOwned = owner == caller };
+            if (
+                SessionWait.Text(resources["secret"]) is string secret
+                && facts?.OwnedSecrets?.Contains(secret, StringComparer.Ordinal) == true
+            )
+                operation = operation with { SecretOwned = true };
+            return operation;
+        }
+
         internal IEnumerable<PlannedOperation> Expand(OperationTemplate template)
         {
             if (template.When is { } when)
@@ -493,7 +762,14 @@ internal sealed record OperationPlan(
                 if (expanded is null || expanded.Count == 0)
                 {
                     // Conditional per-item templates (secrets, questions) have no items to add.
-                    if (each is "secrets" or "secret-questions" && expanded is not null)
+                    if (
+                        each
+                            is "secrets"
+                                or "secret-questions"
+                                or "from-config-files"
+                                or "from-config-servers"
+                        && expanded is not null
+                    )
                         yield break;
                     gaps.Add($"{template.Op}: no {each} facts");
                     yield break;
