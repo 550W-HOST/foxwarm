@@ -134,8 +134,8 @@ export default function NodeActionsModal({ node, action, onClose, onNodesChanged
         {!command ? <button type="button" className={buttonClass} onClick={() => void generate(false)}>Update command</button> : null}
       </fieldset>
       {command?.command ? <>
-        <p className="text-sm text-fw-text-muted">Check the launch method and paths. Run this on the Node’s machine as the original user{launch.serviceScope === 'system' ? ' (with system service permissions)' : ''}.</p>
-        {issued ? <p className="text-sm text-fw-warning">The old token has been revoked. Stop any running Node process before using this command. Copy it now; the new token is shown only here.</p> : null}
+        <p className="text-sm text-fw-text-muted">Check the launch method and paths. Run this on the Node’s machine as the original user.{launch.serviceScope === 'system' ? ' Run it with permission to manage system services.' : ''}</p>
+        {issued ? <p className="text-sm text-fw-warning">The old token no longer works. Copy this command now; the new token won't be shown again.</p> : null}
         <pre data-node-start-command className="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-fw-canvas p-3 text-xs">{command.command}</pre>
         <button type="button" className={buttonClass} onClick={() => void copy(command.command!, 'command')}>{copied === 'command' ? 'Copied' : 'Copy command'}</button>
         {issued ? <div><label className="block text-sm">New token<input aria-label="New Node token" readOnly className={`${fieldClass} font-mono`} value={command.authToken} /></label><button type="button" className={`${buttonClass} mt-2`} onClick={() => void copy(command.authToken!, 'token')}>{copied === 'token' ? 'Copied' : 'Copy token'}</button></div> : null}
