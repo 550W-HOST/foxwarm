@@ -49,7 +49,9 @@ Caller selectors are constant. These builtins have no Node or path facts. Relati
 2. Classifies each row in O(1).
 3. Memoizes the probe result per class.
 
-The constructor `memoize: false` mode evaluates every row with its real `AuthorizationTarget`, and tests compare the two modes.
+Operation rules compare the canonical ID instead of a spelling. Their `targetSession.id` and `parent.id` literals join the literal set and the explicit set; a row whose canonical ID one names, or that matches a different subset of their `*` patterns than an unnamed ID does, is classified with its own ID as the representative target. With any such pattern the unrelated rows are no longer one class: `Broad` holds, `Covers` does not, and per-Agent counts check each row.
+
+The constructor `memoize: false` mode evaluates every row with its real `AuthorizationTarget`, and tests compare the two modes, including over operation-rule IDs and patterns.
 
 The list chooses its candidates as follows:
 

@@ -191,7 +191,7 @@ The notes phase 1 found for phase 2, with their resolution, are in [approval sta
 
 These apply from phase 3.
 
-- **Session list.** A row is listed when `session.view`, `session.send`, `session.control {change: stop|rename}`, `history.read` or `task.assign` is possible with the row as `targetSession`. Classes are memoized as today. Operation rules use canonical `id` literals, while version-1 literal classes are unchanged.
+- **Session list.** A row is listed when `session.view`, `session.send`, `session.control {change: stop|rename}`, `history.read` or `task.assign` is possible with the row as `targetSession`. Classes are memoized as today. Operation rules compare canonical IDs: the literals of `targetSession.id` and `parent.id` join the class key and the explicit set, and with an ID pattern the list scans its scope ([cost model](./session-list-visibility.md#cost-model)). Version-1 literal classes are unchanged.
 - **Agent list.** A row is listed when `session.create`, `session.manage {change: move}`, `agent.view` or `agent.manage` is possible with the row as `targetAgent`. The structural filters and "owns a listed Session" also apply.
 - **Node list.** A Node is listed when an `env.*` template with that Node known is possible: its advertised tools, or read, write and exec when none are advertised. Copy endpoints are the read and write templates. select, inspect and destroy are annotations ([Node list visibility](./node-list-visibility.md)).
 - **Help and search.** A `ctl` command selects branches through its fixed arguments, and the parser's raw values are the known raw facts. `tool search` and native declarations use every branch, with raw fields unknown.

@@ -23,6 +23,8 @@ Rationale: existing rules carry whole-call correlations, such as a delivery rule
 
 Structural failures still reject them: an unavailable policy, an invalid creator chain or an unreadable layer.
 
+A self-exempt script container stays within that scope: it may return only images referenced in its own Session's history and images produced in the same run by its authorized nested calls and model requests; any other image reference fails the run before the blob is read ([script results](./tool-operation-rules.md#script-results)).
+
 The [legacy isolation](./isolation-migration.md) contract "not less restricted than its last enforced state" gains the exception "except for self-scoped operations" (**user decision, 2026-11-15**). Its owner records it.
 
 The exemption ships in phase 3, together with the ToolScript model-request gate ([model requests](#model-requests-from-scripts)). Exempting script containers without that gate would open an ungated provider call.
