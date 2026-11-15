@@ -3,6 +3,7 @@
 // unchanged WebUI entry and writes to its own directory.
 import { createRequire } from 'node:module'
 import { existsSync } from 'node:fs'
+import { readFile, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { defineConfig, mergeConfig, type Plugin } from 'vite'
@@ -11,14 +12,23 @@ import base from './vite.config'
 const webui = dirname(fileURLToPath(import.meta.url))
 const repo = resolve(webui, '../..')
 const outDir = process.env.FOXWARM_DEMO_OUT_DIR ? resolve(process.env.FOXWARM_DEMO_OUT_DIR) : resolve(webui, 'dist-demo')
+const robots = '<meta name="robots" content="noindex, nofollow" />'
 
+// Search engines may crawl the demo, so every page it serves carries the noindex rule.
 function demoHtmlPlugin(): Plugin {
   return {
     name: 'foxwarm-demo-html',
+    // The sign-in page is copied from public/ unprocessed; the demo never shows it.
+    async writeBundle() {
+      const login = resolve(outDir, 'login.html')
+      if (!existsSync(login)) return
+      const html = await readFile(login, 'utf8')
+      if (!html.includes('name="robots"')) await writeFile(login, html.replace('<title>', `${robots}\n  <title>`))
+    },
     transformIndexHtml: {
       order: 'pre',
       handler: html => html
-        .replace('<title>Foxwarm</title>', '<meta name="robots" content="noindex, nofollow" />\n    <title>Foxwarm demo</title>')
+        .replace('<title>Foxwarm</title>', `${robots}\n    <title>Foxwarm demo</title>`)
         .replace('<script type="module" src="/src/main.tsx"></script>', '<script type="module" src="/demo/src/entry.ts"></script>\n    <script type="module" src="/src/main.tsx"></script>'),
     },
   }

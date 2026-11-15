@@ -35,13 +35,9 @@ Owns the static public project homepage, user documentation, root installer down
 
 ### D-website-public-demo
 
-**User decision (user, 2026-11-15).** The `/demo/` WebUI replay is public and reachable from the homepage. The demo keeps its own exclusions from search: `noindex, nofollow` in its HTML, `Disallow: /demo/` in `robots.txt`, and no sitemap entry, because it replays fictional data and search results should not present it as a hosted instance. Indexed pages may link to it. This replaces the earlier rule that no site page links to the demo.
+**User decisions (user, 2026-11-15).** The `/demo/` WebUI replay is public and reachable from the homepage. It stays out of search results because it replays fictional data and should not look like a hosted instance. The exclusion is the `noindex, nofollow` robots meta on every demo page plus no sitemap entry; `robots.txt` does not disallow `/demo/`. A crawler that is barred from fetching a page never reads its `noindex`, and once indexed pages link to the demo, a disallowed URL can still be listed without content, so crawling stays allowed and `noindex` does the excluding. Indexed pages may link to the demo. These decisions replace the earlier rules that no site page links to the demo and that `robots.txt` disallows it.
 
 [2026-11-15] The homepage navigation opens `/demo/`. The hero caption opens the Session shown in the hero screenshot, with one sentence saying the demo is a recorded, read-only workspace whose sessions and tool calls can be opened but nothing runs live. Feature sections whose subject has a recorded showcase Session (compaction and recall, Nodes, delegation) add an "Open in the demo" link through the WebUI's inbound `#session/<id>` route. The channel section has none: the recording has no Session attached to a group chat, and the gallery's single channel message does not show its chat context in the timeline. Session links must name Sessions in the recorded snapshot, so regenerating the fixture with different Session IDs requires updating the links.
-
-## Open Questions
-
-- `robots.txt` disallows `/demo/`, so crawlers never fetch the page and never see its `noindex` meta. Now that indexed pages link to it, a search engine may list the bare `/demo/` URL without content. Allowing crawling of `/demo/` and relying on `noindex` would exclude it reliably, but that changes the confirmed policy above and needs a user decision.
 
 ## Integration notes
 

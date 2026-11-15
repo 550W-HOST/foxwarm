@@ -142,8 +142,13 @@ test('installer downloads are byte-exact copies of repository scripts', async ()
 });
 
 test('the WebUI demo is built, unindexed, and linked from both homepages', async () => {
+  // Crawlers may fetch the demo, so every page it serves must carry noindex.
+  const demoPages = (await htmlFiles(path.join(distRoot, 'demo'))).map((filePath) => path.relative(distRoot, filePath)).sort();
+  assert.ok(demoPages.includes('demo/index.html'), 'demo has an entry page');
+  for (const page of demoPages) {
+    assert.match(await readFile(path.join(distRoot, page), 'utf8'), /<meta name="robots" content="noindex, nofollow"/, `${page} is noindex`);
+  }
   const html = await readFile(path.join(distRoot, 'demo', 'index.html'), 'utf8');
-  assert.match(html, /<meta name="robots" content="noindex, nofollow"/);
   const moduleEntries = [...html.matchAll(/<script\b([^>]*)>/g)]
     .map(([, attributes]) => attributes)
     .filter((attributes) => /\btype="module"/.test(attributes))
@@ -181,7 +186,8 @@ test('robots, sitemap, and search artifacts are present', async () => {
   const robots = await readFile(path.join(distRoot, 'robots.txt'), 'utf8');
   assert.match(robots, /^User-agent: \*$/m);
   assert.match(robots, /^Allow: \/$/m);
-  assert.match(robots, /^Disallow: \/demo\/$/m);
+  // The demo is excluded by its noindex meta, which crawlers can only read if they may fetch it.
+  assert.doesNotMatch(robots, /^Disallow:/m);
   assert.match(robots, new RegExp(`Sitemap: ${siteOrigin.replaceAll('.', '\\.')}\/sitemap-index\\.xml`));
 
   const sitemapIndex = await readFile(path.join(distRoot, 'sitemap-index.xml'), 'utf8');
