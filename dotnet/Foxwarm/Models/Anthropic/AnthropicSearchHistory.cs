@@ -85,7 +85,8 @@ internal static class AnthropicSearchHistory
             foreach (var id in unanswered)
             {
                 var (start, part) = pending[id];
-                abandoned.Add(part, (start, index));
+                // This response was generated before repair, against the old prefix.
+                abandoned.Add(part, (start, index + 1));
             }
             pending.Clear();
             foreach (var part in (message["parts"] as JsonArray ?? []).OfType<JsonObject>())
@@ -101,8 +102,8 @@ internal static class AnthropicSearchHistory
         {
             removed.Add(part);
             // Signatures after this edit were produced against the old prefix.
-            // Stop at the abandoning input/response: thinking generated during recovery
-            // sees the repaired prefix and must survive subsequent requests.
+            // Include an abandoning response, but stop before an abandoning user
+            // input. Thinking generated after repair must survive later requests.
             for (var cursor = index; cursor < boundary; cursor++)
             {
                 var afterCall = cursor > index;

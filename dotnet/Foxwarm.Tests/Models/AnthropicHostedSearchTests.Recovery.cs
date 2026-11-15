@@ -185,4 +185,112 @@ public sealed partial class AnthropicHostedSearchTests
         Assert.Contains("opaque-result", calls[1]["messages"]!.ToJsonString());
         Assert.True(JsonNode.DeepEquals(calls[0]["messages"]![0], calls[1]["messages"]![0]));
     }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Abandoning_response_thinking_is_removed_but_later_recovery_thinking_stays(
+        bool thinkingOnly
+    )
+    {
+        JsonObject Thought(string signature) =>
+            new()
+            {
+                ["type"] = "thinking",
+                ["thinking"] = "Reasoning.",
+                ["signature"] = signature,
+            };
+        JsonObject Tool(long seq) =>
+            new()
+            {
+                ["role"] = "tool",
+                ["__meta"] = new JsonObject { ["seq"] = seq },
+                ["parts"] = new JsonArray(
+                    Obj(
+                        """{"functionResponse":{"tool_use_id":"local","name":"task","response":{"output":"ok"}}}"""
+                    )
+                ),
+            };
+        var first = SearchRow(
+            1,
+            Thought("before-call"),
+            Search("abandoned"),
+            Thought("after-call"),
+            LocalTask()
+        );
+        var affected = new[]
+        {
+            Thought("abandoning-response"),
+            Obj("""{"type":"redacted_thinking","data":"old-redacted"}"""),
+        };
+        var second = SearchRow(
+            3,
+            thinkingOnly ? affected : [.. affected, Text("Keep the answer."), LocalTask()]
+        );
+        var history = new List<JsonObject> { first, Tool(2), second };
+        if (!thinkingOnly)
+            history.Add(Tool(4));
+        var original = new JsonArray(
+            history.Select(row => row.DeepClone()).ToArray()
+        ).ToJsonString();
+        RequestHistory Repair() =>
+            RequestHistoryRepair.SelectAndRepair(
+                RequestHistory.FromSnapshot(
+                    SessionHistory.FromMessages(history.Select(HistoryMessage.FromJson))
+                )
+            );
+        JsonArray Wire(RequestHistory repaired) =>
+            AnthropicRequestSerializer.ConvertHistory(
+                repaired.Messages,
+                new Uri("https://example.invalid"),
+                "a/wire"
+            );
+        var repaired = Repair();
+        var wire = Wire(repaired);
+        var text = wire.ToJsonString();
+        Assert.Contains("before-call", text);
+        Assert.DoesNotContain("abandoned", text);
+        Assert.DoesNotContain("after-call", text);
+        Assert.DoesNotContain("abandoning-response", text);
+        Assert.DoesNotContain("old-redacted", text);
+        var firstProjection = Assert.Single(
+            repaired.Rows,
+            row => SessionWait.Number(row.Message["__meta"]?["seq"]) == 1
+        );
+        Assert.Null(firstProjection.Origin);
+        if (thinkingOnly)
+            Assert.DoesNotContain(
+                repaired.Rows,
+                row => SessionWait.Number(row.Message["__meta"]?["seq"]) == 3
+            );
+        else
+        {
+            Assert.Contains("Keep the answer.", text);
+            Assert.Null(
+                Assert
+                    .Single(
+                        repaired.Rows,
+                        row => SessionWait.Number(row.Message["__meta"]?["seq"]) == 3
+                    )
+                    .Origin
+            );
+        }
+        Assert.Equal(
+            original,
+            new JsonArray(history.Select(row => row.DeepClone()).ToArray()).ToJsonString()
+        );
+        history.Add(SearchRow(5, Thought("new-valid-thinking"), Text("Recovered.")));
+        var later = Repair();
+        var laterWire = Wire(later);
+        Assert.Contains("new-valid-thinking", laterWire.ToJsonString());
+        Assert.DoesNotContain("abandoning-response", laterWire.ToJsonString());
+        Assert.NotNull(
+            Assert
+                .Single(later.Rows, row => SessionWait.Number(row.Message["__meta"]?["seq"]) == 5)
+                .Origin
+        );
+        for (var index = 0; index < wire.Count; index++)
+            Assert.True(JsonNode.DeepEquals(wire[index], laterWire[index]));
+        Assert.Equal(laterWire.ToJsonString(), Wire(Repair()).ToJsonString());
+    }
 }
