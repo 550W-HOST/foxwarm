@@ -128,6 +128,9 @@ test('files the form cannot represent faithfully stay in YAML', () => {
     assert.deepEqual(reading, { ok: false, reason: 'unsupported' }, name)
   }
   assert.deepEqual(readModelSetupForm('providers: [\n'), { ok: false, reason: 'invalid' })
+  // An alias typed before its anchor exists must not throw while the YAML is being edited.
+  assert.deepEqual(readModelSetupForm(base.replace('apiKey: k', 'apiKey: *')), { ok: false, reason: 'invalid' })
+  assert.deepEqual(readModelSetupForm(base.replace('apiKey: k', 'apiKey: *c')), { ok: false, reason: 'invalid' })
   assert.equal(readModelSetupForm(base).ok, true)
   const withLimits = readModelSetupForm(base.replace('models: [m]', 'models: [{id: m, contextLimit: 200000, maxOutput: 64000}, n]'))
   assert.deepEqual(withLimits.ok && withLimits.form.models, [{ id: 'm', contextLimit: 200000, maxOutput: 64000 }, { id: 'n' }])

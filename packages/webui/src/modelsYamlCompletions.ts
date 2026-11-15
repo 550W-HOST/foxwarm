@@ -80,7 +80,13 @@ function getDisplayConcreteKeys(providerKey: string, entry: ParsedProvider): str
 export function parseModelsYamlSuggestions(rawYaml: string): ModelsYamlSuggestions | null {
   const document = parseDocument(rawYaml)
   if (document.errors.length > 0) return null
-  const root = document.toJS() as { providers?: unknown; models?: unknown } | null
+  let root: { providers?: unknown; models?: unknown } | null
+  try {
+    // Unresolved or excessive aliases throw only when the document is converted.
+    root = document.toJS() as { providers?: unknown; models?: unknown } | null
+  } catch {
+    return null
+  }
   if (!root || typeof root !== 'object') return { modelKeys: [], concreteKeys: [], historyModelKeys: [], providerKeys: [] }
   const rawProviders = root.providers ?? root.models
   if (!rawProviders || typeof rawProviders !== 'object' || Array.isArray(rawProviders)) {

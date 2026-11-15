@@ -369,6 +369,7 @@ providers:
 
 test('invalid partial YAML returns null so the editor can retain its last valid suggestions', () => {
   assert.equal(completions.parseModelsYamlSuggestions('providers:\n  broken: [\n'), null)
+  assert.equal(completions.parseModelsYamlSuggestions('providers:\n  one:\n    apiKey: *c\n'), null)
   assert.deepEqual(completions.getModelsCompletionKind(['default: rou'], 0), 'default')
   assert.deepEqual(completions.getModelsCompletionKind(['providers:', '  route:', '    targets:', '      - one'], 3), 'targets')
   assert.equal(completions.getModelsCompletionKind(['providers:', '  route:', '    providerType: failover'], 2), null)

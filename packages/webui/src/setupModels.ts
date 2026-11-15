@@ -235,7 +235,13 @@ function sameValue(left: unknown, right: unknown): boolean {
 export function readModelSetupForm(text: string): ModelSetupReading {
   const doc = parseDocument(text)
   if (doc.errors.length > 0) return { ok: false, reason: 'invalid' }
-  const root: unknown = doc.toJS()
+  let root: unknown
+  try {
+    // Alias resolution happens here, so an alias without an earlier anchor (as while typing `*`) throws.
+    root = doc.toJS()
+  } catch {
+    return { ok: false, reason: 'invalid' }
+  }
   if (!isPlainObject(root) || Object.keys(root).some((key) => !ROOT_KEYS.has(key))) return { ok: false, reason: 'unsupported' }
   const providers = root.providers
   if (!isPlainObject(providers) || Object.keys(providers).length !== 1) return { ok: false, reason: 'unsupported' }
