@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
+import android.content.SharedPreferences
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.Handler
@@ -18,12 +19,17 @@ class NodeService : Service() {
         @Volatile var connectionStatus = "Stopped"; private set
     }
     private var client: NodeClient? = null
+    private val pinPreferences by lazy { getSharedPreferences(PinStore.PREFERENCES, MODE_PRIVATE) }
+    private val pinListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
+        client?.setUnlockEnabled(PinStore(this).enabled)
+    }
     private val main = Handler(android.os.Looper.getMainLooper())
     private val preferences by lazy { NodePreferences(this) }
     private val notifications by lazy { getSystemService(NotificationManager::class.java) }
 
     override fun onCreate() {
         super.onCreate()
+        pinPreferences.registerOnSharedPreferenceChangeListener(pinListener)
         notifications.createNotificationChannel(NotificationChannel("connection", "Node connection", NotificationManager.IMPORTANCE_LOW))
     }
 
@@ -56,7 +62,7 @@ class NodeService : Service() {
                     notifications.notify(1, notification(state))
                 }
             }
-        })
+        }, unlockEnabled = PinStore(this).enabled)
         client = connectedClient
         connectedClient.start()
         return START_STICKY
@@ -66,12 +72,13 @@ class NodeService : Service() {
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val stop = PendingIntent.getService(this, 1, Intent(this, NodeService::class.java).setAction(STOP), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         return Notification.Builder(this, "connection")
-            .setSmallIcon(R.drawable.ic_node).setContentTitle("Foxwarm Node")
+            .setSmallIcon(R.drawable.ic_node).setContentTitle(getString(R.string.app_name))
             .setContentText(status).setContentIntent(open).setOngoing(true)
             .addAction(Notification.Action.Builder(null, "Stop", stop).build()).build()
     }
 
     override fun onDestroy() {
+        pinPreferences.unregisterOnSharedPreferenceChangeListener(pinListener)
         client?.close()
         client = null
         isRunning = false

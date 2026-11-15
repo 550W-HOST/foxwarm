@@ -15,6 +15,12 @@ fun main() {
         }
     }, { println("NODE_STATUS $it") }).use { client ->
         client.start()
-        readlnOrNull()
+        while (true) {
+            when (readlnOrNull()) {
+                "unlock:on" -> client.setUnlockEnabled(true)
+                "unlock:off" -> client.setUnlockEnabled(false)
+                else -> break
+            }
+        }
     }
 }

@@ -38,7 +38,13 @@ class NodeProtocolTest {
         val capabilities = registration.getJSONObject("capabilities")
         assertEquals(setOf("tools"), capabilities.keys().asSequence().toSet())
         val tools = capabilities.getJSONArray("tools")
-        assertEquals(9, tools.length())
+        assertEquals(14, tools.length())
+        assertFalse((0 until tools.length()).any { tools.getJSONObject(it).getString("name") == "android_unlock" })
+        val enabled = NodeProtocol.registration(true).getJSONObject("capabilities").getJSONArray("tools")
+        assertEquals(15, enabled.length())
+        val unlock = (0 until enabled.length()).map(enabled::getJSONObject).single { it.getString("name") == "android_unlock" }
+        assertEquals(0, unlock.getJSONObject("parameters").getJSONObject("properties").length())
+        assertEquals(NodeProtocol.registration(true).toString(), NodeProtocol.registration(true).toString())
         for (i in 0 until tools.length()) {
             val schema = tools.getJSONObject(i).getJSONObject("parameters")
             assertEquals("object", schema.getString("type"))

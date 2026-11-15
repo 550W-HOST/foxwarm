@@ -17,6 +17,7 @@ class NodeClient(
     private val execute: (String, JSONObject) -> JSONObject,
     private val status: (String) -> Unit,
     private val reconnectBaseMs: Long = 1000,
+    unlockEnabled: Boolean = false,
 ) : Closeable {
     private val http = OkHttpClient.Builder().pingInterval(30, TimeUnit.SECONDS).build()
     private val state = Executors.newSingleThreadScheduledExecutor()
@@ -25,11 +26,26 @@ class NodeClient(
     private var retry: ScheduledFuture<*>? = null
     private var attempt = 0
     private var generation = 0L
+    private var unlockEnabled = unlockEnabled
     private var registered = false
     private var quarantined = false
     @Volatile private var closed = false
 
     fun start() = enqueue { if (socket == null && retry == null && !quarantined) connect() }
+
+    // Main accepts capabilities on connection registration, not repeated frames on one socket.
+    fun setUnlockEnabled(enabled: Boolean) = enqueue {
+        if (unlockEnabled == enabled) return@enqueue
+        unlockEnabled = enabled
+        if (quarantined) return@enqueue
+        ++generation
+        registered = false
+        retry?.cancel(false)
+        retry = null
+        socket?.cancel()
+        socket = null
+        connect()
+    }
 
     private fun enqueue(action: () -> Unit) {
         if (!closed) runCatching { state.execute { if (!closed) action() } }
@@ -42,7 +58,7 @@ class NodeClient(
         socket = http.newWebSocket(Request.Builder().url(pairing.socketUrl()).build(), object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) = enqueue {
                 if (current != generation) return@enqueue
-                webSocket.send(NodeProtocol.registration().toString())
+                webSocket.send(NodeProtocol.registration(unlockEnabled).toString())
                 status("Registering")
             }
 

@@ -61,12 +61,20 @@ try {
   const node = await online()
   assert.equal(node.type, 'android-node')
   assert.equal(node.protocolCompatibility.negotiated, 3)
+  assert.equal(node.tools.length, 14)
+  assert(!node.tools.some(tool => tool.name === 'android_unlock'))
+  client.stdin.write('unlock:on\n')
+  await until(async () => (await nodes()).some(node => node.id === 'owned-phone' && node.tools.some(tool => tool.name === 'android_unlock')), 'unlock capability added')
   const session = (await api('POST', '/api/sessions', { agentId: 'main', sessionId: 'phone' })).body.sessionId
   const call = (id, tool, args = {}) => functionCall(id, 'call_tool', { toolId: 'node:owned-phone/' + tool, args })
   let state = await turn(session, 'ordinary', [call('app', 'android_current_app'), call('input', 'android_input', { text: 'JVM wire test' }), call('error', 'android_global_action', { action: 'back' })])
   assert.equal(pair(state, 'app').packageName, 'owned.test.app')
   assert.equal(pair(state, 'input').args.text, 'JVM wire test')
   assert.match(JSON.stringify(pair(state, 'error')), /Synthetic device action unavailable/)
+  state = await turn(session, 'unlock', [call('unlock', 'android_unlock')])
+  assert.equal(pair(state, 'unlock').packageName, 'owned.test.app')
+  client.stdin.write('unlock:off\n')
+  await until(async () => (await nodes()).some(node => node.id === 'owned-phone' && node.online && node.executable && node.tools.length === 14 && !node.tools.some(tool => tool.name === 'android_unlock')), 'unlock capability removed')
   state = await turn(session, 'image', [call('screen', 'android_screenshot')])
   assert.match(JSON.stringify(pair(state, 'screen')), /1440.*3200/)
   assert(state.history.some(row => row.parts?.some(part => part.inlineData?.mimeType?.startsWith('image/') || part.inlineDataRef)), 'Screenshot reaches image history')
@@ -77,7 +85,7 @@ try {
   assert(!(await readFile(join(fixture.data, 'state/nodes.json'), 'utf8')).includes(created.body.authToken))
   assert(!fixture.output.includes(created.body.authToken)); assert(!clientOutput.includes(created.body.authToken))
   const exited = once(client, 'exit'); client.stdin.end('\n'); assert.deepEqual(await exited, [0, null], clientOutput)
-  console.log('Android production JVM client: direct QR credential, prefixed endpoint, protocol 3, ordinary result/error, structured screenshot history, cold Main reconnect and secret-free persistence/logs passed. Device operations were synthetic.')
+  console.log('Android production JVM client: direct QR credential, prefixed endpoint, protocol 3, ordinary result/error, capability-change reconnect, structured screenshot history, cold Main reconnect and secret-free persistence/logs passed. Device operations were synthetic.')
 } catch (error) {
   console.error(clientOutput); console.error(fixture.output); throw error
 } finally {

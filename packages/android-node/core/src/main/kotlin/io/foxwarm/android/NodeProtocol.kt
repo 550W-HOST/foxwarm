@@ -7,11 +7,11 @@ object NodeProtocol {
     const val MIN = 1
     const val MAX = 3
 
-    fun registration(): JSONObject = JSONObject()
+    fun registration(unlockEnabled: Boolean = false): JSONObject = JSONObject()
         .put("type", "node_register")
         .put("nodeType", "android-node")
         .put("nodeProtocol", JSONObject().put("min", MIN).put("max", MAX))
-        .put("capabilities", JSONObject().put("tools", tools()))
+        .put("capabilities", JSONObject().put("tools", tools(unlockEnabled)))
 
     fun negotiated(message: JSONObject): Int {
         if (!message.has("nodeProtocol")) return 1
@@ -43,7 +43,7 @@ object NodeProtocol {
         .put("parameters", JSONObject().put("type", "object").put("properties", properties)
             .put("additionalProperties", false).put("required", JSONArray(required.toList())))
 
-    fun tools(): JSONArray = JSONArray().apply {
+    fun tools(unlockEnabled: Boolean = false): JSONArray = JSONArray().apply {
         put(tool("android_get_ui_tree", "Read the active Android window's accessibility tree, including text, resource IDs, bounds and available actions. Some apps expose only part of their interface. Bounds are in screen pixels."))
         put(tool("android_list_elements", "List visible elements in the active Android window with text, resource IDs and screen bounds. Bounds are in screen pixels.", JSONObject()
             .put("clickableOnly", property("boolean", "Return only clickable elements."))
@@ -67,6 +67,18 @@ object NodeProtocol {
         put(tool("android_current_app", "Get the package name of the active Android window."))
         put(tool("android_launch_app", "Open an installed Android app by package name.", JSONObject()
             .put("packageName", property("string", "Android package name, for example com.android.settings.")), "packageName"))
+        put(tool("android_device_state", "Get whether the screen is on, whether the lock screen is showing, whether a screen lock is set, and the active app's package name."))
+        put(tool("android_wake", "Turn on the screen and ask Android to dismiss the lock screen. A secure lock screen shows its PIN, pattern or password prompt instead. Returns the dismissal outcome and device state."))
+        put(tool("android_lock", "Lock the screen with Android's accessibility system action and return the device state."))
+        put(tool("android_long_press", "Press and hold one screen coordinate.", JSONObject()
+            .put("x", property("number", "Horizontal screen coordinate in pixels."))
+            .put("y", property("number", "Vertical screen coordinate in pixels."))
+            .put("durationMs", property("integer", "Hold duration in milliseconds (100–5000; default 600).").put("minimum", 100).put("maximum", 5000).put("default", 600)), "x", "y"))
+        put(tool("android_double_tap", "Tap one screen coordinate twice, with a gap between taps, as one gesture.", JSONObject()
+            .put("x", property("number", "Horizontal screen coordinate in pixels."))
+            .put("y", property("number", "Vertical screen coordinate in pixels."))
+            .put("intervalMs", property("integer", "Time between the first tap ending and the second tap starting, in milliseconds (40–300; default 100).").put("minimum", 40).put("maximum", 300).put("default", 100)), "x", "y"))
+        if (unlockEnabled) put(tool("android_unlock", "Make one unlock attempt using the numeric PIN saved on this phone. The PIN stays on the phone. After an unsuccessful attempt, confirm the PIN again in the app before retrying. Patterns, passwords and biometrics are not supported. Returns the outcome and device state."))
         put(tool("android_screenshot", "Capture the Android screen as an image, with its size in screen pixels. Tap and swipe coordinates use the same pixel space. Protected screens may block capture."))
     }
 }

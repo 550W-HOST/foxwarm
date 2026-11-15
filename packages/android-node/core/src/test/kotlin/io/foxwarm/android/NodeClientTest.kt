@@ -93,6 +93,35 @@ class NodeClientTest {
         }
     }
 
+    @Test fun capabilityChangesReconnectOnlyWhenEnabledChanges() {
+        MockWebServer().use { server ->
+            val peers = List(3) { Peer().also { server.enqueue(MockResponse().withWebSocketUpgrade(it)) } }
+            NodeClient(Pairing.manual(server.url("/").toString(), "phone", "secret"), { _, _ -> JSONObject() }, {}, 20).use { client ->
+                client.start()
+                val first = peers[0].socket()
+                assertFalse(peers[0].frame().toString().contains("android_unlock"))
+                first.send(registered())
+                client.setUnlockEnabled(false)
+                first.send("""{"type":"ping"}""")
+                assertEquals("pong", peers[0].frame().getString("type"))
+                client.setUnlockEnabled(true)
+                val second = peers[1].socket()
+                assertTrue(peers[1].frame().toString().contains("android_unlock"))
+                second.send(registered())
+                repeat(3) { client.setUnlockEnabled(true) }
+                second.send("""{"type":"ping"}""")
+                assertEquals("pong", peers[1].frame().getString("type"))
+                assertNull(peers[1].frames.poll(100, TimeUnit.MILLISECONDS))
+                client.setUnlockEnabled(false)
+                val third = peers[2].socket()
+                assertFalse(peers[2].frame().toString().contains("android_unlock"))
+                third.send(registered())
+                third.send(call("after-change"))
+                assertEquals("after-change", peers[2].frame().getString("callId"))
+            }
+        }
+    }
+
     @Test fun rejectedCredentialStopsRetryWithoutExposingSecret() {
         MockWebServer().use { server ->
             server.enqueue(MockResponse().setResponseCode(403))

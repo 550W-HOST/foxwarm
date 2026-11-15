@@ -37,6 +37,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var stop: Button
     private lateinit var scan: Button
     private lateinit var layout: LinearLayout
+    private lateinit var pinStatus: TextView
     private val preferences by lazy { NodePreferences(this) }
     private val handler = Handler(Looper.getMainLooper())
     private val scanCode = registerForActivityResult(ScanContract()) { result ->
@@ -65,7 +66,7 @@ class MainActivity : ComponentActivity() {
             insets
         }
         setContentView(scroll)
-        text("Foxwarm Node", 28)
+        text(getString(R.string.app_name), 28)
         text("Connect this phone to your Main server.", 16)
         status = text("Stopped", 18)
         text("1 · Pair this phone", 20)
@@ -100,6 +101,11 @@ class MainActivity : ComponentActivity() {
             updateStatus()
         }
         text("Stop here or in the persistent notification. After restarting the phone, open this app and connect again.")
+        text("4 · PIN unlock (optional)", 20)
+        text("Let Foxwarm unlock this phone with a PIN stored only on this device. Patterns, passwords and biometrics are not supported.")
+        pinStatus = text("")
+        button("Manage PIN unlock") { startActivity(Intent(this, PinSettingsActivity::class.java)) }
+
     }
 
     private fun startConnection() {
@@ -115,6 +121,8 @@ class MainActivity : ComponentActivity() {
 
     private fun updateStatus() {
         status.text = NodeService.connectionStatus
+        val pin = PinStore(this)
+        pinStatus.text = if (!pin.enabled) "PIN unlock is off" else if (pin.needsConfirmation) "PIN unlock needs the PIN again" else "PIN unlock is on"
         accessibility.text = if (DeviceAccessibilityService.current != null) "Accessibility enabled" else "Accessibility is off"
         battery.text = if (getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName)) "Battery use is unrestricted" else "Battery optimisation is on"
         val running = NodeService.isRunning
