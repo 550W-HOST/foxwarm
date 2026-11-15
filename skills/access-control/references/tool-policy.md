@@ -290,6 +290,40 @@ An Agent can also carry its own ordered rule list. Set it with `create_agent({ru
 
 Two node-selector details matter for allowlists. A top-level `node` selector also matches the `node` tool's select, inspect and destroy targets and the endpoints of file transfers, so scope an environment allowance with `tool: {source: node}` unless those are intended. `node: {current: true}` also matches `master` when a Session is placed there, so put an explicit master deny first. The [agent-management templates](../../agent-management/references/memory-templates/) include complete reviewed layers for a restricted worker and a channel assistant.
 
+## Operation rules
+
+A rule with `op` decides what a call does rather than which tool it calls. It goes in the same ordered `rules` list as version-1 rules (the global policy or an Agent-local layer), and the policy stays `version: 1`.
+
+```yaml
+version: 1
+defaultAction: allow
+rules:
+  - id: no-node-switching
+    op: node.select
+    action: deny
+    reason: Stay on the assigned Node
+  - id: reviewer-reads-workspace
+    agent: reviewer
+    op: env.read
+    path: { within: '${agent.dir}' }
+    action: allow
+  - id: reviewer-no-other-reads
+    agent: reviewer
+    op: env.read
+    action: deny
+```
+
+- `op` names one operation, a list, a family (`env.*`) or `*`. Patterns never include `secret.use`.
+- Selectors: `agent`, `session`, `externalId` (global policy only); `node`; `path` (`within`, `notWithin`); `targetSession` and `parent` (`{session: {self|sameAgent|relation}}` or `{id: [...]}`); `targetAgent` (`{self: true}`, `{descendant: true}` or `{id: [...]}`); `task` (`{owned: true}` or `{created: true}`); `channel`, `secret` (`anyOf`, `owned`), `mcp` (`server`, `tool`), `nodeTool`, `model`; `with` for attributes such as `{change: rename}`. Each listed op must support every selector the rule uses.
+- Each operation of a call is decided by the first rule that matches it, whether that rule is a version-1 rule matching the whole call or an operation rule. Put an operation deny above any broad version-1 allow it should override.
+- Operation rules see normalized actions, so `op: node.select` also covers spellings such as `" Select"`. A version-1 `args: {action: ...}` rule still compares the raw value.
+- A copy is a read of its source and a write of its target, and both must be allowed.
+- Secrets: `op: secret.use` with `secret: {anyOf: [...]}` decides each name separately. Version-1 `secrets` rules keep matching the whole set.
+- Calls that only act on the caller's own turn, runs, transfers or images (for example `wait`, inline `run_script`, `artifact get`) can't be denied by any rule. Model requests made from scripts can: `op: model.request` with `model: <key>`.
+- When a rule can't establish what it tests (for example a Session that doesn't exist), the call is rejected as unresolved rather than allowed by a default.
+- Older Foxwarm versions reject any policy or Agent layer that contains `op`. After an Agent layer gets an operation rule, the installation requires a version that reads them.
+- `explain_tool_authorization` lists each operation with the rule that decided it (`ruleKind: operation` or `whole-call`).
+
 ## Generic policy and tool-local checks
 
 Generic deny applies to every internal Session. Generic allow passes only this policy layer: Agent-local layers, own channel attachment requirements, Node readiness and tool-local validation remain separate checks. A denied call cannot be fixed merely by adding a generic allow if a later check rejects it.
