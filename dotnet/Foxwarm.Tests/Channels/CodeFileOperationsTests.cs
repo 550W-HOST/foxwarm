@@ -32,6 +32,90 @@ public sealed class CodeFileOperationsTests
     }
 
     [Fact]
+    public async Task Windows_virtual_root_is_a_drive_directory_without_native_mutation()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+        using var temp = new TempDirectory();
+        var drive = Path.GetPathRoot(temp.Path)!;
+        var before = Directory.GetFileSystemEntries(drive).Length;
+        var root = CodeNativePaths.Native("/");
+        Assert.True(CodeNativePaths.IsVirtualRoot(root));
+        Assert.Equal(drive, CodeNativePaths.Native("/" + char.ToLowerInvariant(drive[0]) + ":"));
+        Assert.Throws<CodeServiceException>(() => CodeNativePaths.NativeDirectory("/"));
+        Assert.Equal("/", CodeNativePaths.Transport("/"));
+
+        Assert.Equal(2, CodeFileOperations.StatFile(root)["type"]!.GetValue<int>());
+        var names = CodeFileOperations
+            .ReadDirectory(root)["entries"]!
+            .AsArray()
+            .Select(entry => entry!["name"]!.ToString())
+            .ToArray();
+        Assert.Contains(drive[..2], names, StringComparer.OrdinalIgnoreCase);
+        Assert.All(names, name => Assert.Matches("^[A-Za-z]:$", name));
+
+        var file = Path.Combine(temp.Path, "kept.txt");
+        await File.WriteAllTextAsync(file, "kept");
+        Assert.Equal(
+            "FileIsADirectory",
+            (
+                await Assert.ThrowsAsync<CodeServiceException>(() =>
+                    CodeFileOperations.ReadFileAsync(root, CancellationToken.None)
+                )
+            ).Code
+        );
+        using var input = new MemoryStream([1]);
+        Assert.Equal(
+            "FileIsADirectory",
+            (
+                await Assert.ThrowsAsync<CodeServiceException>(() =>
+                    CodeFileOperations.WriteFileAsync(
+                        root,
+                        input,
+                        true,
+                        true,
+                        CancellationToken.None
+                    )
+                )
+            ).Code
+        );
+        Assert.Equal(
+            "FileExists",
+            Assert.Throws<CodeServiceException>(() => CodeFileOperations.CreateDirectory(root)).Code
+        );
+        Assert.Equal(
+            "NoPermissions",
+            Assert.Throws<CodeServiceException>(() => CodeFileOperations.Delete(root, true)).Code
+        );
+        Assert.Equal(
+            "NoPermissions",
+            Assert.Throws<CodeServiceException>(() =>
+                CodeFileOperations.Rename(root, file, true)
+            ).Code
+        );
+        Assert.Equal(
+            "NoPermissions",
+            Assert.Throws<CodeServiceException>(() =>
+                CodeFileOperations.Rename(file, root, true)
+            ).Code
+        );
+        Assert.Equal("kept", await File.ReadAllTextAsync(file));
+        Assert.Equal(before, Directory.GetFileSystemEntries(drive).Length);
+    }
+
+    [Fact]
+    public void Posix_root_remains_the_real_filesystem_root()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        Assert.False(CodeNativePaths.IsVirtualRoot("/"));
+        Assert.False(CodeNativePaths.IsMapped("/"));
+        Assert.Equal("/", CodeNativePaths.NativeDirectory("/"));
+        Assert.Equal(2, CodeFileOperations.StatFile("/")["type"]!.GetValue<int>());
+        Assert.NotEmpty(CodeFileOperations.ReadDirectory("/")["entries"]!.AsArray());
+    }
+
+    [Fact]
     public async Task Unix_links_follow_targets_and_keep_link_and_owner_readonly_metadata()
     {
         if (OperatingSystem.IsWindows())

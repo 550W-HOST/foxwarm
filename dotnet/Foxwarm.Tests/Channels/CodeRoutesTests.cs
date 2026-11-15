@@ -683,6 +683,104 @@ public sealed class CodeRoutesTests
     }
 
     [Fact]
+    public async Task Windows_Code_virtual_root_lists_drives_and_leaves_real_roots_unchanged()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+        await using var f = await Fixture.Create();
+        var drive = Path.GetPathRoot(f.Work)![..2].ToUpperInvariant();
+        var rootEntries = Directory.GetFileSystemEntries(Path.GetPathRoot(f.Work)!).Length;
+        var stat = await f.Json(await f.Client.GetAsync(f.Fs("stat", "/")));
+        Assert.Equal(2, stat["type"]!.GetValue<int>());
+        var listing = await f.Json(await f.Client.GetAsync(f.Fs("read-directory", "/")));
+        var entries = listing["entries"]!.AsArray();
+        Assert.Contains(entries, entry => entry!["name"]!.ToString() == drive);
+        Assert.All(entries, entry => Assert.Equal(2, entry!["type"]!.GetValue<int>()));
+        var file = Path.Combine(f.Work, "virtual root.txt");
+        await File.WriteAllTextAsync(file, "through the drive root");
+        var mapped = CodeNativePaths.Transport(file);
+        Assert.StartsWith("/" + drive + "/", mapped, StringComparison.OrdinalIgnoreCase);
+        var driveListing = await f.Json(
+            await f.Client.GetAsync(f.Fs("read-directory", "/" + drive))
+        );
+        Assert.NotNull(driveListing["entries"]);
+        Assert.Equal(
+            "through the drive root",
+            await f.Client.GetStringAsync(f.Fs("read-file", mapped))
+        );
+        var written = await f.Client.PutAsync(
+            f.Fs("write-file", mapped) + "&overwrite=1",
+            new ByteArrayContent(Encoding.UTF8.GetBytes("rewritten"))
+        );
+        Assert.True(written.IsSuccessStatusCode, await written.Content.ReadAsStringAsync());
+        Assert.Equal("rewritten", await File.ReadAllTextAsync(file));
+
+        async Task<string> Code(HttpResponseMessage response, HttpStatusCode status)
+        {
+            Assert.Equal(status, response.StatusCode);
+            return JsonNode.Parse(await response.Content.ReadAsStringAsync())!["code"]!.ToString();
+        }
+        Assert.Equal(
+            "FileIsADirectory",
+            await Code(
+                await f.Client.PutAsync(
+                    f.Fs("write-file", "/") + "&create=1&overwrite=1",
+                    new ByteArrayContent([1])
+                ),
+                HttpStatusCode.BadRequest
+            )
+        );
+        Assert.Equal(
+            "FileExists",
+            await Code(
+                await f.Client.PostAsJsonAsync(f.Fs("create-directory", "/"), new { }),
+                HttpStatusCode.Conflict
+            )
+        );
+        Assert.Equal(
+            "NoPermissions",
+            await Code(
+                await f.Client.PostAsJsonAsync(f.Fs("delete", "/"), new { recursive = true }),
+                HttpStatusCode.Forbidden
+            )
+        );
+        Assert.Equal(
+            "NoPermissions",
+            await Code(
+                await f.Client.PostAsJsonAsync(
+                    "/api/vscode-web/fs/rename",
+                    new { oldPath = "/", newPath = mapped }
+                ),
+                HttpStatusCode.Forbidden
+            )
+        );
+        Assert.Equal(
+            "NoPermissions",
+            await Code(
+                await f.Client.PostAsJsonAsync(
+                    "/api/vscode-web/fs/rename",
+                    new
+                    {
+                        oldPath = mapped,
+                        newPath = "/",
+                        overwrite = true,
+                    }
+                ),
+                HttpStatusCode.Forbidden
+            )
+        );
+        Assert.Equal(
+            "InvalidPath",
+            await Code(
+                await f.Client.GetAsync("/api/vscode-web/git/status?workspace=%2F"),
+                HttpStatusCode.BadRequest
+            )
+        );
+        Assert.Equal("rewritten", await File.ReadAllTextAsync(file));
+        Assert.Equal(rootEntries, Directory.GetFileSystemEntries(Path.GetPathRoot(f.Work)!).Length);
+    }
+
+    [Fact]
     public async Task Workspace_migration_and_defaults_publish_complete_replacement_files()
     {
         await using var f = await Fixture.Create();
