@@ -327,17 +327,21 @@ internal sealed partial class MainToolScript
             }
             if (output["result"] is JsonObject result && result["parts"] is JsonArray parts)
             {
-                // Only references admitted when the run completed are promoted; a record
-                // without that list (an older run) promotes none.
-                var admitted = (record["resultImages"] as JsonArray ?? [])
-                    .Select(Text)
-                    .OfType<string>()
-                    .ToHashSet(StringComparer.Ordinal);
+                // A run completed with admission stores its admitted blobs (`resultImages`), and
+                // only those are promoted. A record without the field completed before admission
+                // existed, under the policy of its time, and keeps promoting every reference
+                // (read-old/write-new: persisted history projects as before).
+                var admitted = record.ContainsKey("resultImages")
+                    ? (record["resultImages"] as JsonArray ?? [])
+                        .Select(Text)
+                        .OfType<string>()
+                        .ToHashSet(StringComparer.Ordinal)
+                    : null;
                 var images = parts
                     .OfType<JsonObject>()
                     .Where(part =>
                         Foxwarm.Images.ImageBlobStore.NormalizeToolReference(part) is { } reference
-                        && admitted.Contains(Text(reference["blobId"])!)
+                        && (admitted is null || admitted.Contains(Text(reference["blobId"])!))
                     )
                     .ToArray();
                 if (images.Length > 0)

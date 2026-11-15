@@ -153,4 +153,54 @@ public sealed partial class ToolAuthorizationEffectsTests
         );
         Assert.Contains("which it can't return", ScriptError(earlier));
     }
+
+    [Fact]
+    public async Task Runs_completed_before_admission_keep_promoting_their_references()
+    {
+        using var temp = new TempDirectory();
+        await Seed(temp.Path);
+        await using var manager = Manager(temp.Path);
+        await manager.LoadAsync();
+        var owner = await manager.RequiredAsync("opaque");
+        var execution = TimerExecutor(manager, owner, temp.Path);
+        await using var mcp = execution.Mcp;
+        var bytes = ImageCodecTests.Raster(SkiaSharp.SKEncodedImageFormat.Png, 6, 5);
+        var foreign = await manager.Images.PutAsync(bytes, "image/png", "foreign-legacy");
+        await AppendImage(await manager.RequiredAsync("foreign"), foreign, "foreign-legacy");
+        await Policy(manager, "version: 1\nrules: []\n");
+        var completed = await Call(execution.Tools, "run_script", Obj("""{"code":"return {'parts':[{'text':'done'}]}"}"""));
+        var runId = SessionWait.Text(completed["runId"])!;
+
+        // A legacy-shaped record: completed, a reference part, and no `resultImages` field.
+        var record = (await manager.ToolScript.Store.ReadAsync(runId, default))!;
+        Assert.True(record.ContainsKey("resultImages"));
+        record.Remove("resultImages");
+        record["lastResult"] = new JsonObject
+        {
+            ["parts"] = new JsonArray(new JsonObject { ["inlineDataRef"] = foreign.DeepClone() }),
+        };
+        await manager.ToolScript.Store.WriteAsync(record, default);
+        var legacy = await Call(execution.Tools, "get_toolscript_run", new JsonObject { ["runId"] = runId });
+        Assert.NotNull(legacy["imageParts"]);
+        Assert.Equal(bytes, await Promoted(manager, legacy));
+
+        // The same record with an admitted list from the new code promotes only what it lists.
+        record["resultImages"] = new JsonArray();
+        await manager.ToolScript.Store.WriteAsync(record, default);
+        var admitted = await Call(execution.Tools, "get_toolscript_run", new JsonObject { ["runId"] = runId });
+        Assert.Null(admitted["imageParts"]);
+
+        // A new run returning the foreign reference is still rejected.
+        var rejected = await Call(
+            execution.Tools,
+            "run_script",
+            new JsonObject
+            {
+                ["code"] = "return {'parts':[{'inlineDataRef':args['reference']}]}",
+                ["args"] = new JsonObject { ["reference"] = foreign.DeepClone() },
+            }
+        );
+        Assert.Contains("which it can't return", ScriptError(rejected));
+        Assert.Null(await Promoted(manager, rejected));
+    }
 }
