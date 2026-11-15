@@ -125,4 +125,35 @@ public sealed class NodeCodeServicesPathTests
         );
         Assert.Equal("InvalidPath", root.Code);
     }
+
+    [Fact]
+    public async Task Windows_service_terminal_accepts_mapped_drive_folders_and_keeps_native_root()
+    {
+        if (!OperatingSystem.IsWindows() || !Foxwarm.Terminal.TerminalNative.IsSupported)
+            return;
+        using var temp = new TempDirectory();
+        await using var service = new NodePtyService(temp.Path);
+        var owner = new object();
+
+        async Task<string> Cwd(string requested)
+        {
+            JsonObject? response = null;
+            await service.Dispatch(
+                "create",
+                new JsonObject { ["cwd"] = requested },
+                owner,
+                value =>
+                {
+                    response = value;
+                    return Task.CompletedTask;
+                }
+            );
+            return response!["terminal"]!["cwd"]!.ToString();
+        }
+
+        var mapped = CodeNativePaths.Transport(temp.Path);
+        Assert.Equal(mapped, await Cwd(mapped), ignoreCase: true);
+        Assert.Equal(temp.Path, await Cwd(temp.Path), ignoreCase: true);
+        Assert.Equal(Path.GetPathRoot(Environment.CurrentDirectory), await Cwd("/"));
+    }
 }
