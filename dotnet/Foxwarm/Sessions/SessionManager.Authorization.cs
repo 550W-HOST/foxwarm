@@ -156,17 +156,26 @@ internal sealed partial class SessionManager
         observe?.Invoke(assessment);
         if (assessment.Denied is { } denied)
             throw new ToolAuthorizationDeniedException(
-                denied.Decision
-                    is {
-                        Secrets.Effect: ToolAuthorizationEffect.Deny,
-                        Call.Effect: not ToolAuthorizationEffect.Deny
-                    }
-                    ? SessionWait.Text(denied.Decision.Secrets.Rule?["reason"])
-                        ?? Foxwarm.Secrets.SecretConfigurationChanges.DeniedMessage(
-                            assessment.Request.Secrets!
-                        )
-                    : SessionWait.Text(denied.Decision.Rule?["reason"])
-                        ?? $"Tool authorization rule denies {resolved.Source} capability `{resolved.Name}`."
+                // The existing message, then which rule denied which obligation of which call.
+                OperationAttribution.Append(
+                    denied.Decision
+                        is {
+                            Secrets.Effect: ToolAuthorizationEffect.Deny,
+                            Call.Effect: not ToolAuthorizationEffect.Deny
+                        }
+                        ? SessionWait.Text(denied.Decision.Secrets.Rule?["reason"])
+                            ?? Foxwarm.Secrets.SecretConfigurationChanges.DeniedMessage(
+                                assessment.Request.Secrets!
+                            )
+                        : SessionWait.Text(denied.Decision.Rule?["reason"])
+                            ?? $"Tool authorization rule denies {resolved.Source} capability `{resolved.Name}`.",
+                    OperationAttribution.Denial(
+                        resolved,
+                        OperationAttribution.Primary(owner),
+                        denied,
+                        assessment.Request.Secrets
+                    )
+                )
             );
         // Deny is final above. An ask outcome passes only within the invocation a
         // person approved, including its internal steps and effect-owner rechecks.
@@ -455,28 +464,40 @@ internal sealed partial class SessionManager
             new JsonObject { ["agentName"] = agent },
             []
         );
-        var policies = EffectivePolicies(source.Agent, await authorization.LoadAsync(token));
-        var indeterminate = false;
-        var ask = false;
-        foreach (var policy in policies)
+        var layers = EffectiveLayers(source.Agent, await authorization.LoadAsync(token));
+        var primary = OperationAttribution.Primary(source);
+        (bool Found, string? Layer) indeterminate = default;
+        (bool Found, string? Layer) ask = default;
+        foreach (var (layer, policy) in layers)
         {
             var decision = ToolAuthorizationEvaluation.EvaluateCreationTarget(policy, request);
             if (decision == CreationTargetDecision.Deny)
                 throw new ToolAuthorizationDeniedException(
-                    $"Tool authorization rules deny creating a Session in Agent '{agent}'."
+                    OperationAttribution.Append(
+                        $"Tool authorization rules deny creating a Session in Agent '{agent}'.",
+                        OperationAttribution.CreationTarget(primary, layer)
+                    )
                 );
-            indeterminate |= decision == CreationTargetDecision.Indeterminate;
-            ask |= decision == CreationTargetDecision.Ask;
+            if (decision == CreationTargetDecision.Indeterminate && !indeterminate.Found)
+                indeterminate = (true, layer);
+            if (decision == CreationTargetDecision.Ask && !ask.Found)
+                ask = (true, layer);
         }
-        if (indeterminate)
+        if (indeterminate.Found)
             throw new ToolAuthorizationDeniedException(
-                "Future Session parameters make create_session target authorization indeterminate at timer registration. "
-                    + "Place a decisive creation-target rule before rules depending on future names or settings."
+                OperationAttribution.Append(
+                    "Future Session parameters make create_session target authorization indeterminate at timer registration. "
+                        + "Place a decisive creation-target rule before rules depending on future names or settings.",
+                    OperationAttribution.CreationTarget(primary, indeterminate.Layer)
+                )
             );
         // A future unattended creation has no invocation a person could approve.
-        if (ask)
+        if (ask.Found)
             throw new ToolAuthorizationDeniedException(
-                $"Tool authorization rules require approval to create Sessions in Agent '{agent}'. A scheduled creation can't be approved in advance, so this timer was not registered."
+                OperationAttribution.Append(
+                    $"Tool authorization rules require approval to create Sessions in Agent '{agent}'. A scheduled creation can't be approved in advance, so this timer was not registered.",
+                    OperationAttribution.CreationTarget(primary, ask.Layer)
+                )
             );
         source.Entry.RequireIdentityAuthority();
         if (!IsCurrentOwner(source))

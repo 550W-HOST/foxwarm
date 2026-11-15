@@ -177,13 +177,28 @@ internal sealed partial class SessionManager
             if (target is null)
                 throw new InvalidDataException("Session not found or unavailable.");
             result["sessionId"] = target.Id;
-            // Resolve exactly as `tool call` would for this caller's current Node.
             var call = (JsonObject)probe.DeepClone();
             call.Remove("sessionId");
             call.Remove("label");
-            if (!call.ContainsKey("args") && !call.ContainsKey("argsJson"))
-                call["args"] = new JsonObject();
-            var resolved = tools.Resolve("call_tool", call, CurrentNode(target));
+            ResolvedTool resolved;
+            if (call.ContainsKey("command"))
+            {
+                // A ctl command, parsed and resolved as the model's ctl call would be.
+                if (call.Any(pair => pair.Key is not ("command" or "values" or "valuesJson")))
+                    throw new InvalidDataException(
+                        "A probe gives either command (with values) or a tool, not both."
+                    );
+                if (CtlParser.Parse(call) is CtlError error)
+                    throw new InvalidDataException(error.Message);
+                resolved = tools.Resolve("ctl", call, CurrentNode(target));
+            }
+            else
+            {
+                // Resolve exactly as `tool call` would for this caller's current Node.
+                if (!call.ContainsKey("args") && !call.ContainsKey("argsJson"))
+                    call["args"] = new JsonObject();
+                resolved = tools.Resolve("call_tool", call, CurrentNode(target));
+            }
             if (SessionToolExecutor.IsCtlFrontEnd(resolved))
                 throw new InvalidDataException(
                     "ctl help, discovery and malformed commands are not authorized; probe a command's target instead."
@@ -198,19 +213,85 @@ internal sealed partial class SessionManager
                     ["server"] = resolved.Server,
                     ["executionNode"] = resolved.ExecutionNode,
                 };
+            var invocation = resolved.Command is { } command
+                ? "ctl " + command
+                : "ctl tool call";
             var files = IdentityWorkspace(target);
             var explained = new List<(string Name, ExplainedVariant Variant)>();
             foreach (var (name, policy) in variants)
                 explained.Add(
                     (name, await ExplainVariantAsync(target, resolved, files, policy, token))
                 );
-            if (compact && explained.Count == 1)
-                ToolAuthorizationExplain.CompactVariant(explained[0].Variant, result);
+            // The plan uses the facts the assessment established; it reads nothing itself.
+            var plan = OperationPlan.Derive(
+                resolved,
+                PlanFacts(
+                    target,
+                    explained.Select(item => item.Variant.Assessment).FirstOrDefault(item => item is not null)?.Request
+                ),
+                new PlanContext(CurrentNode(target))
+                {
+                    PolicyPath = authorization.PolicyPath,
+                    Subtree = id =>
+                    {
+                        try
+                        {
+                            return Nodes.Registry.Forest().Subtree(id);
+                        }
+                        catch (InvalidDataException)
+                        {
+                            return null;
+                        }
+                    },
+                    SessionExists = id => AuthorizationTarget(id) is not null,
+                }
+            );
+            var obligations = new List<JsonArray>();
+            for (var item = 0; item < variants.Count; item++)
+                obligations.Add(
+                    await ExplainObligationsAsync(
+                        target,
+                        plan,
+                        explained[item].Variant.Assessment,
+                        files,
+                        variants[item].Policy,
+                        token
+                    )
+                );
+            if (compact)
+            {
+                // Compact rows name the call and the first non-primary check that denies, else
+                // asks; the full plan is left out.
+                result["invocation"] = invocation;
+                result["capability"] = plan.Capability;
+                if (explained.Count == 1)
+                {
+                    ToolAuthorizationExplain.CompactVariant(explained[0].Variant, result);
+                    ToolAuthorizationExplain.CompactObligation(obligations[0], result);
+                }
+                else
+                    for (var item = 0; item < explained.Count; item++)
+                    {
+                        var row = ToolAuthorizationExplain.CompactVariant(
+                            explained[item].Variant,
+                            new JsonObject()
+                        );
+                        ToolAuthorizationExplain.CompactObligation(obligations[item], row);
+                        result[explained[item].Name] = row;
+                    }
+            }
             else
-                foreach (var (name, variant) in explained)
-                    result[name] = compact
-                        ? ToolAuthorizationExplain.CompactVariant(variant, new JsonObject())
-                        : ToolAuthorizationExplain.FullVariant(variant);
+            {
+                result["invocation"] = invocation;
+                foreach (var pair in plan.ToJson())
+                    result[pair.Key] = pair.Value?.DeepClone();
+                for (var item = 0; item < explained.Count; item++)
+                {
+                    var full = ToolAuthorizationExplain.FullVariant(explained[item].Variant);
+                    full["obligations"] = obligations[item];
+                    result[explained[item].Name] = full;
+                }
+            }
             if (variants.Count == 2)
                 result["changed"] = explained[0].Variant.Decision != explained[1].Variant.Decision;
         }
@@ -222,6 +303,148 @@ internal sealed partial class SessionManager
             result["error"] = error.Message;
         }
         return result;
+    }
+
+    // Facts for the plan: the assessment's request, with the Session target its resolver names
+    // filled in when no rule needed it. That is a catalog lookup, never a protected read.
+    private ToolAuthorizationRequest? PlanFacts(
+        SessionOwner target,
+        ToolAuthorizationRequest? request
+    )
+    {
+        if (request is null || request.SessionTarget is not null)
+            return request;
+        try
+        {
+            return PopulateAuthorizationTargets(request, target);
+        }
+        catch (Exception error) when (error is InvalidDataException or InvalidOperationException)
+        {
+            return request;
+        }
+    }
+
+    // Each planned obligation's existing decision under one global policy variant. Obligations
+    // the plan cannot construct are reported with the reason instead.
+    private async Task<JsonArray> ExplainObligationsAsync(
+        SessionOwner target,
+        OperationPlan plan,
+        AuthorizationAssessment? primary,
+        WorkspaceTools files,
+        ToolAuthorizationPolicy global,
+        CancellationToken token
+    )
+    {
+        var results = new JsonArray();
+        foreach (var obligation in plan.Obligations)
+        {
+            JsonObject entry;
+            if (obligation.SameAsPrimary)
+            {
+                entry = primary is null
+                    ? new JsonObject
+                    {
+                        ["id"] = obligation.Id,
+                        ["decision"] = "deny",
+                        ["deniedBy"] = "precheck",
+                    }
+                    : OperationAttribution.Obligation(obligation, primary);
+                if (obligation.Kind != ObligationKind.Primary)
+                    entry["sameAs"] = "primary";
+            }
+            else if (obligation.Request is { } request)
+                entry = await ExplainObligationAsync(target, obligation, request, files, global, token);
+            else if (obligation.CreationAgent is { } agent)
+                entry = ExplainCreationTarget(target, obligation, agent, global);
+            else
+                entry = new JsonObject
+                {
+                    ["id"] = obligation.Id,
+                    ["evaluated"] = false,
+                    ["reason"] = obligation.Gap,
+                };
+            results.Add((JsonNode?)entry);
+        }
+        return results;
+    }
+
+    private async Task<JsonObject> ExplainObligationAsync(
+        SessionOwner target,
+        PlannedObligation obligation,
+        ResolvedTool request,
+        WorkspaceTools files,
+        ToolAuthorizationPolicy global,
+        CancellationToken token
+    )
+    {
+        try
+        {
+            return OperationAttribution.Obligation(
+                obligation,
+                await AssessToolAsync(target, request, files, token, global: global)
+            );
+        }
+        catch (ToolAuthorizationDeniedException denied)
+        {
+            return new JsonObject
+            {
+                ["id"] = obligation.Id,
+                ["decision"] = "deny",
+                ["deniedBy"] = "precheck",
+                ["precheck"] = denied.Message,
+            };
+        }
+        catch (Exception error)
+            when (error is InvalidDataException or InvalidOperationException or NotSupportedException)
+        {
+            return new JsonObject { ["id"] = obligation.Id, ["error"] = error.Message };
+        }
+    }
+
+    // A timer's creation-target probe, combined as timer registration combines it: any deny
+    // rejects, then any indeterminate layer, then any ask.
+    private JsonObject ExplainCreationTarget(
+        SessionOwner target,
+        PlannedObligation obligation,
+        string agent,
+        ToolAuthorizationPolicy global
+    )
+    {
+        var request = AuthorizationRequest(
+            target,
+            "builtin",
+            "create_session",
+            null,
+            new JsonObject { ["agentName"] = agent },
+            []
+        );
+        var layers = new JsonArray();
+        var decisions = new List<CreationTargetDecision>();
+        foreach (var (layer, policy) in EffectiveLayers(target.Agent, global))
+        {
+            var decision = ToolAuthorizationEvaluation.EvaluateCreationTarget(policy, request);
+            decisions.Add(decision);
+            layers.Add(
+                (JsonNode?)
+                    new JsonObject
+                    {
+                        ["layer"] = layer is null ? "global" : "agent:" + layer,
+                        ["decision"] = decision.ToString().ToLowerInvariant(),
+                    }
+            );
+        }
+        var combined =
+            decisions.Contains(CreationTargetDecision.Deny) ? "deny"
+            : decisions.Contains(CreationTargetDecision.Indeterminate) ? "indeterminate"
+            : decisions.Contains(CreationTargetDecision.Ask) ? "ask"
+            : "allow";
+        return new JsonObject
+        {
+            ["id"] = obligation.Id,
+            ["decision"] = combined,
+            ["agentName"] = agent,
+            ["layers"] = layers,
+        };
     }
 
     private async Task<ExplainedVariant> ExplainVariantAsync(

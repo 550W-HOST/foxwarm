@@ -1,0 +1,173 @@
+{
+ "description": "Decision-equality corpus for operation authorization phase 1. Each case is a global policy, optional Agent-local layers and one request (or a timer creation-target probe). expected is what the existing evaluator decides: the combined decision, each layer's decision, deciding rule and secret part, and the approval options of an ask. Checked by OperationAttributionTests at the base and at the phase-1 revision.",
+ "cases": [
+  {
+   "name": "correlated delivery to the same Session is allowed",
+   "global": "version: 1\ndefaultAction: deny\nrules:\n- id: deliver-self\n  tool: {source: builtin, name: send_file}\n  node: box\n  args: {sessionId: {session: {self: true}}}\n  action: allow\n",
+   "request": {"source": "builtin", "name": "send_file", "args": {"filePath": "r.txt"}, "targetNode": "box", "nodeTargets": ["box"], "sessionTarget": {"id": "alpha-1", "agent": "alpha"}},
+   "expected": {"decision": "allow", "layers": [{"layer": "global", "decision": "allow", "rule": "deliver-self"}]}
+  },
+  {
+   "name": "correlated delivery to another Session is denied",
+   "global": "version: 1\ndefaultAction: deny\nrules:\n- id: deliver-self\n  tool: {source: builtin, name: send_file}\n  node: box\n  args: {sessionId: {session: {self: true}}}\n  action: allow\n",
+   "request": {"source": "builtin", "name": "send_file", "args": {"filePath": "r.txt", "sessionId": "beta-1"}, "targetNode": "box", "nodeTargets": ["box"], "sessionTarget": {"id": "beta-1", "agent": "beta"}},
+   "expected": {"decision": "deny", "layers": [{"layer": "global", "decision": "deny", "rule": null}]}
+  },
+  {
+   "name": "conditional ask for a safe command",
+   "global": "version: 1\ndefaultAction: allow\nrules:\n- id: ask-safe\n  tool: {source: node, name: exec}\n  args: {command: safe}\n  action: ask\n  approval: {approvers: [ops, reviewer], timeoutSeconds: 120}\n- id: deny-exec\n  tool: {source: node, name: exec}\n  action: deny\n",
+   "request": {"source": "node", "name": "exec", "args": {"command": "safe"}, "nodeTargets": ["master"]},
+   "expected": {"decision": "ask", "layers": [{"layer": "global", "decision": "ask", "rule": "ask-safe"}], "approval": {"approvers": ["ops", "reviewer"], "timeoutSeconds": 120}}
+  },
+  {
+   "name": "conditional ask denies other commands",
+   "global": "version: 1\ndefaultAction: allow\nrules:\n- id: ask-safe\n  tool: {source: node, name: exec}\n  args: {command: safe}\n  action: ask\n  approval: {approvers: [ops, reviewer], timeoutSeconds: 120}\n- id: deny-exec\n  tool: {source: node, name: exec}\n  action: deny\n",
+   "request": {"source": "node", "name": "exec", "args": {"command": "rm"}, "nodeTargets": ["master"]},
+   "expected": {"decision": "deny", "layers": [{"layer": "global", "decision": "deny", "rule": "deny-exec"}]}
+  },
+  {
+   "name": "single-name secret allow, first name",
+   "global": "version: 1\ndefaultAction: allow\nrules:\n- id: allow-a\n  secrets: {anyOf: key-a}\n  action: allow\n- id: allow-b\n  secrets: {anyOf: key-b}\n  action: allow\n- id: no-master-exec\n  tool: {source: node, name: exec}\n  node: {exact: master}\n  action: deny\n",
+   "request": {"source": "builtin", "name": "set_config", "args": {"target": "models", "filePath": "m.yaml"}, "secrets": ["key-a"]},
+   "expected": {"decision": "allow", "layers": [{"layer": "global", "decision": "allow", "rule": null, "secrets": {"decision": "allow", "source": "rule", "rule": "allow-a"}}]}
+  },
+  {
+   "name": "single-name secret allow, second name",
+   "global": "version: 1\ndefaultAction: allow\nrules:\n- id: allow-a\n  secrets: {anyOf: key-a}\n  action: allow\n- id: allow-b\n  secrets: {anyOf: key-b}\n  action: allow\n- id: no-master-exec\n  tool: {source: node, name: exec}\n  node: {exact: master}\n  action: deny\n",
+   "request": {"source": "builtin", "name": "set_config", "args": {"target": "models", "filePath": "m.yaml"}, "secrets": ["key-b"]},
+   "expected": {"decision": "allow", "layers": [{"layer": "global", "decision": "allow", "rule": null, "secrets": {"decision": "allow", "source": "rule", "rule": "allow-b"}}]}
+  },
+  {
+   "name": "two single-name secret allows deny the pair",
+   "global": "version: 1\ndefaultAction: allow\nrules:\n- id: allow-a\n  secrets: {anyOf: key-a}\n  action: allow\n- id: allow-b\n  secrets: {anyOf: key-b}\n  action: allow\n- id: no-master-exec\n  tool: {source: node, name: exec}\n  node: {exact: master}\n  action: deny\n",
+   "request": {"source": "builtin", "name": "set_config", "args": {"target": "models", "filePath": "m.yaml"}, "secrets": ["key-a", "key-b"]},
+   "expected": {"decision": "deny", "layers": [{"layer": "global", "decision": "deny", "rule": "no-master-exec", "secrets": {"decision": "deny", "source": "fallback", "rule": "no-master-exec"}}]}
+  },
+  {
+   "name": "ordinary exec allow with an unowned secret is denied",
+   "global": "version: 1\ndefaultAction: allow\nrules:\n- id: ls-only\n  tool: {source: node, name: exec}\n  args: {command: ls}\n  action: allow\n- id: deny-rest\n  action: deny\n",
+   "request": {"source": "node", "name": "exec", "args": {"command": "ls", "secretEnv": {"T": "tok"}}, "nodeTargets": ["master"], "secrets": ["tok"]},
+   "expected": {"decision": "deny", "layers": [{"layer": "global", "decision": "deny", "rule": "deny-rest", "secrets": {"decision": "deny", "source": "fallback", "rule": "deny-rest"}}]}
+  },
+  {
+   "name": "ordinary exec allow with an owned secret is allowed",
+   "global": "version: 1\ndefaultAction: allow\nrules:\n- id: ls-only\n  tool: {source: node, name: exec}\n  args: {command: ls}\n  action: allow\n- id: deny-rest\n  action: deny\n",
+   "request": {"source": "node", "name": "exec", "args": {"command": "ls", "secretEnv": {"T": "tok"}}, "nodeTargets": ["master"], "secrets": ["tok"], "ownedSecrets": ["tok"]},
+   "expected": {"decision": "allow", "layers": [{"layer": "global", "decision": "allow", "rule": "ls-only", "secrets": {"decision": "allow", "source": "owned", "rule": null}}]}
+  },
+  {
+   "name": "script primary allowed",
+   "global": "version: 1\ndefaultAction: allow\nrules:\n- id: no-read\n  tool: {source: node, name: read}\n  action: deny\n",
+   "request": {"source": "builtin", "name": "run_script", "args": {"filePath": "job.py"}, "paths": [{"arg": "filePath", "raw": "job.py", "resolved": "/w/alpha/job.py"}]},
+   "expected": {"decision": "allow", "layers": [{"layer": "global", "decision": "allow", "rule": null}]}
+  },
+  {
+   "name": "script source read denied",
+   "global": "version: 1\ndefaultAction: allow\nrules:\n- id: no-read\n  tool: {source: node, name: read}\n  action: deny\n",
+   "request": {"source": "node", "name": "read", "args": {"filePath": "job.py"}, "nodeTargets": ["master"], "paths": [{"arg": "filePath", "raw": "job.py", "resolved": "/w/alpha/job.py"}]},
+   "expected": {"decision": "deny", "layers": [{"layer": "global", "decision": "deny", "rule": "no-read"}]}
+  },
+  {
+   "name": "artifact primary allowed",
+   "global": "version: 1\ndefaultAction: allow\nrules:\n- id: no-remote-read\n  tool: {source: node, name: read}\n  node: box\n  action: deny\n",
+   "request": {"source": "builtin", "name": "artifact", "args": {"action": "prepare", "filePath": "a.json", "node": "box"}, "targetNode": "box", "nodeTargets": ["box"], "paths": [{"arg": "filePath", "raw": "a.json", "node": "box"}]},
+   "expected": {"decision": "allow", "layers": [{"layer": "global", "decision": "allow", "rule": null}]}
+  },
+  {
+   "name": "artifact source read denied",
+   "global": "version: 1\ndefaultAction: allow\nrules:\n- id: no-remote-read\n  tool: {source: node, name: read}\n  node: box\n  action: deny\n",
+   "request": {"source": "node", "name": "read", "args": {"filePath": "a.json"}, "targetNode": "box", "nodeTargets": ["box"], "paths": [{"arg": "filePath", "raw": "a.json", "node": "box"}]},
+   "expected": {"decision": "deny", "layers": [{"layer": "global", "decision": "deny", "rule": "no-remote-read"}]}
+  },
+  {
+   "name": "timer allowed",
+   "global": "version: 1\ndefaultAction: allow\nrules:\n- id: no-new-sessions\n  tool: {source: builtin, name: create_session}\n  action: deny\n",
+   "request": {"source": "builtin", "name": "create_timer", "args": {"afterSeconds": 60, "message": "m", "newSession": true, "agentName": "beta"}},
+   "expected": {"decision": "allow", "layers": [{"layer": "global", "decision": "allow", "rule": null}]}
+  },
+  {
+   "name": "timer creation target denied",
+   "kind": "creation-target",
+   "global": "version: 1\ndefaultAction: allow\nrules:\n- id: no-new-sessions\n  tool: {source: builtin, name: create_session}\n  action: deny\n",
+   "request": {"source": "builtin", "name": "create_session", "args": {"agentName": "beta"}},
+   "expected": {"decision": "deny", "layers": [{"layer": "global", "decision": "deny"}]}
+  },
+  {
+   "name": "timer creation target indeterminate",
+   "kind": "creation-target",
+   "global": "version: 1\ndefaultAction: allow\nrules:\n- id: named\n  tool: {source: builtin, name: create_session}\n  args: {sessionName: special}\n  action: deny\n",
+   "request": {"source": "builtin", "name": "create_session", "args": {"agentName": "beta"}},
+   "expected": {"decision": "indeterminate", "layers": [{"layer": "global", "decision": "indeterminate"}]}
+  },
+  {
+   "name": "cascade root allowed",
+   "global": "version: 1\ndefaultAction: allow\nrules:\n- id: keep-child\n  tool: {source: builtin, name: node_remove}\n  node: {exact: box-child}\n  action: deny\n",
+   "request": {"source": "builtin", "name": "node_remove", "args": {"nodeId": "box", "cascade": true}, "nodeTargets": ["box"], "forest": {"box": null, "box-child": "box"}},
+   "expected": {"decision": "allow", "layers": [{"layer": "global", "decision": "allow", "rule": null}]}
+  },
+  {
+   "name": "cascade member denied",
+   "global": "version: 1\ndefaultAction: allow\nrules:\n- id: keep-child\n  tool: {source: builtin, name: node_remove}\n  node: {exact: box-child}\n  action: deny\n",
+   "request": {"source": "builtin", "name": "node_remove", "args": {"nodeId": "box-child", "cascade": true}, "nodeTargets": ["box-child"], "forest": {"box": null, "box-child": "box"}},
+   "expected": {"decision": "deny", "layers": [{"layer": "global", "decision": "deny", "rule": "keep-child"}]}
+  },
+  {
+   "name": "asking default with no approvers",
+   "global": "version: 1\ndefaultAction: ask\nrules: []\n",
+   "request": {"source": "builtin", "name": "list_agents", "args": {}},
+   "expected": {"decision": "ask", "layers": [{"layer": "global", "decision": "ask", "rule": null}], "approval": {"approvers": []}}
+  },
+  {
+   "name": "external ask is a deny",
+   "global": "version: 1\ndefaultAction: allow\nrules:\n- id: ask-exec\n  tool: {source: node, name: exec}\n  action: ask\n",
+   "request": {"source": "node", "name": "exec", "args": {"command": "true"}, "principal": "external", "externalId": "ci", "targetNode": "box", "nodeTargets": ["box"]},
+   "expected": {"decision": "deny", "layers": [{"layer": "global", "decision": "deny", "rule": "ask-exec"}]}
+  },
+  {
+   "name": "external without a matching rule is denied",
+   "global": "version: 1\ndefaultAction: allow\nrules:\n- id: internal-only\n  agent: alpha\n  tool: {source: node, name: exec}\n  action: allow\n",
+   "request": {"source": "node", "name": "exec", "args": {"command": "true"}, "principal": "external", "externalId": "ci", "targetNode": "box", "nodeTargets": ["box"]},
+   "expected": {"decision": "deny", "layers": [{"layer": "global", "decision": "deny", "rule": null}]}
+  },
+  {
+   "name": "external allowed by its rule",
+   "global": "version: 1\ndefaultAction: deny\nrules:\n- id: ci-exec\n  match: {externalId: ci, tool: {source: node, name: exec}}\n  action: allow\n",
+   "request": {"source": "node", "name": "exec", "args": {"command": "true"}, "principal": "external", "externalId": "ci", "targetNode": "box", "nodeTargets": ["box"]},
+   "expected": {"decision": "allow", "layers": [{"layer": "global", "decision": "allow", "rule": "ci-exec"}]}
+  },
+  {
+   "name": "local layer denies what the global policy allows",
+   "global": "version: 1\ndefaultAction: allow\nrules: []\n",
+   "local": [{"agent": "alpha", "rules": [{"id": "local-no-exec", "tool": {"source": "node", "name": "exec"}, "action": "deny"}]}],
+   "request": {"source": "node", "name": "exec", "args": {"command": "true"}, "nodeTargets": ["master"]},
+   "expected": {"decision": "deny", "layers": [{"layer": "global", "decision": "allow", "rule": null}, {"layer": "agent:alpha", "decision": "deny", "rule": "local-no-exec"}]}
+  },
+  {
+   "name": "unmatched local layer passes",
+   "global": "version: 1\ndefaultAction: allow\nrules: []\n",
+   "local": [{"agent": "alpha", "rules": [{"id": "local-no-exec", "tool": {"source": "node", "name": "exec"}, "action": "deny"}]}],
+   "request": {"source": "node", "name": "read", "args": {"filePath": "x"}, "nodeTargets": ["master"]},
+   "expected": {"decision": "allow", "layers": [{"layer": "global", "decision": "allow", "rule": null}, {"layer": "agent:alpha", "decision": "allow", "rule": null}]}
+  },
+  {
+   "name": "asks of two layers intersect approvers",
+   "global": "version: 1\ndefaultAction: allow\nrules:\n- id: global-ask\n  tool: {source: builtin, name: list_agents}\n  action: ask\n  approval: {approvers: [ops, reviewer], timeoutSeconds: 600}\n",
+   "local": [{"agent": "alpha", "rules": [{"id": "local-ask", "tool": {"source": "builtin", "name": "list_agents"}, "action": "ask", "approval": {"approvers": ["ops"], "timeoutSeconds": 300}}]}],
+   "request": {"source": "builtin", "name": "list_agents", "args": {}},
+   "expected": {"decision": "ask", "layers": [{"layer": "global", "decision": "ask", "rule": "global-ask"}, {"layer": "agent:alpha", "decision": "ask", "rule": "local-ask"}], "approval": {"approvers": ["ops"], "timeoutSeconds": 300}}
+  },
+  {
+   "name": "local deny wins over a global ask",
+   "global": "version: 1\ndefaultAction: allow\nrules:\n- id: global-ask\n  tool: {source: builtin, name: list_agents}\n  action: ask\n",
+   "local": [{"agent": "alpha", "rules": [{"id": "local-deny", "action": "deny"}]}],
+   "request": {"source": "builtin", "name": "list_agents", "args": {}},
+   "expected": {"decision": "deny", "layers": [{"layer": "global", "decision": "ask", "rule": "global-ask"}, {"layer": "agent:alpha", "decision": "deny", "rule": "local-deny"}]}
+  },
+  {
+   "name": "raw action spelling is not matched by a version-1 deny",
+   "global": "version: 1\ndefaultAction: allow\nrules:\n- id: no-select\n  tool: {source: builtin, name: node}\n  args: {action: select}\n  action: deny\n",
+   "request": {"source": "builtin", "name": "node", "args": {"action": " Select ", "nodeId": "box"}, "nodeTargets": ["box"]},
+   "expected": {"decision": "allow", "layers": [{"layer": "global", "decision": "allow", "rule": null}]}
+  }
+ ]
+}

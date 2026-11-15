@@ -106,6 +106,38 @@ internal static class ToolAuthorizationExplain
         return result;
     }
 
+    // The first check other than the call's own request that does not allow: one that denies
+    // (or is indeterminate) before one that asks. It names the check, its decision and the
+    // deciding rule ID (null for a default). Nothing is added when every such check allows or
+    // was not evaluated.
+    internal static void CompactObligation(JsonArray obligations, JsonObject result)
+    {
+        var others = obligations
+            .OfType<JsonObject>()
+            .Where(item =>
+                SessionWait.Text(item["id"]) != "primary"
+                && item["sameAs"] is null
+                && item["decision"] is not null
+            )
+            .ToArray();
+        var deciding =
+            others.FirstOrDefault(item =>
+                SessionWait.Text(item["decision"]) is "deny" or "indeterminate"
+            ) ?? others.FirstOrDefault(item => SessionWait.Text(item["decision"]) == "ask");
+        if (deciding is null)
+            return;
+        var decision = SessionWait.Text(deciding["decision"]);
+        var layer = (deciding["layers"] as JsonArray)
+            ?.OfType<JsonObject>()
+            .FirstOrDefault(item => SessionWait.Text(item["decision"]) == decision);
+        result["obligation"] = new JsonObject
+        {
+            ["id"] = deciding["id"]?.DeepClone(),
+            ["decision"] = decision,
+            ["rule"] = layer?["rule"]?["id"]?.DeepClone(),
+        };
+    }
+
     private static JsonNode? RuleId(JsonObject rule) => rule["id"]?.DeepClone();
 
     private static JsonArray Rules(ToolAuthorizationPolicy policy) =>

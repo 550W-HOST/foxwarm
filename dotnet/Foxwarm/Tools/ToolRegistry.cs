@@ -10,7 +10,12 @@ internal sealed record ResolvedTool(
     JsonObject Args,
     string? Server = null,
     string ExecutionNode = "master"
-);
+)
+{
+    // The ctl command path (`node select`, `tool call`) when the call came through ctl. Display
+    // and denial attribution only; it is never an authorization fact.
+    internal string? Command { get; init; }
+}
 
 internal sealed record RegisteredTool(
     JsonObject Definition,
@@ -94,18 +99,27 @@ internal sealed class ToolRegistry(
         JsonObject args
     )
     {
+        var (target, targetArgs, ctl, _) = UnwrapCommand(invocation, args);
+        return (target, targetArgs, ctl);
+    }
+
+    private static (string Invocation, JsonObject Args, bool Ctl, string? Command) UnwrapCommand(
+        string invocation,
+        JsonObject args
+    )
+    {
         if (invocation == "call_tool" && NamesCtl(args))
         {
             invocation = "ctl";
             args = ObjectArg(args, "args", "argsJson") ?? new JsonObject();
         }
         if (invocation != "ctl")
-            return (invocation, args, false);
+            return (invocation, args, false, null);
         return CtlParser.Parse(args) switch
         {
-            CtlTarget target => (target.Name, target.Args, true),
-            CtlCall call => ("call_tool", call.Descriptor, true),
-            _ => ("ctl", args, true),
+            CtlTarget target => (target.Name, target.Args, true, target.Command.Path),
+            CtlCall call => ("call_tool", call.Descriptor, true, call.Command.Path),
+            _ => ("ctl", args, true, null),
         };
     }
 
@@ -117,12 +131,16 @@ internal sealed class ToolRegistry(
 
     internal ResolvedTool Resolve(string invocation, JsonObject args, string currentNode = "master")
     {
-        var (target, targetArgs, ctl) = Unwrap(invocation, args);
+        var (target, targetArgs, ctl, command) = UnwrapCommand(invocation, args);
         if (!ctl)
             return ResolveConcrete(invocation, args, currentNode);
         if (target == "ctl")
             return new("ctl", "builtin", "ctl", (JsonObject)targetArgs.DeepClone());
-        return ResolveConcrete(target, targetArgs, currentNode) with { InvocationName = "ctl" };
+        return ResolveConcrete(target, targetArgs, currentNode) with
+        {
+            InvocationName = "ctl",
+            Command = command,
+        };
     }
 
     private ResolvedTool ResolveConcrete(string invocation, JsonObject args, string currentNode)

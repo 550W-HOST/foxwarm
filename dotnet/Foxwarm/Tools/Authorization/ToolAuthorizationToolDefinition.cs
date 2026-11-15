@@ -47,7 +47,7 @@ internal static class ToolAuthorizationToolDefinition
                 {
                   "type": "function",
                   "name": "explain_tool_authorization",
-                  "description": "Explain how tool authorization would decide a call by an existing Session, without running it. Each probe names the caller Session and the tool, as for call_tool. The result shows the decision and matching rule of the global policy and of each Agent rule layer, and the facts used. Checks made inside the tool itself are not included. With policyFilePath, a candidate file replaces the global policy; set compare to evaluate both and list changed rule ids. Set compact for one short row per probe, which suits large batches. Requires permission to read the active policy file and any candidate on master; probing another Session also requires permission to view it.",
+                  "description": "Explain how tool authorization would decide a call by an existing Session, without running it. Each probe names the caller Session and either a ctl command or a tool, as for ctl tool call. The result shows the decision and matching rule of the global policy and of each Agent rule layer, and the facts used. It also lists the operations the call would perform and the authorization checks it must pass, with each check's decision; parts that are decided only when the call runs are marked incomplete. Checks made inside the tool itself are not included. With policyFilePath, a candidate file replaces the global policy; set compare to evaluate both and list changed rule ids. Set compact for one short row per probe, which suits large batches. Requires permission to read the active policy file and any candidate on master; probing another Session also requires permission to view it.",
                   "parameters": {
                     "type": "object",
                     "additionalProperties": false,
@@ -63,6 +63,9 @@ internal static class ToolAuthorizationToolDefinition
                           "properties": {
                             "sessionId": { "type": "string", "description": "Existing caller Session ID or alias. Its Agent, current Node, cwd and relations are used." },
                             "label": { "type": "string", "minLength": 1, "maxLength": 200, "description": "Name for this probe, echoed in its result." },
+                            "command": { "type": "string", "description": "A ctl command to evaluate instead of a tool, such as `node select master`. The capability it runs is evaluated with the arguments the command gives it." },
+                            "values": { "type": "object", "description": "Values for @name arguments of command." },
+                            "valuesJson": { "type": "string", "description": "values as a JSON object string." },
                             "toolId": { "type": "string", "description": "Tool ID such as builtin:send_file, node:master/read or mcp:server/tool." },
                             "source": { "type": "string", "enum": ["builtin", "node", "mcp"] },
                             "name": { "type": "string" },
@@ -84,7 +87,7 @@ internal static class ToolAuthorizationToolDefinition
                       },
                       "compact": {
                         "type": "boolean",
-                        "description": "Return one short row per probe: its index, Session, tool ID, decision, and the layer and rule ID of each layer that matched a rule or did not allow. With compare, the active and candidate rows and changed. Facts and rule details are omitted."
+                        "description": "Return one short row per probe: its index, Session, tool ID, decision, and the layer and rule ID of each layer that matched a rule or did not allow, plus the invocation, the capability and the first other authorization check that does not allow. With compare, the active and candidate rows and changed. Facts and rule details are omitted."
                       }
                     },
                     "required": ["probes"]

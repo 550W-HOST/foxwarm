@@ -3571,7 +3571,7 @@
     {
       "path": "config explain-auth",
       "summary": "Explain how tool authorization would decide a call, without running it.",
-      "help": "Each probe names the caller Session and the tool, as for `ctl tool call`. The result shows the decision and matching rule of the global policy and of each Agent rule layer, and the facts used. Checks made inside the tool itself are not included. With --policy-file-path, a candidate file replaces the global policy; add --compare to evaluate both and list changed rule IDs. Add --compact for one short row per probe, which suits large batches. Requires permission to read the active policy file and any candidate on master; probing another Session also requires permission to view it.",
+      "help": "Each probe names the caller Session and either a command or a tool, as for `ctl tool call`. The result shows the decision and matching rule of the global policy and of each Agent rule layer, and the facts used. It also lists the operations the call would perform and the authorization checks it must pass, with each check's decision; parts decided only when the call runs are marked incomplete. Checks made inside the tool itself are not included. With --policy-file-path, a candidate file replaces the global policy; add --compare to evaluate both and list changed rule IDs. Add --compact for one short row per probe, which suits large batches. Requires permission to read the active policy file and any candidate on master; probing another Session also requires permission to view it.",
       "ingress": [
         "model"
       ],
@@ -3586,7 +3586,7 @@
           "items": "object",
           "kind": "flag",
           "required": true,
-          "help": "Calls to evaluate, 1 to 256, as a JSON array, usually @name. Each probe has `sessionId`, `toolId` (or `source` and `name`, plus `server` or `nodeId`), `args` and optionally a `label` of up to 200 characters that is echoed in its result."
+          "help": "Calls to evaluate, 1 to 256, as a JSON array, usually @name. Each probe has `sessionId`, either `command` (a command such as `node select master`, with `values` for its @name arguments) or `toolId` (or `source` and `name`, plus `server` or `nodeId`) and `args`, and optionally a `label` of up to 200 characters that is echoed in its result."
         },
         {
           "name": "policyFilePath",
@@ -3604,7 +3604,7 @@
           "name": "compact",
           "type": "boolean",
           "kind": "flag",
-          "help": "Return one short row per probe: its index, Session, tool ID, decision, and the layer and rule ID of each layer that matched a rule or did not allow. With --compare, the active and candidate rows and `changed`. Facts and rule details are omitted."
+          "help": "Return one short row per probe: its index, Session, tool ID, decision, and the layer and rule ID of each layer that matched a rule or did not allow, plus the invocation, the capability and the first other authorization check that does not allow. With --compare, the active and candidate rows and `changed`. Facts and rule details are omitted."
         }
       ]
     },
