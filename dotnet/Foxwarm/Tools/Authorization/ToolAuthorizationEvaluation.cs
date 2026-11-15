@@ -101,6 +101,10 @@ internal sealed record AuthorizationAssessment(
     IReadOnlyList<AuthorizationLayerDecision> Layers
 )
 {
+    // The call can have secret facts, but they could not be established (an unreadable
+    // configuration candidate, rejected MCP arguments). Diagnostic only; never a decision input.
+    internal bool SecretsUnknown { get; init; }
+
     internal AuthorizationLayerDecision? Denied =>
         Layers.FirstOrDefault(layer => layer.Decision.Effect == ToolAuthorizationEffect.Deny);
 
@@ -163,6 +167,8 @@ internal enum CreationTargetDecision
     Deny,
     Indeterminate,
 }
+
+internal sealed record CreationTargetOutcome(CreationTargetDecision Decision, JsonObject? Rule);
 
 // How a layer decided the secret facts of a call: by the first matching rule with a `secrets`
 // selector; otherwise allowed when the caller's Agent owns every one of them; otherwise by the
@@ -407,6 +413,13 @@ internal static class ToolAuthorizationEvaluation
     internal static CreationTargetDecision EvaluateCreationTarget(
         ToolAuthorizationPolicy policy,
         ToolAuthorizationRequest request
+    ) => EvaluateCreationTargetOutcome(policy, request).Decision;
+
+    // The creation-target decision and the rule it was settled at: the first matching rule
+    // whose conditions are all known, or null when the default action settled it.
+    internal static CreationTargetOutcome EvaluateCreationTargetOutcome(
+        ToolAuthorizationPolicy policy,
+        ToolAuthorizationRequest request
     )
     {
         if (
@@ -452,13 +465,13 @@ internal static class ToolAuthorizationEvaluation
             ask |= effect == ToolAuthorizationEffect.Ask;
             deny |= effect == ToolAuthorizationEffect.Deny;
             if (!unknown)
-                return Outcome();
+                return new(Outcome(), rule);
         }
         var fallback = Default(policy, request);
         allow |= fallback == ToolAuthorizationEffect.Allow;
         ask |= fallback == ToolAuthorizationEffect.Ask;
         deny |= fallback == ToolAuthorizationEffect.Deny;
-        return Outcome();
+        return new(Outcome(), null);
     }
 
     // Whether the caller may run any command in any directory on master. Rules that depend on

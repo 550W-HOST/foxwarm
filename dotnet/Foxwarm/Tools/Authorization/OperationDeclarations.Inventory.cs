@@ -227,6 +227,52 @@ internal static partial class OperationDeclarations
         Site(Executor, "CreateRegistry", 2, Tool, "builtin:mcp_config#install"),
     ];
 
+    private const string Require = "authorization.Require";
+    private const string RequireAsync = "authorization.RequireAsync";
+
+    // Inbound MCP enforcement: each external action's check, before its effect and again where
+    // the action rechecks (completion, pairing, sending). They check the capability's own
+    // request as McpExternalAuthorization builds it; mapping inbound actions to operations is
+    // phase 3. External denials stay the generic "Tool action is not permitted."
+    internal static readonly IReadOnlyList<ObligationSite> Inbound =
+    [
+        Site("McpClient.External.cs", "CallExternalAsync", 1, RequireAsync, "mcp:*#primary"),
+        Site("McpClient.External.cs", "CallExternalAsync", 2, Require, "mcp:*#primary"),
+        Site(
+            "McpInboundCatalog.cs",
+            "PairAsync",
+            1,
+            RequireAsync,
+            "builtin:node_pair_list#primary",
+            "builtin:node_pair_approve#primary"
+        ),
+        Site("McpInboundCatalog.cs", "PairAsync", 2, Require, "builtin:node_pair_approve#primary"),
+        Site("McpInboundNodes.cs", "CallAsync", 1, RequireAsync, "node:*#primary"),
+        Site("McpInboundNodes.cs", "CallAsync", 2, Require, "node:*#primary"),
+        Site("McpInboundNodes.cs", "ResultAsync", 1, RequireAsync, "node:*#primary"),
+        Site("McpInboundNodes.cs", "ResultAsync", 2, Require, "node:*#primary"),
+        Site("McpInboundNodes.cs", "ResultAsync", 3, Require, "node:*#primary"),
+        Site("McpInboundNodes.cs", "ResultAsync", 4, Require, "node:*#primary"),
+        Site("McpInboundNodes.cs", "ActionAsync", 1, RequireAsync, "builtin:node#primary"),
+        Site("McpInboundNodes.cs", "ActionAsync", 2, Require, "builtin:node#primary"),
+        Site("McpInboundNodes.cs", "ActionAsync", 3, Require, "builtin:node#primary"),
+        Site("McpInboundSessions.cs", "ListAsync", 1, RequireAsync, "builtin:session#primary"),
+        Site("McpInboundSessions.cs", "ListAsync", 2, Require, "builtin:session#primary"),
+        Site("McpInboundSessions.cs", "ReadAsync", 1, RequireAsync, "builtin:view_session#primary"),
+        Site("McpInboundSessions.cs", "ReadAsync", 2, Require, "builtin:view_session#primary"),
+        Site("McpInboundSessions.cs", "SendAsync", 1, RequireAsync, "builtin:send_to_session#primary"),
+        Site("McpInboundSessions.cs", "SendAsync", 2, Require, "builtin:send_to_session#primary"),
+    ];
+
+
+    // The only direct callers of the evaluator.
+    internal static readonly IReadOnlyList<(string File, string Member, string Reason)> EvaluatorPlumbing =
+    [
+        (Auth, "AssessToolAsync", "the shared assessment of every internal request"),
+        (Auth, "EffectiveDecision", "the combined decision of the effective layers"),
+        ("McpExternalContext.cs", "Require", "the inbound check of one external request"),
+    ];
+
     // Sites that are the gate or the plumbing of the calls above, not obligations of their own.
     internal static readonly IReadOnlyList<(string File, string Member, string Reason)> Plumbing =
     [
@@ -234,6 +280,11 @@ internal static partial class OperationDeclarations
         (Executor, "ExecuteCoreAsync", "dispatch of the invocation's own call"),
         (Auth, "AuthorizeToolAsync", "enforcement of the shared assessment"),
         (Auth, "AuthorizeCreateSessionTargetAsync", "the creation-target probe itself"),
+        (
+            "Tools/Authorization/ToolAuthorizationEvaluation.cs",
+            "EvaluateCreationTarget",
+            "the decision-only form of the creation-target evaluation"
+        ),
         ("Sessions/SessionManager.NodeFiles.cs", "AuthorizeNodeFileAsync", "Node file wrapper"),
     ];
 

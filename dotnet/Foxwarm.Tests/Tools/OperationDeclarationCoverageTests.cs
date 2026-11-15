@@ -54,7 +54,7 @@ public sealed partial class OperationDeclarationCoverageTests
     public void Declarations_use_catalog_operations_selectors_and_explicit_self_reasons()
     {
         var conditions = new Regex(
-            "^!?(arg:[A-Za-z_]+|action:[a-z|-]+|secrets|file-source|file-action|channel|agent-scope|remote-select|legacy-node|invalid-plan|source-exists|source-missing)$"
+            "^!?(arg:[A-Za-z_]+|action:[a-z|-]+|secrets|file-source|file-action|channel|agent-scope|default-cwd-probe|legacy-node|invalid-plan|source-exists|source-missing)$"
         );
         foreach (var declaration in OperationDeclarations.Capabilities)
         {
@@ -191,6 +191,7 @@ public sealed partial class OperationDeclarationCoverageTests
         "AssessToolAsync",
         "AuthorizeCreateSessionTargetAsync",
         "EvaluateCreationTarget",
+        "EvaluateCreationTargetOutcome",
         "EffectiveDecision",
         "registry.ExecuteAsync",
     ];
@@ -219,11 +220,56 @@ public sealed partial class OperationDeclarationCoverageTests
         return null;
     }
 
+    // Inbound MCP enforcement and every direct call of the evaluator.
+    private static readonly string[] InboundCalls =
+    [
+        "authorization.Require",
+        "authorization.RequireAsync",
+        "ToolAuthorizationEvaluation.Evaluate",
+    ];
+
+    // Inbound MCP item: every external enforcement site is listed with the capability it
+    // checks, and the evaluator is called directly only by the shared assessment and the
+    // inbound check. The operation adapter for inbound calls is phase 3.
+    [Fact]
+    public void Inbound_inventory_matches_every_external_enforcement_site()
+    {
+        var root =
+            Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT")
+            ?? throw new InvalidOperationException("FOXWARM_TS_ROOT is required.");
+        var sources = Path.Combine(root, "dotnet", "Foxwarm");
+        var found = CallSites(sources, InboundCalls).ToArray();
+        var plumbing = OperationDeclarations
+            .EvaluatorPlumbing.Select(item => (item.File, item.Member))
+            .ToHashSet();
+        var actual = found
+            .Where(site => !plumbing.Contains((site.File, site.Member)))
+            .Select(site => $"{site.File} {site.Member} {site.Ordinal} {site.Call}")
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        var declared = OperationDeclarations
+            .Inbound.Select(site => $"{site.File} {site.Member} {site.Ordinal} {site.Call}")
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(declared, actual);
+        foreach (var (file, member) in plumbing)
+            Assert.Contains(found, site => site.File == file && site.Member == member);
+        foreach (var site in OperationDeclarations.Inbound)
+        foreach (var (capability, obligation) in site.Obligations)
+            Assert.True(
+                OperationDeclarations
+                    .Capabilities.Single(item => item.Capability == capability)
+                    .Obligations.Any(item => item.Id == obligation),
+                $"{site.File} {site.Member}: {capability}#{obligation} is not declared"
+            );
+    }
+
     internal static IEnumerable<(string File, string Member, int Ordinal, string Call)> CallSites(
-        string sources
+        string sources,
+        IReadOnlyList<string>? calls = null
     )
     {
-        var patterns = Calls
+        var patterns = (calls ?? Calls)
             .Select(call => (call, new Regex(@"(?<![\w])" + Regex.Escape(call) + @"\(")))
             .ToArray();
         foreach (

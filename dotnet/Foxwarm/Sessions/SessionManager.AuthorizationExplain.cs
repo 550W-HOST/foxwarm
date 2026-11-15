@@ -222,36 +222,25 @@ internal sealed partial class SessionManager
                 explained.Add(
                     (name, await ExplainVariantAsync(target, resolved, files, policy, token))
                 );
-            // The plan uses the facts the assessment established; it reads nothing itself.
-            var plan = OperationPlan.Derive(
-                resolved,
-                PlanFacts(
-                    target,
-                    explained.Select(item => item.Variant.Assessment).FirstOrDefault(item => item is not null)?.Request
-                ),
-                new PlanContext(CurrentNode(target))
-                {
-                    PolicyPath = authorization.PolicyPath,
-                    Subtree = id =>
-                    {
-                        try
-                        {
-                            return Nodes.Registry.Forest().Subtree(id);
-                        }
-                        catch (InvalidDataException)
-                        {
-                            return null;
-                        }
-                    },
-                    SessionExists = id => AuthorizationTarget(id) is not null,
-                }
-            );
+            // Each policy variant has its own plan, from the facts its own assessment established
+            // (a candidate policy can allow a read that reveals more facts); the plan reads
+            // nothing itself.
+            var plans = explained
+                .Select(item =>
+                    OperationPlan.Derive(
+                        resolved,
+                        PlanFacts(target, item.Variant.Assessment?.Request),
+                        PlanContextFor(target, item.Variant.Assessment)
+                    )
+                )
+                .ToArray();
+            var plan = plans[0];
             var obligations = new List<JsonArray>();
             for (var item = 0; item < variants.Count; item++)
                 obligations.Add(
                     await ExplainObligationsAsync(
                         target,
-                        plan,
+                        plans[item],
                         explained[item].Variant.Assessment,
                         files,
                         variants[item].Policy,
@@ -288,13 +277,32 @@ internal sealed partial class SessionManager
                     full["obligations"] = obligations[item];
                     result[explained[item].Name] = full;
                 }
+            // A variant whose facts give a different plan carries its own.
+            var differing = Enumerable
+                .Range(1, plans.Length - 1)
+                .Where(item => !JsonNode.DeepEquals(plans[item].ToJson(), plan.ToJson()))
+                .ToArray();
             if (variants.Count == 2)
                 result["changed"] = explained[0].Variant.Decision != explained[1].Variant.Decision;
             // The plan follows the existing fields, which keep their order.
             if (!compact)
             {
                 result["invocation"] = invocation;
-                foreach (var pair in plan.ToJson())
+                var shared = plan.ToJson();
+                if (differing.Length > 0)
+                {
+                    var incomplete = shared["incomplete"] as JsonArray ?? [];
+                    foreach (var item in differing)
+                    {
+                        incomplete.Add(
+                            (JsonNode?)
+                                $"the {explained[item].Name} policy establishes different facts; its plan is in {explained[item].Name}.plan"
+                        );
+                        result[explained[item].Name]!["plan"] = plans[item].ToJson();
+                    }
+                    shared["incomplete"] = incomplete;
+                }
+                foreach (var pair in shared)
                     result[pair.Key] = pair.Value?.DeepClone();
             }
         }
@@ -307,6 +315,36 @@ internal sealed partial class SessionManager
         }
         return result;
     }
+
+    private PlanContext PlanContextFor(SessionOwner target, AuthorizationAssessment? assessment) =>
+        new(CurrentNode(target))
+        {
+            PolicyPath = authorization.PolicyPath,
+            Subtree = id =>
+            {
+                try
+                {
+                    return Nodes.Registry.Forest().Subtree(id);
+                }
+                catch (InvalidDataException)
+                {
+                    return null;
+                }
+            },
+            SessionExists = id => AuthorizationTarget(id) is not null,
+            DefaultCwdProbe = DefaultCwdProbe,
+            SecretsUnknown = assessment?.SecretsUnknown == true,
+        };
+
+    // Whether node select probes the Node's default cwd, as SelectNodeAsync decides it: a remote
+    // Node that is not Provider-backed and advertises get_default_cwd. The handler reaches that
+    // check only for an online Node, so an unconnected one has no probe.
+    internal bool DefaultCwdProbe(string id) =>
+        id != "master"
+        && !NodeProviders.IsProviderNode(id)
+        && Nodes
+            .DiscoveredDefinitions(id)
+            .Any(value => SessionWait.Text(value?["name"]) == "get_default_cwd");
 
     // Facts for the plan: the assessment's request, with the Session target its resolver names
     // filled in when no rule needed it. That is a catalog lookup, never a protected read.
@@ -356,7 +394,22 @@ internal sealed partial class SessionManager
                     entry["sameAs"] = "primary";
             }
             else if (obligation.Request is { } request)
-                entry = await ExplainObligationAsync(target, obligation, request, files, global, token);
+                entry = Unadmitted(request, primary, out var reused) is { } reason
+                    ? new JsonObject
+                    {
+                        ["id"] = obligation.Id,
+                        ["evaluated"] = false,
+                        ["reason"] = reason,
+                    }
+                    : await ExplainObligationAsync(
+                        target,
+                        obligation,
+                        request,
+                        files,
+                        global,
+                        reused,
+                        token
+                    );
             else if (obligation.CreationAgent is { } agent)
                 entry = ExplainCreationTarget(target, obligation, agent, global);
             else
@@ -377,6 +430,7 @@ internal sealed partial class SessionManager
         ResolvedTool request,
         WorkspaceTools files,
         ToolAuthorizationPolicy global,
+        IReadOnlyList<AuthorizationPath>? paths,
         CancellationToken token
     )
     {
@@ -384,7 +438,7 @@ internal sealed partial class SessionManager
         {
             return OperationAttribution.Obligation(
                 obligation,
-                await AssessToolAsync(target, request, files, token, global: global)
+                await AssessToolAsync(target, request, files, token, global: global, paths: paths)
             );
         }
         catch (ToolAuthorizationDeniedException denied)
@@ -401,6 +455,57 @@ internal sealed partial class SessionManager
             when (error is InvalidDataException or InvalidOperationException or NotSupportedException)
         {
             return new JsonObject { ["id"] = obligation.Id, ["error"] = error.Message };
+        }
+    }
+
+    // Why an obligation is not assessed, or null when it can be assessed from facts already
+    // admitted. Explaining a call performs no work the explained call's own assessment did not:
+    // it never resolves a Provider endpoint (which runs discovery and admits Node metadata),
+    // never inspects a path on master that the probe did not (its path facts are reused, as
+    // `paths`), and never derives facts from file contents.
+    private string? Unadmitted(
+        ResolvedTool request,
+        AuthorizationAssessment? primary,
+        out IReadOnlyList<AuthorizationPath>? paths
+    )
+    {
+        paths = null;
+        var endpoints =
+            request is { Source: "builtin", Name: "node" }
+                ? NodeProviders.AuthorizationTargets(request.Args)
+                : ToolAuthorizationNodeEffects.Resolve(
+                    request.Source,
+                    request.Name,
+                    request.ExecutionNode,
+                    request.Args
+                );
+        var forest = Nodes.Registry.Forest();
+        foreach (var node in endpoints ?? [])
+            if (NodeProviders.IsProviderNode(node) && !forest.Contains(node))
+                return $"Node `{node}` is not yet admitted";
+        switch (request)
+        {
+            case { Source: "node", ExecutionNode: not "master" }:
+                // Remote path facts are lexical.
+                return null;
+            case { Source: "node", Name: "read" or "write" or "edit" or "exec" }:
+                var arg = request.Name == "exec" ? "cwd" : "filePath";
+                if (
+                    SessionWait.Text(request.Args[arg]) is not { } raw
+                    || request.Args.ContainsKey("apply_patch")
+                    || primary?.Request.Paths.FirstOrDefault(path =>
+                        path.Raw == raw && path.Node == "master"
+                    ) is not { } established
+                )
+                    return "its path facts are not established by the probe";
+                paths = [established with { Arg = arg }];
+                return null;
+            case { Source: "node" }:
+                return null;
+            case { Source: "builtin", Name: "view_session" or "mcp_notifications" or "node_remove" }:
+                return null;
+            default:
+                return "its facts are established only when the call runs";
         }
     }
 
@@ -425,16 +530,9 @@ internal sealed partial class SessionManager
         var decisions = new List<CreationTargetDecision>();
         foreach (var (layer, policy) in EffectiveLayers(target.Agent, global))
         {
-            var decision = ToolAuthorizationEvaluation.EvaluateCreationTarget(policy, request);
-            decisions.Add(decision);
-            layers.Add(
-                (JsonNode?)
-                    new JsonObject
-                    {
-                        ["layer"] = layer is null ? "global" : "agent:" + layer,
-                        ["decision"] = decision.ToString().ToLowerInvariant(),
-                    }
-            );
+            var outcome = ToolAuthorizationEvaluation.EvaluateCreationTargetOutcome(policy, request);
+            decisions.Add(outcome.Decision);
+            layers.Add((JsonNode?)OperationAttribution.CreationLayer(layer, policy, outcome));
         }
         var combined =
             decisions.Contains(CreationTargetDecision.Deny) ? "deny"

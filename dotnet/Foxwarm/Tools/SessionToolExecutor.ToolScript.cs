@@ -100,9 +100,13 @@ internal sealed partial class SessionToolExecutor
                     if (planned.Preset is not null)
                         return planned.Preset;
                     var request = (JsonObject)wrapper.DeepClone();
+                    string? command = null;
                     // A ctl command naming a capability runs as that capability.
                     if (resolved.InvocationName == "ctl" && !IsCtlFrontEnd(resolved))
+                    {
                         request = ConcreteDescriptor(resolved);
+                        command = resolved.Command;
+                    }
                     request["args"] = planned.Call["args"]!.DeepClone();
                     var effectStarted = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                     var execution = await ExecuteAttributedAsync(
@@ -113,7 +117,8 @@ internal sealed partial class SessionToolExecutor
                             ["args"] = request,
                         },
                         currentToken,
-                        scriptDelivery: subCallDelivery
+                        scriptDelivery: subCallDelivery,
+                        command: command
                     );
                     if (execution.SessionMessages is { Count: > 0 } deliveries)
                         foreach (var delivery in deliveries.OfType<JsonObject>())

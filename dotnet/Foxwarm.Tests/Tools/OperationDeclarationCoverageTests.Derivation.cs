@@ -83,6 +83,9 @@ public sealed partial class OperationDeclarationCoverageTests
         context ??= new JsonObject();
         var subtree = context["subtree"] as JsonObject;
         var sessions = context["sessionExists"] as JsonObject;
+        var cwdProbes = (context["defaultCwdProbe"] as JsonArray)
+            ?.Select(item => item!.GetValue<string>())
+            .ToHashSet();
         return new PlanContext(context["currentNode"]?.GetValue<string>() ?? "master")
         {
             PolicyPath = context["policyPath"]?.GetValue<string>(),
@@ -93,6 +96,8 @@ public sealed partial class OperationDeclarationCoverageTests
                         ? members.Select(item => item!.GetValue<string>()).ToArray()
                         : null,
             SessionExists = sessions is null ? null : id => sessions[id]?.GetValue<bool>(),
+            DefaultCwdProbe = cwdProbes is null ? null : cwdProbes.Contains,
+            SecretsUnknown = context["secretsUnknown"]?.GetValue<bool>() == true,
         };
     }
 

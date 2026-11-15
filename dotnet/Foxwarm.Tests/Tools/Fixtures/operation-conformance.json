@@ -42,6 +42,11 @@
      "primary": "primary",
      "default-cwd": "node:box/get_default_cwd {}"
     }
+   },
+   "context": {
+    "defaultCwdProbe": [
+     "box"
+    ]
    }
   },
   {
@@ -72,13 +77,6 @@
       "id": "primary",
       "kind": "primary",
       "capability": "builtin:node"
-     },
-     {
-      "id": "default-cwd",
-      "kind": "subRequest",
-      "capability": "node:box/get_default_cwd",
-      "conditional": true,
-      "optional": true
      }
     ],
     "normalized": {
@@ -86,9 +84,11 @@
      "nodeId": "box"
     },
     "evaluated": {
-     "primary": "primary",
-     "default-cwd": "node:box/get_default_cwd {}"
+     "primary": "primary"
     }
+   },
+   "context": {
+    "defaultCwdProbe": []
    }
   },
   {
@@ -1945,6 +1945,13 @@
       "id": "primary",
       "kind": "primary",
       "capability": "builtin:node"
+     },
+     {
+      "id": "default-cwd",
+      "kind": "subRequest",
+      "capability": "node:get_default_cwd",
+      "conditional": true,
+      "optional": true
      }
     ],
     "incomplete": [
@@ -1955,7 +1962,8 @@
      "nodeId": "gone"
     },
     "evaluated": {
-     "primary": "primary"
+     "primary": "primary",
+     "default-cwd": null
     }
    }
   },
@@ -1993,6 +2001,185 @@
     },
     "evaluated": {
      "primary": "primary"
+    }
+   }
+  },
+  {
+   "name": "node select of a Provider Node",
+   "toolId": "builtin:node",
+   "args": {
+    "action": "select",
+    "nodeId": "dev/box"
+   },
+   "facts": {
+    "nodeTargets": [
+     "dev/box"
+    ]
+   },
+   "context": {
+    "defaultCwdProbe": []
+   },
+   "expected": {
+    "capability": "builtin:node",
+    "branch": "select",
+    "operations": [
+     {
+      "op": "node.select",
+      "resources": {
+       "node": "dev/box"
+      }
+     }
+    ],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "builtin:node"
+     }
+    ],
+    "normalized": {
+     "action": "select",
+     "nodeId": "dev/box"
+    },
+    "evaluated": {
+     "primary": "primary"
+    }
+   }
+  },
+  {
+   "name": "external node status",
+   "toolId": "builtin:node",
+   "args": {
+    "action": "status"
+   },
+   "facts": {
+    "nodeTargets": [
+     "box"
+    ]
+   },
+   "expected": {
+    "capability": "builtin:node",
+    "branch": "status",
+    "operations": [
+     {
+      "op": "node.view",
+      "resources": {
+       "node": "box"
+      }
+     }
+    ],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "builtin:node"
+     }
+    ],
+    "normalized": {
+     "action": "status"
+    },
+    "evaluated": {
+     "primary": "primary"
+    }
+   }
+  },
+  {
+   "name": "set_config with unknown secret facts",
+   "toolId": "builtin:set_config",
+   "args": {
+    "target": "models",
+    "filePath": "candidate.yaml"
+   },
+   "facts": {},
+   "context": {
+    "secretsUnknown": true
+   },
+   "expected": {
+    "capability": "builtin:set_config",
+    "branch": "call",
+    "operations": [
+     {
+      "op": "config.write",
+      "with": {
+       "target": "models"
+      }
+     }
+    ],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "builtin:set_config"
+     },
+     {
+      "id": "candidate-read",
+      "kind": "subRequest",
+      "capability": "node:master/read"
+     },
+     {
+      "id": "install",
+      "kind": "retained",
+      "capability": "builtin:set_config"
+     }
+    ],
+    "incomplete": [
+     "secret.use: the secret facts are unknown"
+    ],
+    "normalized": {
+     "target": "models",
+     "filePath": "candidate.yaml"
+    },
+    "evaluated": {
+     "primary": "primary",
+     "candidate-read": "node:master/read {\"filePath\":\"candidate.yaml\"}",
+     "install": "primary"
+    }
+   }
+  },
+  {
+   "name": "set_config with no secret facts",
+   "toolId": "builtin:set_config",
+   "args": {
+    "target": "models",
+    "filePath": "candidate.yaml"
+   },
+   "facts": {},
+   "expected": {
+    "capability": "builtin:set_config",
+    "branch": "call",
+    "operations": [
+     {
+      "op": "config.write",
+      "with": {
+       "target": "models"
+      }
+     }
+    ],
+    "obligations": [
+     {
+      "id": "primary",
+      "kind": "primary",
+      "capability": "builtin:set_config"
+     },
+     {
+      "id": "candidate-read",
+      "kind": "subRequest",
+      "capability": "node:master/read"
+     },
+     {
+      "id": "install",
+      "kind": "retained",
+      "capability": "builtin:set_config"
+     }
+    ],
+    "normalized": {
+     "target": "models",
+     "filePath": "candidate.yaml"
+    },
+    "evaluated": {
+     "primary": "primary",
+     "candidate-read": "node:master/read {\"filePath\":\"candidate.yaml\"}",
+     "install": "primary"
     }
    }
   }

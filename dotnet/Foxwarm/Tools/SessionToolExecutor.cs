@@ -508,7 +508,8 @@ internal sealed partial class SessionToolExecutor(
         int? index = null,
         int? total = null,
         string? scriptDelivery = null,
-        TurnToolPreparation? approved = null
+        TurnToolPreparation? approved = null,
+        string? command = null
     )
     {
         await sessions.WaitForIdentityMutationAsync(hosted.Id, token);
@@ -529,6 +530,7 @@ internal sealed partial class SessionToolExecutor(
             AnchorSeq = index is null ? null : foregroundBatch,
             InheritedDelivery = scriptDelivery,
             Approval = (JsonObject?)approved?.Approval?.DeepClone(),
+            Command = command,
         };
         invocation.Value = current;
         // Each invocation gets its own approval scope; nested calls never inherit a grant.
@@ -765,6 +767,14 @@ internal sealed partial class SessionToolExecutor(
                 ExecutionNode,
                 cancellationToken
             );
+            // A ToolScript ctl command runs as its concrete capability; it keeps the command
+            // it came from for display and denial attribution.
+            if (
+                name == "call_tool"
+                && resolved.Command is null
+                && invocation.Value?.Command is { } command
+            )
+                resolved = resolved with { Command = command };
             if (invocation.Value is { } targeted)
                 targeted.Target = TargetRecord(resolved);
             if (
@@ -1502,6 +1512,9 @@ internal sealed record ToolScriptSourcePlacement(string Node, string? Cwd, Works
 
 internal sealed class TurnToolInvocation(string callId)
 {
+    // The ctl command a ToolScript call names, when it runs as the concrete capability.
+    internal string? Command { get; init; }
+
     internal JsonObject? CompactCall { get; set; }
     internal string CallId { get; } = callId;
     internal int? Index { get; set; }

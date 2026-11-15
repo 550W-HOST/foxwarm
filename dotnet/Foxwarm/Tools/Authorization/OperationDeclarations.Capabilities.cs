@@ -405,6 +405,9 @@ internal static partial class OperationDeclarations
                 Branch("list", "list", Op("node.list")),
                 Branch("inspect", "inspect", Op("node.view", "node=node-target")),
                 Branch("select", "select", Op("node.select", "node=node-target")),
+                // External-only: inbound `node status` views the selected Node; the model's
+                // node tool has no such action.
+                Branch("status", "status", Op("node.view", "node=node-target")),
                 Branch(
                     "create",
                     "create",
@@ -427,7 +430,7 @@ internal static partial class OperationDeclarations
                     "default-cwd",
                     "node:get_default_cwd",
                     "default working directory probe of the selected Node",
-                    "remote-select",
+                    "default-cwd-probe",
                     optional: true
                 ),
                 Retained(

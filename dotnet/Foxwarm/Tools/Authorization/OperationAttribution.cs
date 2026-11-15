@@ -142,17 +142,24 @@ internal static class OperationAttribution
         return $"{who} denied {what}, called as `{Invocation(call)}`.";
     }
 
-    // The attribution of a refused timer creation target.
-    internal static string CreationTarget(ResolvedTool? primary, string? layer) =>
-        $"{Capitalized(LayerName(layer))} denied the create_session creation target (`builtin:create_session`)"
+    // The attribution of a refused timer creation target, in the form of a rule denial.
+    internal static string CreationTarget(
+        ResolvedTool? primary,
+        string? layer,
+        ToolAuthorizationPolicy policy,
+        JsonObject? rule
+    ) =>
+        (
+            rule is null
+                ? $"The default action of {LayerName(layer)}"
+                : $"{RuleName(policy, rule)} in {LayerName(layer)}"
+        )
+        + " denied the create_session creation target (`builtin:create_session`)"
         + (
             primary is null
                 ? "."
                 : $" for `{OperationPlan.CapabilityId(primary)}`, called as `{Invocation(primary)}`."
         );
-
-    private static string Capitalized(string text) =>
-        text.Length == 0 ? text : char.ToUpperInvariant(text[0]) + text[1..];
 
     internal static string Append(string message, string attribution) =>
         message.TrimEnd() is var trimmed && trimmed.Length > 0
@@ -168,18 +175,40 @@ internal static class OperationAttribution
             ["layer"] = layer.Layer is null ? "global" : "agent:" + layer.Layer,
             ["decision"] = AuthorizationDecision.Name(layer.Decision.Effect),
         };
-        if (layer.Decision.Rule is { } rule)
+        RuleReference(result, layer.Policy, layer.Decision.Rule);
+        return result;
+    }
+
+    // One layer of a creation-target probe: its decision and the rule that settled it, or null
+    // with the default action.
+    internal static JsonObject CreationLayer(
+        string? layer,
+        ToolAuthorizationPolicy policy,
+        CreationTargetOutcome outcome
+    )
+    {
+        var result = new JsonObject
+        {
+            ["layer"] = layer is null ? "global" : "agent:" + layer,
+            ["decision"] = outcome.Decision.ToString().ToLowerInvariant(),
+        };
+        RuleReference(result, policy, outcome.Rule);
+        return result;
+    }
+
+    private static void RuleReference(JsonObject result, ToolAuthorizationPolicy policy, JsonObject? rule)
+    {
+        if (rule is not null)
             result["rule"] = new JsonObject
             {
-                ["index"] = layer.Policy.Value["rules"]!.AsArray().IndexOf(rule) + 1,
+                ["index"] = policy.Value["rules"]!.AsArray().IndexOf(rule) + 1,
                 ["id"] = rule["id"]?.DeepClone(),
             };
         else
         {
             result["rule"] = null;
-            result["default"] = layer.Policy.Value["defaultAction"]?.DeepClone();
+            result["default"] = policy.Value["defaultAction"]?.DeepClone();
         }
-        return result;
     }
 
     internal static JsonObject Obligation(PlannedObligation obligation, AuthorizationAssessment assessment)

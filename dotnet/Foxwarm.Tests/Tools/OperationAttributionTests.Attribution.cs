@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json.Nodes;
 using Foxwarm.Tools;
 
@@ -110,9 +111,23 @@ public sealed partial class OperationAttributionTests
             OperationAttribution.Denial(send, null, fallback, null)
         );
         var timer = new ResolvedTool("create_timer", "builtin", "create_timer", new JsonObject());
+        var creation = ToolAuthorizationYaml.Parse(
+            Encoding.UTF8.GetBytes(
+                "version: 1\ndefaultAction: deny\nrules:\n- id: other\n  tool: {source: builtin, name: wait}\n  action: allow\n- id: no-new-session\n  tool: {source: builtin, name: create_session}\n  action: deny\n"
+            )
+        );
         Assert.Equal(
-            "The rules of Agent `alpha` denied the create_session creation target (`builtin:create_session`) for `builtin:create_timer`, called as `create_timer`.",
-            OperationAttribution.CreationTarget(timer, "alpha")
+            "Rule `no-new-session` (#2) in the rules of Agent `alpha` denied the create_session creation target (`builtin:create_session`) for `builtin:create_timer`, called as `create_timer`.",
+            OperationAttribution.CreationTarget(
+                timer,
+                "alpha",
+                creation,
+                creation.Value["rules"]![1]!.AsObject()
+            )
+        );
+        Assert.Equal(
+            "The default action of the global policy denied the create_session creation target (`builtin:create_session`).",
+            OperationAttribution.CreationTarget(null, null, creation, null)
         );
         Assert.Equal(
             "no exec for beta. Rule x.",

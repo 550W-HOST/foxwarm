@@ -14,6 +14,12 @@ internal sealed record PlanContext(string CurrentNode)
 
     // Whether a Session exists in the catalog; null when unknown.
     internal Func<string, bool?>? SessionExists { get; init; }
+
+    // Whether node select probes this Node's default cwd (the handler's own condition).
+    internal Func<string, bool>? DefaultCwdProbe { get; init; }
+
+    // The call can have secret facts that its assessment could not establish.
+    internal bool SecretsUnknown { get; init; }
 }
 
 internal sealed record PlannedOperation(
@@ -267,7 +273,11 @@ internal sealed record OperationPlan(
             switch (when)
             {
                 case "secrets":
-                    return facts is null ? null : facts.Secrets is { Count: > 0 };
+                    // Facts that could not be established are unknown, not an empty set.
+                    return facts is null ? null
+                        : facts.Secrets is { Count: > 0 } ? true
+                        : context.SecretsUnknown ? null
+                        : false;
                 case "file-source":
                     return Text("code") is null;
                 case "file-action":
@@ -278,8 +288,12 @@ internal sealed record OperationPlan(
                     return Text("sessionId") is null
                         && Text("vector_query") is not null
                         && SessionWait.Text(args["scope"]) != "current-session";
-                case "remote-select":
-                    return Action == "select" && NodeTarget is { } node && node != "master";
+                case "default-cwd-probe":
+                    if (Action != "select")
+                        return false;
+                    if (NodeTarget is not { } node || context.DefaultCwdProbe is not { } probe)
+                        return null;
+                    return probe(node);
                 case "legacy-node":
                     return resolved.ExecutionNode != "master"
                         && (args.ContainsKey("edits") || args.ContainsKey("replaceAll"))
@@ -464,7 +478,11 @@ internal sealed record OperationPlan(
                     yield break;
                 if (holds is null)
                 {
-                    gaps.Add($"{template.Op}: condition `{when}` is decided at run time");
+                    gaps.Add(
+                        when == "secrets" && facts is not null
+                            ? $"{template.Op}: the secret facts are unknown"
+                            : $"{template.Op}: condition `{when}` is decided at run time"
+                    );
                     yield break;
                 }
             }

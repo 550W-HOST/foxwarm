@@ -202,7 +202,8 @@ internal sealed partial class SessionManager
         SessionOwner? concreteTarget = null,
         IReadOnlyList<string>? nodeEffects = null,
         ToolAuthorizationPolicy? global = null,
-        IReadOnlyList<string>? secrets = null
+        IReadOnlyList<string>? secrets = null,
+        IReadOnlyList<AuthorizationPath>? paths = null
     )
     {
         owner.Entry.RequireIdentityAuthority();
@@ -232,7 +233,9 @@ internal sealed partial class SessionManager
                             or "run_script"
                             or "start_toolscript_run"
             );
-        var paths =
+        // Given path facts (explain's reuse of facts a probe already established) replace the
+        // computed ones.
+        paths ??=
             resolved.Source == "builtin" && resolved.Name == "copy_between_nodes"
                 ? CopyAuthorizationPaths(owner, resolved.Args, files)
             : remote ? RemoteAuthorizationPaths(resolved)
@@ -316,7 +319,22 @@ internal sealed partial class SessionManager
                 NodeForest = await NodeProviders.PrepareAuthorizationForestAsync(endpoints, token),
             };
         var policy = global ?? await authorization.LoadAsync(token);
-        secrets ??= await SecretFactsAsync(owner, resolved, files, policy, token);
+        var secretsUnknown = false;
+        if (secrets is null)
+        {
+            secrets = await SecretFactsAsync(owner, resolved, files, policy, token);
+            secretsUnknown =
+                secrets is null
+                && resolved.Source == "builtin"
+                && (
+                    resolved.Name == "mcp_config"
+                    || resolved.Name == "set_config"
+                        && files is not null
+                        && SessionWait.Text(resolved.Args["target"]) is "config" or "models"
+                        && SessionWait.Text(resolved.Args["filePath"]) is not null
+                        && models.ConfigurationOwner is not null
+                );
+        }
         if (secrets is { Count: > 0 })
             request = request with
             {
@@ -339,7 +357,10 @@ internal sealed partial class SessionManager
                     ToolAuthorizationEvaluation.Evaluate(layer.Policy, request)
                 ))
                 .ToArray()
-        );
+        )
+        {
+            SecretsUnknown = secretsUnknown,
+        };
     }
 
     // Those of the named secrets that the Agent owns. An unreadable store grants nothing.
@@ -466,37 +487,48 @@ internal sealed partial class SessionManager
         );
         var layers = EffectiveLayers(source.Agent, await authorization.LoadAsync(token));
         var primary = OperationAttribution.Primary(source);
-        (bool Found, string? Layer) indeterminate = default;
-        (bool Found, string? Layer) ask = default;
+        (string? Layer, ToolAuthorizationPolicy Policy, JsonObject? Rule)? indeterminate = null;
+        (string? Layer, ToolAuthorizationPolicy Policy, JsonObject? Rule)? ask = null;
         foreach (var (layer, policy) in layers)
         {
-            var decision = ToolAuthorizationEvaluation.EvaluateCreationTarget(policy, request);
+            var outcome = ToolAuthorizationEvaluation.EvaluateCreationTargetOutcome(policy, request);
+            var decision = outcome.Decision;
             if (decision == CreationTargetDecision.Deny)
                 throw new ToolAuthorizationDeniedException(
                     OperationAttribution.Append(
                         $"Tool authorization rules deny creating a Session in Agent '{agent}'.",
-                        OperationAttribution.CreationTarget(primary, layer)
+                        OperationAttribution.CreationTarget(primary, layer, policy, outcome.Rule)
                     )
                 );
-            if (decision == CreationTargetDecision.Indeterminate && !indeterminate.Found)
-                indeterminate = (true, layer);
-            if (decision == CreationTargetDecision.Ask && !ask.Found)
-                ask = (true, layer);
+            if (decision == CreationTargetDecision.Indeterminate)
+                indeterminate ??= (layer, policy, outcome.Rule);
+            if (decision == CreationTargetDecision.Ask)
+                ask ??= (layer, policy, outcome.Rule);
         }
-        if (indeterminate.Found)
+        if (indeterminate is { } unsettled)
             throw new ToolAuthorizationDeniedException(
                 OperationAttribution.Append(
                     "Future Session parameters make create_session target authorization indeterminate at timer registration. "
                         + "Place a decisive creation-target rule before rules depending on future names or settings.",
-                    OperationAttribution.CreationTarget(primary, indeterminate.Layer)
+                    OperationAttribution.CreationTarget(
+                        primary,
+                        unsettled.Layer,
+                        unsettled.Policy,
+                        unsettled.Rule
+                    )
                 )
             );
         // A future unattended creation has no invocation a person could approve.
-        if (ask.Found)
+        if (ask is { } asking)
             throw new ToolAuthorizationDeniedException(
                 OperationAttribution.Append(
                     $"Tool authorization rules require approval to create Sessions in Agent '{agent}'. A scheduled creation can't be approved in advance, so this timer was not registered.",
-                    OperationAttribution.CreationTarget(primary, ask.Layer)
+                    OperationAttribution.CreationTarget(
+                        primary,
+                        asking.Layer,
+                        asking.Policy,
+                        asking.Rule
+                    )
                 )
             );
         source.Entry.RequireIdentityAuthority();

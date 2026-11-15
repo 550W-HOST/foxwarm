@@ -4,7 +4,7 @@ Files: `dotnet/Foxwarm/Tools/Authorization/OperationPlan.cs`, `dotnet/Foxwarm/To
 
 Secondary files: `dotnet/Foxwarm/Tools/Authorization/ToolAuthorizationEvaluation.cs`, `dotnet/Foxwarm/Tools/Authorization/ToolAuthorizationToolDefinition.cs`, `dotnet/Foxwarm/Sessions/SessionManager.Authorization.cs`, `dotnet/Foxwarm/Sessions/SessionManager.AuthorizationExplain.cs`
 
-Operation rules let a tool authorization policy restrict or grant what a call does: read a path on a Node, send to a Session, select a Node. Today a rule can only name the capability that does it. This page owns that design and its delivery phases. Phase 1 (observational) is the implemented part once this page lands; later phases are approved design. Declarations, the effect and obligation inventory and the conformance corpora are in the [operation catalog](./tool-operation-catalog.md). The evaluator, layers, secret facts and approvals described as "today" are owned by [tool authorization](./tool-authorization.md) and the [authorization thread](../threads/tool-dispatch-authorization.md).
+Operation rules let a tool authorization policy restrict or grant what a call does: read a path on a Node, send to a Session, select a Node. Today a rule can only name the capability that does it. This page owns that design and its delivery phases. Phase 1 (observational) is implemented; later phases are approved design. Declarations, the effect and obligation inventory and the conformance corpora are in the [operation catalog](./tool-operation-catalog.md). The evaluator, layers, secret facts and approvals described as "today" are owned by [tool authorization](./tool-authorization.md) and the [authorization thread](../threads/tool-dispatch-authorization.md).
 
 ## Design Decisions
 
@@ -157,14 +157,9 @@ This section applies from phase 3. Each declaration has **action branches**: the
 
 Phase 1:
 - `config explain-auth` probes may be given as a `command` with `values`, resolved by the `ctl` parser.
-- Each probe reports:
-  - `invocation` and `capability`;
-  - raw and normalized arguments side by side;
-  - the planned operations and obligations, with their kinds;
-  - per obligation, the existing decision, deciding rule and layer;
-  - planning gaps, reported as `incomplete`.
+- Each probe reports its invocation, capability, raw and normalized arguments, operations, obligations and, per obligation and policy, the existing decision, rule and layer; gaps are `incomplete`.
 - Denials name the denied obligation, its rule, the capability and the command.
-- Explanation runs no extra protected reads beyond the reads explain performs today ([fields](./tool-operation-catalog.md#phase-1-explanation-and-attribution)).
+- Explanation adds no work to the probe's own assessment (no Provider discovery, path inspection or file reads); an obligation needing it is unevaluated ([fields](./tool-operation-catalog.md#phase-1-explanation-and-attribution)).
 
 Phase 3:
 - per operation, `{decision, rule, position, ruleKind}`, with version-1 winners marked `whole-call`;
@@ -177,7 +172,7 @@ Probes run at existing Sessions or external identities only.
 
 ## Inbound MCP adapter
 
-Inbound front ends build requests through `McpExternalAuthorization.Request`, not `ToolRegistry.Resolve`. An adapter keeps each external action's current identity and raw arguments and adds its operations ([adapter mapping](./tool-operation-catalog.md#inbound-adapter-mapping)), including the external-only `node status` as `node.view` of the selected Node. As today, ask is a deny, Session relations and Agent path variables never match, and Session IDs are canonical. The adapter has its own conformance corpus.
+Phase 3; phase 1 only inventories inbound enforcement sites. Inbound front ends build requests through `McpExternalAuthorization.Request`, not `ToolRegistry.Resolve`. An adapter keeps each external action's current identity and raw arguments and adds its operations ([adapter mapping](./tool-operation-catalog.md#inbound-adapter-mapping)), including the external-only `node status` as `node.view` of the selected Node. As today, ask is a deny, Session relations and Agent path variables never match, and Session IDs are canonical.
 
 ## Policy format and older readers
 
