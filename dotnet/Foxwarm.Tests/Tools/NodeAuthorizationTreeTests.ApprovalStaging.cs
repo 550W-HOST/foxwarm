@@ -118,4 +118,58 @@ public sealed partial class NodeAuthorizationTreeTests
         Assert.Equal("late", error.Checks.Single().Resolved.Args["nodeId"]!.GetValue<string>());
         Assert.All(new[] { "root", "child", "late" }, id => Assert.True(Registered(f, id)));
     }
+
+    // A Node rule matches a target through its ancestry; an approval given while the target
+    // was under one parent does not cover it under another.
+    [Fact]
+    public async Task Approval_does_not_cover_a_Node_whose_ancestry_changed_while_waiting()
+    {
+        await using var f = await Fixture.Create();
+        f.Manager.Nodes.Registry.Create("root");
+        f.Manager.Nodes.Registry.Create("other");
+        f.Manager.Nodes.Registry.Create("child", "root");
+        await f.Policy(
+            """
+            version: 1
+            rules:
+              - {id: under-root, tool: node_remove, node: root, action: ask, approval: {approvers: [root-ops]}}
+              - {id: elsewhere, tool: node_remove, action: ask, approval: {approvers: [other-ops]}}
+            """
+        );
+        var call = f.Call("node_remove", Obj("""{"nodeId":"child"}"""));
+        var pending = await PendingAsync(f.Owner);
+        Assert.Equal(["root-ops"], Approvers(pending));
+        f.Manager.Nodes.Registry.SetParent("child", "other");
+        await Approve(f.Manager, f.Owner, pending);
+        var result = await call.WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.Equal("tool_approval_unavailable", ErrorType(result));
+        Assert.Contains("under rule elsewhere", SessionWait.Text(result?["error"]?["message"]));
+        Assert.True(Registered(f, "child"));
+        Assert.Equal("cancelled", SessionWait.Text(Assert.Single(Records(f.Owner))["status"]));
+    }
+
+    // `current: true` matches the caller's selected Node; an approval given while the call's
+    // Node was the current one does not cover it after the selection moved.
+    [Fact]
+    public async Task Approval_does_not_cover_a_call_whose_current_Node_changed_while_waiting()
+    {
+        await using var f = await Fixture.Create(provider: true);
+        await f.Policy(
+            """
+            version: 1
+            rules:
+              - {id: read-here, tool: {source: node, name: read}, node: {current: true}, action: ask, approval: {approvers: [here-ops]}}
+              - {id: read-elsewhere, tool: {source: node, name: read}, action: ask, approval: {approvers: [remote-ops]}}
+            """
+        );
+        var call = f.Call("read", Obj("""{"filePath":"seed.txt"}"""));
+        var pending = await PendingAsync(f.Owner);
+        Assert.Equal(["here-ops"], Approvers(pending));
+        await f.Manager.SelectNodeAsync(f.Owner, "fixture/target");
+        await Approve(f.Manager, f.Owner, pending);
+        var result = await call.WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.Equal("tool_approval_unavailable", ErrorType(result));
+        Assert.Contains("under rule read-elsewhere", SessionWait.Text(result?["error"]?["message"]));
+        Assert.Equal("cancelled", SessionWait.Text(Assert.Single(Records(f.Owner))["status"]));
+    }
 }

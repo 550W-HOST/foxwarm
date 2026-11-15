@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
@@ -92,48 +93,115 @@ internal sealed class ToolApprovalScope(SessionOwner owner)
         return new Restore(() => current.Value = previous);
     }
 
-    // The approved identity of a call: what it is, where it runs and the facts policy saw. The
-    // Session ID is excluded so an identity move does not invalidate an approval.
+    // The approved identity of a call: what it is, where it runs, and every fact of the request
+    // the evaluator receives. The request is projected property by property, so a fact added to
+    // ToolAuthorizationRequest is bound without a change here; a value this projection cannot
+    // represent throws instead of being skipped.
     internal static string Fingerprint(ResolvedTool resolved, ToolAuthorizationRequest request)
     {
         var value = new JsonObject
         {
-            ["source"] = resolved.Source,
-            ["name"] = resolved.Name,
-            ["server"] = resolved.Server,
-            ["executionNode"] = resolved.ExecutionNode,
-            ["args"] = resolved.Args.DeepClone(),
-            ["paths"] = new JsonArray(
-                request
-                    .Paths.Select(path =>
-                        (JsonNode?)
-                            new JsonObject
-                            {
-                                ["arg"] = path.Arg,
-                                ["raw"] = path.Raw,
-                                ["resolved"] = path.Resolved,
-                                ["node"] = path.Node,
-                            }
-                    )
-                    .ToArray()
-            ),
-            ["nodeTargets"] = new JsonArray(
-                (request.NodeTargets ?? [])
-                    .Select(node => (JsonNode?)JsonValue.Create(node))
-                    .ToArray()
-            ),
-            ["sessionTarget"] = request.SessionTarget?.Id,
-            ["taskOwner"] = request.TaskOwnerSession,
+            ["call"] = new JsonObject
+            {
+                ["source"] = resolved.Source,
+                ["name"] = resolved.Name,
+                ["server"] = resolved.Server,
+                ["executionNode"] = resolved.ExecutionNode,
+                ["args"] = resolved.Args.DeepClone(),
+            },
+            ["request"] = FingerprintFacts(request),
         };
-        if (request.Secrets is { Count: > 0 } secrets)
-            value["secrets"] = new JsonArray(
-                secrets.Select(name => (JsonNode?)JsonValue.Create(name)).ToArray()
-            );
-        if (request.OwnedSecrets is { Count: > 0 } owned)
-            value["ownedSecrets"] = new JsonArray(
-                owned.Select(name => (JsonNode?)JsonValue.Create(name)).ToArray()
-            );
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value.ToJsonText())));
+    }
+
+    // Every public property of the request, by name.
+    internal static JsonObject FingerprintFacts(ToolAuthorizationRequest request)
+    {
+        var facts = new JsonObject();
+        foreach (
+            var property in typeof(ToolAuthorizationRequest)
+                .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+                .OrderBy(property => property.Name, StringComparer.Ordinal)
+        )
+            facts[property.Name] = FingerprintValue(property.Name, property.GetValue(request), request);
+        return facts;
+    }
+
+    private static JsonNode? FingerprintValue(
+        string name,
+        object? value,
+        ToolAuthorizationRequest request
+    ) =>
+        value switch
+        {
+            null => null,
+            string text => JsonValue.Create(text),
+            bool flag => JsonValue.Create(flag),
+            int or long => JsonValue.Create(Convert.ToInt64(value)),
+            Enum member => JsonValue.Create(member.ToString()),
+            JsonNode node => node.DeepClone(),
+            // The evaluator matches a Node target by its ancestry chain.
+            Foxwarm.Nodes.NodeAuthorizationForest forest => NodeAncestry(forest, request),
+            // An empty collection is an absent fact to the evaluator.
+            System.Collections.IEnumerable items => items.Cast<object?>().ToArray() is
+            { Length: > 0 } list
+                ? new JsonArray(list.Select(item => FingerprintValue(name, item, request)).ToArray())
+                : null,
+            AuthorizationTarget or AuthorizationPath => FingerprintRecord(name, value, request),
+            _ => throw new InvalidOperationException(
+                $"Approval fingerprints cannot bind request fact {name} of type {value.GetType().Name}."
+            ),
+        };
+
+    private static JsonObject FingerprintRecord(
+        string name,
+        object value,
+        ToolAuthorizationRequest request
+    )
+    {
+        var record = new JsonObject();
+        foreach (
+            var property in value
+                .GetType()
+                .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+                .OrderBy(property => property.Name, StringComparer.Ordinal)
+        )
+            record[property.Name] = FingerprintValue(
+                name + "." + property.Name,
+                property.GetValue(value),
+                request
+            );
+        return record;
+    }
+
+    // The ancestry of each Node target, as the evaluator reads it; an invalid ancestry is bound
+    // as such (the evaluator rejects it).
+    private static JsonObject NodeAncestry(
+        Foxwarm.Nodes.NodeAuthorizationForest forest,
+        ToolAuthorizationRequest request
+    )
+    {
+        var chains = new JsonObject();
+        var targets = (request.NodeTargets ?? []).Distinct(StringComparer.Ordinal);
+        foreach (var node in targets.Order(StringComparer.Ordinal))
+        {
+            if (!forest.Contains(node))
+            {
+                chains[node] = null;
+                continue;
+            }
+            try
+            {
+                chains[node] = new JsonArray(
+                    forest.Chain(node).Select(id => (JsonNode?)JsonValue.Create(id)).ToArray()
+                );
+            }
+            catch (InvalidDataException)
+            {
+                chains[node] = "invalid";
+            }
+        }
+        return chains;
     }
 
     private sealed class Restore(Action restore) : IDisposable
