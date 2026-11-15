@@ -114,7 +114,7 @@ export function ApprovalDecisionForm({ record, sessionId, onDecide, focusToken =
         </ul>
       )}
       {record.stage === 'input' && (
-        <div data-approval-stage="input" className="mt-1.5 text-xs text-fw-text-muted">Reading this input comes first. The call is checked once it is read and may need another approval.</div>
+        <div data-approval-stage="input" className="mt-1.5 text-xs text-fw-text-muted">Approve reading this file first. The change itself may need a second approval.</div>
       )}
       {!!checks.length && (
         <div data-approval-checks className="mt-1.5 min-w-0 text-xs text-fw-text-muted">

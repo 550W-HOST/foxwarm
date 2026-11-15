@@ -117,12 +117,12 @@ test('an identity that cannot decide sees the request without decision controls'
   assert.match(await page.$eval('[data-question-dock]', el => el.innerText), /3 open requests/)
 })
 
-test('an input approval says it reads the input first and lists the read', async () => {
+test('an input approval asks to read the file first and lists the read', async () => {
   await page.$$eval('[role="tab"][data-dock-item="approval"]', tabs => tabs.at(-1).click())
   await page.waitForSelector('[data-approval-form="ap-input"]')
   const form = await page.$eval('[data-approval-form="ap-input"]', el => el.innerText)
   assert.match(form, /set_config/)
-  assert.match(form, /Reading this input comes first\. The call is checked once it is read and may need another approval\./)
+  assert.match(form, /Approve reading this file first\. The change itself may need a second approval\./)
   assert.match(await page.$eval('[data-approval-form="ap-input"] [data-approval-checks]', el => el.innerText), /^Reads\s+read master:\/w\/models\.yaml$/)
   if (process.env.FOXWARM_TOOL_APPROVAL_SCREENSHOTS) await page.screenshot({ path: process.env.FOXWARM_TOOL_APPROVAL_SCREENSHOTS + '/approval-input-stage.png' })
 })
