@@ -16,12 +16,12 @@ export type StreamingAssistantDraft = {
   incompletePrefix?: boolean
 }
 
-export type StreamingCaption = { kind: 'reasoning' | 'tool'; text: string; key: string; order: number }
+export type StreamingCaption = { kind: 'reasoning' | 'tool'; text: string }
 
 /** Eligible captions in output order; ordinary output never cancels a previous caption. */
 export function getStreamingCaptions(draft: StreamingAssistantDraft | null | undefined): StreamingCaption[] {
   if (!draft) return []
-  const captions: StreamingCaption[] = []
+  const captions: Array<StreamingCaption & { order: number }> = []
   const reasoning = new Map<number, string[]>()
   if (draft.parts) {
     for (const part of draft.parts) {
@@ -33,13 +33,13 @@ export function getStreamingCaptions(draft: StreamingAssistantDraft | null | und
   } else reasoning.set(-1, [draft.reasoning])
   for (const [order, summaries] of reasoning) {
     const text = extractOpenAIReasoningSummaryTitles(summaries.filter(Boolean).join('\n')).at(-1)
-    if (text) captions.push({ kind: 'reasoning', text, key: `${draft.streamId}:reasoning:${order}`, order })
+    if (text) captions.push({ kind: 'reasoning', text, order })
   }
   for (const call of draft.toolCalls) {
     const text = getStreamingToolSummary(call)
-    if (text) captions.push({ kind: 'tool', text, key: call.id || `${draft.streamId}:tool:${call.index}`, order: call.index })
+    if (text) captions.push({ kind: 'tool', text, order: call.index })
   }
-  return captions.sort((left, right) => left.order - right.order)
+  return captions.sort((left, right) => left.order - right.order).map(({ kind, text }) => ({ kind, text }))
 }
 
 export function buildStreamingAssistantMessage(draft: StreamingAssistantDraft | null): Message | null {

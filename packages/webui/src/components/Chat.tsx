@@ -1756,6 +1756,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
             {displayingLatest && <ProcessingStatus
               key={sessionId}
               timelineView={timelineView}
+              history={activeMessages}
               streamingAssistantDraft={streamingAssistantDraft}
               sessionBusy={sessionBusy}
               runtimeState={sessionRecord?.runtimeState}

@@ -202,3 +202,30 @@ test('only an ordinary Conversation request uses the current stream reasoning ti
   assert.match(tool, />Run checks<\/span>/)
   assert.doesNotMatch(tool, /Latest/)
 })
+
+test('the history-derived caption follows the current runtime style and yields to critical labels', () => {
+  const history = [
+    { role: 'user', parts: [{ text: 'Start' }], __meta: { seq: 1, timestamp: 10 } },
+    { role: 'model', parts: [{ functionCall: { id: 'a', name: 'exec', args: { summary: 'Doing A', command: 'true' } } }], __meta: { seq: 2, timestamp: 20 } },
+    { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'a', name: 'exec', response: { output: 'ok' } } }], __meta: { seq: 3, timestamp: 30 } },
+  ]
+  const request = activeRuntimeState('requesting-model', { active: { phase: 'normal-turn' } })
+  for (const timelineView of ['detailed', 'grouped', 'conversation']) {
+    const html = render({ timelineView, history, runtimeState: request })
+    assert.match(html, />Doing A<\/span>/)
+    assert.match(html, /aria-label="Requesting model…"/)
+    assert.match(html, /text-fw-accent/)
+    assert.doesNotMatch(html, /data-fox-thinking-copy/)
+    const tool = render({ timelineView, history, runtimeState: activeRuntimeState('running-tool', { tool: { id: 'later', name: 'read', source: 'node', argsPreview: 'file', startedAt: 1 } }) })
+    assert.match(tool, />Doing A<\/span>/)
+    assert.match(tool, /text-fw-special/)
+    assert.match(render({ timelineView, history: history.slice(0, 1), runtimeState: request }), /data-fox-thinking-copy/)
+  }
+  for (const override of [
+    { pendingControl: 'stop' },
+    { runtimeState: { ...request, retry: { attempt: 1, maxAttempts: 3 } } },
+    { runtimeState: { ...request, active: { phase: 'compaction' } } },
+    { runtimeState: activeRuntimeState('waiting') },
+    { runtimeState: activeRuntimeState('idle') },
+  ]) assert.doesNotMatch(render({ history, runtimeState: request, ...override }), /Doing A/)
+})

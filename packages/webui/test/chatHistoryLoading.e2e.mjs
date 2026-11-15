@@ -1596,182 +1596,217 @@ test('real Chat routes per-call activity without refetching history or flashing 
   assert.deepEqual(await states(), [false, false, false])
 })
 
+const captionStart = { role: 'user', parts: [{ text: 'Start the caption turn' }], __meta: { seq: 1, timestamp: 10 } }
+
 async function captionChat(t) {
   const page = await browser.newPage()
   t.after(() => page.close())
   await page.setViewport({ width: 390, height: 800 })
-  await page.goto(`${fixtureUrl}?nodePicker=1`, { waitUntil: 'load' })
-  await page.waitForFunction(() => window.fixtureHistoryRequestCount === 1)
-  await page.evaluate(() => {
-    window.initializeFixtureTheme()
-    window.fixtureTimelineView = 'conversation'
-    window.renderFixtureChats()
-    window.resolveFixtureHistory(0, undefined, 0, { busy: true })
-    window.setCaptionRuntime = runtimeState => window.emitFixtureEvent({ type: 'session-state', session: {
-      id: 'fixture/main', busy: runtimeState.busy, queueLength: 0, messageCount: 1, historyVersion: 0, runtimeState,
-    } })
-    // Caption commits as the browser makes them. Hold durations are measured between these commits,
-    // not from when the test happens to observe a caption.
-    window.captionTimeline = []
-    new MutationObserver(() => {
-      const element = document.querySelector('[data-runtime-caption]')
-      const text = !element ? null : element.querySelector('[data-fox-thinking-copy]') ? 'fallback' : element.textContent
-      const state = document.querySelector('[data-processing-runtime-state]')?.dataset.processingRuntimeState ?? null
-      const last = window.captionTimeline.at(-1)
-      if (last?.text !== text || last?.state !== state) window.captionTimeline.push({ text, state, time: Date.now() })
-    }).observe(document.getElementById('root'), { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['data-processing-runtime-state'] })
-  })
+  // A load is also the reload and Session-switch path: the caption is derived from the history it resolves.
+  const load = async (history = [captionStart], runtimeState = { state: 'requesting-model', busy: true, queueLength: 0 }) => {
+    await page.goto(`${fixtureUrl}?nodePicker=1`, { waitUntil: 'load' })
+    await page.waitForFunction(() => window.fixtureHistoryRequestCount === 1)
+    await page.evaluate((history, runtimeState) => {
+      window.initializeFixtureTheme()
+      window.fixtureTimelineView = 'conversation'
+      window.renderFixtureChats()
+      window.captionHistory = history
+      window.resolveFixtureHistory(0, history, 0, { busy: runtimeState.busy, runtimeState })
+      window.setCaptionRuntime = runtimeState => window.emitFixtureEvent({ type: 'session-state', session: {
+        id: 'fixture/main', busy: runtimeState.busy, queueLength: 0, messageCount: window.captionHistory.length, historyVersion: 0, runtimeState,
+      } })
+      window.commitCaptionMessage = message => {
+        const seq = window.captionHistory.length + 1
+        const committed = { ...message, __meta: { seq, timestamp: seq * 100, ...message.__meta } }
+        window.captionHistory = [...window.captionHistory, committed]
+        window.emitFixtureMessage(committed)
+      }
+      // Caption commits as the browser makes them, so a brief fallback flash between transitions is recorded.
+      window.captionTimeline = []
+      new MutationObserver(() => {
+        const element = document.querySelector('[data-runtime-caption]')
+        const text = !element ? null : element.querySelector('[data-fox-thinking-copy]') ? 'fallback' : element.textContent
+        const state = document.querySelector('[data-processing-runtime-state]')?.dataset.processingRuntimeState ?? null
+        const last = window.captionTimeline.at(-1)
+        if (last?.text !== text || last?.state !== state) window.captionTimeline.push({ text, state, time: Date.now() })
+      }).observe(document.getElementById('root'), { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['data-processing-runtime-state'] })
+    }, history, runtimeState)
+  }
+  await load()
   const runtime = state => page.evaluate(state => window.setCaptionRuntime({ queueLength: 0, busy: true, ...state }), state)
   const emit = event => page.evaluate(event => window.emitFixtureEvent({ type: 'session-event', event }), event)
+  const commit = message => page.evaluate(message => window.commitCaptionMessage(message), message)
+  // Color and pose belong to the committed runtime state; wait for that DOM transition before asserting them.
+  const presentation = kind => page.waitForSelector(`[data-runtime-presentation="${kind}"]`)
   const request = async id => {
     await runtime({state:'requesting-model',active:{phase:'normal-turn',streamId:id}})
     await emit({type:'model-stream-reset',streamVersion:2,streamId:id,llmRequestId:id,sequence:0})
+    await presentation('request')
   }
-  const caption = () => page.$eval('[data-runtime-caption]', el => el.textContent)
-  const expect = text => page.waitForFunction(text => document.querySelector('[data-runtime-caption]')?.textContent === text, {}, text)
+  const caption = () => page.$eval('[data-runtime-caption]', el => el.querySelector('[data-fox-thinking-copy]') ? 'fallback' : el.textContent)
+  const expect = text => text === 'fallback'
+    ? page.waitForSelector('[data-runtime-caption] [data-fox-thinking-copy]')
+    : page.waitForFunction(text => document.querySelector('[data-runtime-caption]')?.textContent === text, {}, text)
+  const mode = mode => page.evaluate(mode => { window.fixtureTimelineView = mode; window.renderFixtureChats() }, mode)
+  const ink = () => page.$eval('[data-runtime-caption]', el => getComputedStyle(el).color)
   const shot = async name => {
     if (process.env.FOXWARM_E2E_SCREENSHOT_DIR) await page.screenshot({path:join(process.env.FOXWARM_E2E_SCREENSHOT_DIR, name + '.png')})
   }
-  // Caption texts in display order from the first display of `from`, each with the time it was first committed.
+  // Distinct caption texts in display order from the first display of `from`.
   const shownSince = async from => {
     const timeline = await page.evaluate(() => window.captionTimeline)
     const start = timeline.findIndex(entry => entry.text === from)
     assert.ok(start >= 0, `${from} was displayed: ${JSON.stringify(timeline)}`)
-    return timeline.slice(start).filter((entry, index, entries) => index === 0 || entry.text !== entries[index - 1].text)
+    return timeline.slice(start).map(entry => entry.text).filter((text, index, texts) => index === 0 || text !== texts[index - 1])
   }
-  return {page,runtime,emit,request,caption,expect,shot,shownSince}
+  return {page,load,runtime,emit,commit,presentation,request,caption,expect,mode,ink,shot,shownSince}
 }
 
-test('real Chat captions connect reasoning, generated summaries, execution and the latest next-request heading', async t => {
-  const {page,runtime,emit,request,caption,expect,shot,shownSince} = await captionChat(t)
-  await request('caption-stream')
+test('real Chat captions keep the last displayable item from turn start through execution into later requests', async t => {
+  const {page,runtime,emit,commit,presentation,request,caption,expect,mode,ink,shot,shownSince} = await captionChat(t)
+  // Turn start: nothing displayable has followed the opening input yet.
+  await presentation('request')
+  await expect('fallback')
+  await request('first')
   let sequence = 0
-  const update = delta => emit({type:'model-stream-update',streamVersion:2,streamId:'caption-stream',sequence:++sequence,...delta})
+  const update = delta => emit({type:'model-stream-update',streamVersion:2,streamId:'first',sequence:++sequence,...delta})
   await update({partDeltas:[{outputIndex:0,kind:'reasoning',summaryIndex:0,textDelta:{offset:0,text:'**Inspecting the source**\nBody.'}}]})
   await expect('Inspecting the source')
-  assert.equal(await page.$('[data-fox-thinking-copy]'), null)
   assert.equal(await page.$eval('[data-processing-runtime-state]', el => el.getAttribute('aria-label')), 'Requesting model…')
   await update({partDeltas:[{outputIndex:1,kind:'reasoning',summaryIndex:0,textDelta:{offset:0,text:'**Next heading'}}]})
   assert.equal(await caption(), 'Inspecting the source')
   await update({partDeltas:[{outputIndex:1,kind:'reasoning',summaryIndex:0,textDelta:{offset:14,text:'**\nBody.'}}]})
   await expect('Next heading')
   await update({partDeltas:[{outputIndex:2,kind:'text',contentIndex:0,textDelta:{offset:0,text:'The answer begins.'}}]})
-  await expect('Next heading')
-  const longTitle = 'Checking the implementation and its streaming lifecycle '.repeat(5).trim()
-  await update({partDeltas:[{outputIndex:1,kind:'reasoning',summaryIndex:1,textDelta:{offset:0,text:'**'+longTitle+'**\nBody.'}}]})
-  await expect(longTitle)
-  assert.equal(await page.$eval('[data-runtime-caption] span[title]',el=>el.title),longTitle)
-  assert.equal(await page.$eval('[data-runtime-caption]',el=>el.getBoundingClientRect().right<=innerWidth),true)
-  for (const mode of ['detailed','grouped','conversation']) {
-    await page.evaluate(mode => {window.fixtureTimelineView=mode;window.renderFixtureChats()},mode)
-    await page.waitForFunction(mode => mode === 'conversation' ? !document.querySelector('[data-fox-thinking-copy]') : !!document.querySelector('[data-fox-thinking-copy]'),{},mode)
-  }
   const prefix = '{"summary":"Validate streaming'
   await update({partDeltas:[{outputIndex:3,kind:'tool-call'}],toolCallDeltas:[{index:3,id:'script',name:'run_script',argumentsDelta:{offset:0,text:prefix}}]})
-  await expect(longTitle)
+  assert.equal(await caption(), 'Next heading')
   await update({toolCallDeltas:[{index:3,argumentsDelta:{offset:prefix.length,text:' updates","code":"unfinished'}}]})
   await expect('Validate streaming updates')
-  const requestInk = await page.$eval('[data-runtime-caption]',el=>getComputedStyle(el).color)
+  const requestInk = await ink()
+  assert.ok(await page.$('[data-fox-loader="spinner"]'))
   await shot('caption-generation')
-  assert.equal(await page.$eval('[data-processing-runtime-state]',el=>el.dataset.runtimePresentation),'request')
-  await new Promise(resolve=>setTimeout(resolve,900))
-  await page.evaluate(() => window.emitFixtureMessage({role:'model',parts:[{functionCall:{id:'script',name:'run_script',args:{summary:'Validate streaming updates',code:'return 1'}}}],__meta:{seq:2,timestamp:200,llmRequestId:'caption-stream',llmSegment:{outputStart:0,outputEndExclusive:4,complete:true}}}))
-  await expect('Validate streaming updates')
-  await runtime({state:'running-tool',tool:{id:'script',name:'run_script',source:'builtin',argsPreview:'Validate streaming updates',startedAt:200}})
-  // Retained text already matches before React commits the new runtime state.
-  await page.waitForSelector('[data-processing-runtime-state="running-tool"]')
-  await expect('Validate streaming updates')
-  assert.equal(await page.$eval('[data-processing-runtime-state]',el=>el.dataset.runtimePresentation),'tool')
-  assert.notEqual(await page.$eval('[data-runtime-caption]',el=>getComputedStyle(el).color),requestInk)
+  // The commit replaces the draft with the same committed call.
+  await commit({role:'model',parts:[{thinking:'**Inspecting the source**\nBody.'},{thinking:'**Next heading**\nBody.'},{text:'The answer begins.'},{functionCall:{id:'script',name:'run_script',args:{summary:'Validate streaming updates',code:'return 1'}}}],__meta:{llmRequestId:'first',llmSegment:{outputStart:0,outputEndExclusive:4,complete:true}}})
+  await runtime({state:'running-tool',tool:{id:'script',name:'run_script',source:'builtin',argsPreview:'Validate streaming upd...',startedAt:200}})
+  await presentation('tool')
+  assert.equal(await caption(), 'Validate streaming updates', 'execution keeps the complete committed summary')
+  assert.notEqual(await ink(), requestInk)
   assert.ok(await page.$('[data-runtime-fox="tool"]'))
   await shot('caption-execution')
   await page.click('[data-runtime-caption]')
   await page.waitForSelector('[data-runtime-details]')
   assert.match(await page.$eval('[data-runtime-details]',el=>el.textContent),/run_script/)
   await page.keyboard.press('Escape')
-  await request('next-request')
-  await page.waitForSelector('[data-processing-runtime-state="requesting-model"]')
-  const nextUpdate = (sequence,text) => emit({type:'model-stream-update',streamVersion:2,streamId:'next-request',sequence,partDeltas:[{outputIndex:0,kind:'reasoning',summaryIndex:0,textDelta:{offset:0,text}}]})
-  await nextUpdate(1,'**Intermediate heading**\nBody.')
-  await expect('Validate streaming updates')
-  await nextUpdate(2,'**Latest heading**\nBody.')
-  assert.equal(await page.$eval('[data-runtime-caption]',el=>getComputedStyle(el).color),requestInk)
+  await commit({role:'tool',parts:[{functionResponse:{tool_use_id:'script',name:'run_script',response:{output:'1'}}}]})
+  await request('second')
+  assert.equal(await caption(), 'Validate streaming updates', 'retained after execution into the next request')
+  assert.equal(await ink(), requestInk)
   assert.ok(await page.$('[data-fox-loader="spinner"]'))
-  await shot('caption-held-next-request')
-  await new Promise(resolve=>setTimeout(resolve,700))
-  await nextUpdate(3,'**Latest heading**\nBody grows.')
-  await new Promise(resolve=>setTimeout(resolve,700))
-  await nextUpdate(4,'**Latest heading**\nBody grows again.')
-  await expect('Validate streaming updates')
-  await expect('Latest heading')
-  const generated = await shownSince('Validate streaming updates')
-  assert.deepEqual(generated.map(item=>item.text), ['Validate streaming updates','Latest heading'], 'no intermediate caption is shown while the summary is held')
-  const elapsed = generated[1].time-generated[0].time
-  assert.ok(elapsed>=2800 && elapsed<3900, `minimum is measured from generation, without update/execution resets: ${elapsed}ms`)
-  await emit({type:'model-stream-update',streamVersion:2,streamId:'next-request',sequence:5,trimBeforeOutputIndex:1,partDeltas:[{outputIndex:1,kind:'text',textDelta:{offset:0,text:'Retained through committed prefix and body output.'}}]})
-  await expect('Latest heading')
-  // A reset can reach Chat before the matching runtime-state publication. It must retire the old heading.
-  await emit({type:'model-stream-reset',streamVersion:2,streamId:'fresh-request',sequence:0})
-  await page.waitForSelector('[data-fox-thinking-copy]')
-  await request('fresh-request')
-  await page.waitForSelector('[data-fox-thinking-copy]')
+  await shot('caption-retained-next-request')
+  const next = (sequence, delta) => emit({type:'model-stream-update',streamVersion:2,streamId:'second',sequence,...delta})
+  await next(1,{partDeltas:[{outputIndex:0,kind:'text',contentIndex:0,textDelta:{offset:0,text:'Body output without a heading.'}}]})
+  await next(2,{partDeltas:[{outputIndex:1,kind:'reasoning',summaryIndex:0,textDelta:{offset:0,text:'**Incomplete later heading'}}]})
+  await page.waitForFunction(() => document.body.textContent.includes('Body output without a heading.'))
+  assert.equal(await caption(), 'Validate streaming updates', 'body output and incomplete headings keep the caption')
+  const longTitle = 'Checking the implementation and its streaming lifecycle '.repeat(5).trim()
+  await next(3,{partDeltas:[{outputIndex:2,kind:'reasoning',summaryIndex:0,textDelta:{offset:0,text:'**'+longTitle+'**\nBody.'}}]})
+  await expect(longTitle)
+  assert.equal(await page.$eval('[data-runtime-caption] span[title]',el=>el.title),longTitle)
+  assert.equal(await page.$eval('[data-runtime-caption]',el=>el.getBoundingClientRect().right<=innerWidth),true)
+  assert.deepEqual(await shownSince('Inspecting the source'), ['Inspecting the source','Next heading','Validate streaming updates',longTitle], 'no fallback between generation, execution and the next request')
+  // Detailed and Grouped show only tool summaries under the same rule.
+  for (const view of ['detailed','grouped']) {
+    await mode(view)
+    await expect('Validate streaming updates')
+  }
+  await mode('conversation')
+  await expect(longTitle)
+  // Without new displayable content the caption stays until the turn ends: no timer replaces it. Virtual
+  // time runs the page's timers through ten minutes without waiting for them.
+  const before = (await page.evaluate(() => window.captionTimeline)).length
+  const clock = await page.evaluate(() => Date.now())
+  const cdp = await page.createCDPSession()
+  const expired = new Promise(resolve => cdp.once('Emulation.virtualTimeBudgetExpired', resolve))
+  await cdp.send('Emulation.setVirtualTimePolicy', {policy:'advance',budget:600000})
+  await expired
+  assert.ok(await page.evaluate(() => Date.now()) - clock >= 600000, 'the page clock advanced through the period')
+  assert.equal(await caption(), longTitle)
+  assert.equal((await page.evaluate(() => window.captionTimeline)).length, before)
   assert.equal(await page.evaluate(()=>window.fixtureHistoryRequestCount),1)
 })
 
-test('real Chat tool caption retention is latest-wins in every mode and critical states cancel it', async t => {
-  const {page,runtime,emit,request,caption,expect,shot,shownSince} = await captionChat(t)
-  const tool = (id,text) => runtime({state:'running-tool',tool:{id,name:'exec',source:'node',argsPreview:text,startedAt:200}})
-  await tool('first','First tool')
-  await expect('First tool')
-  await tool('skipped','Skipped tool')
-  await tool('latest','Latest tool')
-  for (const mode of ['detailed','grouped','conversation']) {
-    await page.evaluate(mode=>{window.fixtureTimelineView=mode;window.renderFixtureChats()},mode)
-    await expect('First tool')
-  }
-  await expect('Latest tool')
-  await shot('caption-latest-tool')
-  await request('without-heading')
-  await page.waitForSelector('[data-processing-runtime-state="requesting-model"]')
-  await page.waitForSelector('[data-fox-thinking-copy]')
-  // Only the newest candidate follows the first summary, and its own minimum carries it into the next request.
-  const shown = await shownSince('First tool')
-  assert.deepEqual(shown.map(item=>item.text), ['First tool','Latest tool','fallback'], JSON.stringify(shown))
-  const timeline = await page.evaluate(() => window.captionTimeline)
-  assert.ok(timeline.some(item=>item.text==='Latest tool' && item.state==='requesting-model'), 'the held tool summary is shown during the next request')
-  const [first, latest, fallback] = shown.map(item=>item.time)
-  assert.ok(latest-first>=2800, `the first summary is held from its display: ${latest-first}ms`)
-  assert.ok(fallback-latest>=2800, `the latest summary is held from its own display: ${fallback-latest}ms`)
-  assert.ok(fallback-first>=5800, `both minimums run back to back: ${fallback-first}ms`)
-  for (const state of [
-    {state:'waiting',busy:false,waiting:{waitId:'pause',waitingFor:'input'}},
-    {state:'running-tool',stopping:true},
-    {state:'llm-failed',busy:false},
-    {state:'requesting-model',active:{phase:'compaction'}},
-    {state:'requesting-model',retry:{attempt:1,maxAttempts:3}},
-    {state:'idle',busy:false},
+test('real Chat captions reset at inserted input, yield to critical states, and match after reload and Session switch', async t => {
+  const {page,load,runtime,emit,commit,presentation,request,caption,expect,mode,ink} = await captionChat(t)
+  const call = (id, summary) => ({role:'model',parts:[{functionCall:{id,name:'exec',args:{summary,command:'true'}}}]})
+  const done = id => ({role:'tool',parts:[{functionResponse:{tool_use_id:id,name:'exec',response:{output:'ok'}}}]})
+  await commit(call('a','Doing A'))
+  await commit(done('a'))
+  await expect('Doing A')
+  const requestInk = await ink()
+  // Critical states keep their own labels; the derived caption returns when the same segment resumes.
+  for (const [state, kind] of [
+    [{state:'waiting',busy:false,waiting:{waitId:'pause',waitingFor:'input'}}, 'waiting'],
+    [{state:'running-tool',tool:{id:'approval',name:'exec',source:'node',approval:{id:'ap',status:'pending'},startedAt:1}}, 'waiting'],
+    [{state:'running-tool',stopping:true}, 'stopping'],
+    [{state:'requesting-model',active:{phase:'compaction'}}, 'compact'],
+    [{state:'requesting-model',retry:{attempt:1,maxAttempts:3}}, 'retry'],
+    [{state:'llm-failed',busy:false}, 'error'],
   ]) {
-    await tool('held-'+JSON.stringify(state),'Must clear immediately')
-    await expect('Must clear immediately')
     await runtime(state)
-    await page.waitForFunction(()=>document.querySelector('[data-runtime-caption]')?.textContent!=='Must clear immediately')
-    await request('clean-'+JSON.stringify(state))
-    await page.waitForSelector('[data-fox-thinking-copy]')
+    await presentation(kind)
+    assert.notEqual(await caption(), 'Doing A', kind)
+    await request('resume-'+kind)
+    await expect('Doing A')
+    assert.equal(await ink(), requestInk)
   }
-  // Generated summaries keep the same mode gating as executed summaries; reasoning remains Conversation-only.
-  for (const mode of ['detailed','grouped','conversation']) {
-    await request(mode)
-    await page.evaluate(mode=>{window.fixtureTimelineView=mode;window.renderFixtureChats()},mode)
-    await emit({type:'model-stream-update',streamVersion:2,streamId:mode,sequence:1,toolCallDeltas:[{index:0,id:'generated-'+mode,name:'call_tool',argumentsDelta:{offset:0,text:'{"toolId":"node:worker/exec","args":{"summary":"Generated in '+mode+'","command":"unfinished'}}]})
-    await expect('Generated in '+mode)
-    await runtime({state:'waiting',busy:false})
+  // Every delivered input opens a new segment with the decorative caption until something displayable follows.
+  const inputs = [
+    {role:'user',parts:[{text:'A correction while working'}]},
+    {role:'user',parts:[{system:'<foxwarm-message type="inter-agent" sourceSessionId="peer/one">\nPeer report\n</foxwarm-message>'}]},
+    {role:'user',parts:[{system:'<foxwarm-system kind="event" type="exec-completed">\nBackground command finished\n</foxwarm-system>'}]},
+  ]
+  for (const [index, input] of inputs.entries()) {
+    await commit(input)
+    await expect('fallback')
+    await request('after-input-'+index)
+    await expect('fallback')
+    await emit({type:'model-stream-update',streamVersion:2,streamId:'after-input-'+index,sequence:1,toolCallDeltas:[{index:0,id:'live-'+index,name:'call_tool',argumentsDelta:{offset:0,text:'{"toolId":"node:worker/exec","args":{"summary":"Handling input '+index+'","command":"unfinished'}}]})
+    await expect('Handling input '+index)
+    await commit({role:'model',parts:[{functionCall:{id:'live-'+index,name:'call_tool',args:{toolId:'node:worker/exec',args:{summary:'Handling input '+index,command:'true'}}}}],__meta:{llmRequestId:'after-input-'+index,llmSegment:{outputStart:0,outputEndExclusive:1,complete:true}}})
+    await commit(done('live-'+index))
   }
-  await tool('session-owned','Session-owned caption')
-  await expect('Session-owned caption')
-  await page.evaluate(()=>window.renderFixtureChats(1,0,'fixture/other'))
-  await page.waitForFunction(()=>window.fixtureHistoryRequestCount===2)
-  await page.waitForFunction(()=>document.querySelector('[data-runtime-caption]')?.textContent!=='Session-owned caption')
-  await page.evaluate(()=>window.resolveFixtureHistory(0,undefined,0,{sessionId:'fixture/other',busy:true}))
-  await page.waitForSelector('[data-fox-thinking-copy]')
-  assert.notEqual(await caption(),'Session-owned caption')
+  // A batch executing its first call shows that call; reload and Session switch derive the same caption.
+  await commit({role:'model',parts:[{thinking:'**Planning the batch**\nBody.'},...call('b1','First in batch').parts,...call('b2','Second in batch').parts]})
+  await expect('Second in batch')
+  const executing = {state:'running-tool',busy:true,queueLength:0,tool:{id:'b1',name:'exec',source:'node',argsPreview:'First in batch',startedAt:1}}
+  await runtime(executing)
+  await presentation('tool')
+  await expect('First in batch')
+  const history = await page.evaluate(() => window.captionHistory)
+  await load(history, executing)
+  await presentation('tool')
+  await expect('First in batch')
+  for (const view of ['detailed','grouped','conversation']) {
+    await mode(view)
+    await expect('First in batch')
+  }
+  await runtime({state:'requesting-model',active:{phase:'normal-turn'}})
+  await presentation('request')
+  await expect('Second in batch')
+  await mode('conversation')
+  await page.evaluate(() => window.renderFixtureChats(1, 0, 'fixture/other'))
+  await page.waitForFunction(() => window.fixtureHistoryRequestCount === 2)
+  await page.evaluate(() => window.resolveFixtureHistory(0, [
+    {role:'user',parts:[{text:'Other Session input'}],__meta:{seq:1,timestamp:10}},
+    {role:'model',parts:[{thinking:'**Working in the other Session**\nBody.'}],__meta:{seq:2,timestamp:20}},
+  ], 0, {sessionId:'fixture/other',busy:true}))
+  await expect('Working in the other Session')
+  await page.evaluate(() => window.renderFixtureChats(1, 0, 'fixture/main'))
+  await page.waitForFunction(() => window.fixtureHistoryRequestCount === 3)
+  await page.evaluate(history => window.resolveFixtureHistory(0, history, 0, {busy:true}), history)
+  await expect('Second in batch')
+  // The turn end retires the caption.
+  await runtime({state:'idle',busy:false})
+  await page.waitForFunction(() => document.querySelector('[data-runtime-caption]')?.textContent !== 'Second in batch')
 })
