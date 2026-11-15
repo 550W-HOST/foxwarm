@@ -9,6 +9,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { missingImports } from './windows-imports.mjs'
+import { writePack, codeSources } from '../asset-pack.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const version = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version
@@ -57,7 +58,7 @@ export function assetName(name) {
   return `foxwarm-${name}.${TARGETS[name].archive}`
 }
 
-export const codeAssetName = `foxwarm-code-${version}.tar.gz`
+export const codeAssetName = `foxwarm-code-${version}.fwassets`
 const codeAssets = path.join(root, 'packages/vscode-web/assets')
 
 export function validateCodeAssets(source = codeAssets) {
@@ -82,19 +83,11 @@ export function validateCodeAssets(source = codeAssets) {
   }
 }
 
-export function installCodeAssets(directory, source = codeAssets) {
-  validateCodeAssets(source)
-  const destination = path.join(directory, 'packages/vscode-web/assets')
-  for (const entry of ['vscode-web', 'extensions/redhat.vscode-yaml']) {
-    fs.cpSync(path.join(source, entry), path.join(destination, entry), { recursive: true })
-  }
-}
-
-export function archiveCode(output, source = codeAssets) {
+export function packCode(output, source = codeAssets) {
   validateCodeAssets(source)
   fs.mkdirSync(output, { recursive: true })
   const file = path.join(output, codeAssetName)
-  tarArchive(source, ['extensions/redhat.vscode-yaml', 'vscode-web'], file)
+  writePack(file, codeSources(source))
   return file
 }
 
@@ -163,7 +156,8 @@ function checkWindowsImports(directory) {
 function publish(name, directory, nativeLibraries) {
   const target = TARGETS[name]
   const common = ['-c', 'Release', '-r', target.rid, '--self-contained', String(target.selfContained),
-    '-p:DebugType=None', '-p:DebugSymbols=false', '-o', directory]
+    '-p:DebugType=None', '-p:DebugSymbols=false', '-p:FoxwarmPackAssets=true', '-o', directory]
+  if (includesCode(name)) { validateCodeAssets(); common.push('-p:FoxwarmBundleCodeAssets=true') }
   // Release builds ship the libraries built from pinned, patched source (see Foxwarm.csproj).
   if (nativeLibraries) {
     for (const file of nativeFiles[target.rid] ?? []) {
@@ -205,7 +199,6 @@ function publish(name, directory, nativeLibraries) {
   }
   removeDebugFiles(directory)
   if (target.rid.startsWith('win-')) checkWindowsImports(directory)
-  if (includesCode(name)) installCodeAssets(directory)
   const commit = capture('git', ['rev-parse', 'HEAD'])
   fs.writeFileSync(path.join(directory, 'release.json'), JSON.stringify({
     version, target: name, kind: target.kind, rid: target.rid, selfContained: target.selfContained,
@@ -259,7 +252,7 @@ with open(out, 'wb') as raw:
 }
 
 export function writeChecksums(output) {
-  const lines = fs.readdirSync(output).filter(file => /\.(zip|tar\.gz)$/.test(file)).sort().map(file =>
+  const lines = fs.readdirSync(output).filter(file => /\.(zip|tar\.gz|fwassets)$/.test(file)).sort().map(file =>
     `${createHash('sha256').update(fs.readFileSync(path.join(output, file))).digest('hex')}  ${file}`)
   fs.writeFileSync(path.join(output, 'SHA256SUMS'), lines.join('\n') + '\n')
 }
@@ -289,7 +282,7 @@ function main(argv) {
   output = path.resolve(output)
   if (codeOnly) {
     if (targets.length || buildAssets || directoryOnly || checksumsOnly) usage('--code-only cannot be combined with other build options')
-    console.log(`Packaged ${archiveCode(output)}`)
+    console.log(`Packaged ${packCode(output)}`)
     writeChecksums(output)
     return
   }

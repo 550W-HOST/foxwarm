@@ -5,7 +5,9 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
-import { TARGETS, archive, assetName, archiveCode, codeAssetName, hostRid, installCodeAssets, validateCodeAssets, writeChecksums } from './package.mjs'
+import { TARGETS, archive, assetName, packCode, codeAssetName, hostRid, validateCodeAssets, writeChecksums } from './package.mjs'
+
+import { codePrefix, extractPack, readPack } from '../asset-pack.mjs'
 
 const root = path.resolve(import.meta.dirname, '../..')
 const unix = { skip: process.platform === 'win32' }
@@ -200,19 +202,20 @@ function preparedCode(t) {
   return { directory, files }
 }
 
-test('Code archive extracts directly into assets and Desktop retains every resource and notice', unix, t => {
+test('Code pack preserves every resource and notice and supports debugging extraction', t => {
   const { directory, files } = preparedCode(t)
-  const output = scratch(t), desktop = scratch(t), extracted = scratch(t)
-  const archive = archiveCode(output, directory)
-  assert.equal(path.basename(archive), codeAssetName)
-  const extraction = spawnSync('tar', ['-xzf', archive, '-C', extracted], { encoding: 'utf8' })
-  assert.equal(extraction.status, 0, extraction.stderr)
-  assert.deepEqual(fs.readdirSync(extracted).sort(), ['extensions', 'vscode-web'])
-  installCodeAssets(desktop, directory)
-  for (const [file, text] of Object.entries(files)) {
-    assert.equal(fs.readFileSync(path.join(extracted, file), 'utf8'), text)
-    assert.equal(fs.readFileSync(path.join(desktop, 'packages/vscode-web/assets', file), 'utf8'), text)
-  }
+  const output = scratch(t), extracted = scratch(t)
+  const file = packCode(output, directory)
+  assert.equal(path.basename(file), codeAssetName)
+  extractPack(file, extracted)
+  const pack = readPack(file)
+  try {
+    assert.deepEqual(Object.keys(pack.entries).sort(), Object.keys(files).map(file => `${codePrefix}/${file}`).sort())
+    for (const [name, text] of Object.entries(files)) {
+      assert.equal(pack.read(`${codePrefix}/${name}`).toString(), text)
+      assert.equal(fs.readFileSync(path.join(extracted, codePrefix, name), 'utf8'), text)
+    }
+  } finally { pack.close() }
   writeChecksums(output)
   assert.match(fs.readFileSync(path.join(output, 'SHA256SUMS'), 'utf8'), new RegExp('  ' + codeAssetName.replaceAll('.', '\\.') + '\n$'))
 })

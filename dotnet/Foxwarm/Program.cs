@@ -63,21 +63,7 @@ try
     var configuration = new ModelConfiguration(HostPaths.Capture(applicationRoot));
     var paths = configuration.Paths;
     var http = await HttpServerSettings.CaptureAsync(configuration, paths.DataRoot);
-    var packaged = Path.Combine(paths.ResourceRoot, "webui-dist");
-    var installed = Path.Combine(paths.ApplicationRoot, "packages", "webui", "dist");
-    var distRoot =
-        Directory.Exists(packaged) ? packaged
-        : Directory.Exists(installed) ? installed
-        : null;
-    if (
-        http.WebUiEnabled
-        && distRoot is not null
-        && (
-            !File.Exists(Path.Combine(distRoot, "index.html"))
-            || !Directory.Exists(Path.Combine(distRoot, "assets"))
-        )
-    )
-        throw new InvalidOperationException("Configured WebUI dist needs index.html and assets/.");
+    var distRoot = HttpAssets.WebUiDirectory(paths, validate: http.WebUiEnabled);
     await using var host = await MainHost.CreateAsync(
         args,
         configuration,

@@ -3,13 +3,11 @@ import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
 import { execFileSync } from 'node:child_process'
-import { access, readFile, writeFile } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { createHostFixture, until, sleep } from './mainHostFixture.mjs'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
 
-const workbenchDir = resolve('dotnet/Foxwarm/bin/Debug/net10.0/packages/vscode-web/assets/vscode-web')
-await access(join(workbenchDir, 'out/vs/workbench/workbench.web.main.internal.js'))
 const options = { env: {} }
 const host = await createHostFixture('workbench-parity', options)
 options.cwd = host.root
@@ -200,7 +198,9 @@ try {
   await popup.close()
   assert.deepEqual(errors, [])
   assert(!http.some(row => row.status >= 500 && row.path !== '/api/history/search'), JSON.stringify(http.filter(row => row.status >= 500)))
-  const assets = JSON.parse(await readFile(join(workbenchDir, 'foxwarm-vscode-web-assets.json'), 'utf8'))
+  const metadata = await host.api('GET', '/vscode-web/static/foxwarm-vscode-web-assets.json')
+  assert.equal(metadata.status, 200)
+  const assets = metadata.body
   console.log(JSON.stringify({ result: 'passed', normalHost: true, originalApp: true, requests: requests.length, measuredRequests: modelRows.length, toolTiming: receipt.executionTiming, summary: summary.summary, codeAssets: assets, yamlAssistanceQualified: false, browserErrors, limits: ['No Vector search; real VECTOR_DISABLED response preserved.', 'Remote Node/OAuth/Anthropic use prior unchanged qualifications.'] }))
   await host.stop()
 } catch (error) { console.error(JSON.stringify({ host: host.output, browserErrors, httpFailures: http.filter(row => row.status >= 400), terminals: (await host.api('GET', '/api/terminals')).body, text: await page?.evaluate(() => document.body.innerText).catch(() => ''), frames: page?.frames().map(frame => frame.url()) })); throw error }

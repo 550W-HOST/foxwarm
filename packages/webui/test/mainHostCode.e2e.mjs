@@ -4,7 +4,7 @@ import { createServer, request as httpRequest } from 'node:http'
 import { createServer as createTlsServer, request as tlsRequest } from 'node:https'
 import { once } from 'node:events'
 import { execFileSync, spawn } from 'node:child_process'
-import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { createHostFixture, until } from './mainHostFixture.mjs'
 import sharp from 'sharp'
@@ -45,8 +45,6 @@ function observePrefixNavigation(page) {
 }
 stage('owned fixture preparation')
 
-const workbenchDir = resolve('dotnet/Foxwarm/bin/Debug/net10.0/packages/vscode-web/assets/vscode-web')
-await access(join(workbenchDir, 'out/vs/workbench/workbench.web.main.internal.js'))
 const options = { env: {} }, owned = await createHostFixture('code', options)
 options.cwd = owned.root
 options.env = { HOME: join(owned.root, 'home') }
@@ -480,6 +478,8 @@ try {
   }
   stage('final effects and host shutdown')
   assert.equal(git('rev-parse', 'HEAD'), commit); assert.equal(requests.length, declaredMode ? 6 : 3)
+  const missingResources = codeResponses.filter(row => row.status >= 400 && /\/vscode-web\/(?:static|extensions|webview)\//.test(new URL(row.url).pathname) && !new URL(row.url).pathname.endsWith('/package.nls.json'))
+  assert.deepEqual(missingResources, [])
   assert(!codeResponses.some(row => row.status >= 500), JSON.stringify(codeResponses.filter(row => row.status >= 500)))
   await owned.stop(); console.log(JSON.stringify({ status: 'passed', requests: requests.length, codeRequests: codeResponses.length, browserErrors, roots, folders: persisted.folders.length, prefixedWorkbench: !declaredMode, originHeaderIsNotAuthentication: Boolean(declaredMode), declaredMode, proxyUpgrades }))
 } catch (error) {

@@ -131,12 +131,12 @@ public sealed class CodeRoutesTests
         Assert.Contains("npm run download:code", html);
         Assert.Contains(WebUtility.HtmlEncode(Path.GetDirectoryName(f.InstalledAssets)!), html);
         Assert.Contains($"releases/download/v{ProductVersion.Value}", html);
-        Assert.Contains($"foxwarm-code-{ProductVersion.Value}.tar.gz", html);
+        Assert.Contains($"foxwarm-code-{ProductVersion.Value}.fwassets", html);
         Assert.Contains("SHA256SUMS", html);
         Assert.Contains("sha256sum -c", html);
         Assert.Contains("shasum -a 256 -c", html);
         Assert.Contains("Get-FileHash", html);
-        Assert.Contains("tar -xzf", html);
+        Assert.Contains("foxwarm.assets", html);
         using var asset = await f.Client.GetAsync("/vscode-web/static/out/nls.messages.js");
         Assert.Equal(HttpStatusCode.NotFound, asset.StatusCode);
     }

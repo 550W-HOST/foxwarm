@@ -11,6 +11,7 @@ import { join, relative, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import { WebSocket } from 'ws'
+import { readPack, packName } from '../../scripts/asset-pack.mjs'
 import { runCleanup } from './desktop-cleanup.mjs'
 
 const run = promisify(execFile)
@@ -36,7 +37,7 @@ async function validateBundle() {
   const executable = join(app, 'Contents/MacOS', await plist('CFBundleExecutable'))
   assert((await stat(executable)).mode & 0o111, 'The bundle executable is not executable')
   for (const file of [
-    'webui-dist/index.html', 'packages/webui/login.html', 'templates/agents/00_SYSTEM.md', 'templates/models.example.yaml',
+    packName, 'templates/agents/00_SYSTEM.md', 'templates/models.example.yaml',
     'skills/code-index/SKILL.md', 'packages/cli-node/dist/client.bundle.js', 'lib/artifacts/managedPrepare.js',
     'ToolScript/native/monty', 'liblancedb_ffi.dylib', 'libfoxwarm-pty.dylib',
     'node_modules/esbuild/lib/main.js', 'node_modules/sharp/lib/index.js',
@@ -44,6 +45,11 @@ async function validateBundle() {
     'LICENSE.txt', 'LanceDB-LICENSE.txt', 'SkiaSharp-LICENSE.txt', 'ToolScript/MONTY-LICENSE',
     '../Resources/Foxwarm.icns', '../Resources/Foxwarm-icon-LICENSE.txt',
   ]) assert((await stat(join(resources, file))).size > 0, `Missing or empty bundle file: ${file}`)
+  const pack = readPack(join(resources, packName))
+  try {
+    for (const file of ['webui-dist/index.html', 'packages/webui/login.html']) assert(pack.read(file).length > 0)
+    assert(Object.keys(pack.entries).some(file => file.startsWith('webui-dist/assets/') && file.endsWith('.js')))
+  } finally { pack.close() }
   const contents = join(app, 'Contents')
   const files = (await readdir(contents, { recursive: true, withFileTypes: true })).filter(entry => entry.isFile())
     .map(entry => relative(contents, join(entry.parentPath, entry.name)))

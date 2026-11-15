@@ -18,6 +18,8 @@ internal sealed partial class CodeWorkbench
     private readonly string? modelsConfig;
     private readonly string extensionRoot;
     private readonly string installedAssets;
+    private readonly HttpAssets payloadAssets;
+    private readonly HttpAssets externalAssets;
     private readonly string defaultFolder;
     private readonly string workspacePath;
     private readonly bool hasPty;
@@ -46,22 +48,23 @@ internal sealed partial class CodeWorkbench
         var resources = config?.Paths.ResourceRoot ?? AppContext.BaseDirectory;
         appConfig = config is null ? null : Path.GetFullPath(config.AppPath);
         modelsConfig = config is null ? null : Path.GetFullPath(config.ActivePath);
+        payloadAssets = new HttpAssets(resources, additionalPack: HttpAssets.CodePack);
+        externalAssets = new HttpAssets(applicationRoot, HttpAssets.CodePack);
         extensionRoot = Path.Combine(resources, "packages", "vscode-web");
         installedAssets = Path.Combine(applicationRoot, "packages", "vscode-web", "assets");
         defaultFolder = FoxwarmUri(applicationRoot);
         workspacePath = Path.Combine(dataRoot, "state", "vscode-web", "foxwarm.code-workspace");
     }
 
-    // Prepared Code assets are optional and outlive replaced payloads. A payload that
-    // ships or mounts them wins; otherwise they belong to the installation, where
-    // `build:code` and `download:code` write them. Checked per request so assets
-    // prepared while Main runs need only a reload.
-    private string Assets =>
-        Directory.Exists(Path.Combine(extensionRoot, "assets", "vscode-web"))
-            ? Path.Combine(extensionRoot, "assets")
-            : installedAssets;
-    private string AssetRoot => Path.Combine(Assets, "vscode-web");
-    private string YamlRoot => Path.Combine(Assets, "extensions", "redhat.vscode-yaml");
+    // Payload Code wins over the separately installed optional component. Lookup is
+    // live, so installing a pack or preparing loose assets needs only a browser reload.
+    private bool PayloadHasCode =>
+        payloadAssets.Exists(AssetRoot + "/out/nls.messages.js")
+        || Directory.Exists(Path.Combine(extensionRoot, "assets", "vscode-web"));
+    private HttpAssets CodeAssets => PayloadHasCode ? payloadAssets : externalAssets;
+    private string Assets => PayloadHasCode ? Path.Combine(extensionRoot, "assets") : installedAssets;
+    private const string AssetRoot = HttpAssets.CodePrefix + "/vscode-web";
+    private const string YamlRoot = HttpAssets.CodePrefix + "/extensions/redhat.vscode-yaml";
 
     private bool Prepared =>
         new[]
@@ -69,8 +72,8 @@ internal sealed partial class CodeWorkbench
             "out/nls.messages.js",
             "out/vs/workbench/workbench.web.main.internal.css",
             "out/vs/workbench/workbench.web.main.internal.js",
-        }.All(file => File.Exists(Path.Combine(AssetRoot, file)));
-    private bool HasYaml => File.Exists(Path.Combine(YamlRoot, "package.json"));
+        }.All(file => CodeAssets.Exists(AssetRoot + "/" + file));
+    private bool HasYaml => CodeAssets.Exists(YamlRoot + "/package.json");
 
     internal JsonObject Roots()
     {

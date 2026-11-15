@@ -171,7 +171,7 @@ test('Tests and Release reuse one cache-backed Code producer and consume its per
   for (const [job, artifact] of [[jobs.chromium, uploaded.with.name], [release.jobs.windows, forwarded.with.name]]) {
     const download = downloads(job, artifact)
     assert.ok(download)
-    const extraction = job.steps.find(step => step.run?.includes('tar -xzf') && step.run.includes('foxwarm-code-'))
+    const extraction = job.steps.find(step => step.run?.includes('asset-pack.mjs extract') && step.run.includes('foxwarm-code-'))
     assert.ok(extraction)
     assert.ok(job.steps.indexOf(download) < job.steps.indexOf(extraction))
     assert.ok(!builtCode(job))

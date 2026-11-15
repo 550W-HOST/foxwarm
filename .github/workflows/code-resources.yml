@@ -23,7 +23,7 @@ jobs:
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: packages/vscode-web/assets
-          key: code-oss-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('packages/vscode-web/code-oss-version.json', 'packages/vscode-web/yaml-extension-version.json', 'packages/vscode-web/scripts/**', 'packages/vscode-web/Dockerfile.code-oss', 'packages/vscode-web/package*.json', 'package*.json', 'scripts/test/prepare-browser.mjs', 'scripts/release/package.mjs', '.github/workflows/code-resources.yml') }}
+          key: code-oss-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('packages/vscode-web/code-oss-version.json', 'packages/vscode-web/yaml-extension-version.json', 'packages/vscode-web/scripts/**', 'packages/vscode-web/Dockerfile.code-oss', 'packages/vscode-web/package*.json', 'package*.json', 'scripts/test/prepare-browser.mjs', 'scripts/release/package.mjs', 'scripts/asset-pack.mjs', '.github/workflows/code-resources.yml') }}
       - name: Build missing Code resources once
         if: ${{ steps.cache.outputs.cache-hit != 'true' }}
         run: node scripts/test/prepare-browser.mjs --code-only
@@ -41,7 +41,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: code-resources
-          path: ${{ runner.temp }}/code-resources/foxwarm-code-*.tar.gz
+          path: ${{ runner.temp }}/code-resources/foxwarm-code-*.fwassets
           if-no-files-found: error
           compression-level: 0
           retention-days: 14

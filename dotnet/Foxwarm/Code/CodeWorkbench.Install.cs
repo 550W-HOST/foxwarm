@@ -5,7 +5,7 @@ internal sealed partial class CodeWorkbench
     internal static string InstallCommand(string assets, bool powershell)
     {
         var version = ProductVersion.Value;
-        var asset = $"foxwarm-code-{version}.tar.gz";
+        var asset = $"foxwarm-code-{version}.fwassets";
         var url = $"https://github.com/550W-HOST/foxwarm/releases/download/v{version}";
         if (powershell)
         {
@@ -26,8 +26,7 @@ internal sealed partial class CodeWorkbench
                     $expected = $line[0].Split(' ')[0]
                     if ((Get-FileHash (Join-Path $temp $asset) -Algorithm SHA256).Hash -ne $expected) { throw 'Package checksum failed.' }
                     New-Item -ItemType Directory -Force -Path $target | Out-Null
-                    tar -xzf (Join-Path $temp $asset) -C $target
-                    if ($LASTEXITCODE -ne 0) { throw 'Package extraction failed.' }
+                    Move-Item -LiteralPath (Join-Path $temp $asset) -Destination (Join-Path $target 'foxwarm.assets') -Force
                   } finally { Remove-Item -LiteralPath $temp -Recurse -Force }
                 }
                 """;
@@ -49,7 +48,7 @@ internal sealed partial class CodeWorkbench
                 if command -v sha256sum >/dev/null 2>&1; then sha256sum -c code.sha256; else shasum -a 256 -c code.sha256; fi
               )
               mkdir -p "$target"
-              tar -xzf "$temp/$asset" -C "$target"
+              mv "$temp/$asset" "$target/foxwarm.assets"
             )
             """;
     }

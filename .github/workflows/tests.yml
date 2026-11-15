@@ -247,7 +247,8 @@ jobs:
       - name: Extract shared Code resources
         run: |
           mkdir -p packages/vscode-web/assets
-          tar -xzf "$RUNNER_TEMP"/code-resources/foxwarm-code-*.tar.gz -C packages/vscode-web/assets
+          node scripts/asset-pack.mjs extract "$RUNNER_TEMP"/code-resources/foxwarm-code-*.fwassets "$RUNNER_TEMP/code-assets"
+          cp -a "$RUNNER_TEMP/code-assets/packages/vscode-web/assets/." packages/vscode-web/assets/
       - name: Check shared Code resources
         run: node scripts/test/prepare-browser.mjs --check-code
       - name: Prepare owned SSH daemon prerequisite

@@ -533,11 +533,12 @@ jobs:
       - name: Prepare shared Code resources
         shell: pwsh
         run: |
-          # The server artifact forwards the shared code-resources archive unchanged.
+          # The server artifact forwards the shared Code asset pack unchanged.
           New-Item -ItemType Directory -Force packages/vscode-web/assets | Out-Null
-          $code = @(Get-ChildItem dist/foxwarm-code-*.tar.gz)
-          if ($code.Count -ne 1) { throw 'Expected one shared Code resource archive' }
-          tar -xzf $code[0].FullName -C packages/vscode-web/assets
+          $code = @(Get-ChildItem dist/foxwarm-code-*.fwassets)
+          if ($code.Count -ne 1) { throw 'Expected one shared Code asset pack' }
+          node scripts/asset-pack.mjs extract $code[0].FullName "$env:RUNNER_TEMP/code-assets"
+          Copy-Item -Recurse -Force "$env:RUNNER_TEMP/code-assets/packages/vscode-web/assets/*" packages/vscode-web/assets
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node scripts/test/prepare-browser.mjs --check-code
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

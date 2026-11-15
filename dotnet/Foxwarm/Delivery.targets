@@ -197,6 +197,17 @@
       >$(NETCoreSdkPortableRuntimeIdentifier)</ArtifactTargetRid>
     <ArtifactRuntimeOutput>$(MSBuildProjectDirectory)/obj/artifact-runtime/$(ArtifactTargetRid)</ArtifactRuntimeOutput>
   </PropertyGroup>
+  <Target Name="CollectHttpAssets" BeforeTargets="AssignTargetPaths" Condition="'$(FoxwarmPackAssets)' == 'true'">
+    <PropertyGroup>
+      <HttpAssetOutput>$(MSBuildProjectDirectory)/obj/http-assets/$(Configuration)/$(ArtifactTargetRid)/$(FoxwarmBundleCodeAssets)/foxwarm.assets</HttpAssetOutput>
+      <HttpAssetCodeArgument Condition="'$(FoxwarmBundleCodeAssets)' == 'true'">--code</HttpAssetCodeArgument>
+    </PropertyGroup>
+    <Exec Command="node &quot;$(MSBuildProjectDirectory)/../../scripts/asset-pack.mjs&quot; build &quot;$(HttpAssetOutput)&quot; $(HttpAssetCodeArgument)" />
+    <ItemGroup>
+      <Content Remove="../../packages/webui/dist/**/*;../../packages/webui/public/login.html;../../packages/vscode-web/foxwarm-*/package.json;../../packages/vscode-web/foxwarm-*/dist/**/*;../../packages/vscode-web/foxwarm-*/media/**/*" />
+      <Content Include="$(HttpAssetOutput)" Link="foxwarm.assets" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    </ItemGroup>
+  </Target>
   <Target Name="CollectArtifactRuntime" BeforeTargets="AssignTargetPaths">
     <Exec Command="node &quot;$(MSBuildProjectDirectory)/../../scripts/collect-artifact-runtime.mjs&quot; &quot;$(ArtifactRuntimeOutput)&quot; &quot;$(ArtifactTargetRid)&quot; --allow-missing" />
     <ItemGroup>

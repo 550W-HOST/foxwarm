@@ -61,11 +61,8 @@ internal sealed partial class DesktopWindow : Window
                     )
             );
             var configuration = new ModelConfiguration(HostPaths.ForDataRoot(data));
-            var dist = Path.Combine(AppContext.BaseDirectory, "webui-dist");
-            if (
-                !File.Exists(Path.Combine(dist, "index.html"))
-                || !Directory.Exists(Path.Combine(dist, "assets"))
-            )
+            var dist = HttpAssets.WebUiDirectory(configuration.Paths);
+            if (dist is null)
                 throw new InvalidDataException(
                     "The WebUI is missing. Extract the complete Foxwarm ZIP and try again."
                 );

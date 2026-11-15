@@ -8,7 +8,6 @@ using Foxwarm.Channels.WebUi;
 using Foxwarm.Sessions;
 using Microsoft.AspNetCore.ResponseCompression;
 using Microsoft.AspNetCore.Server.Kestrel.Transport.Sockets;
-using Microsoft.Extensions.FileProviders;
 
 namespace Foxwarm;
 
@@ -168,7 +167,7 @@ internal sealed class HttpServer
             }
         );
         app.UseResponseCompression();
-        var loginFile = Path.Combine(AppContext.BaseDirectory, "packages", "webui", "login.html");
+        var resources = new HttpAssets(sessions.Models.ConfigurationOwner?.Paths.ResourceRoot ?? AppContext.BaseDirectory);
         app.Use(
             async (context, next) =>
             {
@@ -224,7 +223,7 @@ internal sealed class HttpServer
                 {
                     context.Response.ContentType = "text/html; charset=utf-8";
                     context.Response.Headers.CacheControl = "no-store";
-                    await context.Response.SendFileAsync(loginFile, context.RequestAborted);
+                    await resources.ServeAsync(context, "packages/webui/login.html");
                     return;
                 }
                 var resource = WebUiEnabled && Downloads.Authorizes(context);
@@ -272,67 +271,52 @@ internal sealed class HttpServer
         );
         if (WebUiEnabled && distRoot is not null)
         {
-            app.UseStaticFiles(
-                new StaticFileOptions
-                {
-                    FileProvider = new PhysicalFileProvider(Path.Combine(distRoot, "assets")),
-                    RequestPath = "/assets",
-                }
-            );
-            // Keep one manifest identity while projecting this browser's public canvas color.
+            var dist = new HttpAssets(Path.GetDirectoryName(distRoot)!);
+            var prefix = Path.GetFileName(distRoot) + "/";
             app.Use(async (context, next) =>
             {
-                if (context.Request.Method != "GET" || context.Request.Path != "/manifest.json")
+                var path = context.Request.Path;
+                if (context.Request.Method is not "GET" and not "HEAD")
                 {
                     await next();
                     return;
                 }
-                var file = Path.Combine(distRoot, "manifest.json");
-                if (!File.Exists(file)) { await next(); return; }
-                var manifest = JsonNode.Parse(await File.ReadAllTextAsync(file, context.RequestAborted))!.AsObject();
-                var color = context.Request.Cookies["foxwarm_canvas"];
-                if (color is not null && (color.Length == 6 || color.Length == 8)
-                    && color.All(Uri.IsHexDigit))
+                if (path.StartsWithSegments("/assets") || path != "/manifest.json" && IsBrandAsset(path))
                 {
-                    manifest["theme_color"] = "#" + color;
-                    manifest["background_color"] = "#" + color;
+                    if (IsBrandAsset(path))
+                        context.Response.Headers.CacheControl = "private, no-cache";
+                    await dist.ServeAsync(context, prefix + path.Value!.TrimStart('/'));
+                    return;
                 }
-                context.Response.Headers.CacheControl = "private, no-store";
-                context.Response.Headers.Vary = "Cookie";
-                context.Response.ContentType = "application/manifest+json";
-                await context.Response.WriteAsync(manifest.ToJsonText(), context.RequestAborted);
-            });
-            app.UseWhen(
-                context => context.Request.Path != "/manifest.json" && IsBrandAsset(context.Request.Path),
-                branch =>
-                    branch.UseStaticFiles(
-                        new StaticFileOptions
-                        {
-                            FileProvider = new PhysicalFileProvider(distRoot),
-                            OnPrepareResponse = context =>
-                                context.Context.Response.Headers.CacheControl = "private, no-cache",
-                        }
-                    )
-            );
-            var indexPath = Path.Combine(distRoot, "index.html");
-            app.Use(
-                async (context, next) =>
+                if (context.Request.Method == "GET" && path == "/manifest.json" && dist.Exists(prefix + "manifest.json"))
                 {
-                    if (context.Request.Method == "GET" && context.Request.Path == "/")
+                    var manifest = JsonNode.Parse(await dist.ReadTextAsync(prefix + "manifest.json", context.RequestAborted))!.AsObject();
+                    var color = context.Request.Cookies["foxwarm_canvas"];
+                    if (color is not null && (color.Length == 6 || color.Length == 8) && color.All(Uri.IsHexDigit))
                     {
-                        var html = await File.ReadAllTextAsync(indexPath, context.RequestAborted);
-                        const string marker = "<meta name=\"foxwarm-host\" content=\"dotnet\">";
-                        html = html.Contains("<head>", StringComparison.Ordinal)
-                            ? html.Replace("<head>", "<head>" + marker)
-                            : marker + html;
-                        context.Response.ContentType = "text/html; charset=utf-8";
-                        context.Response.Headers.CacheControl = "no-store";
-                        await context.Response.WriteAsync(html, context.RequestAborted);
-                        return;
+                        manifest["theme_color"] = "#" + color;
+                        manifest["background_color"] = "#" + color;
                     }
-                    await next();
+                    context.Response.Headers.CacheControl = "private, no-store";
+                    context.Response.Headers.Vary = "Cookie";
+                    context.Response.ContentType = "application/manifest+json";
+                    await context.Response.WriteAsync(manifest.ToJsonText(), context.RequestAborted);
+                    return;
                 }
-            );
+                if (context.Request.Method == "GET" && path == "/")
+                {
+                    var html = await dist.ReadTextAsync(prefix + "index.html", context.RequestAborted);
+                    const string marker = "<meta name=\"foxwarm-host\" content=\"dotnet\">";
+                    html = html.Contains("<head>", StringComparison.Ordinal)
+                        ? html.Replace("<head>", "<head>" + marker)
+                        : marker + html;
+                    context.Response.ContentType = "text/html; charset=utf-8";
+                    context.Response.Headers.CacheControl = "no-store";
+                    await context.Response.WriteAsync(html, context.RequestAborted);
+                    return;
+                }
+                await next();
+            });
         }
         if (WebUiEnabled)
         {

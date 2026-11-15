@@ -86,8 +86,8 @@ internal sealed partial class DesktopApplication : NSApplicationDelegate
                     )
             );
             var configuration = new ModelConfiguration(HostPaths.ForDataRoot(data));
-            var dist = Path.Combine(configuration.Paths.ResourceRoot, "webui-dist");
-            if (!File.Exists(Path.Combine(dist, "index.html")))
+            var dist = HttpAssets.WebUiDirectory(configuration.Paths);
+            if (dist is null)
                 throw new InvalidDataException(
                     "The WebUI is missing from the Foxwarm application."
                 );

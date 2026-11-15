@@ -14,7 +14,7 @@ Foxwarm releases are prebuilt packages. Installing one compiles nothing and need
 | `foxwarm-win-x64-native.zip` | Server for Windows x64 compiled to native code; needs no .NET runtime |
 | `foxwarm-desktop-win-x64.zip` | Windows desktop app compiled to native code, with Code OSS and YAML support; needs no .NET runtime |
 | `foxwarm-desktop-osx-arm64.zip` | macOS desktop app for Apple Silicon compiled to native code: the `Foxwarm.app` bundle |
-| `foxwarm-code-<version>.tar.gz` | Platform-independent Code OSS workbench and YAML extension for server installations |
+| `foxwarm-code-<version>.fwassets` | Platform-independent Code OSS workbench and YAML extension for server installations |
 | `SHA256SUMS` | SHA-256 checksums of the assets |
 
 Server and Desktop asset names carry no version, so `releases/latest/download/<asset>` always names the newest release; each application archive has a single top-level directory such as `foxwarm-0.9.0-linux-x64/` (`Foxwarm.app` for the macOS desktop app). Every application package except the macOS desktop app contains `release.json` (version, target, runtime identifier, whether it is self-contained and whether it is native, its asset name and source commit). Server packages also contain the installation control script: `foxwarmctl` on Linux and macOS, `foxwarmctl.ps1` and `foxwarmctl.cmd` on Windows.
@@ -35,9 +35,9 @@ The Windows desktop app is the WinUI host of `dotnet/Foxwarm.Desktop`, compiled 
 
 ## Code for server installations
 
-Open Code in the running Foxwarm installation. If its assets are missing, the setup page provides Linux/macOS and PowerShell commands for that exact Foxwarm version. The commands download `foxwarm-code-<version>.tar.gz` and the same release's `SHA256SUMS`, verify SHA-256, and extract into the selected installation asset directory. Reload Code after extraction; Main does not need a restart.
+Open Code in the running Foxwarm installation. If its assets are missing, the setup page provides Linux/macOS and PowerShell commands for that exact Foxwarm version. The commands download `foxwarm-code-<version>.fwassets` and the same release's `SHA256SUMS`, verify SHA-256, and place the pack as `foxwarm.assets` in the selected installation asset directory. Reload Code after installation; Main does not need a restart.
 
-The Code archive has `vscode-web/` and `extensions/redhat.vscode-yaml/` at its root, ready to extract into `packages/vscode-web/assets`. It does not include or replace Main or instance data. The existing `npm run build:code` source option remains available. `npm run download:code` continues to select Microsoft's separately licensed development/internal-use distribution; it is not an alias for the Foxwarm release asset.
+The Code pack contains the complete workbench and YAML resource namespace. Main serves it directly without extraction; existing extracted installations continue to work. Application releases similarly carry WebUI/login and first-party extension resources in one `foxwarm.assets` file; Windows Desktop also includes Code in that file. Files consumed by Node or native libraries remain loose. For debugging, `node scripts/asset-pack.mjs inspect PACK` prints the index and `extract PACK EMPTY_DIRECTORY` restores the original resources. It does not include or replace Main or instance data. The existing `npm run build:code` source option remains available. `npm run download:code` continues to select Microsoft's separately licensed development/internal-use distribution; it is not an alias for the Foxwarm release asset.
 
 Measured with Foxwarm 0.9.2 and the pinned Code OSS 1.141.0 build (all 80 built-in extensions retained):
 
