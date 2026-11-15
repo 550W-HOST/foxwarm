@@ -99,10 +99,11 @@ internal static class OperationAttribution
     internal static string LayerName(string? layer) =>
         layer is null ? "the global policy" : $"the rules of Agent `{layer}`";
 
-    private static string RuleName(ToolAuthorizationPolicy policy, JsonObject rule)
+    // Sentence-initial by default; `lower` for use in the middle of a sentence.
+    private static string RuleName(ToolAuthorizationPolicy policy, JsonObject rule, bool lower = false)
     {
         var index = policy.Value["rules"]!.AsArray().IndexOf(rule) + 1;
-        return $"Rule `{SessionWait.Text(rule["id"])}` (#{index})";
+        return $"{(lower ? "rule" : "Rule")} `{SessionWait.Text(rule["id"])}` (#{index})";
     }
 
     // The attribution appended to a denial: the deciding rule and layer, the denied obligation
@@ -188,20 +189,20 @@ internal static class OperationAttribution
         var call = primary ?? check;
         var capability = $"`{OperationPlan.CapabilityId(check)}`";
         var who = unresolved.Rule is { } rule
-            ? $"{RuleName(denied.Policy, rule)} in {LayerName(denied.Layer)}"
+            ? $"{RuleName(denied.Policy, rule, lower: true)} in {LayerName(denied.Layer)}"
             : $"the operation rules of {LayerName(denied.Layer)}";
         var operation = unresolved.Operation;
         if (operation.Underivable is { } reason)
-            return $"Tool authorization can't determine what {capability} would do ({reason}), so {who} can't decide it. It was not executed. Called as `{Invocation(call)}`.";
+            return $"Tool authorization can't determine what {capability} would do ({reason}), called as `{Invocation(call)}`, so {who} can't decide it. The call was not executed.";
         var missing = operation
             .Resources.Where(pair => pair.Value is null)
             .Select(pair => pair.Key)
             .Concat(operation.With.Where(pair => pair.Value is null).Select(pair => "with." + pair.Key))
             .ToArray();
         var facts = missing.Length == 0
-            ? "the facts its selectors test"
-            : "its " + string.Join(", ", missing.Select(name => $"`{name}`"));
-        return $"Tool authorization can't establish {facts} for the operation {OperationText(operation)} of {capability}, so {who} can't decide it. It was not executed. Called as `{Invocation(call)}`.";
+            ? "the tested facts"
+            : "the " + string.Join(", ", missing.Select(name => $"`{name}`"));
+        return $"Tool authorization can't establish {facts} of the operation `{operation.Op}` ({capability}, called as `{Invocation(call)}`), so {who} can't decide it. The call was not executed.";
     }
 
     // What a creation-target outcome is attributed to. A deny or ask the stopping rule (or

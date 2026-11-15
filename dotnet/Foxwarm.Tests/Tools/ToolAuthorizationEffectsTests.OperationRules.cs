@@ -269,7 +269,7 @@ public sealed partial class ToolAuthorizationEffectsTests
         var missing = await Call(execution.Tools, "view_session", Obj("""{"sessionId":"ghost"}"""));
         Assert.Equal("tool_authorization_unresolved", Error(missing));
         Assert.Equal(
-            "Tool authorization can't establish its `targetSession` for the operation `session.view` of `builtin:view_session`, so Rule `own-tree` (#1) in the global policy can't decide it. It was not executed. Called as `view_session`.",
+            "Tool authorization can't establish the `targetSession` of the operation `session.view` (`builtin:view_session`, called as `view_session`), so rule `own-tree` (#1) in the global policy can't decide it. The call was not executed.",
             Message(missing)
         );
     }
