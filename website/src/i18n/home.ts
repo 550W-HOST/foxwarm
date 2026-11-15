@@ -44,7 +44,7 @@ export type HomeStrings = {
   htmlLang: string;
   path: string;
   meta: { title: string; description: string; ogTitle: string };
-  nav: { features: string; install: string; docs: string; demo: string; github: string; theme: string; language: string; languageLabel: string; skip: string };
+  nav: { features: string; install: string; docs: string; demo: string; blog: string; github: string; theme: string; language: string; languageLabel: string; skip: string };
   hero: {
     title: string;
     lede: string;
@@ -83,9 +83,10 @@ export type HomeStrings = {
   room: { title: string; status: string; messages: ChatMessage[] };
   extras: { eyebrow: string; title: string; items: { title: string; body: string }[] };
   start: { eyebrow: string; title: string; lede: string; steps: { title: string; body: string }[]; guide: string };
-  footer: { tagline: string; docs: string; github: string; license: string };
+  footer: { tagline: string; docs: string; blog: string; github: string; license: string };
 };
 
-export const docs = (_lang: Lang, page = '') => `/docs/${page}`;
+export const docsPath = (lang: Lang, page = '') => `${lang === 'zh' ? '/zh' : ''}/docs/${page}`;
+export const blogPath = (lang: Lang, slug = '') => `${lang === 'zh' ? '/zh' : ''}/blog/${slug ? `${slug}/` : ''}`;
 
 export const strings: Record<Lang, HomeStrings> = { en, zh };

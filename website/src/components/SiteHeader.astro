@@ -1,0 +1,44 @@
+---
+// Header shared by the homepage and the blog: brand, section links, language switch and theme toggle.
+import Icon from './Icon.astro';
+import { strings, githubUrl, demoUrl, docsPath, blogPath, type Lang } from '../i18n/home';
+
+interface Props {
+  lang: Lang;
+  /** Where the language link goes: the same page in the other language, or its nearest equivalent. */
+  languageHref: string;
+  current?: 'blog';
+}
+const { lang, languageHref, current } = Astro.props;
+const t = strings[lang];
+const other: Lang = lang === 'en' ? 'zh' : 'en';
+---
+<a class="skip-link" href="#main">{t.nav.skip}</a>
+<header class="site-header">
+  <div class="container header-inner">
+    <a class="brand" href={t.path} aria-label="Foxwarm">
+      <img src="/favicon.svg" alt="" width="26" height="26" />
+      <span>Foxwarm</span>
+    </a>
+    <nav class="primary-nav" aria-label="Primary">
+      <a href={docsPath(lang)}>{t.nav.docs}</a>
+      <a href={demoUrl}>{t.nav.demo}</a>
+      <a href={blogPath(lang)} aria-current={current === 'blog' ? 'page' : undefined}>{t.nav.blog}</a>
+      <a class="nav-github" href={githubUrl}>{t.nav.github}</a>
+      <a href={languageHref} hreflang={strings[other].htmlLang} lang={strings[other].htmlLang} aria-label={t.nav.languageLabel}>{t.nav.language}</a>
+      <button class="theme-toggle" type="button" aria-label={t.nav.theme} title={t.nav.theme}>
+        <Icon name="sun" class="theme-icon-light" /><Icon name="moon" class="theme-icon-dark" />
+      </button>
+    </nav>
+  </div>
+</header>
+<script is:inline>
+  (() => {
+    const root = document.documentElement;
+    document.querySelector('.theme-toggle')?.addEventListener('click', () => {
+      const next = root.dataset.theme === 'dark' ? 'light' : 'dark';
+      root.dataset.theme = next;
+      try { localStorage.setItem('starlight-theme', next); } catch {}
+    });
+  })();
+</script>

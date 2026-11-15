@@ -1,0 +1,9 @@
+---
+import BlogPost from '../../../components/BlogPost.astro';
+import { getPostGroups } from '../../../blog/posts';
+
+export async function getStaticPaths() {
+  return (await getPostGroups()).filter((group) => group.versions.zh).map((group) => ({ params: { slug: group.slug }, props: { group } }));
+}
+---
+<BlogPost lang="zh" group={Astro.props.group} />

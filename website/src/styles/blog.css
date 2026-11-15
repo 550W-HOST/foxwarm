@@ -1,0 +1,92 @@
+/* Blog index and long-form articles, on the homepage palette and type (home.css). */
+.blog-main { padding: 56px 0 104px; }
+.blog-index { width: min(760px, 100% - 48px); }
+.post { width: min(720px, 100% - 48px); }
+
+.primary-nav a[aria-current='page'] { color: var(--ink); }
+
+/* Index */
+.blog-index-head h1 { font-size: clamp(2rem, 4vw, 2.6rem); line-height: 1.15; letter-spacing: -.03em; }
+:lang(zh) .blog-index-head h1 { letter-spacing: 0; }
+.blog-lede { margin-top: 14px; color: var(--ink-soft); font-size: 1.05rem; line-height: 1.7; }
+.blog-feed { display: inline-block; margin-top: 14px; color: var(--muted); font: .8rem var(--font-mono); text-underline-offset: 3px; }
+.blog-feed:hover { color: var(--ink); }
+.post-list { margin: 40px 0 0; padding: 0; border-top: 1px solid var(--ink); list-style: none; }
+.post-item { padding: 26px 0 28px; border-bottom: 1px solid var(--line); }
+.post-item h2 { margin-top: 10px; font-size: 1.35rem; line-height: 1.4; letter-spacing: -.01em; }
+.post-item h2 a { text-decoration: none; }
+.post-item h2 a:hover { color: var(--accent-strong); }
+.post-summary { margin-top: 8px; color: var(--muted); font-size: .97rem; line-height: 1.7; }
+
+.post-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; color: var(--muted); font: .8rem/1.6 var(--font-mono); }
+.post-meta > :not(:first-child)::before { content: '·'; margin-right: 10px; color: var(--line-strong); }
+.post-meta a { color: var(--accent-strong); text-decoration: none; }
+.post-meta a:hover { text-decoration: underline; text-underline-offset: 3px; }
+.post-badge { color: var(--ink-soft); }
+
+/* Article */
+.post-head { padding-bottom: 26px; border-bottom: 1px solid var(--line); }
+.post-trail { display: flex; flex-wrap: wrap; gap: 4px 10px; color: var(--muted); font: 500 .8rem/1.6 var(--font-mono); }
+.post-trail a { color: var(--accent-strong); text-decoration: none; }
+.post-trail a:hover { text-decoration: underline; text-underline-offset: 3px; }
+.post-trail > :not(:first-child)::before { content: '/'; margin-right: 10px; color: var(--line-strong); }
+.post-head h1 { margin-top: 14px; font-size: clamp(1.8rem, 4.2vw, 2.5rem); line-height: 1.22; letter-spacing: -.03em; }
+:lang(zh) .post-head h1 { line-height: 1.35; letter-spacing: 0; }
+.post-head .post-meta { margin-top: 16px; }
+
+.prose { margin-top: 32px; color: var(--ink-soft); font-size: 1.06rem; line-height: 1.8; overflow-wrap: break-word; }
+:lang(zh) .prose { line-height: 1.9; }
+.prose > * + * { margin-top: 1.15em; }
+.prose h2 { margin-top: 2.2em; color: var(--ink); font-size: 1.45rem; line-height: 1.35; letter-spacing: -.015em; }
+:lang(zh) .prose h2 { letter-spacing: 0; }
+.prose h3 { margin-top: 1.8em; color: var(--ink); font-size: 1.15rem; line-height: 1.4; }
+.prose h2 + *, .prose h3 + * { margin-top: .7em; }
+.prose a { color: var(--accent-strong); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.prose strong { color: var(--ink); font-weight: 600; }
+.prose ul, .prose ol { padding-left: 1.4em; }
+.prose li + li { margin-top: .45em; }
+.prose li::marker { color: var(--muted); }
+.prose :not(pre) > code { padding: .08em .35em; border: 1px solid var(--line); border-radius: 4px; background: var(--code-bg); color: var(--ink); font-size: .86em; overflow-wrap: anywhere; }
+/* Code blocks use the docs' Expressive Code frames. Their variables are declared on :root and
+   read the Starlight palette there, so blog pages define the docs' values (docs.css) at :root. */
+:root {
+  --__sl-font: var(--font-sans);
+  --__sl-font-mono: var(--font-mono);
+  --sl-text-code: .84rem;
+  --sl-line-height: 1.65;
+  --sl-color-text: var(--ink-soft);
+  --sl-color-accent: #c14d1d;
+  --sl-color-accent-high: #6b2a0f;
+  --sl-color-gray-5: #d3d6db;
+  --sl-color-gray-6: #f0f1f3;
+  --sl-color-gray-7: #f7f8f9;
+  --sl-color-black: #ffffff;
+}
+:root[data-theme='dark'] {
+  --sl-color-accent: #ff7a3d;
+  --sl-color-accent-high: #ffd0b8;
+  --sl-color-gray-5: #353940;
+  --sl-color-gray-6: #1b1d20;
+  --sl-color-gray-7: #151618;
+  --sl-color-black: #111214;
+}
+.prose .expressive-code { margin-top: 1.4em; margin-bottom: 1.4em; }
+.prose pre { overflow-x: auto; font-size: .84rem; line-height: 1.65; }
+.prose hr { margin: 2.4em 0; border: 0; border-top: 1px solid var(--line); }
+.prose blockquote { margin-left: 0; padding-left: 16px; border-left: 2px solid var(--line-strong); color: var(--muted); }
+
+/* Wide tables scroll inside the column instead of widening the page. */
+.prose table { display: block; width: max-content; max-width: 100%; overflow-x: auto; border-collapse: collapse; font-size: .92rem; line-height: 1.6; }
+.prose th, .prose td { padding: 9px 14px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+.prose th { border-bottom-color: var(--line-strong); color: var(--ink); font-weight: 600; }
+.prose td:first-child, .prose th:first-child { padding-left: 0; }
+
+.post-foot { margin-top: 56px; padding-top: 20px; border-top: 1px solid var(--line); }
+.post-foot a { color: var(--accent-strong); font-size: .95rem; text-decoration: none; }
+.post-foot a:hover { text-decoration: underline; text-underline-offset: 3px; }
+
+@media (max-width: 720px) {
+  .blog-main { padding: 36px 0 72px; }
+  .blog-index, .post { width: min(720px, 100% - 32px); }
+  .prose { font-size: 1rem; }
+}

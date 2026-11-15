@@ -206,7 +206,7 @@ code, pre, time { font-family: var(--font-mono); }
 .site-footer { border-top: 1px solid var(--line); }
 .footer-inner { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 28px; padding: 28px 0; color: var(--muted); font-size: .88rem; }
 .footer-inner .brand { color: var(--ink); font-size: .95rem; }
-.footer-inner nav { display: flex; gap: 20px; margin-left: auto; }
+.footer-inner nav { display: flex; flex-wrap: wrap; gap: 8px 20px; margin-left: auto; }
 .footer-inner nav a { color: var(--muted); text-decoration: none; }
 .footer-inner nav a:hover { color: var(--ink); }
 
@@ -220,6 +220,7 @@ code, pre, time { font-family: var(--font-mono); }
   .container { width: min(var(--container), 100% - 32px); }
   .primary-nav { gap: 14px; }
   .primary-nav a[href*='github'] { display: none; }
+  .footer-inner nav { margin-left: 0; }
   .steps { grid-template-columns: minmax(0, 1fr); gap: 24px; }
   .extra-list div { grid-template-columns: minmax(0, 1fr); gap: 2px; }
   .shot-stack { padding-bottom: 0; }
@@ -227,8 +228,12 @@ code, pre, time { font-family: var(--font-mono); }
   .day-rows::before { left: 59px; }
   .day-row { grid-template-columns: 44px 32px minmax(0, 1fr); }
 }
+/* Docs, Demo, Blog, language and theme fit beside the logo alone on the narrowest phones. */
+@media (max-width: 374px) {
+  .site-header .brand span { display: none; }
+}
 @media (max-width: 360px) {
-  .primary-nav { gap: 10px; }
+  .primary-nav { gap: 12px; }
 }
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }

@@ -1,0 +1,47 @@
+---
+import { render } from 'astro:content';
+import BlogLayout from './BlogLayout.astro';
+import { strings, blogPath, type Lang } from '../i18n/home';
+import { blogStrings } from '../i18n/blog';
+import type { PostGroup } from '../blog/posts';
+
+interface Props { lang: Lang; group: PostGroup }
+const { lang, group } = Astro.props;
+const post = group.versions[lang]!;
+const other: Lang = lang === 'en' ? 'zh' : 'en';
+const translation = group.versions[other];
+const b = blogStrings[lang];
+const path = blogPath(lang, group.slug);
+const alternates = translation ? { [lang]: path, [other]: blogPath(other, group.slug) } : {};
+const { Content } = await render(post);
+---
+<BlogLayout
+  lang={lang}
+  title={post.data.title}
+  description={post.data.description}
+  path={path}
+  alternates={alternates}
+  languageHref={translation ? blogPath(other, group.slug) : blogPath(other)}
+  article={{ published: post.data.date }}
+>
+  <article class="container post">
+    <header class="post-head">
+      <p class="post-trail">
+        <a href={blogPath(lang)}>{b.title}</a>
+        {post.data.series && <span>{post.data.series}</span>}
+      </p>
+      <h1>{post.data.title}</h1>
+      <p class="post-meta">
+        <time datetime={post.data.date.toISOString().slice(0, 10)}>{b.formatDate(post.data.date)}</time>
+        {post.data.version && <span>{b.appliesTo(post.data.version)}</span>}
+        {translation && <a href={blogPath(other, group.slug)} hreflang={strings[other].htmlLang} lang={strings[other].htmlLang}>{b.translation}</a>}
+      </p>
+    </header>
+    <div class="prose">
+      <Content />
+    </div>
+    <footer class="post-foot">
+      <a href={blogPath(lang)}>← {b.allPosts}</a>
+    </footer>
+  </article>
+</BlogLayout>

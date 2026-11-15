@@ -35,8 +35,36 @@ const requiredRoutes = [
   '/docs/data-upgrades-backups/',
   '/docs/faq/',
   '/zh/docs/',
-  '/zh/docs/quick-start/'
+  '/zh/docs/quick-start/',
+  '/blog/',
+  '/zh/blog/'
 ];
+
+const blogSource = path.join(websiteRoot, 'src', 'content', 'blog');
+const blogPath = (lang, slug = '') => `${lang === 'zh' ? '/zh' : ''}/blog/${slug ? `${slug}/` : ''}`;
+
+// Posts from src/content/blog/<slug>/<lang>.md, newest first, with the title of each language version.
+async function blogPosts() {
+  const posts = [];
+  for (const entry of await readdir(blogSource, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const versions = {};
+    let date = null;
+    for (const lang of ['en', 'zh']) {
+      const file = path.join(blogSource, entry.name, `${lang}.md`);
+      if (!await exists(file)) continue;
+      const frontmatter = (await readFile(file, 'utf8')).match(/^---\n([\s\S]*?)\n---\n/)?.[1] ?? '';
+      const field = (name) => frontmatter.match(new RegExp(`^${name}:\\s*(.+)$`, 'm'))?.[1].trim();
+      versions[lang] = { title: field('title') };
+      date ??= field('date');
+    }
+    posts.push({ slug: entry.name, date, versions });
+  }
+  return posts.sort((a, b) => b.date.localeCompare(a.date) || a.slug.localeCompare(b.slug));
+}
+
+const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const decodeEntities = (text) => text.replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code))).replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCodePoint(parseInt(code, 16))).replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
 
 function routeToFile(route) {
   if (route === '/') return path.join(distRoot, 'index.html');
@@ -174,6 +202,79 @@ test('the WebUI demo is built, unindexed, and linked from both homepages', async
     const sessionLinks = [...homepage.matchAll(/href="\/demo\/#session\/([^"]+)"/g)].map((link) => decodeURIComponent(link[1]));
     assert.deepEqual(sessionLinks.filter((id) => !recorded.has(id)), [], `${route} links only recorded Sessions`);
   }
+});
+
+test('the blog lists every post in both languages and links each article to its translation', async () => {
+  const posts = await blogPosts();
+  assert.ok(posts.length > 0, 'the blog has posts');
+  const sitemap = await readFile(path.join(distRoot, 'sitemap-0.xml'), 'utf8');
+  for (const lang of ['en', 'zh']) {
+    const other = lang === 'en' ? 'zh' : 'en';
+    const index = await readFile(routeToFile(blogPath(lang)), 'utf8');
+    // Every post appears in both indexes, newest first; a post not yet in this language links to the version that exists.
+    const listed = [...index.matchAll(/<li class="post-item">([\s\S]*?)<\/li>/g)].map(([, item]) => item);
+    assert.equal(listed.length, posts.length, `${blogPath(lang)} lists every post`);
+    posts.forEach((post, position) => {
+      const shown = post.versions[lang] ? lang : other;
+      const item = listed[position];
+      assert.match(item, new RegExp(`<a href="${escapeRegExp(blogPath(shown, post.slug))}"`), `${blogPath(lang)} links ${post.slug}`);
+      assert.ok(decodeEntities(item).includes(post.versions[shown].title), `${blogPath(lang)} shows the title of ${post.slug}`);
+      assert.equal(item.includes('class="post-badge"'), shown !== lang, `${blogPath(lang)} marks ${post.slug} only when it is in the other language`);
+    });
+    for (const target of [blogPath(lang), `${blogPath(lang)}rss.xml`]) assert.ok(index.includes(`href="${target}"`), `${blogPath(lang)} links ${target}`);
+    const feed = await readFile(path.join(distRoot, blogPath(lang).slice(1), 'rss.xml'), 'utf8');
+    for (const post of posts) assert.ok(feed.includes(`<link>${siteOrigin}${blogPath(post.versions[lang] ? lang : other, post.slug)}</link>`), `${lang} feed lists ${post.slug}`);
+
+    for (const post of posts.filter((candidate) => candidate.versions[lang])) {
+      const route = blogPath(lang, post.slug);
+      const html = await readFile(routeToFile(route), 'utf8');
+      const canonical = `${siteOrigin}${route}`;
+      assert.match(html, new RegExp(`<link rel="canonical" href="${escapeRegExp(canonical)}"`), `${route} canonical`);
+      assert.doesNotMatch(html, /<meta[^>]+name="robots"[^>]+noindex/i, `${route} is indexable`);
+      assert.ok(sitemap.includes(`<loc>${canonical}</loc>`), `${route} is in the sitemap`);
+      assert.match(html, new RegExp(`<meta property="og:url" content="${escapeRegExp(canonical)}"`), `${route} og:url`);
+      assert.match(html, /<meta property="og:type" content="article"/, `${route} og:type`);
+      assert.match(html, /<meta property="og:image" content="https:\/\/foxwarm\.net\/[^"]+"/, `${route} og:image`);
+      assert.ok(decodeEntities(html.match(/<title>([^<]*)<\/title>/)?.[1] ?? '').startsWith(post.versions[lang].title), `${route} title`);
+      assert.match(html, /<time datetime="\d{4}-\d{2}-\d{2}">/, `${route} shows its date`);
+      // Translations link to each other and declare hreflang alternates; a single-language post declares none.
+      const alternates = [...html.matchAll(/<link rel="alternate" hreflang="([^"]+)" href="([^"]+)"/g)].map(([, hreflang, href]) => `${hreflang} ${href}`);
+      if (post.versions[other]) {
+        const translation = `${siteOrigin}${blogPath(other, post.slug)}`;
+        assert.ok(alternates.includes(`${lang === 'en' ? 'en' : 'zh-CN'} ${canonical}`) && alternates.includes(`${other === 'en' ? 'en' : 'zh-CN'} ${translation}`), `${route} hreflang alternates`);
+        assert.ok(html.includes(`href="${blogPath(other, post.slug)}"`), `${route} links its translation`);
+      } else {
+        assert.deepEqual(alternates, [], `${route} has no translation to declare`);
+      }
+      // Readers can get back to the homepage, the docs, the demo and the blog.
+      for (const target of [lang === 'zh' ? '/zh/' : '/', `${lang === 'zh' ? '/zh' : ''}/docs/`, '/demo/', blogPath(lang)]) {
+        assert.ok(html.includes(`href="${target}"`), `${route} links ${target}`);
+      }
+    }
+  }
+
+  // Homepages link the blog from the navigation and the footer.
+  for (const [route, lang, label] of [['/', 'en', 'Blog'], ['/zh/', 'zh', '博客']]) {
+    const homepage = await readFile(routeToFile(route), 'utf8');
+    const nav = homepage.match(/<nav class="primary-nav"[^>]*>([\s\S]*?)<\/nav>/)?.[1] ?? '';
+    assert.match(nav, new RegExp(`<a href="${escapeRegExp(blogPath(lang))}">${label}</a>`), `${route} navigation opens the blog`);
+    const footer = homepage.match(/<footer class="site-footer">([\s\S]*?)<\/footer>/)?.[1] ?? '';
+    assert.match(footer, new RegExp(`<a href="${escapeRegExp(blogPath(lang))}">${label}</a>`), `${route} footer links the blog`);
+  }
+});
+
+test('demo Session links outside the demo name recorded Sessions', async () => {
+  const snapshotPath = path.join(repositoryRoot, 'packages', 'webui', 'demo', 'fixtures', 'snapshot.json');
+  const recorded = new Set(unpackSnapshot(JSON.parse(await readFile(snapshotPath, 'utf8'))).sessions);
+  const unknown = [];
+  for (const filePath of await htmlFiles()) {
+    if (path.relative(distRoot, filePath).startsWith(`demo${path.sep}`)) continue;
+    const html = await readFile(filePath, 'utf8');
+    for (const [, id] of html.matchAll(/href="\/demo\/#session\/([^"]+)"/g)) {
+      if (!recorded.has(decodeURIComponent(id))) unknown.push(`${path.relative(distRoot, filePath)} -> ${decodeURIComponent(id)}`);
+    }
+  }
+  assert.deepEqual(unknown, []);
 });
 
 test('the custom 404 is excluded from indexing', async () => {

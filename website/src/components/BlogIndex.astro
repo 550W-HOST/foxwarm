@@ -1,0 +1,47 @@
+---
+import BlogLayout from './BlogLayout.astro';
+import { strings, blogPath, type Lang } from '../i18n/home';
+import { blogStrings } from '../i18n/blog';
+import { getPostGroups, preferredVersion } from '../blog/posts';
+
+interface Props { lang: Lang }
+const { lang } = Astro.props;
+const other: Lang = lang === 'en' ? 'zh' : 'en';
+const b = blogStrings[lang];
+// Every post is listed; one that is not yet in this language links to the version that exists.
+const entries = (await getPostGroups()).map((group) => {
+  const { post, lang: postLang } = preferredVersion(group, lang);
+  return { group, post, postLang, href: blogPath(postLang, group.slug), translated: postLang === lang };
+});
+---
+<BlogLayout
+  lang={lang}
+  title={b.title}
+  description={b.description}
+  path={blogPath(lang)}
+  alternates={{ en: blogPath('en'), zh: blogPath('zh') }}
+  languageHref={blogPath(other)}
+>
+  <div class="container blog-index">
+    <header class="blog-index-head">
+      <h1>{b.title}</h1>
+      <p class="blog-lede">{b.description}</p>
+      <a class="blog-feed" href={`${blogPath(lang)}rss.xml`}>{b.feed}</a>
+    </header>
+    <ol class="post-list">
+      {entries.map(({ group, post, postLang, href, translated }) => (
+        <li class="post-item">
+          <p class="post-meta">
+            <time datetime={group.date.toISOString().slice(0, 10)}>{b.formatDate(group.date)}</time>
+            {post.data.series && <span lang={strings[postLang].htmlLang}>{post.data.series}</span>}
+            {!translated && <span class="post-badge">{b.otherLanguageOnly}</span>}
+          </p>
+          <h2 lang={translated ? undefined : strings[postLang].htmlLang}>
+            <a href={href} hreflang={translated ? undefined : strings[postLang].htmlLang}>{post.data.title}</a>
+          </h2>
+          <p class="post-summary" lang={translated ? undefined : strings[postLang].htmlLang}>{post.data.description}</p>
+        </li>
+      ))}
+    </ol>
+  </div>
+</BlogLayout>

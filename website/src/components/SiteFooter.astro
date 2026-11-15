@@ -1,0 +1,24 @@
+---
+import { strings, githubUrl, docsPath, blogPath, type Lang } from '../i18n/home';
+
+interface Props {
+  lang: Lang;
+  languageHref: string;
+}
+const { lang, languageHref } = Astro.props;
+const t = strings[lang];
+const other: Lang = lang === 'en' ? 'zh' : 'en';
+---
+<footer class="site-footer">
+  <div class="container footer-inner">
+    <a class="brand" href={t.path}><img src="/favicon.svg" alt="" width="24" height="24" /><span>Foxwarm</span></a>
+    <p>{t.footer.tagline}</p>
+    <nav aria-label="Footer">
+      <a href={docsPath(lang)}>{t.footer.docs}</a>
+      <a href={blogPath(lang)}>{t.footer.blog}</a>
+      <a href={githubUrl}>{t.footer.github}</a>
+      <a href={`${githubUrl}/blob/main/LICENSE`}>{t.footer.license}</a>
+      <a href={languageHref} hreflang={strings[other].htmlLang} lang={strings[other].htmlLang}>{t.nav.language}</a>
+    </nav>
+  </div>
+</footer>

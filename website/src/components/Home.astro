@@ -5,7 +5,10 @@ import '@fontsource/ibm-plex-mono/500.css';
 import '../styles/home.css';
 import Screenshot from './Screenshot.astro';
 import Icon from './Icon.astro';
-import { strings, installCommands, githubUrl, siteUrl, demoUrl, demoSession, heroDemoSession, featureDemoSessions, type Lang } from '../i18n/home';
+import SiteHeader from './SiteHeader.astro';
+import SiteFooter from './SiteFooter.astro';
+import ThemeInit from './ThemeInit.astro';
+import { strings, installCommands, siteUrl, docsPath, demoSession, heroDemoSession, featureDemoSessions, type Lang } from '../i18n/home';
 
 import HandsDiagram from './HandsDiagram.astro';
 import heroLight from '../assets/screens/hero-light.png';
@@ -30,7 +33,7 @@ const installTabs = [
   { id: 'windows', label: t.install.tabs.windows, command: installCommands.windows, note: t.install.notes.windows, prompt: 'PS>' },
   { id: 'docker', label: t.install.tabs.docker, command: installCommands.docker, note: t.install.notes.docker, prompt: '$' }
 ];
-const docsHref = (page = '') => `${lang === 'zh' ? '/zh' : ''}/docs/${page}`;
+const docsHref = (page = '') => docsPath(lang, page);
 ---
 <!doctype html>
 <html lang={t.htmlLang} data-theme="light">
@@ -52,35 +55,10 @@ const docsHref = (page = '') => `${lang === 'zh' ? '/zh' : ''}/docs/${page}`;
     <link rel="alternate" hreflang="x-default" href={siteUrl + strings.en.path} />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="icon" href="/favicon-32x32.png" sizes="32x32" />
-    <script is:inline>
-      (() => {
-        // Shared with the Starlight docs, which store 'light', 'dark' or 'auto'.
-        let saved = null;
-        try { saved = localStorage.getItem('starlight-theme'); } catch {}
-        const preferred = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-        document.documentElement.dataset.theme = saved === 'light' || saved === 'dark' ? saved : preferred;
-      })();
-    </script>
+    <ThemeInit />
   </head>
   <body>
-    <a class="skip-link" href="#main">{t.nav.skip}</a>
-    <header class="site-header">
-      <div class="container header-inner">
-        <a class="brand" href={t.path} aria-label="Foxwarm">
-          <img src="/favicon.svg" alt="" width="26" height="26" />
-          <span>Foxwarm</span>
-        </a>
-        <nav class="primary-nav" aria-label="Primary">
-          <a href={docsHref()}>{t.nav.docs}</a>
-          <a href={demoUrl}>{t.nav.demo}</a>
-          <a href={githubUrl}>{t.nav.github}</a>
-          <a href={strings[other].path} hreflang={strings[other].htmlLang} lang={strings[other].htmlLang} aria-label={t.nav.languageLabel}>{t.nav.language}</a>
-          <button class="theme-toggle" type="button" aria-label={t.nav.theme} title={t.nav.theme}>
-            <Icon name="sun" class="theme-icon-light" /><Icon name="moon" class="theme-icon-dark" />
-          </button>
-        </nav>
-      </div>
-    </header>
+    <SiteHeader lang={lang} languageHref={strings[other].path} />
 
     <main id="main">
       <section class="hero" aria-labelledby="hero-title">
@@ -237,28 +215,10 @@ const docsHref = (page = '') => `${lang === 'zh' ? '/zh' : ''}/docs/${page}`;
       </section>
     </main>
 
-    <footer class="site-footer">
-      <div class="container footer-inner">
-        <a class="brand" href={t.path}><img src="/favicon.svg" alt="" width="24" height="24" /><span>Foxwarm</span></a>
-        <p>{t.footer.tagline}</p>
-        <nav aria-label="Footer">
-          <a href={docsHref()}>{t.footer.docs}</a>
-          <a href={githubUrl}>{t.footer.github}</a>
-          <a href={`${githubUrl}/blob/main/LICENSE`}>{t.footer.license}</a>
-          <a href={strings[other].path} hreflang={strings[other].htmlLang} lang={strings[other].htmlLang}>{t.nav.language}</a>
-        </nav>
-      </div>
-    </footer>
+    <SiteFooter lang={lang} languageHref={strings[other].path} />
 
     <script is:inline>
       (() => {
-        const root = document.documentElement;
-        document.querySelector('.theme-toggle')?.addEventListener('click', () => {
-          const next = root.dataset.theme === 'dark' ? 'light' : 'dark';
-          root.dataset.theme = next;
-          try { localStorage.setItem('starlight-theme', next); } catch {}
-        });
-
         for (const group of document.querySelectorAll('[data-tabs]')) {
           const tabs = [...group.querySelectorAll('[role="tab"]')];
           const select = (tab, focus) => {

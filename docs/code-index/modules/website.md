@@ -2,7 +2,7 @@
 
 ## Responsibility
 
-Owns the static public project homepage, user documentation, root installer download artifacts, and GitHub Pages build/deployment workflow. The website is an independent Astro/Starlight package under `website/`; it is not part of the Foxwarm runtime build or a hosted Foxwarm API/WebUI instance.
+Owns the static public project homepage, user documentation, blog, root installer download artifacts, and GitHub Pages build/deployment workflow. The website is an independent Astro/Starlight package under `website/`; it is not part of the Foxwarm runtime build or a hosted Foxwarm API/WebUI instance.
 
 ## Units
 
@@ -13,6 +13,7 @@ Owns the static public project homepage, user documentation, root installer down
 
 - `https://foxwarm.net/` — project homepage.
 - `/docs/` — English user documentation with the standard Starlight article layout and navigation sidebar.
+- `/blog/` and `/zh/blog/` — blog indexes, with articles at `/blog/<slug>/` (English) and `/zh/blog/<slug>/` (Chinese) and an RSS feed per language at `rss.xml` under each index ([D-website-blog](#d-website-blog)).
 - `/install-foxwarm.sh` and `/install-foxwarm.ps1` — byte-exact build copies of the repository-root installers.
 - `/demo/` — unindexed static [WebUI demo](../units/webui-demo.md) replaying recorded data; it has no server and accepts no writes. The homepage links to it, including `/demo/#session/<id>` links that open one recorded Session ([D-website-public-demo](#d-website-public-demo)).
 - `npm ci`, `npm run build`, and `npm run check` from `website/` — standalone dependency, production-build, and validation boundaries.
@@ -37,7 +38,16 @@ Owns the static public project homepage, user documentation, root installer down
 
 **User decisions (user, 2026-11-15).** The `/demo/` WebUI replay is public and reachable from the homepage. It stays out of search results because it replays fictional data and should not look like a hosted instance. The exclusion is the `noindex, nofollow` robots meta on every demo page plus no sitemap entry; `robots.txt` does not disallow `/demo/`. A crawler that is barred from fetching a page never reads its `noindex`, and once indexed pages link to the demo, a disallowed URL can still be listed without content, so crawling stays allowed and `noindex` does the excluding. Indexed pages may link to the demo. These decisions replace the earlier rules that no site page links to the demo and that `robots.txt` disallows it.
 
-[2026-11-15] The homepage navigation opens `/demo/`. The hero caption opens the Session shown in the hero screenshot, with one sentence saying the demo is a recorded, read-only workspace whose sessions and tool calls can be opened but nothing runs live. Feature sections whose subject has a recorded showcase Session (compaction and recall, Nodes, delegation) add an "Open in the demo" link through the WebUI's inbound `#session/<id>` route. The channel section has none: the recording has no Session attached to a group chat, and the gallery's single channel message does not show its chat context in the timeline. Session links must name Sessions in the recorded snapshot, so regenerating the fixture with different Session IDs requires updating the links.
+[2026-11-15] The homepage navigation opens `/demo/`. The hero caption opens the Session shown in the hero screenshot, with one sentence saying the demo is a recorded, read-only workspace whose sessions and tool calls can be opened but nothing runs live. Feature sections whose subject has a recorded showcase Session (compaction and recall, Nodes, delegation) add an "Open in the demo" link through the WebUI's inbound `#session/<id>` route. The channel section has none: the recording has no Session attached to a group chat, and the gallery's single channel message does not show its chat context in the timeline. Session links on any site page, blog articles included, must name Sessions in the recorded snapshot, so regenerating the fixture with different Session IDs requires updating the links.
+
+### D-website-blog
+
+**User decision (user, 2026-11-15).** The site has a blog. Its first series, Agent Design Notes (named in each article's `series` field, in the article's language), takes one general agent design question per post, compares how other agents answer it, and explains the trade-off Foxwarm makes and the evidence for it. Posts are written in Chinese first; English versions follow later.
+
+- **Routes.** Chinese articles live at `/zh/blog/<slug>/`, English ones at `/blog/<slug>/`; the indexes are `/blog/` and `/zh/blog/`. Translations share the slug.
+- **Languages.** Each index lists every post, newest first. A post without a version in the index's language is still listed, marked as available only in the other language, and links to the version that exists, so the English index is never empty while posts are Chinese-only. Translations link to each other and declare `hreflang` alternates; a post in one language declares none. The header language switch opens the translation, or the other language's index when there is none.
+- **Indexing.** Blog pages are indexable, appear in the sitemap and carry a canonical URL and Open Graph metadata; each article shows its date, series and the Foxwarm version it applies to.
+- **Content.** Articles are published as written; site work changes only formatting and links. In-site links point at the reader's locale (`/zh/docs/…` from Chinese articles, which falls back to English pages that have no translation).
 
 ## Integration notes
 
