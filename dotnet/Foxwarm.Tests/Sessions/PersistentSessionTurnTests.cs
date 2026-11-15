@@ -161,9 +161,10 @@ public sealed class PersistentSessionTurnTests
         Assert.Contains("C", combined);
         var archive = store.Archive.ReadMessages();
         Assert.Equal(hot.History.Count, archive.Count);
+        // Compare the stored payload, not a re-encoded projection of the Archive DOM.
         Assert.Equal(
             hot.History.Select(message => message.ToJsonString()),
-            archive.Select(record => record.Message.ToJsonString())
+            archive.Select(record => record.MessageJson)
         );
     }
 

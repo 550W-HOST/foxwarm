@@ -253,7 +253,7 @@ public sealed class WebUiMessageTransportTests
                 }
             );
         await ForkClearLifecycleTests.AppendAsync(owner, authored);
-        var canonical = owner.History().Single().ToJsonString();
+        var canonical = owner.Entry.Snapshot().History.Single().ToJsonString();
         var archive = owner.Archive.ReadMessages().Single().MessageJson;
         var sent = await ReceiveFrame(ws, "message", deadline.Token);
         AssertProjected(sent.Frame["message"]!.AsObject());
@@ -264,7 +264,7 @@ public sealed class WebUiMessageTransportTests
             ["message"] = WebUiMessageTransport.Message(Obj(canonical)),
         };
         Assert.Equal(
-            Encoding.UTF8.GetBytes(Foxwarm.Images.ImageTransport.Project(expected)!.ToJsonString()),
+            Encoding.UTF8.GetBytes(Foxwarm.Images.ImageTransport.Project(expected)!.ToJsonText()),
             sent.Bytes
         );
         var tail = sent.Frame["message"]!["parts"]!.AsArray().Last()!;
@@ -371,11 +371,11 @@ public sealed class WebUiMessageTransportTests
                     ["type"] = "session-event",
                     ["sessionId"] = owner.Id,
                     ["event"] = deep.DeepClone(),
-                }.ToJsonString()
+                }.ToJsonText()
             ),
             deepSent.Bytes
         );
-        Assert.Equal(canonical, owner.History().Single().ToJsonString());
+        Assert.Equal(canonical, owner.Entry.Snapshot().History.Single().ToJsonString());
         Assert.Equal(archive, owner.Archive.ReadMessages().Single().MessageJson);
         Assert.Equal(
             canonical,

@@ -14,6 +14,8 @@ Persisted isolation migration digests (`fenceDigest`, `rulesDigest`, `confirmedD
 
 The MCP SDK owns its outer protocol/SSE serialization and keeps its own encoding and metadata. Foxwarm-owned MCP HTTP errors and text content inside MCP results use the shared encoder; no transport re-encoding adapter is used.
 
+Compact `ToJsonText()` retains the 1000-level DOM writer limit of parameterless `JsonNode.ToJsonString()`. Supplying encoder options must not reduce it to the serializer's 64-level default; realtime queue accounting and deep event delivery share that retained limit. Indented serialization keeps its existing serializer depth policy.
+
 JSON readers need no migration. Affected serialized text and provider request bytes may change once at upgrade; subsequent requests use the same deterministic encoding. Already committed raw history is not rewritten solely for encoding. The existing canonical ECMAScript serializers for history identity, model routing fingerprints and journal object hashes retain their own normalization and byte contracts.
 
 ## Contracts

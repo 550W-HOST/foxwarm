@@ -9,7 +9,12 @@ public static class JsonText
 {
     public static JavaScriptEncoder Encoder => JavaScriptEncoder.UnsafeRelaxedJsonEscaping;
 
-    private static readonly JsonSerializerOptions Compact = new() { Encoder = Encoder };
+    private static readonly JsonSerializerOptions Compact = new()
+    {
+        Encoder = Encoder,
+        // Match JsonNode.ToJsonString() without options, not the serializer's 64-level default.
+        MaxDepth = 1000,
+    };
     private static readonly JsonSerializerOptions Indented = new()
     {
         Encoder = Encoder,

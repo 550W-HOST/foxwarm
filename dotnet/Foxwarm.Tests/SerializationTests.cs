@@ -20,6 +20,16 @@ public sealed class SerializationTests
     }
 
     [Fact]
+    public void Compact_DOM_text_preserves_the_default_writer_depth()
+    {
+        var node = new JsonObject { ["value"] = "retained" };
+        for (var depth = 0; depth < 80; depth++)
+            node = new JsonObject { ["child"] = node };
+
+        Assert.Equal(node.ToJsonString(), node.ToJsonText());
+    }
+
+    [Fact]
     public void Persisted_isolation_digests_keep_the_original_escaped_bytes()
     {
         var rules = new JsonArray(new JsonObject { ["text"] = ReadableText });

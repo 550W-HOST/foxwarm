@@ -10,7 +10,7 @@ public sealed class InboundMcpSessionReadTests
     {
         Assert.False(result["isError"]?.GetValue<bool>() ?? false, result.ToJsonString());
         var value = result["structuredContent"]!.AsObject();
-        Assert.Equal(value.ToJsonString(), result["content"]![0]!["text"]!.GetValue<string>());
+        Assert.Equal(value.ToJsonText(), result["content"]![0]!["text"]!.GetValue<string>());
         return value;
     }
 
@@ -107,7 +107,7 @@ public sealed class InboundMcpSessionReadTests
         var staleResult = await Call(client, older);
         Assert.True(staleResult["isError"]!.GetValue<bool>());
         var stale = staleResult["structuredContent"]!.AsObject();
-        Assert.Equal(stale.ToJsonString(), staleResult["content"]![0]!["text"]!.GetValue<string>());
+        Assert.Equal(stale.ToJsonText(), staleResult["content"]![0]!["text"]!.GetValue<string>());
         Assert.Equal("stale_history_boundary", stale["error"]!.GetValue<string>());
         Assert.NotEqual(
             page["historyVersion"]!.GetValue<long>(),
