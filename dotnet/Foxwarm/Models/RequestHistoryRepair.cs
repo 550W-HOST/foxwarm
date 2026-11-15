@@ -15,7 +15,7 @@ internal static partial class RequestHistoryRepair
             .Rows.Where(row => CanonicalMessage.IsVisible(row.Message))
             .Select(row => new RequestHistory.Row((JsonObject)row.Message.DeepClone(), row.Origin))
             .ToArray();
-        AnthropicSearchHistory.RemoveAbandonedCalls(source);
+        source = AnthropicSearchHistory.RemoveAbandonedCalls(source);
         var result = new List<RequestHistory.Row>();
         bool Nearby(int index, int direction, bool request)
         {

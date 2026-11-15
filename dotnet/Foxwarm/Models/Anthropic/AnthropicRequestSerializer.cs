@@ -270,12 +270,15 @@ internal static class AnthropicRequestSerializer
             return null;
         // Basic direct search; newer versions implicitly enable code execution.
         var tool = new JsonObject { ["type"] = "web_search_20250305", ["name"] = "web_search" };
-        if (config["allowedDomains"] is JsonArray domains)
+        if (config["allowedDomains"] is JsonArray { Count: > 0 } domains)
             tool["allowed_domains"] = domains.DeepClone();
         if (config["userLocation"] is JsonObject location)
         {
-            tool["user_location"] = location.DeepClone();
-            tool["user_location"]!["type"] = "approximate";
+            var normalized = new JsonObject { ["type"] = "approximate" };
+            foreach (var key in new[] { "country", "city", "region", "timezone" })
+                if (SessionWait.Text(location[key]) is string value && value.Trim().Length > 0)
+                    normalized[key] = value.Trim();
+            tool["user_location"] = normalized;
         }
         return tool;
     }

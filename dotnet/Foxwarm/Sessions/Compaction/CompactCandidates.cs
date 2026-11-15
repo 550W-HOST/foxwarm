@@ -398,9 +398,9 @@ internal static class CompactCandidateBuilder
     }
 
     // Both client tools and deferred native search share the same history range.
-    // A result closes only its actual server call ID. While a search remains
-    // pending, keep its contiguous assistant/tool continuation together; a user
-    // message or summary block still ends the exchange.
+    // A pending direct server call joins its next assistant response. That
+    // response answers or abandons it; only newly issued calls extend the range.
+    // A user message or summary block also ends the exchange.
     private static int RawExchangeEnd(
         IReadOnlyList<JsonObject> history,
         int start,

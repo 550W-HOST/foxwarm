@@ -208,6 +208,13 @@ internal static class AnthropicCanonicalConverter
             },
         };
 
+    internal static double? InputContext(JsonObject? usage) =>
+        Reported(usage?["input_tokens"]) is double input
+            ? input
+                + (Reported(usage?["cache_creation_input_tokens"]) ?? 0)
+                + (Reported(usage?["cache_read_input_tokens"]) ?? 0)
+            : null;
+
     private static double? Reported(JsonNode? node) =>
         SessionWait.Number(node) is double value && double.IsFinite(value) ? value : null;
 

@@ -297,7 +297,7 @@ export const getContextScrollbarContextUsage = (messages: Message[], capacityTok
     freeTokens: Math.max(0, capacityTokens - usedTokens),
     capacityTokens,
     usageAnchorKey: usageIndex >= 0 ? getMessageStableKey(committed[usageIndex], usageIndex) : null,
-    ...(committed[usageIndex].__meta?.usage?.contextTokensSource === 'estimated' ? { estimated: true } : {}),
+    ...(['estimated', 'reported-input-plus-estimate'].includes(committed[usageIndex].__meta?.usage?.contextTokensSource) ? { estimated: true } : {}),
   }
 }
 

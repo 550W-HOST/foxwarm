@@ -83,6 +83,7 @@ internal sealed class AnthropicMessagesService(
                 catch { }
             });
             JsonNode? payload;
+            double? inputContext = null;
             var responseHeaders = ProviderHttpRequest.ResponseHeaders(response);
             var responseStatus = $"{(int)response.StatusCode} {response.ReasonPhrase}";
             options.Diagnostics?.Response(responseStatus, responseHeaders, null);
@@ -108,7 +109,8 @@ internal sealed class AnthropicMessagesService(
                         {
                             reasoning = active;
                             ScheduleInactivity();
-                        }
+                        },
+                        value => inputContext = value
                     )
                     .ConfigureAwait(false);
             }
@@ -178,10 +180,11 @@ internal sealed class AnthropicMessagesService(
                 )
             )
             {
-                // The encrypted result text is unavailable locally. Use the same
-                // visible-text/image estimator as other request diagnostics, not
-                // cumulative billed input or guessed per-search division.
-                var context = assistant is null ? history : history.Append(assistant).ToArray();
+                // SSE starts with an exact input context, including prior encrypted
+                // results. Only this response's new content needs estimating then.
+                var context = inputContext is not null
+                    ? (assistant is null ? [] : new[] { assistant })
+                    : (assistant is null ? history : history.Append(assistant).ToArray());
                 var systemText =
                     SessionWait.Text(body["system"])
                     ?? string.Join(
@@ -191,12 +194,17 @@ internal sealed class AnthropicMessagesService(
                             .Select(block => SessionWait.Text(block["text"]) ?? "")
                     );
                 usage["contextTokens"] =
-                    (double)CompactCandidateBuilder.Tokens(systemText)
-                    + CompactCandidateBuilder.Tokens(body["tools"]?.ToJsonString() ?? "")
+                    (
+                        inputContext
+                        ?? (double)CompactCandidateBuilder.Tokens(systemText)
+                            + CompactCandidateBuilder.Tokens(body["tools"]?.ToJsonString() ?? "")
+                    )
                     + HostedSearchSources
                         .Project(context)
                         .Sum(row => Foxwarm.Images.ImageTokenEstimate.Message(row).Tokens);
-                usage["contextTokensSource"] = "estimated";
+                usage["contextTokensSource"] = inputContext is null
+                    ? "estimated"
+                    : "reported-input-plus-estimate";
             }
             if (assistant is not null && usage is not null)
                 assistant["__meta"]!["usage"] = usage.DeepClone();

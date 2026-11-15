@@ -6,7 +6,8 @@ namespace Foxwarm.Models;
 
 internal sealed class AnthropicEventAccumulator(
     ResponsesStreamCallbacks? callbacks = null,
-    Action<bool>? reasoningPhase = null
+    Action<bool>? reasoningPhase = null,
+    Action<double>? inputContext = null
 )
 {
     private sealed class Block(int index, JsonObject content)
@@ -60,6 +61,8 @@ internal sealed class AnthropicEventAccumulator(
                 usage = message["usage"] is JsonObject initial
                     ? (JsonObject)initial.DeepClone()
                     : null;
+                if (AnthropicCanonicalConverter.InputContext(usage) is double initialContext)
+                    inputContext?.Invoke(initialContext);
                 break;
             case "content_block_start":
                 var index = Index(item);
@@ -271,10 +274,11 @@ internal static class AnthropicSseCollector
         Stream stream,
         CancellationToken token,
         ResponsesStreamCallbacks? callbacks = null,
-        Action<bool>? reasoningPhase = null
+        Action<bool>? reasoningPhase = null,
+        Action<double>? inputContext = null
     )
     {
-        var accumulator = new AnthropicEventAccumulator(callbacks, reasoningPhase);
+        var accumulator = new AnthropicEventAccumulator(callbacks, reasoningPhase, inputContext);
         await OpenAISseReader
             .ReadAsync(
                 stream,

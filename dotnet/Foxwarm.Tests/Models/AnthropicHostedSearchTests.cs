@@ -51,7 +51,7 @@ public sealed partial class AnthropicHostedSearchTests
             ),
         };
 
-    private static string Sse(JsonObject reply)
+    private static string Sse(JsonObject reply, JsonObject? initialUsage = null)
     {
         var output = new StringBuilder();
         void Event(JsonObject item) =>
@@ -60,9 +60,13 @@ public sealed partial class AnthropicHostedSearchTests
             new JsonObject
             {
                 ["type"] = "message_start",
-                ["message"] = Obj(
-                    """{"id":"synthetic-message","usage":{"input_tokens":1,"output_tokens":0}}"""
-                ),
+                ["message"] = new JsonObject
+                {
+                    ["id"] = "synthetic-message",
+                    ["usage"] =
+                        initialUsage?.DeepClone()
+                        ?? Obj("""{"input_tokens":1,"output_tokens":0}"""),
+                },
             }
         );
         var index = 0;
@@ -165,7 +169,7 @@ public sealed partial class AnthropicHostedSearchTests
                   searchContextSize: high
                   allowedDomains: [example.com]
                   userLocation: {country: US}
-                models: [wire, {id: off, webSearch: false}]
+                models: [wire, {id: off, webSearch: false}, {id: empty, webSearch: {allowedDomains: [], userLocation: {country: " ", city: "", region: " NY ", timezone: ""}}}]
             """;
         await configuration.SaveAsync(new JsonObject { ["yaml"] = yaml });
         Assert.Equal(yaml, await File.ReadAllTextAsync(configuration.ActivePath));
@@ -220,6 +224,17 @@ public sealed partial class AnthropicHostedSearchTests
         var native = AnthropicRequestSerializer.BuildSearchTool(Plan("b/wire").WebSearch)!;
         Assert.Equal("example.com", native["allowed_domains"]![0]!.ToString());
         Assert.Equal("approximate", native["user_location"]!["type"]!.ToString());
+        var emptyNative = AnthropicRequestSerializer.BuildSearchTool(Plan("b/empty").WebSearch)!;
+        var emptyResponses = HostedResponsesTools.BuildWebSearchTool(Plan("b/empty").WebSearch)!;
+        Assert.Null(emptyNative["allowed_domains"]);
+        Assert.Null(emptyResponses["filters"]);
+        Assert.True(
+            JsonNode.DeepEquals(emptyNative["user_location"], emptyResponses["user_location"])
+        );
+        Assert.Equal(
+            """{"type":"approximate","region":"NY"}""",
+            emptyNative["user_location"]!.ToJsonString()
+        );
         var overridden = AnthropicRequestSerializer.BuildRequest(
             [],
             Plan("a/enabled") with
@@ -438,8 +453,15 @@ public sealed partial class AnthropicHostedSearchTests
                 "__meta"
             ]!["usage"]!;
             Assert.Equal(300010, finalUsage["inputTokens"]!.GetValue<double>());
-            Assert.Equal("estimated", finalUsage["contextTokensSource"]!.ToString());
-            Assert.InRange(finalUsage["contextTokens"]!.GetValue<double>(), 1000, 40000);
+            Assert.Equal(
+                streaming ? "reported-input-plus-estimate" : "estimated",
+                finalUsage["contextTokensSource"]!.ToString()
+            );
+            Assert.InRange(
+                finalUsage["contextTokens"]!.GetValue<double>(),
+                streaming ? 1 : 1000,
+                40000
+            );
             Assert.Equal(
                 (20 + 300010 * 2 + 40 * 3) / 1_000_000d,
                 finalUsage["cost"]!.GetValue<double>(),
