@@ -165,10 +165,18 @@ internal sealed partial class SessionManager
             ]
         );
         var asking = assessment.Asking.SelectMany(layer => layer.Decision.AskingRules).ToArray();
+        // The slice's own approval binds the operations the dispatch gate derived for it (none
+        // without operation rules, none for an inline script), so compare with the same.
+        var sliceRequest = assessment.Request with { Operations = null };
+        if (assessment.Layers.Any(layer => layer.Policy.HasOperationRules))
+            sliceRequest = sliceRequest with
+            {
+                Operations = AuthorizationOperations(owner, slice, sliceRequest, files),
+            };
         return new(
             assessment,
             ApprovalFingerprint(owner, slice, assessment.Request),
-            ApprovalFingerprint(owner, slice, assessment.Request with { Operations = null }),
+            ApprovalFingerprint(owner, slice, sliceRequest),
             asking.Length > 0 && !asking.Any(OperationRules.IsOperationRule)
         );
     }
