@@ -8,6 +8,8 @@ Part of the [tool dispatch](./tool-dispatch.md) thread. Covers how a resolved ta
 - [src-tool-authorization](../units/src-tool-authorization.md)
 - [tool-authorization](../units/tool-authorization.md)
 - [isolation-migration](../units/isolation-migration.md)
+- [tool-operation-authorization](../units/tool-operation-authorization.md): operation rules, effects and obligations, delivery phases
+- [tool-operation-catalog](../units/tool-operation-catalog.md)
 - Historical: [src-isolated-check](../units/src-isolated-check.md), [src-permissions](../units/src-permissions.md)
 
 ## Invariants
