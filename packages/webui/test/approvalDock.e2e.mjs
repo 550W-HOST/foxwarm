@@ -20,6 +20,7 @@ const pending = (id, extra) => ({ id, status: 'pending', createdAt: 1, origin: '
 const approvals = [
   pending('ap-large', { canDecide: true, workingDirectory: '/srv/app', argsTruncated: true, argsPreview: '{"command":"rm -rf build', expiresAt: Date.now() + 4 * 60_000, facts: { paths: [{ raw: 'build', resolved: '/w/build', node: 'build-box' }] } }),
   pending('ap-other', { canDecide: false, tool: { source: 'mcp', server: 'tracker', name: 'close_issue' }, summary: 'close #12', args: { issue: 12 } }),
+  pending('ap-input', { canDecide: true, stage: 'input', tool: { source: 'builtin', name: 'set_config', executionNode: 'master' }, summary: 'models models.yaml', args: { target: 'models', filePath: 'models.yaml' }, rules: [{ layer: 'global', id: 'confirm-read' }], checks: [{ id: 'candidate-read', tool: { source: 'node', name: 'read', executionNode: 'master' }, facts: { paths: [{ raw: 'models.yaml', resolved: '/w/models.yaml', node: 'master' }] } }] }),
 ]
 const question = { id: 'q-1', status: 'open', questions: [{ question: 'Which branch?' }] }
 window.decisions = []
@@ -83,9 +84,9 @@ test('pending approvals open the dock first and decide with the note', async () 
   await page.goto(url)
   await page.waitForSelector('[data-approval-form="ap-large"]')
   const dock = await page.$eval('[data-question-dock]', el => el.innerText)
-  assert.match(dock, /3 open requests/)
+  assert.match(dock, /4 open requests/)
   assert.match(dock, /Waiting for approval/)
-  assert.deepEqual(await page.$$eval('[role="tab"]', tabs => tabs.map(tab => tab.dataset.dockItem)), ['approval', 'approval', 'question'])
+  assert.deepEqual(await page.$$eval('[role="tab"]', tabs => tabs.map(tab => tab.dataset.dockItem)), ['approval', 'approval', 'approval', 'question'])
   const form = await page.$eval('[data-approval-form="ap-large"]', el => el.innerText)
   assert.match(form, /exec/)
   assert.match(form, /on build-box/)
@@ -113,7 +114,17 @@ test('an identity that cannot decide sees the request without decision controls'
   assert.match(form, /tracker · close_issue/)
   assert.match(form, /Waiting for an approver\./)
   assert.equal(await page.$('[data-approval-form="ap-other"] [data-approval-decision]'), null)
-  assert.match(await page.$eval('[data-question-dock]', el => el.innerText), /2 open requests/)
+  assert.match(await page.$eval('[data-question-dock]', el => el.innerText), /3 open requests/)
+})
+
+test('an input approval says it reads the input first and lists the read', async () => {
+  await page.$$eval('[role="tab"][data-dock-item="approval"]', tabs => tabs.at(-1).click())
+  await page.waitForSelector('[data-approval-form="ap-input"]')
+  const form = await page.$eval('[data-approval-form="ap-input"]', el => el.innerText)
+  assert.match(form, /set_config/)
+  assert.match(form, /Reading this input comes first\. The call is checked once it is read and may need another approval\./)
+  assert.match(await page.$eval('[data-approval-form="ap-input"] [data-approval-checks]', el => el.innerText), /^Reads\s+read master:\/w\/models\.yaml$/)
+  if (process.env.FOXWARM_TOOL_APPROVAL_SCREENSHOTS) await page.screenshot({ path: process.env.FOXWARM_TOOL_APPROVAL_SCREENSHOTS + '/approval-input-stage.png' })
 })
 
 test('timeline notices summarize settled approvals with their note', async () => {

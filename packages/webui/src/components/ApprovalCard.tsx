@@ -3,6 +3,7 @@ import { ShieldAlert, ShieldCheck, ShieldX } from 'lucide-react'
 import {
   ApprovalDecisionError,
   approvalArgsText,
+  approvalCheckLines,
   approvalOriginLabel,
   approvalTargets,
   approvalTimeLeft,
@@ -93,6 +94,7 @@ export function ApprovalDecisionForm({ record, sessionId, onDecide, focusToken =
     } finally { setPending(false) }
   }
   const targets = approvalTargets(record)
+  const checks = approvalCheckLines(record)
   const origin = approvalOriginLabel(record.origin)
   const timeLeft = approvalTimeLeft(record.expiresAt, now)
   const workingDirectory = approvalWorkingDirectoryLabel(record)
@@ -110,6 +112,17 @@ export function ApprovalDecisionForm({ record, sessionId, onDecide, focusToken =
         <ul className="mt-1.5 flex flex-col gap-0.5 text-xs text-fw-text-muted">
           {targets.map(target => <li key={target} className="min-w-0 truncate font-mono" title={target}>{target}</li>)}
         </ul>
+      )}
+      {record.stage === 'input' && (
+        <div data-approval-stage="input" className="mt-1.5 text-xs text-fw-text-muted">Reading this input comes first. The call is checked once it is read and may need another approval.</div>
+      )}
+      {!!checks.length && (
+        <div data-approval-checks className="mt-1.5 min-w-0 text-xs text-fw-text-muted">
+          <div>{record.stage === 'input' ? 'Reads' : 'Also covers'}</div>
+          <ul className="mt-0.5 flex flex-col gap-0.5">
+            {checks.map((line, index) => <li key={index} className="min-w-0 truncate font-mono" title={line}>{line}</li>)}
+          </ul>
+        </div>
       )}
       {!!record.rules?.length && (
         <ul className="mt-1.5 flex flex-col gap-0.5 text-xs text-fw-text-muted">

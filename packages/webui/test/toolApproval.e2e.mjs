@@ -44,7 +44,7 @@ test('a scoped approver reviews and decides tool calls that match an ask rule', 
   const reviewerToken = 'synthetic-approval-reviewer', viewerToken = 'synthetic-approval-viewer'
   await writeFile(join(fixture.data, 'state/config.yaml'), `bot:\n  name: tool-approval-fixture\n  httpPort: ${fixture.port}\n  enableWebUI: true\n  enableTrigger: false\nvector: false\nvectorMaintenance: false\nsessionWorkers: false\ndbWorkers: false\nhandoffConfirmation: false\nchannels: {}\npaths:\n  mcpConfigPath: ${JSON.stringify(join(fixture.data, 'state/mcp.json'))}\naccess:\n  identities:\n    reviewer:\n      token: ${reviewerToken}\n      surfaces:\n        webui: {sessions: [gated]}\n    viewer:\n      token: ${viewerToken}\n      surfaces:\n        webui: {sessions: [gated]}\n`)
   await writeFile(join(fixture.data, 'state/mcp.json'), '{}')
-  await writeFile(join(fixture.data, 'state/tool-authorization.yaml'), 'version: 1\ndefaultAction: allow\nrules:\n  - id: confirm-write\n    tool: {source: node, name: write}\n    action: ask\n    reason: Writes need a decision.\n    approval: {approvers: [reviewer]}\n')
+  await writeFile(join(fixture.data, 'state/tool-authorization.yaml'), 'version: 1\ndefaultAction: allow\nrules:\n  - id: confirm-write\n    tool: {source: node, name: write}\n    action: ask\n    reason: Writes need a decision.\n    approval: {approvers: [reviewer]}\n  - id: confirm-read\n    tool: {source: node, name: read}\n    action: ask\n    reason: Reads need a decision.\n    approval: {approvers: [reviewer]}\n')
   await writeFile(fixture.modelPath, JSON.stringify({ default: 'local/wire', providers: { local: { providerType: 'openai-responses', apiKey: 'synthetic-model', baseUrl: `http://127.0.0.1:${model.address().port}/v1`, asyncCompact: false, models: ['wire'] } } }))
   const route = id => '/api/sessions/' + encodeURIComponent(id)
   const view = async id => (await fixture.api('GET', route(id) + '/questions')).body
@@ -124,6 +124,24 @@ test('a scoped approver reviews and decides tool calls that match an ask rule', 
     await until(async () => (await view(gated)).approvals.find(record => record.id === third.id)?.status === 'cancelled', 'Stop cancels the request')
     await page.waitForSelector('[data-question-dock]', { hidden: true })
     assert.equal(existsSync(join(fixture.work, 'later.txt')), false)
+
+    // One approval covers the call and the other checks it needs that ask: a script's source read.
+    await writeFile(join(fixture.work, 'job.py'), "return 'staged-ran'")
+    await send(gated, 'staged', [[call('script-1', 'run_script', { filePath: 'job.py' })]])
+    const fourth = await pendingApproval(gated)
+    assert.equal(fourth.tool.name, 'run_script')
+    assert.deepEqual(fourth.checks.map(check => check.id), ['source-read'])
+    const stagedForm = `[data-question-dock] [data-approval-form="${fourth.id}"]`
+    await page.waitForSelector(stagedForm)
+    const covers = await page.$eval(`${stagedForm} [data-approval-checks]`, node => node.innerText)
+    assert.match(covers, /Also covers/)
+    assert.match(covers, /read .*job\.py/)
+    assert.match(await page.$eval(stagedForm, node => node.innerText), /Rule confirm-read — Reads need a decision\./)
+    await screenshot(page, 'approval-staged')
+    await page.click(`${stagedForm} [data-approval-decision="approve"]`)
+    await until(async () => (inputs.get('staged') || []).length >= 2, 'script result reached the model')
+    assert.match(inputs.get('staged')[1], /staged-ran/)
+    assert.equal((await view(gated)).approvals.filter(record => record.toolCallId === 'script-1').length, 1)
     assert.deepEqual(errors, [])
   } finally {
     model.close()

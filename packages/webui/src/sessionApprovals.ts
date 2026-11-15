@@ -26,6 +26,10 @@ export interface ToolApprovalRecord {
     secrets?: string[]
   }
   rules?: Array<{ layer: string; id: string; reason?: string }>
+  /** Present when the approval is for the input the call must read before it is checked. */
+  stage?: 'input'
+  /** Other requests of the call that asked and that this approval also covers. */
+  checks?: Array<{ id: string; tool: ToolApprovalRecord['tool']; facts?: ToolApprovalRecord['facts'] }>
   approvers?: string[]
   decidedAt?: number
   decidedBy?: { kind: 'administrator' | 'identity' | 'system'; id?: string; reason?: string }
@@ -136,6 +140,15 @@ export function approvalTargets(record: Pick<ToolApprovalRecord, 'facts' | 'tool
   if (facts.sessionTarget?.id) targets.push(`Session ${facts.sessionTarget.id}`)
   for (const name of facts.secrets || []) targets.push(`Secret ${name}`)
   return targets
+}
+
+/** One line per other request the approval covers: the tool and its resolved targets. */
+export function approvalCheckLines(record: Pick<ToolApprovalRecord, 'checks'>): string[] {
+  return (record.checks || []).map(check => {
+    const targets = approvalTargets(check)
+    const node = check.tool.executionNode && check.tool.executionNode !== 'master' && !targets.length ? ` on ${check.tool.executionNode}` : ''
+    return [approvalToolLabel(check.tool) + node, ...targets].join(' ')
+  })
 }
 
 export function approvalOriginLabel(origin: ToolApprovalRecord['origin']): string {
