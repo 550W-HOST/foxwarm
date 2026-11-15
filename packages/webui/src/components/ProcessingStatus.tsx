@@ -2,7 +2,6 @@ import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import RuntimeFox from './RuntimeFox'
 import FoxThinkingText from './FoxThinkingText'
-import type { TimelineView } from '../chatPreferences'
 import { isRuntimeStateInactiveName, type SessionRuntimeState } from '../sessionRuntimeState'
 import { getRuntimeActivityText, getRuntimeStatusView, type RuntimeStatusView } from '../runtimeStatus'
 
@@ -17,7 +16,6 @@ interface ProcessingStatusProps {
   /** A sent input is shown but its canonical history row has not arrived yet. */
   pendingSend?: boolean
   isMobile: boolean
-  timelineView?: TimelineView
   pendingControl?: SessionControlAction | null
   controlFeedback?: SessionControlFeedback | null
   failure?: { title: string; details?: string } | null
@@ -29,7 +27,7 @@ const controlButtonClass = 'inline-flex shrink-0 items-center rounded-md px-2 te
 const toneClasses = { accent: 'text-fw-accent', special: 'text-fw-special', warning: 'text-fw-warning', danger: 'text-fw-danger', muted: 'text-fw-text-muted' }
 const useBrowserLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect
 
-const ProcessingStatus = memo(function ProcessingStatus({ sessionBusy, runtimeState, sessionQueueLength, turnIncomplete, loading, pendingSend = false, isMobile, timelineView, pendingControl, controlFeedback, failure, onContinue, onCancelCompaction }: ProcessingStatusProps) {
+const ProcessingStatus = memo(function ProcessingStatus({ sessionBusy, runtimeState, sessionQueueLength, turnIncomplete, loading, pendingSend = false, isMobile, pendingControl, controlFeedback, failure, onContinue, onCancelCompaction }: ProcessingStatusProps) {
   const [now, setNow] = useState(Date.now)
   const [open, setOpen] = useState(false)
   const [position, setPosition] = useState<{ left: number; bottom?: number; top?: number; width: number; maxHeight: number } | null>(null)
@@ -94,8 +92,8 @@ const ProcessingStatus = memo(function ProcessingStatus({ sessionBusy, runtimeSt
 
   useEffect(() => { if (open && position) panel.current?.focus({ preventScroll: true }) }, [open, position !== null])
 
-  // The owner's live activity: reasoning headings only in Conversation, tool summaries in every view.
-  const liveCaption = getRuntimeActivityText(runtimeState, view, timelineView === 'conversation' ? 'latest' : 'tool')
+  // The owner's live activity: the later reasoning heading or tool summary, in every timeline view.
+  const liveCaption = getRuntimeActivityText(runtimeState, view)
   const caption = view && <>
     <RuntimeFox kind={view.kind} />
     {liveCaption ? <span className="min-w-0 truncate" title={liveCaption}>{liveCaption}</span> : view.playful ? <FoxThinkingText label={view.label} title={view.label} /> : <span className="min-w-0 truncate" title={view.label}>{view.label}</span>}

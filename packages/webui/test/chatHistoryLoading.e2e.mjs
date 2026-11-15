@@ -1667,13 +1667,11 @@ test('real Chat captions show the owner activity through generation, execution a
   await runtime(requesting({reasoning:'Inspecting the source',latest:'reasoning'}))
   await expect('Inspecting the source')
   assert.equal(await page.$eval('[data-processing-runtime-state]', el => el.getAttribute('aria-label')), 'Requesting model…')
-  // Detailed and Grouped use the tool summary only; without one they keep the decorative caption.
-  for (const view of ['detailed','grouped']) {
+  // Every timeline view shows the reasoning heading.
+  for (const view of ['detailed','grouped','conversation']) {
     await mode(view)
-    await expect('fallback')
+    await expect('Inspecting the source')
   }
-  await mode('conversation')
-  await expect('Inspecting the source')
   const generating = {reasoning:'Inspecting the source',tool:'Validate streaming updates',latest:'tool'}
   await runtime(requesting(generating))
   await expect('Validate streaming updates')
@@ -1704,13 +1702,11 @@ test('real Chat captions show the owner activity through generation, execution a
   await expect(longTitle)
   assert.equal(await page.$eval('[data-runtime-caption] span[title]',el=>el.title),longTitle)
   assert.equal(await page.$eval('[data-runtime-caption]',el=>el.getBoundingClientRect().right<=innerWidth),true)
-  assert.deepEqual(await shownSince('Inspecting the source'), ['Inspecting the source','fallback','Inspecting the source','Validate streaming updates',longTitle], 'no fallback between generation, execution and the next request')
-  for (const view of ['detailed','grouped']) {
+  assert.deepEqual(await shownSince('Inspecting the source'), ['Inspecting the source','Validate streaming updates',longTitle], 'no fallback between generation, execution and the next request')
+  for (const view of ['detailed','grouped','conversation']) {
     await mode(view)
-    await expect('Validate streaming updates')
+    await expect(longTitle)
   }
-  await mode('conversation')
-  await expect(longTitle)
   // The browser keeps no caption timer: virtual time runs the page's timers through ten minutes.
   const before = (await page.evaluate(() => window.captionTimeline)).length
   const clock = await page.evaluate(() => Date.now())

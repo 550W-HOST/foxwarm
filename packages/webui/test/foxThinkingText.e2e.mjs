@@ -23,7 +23,7 @@ before(async () => {
         const [queue, setQueue] = useState(0)
         window.fixture.setQueue = setQueue
         window.fixture.setState = setState
-        return <><ProcessingStatus sessionBusy={state !== 'idle'} sessionQueueLength={queue} turnIncomplete={state === 'interrupted'} timelineView="grouped"
+        return <><ProcessingStatus sessionBusy={state !== 'idle'} sessionQueueLength={queue} turnIncomplete={state === 'interrupted'}
           loading={state === 'loading'} isMobile={innerWidth < 768}
           runtimeState={{state: state === 'interrupted' ? 'idle' : state === 'compacting' ? 'requesting-model' : state === 'exec' ? 'running-tool' : state,
             active: {phase: state === 'compacting' ? 'compaction' : 'normal-turn'},

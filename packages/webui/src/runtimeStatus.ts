@@ -93,15 +93,13 @@ export function getRuntimeStatusView(runtime: SessionRuntimeState | undefined, f
 }
 
 /**
- * The live activity text shown in place of an ordinary request or tool-execution caption. `latest`
- * is the later of the reasoning heading and tool summary; `tool` is the tool summary only. Waiting,
- * approval, retry, compaction, stopping and failure keep their own labels.
+ * The live activity text shown in place of an ordinary request or tool-execution caption: the later
+ * of the reasoning heading and tool summary. Waiting, approval, retry, compaction, stopping and
+ * failure keep their own labels.
  */
-export function getRuntimeActivityText(runtime: SessionRuntimeState | undefined, view: RuntimeStatusView | null,
-  include: 'latest' | 'tool' = 'latest'): string | undefined {
+export function getRuntimeActivityText(runtime: SessionRuntimeState | undefined, view: RuntimeStatusView | null): string | undefined {
   const activity = runtime?.activity
   if (!activity || !view || !(view.playful || view.kind === 'tool')) return undefined
-  const text = include === 'tool' ? activity.tool
-    : activity.latest === 'reasoning' ? activity.reasoning ?? activity.tool : activity.tool ?? activity.reasoning
+  const text = activity.latest === 'reasoning' ? activity.reasoning ?? activity.tool : activity.tool ?? activity.reasoning
   return text?.trim() || undefined
 }
