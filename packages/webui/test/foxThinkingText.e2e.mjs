@@ -27,6 +27,7 @@ before(async () => {
           loading={state === 'loading'} isMobile={innerWidth < 768}
           runtimeState={{state: state === 'interrupted' ? 'idle' : state === 'compacting' ? 'requesting-model' : state === 'exec' ? 'running-tool' : state,
             active: {phase: state === 'compacting' ? 'compaction' : 'normal-turn'},
+            ...(state === 'exec' ? {activity: {tool: 'Print the work marker', latest: 'tool'}} : {}),
             tool: {name: state === 'exec' ? 'exec' : 'read', index: 0, total: 2, executionNode: 'fixture-node', argsPreview: 'echo WORK', startedAt: 1}}}
           onContinue={() => window.fixture.continues++} />
           <QueuedMessageStatus count={queue} alignment="left" isMobile={innerWidth < 768} onRunQueued={() => window.fixture.runs++} /></>
@@ -183,7 +184,7 @@ test('exec shows real identity, special ink and details without decorative capti
     assert.equal(await page.$('[data-fox-thinking-copy]'),null)
     const ink=await page.$eval('[data-runtime-caption]', el=>getComputedStyle(el).color)
     assert.notEqual(ink,thinking)
-    assert.match(await page.$eval('[data-runtime-caption]', el=>el.textContent),/echo WORK/)
+    assert.match(await page.$eval('[data-runtime-caption]', el=>el.textContent),/Print the work marker/)
     assert.equal(await page.$eval('[data-runtime-fox="tool"]',el=>getComputedStyle(el).stroke),ink)
     assert.equal(await page.evaluate(()=>window.thinkingTimers.size),0)
     await page.click('[data-runtime-caption]');await page.waitForSelector('[data-runtime-details]')

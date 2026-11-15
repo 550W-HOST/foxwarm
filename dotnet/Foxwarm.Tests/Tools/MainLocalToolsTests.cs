@@ -906,7 +906,7 @@ public sealed partial class MainLocalToolsTests
         var output = status["output"]!.GetValue<string>();
         Assert.Contains($"session id: `{target.Id}`", output);
         Assert.Contains("/target/cwd", output);
-        Assert.Contains("messages: 1", output);
+        Assert.Contains("messages: msg#1 latest · 1 active", output);
 
         var unified = await f.Call(
             "ctl",
