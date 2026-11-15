@@ -5,7 +5,7 @@ import '@fontsource/ibm-plex-mono/500.css';
 import '../styles/home.css';
 import Screenshot from './Screenshot.astro';
 import Icon from './Icon.astro';
-import { strings, installCommands, githubUrl, siteUrl, type Lang } from '../i18n/home';
+import { strings, installCommands, githubUrl, siteUrl, demoUrl, demoSession, heroDemoSession, featureDemoSessions, type Lang } from '../i18n/home';
 
 import HandsDiagram from './HandsDiagram.astro';
 import heroLight from '../assets/screens/hero-light.png';
@@ -72,6 +72,7 @@ const docsHref = (page = '') => `${lang === 'zh' ? '/zh' : ''}/docs/${page}`;
         </a>
         <nav class="primary-nav" aria-label="Primary">
           <a href={docsHref()}>{t.nav.docs}</a>
+          <a href={demoUrl}>{t.nav.demo}</a>
           <a href={githubUrl}>{t.nav.github}</a>
           <a href={strings[other].path} hreflang={strings[other].htmlLang} lang={strings[other].htmlLang} aria-label={t.nav.languageLabel}>{t.nav.language}</a>
           <button class="theme-toggle" type="button" aria-label={t.nav.theme} title={t.nav.theme}>
@@ -126,7 +127,13 @@ const docsHref = (page = '') => `${lang === 'zh' ? '/zh' : ''}/docs/${page}`;
 
         <figure class="container hero-shot">
           <Screenshot light={heroLight} dark={heroDark} alt={t.hero.screenshotAlt} eager widths={[960, 1440, 2000, 2880]} sizes="(min-width: 1260px) 1200px, 100vw" />
-          <figcaption>{t.hero.shotCaption}</figcaption>
+          <figcaption>
+            <span class="shot-caption">{t.hero.shotCaption}</span>
+            <span class="demo-entry">
+              <a class="demo-link" href={demoSession(heroDemoSession)}>{t.hero.demo.link} →</a>
+              <span class="demo-note">{t.hero.demo.note}</span>
+            </span>
+          </figcaption>
         </figure>
       </section>
 
@@ -170,7 +177,10 @@ const docsHref = (page = '') => `${lang === 'zh' ? '/zh' : ''}/docs/${page}`;
                 <div class="feature-copy">
                   <p>{feature.body}</p>
                   <ul class="points">{feature.points.map((point) => <li>{point}</li>)}</ul>
-                  <a class="text-link" href={feature.link.href}>{feature.link.label} →</a>
+                  <p class="feature-links">
+                    <a class="text-link" href={feature.link.href}>{feature.link.label} →</a>
+                    {featureDemoSessions[feature.id] && <a class="text-link" href={demoSession(featureDemoSessions[feature.id]!)}>{t.featureDemo} →</a>}
+                  </p>
                 </div>
               </div>
               {feature.id !== 'room' && <div class="feature-visual">

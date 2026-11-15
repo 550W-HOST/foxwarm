@@ -14,14 +14,14 @@ Owns the static public project homepage, user documentation, root installer down
 - `https://foxwarm.net/` — project homepage.
 - `/docs/` — English user documentation with the standard Starlight article layout and navigation sidebar.
 - `/install-foxwarm.sh` and `/install-foxwarm.ps1` — byte-exact build copies of the repository-root installers.
-- `/demo/` — unindexed static [WebUI demo](../units/webui-demo.md) replaying recorded data; it has no server and accepts no writes.
+- `/demo/` — unindexed static [WebUI demo](../units/webui-demo.md) replaying recorded data; it has no server and accepts no writes. The homepage links to it, including `/demo/#session/<id>` links that open one recorded Session ([D-website-public-demo](#d-website-public-demo)).
 - `npm ci`, `npm run build`, and `npm run check` from `website/` — standalone dependency, production-build, and validation boundaries.
 
 ## Invariants
 
 - Website dependencies and Node requirements remain confined to `website/`, plus the existing `packages/webui` lockfile used only to build the `/demo/` bundle; normal Foxwarm runtime install/build commands do not install or build the site.
 - The site describes public `main` behavior and links to deeper repository references instead of publishing the full mixed-purpose `docs/` tree.
-- The domain serves only static project content and downloads; it does not claim to host user Agents, WebUI, APIs, credentials, or runtime data. The `/demo/` WebUI is a read-only replay of fictional recorded data, not a hosted instance.
+- The domain serves only static project content and downloads; it does not claim to host user Agents, WebUI, APIs, credentials, or runtime data. The `/demo/` WebUI is a read-only replay of fictional recorded data, not a hosted instance; site pages may link to it, but the demo itself stays excluded from search indexing.
 - Installer output is copied from the root scripts during the site build and validated byte-for-byte.
 - Pull requests may build and check the site but cannot deploy it. Production deployment consumes the Actions artifact only from public `main`; no branch-output commit or push credential is used.
 
@@ -32,6 +32,16 @@ Owns the static public project homepage, user documentation, root installer down
 **Derived delivery design; the separate static website/build proposal was approved.** It serves public documentation/downloads without coupling them to a running instance API. Root installer sources and real download consumers constrain published copies; framework/version pins and CI artifact transport are implementation choices, not deployment authority for an installation.
 
 [2026-09-11] The public homepage and user documentation use one independent Astro/Starlight package deployed as a static GitHub Pages artifact at the custom-domain root. A custom homepage owns product orientation while Starlight owns `/docs/`; concise user guides are canonical website content, with links to deeper repository references. Installer files remain canonical at repository root and are copied byte-exact into the site output. This keeps website tooling out of runtime dependency/build requirements, avoids a committed `gh-pages` build branch, and prevents the documentation host from being confused with a hosted Foxwarm service.
+
+### D-website-public-demo
+
+**User decision (user, 2026-11-15).** The `/demo/` WebUI replay is public and reachable from the homepage. The demo keeps its own exclusions from search: `noindex, nofollow` in its HTML, `Disallow: /demo/` in `robots.txt`, and no sitemap entry, because it replays fictional data and search results should not present it as a hosted instance. Indexed pages may link to it. This replaces the earlier rule that no site page links to the demo.
+
+[2026-11-15] The homepage navigation opens `/demo/`. The hero caption opens the Session shown in the hero screenshot, with one sentence saying the demo is a recorded, read-only workspace whose sessions and tool calls can be opened but nothing runs live. Feature sections whose subject has a recorded showcase Session (compaction and recall, Nodes, delegation) add an "Open in the demo" link through the WebUI's inbound `#session/<id>` route. The channel section has none: the recording has no Session attached to a group chat, and the gallery's single channel message does not show its chat context in the timeline. Session links must name Sessions in the recorded snapshot, so regenerating the fixture with different Session IDs requires updating the links.
+
+## Open Questions
+
+- `robots.txt` disallows `/demo/`, so crawlers never fetch the page and never see its `noindex` meta. Now that indexed pages link to it, a search engine may list the bare `/demo/` URL without content. Allowing crawling of `/demo/` and relying on `noindex` would exclude it reliably, but that changes the confirmed policy above and needs a user decision.
 
 ## Integration notes
 

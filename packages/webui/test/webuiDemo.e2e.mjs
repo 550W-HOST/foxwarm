@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Static WebUI demo: builds the demo bundle, serves it under /demo/ from a plain
 // static server, and checks that it boots from the recorded snapshot with no
-// failed or unrecorded requests, renders every view, and refuses write actions.
+// failed or unrecorded requests, renders every view, opens showcase Sessions
+// from direct links, and refuses write actions.
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { createServer } from 'node:http'
@@ -84,6 +85,16 @@ test('static WebUI demo boots from the snapshot and stays read-only', { timeout:
         await page.waitForFunction(() => document.querySelector('[data-chat-timeline="committed"]')?.textContent?.trim(), { timeout: 15000 })
         await page.waitForNetworkIdle({ idleTime: 200, timeout: 10000 }).catch(() => {})
       }
+    }
+
+    // Showcase Sessions open from a cold `#session/<id>` link, as the website links them.
+    await page.evaluate(() => localStorage.clear())
+    for (const id of showcase) {
+      await page.goto('about:blank')
+      await page.goto(`${base}#session/${encodeURIComponent(id)}`, { waitUntil: 'networkidle0' })
+      await page.waitForSelector('[data-fox-splash]', { hidden: true })
+      await page.waitForFunction(expected => decodeURIComponent(location.hash) === `#tab/chat:${expected}` && document.querySelector('[data-chat-timeline="committed"]')?.textContent?.trim(), { timeout: 15000 }, id)
+      await page.waitForNetworkIdle({ idleTime: 200, timeout: 10000 }).catch(() => {})
     }
 
     // A write action is refused with the read-only notice and changes nothing.

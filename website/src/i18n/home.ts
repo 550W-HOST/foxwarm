@@ -14,6 +14,18 @@ export const installCommands = {
 
 export type FeatureVisual = 'memory' | 'hands' | 'team' | 'room';
 
+// The static WebUI demo replays recorded, fictional Sessions; `#session/<id>` opens one directly.
+export const demoUrl = '/demo/';
+export const demoSession = (sessionId: string) => `${demoUrl}#session/${encodeURIComponent(sessionId)}`;
+// The hero screenshot shows this Session.
+export const heroDemoSession = 'tidepool/fix-ci';
+// Recorded Sessions that show each feature. The channel example has no counterpart in the recording.
+export const featureDemoSessions: Partial<Record<FeatureVisual, string>> = {
+  memory: 'tidepool/support',
+  hands: 'tidepool/runner',
+  team: 'tidepool/proration-v2'
+};
+
 export type Feature = {
   id: FeatureVisual;
   eyebrow: string;
@@ -32,7 +44,7 @@ export type HomeStrings = {
   htmlLang: string;
   path: string;
   meta: { title: string; description: string; ogTitle: string };
-  nav: { features: string; install: string; docs: string; github: string; theme: string; language: string; languageLabel: string; skip: string };
+  nav: { features: string; install: string; docs: string; demo: string; github: string; theme: string; language: string; languageLabel: string; skip: string };
   hero: {
     title: string;
     lede: string;
@@ -44,7 +56,9 @@ export type HomeStrings = {
     };
     shotCaption: string;
     screenshotAlt: string;
+    demo: { link: string; note: string };
   };
+  featureDemo: string;
   install: {
     tabs: { linux: string; windows: string; docker: string };
     copy: string;

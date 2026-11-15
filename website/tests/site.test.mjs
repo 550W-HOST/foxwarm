@@ -3,6 +3,7 @@ import { readFile, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { unpackSnapshot } from '../../packages/webui/demo/src/pack.mjs';
 
 const websiteRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const repositoryRoot = path.resolve(websiteRoot, '..');
@@ -115,6 +116,8 @@ test('in-site links to page sections point at existing headings', async () => {
     for (const match of html.matchAll(/href="([^"]*#[^"]+)"/g)) {
       const [pagePart, hash] = match[1].split('#', 2);
       if (!hash || hash === '_top' || hash === 'main' || hash === 'install' || hash === 'features') continue;
+      // The demo WebUI routes its own hash (`#session/<id>`); it is not a heading anchor.
+      if (pagePart === '/demo/') continue;
       const target = pagePart ? localTarget(pagePart) : filePath;
       if (!target || !await exists(target)) continue;
       if (!idsByFile.has(target)) {
@@ -138,7 +141,7 @@ test('installer downloads are byte-exact copies of repository scripts', async ()
   }
 });
 
-test('the WebUI demo is built, unindexed, and not linked from the site', async () => {
+test('the WebUI demo is built, unindexed, and linked from both homepages', async () => {
   const html = await readFile(path.join(distRoot, 'demo', 'index.html'), 'utf8');
   assert.match(html, /<meta name="robots" content="noindex, nofollow"/);
   const moduleEntries = [...html.matchAll(/<script\b([^>]*)>/g)]
@@ -150,12 +153,22 @@ test('the WebUI demo is built, unindexed, and not linked from the site', async (
   for (const src of moduleEntries) {
     assert.ok((await stat(path.join(distRoot, 'demo', src))).isFile(), `${src} exists`);
   }
-  const linking = [];
-  for (const filePath of await htmlFiles()) {
-    if (filePath.startsWith(path.join(distRoot, 'demo') + path.sep)) continue;
-    if (/(?:href|src)="(?:https:\/\/foxwarm\.net)?\/demo[/"]/.test(await readFile(filePath, 'utf8'))) linking.push(path.relative(distRoot, filePath));
+
+  // Session links must name Sessions that the replayed recording contains.
+  const snapshotPath = path.join(repositoryRoot, 'packages', 'webui', 'demo', 'fixtures', 'snapshot.json');
+  const recorded = new Set(unpackSnapshot(JSON.parse(await readFile(snapshotPath, 'utf8'))).sessions);
+  for (const [route, navLabel] of [['/', 'Demo'], ['/zh/', '演示']]) {
+    const homepage = await readFile(routeToFile(route), 'utf8');
+    const nav = homepage.match(/<nav class="primary-nav"[^>]*>([\s\S]*?)<\/nav>/)?.[1] ?? '';
+    assert.match(nav, new RegExp(`<a href="/demo/">${navLabel}</a>`), `${route} navigation opens the demo`);
+    const hero = homepage.match(/<section class="hero"[\s\S]*?<\/section>/)?.[0] ?? '';
+    assert.match(hero, /<a class="demo-link" href="\/demo\/#session\/tidepool%2Ffix-ci">/, `${route} hero opens the screenshot's Session in the demo`);
+    const featureLinks = [...homepage.matchAll(/<section class="feature [^"]*"[\s\S]*?<\/section>/g)]
+      .flatMap(([section]) => [...section.matchAll(/href="\/demo\/#session\/([^"]+)"/g)].map((link) => decodeURIComponent(link[1])));
+    assert.ok(featureLinks.length > 0, `${route} features link into the demo`);
+    const sessionLinks = [...homepage.matchAll(/href="\/demo\/#session\/([^"]+)"/g)].map((link) => decodeURIComponent(link[1]));
+    assert.deepEqual(sessionLinks.filter((id) => !recorded.has(id)), [], `${route} links only recorded Sessions`);
   }
-  assert.deepEqual(linking, []);
 });
 
 test('the custom 404 is excluded from indexing', async () => {
