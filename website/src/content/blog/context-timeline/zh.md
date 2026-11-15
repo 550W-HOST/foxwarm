@@ -16,7 +16,7 @@ version: Foxwarm 0.9.5
 
 先看几个大家熟悉的 agent 是怎么做的。它们的选择都很合理，只是针对的场景不同。
 
-- **Claude Code**：接近上限时自动压缩，也可以手动 `/compact`，把对话换成一份结构化摘要。压缩后会从磁盘重新注入 CLAUDE.md、auto memory 和 Skills，并重读最近改过的几个文件。官方文档也直说了：较早的详细指令可能在压缩中丢失，需要长期保留的规则应该写进 CLAUDE.md。用户可以给 `/compact` 指定重点，也可以用 `/rewind` 只压缩一部分对话。
+- **Claude Code**：接近上限时自动压缩，也可以手动 `/compact`，把对话换成一份结构化摘要。压缩后会从磁盘重新注入 CLAUDE.md、auto memory 和 Skills，并重读这次会话读过或改过的文件里最近修改的至多 5 个。官方文档也直说了：较早的详细指令可能在压缩中丢失，需要长期保留的规则应该写进 CLAUDE.md。用户可以给 `/compact` 指定重点，也可以用 `/rewind` 只压缩一部分对话。
 - **Pi**：上下文超过阈值时触发，保留最近约 20k token 的原文，把更早的部分交给模型总结，并把上一份摘要作为输入，生成新的摘要。原始记录留在 JSONL 会话文件里；切换分支时另有 branch summary；extension 可以接管压缩过程。
 - **DeepSeek Harness**：压缩是一个可替换的插件接口。默认的 basic 后端把最老的一段历史压成摘要、保留近期消息，可以先裁掉过大的工具输出，上下文溢出时压缩后重试。事件日志只追加不修改，压缩事件也记录在里面；另有一个需要显式挂载的实验性插件，让模型检索会话、读取精确事件。
 
@@ -139,7 +139,7 @@ Foxwarm 很早就不用单份摘要，而是把过去切成一个个摘要块（
 
 Foxwarm 0.9.5 起，新会话直接使用这套规则，已有会话会在后续压缩中逐步整理。`/compact` 可以手动触发；`llm.compactThresholdPercent` 和 `llm.compactKeepPercent` 调整触发点和保留的原文量，见[长对话与历史检索](/zh/docs/history-search/)。
 
-想先看看效果，可以打开[演示工作区](/demo/#session/tidepool%2Fsupport)，里面有一个经过压缩的会话，可以看到摘要块，以及模型用 recall 找回原文的过程。
+想先看看效果，可以打开[演示工作区](/demo/#session/tidepool%2Fsupport)，里面有一个经过压缩的会话。把视图切换到 Grouped 或 Detailed，就能看到摘要块，以及模型用 recall 找回原文的两次调用。
 
 ## 参考
 
