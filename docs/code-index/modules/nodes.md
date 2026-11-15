@@ -83,6 +83,12 @@ The operator-facing deployment/configuration workflow is documented by the singl
 
 ## Design decisions
 
+### D-node-restart-and-revocation
+
+[2026-11-15, user decision] System Nodes offers existing CLI restart commands without a credential, using the Node's saved credentials. Official clients report non-secret launch method, platform and installation paths; older or unknown installations have editable defaults. Shell clients retain no credentials, so restarting them requires the operator's token or explicit reissue. Main cannot recover an existing plaintext token. Reissue replaces its hash, invalidates the old token, disconnects the current transport and returns the replacement command/token once to the administrator. The mounted dialog discards it on close.
+
+Deletion revokes credentials, disconnects and removes the approved record. Descendants require explicit cascade confirmation; processes and files on the remote machine are untouched. Provider-owned Nodes use Provider destruction, not native credential deletion; the System Nodes delete action is unavailable for those Nodes and mixed subtrees. Implementation: [external Node maintenance](../units/external-nodes.md#administrator-node-maintenance), [System Nodes](../units/webui-nodes.md).
+
 ### D-node-credential-hash
 
 **Security and persisted-credential contract, independently supported by authenticated Node consumers.** It constrains [Node authority](../behaviors/nodes-workspaces-and-permissions.md#authority-has-several-independent-boundaries). Credential verification/storage is an implementation boundary with a real security consumer, not a rationale for adding unrelated artifact fingerprints.

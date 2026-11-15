@@ -53,6 +53,27 @@ internal sealed partial class NodeClient
         authToken = options.AuthToken;
     }
 
+    private static JsonObject? LaunchInfo()
+    {
+        var method = Environment.GetEnvironmentVariable("FOXWARM_NODE_LAUNCH_METHOD");
+        if (string.IsNullOrEmpty(method))
+            return null;
+        var result = new JsonObject
+        {
+            ["method"] = method,
+            ["platform"] = OperatingSystem.IsWindows() ? "win32" : OperatingSystem.IsMacOS() ? "darwin" : "linux",
+        };
+        foreach (var (key, name) in new[]
+        {
+            ("installDir", "DIR"), ("stateDir", "STATE_DIR"), ("sourceDir", "SOURCE_DIR"),
+            ("composeFile", "COMPOSE_FILE"), ("envFile", "ENV_FILE"),
+            ("mode", "MODE"), ("serviceScope", "SERVICE_SCOPE"),
+        })
+            if (Environment.GetEnvironmentVariable("FOXWARM_NODE_LAUNCH_" + name) is { Length: > 0 } value)
+                result[key] = value;
+        return result;
+    }
+
     private bool Authenticated => !string.IsNullOrEmpty(nodeId) && !string.IsNullOrEmpty(authToken);
 
     internal async Task Run(CancellationToken stop)
@@ -120,6 +141,7 @@ internal sealed partial class NodeClient
                         {
                             ["type"] = Authenticated ? "node_register" : "pair_request",
                             ["nodeType"] = "cli-node",
+                            ["launchInfo"] = LaunchInfo(),
                             ["capabilities"] = Capabilities(
                                 options.ToolCallInterceptor is not null,
                                 browserTools.Definitions()

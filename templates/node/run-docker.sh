@@ -95,6 +95,10 @@ compose_quote() {
 }
 
 {
+  printf 'NODE_LAUNCH_DIR='; compose_quote "$(pwd -P)"; echo
+  printf 'NODE_LAUNCH_STATE_DIR='; compose_quote "$(cd "$STATE_DIR" && pwd -P)"; echo
+  printf 'NODE_LAUNCH_COMPOSE_FILE='; compose_quote "$COMPOSE_FILE"; echo
+  printf 'NODE_LAUNCH_ENV_FILE='; compose_quote "$ENV_FILE"; echo
   printf 'NODE_HOST='; compose_quote "$HOST"; echo
   printf 'NODE_SOURCE_URL='; compose_quote "$HOST/node/source.tar.gz"; echo
   printf 'NODE_PAIRING_TOKEN='; compose_quote "$PAIRING"; echo
@@ -118,7 +122,7 @@ echo "Persistent node data: $ABS_STATE_DIR"
 echo "Credentials file will be stored at: $ABS_STATE_DIR/state/node_credentials.json"
 
 echo "Starting node client with: $DOCKER_COMPOSE up -d --build"
-sh -c "$DOCKER_COMPOSE up -d --build"
+$DOCKER_COMPOSE --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d --build
 
 if [ "$DETACH" = "1" ]; then
 cat <<EOF
@@ -149,4 +153,4 @@ Press Ctrl-C to stop following logs. The container will keep running because it 
 
 EOF
 
-exec sh -c "$DOCKER_COMPOSE logs -f"
+exec $DOCKER_COMPOSE --env-file "$ENV_FILE" -f "$COMPOSE_FILE" logs -f

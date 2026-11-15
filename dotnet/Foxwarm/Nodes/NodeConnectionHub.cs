@@ -227,6 +227,7 @@ internal sealed partial class NodeConnectionHub : IDisposable
                 var id = record["nodeId"]!.GetValue<string>();
                 nodes.TryGetValue(id, out var connection);
                 record["id"] = id;
+                record["credentialManaged"] = true;
                 record["type"] = connection?.Type ?? record["nodeType"]?.GetValue<string>();
                 record["connected"] = connection is { Retired: false } && connection.Open;
                 record["executable"] =
@@ -351,6 +352,28 @@ internal sealed partial class NodeConnectionHub : IDisposable
         }
         Changed?.Invoke();
         return disconnected;
+    }
+
+    internal JsonObject Reissue(string id)
+    {
+        using var mutation = Registry.BeginMutation();
+        JsonObject result;
+        lock (gate)
+        {
+            try
+            {
+                result = Registry.Reissue(id, mutation);
+            }
+            catch (AuthorityCommittedException)
+            {
+                Disconnect(id, "Node credentials replaced");
+                throw;
+            }
+            result["disconnected"] = nodes.ContainsKey(id);
+            Disconnect(id, "Node credentials replaced");
+        }
+        Changed?.Invoke();
+        return result;
     }
 
     internal void Rename(string oldId, string newId)

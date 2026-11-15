@@ -73,6 +73,11 @@ services:
         CMD ["/app/scripts/start-sandbox-node.sh"]
     restart: unless-stopped
     environment:
+      FOXWARM_NODE_LAUNCH_METHOD: docker
+      FOXWARM_NODE_LAUNCH_DIR: ${NODE_LAUNCH_DIR:-}
+      FOXWARM_NODE_LAUNCH_STATE_DIR: ${NODE_LAUNCH_STATE_DIR:-}
+      FOXWARM_NODE_LAUNCH_COMPOSE_FILE: ${NODE_LAUNCH_COMPOSE_FILE:-docker-compose.yaml}
+      FOXWARM_NODE_LAUNCH_ENV_FILE: ${NODE_LAUNCH_ENV_FILE:-.env}
       NODE_URL: ${NODE_HOST}
       NODE_ID: ${NODE_ID:-foxwarm-node}
       NODE_TOKEN: ${NODE_PAIRING_TOKEN:-}

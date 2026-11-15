@@ -267,6 +267,12 @@ if (-not $Pairing -or (Test-Path -LiteralPath $CredentialsFile)) {
 
 Write-Host ""
 
+$env:FOXWARM_NODE_LAUNCH_METHOD = 'windows'
+$env:FOXWARM_NODE_LAUNCH_DIR = [System.IO.Path]::GetFullPath($ScriptDir)
+$env:FOXWARM_NODE_LAUNCH_STATE_DIR = $StateDir
+$env:FOXWARM_NODE_LAUNCH_SOURCE_DIR = $SourceDir
+$env:FOXWARM_NODE_LAUNCH_MODE = if ($Interactive) { 'interactive' } else { 'foreground' }
+
 # ─── Run synchronously ───
 $nodeExitCode = 1
 Push-Location -LiteralPath $ScriptDir

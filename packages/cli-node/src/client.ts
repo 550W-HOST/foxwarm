@@ -473,6 +473,7 @@ export class NodeClient {
       if (this.isAuthenticatedMode) {
         this.send({
           type: 'node_register',
+          launchInfo: this.launchInfo(),
           nodeType: 'cli-node',
           capabilities: this.getNodeCapabilities(),
           nodeProtocol: CURRENT_NODE_PROTOCOL_RANGE,
@@ -1094,6 +1095,17 @@ export class NodeClient {
     }
 
     return { output: String(rawResult) };
+  }
+
+  private launchInfo(): Record<string, string> | undefined {
+    const method = process.env.FOXWARM_NODE_LAUNCH_METHOD;
+    if (!method) return undefined;
+    const result: Record<string, string> = { method, platform: process.platform };
+    for (const [key, name] of Object.entries({ installDir: 'DIR', stateDir: 'STATE_DIR', sourceDir: 'SOURCE_DIR', composeFile: 'COMPOSE_FILE', envFile: 'ENV_FILE', mode: 'MODE', serviceScope: 'SERVICE_SCOPE' })) {
+      const value = process.env[`FOXWARM_NODE_LAUNCH_${name}`];
+      if (value) result[key] = value;
+    }
+    return result;
   }
 
   private send(data: any): void {

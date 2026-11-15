@@ -160,13 +160,7 @@ internal sealed partial class SessionManager
             throw new InvalidDataException("cascade must be a boolean.");
         var cascade = args["cascade"]?.GetValue<bool>() ?? false;
         using var mutation = await Nodes.Registry.BeginMutationAsync(token);
-        var subtree = Nodes.Registry.Forest().Subtree(id);
-        if (!cascade && subtree.Count > 1)
-            throw new InvalidDataException("Node has descendants; cascade is required.");
-        if (subtree.Any(node => node == "master" || node.Contains('/')))
-            throw new InvalidDataException(
-                "Native credential cascade cannot contain executable-provider Nodes."
-            );
+        var subtree = Nodes.Registry.NativeRemovalNodes(id, cascade, mutation);
         foreach (var member in subtree)
         {
             var removal = (JsonObject)args.DeepClone();

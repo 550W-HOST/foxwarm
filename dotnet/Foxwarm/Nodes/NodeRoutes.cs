@@ -190,18 +190,67 @@ internal static class NodeRoutes
                 return Task.FromResult(new JsonObject { ["success"] = true });
             }
         );
+        JsonObject ApprovedRecord(string id) => hub.Registry.ListApproved().OfType<JsonObject>()
+            .FirstOrDefault(record => SessionWait.Text(record["nodeId"]) == id)
+            ?? throw new InvalidDataException("Approved Node not found.");
+        foreach (var reissue in new[] { false, true })
+            MapPost(app, "/api/nodes/{nodeId}/" + (reissue ? "reissue-token" : "restart-command"), (body, context) =>
+            {
+                var id = context.Request.RouteValues["nodeId"]!.ToString()!;
+                var record = ApprovedRecord(id);
+                if (SessionWait.Text(record["nodeType"]) is not ("cli-node" or "shell-node"))
+                    throw new InvalidDataException("This Node has no command-line launcher.");
+                var url = NodeBootstrap.OnboardingBaseUrl(body, configuredBaseUrl);
+                var launch = bootstrap.ExistingLaunch(record, body);
+                // Validate all command inputs before replacing the credential.
+                var result = bootstrap.ExistingCommand(url, id, launch);
+                if (reissue)
+                {
+                    var credential = hub.Reissue(id);
+                    result = bootstrap.ExistingCommand(url, id, launch, credential["authToken"]!.GetValue<string>());
+                    result["authToken"] = credential["authToken"]!.DeepClone();
+                }
+                return Task.FromResult(result);
+            });
+        app.MapGet("/api/nodes/{nodeId}/removal", (string nodeId) =>
+        {
+            try
+            {
+                ApprovedRecord(nodeId);
+                var members = hub.Registry.Forest().Subtree(nodeId);
+                return Results.Ok(new JsonObject
+                {
+                    ["nodes"] = new JsonArray(members.Select(id => (JsonNode?)JsonValue.Create(id)).ToArray()),
+                    ["canDelete"] = members.All(id => id != "master" && !id.Contains('/')),
+                });
+            }
+            catch (InvalidDataException error)
+            {
+                return Results.BadRequest(new JsonObject { ["error"] = error.Message });
+            }
+        });
         app.MapDelete(
             "/api/nodes/{nodeId}",
-            (string nodeId) =>
+            async (string nodeId, HttpContext context) =>
             {
                 try
                 {
-                    hub.Remove(nodeId);
+                    var raw = context.Request.Query["cascade"].FirstOrDefault();
+                    var cascade = false;
+                    if (raw is not null && !bool.TryParse(raw, out cascade))
+                        throw new InvalidDataException("cascade must be a boolean.");
+                    using var mutation = await hub.Registry.BeginMutationAsync(context.RequestAborted);
+                    var members = hub.Registry.NativeRemovalNodes(nodeId, cascade, mutation);
+                    hub.RemoveNodes(members, mutation);
                     return Results.Ok(new JsonObject { ["success"] = true });
                 }
                 catch (InvalidDataException error)
                 {
                     return Results.BadRequest(new JsonObject { ["error"] = error.Message });
+                }
+                catch (IOException)
+                {
+                    return Results.Json(new JsonObject { ["error"] = "The request could not be completed. Refresh Nodes before trying again." }, statusCode: 500);
                 }
             }
         );

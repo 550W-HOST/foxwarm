@@ -8,7 +8,7 @@ using Foxwarm.Sessions;
 
 namespace Foxwarm.Tests;
 
-public sealed class NodeOnboardingHttpTests
+public sealed partial class NodeOnboardingHttpTests
 {
     private sealed class Fixture : IAsyncDisposable
     {

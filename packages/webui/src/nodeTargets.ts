@@ -6,6 +6,7 @@ export type WebUiNodeTarget = {
   availability?: 'ready' | 'offline' | 'unavailable' | 'error'
   lastSeenAt?: number
   services: Record<string, number>
+  credentialManaged?: boolean
   unavailable?: boolean
   protocolStatus?: 'compatible' | 'upgrade-required'
   protocolMessage?: string
@@ -50,6 +51,7 @@ export function parseWebUiNodeTargets(payload: unknown): WebUiNodeTarget[] {
       type: typeof item.type === 'string' && item.type.trim() ? item.type.trim() : 'remote',
       displayName: typeof item.displayName === 'string' && item.displayName.trim() ? item.displayName.trim() : id,
       online: item.online === true,
+      credentialManaged: item.credentialManaged === true,
       ...(['ready', 'offline', 'unavailable', 'error'].includes(String(item.availability)) ? { availability: item.availability as WebUiNodeTarget['availability'] } : {}),
       ...(Number.isFinite(item.lastSeenAt) ? { lastSeenAt: Number(item.lastSeenAt) } : {}),
       services,

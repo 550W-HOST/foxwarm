@@ -27,6 +27,8 @@ Main-owned [authorization forests](../behaviors/nodes-workspaces-and-permissions
 - [Tool authorization](../units/tool-authorization.md)
 - [Node list visibility](../units/node-list-visibility.md)
 
+The System Nodes administrator APIs also expose credential-free restart suggestions, explicit token reissue and confirmed native subtree deletion; see [administrator maintenance](../units/external-nodes.md#administrator-node-maintenance).
+
 ## Tests and callers
 
 The external Node unit maps the persistent registry/save-lane tests and real host/official-client qualification. The ordinary Node path uses the existing Session owner and tool authorization; Main-owned observation and history remain available offline.

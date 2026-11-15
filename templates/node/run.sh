@@ -208,6 +208,15 @@ shell_quote() {
 {
   echo '#!/bin/sh'
   echo 'set -eu'
+  launch_method=bareMetal
+  [ "$DETACH" = 0 ] || launch_method=bareMetalBackground
+  [ "$INSTALL_SERVICE" = 0 ] || launch_method=bareMetalInstall
+  printf 'export FOXWARM_NODE_LAUNCH_METHOD='; shell_quote "$launch_method"; echo
+  printf 'export FOXWARM_NODE_LAUNCH_DIR='; shell_quote "$ABS_INSTALL_DIR"; echo
+  if [ "$INSTALL_SERVICE" = 1 ]; then
+    if [ "$(id -u)" = 0 ]; then launch_scope=system; else launch_scope=user; fi
+    printf 'export FOXWARM_NODE_LAUNCH_SERVICE_SCOPE='; shell_quote "$launch_scope"; echo
+  fi
   printf 'cd '; shell_quote "$SOURCE_DIR"; echo
   printf 'exec '; shell_quote "$NODE_BIN"
   if [ -n "$NODE_CLIENT_ENTRYPOINT" ]; then

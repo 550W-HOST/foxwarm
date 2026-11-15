@@ -197,6 +197,11 @@ fi
 
 echo ""
 
+export FOXWARM_NODE_LAUNCH_METHOD=interactive
+export FOXWARM_NODE_LAUNCH_DIR="$(pwd -P)"
+export FOXWARM_NODE_LAUNCH_STATE_DIR="$ABS_STATE_DIR"
+export FOXWARM_NODE_LAUNCH_SOURCE_DIR="$ABS_SOURCE_DIR"
+
 # Run interactively (foreground, stdin attached)
 # curl | bash consumes stdin for the script; attach the controlling terminal
 # before entering the interactive client.

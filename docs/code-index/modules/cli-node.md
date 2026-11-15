@@ -64,3 +64,5 @@ Proxy behavior is centralized and follows standard environment variables, includ
 ## Canonical ownership
 
 Bootstrap artifact ownership: [D-node-bootstrap-bundle](./nodes.md#d-node-bootstrap-bundle). Model tool/backend service separation: [D-node-thread-tool-service-split](../threads/node-communication.md#d-node-thread-tool-service-split).
+
+Official launcher environment facts are attached to authenticated registration for [administrator restart suggestions](../units/external-nodes.md#administrator-node-maintenance). They contain no credentials and do not alter capability or authorization negotiation.

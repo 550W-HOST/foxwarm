@@ -15,7 +15,7 @@ The implemented current model tools are `read`, `write`, `edit`, `exec`, `get_de
 | Symbol | Responsibility |
 |---|---|
 | `Program.Main`, `Parse` | Argument entry, explicit interactive branch, signals and shutdown; accepts host, ID, shared pairing token, per-node auth token, optional credential file, `--local-trigger-port` and `--no-local-trigger`. |
-| `NodeClient.Run`, `Receive` | Credential precedence, pairing/auth registration, protocol validation, reconnect and receive ownership. |
+| `NodeClient.Run`, `Receive`, `LaunchInfo` | Credential precedence, pairing/auth registration, optional non-secret launcher facts, protocol validation, reconnect and receive ownership. |
 | `NodeClient.Dispatch`, `ToolCallFailure`, `ScheduleDispatch`, `Connection.Send` | Session tool/transfer replies, prequeued exec cancellation, draining and originating-connection ownership. |
 | `NodeClient.Recover`, `SendCompletion`, `Connection.Request`, `Accept` | Authenticated recovery and exact connection/request completion ACK correlation. |
 | `NodeServiceDispatch.Dispatch` (via `NodeClient.DispatchService` and `NodeStdioHost`), `NodeCodeServices.Execute`, `Error` | Fixed Code request/command framing, native paths, strict Source flags/base64 and service error code/status; no model/external owner or approval. |

@@ -1,10 +1,11 @@
 using System.Formats.Tar;
 using System.IO.Compression;
 using System.Text.Json.Nodes;
+using Foxwarm.Sessions;
 
 namespace Foxwarm.Nodes;
 
-internal sealed class NodeBootstrap(
+internal sealed partial class NodeBootstrap(
     NodeConnectionHub hub,
     PublicWebAddress address,
     bool hasConfiguredUrl = true
@@ -56,7 +57,9 @@ internal sealed class NodeBootstrap(
         string? baseUrl = null,
         string? id = null,
         string directory = "/opt/foxwarm-node",
-        string? authToken = null
+        string? authToken = null,
+        bool storedCredentials = false,
+        JsonObject? launch = null
     )
     {
         var url = baseUrl is null ? InstructionBaseUrl : NormalizeBaseUrl(baseUrl);
@@ -67,14 +70,18 @@ internal sealed class NodeBootstrap(
             throw new InvalidDataException("Enter an installation directory.");
         string Download(string name) =>
             "curl -fsSL " + Quote(url + "/node/" + name) + " | bash -s --";
-        var credential = authToken ?? hub.Registry.PairingToken;
+        var credential = authToken ?? (storedCredentials ? "" : hub.Registry.PairingToken);
         var arguments =
             " --host="
             + Quote(url)
-            + (authToken is null ? " --pairing=" : " --auth-token=")
-            + Quote(credential)
+            + (storedCredentials ? "" : (authToken is null ? " --pairing=" : " --auth-token=") + Quote(credential))
             + " --node-id="
             + Quote(id);
+        var stateDir = launch?["stateDir"]?.GetValue<string>();
+        var sourceDir = launch?["sourceDir"]?.GetValue<string>();
+        var directoryPrefix = launch is null ? "" : "cd " + Quote(directory) + " && ";
+        var pathArgs = (stateDir is null ? "" : " --state-dir=" + Quote(stateDir))
+            + (sourceDir is null ? "" : " --source-dir=" + Quote(sourceDir));
         return new JsonObject
         {
             ["baseUrl"] = url,
@@ -94,8 +101,11 @@ internal sealed class NodeBootstrap(
                     Download("run.sh") + " --dir=" + Quote(directory) + arguments + " -d",
                 ["bareMetalInstall"] =
                     Download("run.sh") + " --dir=" + Quote(directory) + arguments + " --install",
-                ["docker"] = Download("run-docker.sh") + arguments,
-                ["interactive"] = Download("run-interactive.sh") + arguments,
+                ["docker"] = directoryPrefix + Download("run-docker.sh") + arguments
+                    + (stateDir is null ? "" : " --state-dir=" + Quote(stateDir))
+                    + (launch?["composeFile"] is null ? "" : " --compose-file=" + Quote(launch["composeFile"]!.GetValue<string>()))
+                    + (launch?["envFile"] is null ? "" : " --env-file=" + Quote(launch["envFile"]!.GetValue<string>())),
+                ["interactive"] = directoryPrefix + Download("run-interactive.sh") + arguments + pathArgs,
                 ["manualCompose"] =
                     "curl -fsSL "
                     + Quote(url + "/node/docker-compose.yaml")
@@ -112,13 +122,17 @@ internal sealed class NodeBootstrap(
                     + ComposeQuote(id)
                     + "\nNODE_DATA_DIR=./data\nFOXWARM_NODE_ENV\nchmod 600 .env\n\ndocker compose up -d --build",
                 ["windows"] =
-                    PowerShellDownload(url, "run.ps1")
+                    (launch is null ? "" : "& { Set-Location -LiteralPath " + PowerShellQuote(directory) + " -ErrorAction Stop; ")
+                    + PowerShellDownload(url, "run.ps1")
                     + " -HostUrl "
                     + PowerShellQuote(url)
-                    + (authToken is null ? " -Pairing " : " -AuthToken ")
-                    + PowerShellQuote(credential)
+                    + (storedCredentials ? "" : (authToken is null ? " -Pairing " : " -AuthToken ") + PowerShellQuote(credential))
                     + " -NodeId "
-                    + PowerShellQuote(id),
+                    + PowerShellQuote(id)
+                    + (launch is null ? "" : " -StateDir " + PowerShellQuote(stateDir ?? directory.TrimEnd('\\', '/') + "\\data")
+                        + " -SourceDir " + PowerShellQuote(sourceDir ?? directory.TrimEnd('\\', '/') + "\\foxwarm-node"))
+                    + (SessionWait.Text(launch?["mode"]) == "interactive" ? " -Interactive" : "")
+                    + (launch is null ? "" : " }"),
             },
         };
     }

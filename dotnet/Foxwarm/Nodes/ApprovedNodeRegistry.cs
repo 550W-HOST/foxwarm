@@ -241,6 +241,21 @@ internal sealed partial class ApprovedNodeRegistry
         );
     }
 
+    internal JsonObject Reissue(string id, Mutation mutation) =>
+        Change(next =>
+        {
+            var record = Approved(next)[ValidateId(id)] as JsonObject
+                ?? throw new InvalidDataException("Approved Node not found.");
+            var auth = Token();
+            record["tokenHash"] = Hash(auth);
+            record["updatedAt"] = Now;
+            // An old, unclaimed pairing must never deliver the superseded credential.
+            foreach (var pair in Pending(next).ToArray())
+                if (SessionWait.Text(pair.Value?["approvedNodeId"]) == id)
+                    Pending(next).Remove(pair.Key);
+            return new JsonObject { ["nodeId"] = id, ["authToken"] = auth };
+        }, mutation);
+
     internal JsonObject Request(JsonObject input, JsonObject protocol)
     {
         Cleanup();
@@ -448,6 +463,8 @@ internal sealed partial class ApprovedNodeRegistry
                 record["capabilities"] = input["capabilities"]!.DeepClone();
                 record["nodeProtocol"] = compatibility["client"]!.DeepClone();
                 record["protocolCompatibility"] = compatibility.DeepClone();
+                if (NodeBootstrap.LaunchInfo(input["launchInfo"]) is { } launch)
+                    record["launchInfo"] = launch;
                 record["lastSeenAt"] = Now;
                 record["updatedAt"] = Now;
                 return true;
