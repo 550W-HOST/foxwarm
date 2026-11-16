@@ -20,7 +20,8 @@ const providerBodies = []
 let detectorCalls = 0
 
 // Flags the person and email; a text containing "again" reports only the email, so the person
-// there is masked literally from the earlier find. "OVERSIZED" is rejected as too large.
+// there is masked literally from the earlier find, when the installation policy enrolls person
+// values. "OVERSIZED" is rejected as too large.
 const detector = createServer(async (request, response) => {
   try {
     const { text } = JSON.parse(await read(request))
@@ -51,13 +52,16 @@ const provider = createServer(async (request, response) => {
 })
 for (const server of [detector, provider]) { server.listen(0, '127.0.0.1'); await once(server, 'listening') }
 const detectorUrl = `http://127.0.0.1:${detector.address().port}/classify`
-const writeModels = threshold => writeFile(fixture.modelPath, JSON.stringify({
+// Literal spreading of a person value needs `knownLabels: "all"`; the default policy enrolls only
+// email, phone and address values.
+const writeModels = (threshold, knownLabels) => writeFile(fixture.modelPath, JSON.stringify({
   default: 'guarded/wire',
+  ...(knownLabels === undefined ? {} : { defaults: { textRedaction: { knownLabels } } }),
   providers: {
     guarded: { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${provider.address().port}`, models: ['wire'], contextLimit: 100000, asyncCompact: false, textRedaction: { enabled: true, endpoint: detectorUrl, threshold } },
   },
 }))
-await writeModels(0.5)
+await writeModels(0.5, 'all')
 await mkdir(join(fixture.work, 'memory'), { recursive: true })
 await writeFile(join(fixture.work, 'memory/ONBOOT.md'), ' \n')
 const shots = process.env.FOXWARM_SYSTEM_SCREENSHOT_DIR
@@ -186,7 +190,7 @@ try {
 
   // Changed detection settings start over, so the earlier version is no longer available.
   await fixture.stop()
-  await writeModels(0.6)
+  await writeModels(0.6, 'all')
   await fixture.start()
   await reopen('after a settings change')
   await page.waitForSelector('[data-sent-version-dialog][data-sent-version-state="unavailable"]')
@@ -194,6 +198,24 @@ try {
   await shot(await page.$('[data-sent-version-dialog]'), 'sent-version-unavailable.png')
   // Rendering the view never asks the detector.
   assert.equal(detectorCalls, callsBefore)
+
+  // The default policy does not enroll a person value: when the detector no longer reports it, it
+  // is sent as written, while the email stays masked.
+  await fixture.stop()
+  await writeModels(0.6)
+  await fixture.start()
+  const bare = await fixture.api('POST', '/api/sessions', { agentId: 'main', sessionId: 'default-policy' })
+  assert.ok([200, 201].includes(bare.status), JSON.stringify(bare.body))
+  const bareBodies = []
+  for (const [text, count] of [[`Please email ${PERSON} at ${EMAIL} about Friday.`, 1], [`Remind ${PERSON} again tomorrow, cc ${EMAIL}.`, 2]]) {
+    assert.equal((await fixture.api('POST', route('default-policy') + '/message', { text })).status, 202)
+    await until(async () => (await replies('default-policy')).length >= count, 'default policy reply ' + count)
+    await settle('default-policy')
+    bareBodies.push(providerBodies.at(-1))
+  }
+  assert.ok(!bareBodies[0].includes(PERSON) && !bareBodies[0].includes(EMAIL))
+  assert.ok(bareBodies[1].includes(PERSON))
+  assert.ok(!bareBodies[1].includes(EMAIL))
 
   assert.deepEqual(browserErrors, [])
   assert.deepEqual(errors, [])
