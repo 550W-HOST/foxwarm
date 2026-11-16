@@ -403,7 +403,7 @@
           "name": "count",
           "type": "integer",
           "kind": "flag",
-          "help": "Maximum visible source records to select after applying --parts; without --start or --before, the newest ones. Defaults to 10; 0 returns only the header and execution state. Text filters can leave fewer matches."
+          "help": "Number of records to show after --parts filtering; without --start or --before, the most recent ones. Defaults to 10; 0 returns only the header and execution state. Text filters can return fewer."
         },
         {
           "name": "historyVersion",
