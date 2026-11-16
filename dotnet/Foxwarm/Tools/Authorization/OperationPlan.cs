@@ -29,6 +29,9 @@ internal sealed record PlanContext(string CurrentNode)
     // default, the installation default, then master); null when unknown.
     internal Func<string, string?>? AgentDefaultNode { get; init; }
 
+    // The canonical ID of a Session reference (an ID or alias); null when it names none.
+    internal Func<string, string?>? CanonicalSession { get; init; }
+
     // The installation default Node of new Sessions (part of an Agent's effective default).
     internal string? InstallDefaultNode { get; init; }
 
@@ -828,10 +831,22 @@ internal sealed partial record OperationPlan(
                     value = ChildAgent() is string childAgent ? Prospective(childAgent, null, child: true) : null;
                     return value is not null;
                 case "prospective-session":
-                    value = SessionWait.Text(args["agentName"]) is string sessionAgent
-                        ? Prospective(sessionAgent, null, child: false)
-                        : null;
-                    return value is not null;
+                {
+                    // create_session's Session is the caller's child when its parentSessionId
+                    // resolves to the caller.
+                    if (SessionWait.Text(args["agentName"]) is not string sessionAgent)
+                        return false;
+                    var parent = Text("parentSessionId");
+                    bool child;
+                    if (parent is null)
+                        child = false;
+                    else if (context.CanonicalSession?.Invoke(SessionGoal.Trim(parent)) is string canonical)
+                        child = canonical == facts?.Session;
+                    else
+                        return false;
+                    value = Prospective(sessionAgent, null, child);
+                    return true;
+                }
                 case "creation-runtime":
                     try
                     {

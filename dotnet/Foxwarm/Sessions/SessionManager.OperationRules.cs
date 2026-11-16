@@ -83,6 +83,17 @@ internal sealed partial class SessionManager
                 }
             },
             InstallDefaultNode = agents.InstallDefaultNode,
+            CanonicalSession = id =>
+            {
+                try
+                {
+                    return AuthorizationTarget(id)?.Id;
+                }
+                catch (Exception error) when (error is InvalidDataException or InvalidOperationException)
+                {
+                    return null;
+                }
+            },
             PairingNodeId = (pendingId, nodeId) => Nodes.Registry.PreviewApprovalId(pendingId, nodeId),
             DefaultExecCwd = files is null
                 ? null

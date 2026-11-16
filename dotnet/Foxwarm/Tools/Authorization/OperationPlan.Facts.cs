@@ -97,7 +97,7 @@ internal sealed partial record OperationPlan
             "source-agent" or "source-session" or "source-node" => ["sourceSessionId"],
             "pairing-node" => ["pendingId", "nodeId"],
             "prospective-child" => ["agentName"],
-            "prospective-session" => ["agentName"],
+            "prospective-session" => ["agentName", "parentSessionId"],
             "creation-runtime" => ["runtime"],
             "node-target" or "node-target?" => ["nodeId", "parentNode", "providerId"],
             "provider-node" => ["nodeId", "providerId"],
@@ -177,8 +177,9 @@ internal sealed partial record OperationPlan
             case "pairing-node":
                 return ("ApprovedNodeRegistry approval ID", ["PairingNodeId"]);
             case "prospective-child":
-            case "prospective-session":
                 return ("SessionCreationDefaults (prospective Session)", []);
+            case "prospective-session":
+                return ("SessionCreationDefaults (prospective Session), parent by catalog", ["CanonicalSession"]);
             case "creation-runtime":
                 return ("SessionCreationDefaults.Runtime", []);
             case "source-node":

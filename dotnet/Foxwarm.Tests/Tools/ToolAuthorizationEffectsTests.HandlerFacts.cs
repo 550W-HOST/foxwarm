@@ -164,6 +164,32 @@ public sealed partial class ToolAuthorizationEffectsTests
         Assert.Equal(ToolAuthorizationEffect.Allow, child.Effect);
     }
 
+    // A Session create_session parents to the caller is the caller's child, by ID or alias.
+    [Fact]
+    public async Task Sessions_parented_to_the_caller_are_its_children()
+    {
+        using var temp = new TempDirectory();
+        await Seed(temp.Path);
+        await using var manager = Manager(temp.Path);
+        await manager.LoadAsync();
+        var caller = await manager.RequiredAsync("opaque");
+        var execution = TimerExecutor(manager, caller, temp.Path);
+        await using var mcp = execution.Mcp;
+        JsonObject Args(string name, string parent) =>
+            new() { ["agentName"] = "alpha", ["sessionName"] = name, ["parentSessionId"] = parent };
+        await Policy(
+            manager,
+            "version: 1\ndefaultAction: deny\nrules:\n- {op: session.create, targetSession: {session: {relation: child}}, action: allow}\n"
+        );
+        Assert.Null(Error(await Call(execution.Tools, "create_session", Args("by-id", "opaque"))));
+        Assert.Null(Error(await Call(execution.Tools, "create_session", Args("by-alias", "self"))));
+        Assert.Equal("tool_authorization_denied", Error(await Call(execution.Tools, "create_session", Args("unrelated", "foreign"))));
+        await Policy(manager, "version: 1\nrules:\n- {op: session.create, targetSession: {session: {relation: child}}, action: deny}\n");
+        Assert.Equal("tool_authorization_denied", Error(await Call(execution.Tools, "create_session", Args("denied", "opaque"))));
+        Assert.Null(manager.Catalog.Get("alpha/denied"));
+        Assert.Null(Error(await Call(execution.Tools, "create_session", Args("sibling", "foreign"))));
+    }
+
     // a run checkpointed before image admission completes with the old promotion.
     [Fact]
     public async Task Runs_checkpointed_before_admission_resume_under_the_old_promotion()
