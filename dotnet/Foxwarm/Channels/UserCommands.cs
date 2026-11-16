@@ -23,8 +23,28 @@ internal static class UserCommands
 
     internal static IReadOnlyList<string> Heads => heads.Value;
 
-    // A complete, case-sensitive command head.
-    internal static bool IsHead(string head) => heads.Value.Contains(head, StringComparer.Ordinal);
+    // One-release notice (user decision 2026-11-16; remove in 0.9.7): the 0.9.5 heads that became
+    // noun commands stay recognized heads so their text never reaches the model, and reply with
+    // the new spelling without running anything. They are not listed in help, autocomplete or
+    // the Telegram menu.
+    private static readonly Dictionary<string, string> retired = new(StringComparer.Ordinal)
+    {
+        ["/search"] = "/history search",
+        ["/messages"] = "/session messages",
+        ["/delete-messages"] = "/session delete-messages",
+        ["/verbose"] = "/session verbose",
+        ["/attach"] = "/channel attach",
+    };
+
+    // The reply to a retired head, or null for any other head. Remove in 0.9.7.
+    internal static string? RetiredNotice(string head) =>
+        retired.TryGetValue(head, out var current)
+            ? $"`{head}` is now `{current}`. Nothing was run; send `/help {current[1..]}` for its usage."
+            : null;
+
+    // A complete, case-sensitive command head, including the retired 0.9.5 heads until 0.9.7.
+    internal static bool IsHead(string head) =>
+        heads.Value.Contains(head, StringComparer.Ordinal) || retired.ContainsKey(head);
 
     internal static JsonObject? Find(string name) =>
         WebUiCommands().OfType<JsonObject>().FirstOrDefault(row => row["name"]!.GetValue<string>() == name);

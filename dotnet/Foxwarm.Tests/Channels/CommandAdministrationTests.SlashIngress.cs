@@ -84,6 +84,58 @@ public sealed partial class CommandAdministrationTests
         Assert.False(MessageRouter.IsKnownCommand("@helper /unknown", allowMention: true));
     }
 
+    // One-release notice for the 0.9.5 heads (remove in 0.9.7).
+    [Fact]
+    public async Task Retired_heads_reply_with_their_new_spelling_and_run_nothing()
+    {
+        await using var f = await ExternalChannelFixture.CreateAsync(
+            new JsonObject { ["alpha"] = ExternalChannelFixture.Channel() }
+        );
+        var web = new List<string>();
+        f.Owner.Changed += e =>
+        {
+            if (e.Kind == SessionEventKind.CommandReply)
+                web.Add(SessionWait.Text(e.Data?["parts"]?[0]?["text"])!);
+        };
+        var renamed = new Dictionary<string, string>
+        {
+            ["/search weekly"] = "/history search",
+            ["/messages 2"] = "/session messages",
+            ["/delete-messages 1"] = "/session delete-messages",
+            ["/verbose on"] = "/session verbose",
+            ["/attach other"] = "/channel attach",
+        };
+        foreach (var (text, current) in renamed)
+        {
+            Assert.True(MessageRouter.IsKnownCommand(text));
+            var response = await f.Router.HandleMessageAsync(
+                new ChannelContext(f.Owner.Id, "webui"),
+                new ChannelMessage(text, null)
+            );
+            Assert.Equal(200, response.Status);
+            Assert.Contains("is now `" + current + "`", web.Last());
+            Assert.Contains("/help " + current[1..], web.Last());
+        }
+        Assert.Empty(f.Owner.Entry.Snapshot().Queue);
+        Assert.Empty(f.Owner.History());
+        Assert.Null(UserCommands.Find("/attach"));
+        Assert.DoesNotContain("/attach", UserCommands.Heads);
+
+        var replies = new List<string>();
+        var source = Source(replies);
+        f.Manager.AttachChannel(source.Target, f.Owner);
+        await f.Router.HandleExternalMessageAsync(source, Message("/attach other"));
+        Assert.Contains("`/attach` is now `/channel attach`", replies.Single());
+        Assert.Equal(f.Owner.Id, SessionWait.Text(f.Manager.ChannelBinding(source.Target)?["sessionId"]));
+        Assert.Empty(f.Owner.Entry.Snapshot().Queue);
+
+        // A bare page number is refused; text and options still list.
+        await f.Router.HandleExternalMessageAsync(source, Message("/session list 2"));
+        Assert.Contains("--start", replies.Last());
+        await f.Router.HandleExternalMessageAsync(source, Message("/session list source2"));
+        Assert.DoesNotContain("--start", replies.Last());
+    }
+
     [Fact]
     public async Task Known_malformed_commands_keep_validation_and_do_not_become_user_input()
     {
