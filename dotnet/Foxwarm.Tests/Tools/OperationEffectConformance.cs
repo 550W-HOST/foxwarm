@@ -25,7 +25,8 @@ namespace Foxwarm.Tests;
 /// destination must come from the source. A tree write without its read is an error.</item>
 /// </list>
 /// Observed effects come from persisted state: Session catalog rows (Agent, Node, runtime,
-/// parent), the Agent catalog and metadata, Task owners, approved Nodes, the secret store, MCP
+/// parent), the Agent catalog and metadata (an inheritance it sets is a view of the inherited
+/// Agent), Task owners, approved Nodes, the secret store, MCP
 /// server configuration, and file trees. To cover another capability, add a <see cref="Case"/> to
 /// a case table (ToolAuthorizationEffectsTests.Differential.cs, NodeAuthorizationTreeTests
 /// .Differential.cs, AgentRulesTreeTests.Differential.cs); each table also runs whitespace-padded
@@ -63,6 +64,7 @@ internal static class OperationEffectConformance
         Dictionary<string, JsonObject> Sessions,
         HashSet<string> Agents,
         Dictionary<string, string> AgentMetadata,
+        Dictionary<string, string?> AgentInherit,
         Dictionary<string, string?> Tasks,
         HashSet<string> Nodes,
         Dictionary<string, string> Secrets,
@@ -89,6 +91,7 @@ internal static class OperationEffectConformance
                 .ToDictionary(row => SessionWait.Text(row["id"])!, row => (JsonObject)row.DeepClone()),
             manager.Agents().ToHashSet(StringComparer.Ordinal),
             manager.Agents().ToDictionary(agent => agent, agent => HashText(metadata[agent]?.ToJsonString() ?? "")),
+            manager.Agents().ToDictionary(agent => agent, agent => SessionWait.Text(metadata[agent]?["inherit"])),
             tasks.ToDictionary(id => id, id => manager.Tasks.OwnerSessionId(id)),
             manager
                 .Nodes.Registry.ListApproved()
@@ -180,7 +183,8 @@ internal static class OperationEffectConformance
                     {
                         ["targetSession"] = id,
                         ["targetAgent"] = SessionWait.Text(row["agent"]),
-                        ["node"] = SessionWait.Text(row["currentNode"]),
+                        // The Node the Session executes on (SessionManager.ResolveExecutionNode).
+                        ["node"] = row["currentNode"] is null ? null : SessionManager.ResolveExecutionNode(row),
                         ["parent"] = SessionWait.Text(row["parentSessionId"]),
                         ["runtime"] = SessionWait.Text(row["runtime"]) ?? "foxwarm",
                     }
@@ -194,6 +198,10 @@ internal static class OperationEffectConformance
         foreach (var (agent, hash) in after.AgentMetadata)
             if (!newAgents.Contains(agent) && before.AgentMetadata.GetValueOrDefault(agent) != hash)
                 effects.Add(new("agent.manage", new JsonObject { ["targetAgent"] = agent }));
+        // An inheritance the call sets reads the inherited Agent: an agent.view of it.
+        foreach (var (agent, inherit) in after.AgentInherit)
+            if (inherit is not null && inherit != before.AgentInherit.GetValueOrDefault(agent))
+                effects.Add(new("agent.view", new JsonObject { ["targetAgent"] = inherit, ["inheritedBy"] = agent }));
         foreach (var (task, owner) in after.Tasks)
             if (owner is not null && owner != before.Tasks.GetValueOrDefault(task))
                 effects.Add(new("task.assign", new JsonObject { ["task"] = task, ["targetSession"] = owner }));
@@ -312,6 +320,17 @@ internal static class OperationEffectConformance
                         copied[leg] = set = new(StringComparer.Ordinal);
                     set.Add(relative);
                 }
+                continue;
+            }
+            if (effect.Op == "agent.view")
+            {
+                // Views aren't consumed: one declared view explains every read of its Agent.
+                var inherited = SessionWait.Text(effect.Resources["targetAgent"]);
+                var views = declared.Where(operation => operation.Op == "agent.view").ToArray();
+                if (!views.Any(view => SessionWait.Text(view.Resources["targetAgent"]) == inherited))
+                    problems.Add(
+                        $"agent.view: inherits {inherited}, declared views of {(views.Length == 0 ? "none" : string.Join(", ", views.Select(view => view.Resources["targetAgent"]?.ToJsonString() ?? "unresolved")))}"
+                    );
                 continue;
             }
             var candidates = remaining.Where(operation => Kind(operation) == Kind(effect)).ToList();

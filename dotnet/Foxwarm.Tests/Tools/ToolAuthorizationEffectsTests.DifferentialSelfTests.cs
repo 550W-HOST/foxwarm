@@ -101,6 +101,26 @@ public sealed partial class ToolAuthorizationEffectsTests
         var inherit = await Observe("set_agent_inherit", Obj("""{"agentName":"beta","inheritAgentName":"alpha"}"""));
         Assert.Contains(inherit.Effects, effect => effect.Op == "agent.manage");
         Reports("a metadata change with an empty plan", inherit.Case, [], inherit.Effects, inherit.Sources);
+        Reports(
+            "an inheritance declared as a view of another spelling",
+            inherit.Case,
+            inherit
+                .Operations.Select(operation =>
+                    operation.Op != "agent.view"
+                        ? operation
+                        : operation with { Resources = new JsonObject { ["targetAgent"] = " alpha " } }
+                )
+                .ToArray(),
+            inherit.Effects,
+            inherit.Sources
+        );
+        Reports(
+            "an inheritance without its view",
+            inherit.Case,
+            inherit.Operations.Where(operation => operation.Op != "agent.view").ToArray(),
+            inherit.Effects,
+            inherit.Sources
+        );
 
         // A Session parented to the caller is its child.
         var child = await Observe(
