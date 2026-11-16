@@ -543,12 +543,11 @@ public sealed class WebhookHttpTests
             Assert.Equal(HttpStatusCode.TooManyRequests, limited.StatusCode);
             Assert.True(limited.Headers.RetryAfter?.Delta > TimeSpan.Zero);
 
-            // The deprecated administrator route still works for one release and says so.
+            // The administrator route POST /trigger was removed in 0.9.6.
             using var admin = Client(host);
             admin.DefaultRequestHeaders.Authorization = new("Bearer", settings.Token);
             var legacy = await admin.PostAsJsonAsync("/trigger", new { text = "LEGACY-TRIGGER" });
-            Assert.Equal(HttpStatusCode.OK, legacy.StatusCode);
-            Assert.Equal("@1794096000", legacy.Headers.GetValues("Deprecation").Single());
+            Assert.Equal(HttpStatusCode.NotFound, legacy.StatusCode);
 
             host.Lifetime.StopApplication();
             Assert.Equal(
@@ -585,7 +584,7 @@ public sealed class WebhookHttpTests
             "webhook=\"gh\" event=\"workflow_run\" action=\"completed\" deliveryId=\"d-1\"",
             queued
         );
-        Assert.Contains("LEGACY-TRIGGER", queued);
+        Assert.DoesNotContain("LEGACY-TRIGGER", queued);
         Assert.DoesNotContain("TOO-LATE", queued);
         Assert.All(
             queue.OfType<JsonObject>(),
@@ -626,7 +625,6 @@ public sealed class WebhookHttpTests
         var settings = await HttpServerSettings.CaptureAsync(config, data);
         // Webhook identities alone start the listener, like MCP identities.
         Assert.True(settings.HttpEnabled);
-        Assert.False(settings.TriggerEnabled);
         await using var host = await MainHost.CreateAsync([], config, Ephemeral(settings));
         await host.StartAsync();
         using var client = Client(host);
@@ -667,7 +665,7 @@ public sealed class WebhookHttpTests
                 )
             ).StatusCode
         );
-        // The deprecated route stays governed by bot.enableTrigger.
+        // POST /trigger no longer exists.
         using var admin = Client(host);
         admin.DefaultRequestHeaders.Authorization = new("Bearer", settings.Token);
         Assert.Equal(

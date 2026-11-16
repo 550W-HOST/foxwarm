@@ -42,8 +42,7 @@ internal sealed class HttpServer
         PublicWebAddress? publicAddress = null,
         bool? webUiEnabled = null,
         string bindAddress = "127.0.0.1",
-        bool desktop = false,
-        bool triggerEnabled = true
+        bool desktop = false
     )
     {
         var address = publicAddress ?? PublicWebAddress.Capture(port, bindAddress: bindAddress);
@@ -380,8 +379,6 @@ internal sealed class HttpServer
                 return Results.Accepted();
             }
         );
-        if (triggerEnabled)
-            TriggerHttp.Register(app, new SessionRuntime(sessions));
         new WebhookHttp(accessConfiguration, new SessionRuntime(sessions)).Register(app, address);
         Foxwarm.Nodes.NodeRoutes.Register(app, sessions, address);
         McpOAuthRoutes.Register(app, sessions.OutboundMcp);

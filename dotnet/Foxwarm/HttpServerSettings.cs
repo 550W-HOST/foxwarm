@@ -15,7 +15,6 @@ internal sealed record HttpServerSettings(
     PublicWebAddress Address,
     bool WebUiEnabled,
     bool Desktop = false,
-    bool TriggerEnabled = true,
     bool HttpEnabled = true
 )
 {
@@ -50,6 +49,9 @@ internal sealed record HttpServerSettings(
         var configuredUrl = SessionWait.Text(configuration.AppConfiguration["url"]);
         var address = PublicWebAddress.Capture(port, configuredUrl, bindAddress);
         var enabled = Enabled(configuration);
+        // bot.enableTrigger (default true) named the administrator POST /trigger route, removed in
+        // 0.9.6. Existing configurations keep its listener meaning: it still starts HTTP for
+        // /health, Nodes and the API when WebUI is off.
         var trigger = Feature(configuration, "enableTrigger");
         var http =
             enabled
@@ -66,7 +68,6 @@ internal sealed record HttpServerSettings(
             bindAddress,
             address,
             enabled,
-            TriggerEnabled: trigger,
             HttpEnabled: http
         );
     }

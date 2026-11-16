@@ -36,8 +36,7 @@ public sealed class WebUiAdjacentProjectionTests
             "assigned",
             "new"
         );
-        await new SessionRuntime(f.Manager).QueueTriggerAsync(target.Id, "accepted trigger");
-        foreach (var type in new[] { "background", "onboot" })
+        foreach (var type in new[] { "trigger", "background", "onboot" })
             await f.Manager.AdmitNodeSessionEventAsync(
                 "master",
                 new JsonObject

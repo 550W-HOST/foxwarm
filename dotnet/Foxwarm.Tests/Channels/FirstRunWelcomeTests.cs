@@ -96,8 +96,8 @@ public sealed class FirstRunWelcomeTests
         // The provider history begins with a user turn and keeps the welcome as the
         // assistant's own earlier reply.
         var triggered = await client.PostAsJsonAsync(
-            "/trigger",
-            new { text = "Call me Ming.", sessionId = "main" }
+            "/api/sessions/main/message",
+            new { text = "Call me Ming." }
         );
         Assert.True(triggered.IsSuccessStatusCode, await triggered.Content.ReadAsStringAsync());
         var captured = await peer.RequestAt(0).WaitAsync(TimeSpan.FromSeconds(15));

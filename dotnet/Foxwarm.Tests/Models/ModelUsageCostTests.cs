@@ -114,8 +114,8 @@ public sealed partial class ModelUsageCostTests
             "sessionId"
         ]!.GetValue<string>();
         var triggered = await client.PostAsJsonAsync(
-            "/trigger",
-            new { text = "exercise saved pricing", sessionId }
+            "/api/sessions/" + Uri.EscapeDataString(sessionId) + "/message",
+            new { text = "exercise saved pricing" }
         );
         Assert.True(triggered.IsSuccessStatusCode, await triggered.Content.ReadAsStringAsync());
         // Observe the normal HTTP consumer, not an internal accounting shortcut.

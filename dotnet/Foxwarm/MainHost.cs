@@ -190,8 +190,7 @@ internal sealed class MainHost : IAsyncDisposable
                 http.Address,
                 http.WebUiEnabled,
                 http.BindAddress,
-                http.Desktop,
-                http.TriggerEnabled
+                http.Desktop
             );
             if (server.WebUiEnabled)
             {

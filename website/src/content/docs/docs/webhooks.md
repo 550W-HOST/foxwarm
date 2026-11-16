@@ -175,6 +175,6 @@ Treat delivered text like any text from the outside world. On a public repositor
 
 ## Replacing `/trigger`
 
-The administrator-only `POST /trigger` endpoint is deprecated and will be removed in a later release. Responses from it carry a `Deprecation` header. To move a script off it, add a `bearer` webhook for the Session it used and send the message text as the body.
+The administrator-only `POST /trigger` endpoint was removed in 0.9.6. To move a script off it, add a `bearer` webhook for the Session it used and send the message text as the body.
 
 The agent reads a webhook body as data from an outside service, not as an instruction from you, so a script that used `/trigger` to tell the agent what to do may get different results after the move. To give the agent instructions from a script, send a message through an [MCP identity](/docs/mcp-inbound/) instead.
