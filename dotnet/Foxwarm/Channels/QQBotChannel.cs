@@ -72,7 +72,13 @@ internal sealed partial class QQBotChannel : IManagedChannel
         groupLimit = GroupOption("groupContextLimit", 10, 0, 50);
         batchWindow = GroupOption("groupBatchWindowMs", 5000, 250, 30000, true);
         media = new QQBotMedia(sessions, http, config["media"] as JsonObject, dependencies);
-        Transport = new("qqbot", SendAsync, SendFileAsync, TypingAsync);
+        Transport = new(
+            "qqbot",
+            SendAsync,
+            SendFileAsync,
+            TypingAsync,
+            Conversation: (conversation, _) => Parse(conversation) is var (kind, id) ? kind + ":" + id : null
+        );
     }
 
     internal RegisteredChannel Transport { get; }

@@ -556,7 +556,7 @@ internal static partial class OperationDeclarations
                 ) with { PathArg = "filePath" },
             ]
         ),
-        Simple("builtin:send_to_channel", Op("channel.send", "channel=arg:channelTargetId")),
+        Simple("builtin:send_to_channel", Op("channel.send", "channel=channel-target")),
         // Timers.
         Timer("create_timer", "create"),
         Timer("update_timer", "update"),

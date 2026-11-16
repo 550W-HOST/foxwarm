@@ -29,6 +29,10 @@ internal sealed record PlanContext(string CurrentNode)
     // default, the installation default, then master); null when unknown.
     internal Func<string, string?>? AgentDefaultNode { get; init; }
 
+    // The channel target a send reaches (ChannelRegistry.CanonicalTarget; the flag: a file
+    // delivery); null when it can't be established before delivery.
+    internal Func<string, bool, string?>? ChannelTarget { get; init; }
+
     // The canonical ID of a Session reference (an ID or alias); null when it names none.
     internal Func<string, string?>? CanonicalSession { get; init; }
 
@@ -751,7 +755,19 @@ internal sealed partial record OperationPlan(
                     value = Foxwarm.Secrets.SecretStore.ArgumentName(args["name"]) is { Length: > 0 } secret ? secret : null;
                     return value is not null;
                 case "file-channel":
-                    value = Foxwarm.Channels.ChannelRegistry.FileDeliveryTarget(args) is { Length: > 0 } channel ? channel : null;
+                    // The target the file reaches: its transport's canonical conversation.
+                    value =
+                        Foxwarm.Channels.ChannelRegistry.FileDeliveryTarget(args) is { Length: > 0 } channel
+                            ? context.ChannelTarget?.Invoke(channel, true)
+                            : null;
+                    return value is not null;
+                case "channel-target":
+                    // send_to_channel passes its target as given; the transport delivers to its
+                    // canonical conversation.
+                    value =
+                        SessionWait.Text(args["channelTargetId"]) is { Length: > 0 } requested
+                            ? context.ChannelTarget?.Invoke(requested, false)
+                            : null;
                     return value is not null;
                 case "pairing-node":
                     value = Text("pendingId") is string pendingId

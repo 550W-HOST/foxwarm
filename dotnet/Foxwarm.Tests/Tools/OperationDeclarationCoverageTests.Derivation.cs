@@ -102,6 +102,8 @@ public sealed partial class OperationDeclarationCoverageTests
             AgentDefaultNode = context["agentDefaultNode"] is JsonObject defaults
                 ? agent => defaults[agent]?.GetValue<string>()
                 : null,
+            // Corpus channels deliver to their targets verbatim.
+            ChannelTarget = (target, _) => target,
         };
     }
 

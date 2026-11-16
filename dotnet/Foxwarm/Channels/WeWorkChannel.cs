@@ -87,8 +87,34 @@ internal sealed partial class WeWorkChannel : IManagedChannel
                 LifecycleAsync(conversation, "", options, null, token),
             IsLifecycleActive: conversation => streams.Get(conversation) is { Finish: false },
             Progress: (conversation, progress, token) =>
-                LifecycleAsync(conversation, "", new(), progress, token)
+                LifecycleAsync(conversation, "", new(), progress, token),
+            Conversation: CanonicalConversation
         );
+
+    // The conversation part that names the configured default webhook destination. WeWork user
+    // and chat IDs never contain `/`, and rule patterns accept it.
+    internal const string DefaultWebhookConversation = "/default-webhook";
+
+    // The conversation a tool send or file delivery reaches, decided as delivery decides it:
+    // - over the WebSocket, the conversation itself (a proactive send to it, or its own stream);
+    // - over the webhook, a `wok`/`wrk` chat itself (EffectiveChat); any other conversation
+    //   reaches the default webhook destination, except a text send while streaming is enabled,
+    //   which joins that conversation's stream when one is open, so it can't be known in advance.
+    // Surrounding whitespace is left to the WeWork server, so a padded ID is unknown too.
+    private string? CanonicalConversation(string conversation, bool file)
+    {
+        if (
+            conversation.Length == 0
+            || conversation != conversation.Trim()
+            || conversation == DefaultWebhookConversation && WebSocketEnabled
+        )
+            return null;
+        if (WebSocketEnabled)
+            return conversation;
+        if (EffectiveChat(conversation, new()) is { } chat)
+            return chat;
+        return file || !streamEnabled ? DefaultWebhookConversation : null;
+    }
 
     public async Task StartAsync()
     {

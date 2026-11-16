@@ -164,7 +164,8 @@ public sealed partial class ToolAuthorizationEffectsTests
         Assert.Equal(ToolAuthorizationEffect.Allow, child.Effect);
     }
 
-    // send_file delivers to its trimmed channel target, which its operation names.
+    // send_file delivers to its trimmed channel target, which its operation names through the
+    // transport's canonical conversation; an unregistered instance is unresolved.
     [Fact]
     public async Task File_delivery_names_the_channel_target_it_delivers_to()
     {
@@ -176,19 +177,17 @@ public sealed partial class ToolAuthorizationEffectsTests
         var execution = TimerExecutor(manager, caller, temp.Path);
         await using var mcp = execution.Mcp;
         await Policy(manager, OperationEffectConformance.Policy);
-        foreach (var target in new[] { "webui:1", " webui:1 ", "\twebui:1\n" })
-        {
-            var assessment = await manager.AssessToolAsync(
+        manager.ChannelRegistry.Register("plain", (_, _, _) => System.Threading.Tasks.Task.CompletedTask);
+        async Task<JsonNode?> Channel(string target) =>
+            (await manager.AssessToolAsync(
                 caller,
                 execution.Registry.Resolve("send_file", new JsonObject { ["filePath"] = "a.txt", ["channelTargetId"] = target }),
                 execution.Files,
                 default
-            );
-            Assert.Equal(
-                Foxwarm.Channels.ChannelRegistry.FileDeliveryTarget(new JsonObject { ["channelTargetId"] = target }),
-                SessionWait.Text(Assert.Single(assessment.Request.Operations ?? [], operation => operation.Op == "channel.send").Resources["channel"])
-            );
-        }
+            )).Request.Operations!.Single(operation => operation.Op == "channel.send").Resources["channel"];
+        foreach (var target in new[] { "plain:1", " plain:1 ", "\tplain:1\n" })
+            Assert.Equal("plain:1", SessionWait.Text(await Channel(target)));
+        Assert.Null(await Channel("absent:1"));
         // Whitespace alone is no channel target: the file goes to a Session.
         var session = await manager.AssessToolAsync(
             caller,

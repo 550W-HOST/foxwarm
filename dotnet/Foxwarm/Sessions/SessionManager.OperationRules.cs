@@ -83,6 +83,7 @@ internal sealed partial class SessionManager
                 }
             },
             InstallDefaultNode = agents.InstallDefaultNode,
+            ChannelTarget = ChannelRegistry.CanonicalTarget,
             CanonicalSession = id =>
             {
                 try

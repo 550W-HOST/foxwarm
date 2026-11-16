@@ -101,6 +101,7 @@ internal sealed partial record OperationPlan
             "mcp-config-name" => ["name"],
             "secret-name" => ["name"],
             "file-channel" => ["channelTargetId"],
+            "channel-target" => ["channelTargetId"],
             "prospective-child" => ["agentName"],
             "prospective-session" => ["agentName", "parentSessionId"],
             "creation-runtime" => ["runtime"],
@@ -190,7 +191,9 @@ internal sealed partial record OperationPlan
             case "secret-name":
                 return ("SecretStore.ArgumentName", []);
             case "file-channel":
-                return ("ChannelRegistry.FileDeliveryTarget", []);
+                return ("ChannelRegistry.FileDeliveryTarget, then the transport's canonical conversation", ["ChannelTarget"]);
+            case "channel-target":
+                return ("ChannelRegistry.CanonicalTarget (the transport's canonical conversation)", ["ChannelTarget"]);
             case "prospective-child":
                 return ("SessionCreationDefaults (prospective Session)", []);
             case "prospective-session":

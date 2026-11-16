@@ -72,7 +72,8 @@ internal sealed class TelegramChannel : IManagedChannel
             "telegram",
             (conversation, text, _, token) => SendAsync(conversation, text, token),
             SendFileAsync,
-            TypingAsync
+            TypingAsync,
+            Conversation: (conversation, _) => Chat(conversation).ToJsonText()
         );
 
     public async Task StartAsync()
@@ -335,6 +336,8 @@ internal sealed class TelegramChannel : IManagedChannel
         }
     }
 
+    // The chat a conversation delivers to: its leading integer. Every send path and the
+    // transport's canonical conversation use it.
     private static JsonNode Chat(string conversation)
     {
         var match = Regex.Match(conversation.TrimStart(), @"^[+-]?\d+");

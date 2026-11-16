@@ -36,7 +36,11 @@ internal sealed record RegisteredChannel(
     Func<string, CancellationToken, Task>? Typing = null,
     Func<string, ChannelSendOptions, CancellationToken, Task>? Finalize = null,
     Func<string, bool>? IsLifecycleActive = null,
-    Func<string, ChannelTurnProgress, CancellationToken, Task>? Progress = null
+    Func<string, ChannelTurnProgress, CancellationToken, Task>? Progress = null,
+    // The conversation a requested conversation part delivers to (the flag: a file delivery),
+    // computed by the function the transport's delivery uses; null when the transport can't
+    // establish it before delivery. Absent: the transport delivers to the ID verbatim.
+    Func<string, bool, string?>? Conversation = null
 );
 
 // One transport registry. Persisted attachments and managed transport lifetimes have their own owners.
@@ -91,6 +95,36 @@ internal sealed class ChannelRegistry
                 "Invalid channelTargetId format. Use <channel-instance-id>:<conversation-id>."
             );
         return (target[..colon], target[(colon + 1)..]);
+    }
+
+    // The channel target a send delivers to: the instance and its transport's canonical
+    // conversation. Null when the target is malformed, its instance isn't registered, or the
+    // transport can't establish the conversation before delivery. The operation plan names it.
+    internal string? CanonicalTarget(string target, bool file)
+    {
+        string instance;
+        string conversation;
+        try
+        {
+            (instance, conversation) = Parse(target);
+        }
+        catch (InvalidDataException)
+        {
+            return null;
+        }
+        if (Get(instance) is not { } channel)
+            return null;
+        try
+        {
+            return (channel.Conversation is { } canonical ? canonical(conversation, file) : conversation)
+                is { } delivered
+                ? instance + ":" + delivered
+                : null;
+        }
+        catch (InvalidDataException)
+        {
+            return null;
+        }
     }
 
     internal Task SendAsync(string target, string message, CancellationToken token)
