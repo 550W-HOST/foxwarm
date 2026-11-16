@@ -12,7 +12,7 @@ This is the reference table for [tool operation authorization](./tool-operation-
 
 | Op | Resources (selector) | Attributes (`with`) | Derived from |
 | --- | --- | --- | --- |
-| `env.read` | Node (`node`), path (`path`) | — | the execution, delivery or source Node; `WorkspaceTools.AuthorizationFacts`, `CopyAuthorizationPaths`, `MemoryTools.AuthorizationFacts`; Agent memory directories for `create_agent` `inheritMemory` |
+| `env.read` | Node (`node`), path (`path`) | — | the execution, delivery or source Node; `WorkspaceTools.AuthorizationFacts`, `CopyAuthorizationPaths`, `MemoryTools.AuthorizationFacts`; Agent memory directories (tree legs) for `create_agent` `inheritMemory` and `move_session` `createAgentInheritMemory` |
 | `env.write` | Node, path | — | the same; one op per patch Add, Update or Delete header |
 | `env.exec` | Node, cwd (`path`) | — | execution Node, `exec.cwd` |
 | `env.browser` | Node | — | execution Node of `browser_*` |
@@ -106,14 +106,14 @@ Notation:
 | `session` (one branch per action) | status: `session.view` / list: `session.list` / rename: `session.control(rename)` / set-parent, clear-parent: `session.manage(reparent)` | P |
 | `view_session` | `session.view` | P |
 | `stop_session`, `compact_session`, `refresh_session_snapshot`, `set_session_child_model`, `set_session_compact_threshold` | `session.control(stop\|compact\|snapshot\|settings)` | P |
-| `move_session` / `delete_session` | `session.manage(move)`, `[agent.create]` / `session.manage(delete)` | P |
+| `move_session` / `delete_session` | `session.manage(move)`, `[agent.create]`, `[env.read]`/`[env.write]` memory legs / `session.manage(delete)` | P |
 | `recall` | `history.read(target, mode)`, or `history.search` for Agent scope | P |
 | `get_archived_messages/blocks` | `history.read(exact)` | P |
 | `list_agents` / `skill` | `agent.list` / `agent.view` | P |
-| `create_agent` | `agent.create`; `[agent.view(inherit)]`; `[session.create(kind: session)]` for the main Session; existing source: `[session.view(source)]`; missing source: `[session.create(kind: source)]`; `[env.read]` of the source Agent's and `[env.write]` of the new Agent's memory directory for `inheritMemory`; `[session.manage(move)]` for `convertSession` | P. The missing-source creation without a main Session is a known defect; its fix updates the corpus. |
+| `create_agent` | `agent.create`; `[agent.view(inherit)]`; `[session.create(kind: session)]` for the main Session (its Node; none for `convertSession`); existing source: `[session.view(source)]`; missing source: `[session.create(kind: source)]` in its ID's Agent; tree `[env.read]` of the source Agent's and `[env.write]` of the new Agent's memory directory for `inheritMemory`; `[session.manage(move)]` for `convertSession` | P. The missing-source creation without a main Session is a known defect; its fix updates the corpus. |
 | `set_agent_rules` / `set_agent_inherit` | `agent.manage(rules)` / `agent.manage(inherit)`, `[agent.view(inherit)]` | P. Subsumed: the `refreshSnapshots` refresh of the target Agent and inheriting Agents. |
 | `node` (one branch per action) | list: `node.list` / inspect: `node.view` / select: `node.select` / create, ensure, destroy: `node.lifecycle(action)` | P; S `node:<selected>/get_default_cwd` probe for a remote Node that advertises it (optional: a denial only omits the default cwd); R the final Node identity at the lifecycle effect (create: the Provider parent; ensure: the existing or parent identity; destroy: the Node) |
-| `copy_between_nodes` | `env.read(source)`, `env.write(target)` | P; R the detached transfer recheck |
+| `copy_between_nodes` | `env.read(source)`, `env.write(target)`, both tree legs | P; R the detached transfer recheck |
 | `node_create_auth_token` / `node_bootstrap_info` | `node.trust(credential)`, `env.write(master, filePath)` | P |
 | `node_pair_list` / `node_pair_approve` | `node.trust(pending)` / `node.trust(approve)` | P |
 | `node_remove` | `node.trust(revoke)` per subtree member | P; R one `node_remove` request per member, a clone of the arguments with that `nodeId`, assessed inside the registry mutation scope before any revocation |
