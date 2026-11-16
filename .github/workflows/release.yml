@@ -302,21 +302,19 @@ jobs:
           for package in dist/foxwarm-osx-arm64*.tar.gz; do
             /bin/bash scripts/release/smoke-server.sh "$package" 3001 --without-tmux
           done
-      - name: Upgrade the previous release's self-contained package to the native package
+      - name: Upgrade the previous release's native package
         shell: /bin/bash -e {0}
         run: |
-          # The installed release's own control script performs the switch, as for users: once
-          # after an installer rerun with the new package file, and once by its own update,
-          # which downloads its recorded asset; for 0.9.6 the release publishes the native
-          # package under that name.
+          # The installed release's own control script performs the upgrade, as for users: once
+          # after an installer rerun, and once by its own update, which downloads its recorded asset.
           mkdir -p "$RUNNER_TEMP/previous"
           base="https://github.com/$GITHUB_REPOSITORY/releases/download/$PREVIOUS_RELEASE"
-          curl -fsSL --retry 3 -o "$RUNNER_TEMP/previous/foxwarm-osx-arm64-self-contained.tar.gz" "$base/foxwarm-osx-arm64-self-contained.tar.gz"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/previous/foxwarm-osx-arm64-native.tar.gz" "$base/foxwarm-osx-arm64-native.tar.gz"
           curl -fsSL --retry 3 -o "$RUNNER_TEMP/previous/SHA256SUMS" "$base/SHA256SUMS"
-          (cd "$RUNNER_TEMP/previous" && grep -E '  foxwarm-osx-arm64-self-contained\.tar\.gz$' SHA256SUMS | shasum -a 256 -c -)
-          previous="$RUNNER_TEMP/previous/foxwarm-osx-arm64-self-contained.tar.gz"
+          (cd "$RUNNER_TEMP/previous" && grep -E '  foxwarm-osx-arm64-native\.tar\.gz$' SHA256SUMS | shasum -a 256 -c -)
+          previous="$RUNNER_TEMP/previous/foxwarm-osx-arm64-native.tar.gz"
           /bin/bash scripts/release/smoke-upgrade.sh "$previous" dist/foxwarm-osx-arm64-native.tar.gz 3001
-          /bin/bash scripts/release/smoke-upgrade.sh --via-update foxwarm-osx-arm64-self-contained.tar.gz \
+          /bin/bash scripts/release/smoke-upgrade.sh --via-update foxwarm-osx-arm64-native.tar.gz \
             "$previous" dist/foxwarm-osx-arm64-native.tar.gz 3001
       - name: Switch a framework-dependent installation to the native package
         shell: /bin/bash -e {0}
@@ -677,22 +675,21 @@ jobs:
       - name: Native server package
         shell: pwsh
         run: ./scripts/release/smoke-server.ps1 -Package dist/foxwarm-win-x64-native.zip -Port 3002
-      - name: Upgrade the previous release's self-contained package to the native package
+      - name: Upgrade the previous release's native package
         shell: pwsh
         run: |
           # As on Linux and macOS: once by rerunning the installer with the new package file,
-          # once through the installed release's own update, which downloads its recorded asset;
-          # for 0.9.6 the release publishes the native package under that name.
+          # once through the installed release's own update, which downloads its recorded asset.
           $previous = Join-Path $env:RUNNER_TEMP 'previous'
           New-Item -ItemType Directory -Force $previous | Out-Null
           $base = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$env:PREVIOUS_RELEASE"
-          Invoke-WebRequest "$base/foxwarm-win-x64-self-contained.zip" -OutFile "$previous/foxwarm-win-x64-self-contained.zip" -UseBasicParsing
+          Invoke-WebRequest "$base/foxwarm-win-x64-native.zip" -OutFile "$previous/foxwarm-win-x64-native.zip" -UseBasicParsing
           Invoke-WebRequest "$base/SHA256SUMS" -OutFile "$previous/SHA256SUMS" -UseBasicParsing
-          $expected = Get-Content "$previous/SHA256SUMS" | Where-Object { $_ -match '^([0-9a-f]{64})  foxwarm-win-x64-self-contained\.zip$' } | ForEach-Object { $Matches[1] }
-          if (-not $expected -or (Get-FileHash "$previous/foxwarm-win-x64-self-contained.zip" -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected) { throw 'Checksum verification failed for the previous release' }
-          ./scripts/release/smoke-upgrade.ps1 -Old "$previous/foxwarm-win-x64-self-contained.zip" -New dist/foxwarm-win-x64-native.zip
+          $expected = Get-Content "$previous/SHA256SUMS" | Where-Object { $_ -match '^([0-9a-f]{64})  foxwarm-win-x64-native\.zip$' } | ForEach-Object { $Matches[1] }
+          if (-not $expected -or (Get-FileHash "$previous/foxwarm-win-x64-native.zip" -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected) { throw 'Checksum verification failed for the previous release' }
+          ./scripts/release/smoke-upgrade.ps1 -Old "$previous/foxwarm-win-x64-native.zip" -New dist/foxwarm-win-x64-native.zip
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          ./scripts/release/smoke-upgrade.ps1 -Old "$previous/foxwarm-win-x64-self-contained.zip" -New dist/foxwarm-win-x64-native.zip -ViaUpdate foxwarm-win-x64-self-contained.zip
+          ./scripts/release/smoke-upgrade.ps1 -Old "$previous/foxwarm-win-x64-native.zip" -New dist/foxwarm-win-x64-native.zip -ViaUpdate foxwarm-win-x64-native.zip
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Switch a framework-dependent installation to the native package
         shell: pwsh

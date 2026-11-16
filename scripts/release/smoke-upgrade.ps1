@@ -7,6 +7,10 @@
 # for that name, and ASSET must be the asset the installed release records. Control scripts
 # have a fixed release URL, so for this check the control script runs in this PowerShell
 # session, where an Invoke-WebRequest function serves those downloads.
+# A control script skips a package whose version it already runs unless forced, and the
+# installer forces only a change of package type. When the installer path would upgrade to
+# the installed version (a run of an unreleased version against the previous release's
+# number), the script gives a copy of -New a distinct version in its release.json.
 # Usage: scripts\release\smoke-upgrade.ps1 -Old FILE -New FILE [-Port 3001] [-ViaUpdate ASSET] [-Native | -FrameworkDependent]
 param(
   [Parameter(Mandatory = $true)][string]$Old,
@@ -20,6 +24,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $Old = (Resolve-Path -LiteralPath $Old).Path
 $New = (Resolve-Path -LiteralPath $New).Path
+$NewName = Split-Path $New -Leaf
 $Installer = (Resolve-Path (Join-Path $PSScriptRoot '..\..\install-foxwarm.ps1')).Path
 $Work = Join-Path ([System.IO.Path]::GetTempPath()) ('foxwarm-upgrade-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 $Dir = Join-Path $Work 'foxwarm'
@@ -59,6 +64,25 @@ function Read-PackageRelease($File) {
     $reader = New-Object System.IO.StreamReader($entry.Open())
     try { return $reader.ReadToEnd() | ConvertFrom-Json } finally { $reader.Dispose() }
   } finally { $zip.Dispose() }
+}
+
+# A copy of $File whose release.json version carries an -upgrade-smoke suffix.
+function New-UpgradeSmokePackage($File) {
+  Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
+  $copy = Join-Path $Work 'package-upgrade-smoke.zip'
+  Copy-Item -LiteralPath $File -Destination $copy
+  $zip = [System.IO.Compression.ZipFile]::Open($copy, [System.IO.Compression.ZipArchiveMode]::Update)
+  try {
+    $entry = $zip.Entries | Where-Object { $_.FullName -match '^[^/\\]+[/\\]release\.json$' } | Select-Object -First 1
+    $name = $entry.FullName
+    $reader = New-Object System.IO.StreamReader($entry.Open())
+    try { $text = $reader.ReadToEnd() } finally { $reader.Dispose() }
+    $entry.Delete()
+    $text = ([regex]'("version"\s*:\s*"[^"]*)"').Replace($text, '$1-upgrade-smoke"', 1)
+    $writer = New-Object System.IO.StreamWriter($zip.CreateEntry($name).Open(), (New-Object System.Text.UTF8Encoding($false)))
+    try { $writer.Write($text) } finally { $writer.Dispose() }
+  } finally { $zip.Dispose() }
+  return $copy
 }
 
 New-Item -ItemType Directory -Force -Path (Join-Path $Data 'state') | Out-Null
@@ -115,7 +139,11 @@ try {
       throw "update did not download $ViaUpdate and its SHA256SUMS"
     }
   } else {
-    if ($next.version -eq $before.version -and $next.asset -eq $before.asset) { throw 'Upgrading to the same version of the same package needs no installer switch; use -ViaUpdate or another package.' }
+    if ($next.version -eq $before.version -and $next.asset -eq $before.asset) {
+      $New = New-UpgradeSmokePackage $New
+      $next = Read-PackageRelease $New
+      Write-Host "The package has the installed version; upgrading to $($next.version) instead."
+    }
     $options = @('-Package', $New, '-InstallDir', $Dir)
     if ($Native) { $options += '-Native' }
     if ($FrameworkDependent) { $options += '-FrameworkDependent' }
@@ -147,7 +175,7 @@ try {
   & $Control stop | Out-Host
   & $Control status | Out-Host
   if ($LASTEXITCODE -eq 0) { throw 'Foxwarm is still running after stop' }
-  Write-Host "Upgrade smoke passed: $(Split-Path $Old -Leaf) -> $(Split-Path $New -Leaf)"
+  Write-Host "Upgrade smoke passed: $(Split-Path $Old -Leaf) -> $NewName"
 } catch {
   Write-Host "Upgrade smoke failed: $_"
   Write-Host $_.ScriptStackTrace
