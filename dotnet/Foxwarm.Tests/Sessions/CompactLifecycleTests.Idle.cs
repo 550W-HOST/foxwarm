@@ -189,9 +189,14 @@ public sealed partial class CompactLifecycleTests
     }
 
     [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task Idle_compaction_prunes_large_tool_responses_before_starting_a_planner(bool background)
+    [InlineData(true, false)]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    [InlineData(false, true)]
+    public async Task Idle_compaction_prunes_large_tool_responses_before_starting_a_planner(
+        bool background,
+        bool committedFault
+    )
     {
         var clock = new IdleClock();
         await using var fixture = await CompactFixture.CreateAsync(background, idleClock: clock, idleMinutes: 55);
@@ -242,10 +247,20 @@ public sealed partial class CompactLifecycleTests
         await owner.Registry.Ingress.EnqueueAsync("s", QueueItem.UserText("measured turn"));
         await owner.DrainForegroundAsync();
         Assert.NotNull(clock.PendingDue);
+        var claims = owner.Entry.ProcessorClaimCount;
+        var messages = owner.Entry.Snapshot().History.Count;
+        if (committedFault)
+        {
+            fixture.FailHeldStage = true;
+            fixture.HoldStage = AtomicJsonWriteStage.AfterRenameBeforeDirectorySync;
+            fixture.StageRelease.Set();
+        }
         clock.AdvanceTo(clock.PendingDue!.Value);
         await owner.Compactor.DrainIdleAsync().WaitAsync(TimeSpan.FromSeconds(8));
         await owner.DrainAsync().WaitAsync(TimeSpan.FromSeconds(8));
         Assert.Equal(1, owner.Entry.Snapshot().HistoryVersion);
+        Assert.Equal(claims + (background ? 0 : 1), owner.Entry.ProcessorClaimCount);
+        Assert.Equal(messages, owner.Entry.Snapshot().History.Count);
         Assert.Empty(fixture.Store.Archive.ReadBlocks());
         Assert.Equal(0, fixture.Peer.PlannerRequests);
         Assert.Contains("historical tool response pruned", owner.History()[1].ToJsonString());

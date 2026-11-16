@@ -535,10 +535,21 @@ internal sealed partial class SessionCompactor
         token.ThrowIfCancellationRequested();
         run.CacheKey = await hosted.Entry.SaveLane.EnsurePromptCacheKeyAsync();
         token.ThrowIfCancellationRequested();
-        if (run.PruneTools && await TryPruneToolsAsync(run.Snapshot, token, run.Keep, run.Catalog))
+        if (run.PruneTools)
         {
-            run.Committed = true;
-            return;
+            try
+            {
+                if (await TryPruneToolsAsync(run.Snapshot, token, run.Keep, run.Catalog))
+                {
+                    run.Committed = true;
+                    return;
+                }
+            }
+            catch (AuthorityCommittedException)
+            {
+                run.Committed = true;
+                throw;
+            }
         }
         var rows = run.Snapshot.History.Materialize();
         var candidates = CompactCandidateBuilder.Build(
@@ -584,6 +595,13 @@ internal sealed partial class SessionCompactor
             try
             {
                 await PreparePlanAsync(run, guidance);
+                if (run.Committed)
+                    return;
+            }
+            catch (AuthorityCommittedException error) when (run.Committed)
+            {
+                Report(error);
+                return;
             }
             catch (OperationCanceledException) when (run.Cancellation.IsCancellationRequested)
             {
@@ -725,6 +743,10 @@ internal sealed partial class SessionCompactor
         try
         {
             await PreparePlanAsync(run, guidance);
+        }
+        catch (AuthorityCommittedException) when (run.Committed)
+        {
+            throw;
         }
         catch (Exception error)
             when (error
