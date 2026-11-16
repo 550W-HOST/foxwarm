@@ -220,6 +220,7 @@ internal sealed partial class ModelConfiguration
                 return catalog;
             resolvedWhileLocked = false;
             var next = Validate(raw);
+            Secrets.SetTextRedactionKnownLabels(next.KnownLabels);
             catalog = next;
             cachedRaw = raw;
             cachedSecretGeneration = generation;

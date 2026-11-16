@@ -179,6 +179,7 @@ internal sealed partial class TextRedactor
                         if (
                             size > longest[start - from]
                             && Bounded(text, start, size)
+                            && options.KnownLabels.Allows(patterns[output[match]].Labels)
                             && !Excluded(patterns[output[match]].Labels, options.ExcludeLabels)
                             && !options.Keeps(patterns[output[match]].Original)
                         )

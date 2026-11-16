@@ -20,6 +20,13 @@ defaults:
   contextLimit: 200000
   maxOutput: 32768
   providerImageOutputFormat: webp # or jpeg; transparent input images use PNG
+  # Optional reversible text redaction (disabled unless enabled).
+  # textRedaction:
+  #   enabled: true
+  #   endpoint: https://detector.example/v1/classify
+  #   # Installation-wide reuse of detected values, valid only here in defaults.
+  #   # Use [] for no reuse, or "all" for every detected label.
+  #   knownLabels: [private_email, private_phone, private_address]
   # imageInput: false # text-only models: send a short placeholder instead of each image
 providers:
   openai:

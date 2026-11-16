@@ -149,6 +149,21 @@ const textRedaction = {
   ],
 }
 
+const defaultTextRedaction = {
+  ...textRedaction,
+  anyOf: [textRedaction.anyOf[0], {
+    ...textRedaction.anyOf[1],
+    properties: {
+      ...textRedaction.anyOf[1].properties,
+      knownLabels: {
+        anyOf: [{ type: 'array', items: { type: 'string', pattern: '\\S' } }, { const: 'all' }],
+        default: ['private_email', 'private_phone', 'private_address'],
+        description: 'Labels whose detected values are also masked wherever they appear later, in every Session. Use [] to turn this off, or "all" for every label. Only valid under defaults.textRedaction.',
+      },
+    },
+  }],
+}
+
 const modelDefaultProperties = {
   retryIntervalsMs: { type: 'array', minItems: 1, items: { type: 'integer', minimum: 0, maximum: 2147483647 }, default: [2000, 5000, 10000, 20000, 40000, 60000], description: 'Delays in milliseconds for successive LLM retries; later retries reuse the last entry. Model overrides provider, then defaults. Virtual providers use only their own value or defaults. Saves apply to the next retry wait; an active wait keeps its deadline.' },
   textRedaction,
@@ -320,7 +335,7 @@ export const MODELS_CONFIG_SCHEMA = {
       type: 'object',
       additionalProperties: false,
       description: 'Default model settings. Concrete providers and model entries may override these values.',
-      properties: modelDefaultProperties,
+      properties: { ...modelDefaultProperties, textRedaction: defaultTextRedaction },
     },
     providers: {
       type: 'object',

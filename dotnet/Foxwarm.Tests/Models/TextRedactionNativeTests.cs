@@ -82,6 +82,10 @@ public sealed class TextRedactionNativeTests
         var catalog = HostModels.Parse(
             new JsonObject
             {
+                ["defaults"] = new JsonObject
+                {
+                    ["textRedaction"] = new JsonObject { ["knownLabels"] = "all" },
+                },
                 ["providers"] = new JsonObject
                 {
                     ["p"] = new JsonObject
@@ -128,7 +132,7 @@ public sealed class TextRedactionNativeTests
                 ["parts"] = new JsonArray(new JsonObject { ["text"] = text }),
             };
         JsonObject[] replay;
-        using (var secrets = new InstanceSecrets(root.Path))
+        using (var secrets = TextRedactionKeys.AllLabels(root.Path))
         {
             var first = await Request(secrets, [User(original)]);
             var assistant = first.AssistantMessage!;
@@ -163,7 +167,7 @@ public sealed class TextRedactionNativeTests
             );
         }
         var calls = detector.Texts.Count;
-        using (var restarted = new InstanceSecrets(root.Path))
+        using (var restarted = TextRedactionKeys.AllLabels(root.Path))
         {
             var third = await Request(restarted, replay);
             Assert.Equal(original, SessionWait.Text(third.AssistantMessage!["parts"]![0]!["text"]));

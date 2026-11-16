@@ -91,7 +91,7 @@ public sealed class TextRedactionRegressionTests
             return true;
         };
         using var http = ProviderHttpRequest.CreateClient();
-        using var keys = new TextRedactionKeys();
+        using var keys = new TextRedactionKeys(allLabels: true);
         var options = new TextRedactionOptions(detector.Endpoint, null, 0.5, 30000);
         var redactor = keys.Secrets.TextRedactor();
         var first = redactor.Begin(http, options, default);
@@ -457,7 +457,11 @@ public sealed class TextRedactionRegressionTests
         await using var detector = await TextDetectionPeer.StartAsync(names);
         using var http = ProviderHttpRequest.CreateClient();
         var options = new TextRedactionOptions(detector.Endpoint, null, 0.5, 30000);
-        var redactor = new TextRedactor(Key, knownBytes: 4096);
+        var redactor = new TextRedactor(
+            Key,
+            knownBytes: 4096,
+            knownLabels: TextRedactionKnownLabels.All
+        );
         var scope = redactor.Begin(http, options, default);
         var text = string.Join(", ", names.Reverse());
         var redacted = await scope.RedactAsync(text);
@@ -574,7 +578,7 @@ public sealed class TextRedactionRegressionTests
                 new()
             );
         using var http = ProviderHttpRequest.CreateClient();
-        using var keys = new TextRedactionKeys();
+        using var keys = new TextRedactionKeys(allLabels: true);
         var owner = new ModelRequestOwner(
             http,
             new(failing.BaseUri, "m", "p", "", "", 100),
@@ -635,7 +639,7 @@ public sealed class TextRedactionRegressionTests
             return true;
         };
         using var http = ProviderHttpRequest.CreateClient();
-        using var keys = new TextRedactionKeys();
+        using var keys = new TextRedactionKeys(allLabels: true);
         string? body = null;
         await using var peer = new LoopbackResponsesServer(
             async (connection, request) =>

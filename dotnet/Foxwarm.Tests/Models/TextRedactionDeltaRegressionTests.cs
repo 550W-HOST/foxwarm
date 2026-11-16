@@ -96,6 +96,10 @@ public sealed class TextRedactionDeltaRegressionTests(Xunit.Abstractions.ITestOu
         return HostModels.Parse(
             new JsonObject
             {
+                ["defaults"] = new JsonObject
+                {
+                    ["textRedaction"] = new JsonObject { ["knownLabels"] = "all" },
+                },
                 ["providers"] = new JsonObject
                 {
                     ["p"] = AnthropicProvider(p, pDetector),
@@ -192,7 +196,7 @@ public sealed class TextRedactionDeltaRegressionTests(Xunit.Abstractions.ITestOu
         await using var q = await Provider.StartAsync(_ => (200, Answer("plain answer")));
         var catalog = Route(p.BaseUri, q.BaseUri, detector.Endpoint, null, 1);
         using var http = ProviderHttpRequest.CreateClient();
-        using var keys = new TextRedactionKeys();
+        using var keys = new TextRedactionKeys(allLabels: true);
         var owner = new ModelRequestOwner(
             http,
             new(p.BaseUri, "m", "p", "", "", 100),
@@ -250,7 +254,7 @@ public sealed class TextRedactionDeltaRegressionTests(Xunit.Abstractions.ITestOu
             null
         );
         using var http = ProviderHttpRequest.CreateClient();
-        using var keys = new TextRedactionKeys();
+        using var keys = new TextRedactionKeys(allLabels: true);
         var owner = new ModelRequestOwner(
             http,
             new(p.BaseUri, "m", "p", "", "", 100),
@@ -433,8 +437,11 @@ public sealed class TextRedactionDeltaRegressionTests(Xunit.Abstractions.ITestOu
             return true;
         };
         using var http = ProviderHttpRequest.CreateClient();
-        var options = new TextRedactionOptions(detector.Endpoint, null, 0.5, 30000);
-        var redactor = new TextRedactor(Key);
+        var options = new TextRedactionOptions(detector.Endpoint, null, 0.5, 30000)
+        {
+            KnownLabels = TextRedactionKnownLabels.All,
+        };
+        var redactor = new TextRedactor(Key, knownLabels: TextRedactionKnownLabels.All);
         string P(string value) => redactor.Placeholder(Encoding.UTF8.GetBytes(value));
         await redactor
             .Begin(http, options, default)
@@ -476,11 +483,12 @@ public sealed class TextRedactionDeltaRegressionTests(Xunit.Abstractions.ITestOu
             1000
         )
         {
+            KnownLabels = TextRedactionKnownLabels.All,
             ExcludeLabels = ["private_date"],
         };
         for (var round = 0; round < 40; round++)
         {
-            var redactor = new TextRedactor(Key);
+            var redactor = new TextRedactor(Key, knownLabels: TextRedactionKnownLabels.All);
             var originals = Enumerable
                 .Range(0, 30)
                 .Select(_ => Text(random.Next(2, 7)))
@@ -542,7 +550,7 @@ public sealed class TextRedactionDeltaRegressionTests(Xunit.Abstractions.ITestOu
     [Fact]
     public void Literal_pass_stays_linear_for_clustered_histories()
     {
-        var redactor = new TextRedactor(Key);
+        var redactor = new TextRedactor(Key, knownLabels: TextRedactionKnownLabels.All);
         string[] firsts = ["Ma", "Ja", "Jo", "Ch", "Da", "Sa", "An", "Mi", "Li", "Ka"];
         string Original(int i) => firsts[i % firsts.Length] + "rk" + i.ToString("x") + " Person";
         for (var i = 0; i < 80000; i++)
@@ -593,7 +601,10 @@ public sealed class TextRedactionDeltaRegressionTests(Xunit.Abstractions.ITestOu
         var scope = new TextRedactionScope(
             redactor,
             http,
-            new TextRedactionOptions(new("http://127.0.0.1:1/c"), null, 0.5, 30000),
+            new TextRedactionOptions(new("http://127.0.0.1:1/c"), null, 0.5, 30000)
+            {
+                KnownLabels = TextRedactionKnownLabels.All,
+            },
             default
         );
         var watch = Stopwatch.StartNew();
@@ -618,7 +629,7 @@ public sealed class TextRedactionDeltaRegressionTests(Xunit.Abstractions.ITestOu
             return true;
         };
         using var http = ProviderHttpRequest.CreateClient();
-        using var keys = new TextRedactionKeys();
+        using var keys = new TextRedactionKeys(allLabels: true);
         var placeholder = keys.Secrets.TextRedactor().Placeholder(Encoding.UTF8.GetBytes("Alice"));
         await using var p = await Provider.StartAsync(n =>
             n == 1 ? (500, """{"error":{"message":"down"}}""") : (200, Answer("Hi " + placeholder))
@@ -626,6 +637,10 @@ public sealed class TextRedactionDeltaRegressionTests(Xunit.Abstractions.ITestOu
         var catalog = HostModels.Parse(
             new JsonObject
             {
+                ["defaults"] = new JsonObject
+                {
+                    ["textRedaction"] = new JsonObject { ["knownLabels"] = "all" },
+                },
                 ["providers"] = new JsonObject
                 {
                     ["p"] = AnthropicProvider(p.BaseUri, detector.Endpoint),
@@ -680,8 +695,14 @@ public sealed class TextRedactionDeltaRegressionTests(Xunit.Abstractions.ITestOu
             return true;
         };
         using var http = ProviderHttpRequest.CreateClient();
-        var options = new TextRedactionOptions(detector.Endpoint, null, 0.5, 30000);
-        var redactor = new TextRedactor(Enumerable.Range(60, 32).Select(i => (byte)i).ToArray());
+        var options = new TextRedactionOptions(detector.Endpoint, null, 0.5, 30000)
+        {
+            KnownLabels = TextRedactionKnownLabels.All,
+        };
+        var redactor = new TextRedactor(
+            Enumerable.Range(60, 32).Select(i => (byte)i).ToArray(),
+            knownLabels: TextRedactionKnownLabels.All
+        );
         var bob = redactor.Placeholder("Bob"u8);
         JsonObject[] History() =>
             [

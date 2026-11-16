@@ -567,6 +567,20 @@ var textRedaction = {
     }
   ]
 };
+var defaultTextRedaction = {
+  ...textRedaction,
+  anyOf: [textRedaction.anyOf[0], {
+    ...textRedaction.anyOf[1],
+    properties: {
+      ...textRedaction.anyOf[1].properties,
+      knownLabels: {
+        anyOf: [{ type: "array", items: { type: "string", pattern: "\\S" } }, { const: "all" }],
+        default: ["private_email", "private_phone", "private_address"],
+        description: 'Labels whose detected values are also masked wherever they appear later, in every Session. Use [] to turn this off, or "all" for every label. Only valid under defaults.textRedaction.'
+      }
+    }
+  }]
+};
 var modelDefaultProperties = {
   retryIntervalsMs: { type: "array", minItems: 1, items: { type: "integer", minimum: 0, maximum: 2147483647 }, default: [2e3, 5e3, 1e4, 2e4, 4e4, 6e4], description: "Delays in milliseconds for successive LLM retries; later retries reuse the last entry. Model overrides provider, then defaults. Virtual providers use only their own value or defaults. Saves apply to the next retry wait; an active wait keeps its deadline." },
   textRedaction,
@@ -731,7 +745,7 @@ var MODELS_CONFIG_SCHEMA = {
       type: "object",
       additionalProperties: false,
       description: "Default model settings. Concrete providers and model entries may override these values.",
-      properties: modelDefaultProperties
+      properties: { ...modelDefaultProperties, textRedaction: defaultTextRedaction }
     },
     providers: {
       type: "object",

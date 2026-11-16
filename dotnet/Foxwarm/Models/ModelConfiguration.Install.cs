@@ -103,6 +103,7 @@ internal sealed partial class ModelConfiguration
                     {
                         lock (gate)
                         {
+                            Secrets.SetTextRedactionKnownLabels(next.KnownLabels);
                             catalog = next;
                             cachedRaw = raw;
                             cachedSecretGeneration = generation;

@@ -15,8 +15,14 @@ public sealed class TextRedactionConcurrencyTests
     {
         await using var detector = await TextDetectionPeer.StartAsync();
         using var http = ProviderHttpRequest.CreateClient();
-        using var redactor = new TextRedactor(TextRedactionTests.Key);
-        var options = new TextRedactionOptions(detector.Endpoint, null, 0.5, 30000);
+        using var redactor = new TextRedactor(
+            TextRedactionTests.Key,
+            knownLabels: TextRedactionKnownLabels.All
+        );
+        var options = new TextRedactionOptions(detector.Endpoint, null, 0.5, 30000)
+        {
+            KnownLabels = TextRedactionKnownLabels.All,
+        };
         var first = redactor.Begin(http, options, default);
         var second = redactor.Begin(http, options, default);
         var firstDetected = await first.DetectAsync("Alice Bob");
@@ -106,6 +112,10 @@ public sealed class TextRedactionConcurrencyTests
         var catalog = HostModels.Parse(
             new JsonObject
             {
+                ["defaults"] = new JsonObject
+                {
+                    ["textRedaction"] = new JsonObject { ["knownLabels"] = "all" },
+                },
                 ["providers"] = new JsonObject
                 {
                     ["p"] = new JsonObject
@@ -185,7 +195,7 @@ public sealed class TextRedactionConcurrencyTests
                 maxAttempts: 1
             );
         }
-        using (var secrets = new InstanceSecrets(root.Path))
+        using (var secrets = TextRedactionKeys.AllLabels(root.Path))
         {
             var losing = Request(secrets, "variant-one");
             await held.Task.WaitAsync(TimeSpan.FromSeconds(15));
@@ -210,7 +220,7 @@ public sealed class TextRedactionConcurrencyTests
             Assert.Equal(forms[0], forms[1]);
         }
         var calls = detector.Texts.Count;
-        using (var restarted = new InstanceSecrets(root.Path))
+        using (var restarted = TextRedactionKeys.AllLabels(root.Path))
             await Request(restarted, "variant-two");
         Assert.Equal(calls, detector.Texts.Count);
         Assert.Equal(forms[0], forms[2]);
@@ -219,7 +229,7 @@ public sealed class TextRedactionConcurrencyTests
     [Fact]
     public async Task Concurrent_detection_and_literal_cache_cannot_create_an_unrestored_nested_placeholder()
     {
-        using var keys = new TextRedactionKeys();
+        using var keys = new TextRedactionKeys(allLabels: true);
         var redactor = keys.Secrets.TextRedactor();
         const string prefix = "prefix-value ";
         const string name = "UnitChecks";
@@ -269,7 +279,10 @@ public sealed class TextRedactionConcurrencyTests
             return true;
         };
         using var http = ProviderHttpRequest.CreateClient();
-        var options = new TextRedactionOptions(detector.Endpoint, null, 0.5, 30000);
+        var options = new TextRedactionOptions(detector.Endpoint, null, 0.5, 30000)
+        {
+            KnownLabels = TextRedactionKnownLabels.All,
+        };
         redactor.TryRegister(
             redactor.Placeholder(Encoding.UTF8.GetBytes(literal)),
             literal,
@@ -314,6 +327,10 @@ public sealed class TextRedactionConcurrencyTests
         var catalog = HostModels.Parse(
             new JsonObject
             {
+                ["defaults"] = new JsonObject
+                {
+                    ["textRedaction"] = new JsonObject { ["knownLabels"] = "all" },
+                },
                 ["providers"] = new JsonObject
                 {
                     ["p"] = new JsonObject
@@ -367,8 +384,14 @@ public sealed class TextRedactionConcurrencyTests
     {
         await using var detector = await TextDetectionPeer.StartAsync("Alice");
         using var http = ProviderHttpRequest.CreateClient();
-        using var redactor = new TextRedactor(TextRedactionTests.Key);
-        var options = new TextRedactionOptions(detector.Endpoint, null, 0.5, 30000);
+        using var redactor = new TextRedactor(
+            TextRedactionTests.Key,
+            knownLabels: TextRedactionKnownLabels.All
+        );
+        var options = new TextRedactionOptions(detector.Endpoint, null, 0.5, 30000)
+        {
+            KnownLabels = TextRedactionKnownLabels.All,
+        };
         var original = "Alice Bob";
         var first = await redactor.Begin(http, options, default).RedactAsync(original);
         redactor.TryRegister(redactor.Placeholder("Bob"u8), "Bob", ["secret"]);
@@ -383,13 +406,20 @@ public sealed class TextRedactionConcurrencyTests
     [Fact]
     public void An_evicted_detection_cannot_memoize_literal_offsets_into_a_new_detection()
     {
-        using var redactor = new TextRedactor(TextRedactionTests.Key, cacheBytes: 500);
+        using var redactor = new TextRedactor(
+            TextRedactionTests.Key,
+            cacheBytes: 500,
+            knownLabels: TextRedactionKnownLabels.All
+        );
         var options = new TextRedactionOptions(
             new Uri("http://127.0.0.1:1/classify"),
             null,
             0.5,
             30000
-        );
+        )
+        {
+            KnownLabels = TextRedactionKnownLabels.All,
+        };
         const string text = "Alice Bob";
         var digest = TextRedactor.Digest(text);
         var first = new[]

@@ -212,7 +212,17 @@ internal sealed partial class HostModels
         if (modelsScope && scope.ContainsKey("retryIntervalsMs"))
             _ = ReadRetryIntervals(scope);
         if (modelsScope && scope.ContainsKey("textRedaction"))
+        {
+            if (
+                label != "defaults"
+                && scope["textRedaction"] is JsonObject redaction
+                && redaction.ContainsKey("knownLabels")
+            )
+                throw new InvalidDataException(
+                    "textRedaction.knownLabels is only supported in defaults.textRedaction."
+                );
             TextRedactionOptions.Validate(scope["textRedaction"]);
+        }
         foreach (var field in new[] { "contextLimit", "maxOutput" })
             if (scope.ContainsKey(field))
             {

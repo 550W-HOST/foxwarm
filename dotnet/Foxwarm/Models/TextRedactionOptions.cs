@@ -18,6 +18,8 @@ internal sealed record TextRedactionOptions(
     // settings share cache entries.
     internal IReadOnlyList<string> ExcludeLabels { get; init; } = DefaultExcludeLabels;
 
+    internal TextRedactionKnownLabels KnownLabels { get; init; } = TextRedactionKnownLabels.Default;
+
     internal const int MaxConcurrencyLimit = 64;
 
     // Detection calls in flight to this endpoint at once, shared by every request and Session.
@@ -77,6 +79,7 @@ internal sealed record TextRedactionOptions(
         && ApiKey == other.ApiKey
         && Threshold.Equals(other.Threshold)
         && TimeoutMs == other.TimeoutMs
+        && KnownLabels.Equals(other.KnownLabels)
         && ExcludeLabels.SequenceEqual(other.ExcludeLabels, StringComparer.Ordinal)
         && KeepValues.SequenceEqual(other.KeepValues, StringComparer.Ordinal);
 
@@ -86,6 +89,7 @@ internal sealed record TextRedactionOptions(
             ApiKey,
             Threshold,
             TimeoutMs,
+            KnownLabels,
             string.Join('\n', ExcludeLabels),
             string.Join('\n', KeepValues)
         );
@@ -131,6 +135,7 @@ internal sealed record TextRedactionOptions(
                     && values.All(value =>
                         SessionWait.Text(value) is string text && text.Trim().Length > 0
                     ),
+                "knownLabels" => TextRedactionKnownLabels.Parse(item) is not null,
                 "excludeLabels" => item is JsonArray labels
                     && labels.All(label =>
                         SessionWait.Text(label) is string text && text.Trim().Length > 0
@@ -182,6 +187,9 @@ internal sealed record TextRedactionOptions(
                 1,
                 "textRedaction.maxConcurrency"
             ),
+            KnownLabels = options.ContainsKey("knownLabels")
+                ? TextRedactionKnownLabels.Parse(options["knownLabels"])
+                : TextRedactionKnownLabels.Default,
             BatchBytes = (int)(SessionWait.Number(options["batchBytes"]) ?? 0),
             ExcludeLabels = options["excludeLabels"] is JsonArray labels
                 ? labels

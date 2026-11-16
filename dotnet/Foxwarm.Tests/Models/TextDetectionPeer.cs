@@ -94,7 +94,18 @@ internal sealed class TextRedactionKeys : IDisposable
     internal Foxwarm.Secrets.InstanceSecrets Secrets { get; }
     internal string DataRoot => temp.Path;
 
-    internal TextRedactionKeys() => Secrets = new(temp.Path);
+    internal TextRedactionKeys(bool allLabels = false)
+    {
+        Secrets = allLabels ? AllLabels(temp.Path) : new(temp.Path);
+    }
+
+    // Legacy literal-masking regressions opt into all labels explicitly.
+    internal static Foxwarm.Secrets.InstanceSecrets AllLabels(string dataRoot)
+    {
+        var secrets = new Foxwarm.Secrets.InstanceSecrets(dataRoot);
+        secrets.SetTextRedactionKnownLabels(Foxwarm.Models.TextRedactionKnownLabels.All);
+        return secrets;
+    }
 
     public void Dispose()
     {

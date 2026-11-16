@@ -18,8 +18,6 @@ internal sealed partial class TextRedactor
             return;
         foreach (var (original, labels) in store.ReadKnown())
         {
-            if (labels.Length == 0 || labels.Any(string.IsNullOrEmpty))
-                continue;
             string mapped;
             try
             {
@@ -29,7 +27,12 @@ internal sealed partial class TextRedactor
             {
                 continue;
             }
-            if (ContainsPlaceholder(original))
+            if (
+                labels.Length == 0
+                || labels.Any(string.IsNullOrEmpty)
+                || ContainsPlaceholder(original)
+                || !knownLabels.Allows(labels)
+            )
             {
                 store.DeleteKnown(mapped);
                 continue;

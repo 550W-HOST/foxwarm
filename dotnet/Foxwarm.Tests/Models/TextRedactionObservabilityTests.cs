@@ -146,10 +146,14 @@ public sealed partial class TextRedactionObservabilityTests
             Http = ProviderHttpRequest.CreateClient(),
             Temp = temp,
             Journal = new LlmRequestJournalStore(temp.Path),
-            Keys = new TextRedactionKeys(),
+            Keys = new TextRedactionKeys(allLabels: true),
             Catalog = HostModels.Parse(
                 new JsonObject
                 {
+                    ["defaults"] = new JsonObject
+                    {
+                        ["textRedaction"] = new JsonObject { ["knownLabels"] = "all" },
+                    },
                     ["providers"] = new JsonObject
                     {
                         ["p"] = AnthropicProvider(provider.BaseUri, detector.Endpoint),

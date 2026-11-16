@@ -69,7 +69,7 @@ test('static config schemas are distinct, permissive, and omit the removed model
 
 test('text redaction schema supports inherited options and concrete disablement', () => {
   const config = {
-    defaults: { textRedaction: { enabled: true, endpoint: 'https://detector.example/classify', threshold: 0.5 } },
+    defaults: { textRedaction: { enabled: true, endpoint: 'https://detector.example/classify', threshold: 0.5, knownLabels: ['private_email'] } },
     providers: {
       p: { textRedaction: { timeoutMs: 1000, maxConcurrency: 4, batchBytes: 65536, keepValues: ['Foxwarm'], excludeLabels: [] }, models: ['inherited', { id: 'off', textRedaction: false }, { id: 'dates', textRedaction: { excludeLabels: ['private_url'] } }] },
     },
@@ -77,6 +77,14 @@ test('text redaction schema supports inherited options and concrete disablement'
   assert.equal(validateModelsSchema(config), true, JSON.stringify(validateModelsSchema.errors))
   for (const invalid of [null, { enabled: 'yes' }, { threshold: 1.1 }, { timeoutMs: 0 }, { maxConcurrency: 0 }, { maxConcurrency: 65 }, { maxConcurrency: 1.5 }, { batchBytes: -1 }, { batchBytes: 262145 }, { batchBytes: 0.5 }, { keepValues: 'Foxwarm' }, { keepValues: [''] }, { keepValues: [1] }, { endpoint: 'file:///invalid' }, { unknown: true }, { excludeLabels: 'private_url' }, { excludeLabels: [''] }, { excludeLabels: [' '] }, { excludeLabels: [1] }]) {
     assert.equal(validateModelsSchema({ defaults: { textRedaction: invalid }, providers: { p: {} } }), false)
+  }
+  for (const knownLabels of [[], ['private_email', ' PRIVATE_PHONE '], 'all']) {
+    assert.equal(validateModelsSchema({ defaults: { textRedaction: { knownLabels } }, providers: { p: {} } }), true)
+    assert.equal(validateModelsSchema({ providers: { p: { textRedaction: { knownLabels } } } }), false)
+    assert.equal(validateModelsSchema({ providers: { p: { models: [{ id: 'm', textRedaction: { knownLabels } }] } } }), false)
+  }
+  for (const knownLabels of [null, true, 1, 'ALL', [''], [' '], [1], {}]) {
+    assert.equal(validateModelsSchema({ defaults: { textRedaction: { knownLabels } }, providers: { p: {} } }), false)
   }
   assert.equal(validateModelsSchema({ providers: { p: {}, alias: { providerType: 'session-hash', targets: ['p'], textRedaction: false } } }), false)
 })

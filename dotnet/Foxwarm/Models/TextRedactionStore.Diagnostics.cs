@@ -49,7 +49,8 @@ internal sealed partial class TextRedactionStore
             digits = 0,
             dash = 0,
             identifiers = 0,
-            placeholders = 0;
+            placeholders = 0,
+            eligible = 0;
         var labels = new SortedDictionary<string, long>(StringComparer.Ordinal);
         var lengths = new JsonObject
         {
@@ -76,6 +77,8 @@ internal sealed partial class TextRedactionStore
             }
             readable++;
             var (original, categories) = known;
+            if (TextRedactionKnownLabels.Default.Allows(categories))
+                eligible++;
             foreach (var label in categories.Distinct(StringComparer.Ordinal))
                 labels[label] = labels.GetValueOrDefault(label) + 1;
             var bucket = original.Length switch
@@ -117,6 +120,8 @@ internal sealed partial class TextRedactionStore
             ["startsWithDash"] = dash,
             ["asciiIdentifiers"] = identifiers,
             ["containsPlaceholder"] = placeholders,
+            ["defaultKnownLabelsEligible"] = eligible,
+            ["defaultKnownLabelsIneligible"] = readable - eligible,
         };
     }
 }

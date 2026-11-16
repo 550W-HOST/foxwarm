@@ -67,7 +67,11 @@ public sealed partial class TextRedactionTests
     public async Task Placeholder_collisions_fail_closed_without_replacing_the_registered_value()
     {
         // A one-character digest makes collisions easy to construct.
-        var redactor = new TextRedactor(Key, digestCharacters: 1);
+        var redactor = new TextRedactor(
+            Key,
+            digestCharacters: 1,
+            knownLabels: TextRedactionKnownLabels.All
+        );
         var byPlaceholder = new Dictionary<string, string>(StringComparer.Ordinal);
         string? first = null;
         string? second = null;
@@ -233,7 +237,11 @@ public sealed partial class TextRedactionTests
         );
         using var http = ProviderHttpRequest.CreateClient();
         var options = new TextRedactionOptions(detector.Endpoint, null, .5, 30000);
-        var scope = new TextRedactor(Key).Begin(http, options, default);
+        var scope = new TextRedactor(Key, knownLabels: TextRedactionKnownLabels.All).Begin(
+            http,
+            options,
+            default
+        );
         var result = await scope.RedactAsync(text);
         Assert.Contains(marker, result);
         Assert.Contains(indexed, result);

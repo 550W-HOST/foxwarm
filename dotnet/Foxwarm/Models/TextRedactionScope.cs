@@ -10,11 +10,16 @@ namespace Foxwarm.Models;
 internal sealed class TextRedactionScope(
     TextRedactor redactor,
     HttpClient http,
-    TextRedactionOptions options,
+    TextRedactionOptions settings,
     CancellationToken token
 )
 {
     internal const string OmittedText = "[Text omitted: too long for text redaction]";
+
+    private readonly TextRedactionOptions options = settings with
+    {
+        KnownLabels = redactor.KnownLabels,
+    };
 
     private readonly Dictionary<string, string> registered = new(StringComparer.Ordinal);
 

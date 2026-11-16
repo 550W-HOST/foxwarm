@@ -24,8 +24,14 @@ public sealed class TextRedactionPlaceholderTests
             "Bob"
         );
         using var http = ProviderHttpRequest.CreateClient();
-        using var redactor = new TextRedactor(TextRedactionTests.Key);
-        var options = new TextRedactionOptions(detector.Endpoint, null, 0.5, 30000);
+        using var redactor = new TextRedactor(
+            TextRedactionTests.Key,
+            knownLabels: TextRedactionKnownLabels.All
+        );
+        var options = new TextRedactionOptions(detector.Endpoint, null, 0.5, 30000)
+        {
+            KnownLabels = TextRedactionKnownLabels.All,
+        };
         var input = "😀 " + wrapped + " " + Core + " [[" + Token + "]]";
         var scope = redactor.Begin(http, options, default);
         var output = await scope.RedactAsync(input);
@@ -58,7 +64,10 @@ public sealed class TextRedactionPlaceholderTests
         var path = Path.Combine(temp.Path, TextRedactionStore.FileName);
         await using var detector = await TextDetectionPeer.StartAsync(Core);
         using var http = ProviderHttpRequest.CreateClient();
-        var options = new TextRedactionOptions(detector.Endpoint, null, 0.5, 30000);
+        var options = new TextRedactionOptions(detector.Endpoint, null, 0.5, 30000)
+        {
+            KnownLabels = TextRedactionKnownLabels.All,
+        };
         using var shape = new TextRedactor(TextRedactionTests.Key);
         var placeholder = shape.Placeholder(Encoding.UTF8.GetBytes(Core));
         using (var store = TextRedactionStore.Open(path, storeKey, 1 << 20)!)
@@ -73,7 +82,13 @@ public sealed class TextRedactionPlaceholderTests
             );
         }
         using (var store = TextRedactionStore.Open(path, storeKey, 1 << 20)!)
-        using (var redactor = new TextRedactor(TextRedactionTests.Key, store: store))
+        using (
+            var redactor = new TextRedactor(
+                TextRedactionTests.Key,
+                store: store,
+                knownLabels: TextRedactionKnownLabels.All
+            )
+        )
         {
             Assert.Equal(0, redactor.KnownCount);
             Assert.Null(redactor.Peek(options, Token));
@@ -82,7 +97,13 @@ public sealed class TextRedactionPlaceholderTests
             Assert.Empty(store.ReadKnown());
         }
         using (var store = TextRedactionStore.Open(path, storeKey, 1 << 20)!)
-        using (var redactor = new TextRedactor(TextRedactionTests.Key, store: store))
+        using (
+            var redactor = new TextRedactor(
+                TextRedactionTests.Key,
+                store: store,
+                knownLabels: TextRedactionKnownLabels.All
+            )
+        )
             Assert.Equal(Token, await redactor.Begin(http, options, default).RedactAsync(Token));
         Assert.Single(detector.Texts);
     }
@@ -108,7 +129,7 @@ public sealed class TextRedactionPlaceholderTests
                 store.PutKnown(
                     shape.Placeholder(Encoding.UTF8.GetBytes(original)),
                     original,
-                    ["secret", "test"]
+                    original == "a@b.test" ? ["secret", "private_email"] : ["secret", "test"]
                 );
             store.Flush();
             Assert.Equal(
@@ -139,6 +160,8 @@ public sealed class TextRedactionPlaceholderTests
         Assert.Equal(1, result["startsWithDash"]!.GetValue<long>());
         Assert.Equal(1, result["asciiIdentifiers"]!.GetValue<long>());
         Assert.Equal(1, result["containsPlaceholder"]!.GetValue<long>());
+        Assert.Equal(1, result["defaultKnownLabelsEligible"]!.GetValue<long>());
+        Assert.Equal(4, result["defaultKnownLabelsIneligible"]!.GetValue<long>());
         Assert.Equal(2, result["lengthUtf16"]!["4-7"]!.GetValue<long>());
         Assert.DoesNotContain(Token, result.ToJsonString());
         Assert.DoesNotContain("word_name", result.ToJsonString());

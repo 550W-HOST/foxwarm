@@ -48,6 +48,7 @@ internal sealed partial class TextRedactor : IDisposable
     private readonly object gate = new();
     private readonly long cacheLimit;
     private readonly long knownLimit;
+    private TextRedactionKnownLabels knownLabels;
     private long cacheBytes;
     private long knownBytes;
     private readonly Dictionary<DetectionKey, LinkedListNode<Detection>> detections = new();
@@ -102,7 +103,8 @@ internal sealed partial class TextRedactor : IDisposable
         long cacheBytes = DefaultCacheBytes,
         long knownBytes = DefaultKnownBytes,
         int digestCharacters = DigestCharacters,
-        TextRedactionStore? store = null
+        TextRedactionStore? store = null,
+        TextRedactionKnownLabels? knownLabels = null
     )
     {
         if (key.Length < 32)
@@ -125,6 +127,7 @@ internal sealed partial class TextRedactor : IDisposable
                 + "}(?![0-9a-f])",
             RegexOptions.CultureInvariant
         );
+        this.knownLabels = knownLabels ?? TextRedactionKnownLabels.Default;
         this.store = store;
         LoadKnown();
     }
@@ -134,6 +137,28 @@ internal sealed partial class TextRedactor : IDisposable
         TextRedactionOptions options,
         CancellationToken token
     ) => new(this, http, options, token);
+
+    internal TextRedactionKnownLabels KnownLabels
+    {
+        get
+        {
+            lock (gate)
+                return knownLabels;
+        }
+    }
+
+    internal void SetKnownLabels(TextRedactionKnownLabels policy)
+    {
+        lock (gate)
+        {
+            if (knownLabels.Equals(policy))
+                return;
+            knownLabels = policy;
+            foreach (var node in known.Values.ToArray())
+                if (!policy.Allows(node.Value.Labels))
+                    Forget(node);
+        }
+    }
 
     internal string Placeholder(ReadOnlySpan<byte> original) =>
         Prefix
@@ -327,6 +352,8 @@ internal sealed partial class TextRedactor : IDisposable
             return true;
         lock (gate)
         {
+            if (!knownLabels.Allows(labels))
+                return true;
             if (known.TryGetValue(placeholder, out var node))
             {
                 if (!string.Equals(node.Value.Original, original, StringComparison.Ordinal))

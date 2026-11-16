@@ -644,6 +644,10 @@ internal sealed partial class TextRedactionStore : IDisposable
             Field(options.KeepValues.Count.ToString());
             foreach (var value in options.KeepValues)
                 Field(value);
+            Field(options.KnownLabels.Labels?.Count.ToString());
+            if (options.KnownLabels.Labels is { } knownLabels)
+                foreach (var label in knownLabels)
+                    Field(label);
             var identity = Mac("identity", Encoding.UTF8.GetBytes(text.ToString()));
             if (identities.Count >= 64)
                 identities.Clear();

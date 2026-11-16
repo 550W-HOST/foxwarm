@@ -43,6 +43,8 @@ internal sealed partial class HostModels
     private readonly string defaultKey = "";
     private readonly ModelConfiguration? owner;
     internal ModelConfiguration? ConfigurationOwner => owner;
+    internal TextRedactionKnownLabels KnownLabels { get; private init; } =
+        TextRedactionKnownLabels.Default;
     internal bool HandoffConfirmationEnabled { get; private init; }
     private IReadOnlyList<int> defaultRetryIntervals = DefaultRetryIntervalsMs;
     internal double PresentationContextLimit { get; private init; } = 200000;
@@ -375,6 +377,7 @@ internal sealed partial class HostModels
                 : ordered.FirstOrDefault() ?? requested ?? "";
         return new HostModels(selected, models, ordered)
         {
+            KnownLabels = TextRedactionKnownLabels.FromDefaults(defaults),
             HandoffConfirmationEnabled = Foxwarm.Tools.HandoffConfirmation.Enabled(app),
             defaultRetryIntervals = ReadRetryIntervals(defaults),
             PresentationContextLimit = PositiveSetting(

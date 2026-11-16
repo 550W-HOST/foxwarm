@@ -17,6 +17,10 @@ internal sealed partial class InstanceSecrets : IDisposable
     private readonly string dataRoot;
     private readonly object textRedactorGate = new();
     private Foxwarm.Models.TextRedactor? textRedactor;
+    private Foxwarm.Models.TextRedactionKnownLabels textRedactionKnownLabels = Foxwarm
+        .Models
+        .TextRedactionKnownLabels
+        .Default;
     private bool disposed;
     private SecretRedactor redactor = SecretRedactor.Empty;
     private long builtGeneration = -1;
@@ -154,9 +158,19 @@ internal sealed partial class InstanceSecrets : IDisposable
                 );
             textRedactor = new Foxwarm.Models.TextRedactor(
                 opened.Derive(InstanceKeys.TextRedactionPlaceholderPurpose),
-                store: store
+                store: store,
+                knownLabels: textRedactionKnownLabels
             );
             return textRedactor;
+        }
+    }
+
+    internal void SetTextRedactionKnownLabels(Foxwarm.Models.TextRedactionKnownLabels policy)
+    {
+        lock (textRedactorGate)
+        {
+            textRedactionKnownLabels = policy;
+            textRedactor?.SetKnownLabels(policy);
         }
     }
 

@@ -81,7 +81,7 @@ public sealed partial class TextRedactionObservabilityTests
         Assert.Equal("unavailable", stale["state"]!.GetValue<string>());
         Assert.False(stale["slots"]![0]!["available"]!.GetValue<bool>());
         Assert.Null(stale["slots"]![0]!["ranges"]);
-        using var restarted = new TextRedactionKeys();
+        using var restarted = new TextRedactionKeys(allLabels: true);
         Assert.Equal(
             "unavailable",
             TextRedactionView.Describe(first, candidates, restarted.Secrets)[

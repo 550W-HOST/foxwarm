@@ -72,6 +72,10 @@ public sealed class TextRedactionPersistenceTests
         HostModels.Parse(
             new JsonObject
             {
+                ["defaults"] = new JsonObject
+                {
+                    ["textRedaction"] = new JsonObject { ["knownLabels"] = "all" },
+                },
                 ["providers"] = new JsonObject
                 {
                     ["p"] = new JsonObject
@@ -151,7 +155,7 @@ public sealed class TextRedactionPersistenceTests
         var bob = User("Bob is here.");
         string sent;
         JsonObject reply;
-        using (var secrets = new InstanceSecrets(temp.Path))
+        using (var secrets = TextRedactionKeys.AllLabels(temp.Path))
         {
             reply = (
                 await RequestAsync(http, provider.BaseUri, catalog, secrets, first)
@@ -164,7 +168,7 @@ public sealed class TextRedactionPersistenceTests
         }
         var calls = detector.Texts.Count;
 
-        using (var restarted = new InstanceSecrets(temp.Path))
+        using (var restarted = TextRedactionKeys.AllLabels(temp.Path))
         {
             // The sent-version view reads the store after the restart, without the detector.
             var candidates = TextRedactionView.Candidates(catalog, "p/m");
@@ -227,9 +231,12 @@ public sealed class TextRedactionPersistenceTests
         await using var detector = await DetectorAsync();
         using var http = ProviderHttpRequest.CreateClient();
         using var temp = new TempDirectory();
-        var options = new TextRedactionOptions(detector.Endpoint, null, 0.5, 30000);
+        var options = new TextRedactionOptions(detector.Endpoint, null, 0.5, 30000)
+        {
+            KnownLabels = TextRedactionKnownLabels.All,
+        };
         string placeholder;
-        using (var secrets = new InstanceSecrets(temp.Path))
+        using (var secrets = TextRedactionKeys.AllLabels(temp.Path))
         {
             var scope = secrets.TextRedactor().Begin(http, options, default);
             var result = scope.MaskKnown(await scope.DetectAsync("Alice and Bob"));
@@ -247,7 +254,7 @@ public sealed class TextRedactionPersistenceTests
         using var copy = new TempDirectory();
         Directory.CreateDirectory(Path.Combine(copy.Path, "state"));
         File.Copy(file, Path.Combine(copy.Path, "state", TextRedactionStore.FileName));
-        using (var foreign = new InstanceSecrets(copy.Path))
+        using (var foreign = TextRedactionKeys.AllLabels(copy.Path))
         {
             var redactor = foreign.TextRedactor();
             Assert.Equal(0, redactor.KnownCount);
@@ -259,7 +266,7 @@ public sealed class TextRedactionPersistenceTests
         Directory.CreateDirectory(Path.Combine(keyed.Path, "keys"));
         File.Copy(file, Path.Combine(keyed.Path, "state", TextRedactionStore.FileName));
         File.Copy(InstanceKeys.DefaultPath(temp.Path), InstanceKeys.DefaultPath(keyed.Path));
-        using (var owner = new InstanceSecrets(keyed.Path))
+        using (var owner = TextRedactionKeys.AllLabels(keyed.Path))
         {
             var redactor = owner.TextRedactor();
             Assert.Equal(2, redactor.KnownCount);
@@ -275,9 +282,15 @@ public sealed class TextRedactionPersistenceTests
         using var temp = new TempDirectory();
         var path = Path.Combine(temp.Path, TextRedactionStore.FileName);
         var key = Enumerable.Range(0, 64).Select(i => (byte)i).ToArray();
-        var options = new TextRedactionOptions(new("http://127.0.0.1:1/classify"), null, 0.5, 1);
+        var options = new TextRedactionOptions(new("http://127.0.0.1:1/classify"), null, 0.5, 1)
+        {
+            KnownLabels = TextRedactionKnownLabels.All,
+        };
         const string text = "Hi 🦊 Alice";
-        var placeholder = new TextRedactor(TextRedactionTests.Key).Placeholder("Alice"u8);
+        var placeholder = new TextRedactor(
+            TextRedactionTests.Key,
+            knownLabels: TextRedactionKnownLabels.All
+        ).Placeholder("Alice"u8);
         TextRedactor.Found Span(int start, int length) =>
             new(
                 start,
@@ -296,7 +309,11 @@ public sealed class TextRedactionPersistenceTests
         };
         using (var store = TextRedactionStore.Open(path, key, 1 << 20)!)
         {
-            var redactor = new TextRedactor(TextRedactionTests.Key, store: store);
+            var redactor = new TextRedactor(
+                TextRedactionTests.Key,
+                store: store,
+                knownLabels: TextRedactionKnownLabels.All
+            );
             // Each case under its own cache identity.
             for (var index = 0; index < cases.Length; index++)
                 store.PutSlot(
@@ -347,10 +364,17 @@ public sealed class TextRedactionPersistenceTests
         var path = Path.Combine(temp.Path, TextRedactionStore.FileName);
         var key = Enumerable.Range(0, 64).Select(i => (byte)i).ToArray();
         var clock = new Clock();
-        var options = new TextRedactionOptions(new("http://127.0.0.1:1/classify"), null, 0.5, 1);
+        var options = new TextRedactionOptions(new("http://127.0.0.1:1/classify"), null, 0.5, 1)
+        {
+            KnownLabels = TextRedactionKnownLabels.All,
+        };
         string Text(int index) => "slot " + index;
         using var store = TextRedactionStore.Open(path, key, 1 << 20, clock, slotLimit: 5000)!;
-        var redactor = new TextRedactor(TextRedactionTests.Key, store: store);
+        var redactor = new TextRedactor(
+            TextRedactionTests.Key,
+            store: store,
+            knownLabels: TextRedactionKnownLabels.All
+        );
         for (var index = 0; index < 30; index++)
             store.PutSlot(options, TextRedactor.Digest(Text(index)), [], []);
         store.Flush();
@@ -366,7 +390,11 @@ public sealed class TextRedactionPersistenceTests
             store.Flush();
         }
 
-        var fresh = new TextRedactor(TextRedactionTests.Key, store: store);
+        var fresh = new TextRedactor(
+            TextRedactionTests.Key,
+            store: store,
+            knownLabels: TextRedactionKnownLabels.All
+        );
         Assert.NotNull(fresh.Peek(options, Text(0)));
         for (var index = 30; index < 60; index++)
             Assert.NotNull(fresh.Peek(options, Text(index)));
@@ -389,7 +417,12 @@ public sealed class TextRedactionPersistenceTests
         string[] before;
         using (var store = TextRedactionStore.Open(path, key, 1 << 20)!)
         {
-            var redactor = new TextRedactor(TextRedactionTests.Key, knownBytes: 2000, store: store);
+            var redactor = new TextRedactor(
+                TextRedactionTests.Key,
+                knownBytes: 2000,
+                store: store,
+                knownLabels: TextRedactionKnownLabels.All
+            );
             for (var index = 0; index < 40; index++)
             {
                 var original = "Person" + index;
@@ -409,7 +442,8 @@ public sealed class TextRedactionPersistenceTests
             var restarted = new TextRedactor(
                 TextRedactionTests.Key,
                 knownBytes: 2000,
-                store: store
+                store: store,
+                knownLabels: TextRedactionKnownLabels.All
             );
             Assert.Equal(before, Originals(restarted));
             // Restored values are known for collision checks and literal masking.
@@ -426,7 +460,10 @@ public sealed class TextRedactionPersistenceTests
     private static string[] Originals(TextRedactor redactor)
     {
         var snapshot = redactor.KnownSnapshot();
-        var options = new TextRedactionOptions(new("http://127.0.0.1:1/classify"), null, 0.5, 1);
+        var options = new TextRedactionOptions(new("http://127.0.0.1:1/classify"), null, 0.5, 1)
+        {
+            KnownLabels = TextRedactionKnownLabels.All,
+        };
         return Enumerable
             .Range(0, 40)
             .Select(index => "Person" + index)
@@ -441,11 +478,14 @@ public sealed class TextRedactionPersistenceTests
     {
         await using var detector = await TextDetectionPeer.StartAsync("Alice");
         using var http = ProviderHttpRequest.CreateClient();
-        var options = new TextRedactionOptions(detector.Endpoint, null, 0.5, 30000);
+        var options = new TextRedactionOptions(detector.Endpoint, null, 0.5, 30000)
+        {
+            KnownLabels = TextRedactionKnownLabels.All,
+        };
 
         using var blocked = new TempDirectory();
         Directory.CreateDirectory(Path.Combine(blocked.Path, "state", TextRedactionStore.FileName));
-        using (var secrets = new InstanceSecrets(blocked.Path))
+        using (var secrets = TextRedactionKeys.AllLabels(blocked.Path))
         {
             var scope = secrets.TextRedactor().Begin(http, options, default);
             Assert.DoesNotContain("Alice", scope.MaskKnown(await scope.DetectAsync("Hi Alice")));
@@ -455,12 +495,12 @@ public sealed class TextRedactionPersistenceTests
         Directory.CreateDirectory(Path.Combine(damaged.Path, "state"));
         var file = Path.Combine(damaged.Path, "state", TextRedactionStore.FileName);
         File.WriteAllBytes(file, Enumerable.Repeat((byte)0x5A, 8192).ToArray());
-        using (var secrets = new InstanceSecrets(damaged.Path))
+        using (var secrets = TextRedactionKeys.AllLabels(damaged.Path))
         {
             var scope = secrets.TextRedactor().Begin(http, options, default);
             Assert.DoesNotContain("Alice", scope.MaskKnown(await scope.DetectAsync("Hi Alice")));
         }
-        using (var secrets = new InstanceSecrets(damaged.Path))
+        using (var secrets = TextRedactionKeys.AllLabels(damaged.Path))
             Assert.Equal(1, secrets.TextRedactor().KnownCount);
     }
 }
