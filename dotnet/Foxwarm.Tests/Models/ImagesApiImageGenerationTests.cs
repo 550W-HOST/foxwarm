@@ -5,7 +5,7 @@ using Microsoft.AspNetCore.Http;
 
 namespace Foxwarm.Tests;
 
-public sealed class ImagesApiImageGenerationTests
+public sealed partial class ImagesApiImageGenerationTests
 {
     private const string Png =
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";

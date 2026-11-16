@@ -21,6 +21,26 @@ internal static class ImageGenerationRequests
     internal static bool UsesImagesApi(JsonObject? configuration) =>
         SessionWait.Text(configuration?["api"]) == "images";
 
+    // Provider type recorded for Images API requests: the wire API actually used, always plain
+    // HTTP, whatever transport the configured provider type names.
+    internal const string ImagesApiProviderType = "openai-images";
+
+    /// <summary>
+    /// The model and provider type that journal, usage and redaction rows name for one request.
+    /// An Images API request calls the configured image model, keyed like a catalog model under
+    /// the same provider; every other request is the selected leaf itself.
+    /// </summary>
+    internal static (string ModelKey, string ProviderType) Attribution(
+        ConcreteHostModel leaf,
+        string purpose
+    ) =>
+        purpose == Purpose
+        && leaf.Configuration["imageGeneration"] is JsonObject image
+        && UsesImagesApi(image)
+        && SessionWait.Text(image["model"]) is { } imageModel
+            ? (leaf.ProviderKey + "/" + imageModel, ImagesApiProviderType)
+            : (leaf.Key, leaf.ProviderType);
+
     internal static ResponsesClientOptions Prepare(ResponsesClientOptions options) =>
         options with
         {

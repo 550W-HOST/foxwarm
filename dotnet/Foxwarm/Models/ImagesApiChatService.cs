@@ -215,14 +215,17 @@ internal sealed class ImagesApiChatService(HttpClient http, ResponsesClientOptio
                 },
             },
         };
-        return new ChatResult(
-            assistant,
-            ResponsesCanonicalConverter.BuildUsage(result["usage"] as JsonObject)
+        var usage = ResponsesCanonicalConverter.BuildUsage(result["usage"] as JsonObject);
+        // Image tokens are priced only by imageGeneration.pricing, never by the conversation
+        // model's rates; without it, or when the counts do not fit it, the cost stays unrecorded.
+        if (
+            usage is not null
+            && configuration["pricing"] is JsonObject prices
+            && ModelUsageCost.ImageCost(result["usage"] as JsonObject, prices, edit)
+                is double cost
         )
-        {
-            // Image tokens are not priced by the conversation model's rates.
-            UsageUnpriced = true,
-        };
+            usage["cost"] = cost;
+        return new ChatResult(assistant, usage) { UsagePricedByService = true };
     }
 
     private Dictionary<string, string> Headers()

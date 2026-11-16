@@ -128,9 +128,10 @@ public sealed record ChatResult(
     internal bool ContextCompacted { get; init; }
     internal string? TruncatedStopReason { get; init; }
 
-    // Tokens of a different model family (for example Images API image tokens), recorded
-    // without applying the captured conversation model's pricing.
-    internal bool UsageUnpriced { get; init; }
+    // Tokens of a different model than the captured conversation model (for example Images API
+    // tokens): the service already priced them, or left them unpriced, so the conversation
+    // model's pricing never applies and any cost in Usage is kept.
+    internal bool UsagePricedByService { get; init; }
 
     internal void FinalizeHistory(
         IReadOnlyList<JsonObject>? rows,

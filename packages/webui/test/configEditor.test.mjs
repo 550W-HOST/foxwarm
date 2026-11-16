@@ -204,6 +204,21 @@ test('WebUI schema wrappers reuse the shared canonical schema objects without a 
   assert.doesNotMatch(wrapperSource, /Foxwarm models configuration|providerEntry|channelEntry/)
 })
 
+test('models schema accepts complete image pricing at provider and model level and rejects partial or extra rates', () => {
+  const pricing = { input: 5, imageInput: 8, output: 30 }
+  const provider = (imageGeneration, model = 'model-a') => ({ providers: { p: { providerType: 'openai-ws', models: [model], imageGeneration } } })
+  const imageGeneration = { mode: 'separate', api: 'images', model: 'image-model', pricing }
+  for (const document of [provider(imageGeneration), provider({ enabled: true }, { id: 'model-a', imageGeneration })]) {
+    assert.equal(validateModelsSchema(document), true, JSON.stringify(validateModelsSchema.errors))
+    assert.equal(validateSharedModelsSchema(document), true, JSON.stringify(validateSharedModelsSchema.errors))
+  }
+  for (const bad of [{ input: 5, output: 30 }, { ...pricing, cached: 1 }, { ...pricing, output: -1 }, { ...pricing, input: '5' }]) {
+    const document = provider({ ...imageGeneration, pricing: bad })
+    assert.equal(validateModelsSchema(document), false, JSON.stringify(bad))
+    assert.equal(validateSharedModelsSchema(document), false, JSON.stringify(bad))
+  }
+})
+
 test('models schema deliberately accepts current, legacy, custom, and backend-tolerant fixtures', () => {
   const fixtures = [
     {

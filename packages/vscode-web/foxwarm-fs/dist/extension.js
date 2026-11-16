@@ -505,6 +505,17 @@ var openaiWebSearchConfig = {
   ],
   description: "Hosted web search for Responses and Anthropic Messages. Use true/false for defaults or an object for tuning."
 };
+var openaiImageGenerationPricing = {
+  type: "object",
+  required: ["input", "imageInput", "output"],
+  additionalProperties: false,
+  description: "Image model prices in USD per million tokens, used with api images. Set all three rates. Without pricing, image requests record no cost. Changing prices doesn't recalculate saved costs.",
+  properties: {
+    input: { type: "number", minimum: 0, description: "USD per million text input tokens." },
+    imageInput: { type: "number", minimum: 0, description: "USD per million reference-image input tokens." },
+    output: { type: "number", minimum: 0, description: "USD per million output tokens." }
+  }
+};
 var openaiImageGenerationOptions = {
   type: "object",
   additionalProperties: true,
@@ -519,7 +530,8 @@ var openaiImageGenerationOptions = {
     quality: { enum: ["auto", "low", "medium", "high", "xhigh", "max"], description: "Requested output quality." },
     background: { enum: ["auto", "opaque", "transparent"], description: "Requested output background." },
     outputFormat: { enum: ["png", "jpeg", "webp"], description: "Requested output image format." },
-    outputCompression: { type: "integer", minimum: 0, maximum: 100, description: "Output compression percentage where the provider supports it." }
+    outputCompression: { type: "integer", minimum: 0, maximum: 100, description: "Output compression percentage where the provider supports it." },
+    pricing: openaiImageGenerationPricing
   }
 };
 var openaiImageGenerationConfig = {

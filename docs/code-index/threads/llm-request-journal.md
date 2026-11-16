@@ -81,6 +81,8 @@ The normal journal never stores auth headers or provider-hydrated request payloa
 
 [2026-11-09, user decision] Installation-wide usage is read from a derived ledger inside the journal database rather than from Session stats or the Session catalog, because only the journal records every request purpose (normal turns, compaction, BTW, ToolScript, titles, setup checks, CLI and low-level calls) and outlives Session deletion. The ledger is written in the success result's own writer batch, not by a separate subscriber, so it cannot drift from the journal; older results enter through a resumable newest-first backfill. It stores only counters and identities already present in the journal, never prompt content. It is a reporting projection with no budgets, limits or blocking, and it never fails a result write. Removing or emptying the table loses nothing: the next backfill pass rebuilds it from attempt results.
 
+[2026-11-16, user decision] Rows name the model and protocol an attempt actually called. An Images API image request records the image model (`<providerKey>/<imageModel>`) and protocol `openai-images`, not the conversation leaf; the conversation model remains the request's `requested_model_key` ([attribution](../units/session-image-generation.md#d-image-generation-images-api-attribution)). Model keys in the ledger need not exist in the catalog.
+
 [2026-11-09, user decision] Spend belongs to the Agent that currently owns the Session, resolved when usage is read, so a Session's whole history follows it when it moves to another Agent. Deleted Sessions are attributed to the Agent recorded in their retained Archive. The ledger therefore records the Session ID, not a request-time Agent snapshot.
 
 ## Modules and units

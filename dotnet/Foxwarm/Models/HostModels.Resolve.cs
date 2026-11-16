@@ -407,6 +407,8 @@ internal sealed partial class HostModels
                         );
                     result["outputCompression"] = compression;
                 }
+                if (raw.ContainsKey("pricing"))
+                    result["pricing"] = ModelUsageCost.ValidateImagePrices(raw["pricing"]);
                 CheckImageConflict(result);
             }
             else
@@ -482,7 +484,15 @@ internal sealed partial class HostModels
     private static void CheckImagesApi(JsonObject result)
     {
         if (SessionWait.Text(result["api"]) != "images")
+        {
+            // Only the Images API call has image-model tokens to price; elsewhere the
+            // conversation model's own pricing governs, so image pricing would be ignored.
+            if (result.ContainsKey("pricing"))
+                throw new InvalidDataException(
+                    "imageGeneration.pricing requires imageGeneration.api images."
+                );
             return;
+        }
         if (SessionWait.Text(result["mode"]) is not ("separate" or "isolated"))
             throw new InvalidDataException("imageGeneration.api images requires mode separate.");
         if (SessionWait.Text(result["model"]) is null)

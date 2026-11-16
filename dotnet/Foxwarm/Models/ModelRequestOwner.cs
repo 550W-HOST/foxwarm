@@ -337,6 +337,12 @@ internal sealed class ModelRequestOwner(
                 }
                 var currentJournalRequestId = journalRequestId;
                 var currentJournalAttempt = journal is null ? 0 : ++journalAttempt;
+                // Rows name the model and API that this attempt actually calls, which is the
+                // leaf except for an Images API request.
+                var (attributedModel, attributedType) = ImageGenerationRequests.Attribution(
+                    leaf,
+                    journalPurpose
+                );
                 // Counts only, for the usage overview; never originals or placeholders.
                 LlmRedactionRecord? Redaction(string? failureKind) =>
                     redactionStats is null
@@ -345,9 +351,9 @@ internal sealed class ModelRequestOwner(
                             redactionStats,
                             sessionId.Length == 0 ? null : sessionId,
                             journalPurpose,
-                            leaf.Key,
+                            attributedModel,
                             leaf.ProviderKey,
-                            leaf.ProviderType,
+                            attributedType,
                             request is null ? null : route.Key,
                             failureKind
                         );
@@ -405,9 +411,9 @@ internal sealed class ModelRequestOwner(
                                     journal,
                                     currentJournalRequestId,
                                     currentJournalAttempt,
-                                    leaf.Key,
+                                    attributedModel,
                                     request is null ? null : route.Key,
-                                    leaf.ProviderType,
+                                    attributedType,
                                     payload,
                                     instructions,
                                     manifestCompletion
@@ -476,7 +482,7 @@ internal sealed class ModelRequestOwner(
                             ["completedAt"] = completedAt,
                             ["durationMs"] = duration,
                         };
-                        meta["modelId"] = leaf.Key;
+                        meta["modelId"] = attributedModel;
                         if (result.Usage is not null)
                             meta["usage"] = result.Usage.DeepClone();
                         if (redactionStats is { Completed: true })
