@@ -133,10 +133,9 @@ internal sealed partial class NodeClient
                         + (proxy is null ? "" : " proxy=" + MasterProxy.Safe(proxy))
                 );
                 await connection.Socket.ConnectAsync(address, stop);
-                currentConnection = connection;
                 try
                 {
-                    await connection.Send(
+                    var registration = connection.Send(
                         new JsonObject
                         {
                             ["type"] = Authenticated ? "node_register" : "pair_request",
@@ -150,6 +149,10 @@ internal sealed partial class NodeClient
                             ["requestedName"] = Authenticated ? null : requestedName,
                         }
                     );
+                    // Session requests share this send queue; Main rejects application frames
+                    // that precede registration, so publish only after registration is queued.
+                    currentConnection = connection;
+                    await registration;
                     await Receive(connection, stop);
                 }
                 finally
