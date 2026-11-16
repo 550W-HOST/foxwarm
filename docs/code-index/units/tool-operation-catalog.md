@@ -26,7 +26,7 @@ This is the reference table for [tool operation authorization](./tool-operation-
 | `session.view` | target Session (`targetSession`) | — | `session` family (an omitted target is the caller), `view_session`, external read, `create_agent` source defaults |
 | `session.send` | target Session | — | send family: aliases, `<parent>`, `<main>`; external send (canonical) |
 | `session.deliver` | target Session | — | file family: an omitted target is the caller when no channel target is given |
-| `session.create` | target Agent (`targetAgent`), Node, parent (`parent`), prospective target (`targetSession`) | `kind: session\|child\|timer\|source`, `placement: inherited\|explicit`, `runtime`, `fork` | `create_session`, `create_child_session`, a timer's creation-target probe (`kind: timer`), and `create_agent` main and missing-source Sessions |
+| `session.create` | target Agent (`targetAgent`), Node, parent (`parent`), prospective target (`targetSession`: its Agent, fixed ID when known, child relation) | `kind: session\|child\|timer\|source`, `placement: inherited\|explicit`, `runtime`, `fork` | `create_session`, `create_child_session`, a timer's creation-target probe (`kind: timer`), and `create_agent` main and missing-source Sessions |
 | `session.control` | target Session | `change: stop\|rename\|compact\|snapshot\|settings` | the per-tool `sessionId` |
 | `session.manage` | target Session, new parent, new Agent | `change: reparent\|move\|delete` | `update-parent`, `move_session`, `delete_session`, `create_agent` `convertSession` |
 | `history.read` | target Session | `mode: exact\|vector` | archive tools, exact recall, Session-scoped vector recall |
@@ -38,7 +38,7 @@ This is the reference table for [tool operation authorization](./tool-operation-
 | `task.create` | — | `assigned` | normalized `task` action and owner presence |
 | `task.list` | — | `scope` | normalized scope |
 | `task.read`, `task.update`, `task.complete`, `task.cancel` | Task (`task: {owned\|created}`) | — | Task authority |
-| `task.assign` | Task (absent on create), new owner (`targetSession`; prospective child for `create_child_session(taskId)`) | — | `ownerSessionId`; claim means the caller |
+| `task.assign` | Task (absent on create), new owner (`targetSession`; the prospective child, in its Agent, for `create_child_session(taskId)`) | — | `ownerSessionId`; claim means the caller |
 | `timer.manage` | owner Session | `change: create\|update\|delete\|list`, `kind: message\|script` | timer family; update uses the persisted candidate |
 | `channel.send` | channel target (`channel`) | — | `send_to_channel`, `send_file.channelTargetId` |
 | `user.ask` | — | `secret` | `ask_user` |
@@ -110,12 +110,12 @@ Notation:
 | `recall` | `history.read(target, mode)`, or `history.search` for Agent scope | P |
 | `get_archived_messages/blocks` | `history.read(exact)` | P |
 | `list_agents` / `skill` | `agent.list` / `agent.view` | P |
-| `create_agent` | `agent.create`; `[agent.view(inherit)]`; `[session.create(kind: session)]` for the main Session (its Node; none for `convertSession`); existing source: `[session.view(source)]`; missing source: `[session.create(kind: source)]` in its ID's Agent; tree `[env.read]` of the source Agent's and `[env.write]` of the new Agent's memory directory for `inheritMemory`; `[session.manage(move)]` for `convertSession` | P. The missing-source creation without a main Session is a known defect; its fix updates the corpus. |
+| `create_agent` | `agent.create`; `[agent.view(inherit)]`; `[session.create(kind: session)]` for the main Session (its ID, Node and runtime; none for `convertSession`); existing source: `[session.view(source)]`; missing source: `[session.create(kind: source)]` in its ID's Agent; tree `[env.read]` of the source Agent's and `[env.write]` of the new Agent's memory directory for `inheritMemory`; `[session.manage(move)]` of the source (default the caller) into the new Agent for `convertSession` | P. The missing-source creation without a main Session is a known defect; its fix updates the corpus. |
 | `set_agent_rules` / `set_agent_inherit` | `agent.manage(rules)` / `agent.manage(inherit)`, `[agent.view(inherit)]` | P. Subsumed: the `refreshSnapshots` refresh of the target Agent and inheriting Agents. |
 | `node` (one branch per action) | list: `node.list` / inspect: `node.view` / select: `node.select` / create, ensure, destroy: `node.lifecycle(action)` | P; S `node:<selected>/get_default_cwd` probe for a remote Node that advertises it (optional: a denial only omits the default cwd); R the final Node identity at the lifecycle effect (create: the Provider parent; ensure: the existing or parent identity; destroy: the Node) |
 | `copy_between_nodes` | `env.read(source)`, `env.write(target)`, both tree legs | P; R the detached transfer recheck |
 | `node_create_auth_token` / `node_bootstrap_info` | `node.trust(credential)`, `env.write(master, filePath)` | P |
-| `node_pair_list` / `node_pair_approve` | `node.trust(pending)` / `node.trust(approve)` | P |
+| `node_pair_list` / `node_pair_approve` | `node.trust(pending)` / `node.trust(approve, node)`: the ID approval assigns | P |
 | `node_remove` | `node.trust(revoke)` per subtree member | P; R one `node_remove` request per member, a clone of the arguments with that `nodeId`, assessed inside the registry mutation scope before any revocation |
 | `read_memory` / other memory writers | `env.read(master)` / `env.write(master)` per file | P |
 | `send_file` | `env.read(node, filePath)`; `channel.send` or `session.deliver` | P. Subsumed: staging. |
