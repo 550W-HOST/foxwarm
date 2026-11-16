@@ -267,7 +267,7 @@ Windows/macOS qualification is required before their channels are published;
 see the [platform evidence and limits](../../docs/code-index/units/dotnet-cli-platforms-aot.md).
 
 On the corresponding native host, with that SDK installed (the script selects it
-using an owned temporary `global.json`, without changing repository SDK policy):
+using an owned temporary `global.json` that takes precedence over the repository's .NET 10 `global.json`):
 
 ```sh
 # Use win-x64 on Windows; osx-arm64 on Apple Silicon.

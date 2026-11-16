@@ -168,7 +168,7 @@ jobs:
             packages/webui/package-lock.json
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
-          dotnet-version: '10.0.x'
+          dotnet-version: '10.0.403'
       - name: Check tag version
         if: startsWith(github.ref, 'refs/tags/')
         run: |
@@ -342,6 +342,8 @@ jobs:
           cache-dependency-path: |
             package-lock.json
             packages/webui/package-lock.json
+      # The repository's global.json keeps `dotnet` on the .NET 10 line even when the image
+      # preinstalls a newer major SDK; setup-dotnet only guarantees that 10.0.403 is present.
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: '10.0.403'
@@ -349,6 +351,8 @@ jobs:
         run: |
           test "$(uname -m)" = arm64
           xcodebuild -version
+          dotnet --list-sdks
+          dotnet --version
           printf '{"microsoft.net.sdk.macos":"26.2.10233/10.0.100"}' > "$RUNNER_TEMP/macos-workload.json"
           dotnet workload config --update-mode manifests
           dotnet workload install macos --from-rollback-file "$RUNNER_TEMP/macos-workload.json"
@@ -517,7 +521,7 @@ jobs:
           cache-dependency-path: package-lock.json
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
-          dotnet-version: '10.0.x'
+          dotnet-version: '10.0.403'
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: release-packages-linux

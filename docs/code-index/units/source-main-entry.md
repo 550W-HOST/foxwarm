@@ -31,7 +31,7 @@ For the first restart of an older PID-less source launch, the helper scans only 
 
 The public installers install [release packages](./release-packages.md), not source checkouts, and refuse an existing checkout. A source checkout selects data with the same `data_dir` pointer, written by the operator; ordinary runtime environment overrides remain non-persisting and keep the [host path contract](./host-runtime.md).
 
-Source builds need a net10.0-capable SDK and ASP.NET Core 10 runtime without a pinned local patch SDK. Linux builds need Python 3/make/G++ for the retained node-pty npm build and GCC/pty.h/libutil for the managed PTY helper. Fresh pinned Monty acquisition uses Python 3; Windows can reuse its cached native output. No optional image decoder is required.
+Source builds need a .NET 10 SDK and ASP.NET Core 10 runtime without a pinned local patch SDK: the repository `global.json` requests 10.0.100 with `rollForward: latestFeature`, so any installed 10.0.x SDK works and an SDK 11 is not selected. Linux builds need Python 3/make/G++ for the retained node-pty npm build and GCC/pty.h/libutil for the managed PTY helper. Fresh pinned Monty acquisition uses Python 3; Windows can reuse its cached native output. No optional image decoder is required.
 
 ## Supported candidate boundary
 
