@@ -211,4 +211,4 @@ Phase 1 adds `OperationAttributionTests` (attribution and decision equality) and
 
 ## Open Questions
 
-- Channel conversation identity. A `channel.send` operation names the channel target as given, while transports normalize the conversation part on delivery (a numeric chat ID parsed from its leading digits, trimmed IDs), and a webhook transport may deliver a target it can't address to its default destination. A rule naming a conversation therefore doesn't cover every spelling that reaches it. Options: each transport exposes its canonical conversation and the plan names it, or transports reject non-canonical conversation IDs; the default-destination case needs its own resource name.
+None.

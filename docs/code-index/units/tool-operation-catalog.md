@@ -40,7 +40,7 @@ This is the reference table for [tool operation authorization](./tool-operation-
 | `task.read`, `task.update`, `task.complete`, `task.cancel` | Task (`task: {owned\|created}`) | — | Task authority |
 | `task.assign` | Task (absent on create), new owner (`targetSession`; the prospective child, in its Agent, for `create_child_session(taskId)`) | — | `ownerSessionId`; claim means the caller |
 | `timer.manage` | owner Session | `change: create\|update\|delete\|list`, `kind: message\|script` | timer family; update uses the persisted candidate |
-| `channel.send` | channel target (`channel`) | — | `send_to_channel`, `send_file.channelTargetId` |
+| `channel.send` | channel target as delivered (`channel`: instance and canonical conversation) | — | `send_to_channel`, `send_file.channelTargetId` |
 | `user.ask` | — | `secret` | `ask_user` |
 | `config.read` | — | `target: tool-rules` | `explain_tool_authorization` |
 | `config.write` | — | `target: config\|models\|tool-rules` | `set_config`; `add_secret` `fromConfig` rewrites |
