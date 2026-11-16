@@ -301,6 +301,7 @@ internal sealed partial class SessionCompactor
             if (!claimed)
             {
                 entry.ReleaseProcessor();
+                entry.NotifyProcessorReleased();
                 run.PipelineDone.TrySetResult();
                 await FinishAsync(run);
             }
@@ -331,6 +332,7 @@ internal sealed partial class SessionCompactor
                 Report(error);
             }
             hosted.Entry.ReleaseProcessor();
+            hosted.Entry.NotifyProcessorReleased();
             run.PipelineDone.TrySetResult();
             await FinishAsync(run);
             hosted.PublishStateChanged();
