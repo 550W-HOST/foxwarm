@@ -99,6 +99,31 @@ public sealed partial class OperationRulesTests
     }
 
     [Fact]
+    public void Deny_and_ask_rules_naming_only_self_scoped_builtins_load_with_a_warning()
+    {
+        var policy = Yaml(
+            """
+            rules:
+            - {id: no-crop, tool: {source: builtin, name: [image_crop, node]}, action: deny}
+            - {id: ask-runs, tool: {name: {oneOf: [list_toolscript_runs]}}, action: ask}
+            - {id: allow-wait, tool: {source: builtin, name: wait}, action: allow}
+            - {id: scripts, tool: {source: builtin, name: run_script}, action: deny}
+            - {id: node-wait, tool: {source: node, name: wait}, action: deny}
+            """
+        );
+        Assert.Equal(2, policy.Warnings.Count);
+        Assert.Contains(policy.Warnings, warning => warning.Contains("`no-crop`") && warning.Contains("image_crop"));
+        Assert.DoesNotContain(policy.Warnings, warning => warning.Contains("builtin `node`"));
+        Assert.Contains(policy.Warnings, warning => warning.Contains("`ask-runs`") && warning.Contains("list_toolscript_runs"));
+        // The rule still loads and keeps deciding the capabilities it can decide.
+        Assert.Equal("no-crop", RuleId(Decide(policy, Request("builtin", "node", """{"action":"list"}"""))));
+        var layer = AgentRulePolicy.Parse(
+            JsonNode.Parse("""[{"id":"no-wait","tool":{"source":"builtin","name":"wait"},"action":"deny"}]""")
+        );
+        Assert.Contains(layer.Warnings, warning => warning.Contains("`no-wait`") && warning.Contains("wait"));
+    }
+
+    [Fact]
     public void Agent_local_layers_accept_op_rules_as_json_arrays()
     {
         var layer = AgentRulePolicy.Parse(

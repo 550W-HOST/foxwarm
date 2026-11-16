@@ -493,6 +493,33 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
         return result;
     }
 
+    // Builtins a normalized tool selector names explicitly whose every branch is self-scoped
+    // (D-auth-operation-self-exempt). Since operation authorization phase 3 no rule decides them,
+    // so a deny or ask naming one silently stopped applying; the load warning reports it.
+    private static IEnumerable<string> SelfScopedNames(JsonNode tool)
+    {
+        var requested = tool is JsonObject selected ? selected["name"] : tool;
+        var names = requested switch
+        {
+            JsonArray list => list.Select(SessionWait.Text),
+            JsonObject map => (map["oneOf"] as JsonArray ?? [])
+                .Select(SessionWait.Text)
+                .Prepend(SessionWait.Text(map["equals"])),
+            _ => [SessionWait.Text(requested)],
+        };
+        foreach (var name in names.OfType<string>().Distinct(StringComparer.Ordinal))
+        {
+            var declaration = OperationDeclarations.Find("builtin", name);
+            if (
+                declaration is { Opaque: false, Prefix: false, Branches.Count: > 0 }
+                && declaration.Name == name
+                && declaration.Branches.All(branch => branch.Self is not null)
+                && ToolAuthorizationEvaluation.ToolMatches(tool, "builtin", name, null)
+            )
+                yield return name;
+        }
+    }
+
     internal static ToolAuthorizationPolicy Normalize(JsonObject root)
     {
         var previous = warnings;
@@ -751,6 +778,11 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
                     match["args"] = arguments;
                 }
             }
+            if (effect is "deny" or "ask" && match["tool"] is { } named)
+                foreach (var self in SelfScopedNames(named))
+                    warnings?.Add(
+                        $"rule `{id}` names builtin `{self}`, which acts only on the caller's own turn, runs or history. Rules don't apply to it, so the rule has no effect on it."
+                    );
             // An inbound external principal has no Session or approver; an ask rule naming one
             // could never be satisfied.
             if (effect == "ask" && match.ContainsKey("externalId"))
