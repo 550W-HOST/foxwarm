@@ -300,7 +300,16 @@ internal static partial class OperationDeclarations
                         "targetAgent=move-agent",
                         "with.change==move"
                     ),
-                    OpIf("arg:createAgent", "agent.create", "targetAgent=arg:newAgentName")
+                    OpIf("arg:createAgent", "agent.create", "targetAgent=arg:newAgentName"),
+                    // A new Agent may start with a copy of the moved Session's Agent memory.
+                    OpIf("move-memory", "env.read", "node==master", "path=move-memory-source") with
+                    {
+                        Tree = true,
+                    },
+                    OpIf("move-memory", "env.write", "node==master", "path=move-memory-target") with
+                    {
+                        Tree = true,
+                    }
                 ),
             ],
             [Primary()]
@@ -352,9 +361,10 @@ internal static partial class OperationDeclarations
                     Op("agent.create", "targetAgent=arg:agentName"),
                     OpIf("arg:inherit", "agent.view", "targetAgent=arg:inherit"),
                     OpIf(
-                        "default-true:createMainSession",
+                        "agent-main-created",
                         "session.create",
                         "targetAgent=arg:agentName",
+                        "node=agent-main-node",
                         "with.kind==session"
                     ),
                     OpIf(
@@ -365,12 +375,19 @@ internal static partial class OperationDeclarations
                     OpIf(
                         "source-missing",
                         "session.create",
-                        "targetAgent=arg:agentName",
+                        "targetAgent=source-agent",
+                        "node=source-node",
                         "targetSession=arg:sourceSessionId",
                         "with.kind==source"
                     ),
-                    OpIf("arg:inheritMemory", "env.read", "node==master", "path=memory-source"),
-                    OpIf("arg:inheritMemory", "env.write", "node==master", "path=memory-target"),
+                    OpIf("arg:inheritMemory", "env.read", "node==master", "path=memory-source") with
+                    {
+                        Tree = true,
+                    },
+                    OpIf("arg:inheritMemory", "env.write", "node==master", "path=memory-target") with
+                    {
+                        Tree = true,
+                    },
                     OpIf(
                         "arg:convertSession",
                         "session.manage",
@@ -450,8 +467,8 @@ internal static partial class OperationDeclarations
             "builtin:copy_between_nodes",
             [
                 Call(
-                    OpEach("path:sourcePath", "env.read", Path),
-                    OpEach("path:targetPath", "env.write", Path)
+                    OpEach("path:sourcePath", "env.read", Path) with { Tree = true },
+                    OpEach("path:targetPath", "env.write", Path) with { Tree = true }
                 ),
             ],
             [Primary(), Retained("transfer", "same", "recheck by the detached transfer")]

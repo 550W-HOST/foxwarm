@@ -161,14 +161,20 @@ internal sealed class ToolApprovalScope(SessionOwner owner)
     private static JsonArray? Facts<T>(IEnumerable<T>? items, Func<T, JsonNode?> project) =>
         items?.ToArray() is { Length: > 0 } list ? new(list.Select(project).ToArray()) : null;
 
-    private static JsonObject PathFact(AuthorizationPath path) =>
-        new()
+    private static JsonObject PathFact(AuthorizationPath path)
+    {
+        var fact = new JsonObject
         {
             ["arg"] = path.Arg,
             ["raw"] = path.Raw,
             ["resolved"] = path.Resolved,
             ["node"] = path.Node,
         };
+        // Only copy legs carry it, so other fingerprints are unchanged.
+        if (path.Tree)
+            fact["tree"] = true;
+        return fact;
+    }
 
     private static JsonObject TargetFact(AuthorizationTarget target) =>
         new()

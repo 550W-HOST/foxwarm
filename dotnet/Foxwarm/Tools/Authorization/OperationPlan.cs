@@ -29,6 +29,10 @@ internal sealed record PlanContext(string CurrentNode)
     // default, the installation default, then master); null when unknown.
     internal Func<string, string?>? AgentDefaultNode { get; init; }
 
+    // The Node a new Agent's main Session starts on when the call names no default Node: the
+    // installation default, else master.
+    internal string? NewAgentDefaultNode { get; init; }
+
     // The effective working directory of an exec without cwd on master; null when unknown.
     internal Func<AuthorizationPath?>? DefaultExecCwd { get; init; }
 }
@@ -365,6 +369,17 @@ internal sealed partial record OperationPlan(
         private bool Unknown(params string[] names) =>
             known is not null && names.Any(name => !known.Contains(name));
 
+        // The Agent of create_agent's selected source Session: an existing Session's Agent, or the
+        // Agent its ID names when the call creates it.
+        private string? SourceAgent()
+        {
+            if (Text("sourceSessionId") is not string text)
+                return null;
+            var id = SessionGoal.Trim(text);
+            return context.SessionAgent?.Invoke(id)
+                ?? (Foxwarm.Sessions.SessionIdentity.IsValid(id) ? Foxwarm.Sessions.SessionIdentity.Agent(id) : null);
+        }
+
         private string? Text(string name) =>
             SessionWait.Text(args[name]) is string text && SessionGoal.Trim(text).Length > 0
                 ? text
@@ -439,6 +454,22 @@ internal sealed partial record OperationPlan(
                 case "model-request":
                     // Known only when the script calls the model.
                     return null;
+                case "agent-main-created":
+                    // create_agent creates a main Session unless told not to; a conversion moves
+                    // the source Session in as main instead.
+                    if (Holds("default-true:createMainSession") is not bool main)
+                        return null;
+                    if (!main)
+                        return false;
+                    return args["convertSession"] switch
+                    {
+                        null => true,
+                        JsonValue value when value.TryGetValue<bool>(out var convert) => !convert,
+                        _ => null,
+                    };
+                case "move-memory":
+                    // move_session copies memory only into an Agent it creates.
+                    return Present("createAgent") && Present("createAgentInheritMemory");
                 case "source-exists":
                 case "source-missing":
                     if (Text("sourceSessionId") is not string source)
@@ -596,13 +627,40 @@ internal sealed partial record OperationPlan(
                     return true;
                 case "memory-source":
                 {
-                    // create_agent copies the memory of the source Session's Agent, else main's.
-                    var agent = Text("sourceSessionId") is string source
-                        ? context.SessionAgent?.Invoke(SessionGoal.Trim(source))
-                        : "main";
+                    // create_agent copies the memory of the selected source Session's Agent,
+                    // else the caller's.
+                    var agent = Text("sourceSessionId") is string
+                        ? SourceAgent()
+                        : facts?.Agent;
                     value = agent is null ? null : context.MemoryDirectory?.Invoke(agent);
                     return value is not null;
                 }
+                case "move-memory-source":
+                {
+                    var moved = Text("sessionId")?.Trim() ?? facts?.Session;
+                    var agent = moved is null ? null : context.SessionAgent?.Invoke(moved);
+                    value = agent is null ? null : context.MemoryDirectory?.Invoke(agent);
+                    return value is not null;
+                }
+                case "move-memory-target":
+                    value = Text("newAgentName") is string newAgent
+                        ? context.MemoryDirectory?.Invoke(newAgent.Trim())
+                        : null;
+                    return value is not null;
+                case "agent-main-node":
+                    // The new Agent's default Node, else the installation default, else master.
+                    value = Text("defaultNode")?.Trim() is { Length: > 0 } defaultNode
+                        ? defaultNode
+                        : context.NewAgentDefaultNode;
+                    return value is not null;
+                case "source-agent":
+                    value = SourceAgent();
+                    return value is not null;
+                case "source-node":
+                    value = SourceAgent() is string sourceAgent
+                        ? context.AgentDefaultNode?.Invoke(sourceAgent)
+                        : null;
+                    return value is not null;
                 case "memory-target":
                     value = Text("agentName") is string name
                         ? context.MemoryDirectory?.Invoke(name.Trim())
@@ -774,7 +832,7 @@ internal sealed partial record OperationPlan(
                         ["path"] = path.Resolved ?? path.Raw,
                         ["node"] = path.Node,
                     };
-                    yield return Build(template, item) with { Path = path };
+                    yield return Build(template, item) with { Path = path with { Tree = template.Tree } };
                 }
                 yield break;
             }
@@ -852,7 +910,7 @@ internal sealed partial record OperationPlan(
                         ?? new AuthorizationPath(
                             "path",
                             text,
-                            template.Resources["path"].StartsWith("memory-", StringComparison.Ordinal)
+                            template.Resources["path"].Contains("memory-", StringComparison.Ordinal)
                                 ? text
                                 : null,
                             SessionWait.Text(resources["node"]) ?? "master"
@@ -875,6 +933,8 @@ internal sealed partial record OperationPlan(
                 && facts?.OwnedSecrets?.Contains(secret, StringComparer.Ordinal) == true
             )
                 operation = operation with { SecretOwned = true };
+            if (template.Tree && operation.Path is { } tree)
+                operation = operation with { Path = tree with { Tree = true } };
             return operation;
         }
 

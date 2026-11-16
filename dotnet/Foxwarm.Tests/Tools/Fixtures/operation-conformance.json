@@ -1597,6 +1597,10 @@
    "context": {
     "sessionExists": {
      "gamma-src": false
+    },
+    "newAgentDefaultNode": "master",
+    "agentDefaultNode": {
+     "main": "master"
     }
    },
    "expected": {
@@ -1612,7 +1616,8 @@
      {
       "op": "session.create",
       "resources": {
-       "targetAgent": "gamma"
+       "targetAgent": "gamma",
+       "node": "master"
       },
       "with": {
        "kind": "session"
@@ -1622,7 +1627,8 @@
      {
       "op": "session.create",
       "resources": {
-       "targetAgent": "gamma",
+       "targetAgent": "main",
+       "node": "master",
        "targetSession": "gamma-src"
       },
       "with": {
@@ -1663,7 +1669,8 @@
      {
       "op": "session.create",
       "resources": {
-       "targetAgent": "gamma"
+       "targetAgent": "gamma",
+       "node": "master"
       },
       "with": {
        "kind": "session"
@@ -1688,6 +1695,12 @@
     },
     "evaluated": {
      "primary": "primary"
+    }
+   },
+   "context": {
+    "newAgentDefaultNode": "master",
+    "agentDefaultNode": {
+     "main": "master"
     }
    }
   },

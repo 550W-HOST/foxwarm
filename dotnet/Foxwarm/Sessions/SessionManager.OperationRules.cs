@@ -46,11 +46,12 @@ internal sealed partial class SessionManager
             SessionAgent = id => AuthorizationTarget(id)?.Agent,
             DefaultCwdProbe = DefaultCwdProbe,
             SecretsUnknown = assessment?.SecretsUnknown == true,
+            // Where an Agent's memory lives, also for an Agent the call creates.
             MemoryDirectory = agent =>
             {
                 try
                 {
-                    return agents.MemoryDirectory(agent);
+                    return Path.Combine(agents.SourceDirectory(agent), "memory");
                 }
                 catch (Exception error) when (error is InvalidDataException or ArgumentException)
                 {
@@ -69,6 +70,7 @@ internal sealed partial class SessionManager
                     return null;
                 }
             },
+            NewAgentDefaultNode = agents.InstallDefaultNode ?? "master",
             DefaultExecCwd = files is null
                 ? null
                 : () =>

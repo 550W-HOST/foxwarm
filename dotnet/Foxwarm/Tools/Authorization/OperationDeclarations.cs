@@ -30,7 +30,10 @@ internal sealed record OperationTemplate(
     IReadOnlyDictionary<string, string> Resources,
     IReadOnlyDictionary<string, string> With,
     string? Each = null,
-    string? When = null
+    string? When = null,
+    // A leg of a copy or move: its path is a tree (a directory with everything it contains), and
+    // the read of the source and the write of the target are declared together.
+    bool Tree = false
 )
 {
     internal bool Conditional => When is not null;

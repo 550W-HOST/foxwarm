@@ -56,6 +56,8 @@ internal sealed partial record OperationPlan
             "default-cwd-probe" => ["action", "nodeId"],
             "legacy-node" => ["edits", "replaceAll"],
             "source-exists" or "source-missing" => ["sourceSessionId"],
+            "agent-main-created" => ["createMainSession", "convertSession"],
+            "move-memory" => ["createAgent", "createAgentInheritMemory"],
             _ => [],
         };
     }
@@ -87,6 +89,11 @@ internal sealed partial record OperationPlan
         {
             "memory-source" => ["sourceSessionId"],
             "memory-target" => ["agentName"],
+            "move-memory-source" => ["sessionId"],
+            "move-memory-target" => ["newAgentName"],
+            "agent-main-node" => ["defaultNode"],
+            "source-agent" => ["sourceSessionId"],
+            "source-node" => ["sourceSessionId"],
             "node-target" or "node-target?" => ["nodeId", "parentNode", "providerId"],
             "provider-node" => ["nodeId", "providerId"],
             "target-session" or "timer-owner" => ["sessionId"],
@@ -148,9 +155,17 @@ internal sealed partial record OperationPlan
             case "session-scope":
                 return ("request", []);
             case "memory-source":
+            case "move-memory-source":
                 return ("Agent memory directory", ["SessionAgent", "MemoryDirectory"]);
             case "memory-target":
+            case "move-memory-target":
                 return ("Agent memory directory", ["MemoryDirectory"]);
+            case "agent-main-node":
+                return ("new Agent default Node", ["NewAgentDefaultNode"]);
+            case "source-agent":
+                return ("source Session's Agent", ["SessionAgent"]);
+            case "source-node":
+                return ("source Session's Agent default Node", ["SessionAgent", "AgentDefaultNode"]);
             case "child-node":
             case "session-node":
                 return ("creation Node default", ["AgentDefaultNode"]);

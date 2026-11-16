@@ -388,7 +388,7 @@ internal static class OperationRules
                     ? Of(ToolAuthorizationEvaluation.NodeMatches(matcher, node, request))
                     : OperationMatch.Unknown;
             case "path":
-                return Path(matcher.AsObject(), operation, request);
+                return Path(matcher.AsObject(), operation, request, restrictive);
             case "channel":
             case "nodeTool":
             case "model":
@@ -469,11 +469,14 @@ internal static class OperationRules
     }
 
     // `within` holds when the path is on master inside the root; `notWithin` when it is not.
-    // Agent path variables never match for external principals.
+    // Agent path variables never match for external principals. A tree path (a copy leg) holds
+    // a selector only when every path in it does. When only part of the tree does (the
+    // selector's root lies inside it), a restrictive rule still applies and a grant does not.
     private static OperationMatch Path(
         JsonObject matcher,
         AuthorizationOperation operation,
-        ToolAuthorizationRequest request
+        ToolAuthorizationRequest request,
+        bool restrictive
     )
     {
         if (operation.Path is not { } path)
@@ -483,8 +486,18 @@ internal static class OperationRules
             var root = ToolAuthorizationEvaluation.PolicyRoot(SessionWait.Text(rootValue)!, request);
             if (root is null)
                 return OperationMatch.No;
-            var within = path.Node == "master" && ToolAuthorizationEvaluation.Within(path.Resolved, root);
-            if (name == "within" ? !within : within)
+            var master = path.Node == "master";
+            var within = master && ToolAuthorizationEvaluation.Within(path.Resolved, root);
+            var holds = name == "within" ? within : !within;
+            var partial =
+                !within
+                && path.Tree
+                && master
+                && path.Resolved is { } resolved
+                && ToolAuthorizationEvaluation.Within(root, System.IO.Path.GetFullPath(resolved));
+            if (!holds && !(partial && restrictive))
+                return OperationMatch.No;
+            if (holds && partial && !restrictive)
                 return OperationMatch.No;
         }
         return OperationMatch.Yes;

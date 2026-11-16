@@ -21,6 +21,77 @@ public sealed partial class OperationRulesTests
         Assert.Empty(missing);
     }
 
+    // Capabilities whose handlers copy or move content between paths (memory copies in
+    // create_agent and move_session, copy_between_nodes). Each declares a copy as a tree read of
+    // what it copies plus a tree write of its destination, under the same condition, and a tree
+    // leg anywhere else has its pair.
+    private static readonly string[] Copies =
+    [
+        "builtin:create_agent",
+        "builtin:move_session",
+        "builtin:copy_between_nodes",
+    ];
+
+    [Fact]
+    public void Every_copy_declares_its_read_and_write_legs()
+    {
+        var failures = new List<string>();
+        foreach (var declaration in OperationDeclarations.Capabilities)
+        foreach (var branch in declaration.Branches)
+        {
+            var legs = branch.Operations.Where(template => template.Tree).ToArray();
+            foreach (var group in legs.GroupBy(template => template.When ?? ""))
+            {
+                if (!group.Any(template => template.Op == "env.read"))
+                    failures.Add($"{declaration.Capability} {branch.Name} when '{group.Key}': no read leg");
+                if (!group.Any(template => template.Op == "env.write"))
+                    failures.Add($"{declaration.Capability} {branch.Name} when '{group.Key}': no write leg");
+                foreach (var leg in group.Where(template => template.Op is not ("env.read" or "env.write")))
+                    failures.Add($"{declaration.Capability} {branch.Name}: tree on {leg.Op}");
+            }
+            if (Copies.Contains(declaration.Capability) && legs.Length == 0)
+                failures.Add($"{declaration.Capability} {branch.Name}: copy without legs");
+        }
+        foreach (var capability in Copies)
+            Assert.Contains(OperationDeclarations.Capabilities, declaration => declaration.Capability == capability);
+        Assert.Empty(failures);
+    }
+
+    // A copy leg is the directory and everything in it: a restriction on any path inside
+    // applies, and a grant applies only when it covers the whole tree.
+    [Fact]
+    public void Copy_legs_match_path_selectors_as_trees()
+    {
+        AuthorizationOperation Read(string path, bool tree) =>
+            new(
+                "env.read",
+                new JsonObject { ["node"] = "master", ["path"] = path },
+                new JsonObject()
+            )
+            {
+                Path = new AuthorizationPath("sourcePath", path, path, "master", tree),
+            };
+        var request = Request("builtin", "copy_between_nodes", "{}");
+        OperationMatch Match(string rule, AuthorizationOperation operation) =>
+            OperationRules.Match(
+                (JsonObject)Yaml("rules:\n- " + rule + "\n").Value["rules"]![0]!,
+                operation,
+                request,
+                rule.Contains("deny")
+            );
+        const string DenyInside = "{op: env.read, path: {within: /synthetic/tree/secret}, action: deny}";
+        const string GrantInside = "{op: env.read, path: {within: /synthetic/tree/open}, action: allow}";
+        const string GrantWhole = "{op: env.read, path: {within: /synthetic}, action: allow}";
+        const string DenyOutside = "{op: env.read, path: {notWithin: /synthetic/tree/open}, action: deny}";
+        Assert.Equal(OperationMatch.Yes, Match(DenyInside, Read("/synthetic/tree", true)));
+        Assert.Equal(OperationMatch.No, Match(DenyInside, Read("/synthetic/tree", false)));
+        Assert.Equal(OperationMatch.No, Match(GrantInside, Read("/synthetic/tree", true)));
+        Assert.Equal(OperationMatch.Yes, Match(GrantWhole, Read("/synthetic/tree", true)));
+        Assert.Equal(OperationMatch.Yes, Match(DenyOutside, Read("/synthetic/tree", true)));
+        Assert.Equal(OperationMatch.No, Match(DenyOutside, Read("/synthetic/tree/open/a", true)));
+        Assert.Equal(OperationMatch.No, Match(DenyInside, Read("/synthetic/other", true)));
+    }
+
     // An exec without cwd runs in the Session's directory on master, known only with the
     // caller's workspace; elsewhere, and for inbound callers, no path selector can match it.
     [Fact]

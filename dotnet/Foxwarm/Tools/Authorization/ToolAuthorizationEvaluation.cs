@@ -15,7 +15,9 @@ internal sealed record AuthorizationPath(
     string Arg,
     string Raw,
     string? Resolved,
-    string Node = "master"
+    string Node = "master",
+    // A copy leg: the directory and everything in it, so a rule about any path inside applies.
+    bool Tree = false
 );
 
 internal sealed record ToolAuthorizationRequest(

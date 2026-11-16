@@ -98,6 +98,7 @@ public sealed partial class OperationDeclarationCoverageTests
             SessionExists = sessions is null ? null : id => sessions[id]?.GetValue<bool>(),
             DefaultCwdProbe = cwdProbes is null ? null : cwdProbes.Contains,
             SecretsUnknown = context["secretsUnknown"]?.GetValue<bool>() == true,
+            NewAgentDefaultNode = context["newAgentDefaultNode"]?.GetValue<string>(),
             AgentDefaultNode = context["agentDefaultNode"] is JsonObject defaults
                 ? agent => defaults[agent]?.GetValue<string>()
                 : null,
