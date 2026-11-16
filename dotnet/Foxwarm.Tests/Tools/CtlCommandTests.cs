@@ -184,6 +184,47 @@ public sealed class CtlCommandTests
     }
 
     [Fact]
+    public void Memory_commands_take_an_Agent_flag_that_fills_agentName()
+    {
+        foreach (var (command, tool) in new[]
+        {
+            ("memory read notes.md", "read_memory"),
+            ("memory write notes.md body", "write_memory"),
+            ("memory edit notes.md --old-text a --new-text b", "edit_memory"),
+            ("memory delete notes.md", "delete_memory"),
+            ("memory patch @patch", "apply_patch_memory"),
+        })
+        {
+            JsonObject? Values() =>
+                command.Contains('@')
+                    ? new JsonObject { ["patch"] = "*** Begin Patch\n*** End Patch" }
+                    : null;
+            Assert.False(Target(command, Values()).Args.ContainsKey("agentName"));
+            foreach (var spelling in new[] { "--agent beta", "--agent=beta" })
+            {
+                var parsed = CtlParser.Parse(Args(command + " " + spelling, Values()));
+                Assert.True(parsed is CtlTarget, command + " " + spelling + ": " + (parsed as CtlError)?.Message);
+                var target = (CtlTarget)parsed;
+                Assert.Equal(tool, target.Name);
+                Assert.Equal("beta", target.Args["agentName"]!.GetValue<string>());
+            }
+        }
+        Assert.Contains("Unknown option `--agent-name`", Error("memory edit a --old-text a --new-text b --agent-name beta").Message);
+        // The value is passed verbatim; the handler decides whether the name is canonical.
+        Assert.Equal(" beta ", Target("memory read a.md --agent ' beta '").Args["agentName"]!.GetValue<string>());
+        Assert.Contains("--agent", Error("memory read a.md --agent").Message);
+    }
+
+    [Fact]
+    public void Memory_help_and_usage_list_the_Agent_flag()
+    {
+        var visibleAll = new Func<CtlCommand, bool>(_ => true);
+        foreach (var verb in new[] { "read", "write", "edit", "delete", "patch" })
+            Assert.Contains("[--agent ", CtlHelp.Render(new("memory", verb), visibleAll)!);
+        Assert.Contains("[--agent ", CtlHelp.Error(Error("memory read"), visibleAll));
+    }
+
+    [Fact]
     public void Help_forms_and_unknown_commands_resolve_to_help_or_usage()
     {
         Assert.Equal(new CtlHelpRequest(null, null), CtlParser.Parse(Args("")));

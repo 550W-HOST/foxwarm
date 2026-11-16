@@ -2248,7 +2248,7 @@
     {
       "path": "memory read",
       "summary": "Read a memory file.",
-      "help": "The file is in this Agent's memory directory on master. Use memory-relative paths such as MEMORY.md or notes/project.md.",
+      "help": "The file is in this Agent's memory directory on master, or in the memory directory of the Agent named by `--agent`. Use memory-relative paths such as MEMORY.md or notes/project.md.",
       "ingress": [
         "model"
       ],
@@ -2262,7 +2262,7 @@
           "type": "string",
           "kind": "positional",
           "required": true,
-          "help": "Path relative to this Agent's memory directory, without a memory/ prefix."
+          "help": "Path relative to the memory directory, without a memory/ prefix."
         },
         {
           "name": "startLine",
@@ -2275,13 +2275,20 @@
           "type": "number",
           "kind": "flag",
           "help": "Last line to read, counting from 1. Omit or use 0 to read through the end."
+        },
+        {
+          "name": "agent",
+          "arg": "agentName",
+          "type": "string",
+          "kind": "flag",
+          "help": "Exact name of the Agent whose memory to use. Defaults to this Agent."
         }
       ]
     },
     {
       "path": "memory write",
       "summary": "Create a memory file.",
-      "help": "Existing files are not overwritten; use `ctl memory edit` to modify one. Top-level .md files in this directory are part of the system prompt of every Session of this Agent and of Agents that inherit it.",
+      "help": "Creates the file in this Agent's memory directory on master, or in the memory directory of the Agent named by `--agent`. Existing files are not overwritten; use `ctl memory edit` to modify one. Top-level .md files in a memory directory are part of the system prompt of every Session of that Agent and of Agents that inherit it.",
       "ingress": [
         "model"
       ],
@@ -2295,7 +2302,7 @@
           "type": "string",
           "kind": "positional",
           "required": true,
-          "help": "Path relative to this Agent's memory directory, without a memory/ prefix."
+          "help": "Path relative to the memory directory, without a memory/ prefix."
         },
         {
           "name": "content",
@@ -2303,13 +2310,20 @@
           "kind": "positional",
           "required": true,
           "help": "Complete file contents."
+        },
+        {
+          "name": "agent",
+          "arg": "agentName",
+          "type": "string",
+          "kind": "flag",
+          "help": "Exact name of the Agent whose memory to use. Defaults to this Agent."
         }
       ]
     },
     {
       "path": "memory edit",
       "summary": "Replace one exact occurrence of text in a memory file.",
-      "help": "Top-level .md files in this directory are part of the system prompt of every Session of this Agent and of Agents that inherit it.",
+      "help": "Edits the file in this Agent's memory directory on master, or in the memory directory of the Agent named by `--agent`. Top-level .md files in a memory directory are part of the system prompt of every Session of that Agent and of Agents that inherit it.",
       "ingress": [
         "model"
       ],
@@ -2323,7 +2337,7 @@
           "type": "string",
           "kind": "positional",
           "required": true,
-          "help": "Path relative to this Agent's memory directory, without a memory/ prefix."
+          "help": "Path relative to the memory directory, without a memory/ prefix."
         },
         {
           "name": "oldText",
@@ -2338,12 +2352,20 @@
           "kind": "flag",
           "required": true,
           "help": "Replacement text."
+        },
+        {
+          "name": "agent",
+          "arg": "agentName",
+          "type": "string",
+          "kind": "flag",
+          "help": "Exact name of the Agent whose memory to use. Defaults to this Agent."
         }
       ]
     },
     {
       "path": "memory delete",
       "summary": "Delete a memory file.",
+      "help": "Deletes the file from this Agent's memory directory on master, or from the memory directory of the Agent named by `--agent`.",
       "ingress": [
         "model"
       ],
@@ -2357,14 +2379,21 @@
           "type": "string",
           "kind": "positional",
           "required": true,
-          "help": "Path relative to this Agent's memory directory, without a memory/ prefix."
+          "help": "Path relative to the memory directory, without a memory/ prefix."
+        },
+        {
+          "name": "agent",
+          "arg": "agentName",
+          "type": "string",
+          "kind": "flag",
+          "help": "Exact name of the Agent whose memory to use. Defaults to this Agent."
         }
       ]
     },
     {
       "path": "memory patch",
       "summary": "Change memory files with an apply_patch patch.",
-      "help": "Adds, modifies or deletes files in this Agent's memory directory on master. Paths in patch headers are relative to the memory directory; a memory/ prefix is also accepted. Top-level .md files in this directory are part of the system prompt of every Session of this Agent and of Agents that inherit it.",
+      "help": "Adds, modifies or deletes files in this Agent's memory directory on master, or in the memory directory of the Agent named by `--agent`. Paths in patch headers are relative to the memory directory; a memory/ prefix is also accepted. Top-level .md files in a memory directory are part of the system prompt of every Session of that Agent and of Agents that inherit it.",
       "ingress": [
         "model"
       ],
@@ -2379,6 +2408,13 @@
           "kind": "positional",
           "required": true,
           "help": "Patch text using the same format as apply_patch."
+        },
+        {
+          "name": "agent",
+          "arg": "agentName",
+          "type": "string",
+          "kind": "flag",
+          "help": "Exact name of the Agent whose memory to use. Defaults to this Agent."
         }
       ]
     },

@@ -35,6 +35,8 @@ User commands (phase B). A user command has a `user` object naming its handler a
 
 Registry copy uses ctl spellings: options as `--kebab-case`, positionals as `<kebab-case>` (usage lines and parse errors render positional placeholders the same way, from the parameter name; parameter identities and target argument names stay camelCase), other commands as `` `ctl noun verb` ``, and Foxwarm concept names capitalized (Session, Agent, Task, Node, Provider). A command's help adds to its summary rather than repeating it.
 
+A parameter's flag spelling is its kebab-cased name, so a flag that differs from its target argument names the argument with `arg`: the `memory` commands' `--agent` fills `agentName` ([D-memory-tools-target-agent](./tools-registry.md#d-memory-tools-target-agent)).
+
 Every registered builtin that is not natively declared has a specific command (user, 2026-11-15; `start_toolscript_run` is `script start`). `tool call builtin:<name>` still resolves, for tests and generic dispatch, but help, search, errors and hints never suggest it. Nouns: `session`, `history`, `agent`, `node`, `memory`, `skill`, `file`, `image`, `artifact`, `channel`, `timer`, `script`, `config`, `secret`, `mcp`, `tool`.
 
 ## Grammar

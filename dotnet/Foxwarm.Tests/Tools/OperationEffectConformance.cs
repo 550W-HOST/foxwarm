@@ -535,7 +535,24 @@ internal static class OperationEffectConformance
     )
     {
         var observedRoots = roots.Select(AuthorizationPaths.CanonicalPotential).ToArray();
-        var assessment = await assess(@case.Tool, (JsonObject)@case.Args.DeepClone());
+        AuthorizationAssessment assessment;
+        try
+        {
+            assessment = await assess(@case.Tool, (JsonObject)@case.Args.DeepClone());
+        }
+        catch (InvalidDataException) when (@case.MayReject)
+        {
+            // Facts the handler's own resolution refuses (a non-canonical Agent name) fail the
+            // assessment before the call runs; the call must then fail without effect as well.
+            var refusedBefore = Take(manager, @case.Tasks ?? [], observedRoots, secrets);
+            var refused = await perform(@case.Tool, (JsonObject)@case.Args.DeepClone());
+            var refusedEffects = Diff(refusedBefore, Take(manager, @case.Tasks ?? [], observedRoots, secrets), manager);
+            var refusal = new List<string>();
+            if (refused?["error"] is null)
+                refusal.Add("a call whose assessment was refused succeeded");
+            refusal.AddRange(refusedEffects.Select(effect => $"refused call left {effect.Op} {effect.Resources.ToJsonString()}"));
+            return refusal;
+        }
         IReadOnlyList<AuthorizationOperation> declared = assessment.Request.Operations ?? [];
         // Operations authorized by a separate probe join the plan, derived before the call.
         if (@case.Probes is { } probes)

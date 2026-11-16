@@ -65,6 +65,15 @@ Resolved, authorized top-level dispatch supplies runtime name/source/server/Node
 
 `SessionToolExecutor.CompleteBatchAsync` reads errors from the complete committed tool row and settles explicit waits, handoff waits and finish requests under the [batch-error contract](../behaviors/execution-and-waiting.md#explicit-wait-ends-an-otherwise-finished-turn). Direct, unified and trusted ToolScript effects share this settlement; pending controls are consumed even when an error suppresses their terminal action.
 
+### D-memory-tools-target-agent
+
+**User decision (2026-11-16).** `read_memory`, `write_memory`, `edit_memory`, `delete_memory` and `apply_patch_memory` take an optional `agentName` (`ctl memory ... --agent <name>`) that selects another Agent's memory directory on master. Omitted or null means the caller's Agent.
+
+- `MemoryTools.TargetAgent` resolves it for the handler and for `MemoryTools.AuthorizationFacts`, so the path a rule decides is the path the handler touches. The name is used verbatim, like `create_child_session`'s `agentName`: it must be a canonical Agent name (`AgentCatalog.ValidateName`) of an existing Agent, and a padded name is rejected. The file path stays relative to that memory directory, with the existing traversal and symbolic-link rejection.
+- Authorization is the one of a direct read or write of that file: `env.read(master)` or `env.write(master)` on the canonical path under the target's memory directory (the directory `AgentCatalog.MemoryCopyRoot` names), with no `agent.manage` requirement and no extra restriction. Version-1 rules naming the memory tools keep matching, and path selectors see the target path.
+- A writer's reply ends with ` (Agent <name>)` when the call named an Agent; a call without `agentName` replies as before. Read output is unchanged. A change to a top-level `.md` file reaches that Agent's Sessions and every Agent inheriting it at their next snapshot rebuild, as for the caller's own memory.
+- There is no `memory list` command; reading a directory path lists it.
+
 ### Tool activity summaries
 
 Model-facing `exec` and `run_script` schemas require `summary` describing the action/purpose. It stays in ordinary call arguments; the execution handlers do not require it, preserving existing Node, MCP and ToolScript automation. `LocalExecManager` accepts this additional display argument without changing its command/cwd/timeout semantics. Discovery and direct model definitions expose the same parameter, including current CLI Node capabilities. Older Node schemas and persisted calls remain readable.

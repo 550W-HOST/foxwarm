@@ -47,7 +47,7 @@ Starter files live in [`references/memory-templates/`](references/memory-templat
 
 ## Routine memory edits
 
-Use the memory tools for the current Agent. For another Agent, use ordinary file tools on its `memory/` directory if your permissions allow, or ask the user.
+Use the memory tools for the current Agent. For another Agent, add `--agent <name>` to the `ctl memory` command (`agentName` in ToolScript calls of the memory tools); it needs the same permission as reading or writing that file directly. A change to a top-level `.md` file reaches that Agent's Sessions, and every Agent inheriting it, when their prompts are next rebuilt.
 
 An edit made in this conversation normally needs no snapshot refresh: its content is already here. If another Session needs the change now, send it a short message with the delta. Refresh an exact Session only when it must rebuild its prompt immediately or the user asks; do not broadcast refreshes.
 

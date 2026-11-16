@@ -138,6 +138,31 @@ public sealed partial class ToolAuthorizationEffectsTests
         ["edit_memory"] = _ =>
             Ready(new("", "edit_memory", Obj("""{"filePath":"differential.md","oldText":"memory","newText":"edited"}"""))),
         ["delete_memory"] = _ => Ready(new("", "delete_memory", Obj("""{"filePath":"nested/deep.md"}"""))),
+        ["apply_patch_memory"] = _ =>
+            Ready(
+                new(
+                    "",
+                    "apply_patch_memory",
+                    Obj("""{"input":"*** Begin Patch\n*** Add File: patched/new.md\n+patched\n*** Update File: differential.md\n@@\n-memory of alpha\n+patched\n*** End Patch"}""")
+                )
+            ),
+        // Another Agent's memory (the Agent argument, verbatim; padded variants are rejected).
+        ["write_memory other Agent"] = _ =>
+            Ready(new("", "write_memory", Obj("""{"agentName":"beta","filePath":"notes/new.md","content":"new"}"""))),
+        ["write_memory own Agent named"] = _ =>
+            Ready(new("", "write_memory", Obj("""{"agentName":"alpha","filePath":"notes/new.md","content":"new"}"""))),
+        ["edit_memory other Agent"] = _ =>
+            Ready(new("", "edit_memory", Obj("""{"agentName":"beta","filePath":"differential.md","oldText":"memory","newText":"edited"}"""))),
+        ["delete_memory other Agent"] = _ =>
+            Ready(new("", "delete_memory", Obj("""{"agentName":"beta","filePath":"nested/deep.md"}"""))),
+        ["apply_patch_memory other Agent"] = _ =>
+            Ready(
+                new(
+                    "",
+                    "apply_patch_memory",
+                    Obj("""{"agentName":"beta","input":"*** Begin Patch\n*** Add File: patched/new.md\n+patched\n*** Delete File: nested/deep.md\n*** End Patch"}""")
+                )
+            ),
         ["create_session parent is caller"] = world =>
             Ready(
                 new(

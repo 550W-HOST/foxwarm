@@ -117,7 +117,7 @@ Notation:
 | `node_create_auth_token` / `node_bootstrap_info` | `node.trust(credential)`, `env.write(master, filePath)` | P |
 | `node_pair_list` / `node_pair_approve` | `node.trust(pending)` / `node.trust(approve, node)`: the ID approval assigns | P |
 | `node_remove` | `node.trust(revoke)` per subtree member | P; R one `node_remove` request per member, a clone of the arguments with that `nodeId`, assessed inside the registry mutation scope before any revocation |
-| `read_memory` / other memory writers | `env.read(master)` / `env.write(master)` per file | P |
+| `read_memory` / other memory writers | `env.read(master)` / `env.write(master)` per file, under the memory directory of the Agent `agentName` names (the caller's when omitted; `MemoryTools.TargetAgent`, shared with the handler) | P. Padded `agentName` is rejected by the handler and its assessment (differential corpus). |
 | `send_file` | `env.read(node, filePath)`; `channel.send` or `session.deliver` | P. Subsumed: staging. |
 | `image_write_to_file` | `env.write(node, filePath)` | P |
 | `generate_image` | `image.generate` | P |

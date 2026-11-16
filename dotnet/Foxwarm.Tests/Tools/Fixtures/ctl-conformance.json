@@ -14,6 +14,8 @@
     { "command": "memory edit MEMORY.md --old-text=\"a b\" --new-text='c d'", "descriptor": { "toolId": "builtin:edit_memory", "args": { "filePath": "MEMORY.md", "oldText": "a b", "newText": "c d" } } },
     { "command": "memory edit MEMORY.md --old-text @old --new-text @new", "values": { "old": "first\nline", "new": "second" }, "descriptor": { "toolId": "builtin:edit_memory", "args": { "filePath": "MEMORY.md", "oldText": "first\nline", "newText": "second" } } },
     { "command": "memory write notes.md \"--content=x\"", "descriptor": { "toolId": "builtin:write_memory", "args": { "filePath": "notes.md", "content": "--content=x" } } },
+    { "command": "memory edit MEMORY.md --agent beta --old-text a --new-text b", "descriptor": { "toolId": "builtin:edit_memory", "args": { "filePath": "MEMORY.md", "agentName": "beta", "oldText": "a", "newText": "b" } } },
+    { "command": "memory read notes/a.md --agent=beta --start-line 2", "descriptor": { "toolId": "builtin:read_memory", "args": { "filePath": "notes/a.md", "agentName": "beta", "startLine": 2 } } },
     { "command": "channel send webui:x done; really | ok", "descriptor": { "toolId": "builtin:send_to_channel", "args": { "channelTargetId": "webui:x", "message": "done; really | ok" } } },
     { "command": "channel send --channel-target-id webui:x @m", "values": { "m": "bound message" }, "descriptor": { "toolId": "builtin:send_to_channel", "args": { "channelTargetId": "webui:x", "message": "bound message" } } },
     { "command": "channel send webui:x @@everyone hi", "descriptor": { "toolId": "builtin:send_to_channel", "args": { "channelTargetId": "webui:x", "message": "@everyone hi" } } },

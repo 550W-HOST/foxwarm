@@ -31,37 +31,44 @@ internal static class MainLocalToolDefinitions
             ["parameters"] = parameters,
         };
 
+    private const string MemoryPath =
+        "Path relative to the memory directory, without a memory/ prefix.";
+
+    private const string InjectedMemory =
+        "Top-level .md files in a memory directory are part of the system prompt of every Session of that Agent and of Agents that inherit it.";
+
+    private static JsonObject MemoryAgent() =>
+        String("Exact name of the Agent whose memory directory to use. Omit for this Agent.");
+
     internal static JsonArray Definitions() =>
         [
             Tool(
                 "read_memory",
-                "Read a file in this Agent's memory directory on master. Use memory-relative paths such as MEMORY.md or notes/project.md.",
+                "Read a file in an Agent's memory directory on master: this Agent's, or the Agent named by agentName. Use memory-relative paths such as MEMORY.md or notes/project.md.",
                 Parameters(
                     new JsonObject
                     {
-                        ["filePath"] = String(
-                            "Path relative to this Agent's memory directory, without a memory/ prefix."
-                        ),
+                        ["filePath"] = String(MemoryPath),
                         ["startLine"] = Number(
                             "First line to read, counting from 1. Omit or use 0 to start at the beginning."
                         ),
                         ["endLine"] = Number(
                             "Last line to read, counting from 1. Omit or use 0 to read through the end."
                         ),
+                        ["agentName"] = MemoryAgent(),
                     },
                     "filePath"
                 )
             ),
             Tool(
                 "write_memory",
-                "Create a file in this Agent's memory directory on master. Existing files are not overwritten; use edit_memory to modify one. Top-level .md files in this directory are part of the system prompt of every Session of this Agent and of Agents that inherit it.",
+                "Create a file in an Agent's memory directory on master: this Agent's, or the Agent named by agentName. Existing files are not overwritten; use edit_memory to modify one. " + InjectedMemory,
                 Parameters(
                     new JsonObject
                     {
-                        ["filePath"] = String(
-                            "Path relative to this Agent's memory directory, without a memory/ prefix."
-                        ),
+                        ["filePath"] = String(MemoryPath),
                         ["content"] = String("Complete file contents."),
+                        ["agentName"] = MemoryAgent(),
                     },
                     "filePath",
                     "content"
@@ -69,17 +76,16 @@ internal static class MainLocalToolDefinitions
             ),
             Tool(
                 "edit_memory",
-                "Replace one exact occurrence of text in a file in this Agent's memory directory on master. Top-level .md files in this directory are part of the system prompt of every Session of this Agent and of Agents that inherit it.",
+                "Replace one exact occurrence of text in a file in an Agent's memory directory on master: this Agent's, or the Agent named by agentName. " + InjectedMemory,
                 Parameters(
                     new JsonObject
                     {
-                        ["filePath"] = String(
-                            "Path relative to this Agent's memory directory, without a memory/ prefix."
-                        ),
+                        ["filePath"] = String(MemoryPath),
                         ["oldText"] = String(
                             "Exact text to replace; it must identify a single occurrence."
                         ),
                         ["newText"] = String("Replacement text."),
+                        ["agentName"] = MemoryAgent(),
                     },
                     "filePath",
                     "oldText",
@@ -88,24 +94,24 @@ internal static class MainLocalToolDefinitions
             ),
             Tool(
                 "delete_memory",
-                "Delete one file from this Agent's memory directory on master.",
+                "Delete one file from an Agent's memory directory on master: this Agent's, or the Agent named by agentName.",
                 Parameters(
                     new JsonObject
                     {
-                        ["filePath"] = String(
-                            "Path relative to this Agent's memory directory, without a memory/ prefix."
-                        ),
+                        ["filePath"] = String(MemoryPath),
+                        ["agentName"] = MemoryAgent(),
                     },
                     "filePath"
                 )
             ),
             Tool(
                 "apply_patch_memory",
-                "Add, modify, or delete files in this Agent's memory directory on master using the apply_patch format. Paths in patch headers are relative to the memory directory; a memory/ prefix is also accepted. Top-level .md files in this directory are part of the system prompt of every Session of this Agent and of Agents that inherit it.",
+                "Add, modify, or delete files in an Agent's memory directory on master using the apply_patch format: this Agent's, or the Agent named by agentName. Paths in patch headers are relative to the memory directory; a memory/ prefix is also accepted. " + InjectedMemory,
                 Parameters(
                     new JsonObject
                     {
                         ["input"] = String("Patch text using the same format as apply_patch."),
+                        ["agentName"] = MemoryAgent(),
                     },
                     "input"
                 )

@@ -17,7 +17,7 @@ Agents use tools and `ctl` commands. Run `ctl help` or `ctl <noun> --help` for t
 | `ctl session delete` (`delete_session`) | Delete another Session's live record; its archive is kept |
 | `ctl agent list`, `ctl session list`, `ctl session status` | Inspect Agents and Sessions |
 | `ctl session refresh-snapshot` | Rebuild one Session's system prompt now |
-| `ctl memory read`, `write`, `edit`, `patch`, `delete` | The current Agent's memory |
+| `ctl memory read`, `write`, `edit`, `patch`, `delete` | The current Agent's memory, or another Agent's with `--agent <name>` |
 | `task`, `ctl node ...` | Assignments and execution environments |
 
 Policy rules name the builtin in parentheses, not the command.
