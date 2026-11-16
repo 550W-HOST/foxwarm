@@ -1181,7 +1181,14 @@ public sealed partial class CompactLifecycleTests
         internal readonly SessionManager AuthorizationManager;
         internal readonly string TaskDataRoot;
 
-        private CompactFixture(bool background, bool? modelBackground)
+        internal readonly HostModels Models;
+
+        private CompactFixture(
+            bool background,
+            bool? modelBackground,
+            TimeProvider? idleClock,
+            double idleMinutes
+        )
         {
             var data = Path.Combine(temp.Path, "data");
             var work = Path.Combine(temp.Path, "work");
@@ -1261,11 +1268,13 @@ public sealed partial class CompactLifecycleTests
                 .AsObject();
             configuration["default"] = modelBackground is null ? "a" : "b";
             configuration["providers"]!["a"]!["asyncCompact"] = background;
+            configuration["providers"]!["a"]!["idleCompactMinutes"] = idleMinutes;
             if (modelBackground is not null)
                 configuration["providers"]!["a"]!["models"] = new JsonArray(
                     new JsonObject { ["id"] = "wire", ["asyncCompact"] = modelBackground.Value }
                 );
             var models = HostModels.Parse(configuration, new JsonObject());
+            Models = models;
             var agents = new AgentCatalog(data, work);
             var skills = new Skills(agents, Path.Combine(temp.Path, "skills"));
             var memory = new AgentMemory(agents, skills);
@@ -1304,8 +1313,10 @@ public sealed partial class CompactLifecycleTests
                 models,
                 options,
                 requests,
-                memory
+                memory,
+                timeProvider: idleClock
             );
+            Owner.EnableCommittedNotifications();
             Owner.Registry.OnTurnCompleted = (_, result) =>
                 Owner.Compactor.AutoAfterTurnAsync(result);
             Owner.Registry.OnBeforeContinuation = async (_, result, consume, token) =>
@@ -1329,10 +1340,12 @@ public sealed partial class CompactLifecycleTests
 
         internal static async Task<CompactFixture> CreateAsync(
             bool background = true,
-            bool? modelBackground = null
+            bool? modelBackground = null,
+            TimeProvider? idleClock = null,
+            double idleMinutes = 0
         )
         {
-            var fixture = new CompactFixture(background, modelBackground);
+            var fixture = new CompactFixture(background, modelBackground, idleClock, idleMinutes);
             if (modelBackground is not null)
                 await fixture.Owner.UpdateModelAsync(new JsonObject { ["model"] = "a" });
             await fixture.Owner.Entry.SaveLane.SaveStrictAsync();
@@ -1368,6 +1381,8 @@ public sealed partial class CompactLifecycleTests
 
         public async ValueTask DisposeAsync()
         {
+            Owner.Compactor.StopIdleScheduling();
+            await Owner.Compactor.DrainIdleAsync();
             StageRelease.Set();
             ApplyRelease.Set();
             ContinuationRelease.TrySetResult();

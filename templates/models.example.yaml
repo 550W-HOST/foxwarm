@@ -36,6 +36,8 @@ providers:
     # Optional provider default: disable background compact jobs.
     # Model objects may override this; omitted defaults to true.
     # asyncCompact: false
+    # idleCompactMinutes: 55
+    # idleCompactMinContextPercent: 0.5
     # Optional: enable compressed request bodies for this provider entry.
     # requestCompression: gzip  # or: br
     # Optional: treat a completed response with no content and no tool calls as
@@ -60,6 +62,8 @@ providers:
       - gpt-5.6-sol
       - id: gpt-5.6-terra
         # asyncCompact: false
+        # idleCompactMinutes: 0  # Disable idle compaction for this model.
+        # idleCompactMinContextPercent: 0.5
         # disallowEmptyResponse: true
       - gpt-5.6-luna
 

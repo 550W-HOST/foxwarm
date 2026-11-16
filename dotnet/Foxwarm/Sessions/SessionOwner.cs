@@ -110,6 +110,7 @@ internal sealed partial class SessionOwner
 
     public void EnableCommittedNotifications()
     {
+        Compactor?.AttachIdleScheduling();
         Entry.CaptureForegroundRelease = CaptureForegroundRelease;
         Entry.HistoryAppended = messages =>
         {
@@ -133,6 +134,7 @@ internal sealed partial class SessionOwner
         };
         Entry.QueueHistoryAppended = (snapshot, messages) =>
         {
+            Compactor?.RefreshIdleSchedule();
             Emit(SessionEventKind.StateChanged);
             if (messages.Count > 0)
             {
@@ -148,7 +150,11 @@ internal sealed partial class SessionOwner
                 PublishActivityIfChanged();
             }
         };
-        Entry.Committed = _ => Emit(SessionEventKind.StateChanged);
+        Entry.Committed = _ =>
+        {
+            Compactor?.RefreshIdleSchedule();
+            Emit(SessionEventKind.StateChanged);
+        };
     }
 
     private static JsonNode JsonSerializerNode(object value) => JsonData.SerializeToNode(value)!;

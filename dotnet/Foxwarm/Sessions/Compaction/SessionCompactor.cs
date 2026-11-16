@@ -51,6 +51,7 @@ internal sealed partial class SessionCompactor
         internal readonly string OperationId = Guid.NewGuid().ToString("N");
         internal string Phase = "planning";
         internal JsonObject? Retry;
+        internal bool PruneTools;
         internal bool Committed,
             Applying,
             Ready,
@@ -72,7 +73,8 @@ internal sealed partial class SessionCompactor
         ResponsesClientOptions baseOptions,
         ModelRequestOwner requests,
         AgentMemory memory,
-        Func<JsonArray>? definitions = null
+        Func<JsonArray>? definitions = null,
+        TimeProvider? timeProvider = null
     )
     {
         this.hosted = hosted;
@@ -83,6 +85,7 @@ internal sealed partial class SessionCompactor
         this.requests = requests;
         this.memory = memory;
         this.definitions = definitions;
+        idleClock = timeProvider ?? TimeProvider.System;
     }
 
     public bool Active
@@ -122,6 +125,7 @@ internal sealed partial class SessionCompactor
 
     public async Task DrainAsync()
     {
+        await DrainIdleAsync();
         while (!lifetimes.IsEmpty)
             await Task.WhenAll(lifetimes.Values.ToArray());
     }
@@ -143,6 +147,7 @@ internal sealed partial class SessionCompactor
                 return null;
             var run = new CompactRun(snapshot, catalog, keep, background, standalone);
             active = run;
+            CancelIdleSchedule();
             lifetimes[run] = run.Completion.Task;
             PublishRuntime(run);
             return run;
@@ -217,17 +222,19 @@ internal sealed partial class SessionCompactor
         return run.Committed ? (false, true) : (true, false);
     }
 
-    public async Task<CompactAdmission> StartManualAsync(
+    public Task<CompactAdmission> StartManualAsync(
         string? guidance = null,
         double? keepPercent = null
-    )
+    ) => StartAsync(guidance, keepPercent, idle: false);
+
+    private async Task<CompactAdmission> StartAsync(string? guidance, double? keepPercent, bool idle)
     {
         ClaudeRuntimeState.RequireFoxwarm(hosted, "Foxwarm context compaction");
         if (hosted.Entry.HistoryMutation)
             throw new InvalidOperationException("Session history change is in progress.");
         using var admission = hosted.Entry.AdmitMutation();
-        var snapshot = hosted.Entry.Snapshot();
         var catalog = models.Capture();
+        var snapshot = hosted.Entry.Snapshot();
         var background = SupportsBackground(snapshot, catalog);
         lock (gate)
         {
@@ -236,13 +243,34 @@ internal sealed partial class SessionCompactor
         }
         if (!background && (snapshot.Busy || snapshot.Stopping || snapshot.Queue.Any(Ordinary)))
             return new(false, false, false, true);
-        var run = Begin(
-            snapshot,
-            catalog,
-            keepPercent ?? catalog.CompactKeepFraction,
-            background,
-            !background
-        );
+        CompactRun? run;
+        // Runtime publication reads Session state while holding the compact registry gate.
+        // Admission takes those gates in the same order.
+        lock (gate)
+            run = hosted.Entry.WithState(state =>
+            {
+                snapshot = state.Snapshot();
+                var idleDue = idle ? IdleCandidate(snapshot, catalog, LastIdleRequest(snapshot)) : null;
+                if (
+                    idle
+                    && (idleDue is null || idleDue.At > idleClock.GetUtcNow().ToUnixTimeMilliseconds())
+                )
+                    return null;
+                var started = Begin(
+                    snapshot,
+                    catalog,
+                    keepPercent ?? catalog.CompactKeepFraction,
+                    background,
+                    !background
+                );
+                if (started is not null && idleDue is not null)
+                {
+                    started.PruneTools = true;
+                    lock (idleGate)
+                        idleConsumedThrough = Math.Max(idleConsumedThrough, idleDue.Request.StartedAt);
+                }
+                return started;
+            });
         if (run is null)
             return new(true, false, background, false);
         if (background)
@@ -507,6 +535,11 @@ internal sealed partial class SessionCompactor
         token.ThrowIfCancellationRequested();
         run.CacheKey = await hosted.Entry.SaveLane.EnsurePromptCacheKeyAsync();
         token.ThrowIfCancellationRequested();
+        if (run.PruneTools && await TryPruneToolsAsync(run.Snapshot, token, run.Keep, run.Catalog))
+        {
+            run.Committed = true;
+            return;
+        }
         var rows = run.Snapshot.History.Materialize();
         var candidates = CompactCandidateBuilder.Build(
             rows,
@@ -759,11 +792,13 @@ internal sealed partial class SessionCompactor
                 }
             );
             run.Committed = true;
+            IdleCompactionCommitted();
             hosted.PublishStateChanged();
         }
         catch (AuthorityCommittedException)
         {
             run.Committed = true;
+            IdleCompactionCommitted();
             hosted.PublishStateChanged();
             throw;
         }

@@ -53,6 +53,24 @@ internal sealed class ModelRequestOwner(
         return new(catalog, routeKey, rawEffort, route, request);
     }
 
+    internal ConcreteHostModel ResolveConcrete(HostModels catalog, SessionSnapshot snapshot)
+    {
+        var route = catalog.Resolve(SessionWait.Text(snapshot.AuthorityEnvelope["model"]));
+        if (!route.IsVirtual)
+            return route;
+        var request = routing.Preview(route.Key, route);
+        Func<string, bool>? eligible =
+            request.Strategy == "failover" && Redacts(catalog, request.Targets[0])
+                ? target => Redacts(catalog, target)
+                : null;
+        var selection = routing.Select(
+            request,
+            SessionWait.Text(snapshot.AuthorityEnvelope["promptCacheKey"]) ?? snapshot.Id,
+            eligible
+        );
+        return catalog.Resolve(selection.TargetKey);
+    }
+
     internal Task<ChatResult> RequestAsync(
         string sessionId,
         HostModels catalog,

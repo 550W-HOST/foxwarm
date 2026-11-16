@@ -10,6 +10,7 @@ Owns what a compaction plan may summarize and what it records: triggers, respons
 
 - `checkAndCompactIfNeeded()` compares final usage with the effective compact threshold. The default is `llm.compactThresholdPercent` (85%) of the resolved model context window; a positive per-session threshold overrides it.
 - The runner's continuation trigger compares the previous provider result's total usage with that same threshold. A completed job committed at that safe point satisfies the trigger, and a measurement that strictly exceeds the resolved model context limit waits for pending compact planning before the next provider request. Wait, commit, and Stop rules are canonical in [compaction lifecycle](./compaction-lifecycle.md#commit-and-safe-points).
+- Optional C# idle compaction uses the last main-turn provider request start and context measurement under [D-context-idle-compaction](#d-context-idle-compaction).
 - Explicit compact requests enter `processSessionCompactionRequest()`.
 - The recent raw tail stays out of compaction: the newest raw rows within `llm.compactKeepPercent` (default `0.3`) of the effective compact threshold, or of the raw region present when that is smaller, by estimated tokens. See [D-context-recent-raw-tail](#d-context-recent-raw-tail).
 
@@ -41,6 +42,17 @@ The [memory warning](./conditional-memory-snapshots.md#d-memory-size-warning) id
 - Outside in-context compaction, every committed operation is one the retention policy required for that snapshot; summarized sources are never split across operations, and non-source rows inside a range survive after the new block (except retired preserved rows).
 
 ## Design decisions
+
+### D-context-idle-compaction
+
+**Directly selected by the user (2026-11-17).** An opt-in idle trigger can compact a large Session while its provider prompt cache is still warm, reducing the context that a later turn must resend after cache expiry. Cache lifetimes vary by provider; the feature neither detects a TTL nor sends keepalive requests.
+
+- `llm.idleCompactMinutes` is a finite nonnegative number; absent or `0` disables idle compaction (the default). `llm.idleCompactMinContextPercent` is a fraction in `(0, 1]`, default `0.5`. Concrete provider and model entries override each setting independently in model → provider → application order; a model/provider delay of `0` disables its inherited trigger. Application settings use the existing startup-captured `llm` lifetime; model-file overrides are resolved live.
+- The deadline is the start of the last main-turn provider request (`__meta.llmRequestTiming.startedAt`) plus the configured delay, not the latest message or turn-completion timestamp. Its context measurement uses `contextTokens` when present, otherwise cached + input + output tokens, divided by the current concrete model's context limit. The ratio must be strictly above the configured fraction. A different current concrete model skips the trigger. Side requests and planner requests do not move this deadline.
+- One in-memory timer belongs to each hosted exact Session owner. Turn/processor release arms it; input, active history mutation/compaction, clear, retirement and shutdown cancel or invalidate it. Owner settings changes can re-evaluate an already armed timer; every firing resolves current configuration and rechecks owner eligibility and the deadline before admission. No pending timer is persisted, and startup does not scan the Session catalog: a later turn release arms new work.
+- An eligible Session uses the Foxwarm runtime, is idle and not stopping, has no processor, ordinary queued input, active compact operation or history mutation, and has a provider request since its last compact commit. A later provider result supplies a new measurement.
+- The trigger uses automatic tool-response pruning first and layered planning only when pruning does not commit. Admission, background/awaited selection through `asyncCompact`, cancellation, concurrent input and authority commit all use the existing idle explicit compaction path. It adds no queue kind or second engine. Compaction's existing commit-time memory reread remains the adoption boundary; ordinary next-turn inactivity refresh is unchanged.
+- Scheduling adds no request-time prompt content. The existing persisted compact-completion notice is unchanged, preserving [request-prefix stability](../overview.md#d-request-prefix-stability).
 
 ### D-context-historical-tool-response-pruning
 

@@ -205,7 +205,13 @@ public sealed class SessionEntry
         }
     }
 
-    public void ReleaseProcessor() => Volatile.Write(ref processorClaim, 0);
+    internal Action? ProcessorReleased { get; set; }
+
+    public void ReleaseProcessor()
+    {
+        Volatile.Write(ref processorClaim, 0);
+        ProcessorReleased?.Invoke();
+    }
 
     internal T WithState<T>(Func<SessionState, T> action)
     {

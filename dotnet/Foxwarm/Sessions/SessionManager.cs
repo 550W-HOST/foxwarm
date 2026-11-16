@@ -817,6 +817,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         await waitLiveness.DrainAsync();
         // Planners are independently owned. Release foreground waits first, then
         // cancel/drain planning without reclassifying interruption as user Stop.
+        await Task.WhenAll(current.Select(session => session.Compactor.DrainIdleAsync()));
         await Task.WhenAll(current.Select(session => session.Compactor.StopAsync()));
         await Task.WhenAll(current.Select(session => session.DrainAsync()));
         ToolScript.BeginShutdown();
@@ -845,7 +846,10 @@ internal sealed partial class SessionManager : IAsyncDisposable
         {
             accepting = false;
             foreach (var session in sessions.Values)
+            {
                 session.Registry.Runner.CloseAdmission();
+                session.Compactor.StopIdleScheduling();
+            }
         }
         admissionStop.Cancel();
         waitTimeouts.Stop();

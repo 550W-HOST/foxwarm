@@ -67,6 +67,22 @@ test('static config schemas are distinct, permissive, and omit the removed model
   assert.equal(schemas.MODELS_CONFIG_SCHEMA.required?.includes('default') || false, false)
 })
 
+test('idle compaction schema validates global and concrete overrides without enabling omitted values', () => {
+  assert.equal(schemas.APP_CONFIG_SCHEMA.properties.llm.properties.idleCompactMinutes.default, 0)
+  assert.equal(schemas.APP_CONFIG_SCHEMA.properties.llm.properties.idleCompactMinContextPercent.default, 0.5)
+  const options = { idleCompactMinutes: 55, idleCompactMinContextPercent: 0.5 }
+  assert.equal(validateAppConfigSchema({ llm: options }), true)
+  assert.equal(validateModelsSchema({ providers: { p: { ...options, models: ['inherited', { id: 'off', idleCompactMinutes: 0 }] } } }), true)
+  for (const [field, value] of [['idleCompactMinutes', -1], ['idleCompactMinutes', '55'], ['idleCompactMinContextPercent', 0], ['idleCompactMinContextPercent', 1.1]]) {
+    assert.equal(validateAppConfigSchema({ llm: { [field]: value } }), false)
+    assert.equal(validateModelsSchema({ providers: { p: { [field]: value } } }), false)
+    assert.equal(validateModelsSchema({ providers: { p: { models: [{ id: 'wire', [field]: value }] } } }), false)
+  }
+  for (const field of Object.keys(options)) {
+    assert.equal(validateModelsSchema({ providers: { leaf: {}, route: { providerType: 'session-hash', targets: ['leaf'], [field]: options[field] } } }), false)
+  }
+})
+
 test('text redaction schema supports inherited options and concrete disablement', () => {
   const config = {
     defaults: { textRedaction: { enabled: true, endpoint: 'https://detector.example/classify', threshold: 0.5, knownLabels: ['private_email'] } },

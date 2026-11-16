@@ -99,6 +99,19 @@ internal sealed partial class HostModels
             model?["asyncCompact"]?.DeepClone()
             ?? provider["asyncCompact"]?.DeepClone()
             ?? JsonValue.Create(true);
+        foreach (var scope in new[] { llm, provider, model })
+            if (scope is not null)
+                ValidateIdleCompact(scope);
+        config["idleCompactMinutes"] =
+            model?["idleCompactMinutes"]?.DeepClone()
+            ?? provider["idleCompactMinutes"]?.DeepClone()
+            ?? llm["idleCompactMinutes"]?.DeepClone()
+            ?? JsonValue.Create(0);
+        config["idleCompactMinContextPercent"] =
+            model?["idleCompactMinContextPercent"]?.DeepClone()
+            ?? provider["idleCompactMinContextPercent"]?.DeepClone()
+            ?? llm["idleCompactMinContextPercent"]?.DeepClone()
+            ?? JsonValue.Create(.5);
         config["disallowEmptyResponse"] =
             model?["disallowEmptyResponse"]?.DeepClone()
             ?? provider["disallowEmptyResponse"]?.DeepClone()
@@ -186,6 +199,27 @@ internal sealed partial class HostModels
                 ReadRetryIntervals(provider, ReadRetryIntervals(defaults))
             ),
         };
+    }
+
+    internal static void ValidateIdleCompact(JsonObject scope)
+    {
+        foreach (var field in new[] { "idleCompactMinutes", "idleCompactMinContextPercent" })
+        {
+            if (!scope.ContainsKey(field))
+                continue;
+            var value = SessionWait.Number(scope[field]);
+            if (
+                value is null
+                || !double.IsFinite(value.Value)
+                || (field == "idleCompactMinutes" ? value < 0 : value <= 0 || value > 1)
+            )
+                throw new InvalidDataException(
+                    field
+                        + (field == "idleCompactMinutes"
+                            ? " must be a finite nonnegative number."
+                            : " must be a finite number greater than 0 and at most 1.")
+                );
+        }
     }
 
     internal static void ValidateDefaults(

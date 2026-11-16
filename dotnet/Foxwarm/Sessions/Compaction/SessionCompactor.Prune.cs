@@ -387,6 +387,11 @@ internal sealed partial class SessionCompactor
                 token
             );
         }
+        catch (AuthorityCommittedException)
+        {
+            IdleCompactionCommitted();
+            throw;
+        }
         catch (Exception error)
             when (error is PruningEstimateExceededException
                 || !automatic && error is PruningSnapshotChangedException
@@ -394,6 +399,7 @@ internal sealed partial class SessionCompactor
         {
             return result;
         }
+        IdleCompactionCommitted();
         hosted.PublishStateChanged();
         return result with
         {
