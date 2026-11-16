@@ -616,6 +616,8 @@ var pricing = {
 var modelOverrideProperties = {
   ...modelDefaultProperties,
   pricing,
+  idleCompactMinutes: { type: "number", minimum: 0, description: "Compact idle Sessions after this many minutes from their last provider request. Zero disables idle compaction. Inherits from provider, then application settings." },
+  idleCompactMinContextPercent: { type: "number", exclusiveMinimum: 0, maximum: 1, description: "Minimum context-window fraction for idle compaction. Inherits from provider, then application settings." },
   asyncCompact: { type: "boolean", description: "Whether background compaction may use this provider or model. Model entries override the provider default." },
   disallowEmptyResponse: { type: "boolean", description: "Treat a completed response with no content and no tool calls as a retryable failure. Default false accepts it as a normal turn end. Model entries override the provider default." },
   streamContentInactivityTimeoutMs: { type: "integer", minimum: 1, maximum: 2147483647, default: 6e4, description: "Streaming output inactivity timeout in milliseconds. Model overrides provider; default 60000. First-output timeout and explicit caller deadline remain independent. Safety buffering uses at least 600000." },
@@ -679,6 +681,8 @@ var providerObjectEntry = {
     effort: modelEffortConfig,
     historyReasoningField: modelOverrideProperties.historyReasoningField,
     asyncCompact: modelOverrideProperties.asyncCompact,
+    idleCompactMinutes: modelOverrideProperties.idleCompactMinutes,
+    idleCompactMinContextPercent: modelOverrideProperties.idleCompactMinContextPercent,
     requestCompression: { enum: ["gzip", "br"], description: "Optional request-body compression." },
     disallowEmptyResponse: modelOverrideProperties.disallowEmptyResponse,
     keepReasoningOnError: { type: "boolean", default: false, description: "Provider default for retaining completed encrypted reasoning after a failed normal Responses stream. Model entries may override it; this does not resume provider execution." },
@@ -696,7 +700,7 @@ var providerObjectEntry = {
       then: {
         required: ["targets"],
         properties: { targets: { minItems: 1 } },
-        not: { anyOf: ["models", "model", "baseUrl", "apiKey", "requestCompression", "extraFields", "extraHeaders", "webSearch", "imageGeneration", "contextLimit", "maxOutput", "providerImageOutputFormat", "imageInput", "textRedaction", "pricing", "streamContentInactivityTimeoutMs", "effort", "historyReasoningField", "asyncCompact", "disallowEmptyResponse", "keepReasoningOnError", "sameProviderAs", "failureThreshold", "cooldownMs"].map((field) => ({ required: [field] })) }
+        not: { anyOf: ["models", "model", "baseUrl", "apiKey", "requestCompression", "extraFields", "extraHeaders", "webSearch", "imageGeneration", "contextLimit", "maxOutput", "providerImageOutputFormat", "imageInput", "textRedaction", "pricing", "streamContentInactivityTimeoutMs", "effort", "historyReasoningField", "asyncCompact", "idleCompactMinutes", "idleCompactMinContextPercent", "disallowEmptyResponse", "keepReasoningOnError", "sameProviderAs", "failureThreshold", "cooldownMs"].map((field) => ({ required: [field] })) }
       }
     },
     {
@@ -704,7 +708,7 @@ var providerObjectEntry = {
       then: {
         required: ["targets"],
         properties: { targets: { minItems: 2 } },
-        not: { anyOf: ["models", "model", "baseUrl", "apiKey", "requestCompression", "extraFields", "extraHeaders", "webSearch", "imageGeneration", "contextLimit", "maxOutput", "providerImageOutputFormat", "imageInput", "textRedaction", "pricing", "streamContentInactivityTimeoutMs", "effort", "historyReasoningField", "asyncCompact", "disallowEmptyResponse", "keepReasoningOnError", "sameProviderAs"].map((field) => ({ required: [field] })) }
+        not: { anyOf: ["models", "model", "baseUrl", "apiKey", "requestCompression", "extraFields", "extraHeaders", "webSearch", "imageGeneration", "contextLimit", "maxOutput", "providerImageOutputFormat", "imageInput", "textRedaction", "pricing", "streamContentInactivityTimeoutMs", "effort", "historyReasoningField", "asyncCompact", "idleCompactMinutes", "idleCompactMinContextPercent", "disallowEmptyResponse", "keepReasoningOnError", "sameProviderAs"].map((field) => ({ required: [field] })) }
       }
     },
     {
@@ -1133,6 +1137,8 @@ var APP_CONFIG_SCHEMA = {
         contextLimit: { ...modelDefaultProperties.contextLimit, deprecated: true, description: "Legacy fallback. Prefer defaults in models.yaml." },
         compactKeepPercent: { type: "number", exclusiveMinimum: 0, maximum: 1, default: 0.3 },
         compactThresholdPercent: { type: "number", exclusiveMinimum: 0, maximum: 1, default: 0.85 },
+        idleCompactMinutes: { type: "number", minimum: 0, default: 0, description: "Idle compaction delay from the last provider request, in minutes. Zero disables it." },
+        idleCompactMinContextPercent: { type: "number", exclusiveMinimum: 0, maximum: 1, default: 0.5 },
         memoryWarningThresholdPercent: { type: "number", exclusiveMinimum: 0, maximum: 1, default: 0.15, description: "Warn when injected Agent memory exceeds this fraction of the model context window." },
         compactBlockLevelMinTokens: { type: "integer", minimum: 1 },
         compactBlockLevelForceTokens: { type: "integer", minimum: 1 },
