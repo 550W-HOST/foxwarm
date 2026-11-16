@@ -72,7 +72,7 @@ internal sealed partial class SessionManager
     }
 
     private IReadOnlyList<string>? AddSecretFacts(JsonObject args) =>
-        SessionWait.Text(args["name"])?.Trim() is { } name ? UnsetReferencedSecrets([name]) : null;
+        SecretStore.ArgumentName(args["name"]) is { } name ? UnsetReferencedSecrets([name]) : null;
 
     // ask_user's secret facts: the names its secret questions would fill that configuration
     // already references, as for add_secret.
@@ -207,7 +207,7 @@ internal sealed partial class SessionManager
         if (secrets is not { } instance || models.ConfigurationOwner is not { } configuration)
             throw new NotSupportedException("The secret store is unavailable on this host.");
         var store = instance.Store;
-        var name = SessionWait.Text(args["name"])?.Trim() ?? "";
+        var name = SecretStore.ArgumentName(args["name"]) ?? "";
         SecretStore.ValidateName(name);
         var description = args["description"] is null
             ? null

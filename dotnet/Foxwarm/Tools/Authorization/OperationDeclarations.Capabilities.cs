@@ -346,8 +346,8 @@ internal static partial class OperationDeclarations
         Declare(
             "builtin:skill",
             [
-                Branch("list", "list", Op("agent.view", "targetAgent=agent-or-caller")),
-                Branch("load", "load", Op("agent.view", "targetAgent=agent-or-caller")),
+                Branch("list", "list", Op("agent.view", "targetAgent=skill-agent")),
+                Branch("load", "load", Op("agent.view", "targetAgent=skill-agent")),
             ],
             [Primary()]
         ) with
@@ -526,7 +526,7 @@ internal static partial class OperationDeclarations
             [
                 Call(
                     OpEach("path:filePath", "env.read", Path),
-                    OpIf("channel", "channel.send", "channel=arg:channelTargetId"),
+                    OpIf("channel", "channel.send", "channel=file-channel"),
                     OpIf("!channel", "session.deliver", "targetSession=target-session")
                 ),
             ],
@@ -613,7 +613,7 @@ internal static partial class OperationDeclarations
             "builtin:add_secret",
             [
                 Call(
-                    Op("secret.manage", "secret=arg:name"),
+                    Op("secret.manage", "secret=secret-name"),
                     SecretUse(),
                     OpEachIf("arg:fromConfig", "from-config-files", "config.write", "with.target=each"),
                     OpEachIf("arg:fromConfig", "from-config-servers", "mcp.manage", "mcp=each")
@@ -654,7 +654,7 @@ internal static partial class OperationDeclarations
         Simple("builtin:list_mcp_servers", Op("mcp.list")),
         Declare(
             "builtin:mcp_config",
-            [Call(Op("mcp.manage", "mcp=arg:name"), SecretUse())],
+            [Call(Op("mcp.manage", "mcp=mcp-config-name"), SecretUse())],
             [
                 Primary(),
                 Retained(

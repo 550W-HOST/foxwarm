@@ -13,8 +13,14 @@ internal sealed partial class SessionManager
     internal WebhookActivity Webhooks { get; } = new();
     internal Func<string, string>? TimerSessionName { get; set; }
 
-    private static string TimerOwner(SessionOwner source, JsonObject args) =>
-        ToolRegistry.Text(args, "sessionId") is { Length: > 0 } requested ? requested : source.Id;
+    // The Session whose timers a timer tool addresses: sessionId, trimmed, else the caller. The
+    // handler and the operation plan (`timer-owner`) both use it.
+    internal static string TimerOwner(string callerId, JsonObject args) =>
+        SessionGoal.Trim(ToolRegistry.Text(args, "sessionId") ?? "") is { Length: > 0 } requested
+            ? requested
+            : callerId;
+
+    private static string TimerOwner(SessionOwner source, JsonObject args) => TimerOwner(source.Id, args);
 
     internal Task<JsonObject> ExecuteTimerToolAsync(
         SessionOwner source,

@@ -64,6 +64,10 @@ internal sealed partial class SecretStore
 
     internal event Action? Changed;
 
+    // The secret a tool call names: its name argument, trimmed. add_secret, its secret facts and
+    // the operation plan (`secret-name`) all use it.
+    internal static string? ArgumentName(JsonNode? value) => SessionWait.Text(value)?.Trim();
+
     internal static void ValidateName(string name)
     {
         if (!NamePattern().IsMatch(name))

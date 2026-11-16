@@ -24,6 +24,11 @@ internal sealed record SkillInfo(
 // Knowledge discovery only: entry documents are loaded on demand, never executable tool registration.
 internal sealed partial class Skills(AgentCatalog agents, string globalRoot)
 {
+    // The Agent whose skills the skill tool reads: agentName, trimmed, else the caller's. The
+    // handler and the operation plan (`skill-agent`) both use it.
+    internal static string RequestedAgent(string? agentName, string callerAgent) =>
+        string.IsNullOrWhiteSpace(agentName) ? callerAgent : agentName.Trim();
+
     private static readonly HashSet<string> Skip = new(StringComparer.Ordinal)
     {
         ".git",

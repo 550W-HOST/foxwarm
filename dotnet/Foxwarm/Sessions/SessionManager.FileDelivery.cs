@@ -50,7 +50,7 @@ internal sealed partial class SessionManager
             : selectedNode is null ? ExecutionPlacement(owner).Cwd
             : selectedCwd;
         var requested = SessionGoal.Trim(ToolRegistry.Text(args, "sessionId") ?? "");
-        var direct = SessionGoal.Trim(ToolRegistry.Text(args, "channelTargetId") ?? "");
+        var direct = Foxwarm.Channels.ChannelRegistry.FileDeliveryTarget(args);
         if (requested.Length > 0 && direct.Length > 0)
             throw new InvalidDataException(
                 "At most one of sessionId or channelTargetId may be specified."

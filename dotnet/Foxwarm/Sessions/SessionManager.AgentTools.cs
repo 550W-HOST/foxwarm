@@ -77,14 +77,10 @@ internal sealed partial class SessionManager
                             "SESSION_DELETE_SOURCE_NOT_FOUND",
                             404
                         );
-                    var result = await DeleteAsync(
-                        RequiredString(args, "sessionId"),
-                        source: source
-                    );
-                    return (
-                        Output(DeleteToolText(RequiredString(args, "sessionId"), result)),
-                        false
-                    );
+                    // A Session reference is trimmed as its authorization target is.
+                    var requested = SessionGoal.Trim(RequiredString(args, "sessionId"));
+                    var result = await DeleteAsync(requested, source: source);
+                    return (Output(DeleteToolText(requested, result)), false);
                 }
                 case "set_agent_rules":
                 {

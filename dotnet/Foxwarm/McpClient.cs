@@ -109,6 +109,10 @@ internal sealed partial class McpClient : IAsyncDisposable
         }
     }
 
+    // The server mcp_config changes: its name argument, trimmed. The handler and the operation
+    // plan (`mcp-config-name`) both use it.
+    internal static string? ConfiguredServerName(JsonObject args) => ToolRegistry.Text(args, "name")?.Trim();
+
     private static (string Name, JsonObject Patch) ConfigurationPatch(JsonObject args)
     {
         ToolRegistry.Keys(
@@ -132,7 +136,7 @@ internal sealed partial class McpClient : IAsyncDisposable
                 "headersJson",
             ]
         );
-        var name = ToolRegistry.Text(args, "name")?.Trim();
+        var name = ConfiguredServerName(args);
         if (string.IsNullOrEmpty(name))
             throw new InvalidDataException("mcp_config requires name.");
         var patch = (JsonObject)args.DeepClone();

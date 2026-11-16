@@ -230,9 +230,10 @@ internal sealed partial class SessionManager
     )
     {
         using var operation = TrackCreation();
-        using var parentMutation = parentSessionId is null
-            ? null
-            : BeginOwnerMutation(await RequiredAsync(parentSessionId));
+        // The parent is stored by its canonical ID, as its authorization target names it.
+        var parent = parentSessionId is null ? null : await RequiredAsync(parentSessionId);
+        parentSessionId = parent?.Id;
+        using var parentMutation = parent is null ? null : BeginOwnerMutation(parent);
         while (true)
         {
             var candidate = sessionName ?? GenerateSessionId();

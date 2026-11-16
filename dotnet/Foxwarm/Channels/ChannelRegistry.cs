@@ -1,3 +1,7 @@
+using System.Text.Json.Nodes;
+using Foxwarm.Sessions;
+using Foxwarm.Tools;
+
 namespace Foxwarm.Channels;
 
 internal sealed record ChannelFile(string Path, string Name, string? MimeType, bool IsImage);
@@ -73,6 +77,11 @@ internal sealed class ChannelRegistry
         lock (gate)
             return channels.Keys.ToArray();
     }
+
+    // The channel target send_file delivers to: its channelTargetId, trimmed; empty when absent.
+    // The handler and the operation plan (`file-channel`) both use it.
+    internal static string FileDeliveryTarget(JsonObject args) =>
+        SessionGoal.Trim(ToolRegistry.Text(args, "channelTargetId") ?? "");
 
     internal static (string Instance, string Conversation) Parse(string target)
     {

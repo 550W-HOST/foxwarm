@@ -10,7 +10,7 @@ namespace Foxwarm.Tests;
 // prospective Task owners, pairing IDs, and legacy script checkpoints.
 public sealed partial class ToolAuthorizationEffectsTests
 {
-    // a copy leg is the physical directory the copy reads, as for an ordinary read.
+    // A copy leg is the physical directory the copy reads, as for an ordinary read.
     [Fact]
     public async Task Memory_copy_legs_are_canonical_physical_paths()
     {
@@ -41,7 +41,7 @@ public sealed partial class ToolAuthorizationEffectsTests
         Assert.False(File.Exists(Path.Combine(temp.Path, "workspace", "agents", "copy-link", "memory", "private.md")));
     }
 
-    // a conversion's source defaults to the caller.
+    // A conversion's source defaults to the caller.
     [Fact]
     public async Task Caller_default_conversion_is_decidable()
     {
@@ -67,7 +67,7 @@ public sealed partial class ToolAuthorizationEffectsTests
         Assert.NotNull(manager.Catalog.Get("alpha/second"));
     }
 
-    // the main Session an Agent creation makes has its ID, runtime and descendant Agent.
+    // The main Session an Agent creation makes has its ID, runtime and descendant Agent.
     [Fact]
     public async Task Agent_main_session_carries_every_creation_fact()
     {
@@ -104,7 +104,7 @@ public sealed partial class ToolAuthorizationEffectsTests
         );
     }
 
-    // a Task assigned to a child created in another Agent is not same-Agent.
+    // A Task assigned to a child created in another Agent is not same-Agent.
     [Fact]
     public async Task Prospective_child_task_assignment_keeps_the_child_agent()
     {
@@ -164,6 +164,73 @@ public sealed partial class ToolAuthorizationEffectsTests
         Assert.Equal(ToolAuthorizationEffect.Allow, child.Effect);
     }
 
+    // send_file delivers to its trimmed channel target, which its operation names.
+    [Fact]
+    public async Task File_delivery_names_the_channel_target_it_delivers_to()
+    {
+        using var temp = new TempDirectory();
+        await Seed(temp.Path);
+        await using var manager = Manager(temp.Path);
+        await manager.LoadAsync();
+        var caller = await manager.RequiredAsync("opaque");
+        var execution = TimerExecutor(manager, caller, temp.Path);
+        await using var mcp = execution.Mcp;
+        await Policy(manager, OperationEffectConformance.Policy);
+        foreach (var target in new[] { "webui:1", " webui:1 ", "\twebui:1\n" })
+        {
+            var assessment = await manager.AssessToolAsync(
+                caller,
+                execution.Registry.Resolve("send_file", new JsonObject { ["filePath"] = "a.txt", ["channelTargetId"] = target }),
+                execution.Files,
+                default
+            );
+            Assert.Equal(
+                Foxwarm.Channels.ChannelRegistry.FileDeliveryTarget(new JsonObject { ["channelTargetId"] = target }),
+                SessionWait.Text(Assert.Single(assessment.Request.Operations ?? [], operation => operation.Op == "channel.send").Resources["channel"])
+            );
+        }
+        // Whitespace alone is no channel target: the file goes to a Session.
+        var session = await manager.AssessToolAsync(
+            caller,
+            execution.Registry.Resolve("send_file", new JsonObject { ["filePath"] = "a.txt", ["channelTargetId"] = "  " }),
+            execution.Files,
+            default
+        );
+        Assert.DoesNotContain(session.Request.Operations ?? [], operation => operation.Op == "channel.send");
+    }
+
+    // Padding an Agent or Session name doesn't escape a rule about the one the handler reads.
+    [Fact]
+    public async Task Padded_names_are_decided_as_the_handler_reads_them()
+    {
+        using var temp = new TempDirectory();
+        await Seed(temp.Path);
+        await using var manager = Manager(temp.Path);
+        await manager.LoadAsync();
+        var caller = await manager.RequiredAsync("opaque");
+        var execution = TimerExecutor(manager, caller, temp.Path);
+        await using var mcp = execution.Mcp;
+        async Task<JsonObject> Assess(string tool, JsonObject args) =>
+            (await manager.AssessToolAsync(caller, execution.Registry.Resolve(tool, args), execution.Files, default)).Request.Operations!
+                .Select(operation => operation.Resources)
+                .First();
+        await Policy(manager, "version: 1\nrules:\n- {op: agent.view, targetAgent: {id: beta}, action: deny}\n");
+        foreach (var name in new[] { "beta", " beta ", "\tbeta\n" })
+        {
+            Assert.Equal("beta", SessionWait.Text((await Assess("skill", new JsonObject { ["action"] = "list", ["agentName"] = name }))["targetAgent"]));
+            Assert.Equal(
+                "tool_authorization_denied",
+                Error(await Call(execution.Tools, "skill", new JsonObject { ["action"] = "list", ["agentName"] = name }))
+            );
+        }
+        Assert.Equal(caller.Agent, SessionWait.Text((await Assess("skill", Obj("""{"action":"list","agentName":"  "}""")))["targetAgent"]));
+        foreach (var owner in new[] { caller.Id, " " + caller.Id + " " })
+            Assert.Equal(
+                SessionManager.TimerOwner(caller.Id, new JsonObject { ["sessionId"] = owner }),
+                SessionWait.Text((await Assess("list_timers", new JsonObject { ["sessionId"] = owner }))["targetSession"])
+            );
+    }
+
     // A Session create_session parents to the caller is the caller's child, by ID or alias.
     [Fact]
     public async Task Sessions_parented_to_the_caller_are_its_children()
@@ -190,7 +257,7 @@ public sealed partial class ToolAuthorizationEffectsTests
         Assert.Null(Error(await Call(execution.Tools, "create_session", Args("sibling", "foreign"))));
     }
 
-    // a run checkpointed before image admission completes with the old promotion.
+    // A run checkpointed before image admission completes with the old promotion.
     [Fact]
     public async Task Runs_checkpointed_before_admission_resume_under_the_old_promotion()
     {
@@ -258,7 +325,7 @@ public sealed partial class ToolAuthorizationEffectsTests
 
 public sealed partial class NodeAuthorizationTreeTests
 {
-    // an approval without nodeId is decided on the ID the handler assigns.
+    // An approval without nodeId is decided on the ID the handler assigns.
     [Fact]
     public async Task Pairing_approval_without_node_id_uses_the_assigned_id()
     {

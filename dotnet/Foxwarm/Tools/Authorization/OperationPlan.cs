@@ -480,7 +480,7 @@ internal sealed partial record OperationPlan(
                 case "file-action":
                     return Action is "prepare" or "publish";
                 case "channel":
-                    return Text("channelTargetId") is not null;
+                    return Foxwarm.Channels.ChannelRegistry.FileDeliveryTarget(args).Length > 0;
                 case "agent-scope":
                     return Text("sessionId") is null
                         && Text("vector_query") is not null
@@ -727,6 +727,15 @@ internal sealed partial record OperationPlan(
                         ? context.AgentDefaultNode?.Invoke(sourceAgent)
                         : null;
                     return value is not null;
+                case "mcp-config-name":
+                    value = Foxwarm.McpClient.ConfiguredServerName(args) is { Length: > 0 } server ? server : null;
+                    return value is not null;
+                case "secret-name":
+                    value = Foxwarm.Secrets.SecretStore.ArgumentName(args["name"]) is { Length: > 0 } secret ? secret : null;
+                    return value is not null;
+                case "file-channel":
+                    value = Foxwarm.Channels.ChannelRegistry.FileDeliveryTarget(args) is { Length: > 0 } channel ? channel : null;
+                    return value is not null;
                 case "pairing-node":
                     value = Text("pendingId") is string pendingId
                         ? context.PairingNodeId?.Invoke(pendingId, SessionWait.Text(args["nodeId"]))
@@ -805,8 +814,15 @@ internal sealed partial record OperationPlan(
                 case "agent-or-caller":
                     value = ChildAgent();
                     return value is not null;
+                case "skill-agent":
+                    value = facts?.Agent is string skillCaller
+                        ? Foxwarm.Skills.RequestedAgent(SessionWait.Text(args["agentName"]), skillCaller)
+                        : null;
+                    return value is not null;
                 case "timer-owner":
-                    value = Text("sessionId")?.Trim() ?? facts?.Session;
+                    value = facts?.Session is string timerCaller
+                        ? SessionManager.TimerOwner(timerCaller, args)
+                        : Text("sessionId")?.Trim();
                     return value is not null;
                 case "timer-kind":
                     if (!args.ContainsKey("action"))

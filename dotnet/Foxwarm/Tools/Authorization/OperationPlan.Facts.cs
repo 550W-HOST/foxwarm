@@ -96,6 +96,9 @@ internal sealed partial record OperationPlan
             "creation-source" => ["sourceSessionId"],
             "source-agent" or "source-session" or "source-node" => ["sourceSessionId"],
             "pairing-node" => ["pendingId", "nodeId"],
+            "mcp-config-name" => ["name"],
+            "secret-name" => ["name"],
+            "file-channel" => ["channelTargetId"],
             "prospective-child" => ["agentName"],
             "prospective-session" => ["agentName", "parentSessionId"],
             "creation-runtime" => ["runtime"],
@@ -103,6 +106,7 @@ internal sealed partial record OperationPlan
             "provider-node" => ["nodeId", "providerId"],
             "target-session" or "timer-owner" => ["sessionId"],
             "agent-or-caller" => ["agentName"],
+            "skill-agent" => ["agentName"],
             "timer-kind" => ["action"],
             "placement" or "child-node" or "session-node" => ["node", "agentName"],
             "recall-mode" => ["vector_query"],
@@ -155,6 +159,7 @@ internal sealed partial record OperationPlan
             case "timer-kind":
             case "timer-owner":
             case "agent-or-caller":
+            case "skill-agent":
             case "has-secret-questions":
             case "session-scope":
                 return ("request", []);
@@ -176,6 +181,12 @@ internal sealed partial record OperationPlan
                 return ("SessionCreationDefaults.SourceAgent", ["SessionAgent"]);
             case "pairing-node":
                 return ("ApprovedNodeRegistry approval ID", ["PairingNodeId"]);
+            case "mcp-config-name":
+                return ("McpClient.ConfiguredServerName", []);
+            case "secret-name":
+                return ("SecretStore.ArgumentName", []);
+            case "file-channel":
+                return ("ChannelRegistry.FileDeliveryTarget", []);
             case "prospective-child":
                 return ("SessionCreationDefaults (prospective Session)", []);
             case "prospective-session":

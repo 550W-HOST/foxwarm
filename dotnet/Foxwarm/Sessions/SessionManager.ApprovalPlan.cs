@@ -437,13 +437,10 @@ internal sealed partial class SessionManager
             await AuthorizeCreateSessionTargetAsync(owner, agent, token);
     }
 
-    // The Agent of a new-Session timer's creation target when the arguments name it.
+    // The Agent of a new-Session timer's creation target when the arguments name it, normalized
+    // as the timer row stores it (TimerArguments.Optional).
     private static string? CreationTargetAgent(JsonObject args) =>
-        args["newSession"] is JsonValue flag
-        && flag.TryGetValue<bool>(out var value)
-        && value
-        && SessionWait.Text(args["agentName"]) is { } agent
-        && agent.Trim().Length > 0
-            ? agent.Trim()
+        args["newSession"] is JsonValue flag && flag.TryGetValue<bool>(out var value) && value
+            ? Foxwarm.Timers.TimerArguments.Optional(args["agentName"])
             : null;
 }

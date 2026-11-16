@@ -80,8 +80,7 @@ internal sealed partial class SessionManager
     internal async Task<JsonObject> SkillAsync(SessionOwner source, JsonObject args)
     {
         Keys(args, ["action", "skillName", "agentName"], ["action"]);
-        var agent = OptionalString(args, "agentName");
-        agent = string.IsNullOrWhiteSpace(agent) ? source.Agent : agent.Trim();
+        var agent = Skills.RequestedAgent(OptionalString(args, "agentName"), source.Agent);
         var action = RequiredString(args, "action").Trim().ToLowerInvariant();
         if (action == "list")
         {
