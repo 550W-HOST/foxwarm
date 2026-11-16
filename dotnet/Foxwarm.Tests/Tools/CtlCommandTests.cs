@@ -976,6 +976,17 @@ public sealed class CtlCommandTests
         Assert.Contains("Unknown tool: call_tool", removed.Response!.ToJsonString());
         var search = await Run(tools, "search_tools", new JsonObject());
         Assert.Contains("Unknown tool: search_tools", search.Response!.ToJsonString());
+        // Both name their ctl replacement, for model calls and ToolScript alike.
+        Assert.Equal(
+            "Unknown tool: call_tool. Use `ctl tool call <tool-id>` or the tool's `ctl` command.",
+            SessionWait.Text(removed.Response!["error"]!["message"])
+        );
+        Assert.Equal(
+            "Unknown tool: search_tools. Use `ctl tool search <words>`.",
+            SessionWait.Text(search.Response!["error"]!["message"])
+        );
+        var script = await Run(tools, "run_script", new JsonObject { ["code"] = "return call_tool('search_tools', {'query': 'x'})" });
+        Assert.Contains("Unknown tool: search_tools. Use `ctl tool search <words>`.", SessionWait.Text(script.Response!["error"]));
         var nested = await Run(tools, "ctl", Args("tool call builtin:ctl --args @a", new() { ["a"] = Args("help") }));
         Assert.Contains("not a concrete tool", nested.Response!.ToJsonString());
         var invalid = await Run(tools, "ctl", Args("session list --count many"));

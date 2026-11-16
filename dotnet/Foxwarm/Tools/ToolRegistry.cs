@@ -45,6 +45,17 @@ internal sealed class ToolRegistry(
     // True for a marker label of a currently masked value; writers reject such markers.
     internal Func<string, bool>? KnownSecretLabel { get; set; }
 
+    // The unknown-tool error. The 0.9.5 front ends, still present in older Session histories and
+    // persisted scripts, name their ctl replacement (user decision 2026-11-16); they are not
+    // aliases and run nothing.
+    internal static string UnknownTool(string name) =>
+        name switch
+        {
+            "search_tools" => "Unknown tool: search_tools. Use `ctl tool search <words>`.",
+            "call_tool" => "Unknown tool: call_tool. Use `ctl tool call <tool-id>` or the tool's `ctl` command.",
+            _ => "Unknown tool: " + name,
+        };
+
     internal void Register(
         JsonObject definition,
         string source,
@@ -162,7 +173,7 @@ internal sealed class ToolRegistry(
                         (JsonObject)args.DeepClone(),
                         ExecutionNode: currentNode
                     );
-                throw new InvalidDataException("Unknown tool: " + invocation);
+                throw new InvalidDataException(UnknownTool(invocation));
             }
             return new(
                 invocation,
@@ -236,7 +247,7 @@ internal sealed class ToolRegistry(
             return new(invocation, source, name, targetArgs, ExecutionNode: targetNode);
         }
         if (!entries.TryGetValue(name, out var registration))
-            throw new InvalidDataException("Unknown tool: " + name);
+            throw new InvalidDataException(UnknownTool(name));
         if (registration.Source != source)
             throw new InvalidDataException(
                 $"Tool `{name}` is a {registration.Source} capability, not {source}."

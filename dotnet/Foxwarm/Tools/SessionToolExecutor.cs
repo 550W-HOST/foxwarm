@@ -753,7 +753,7 @@ internal sealed partial class SessionToolExecutor(
                 ?? throw new InvalidDataException("Tool arguments must be an object.");
             // call_tool is ToolScript's host function, not a model tool.
             if (name == "call_tool" && !Programmatic)
-                throw new InvalidDataException("Unknown tool: call_tool");
+                throw new InvalidDataException(ToolRegistry.UnknownTool("call_tool"));
             var compactCall = CompactSubmissionCall(functionCall);
             if (invocation.Value is { } compactInvocation)
                 compactInvocation.CompactCall = compactCall;
