@@ -16,11 +16,10 @@ public sealed partial class ToolAuthorizationEffectsTests
         SessionManager Manager,
         SessionOwner Caller,
         string Root,
-        List<string> Roots
+        List<string> Roots,
+        Func<string, JsonObject, Task<JsonObject>> Call
     )
     {
-        // Timers as stored when create_timer returned (a fired one-shot timer is removed).
-        internal List<JsonObject> Timers { get; } = [];
 
         internal async Task<string> Task(string? owner = null)
         {
@@ -139,24 +138,67 @@ public sealed partial class ToolAuthorizationEffectsTests
         ["edit_memory"] = _ =>
             Ready(new("", "edit_memory", Obj("""{"filePath":"differential.md","oldText":"memory","newText":"edited"}"""))),
         ["delete_memory"] = _ => Ready(new("", "delete_memory", Obj("""{"filePath":"nested/deep.md"}"""))),
+        ["create_session parent is caller"] = world =>
+            Ready(
+                new(
+                    "",
+                    "create_session",
+                    new JsonObject { ["agentName"] = "alpha", ["sessionName"] = "s-child", ["parentSessionId"] = world.Caller.Id }
+                )
+            ),
+        ["create_session parent alias"] = _ =>
+            Ready(new("", "create_session", Obj("""{"agentName":"alpha","sessionName":"s-alias","parentSessionId":"self"}"""))),
+        ["move_session alias"] = _ =>
+            Ready(new("", "move_session", Obj("""{"sessionId":"kid","newSessionId":"renamed-alias"}"""))),
+        ["delete_session alias"] = _ => Ready(new("", "delete_session", Obj("""{"sessionId":"kid"}"""))),
+        ["create_agent convert alias"] = _ =>
+            Ready(new("", "create_agent", Obj("""{"agentName":"d-convert-alias","convertSession":true,"sourceSessionId":"kid"}"""))),
+        ["create_agent inheritMemory (alias source)"] = _ =>
+            Ready(new("", "create_agent", Obj("""{"agentName":"d-memory-alias","inheritMemory":true,"sourceSessionId":"outside"}"""))),
+        ["task assign alias"] = async world =>
+        {
+            var task = await world.Task();
+            return new(
+                "",
+                "task",
+                new JsonObject { ["action"] = "assign", ["taskId"] = task, ["ownerSessionId"] = "kid" },
+                Tasks: [task]
+            );
+        },
+        // Agent metadata writers
+        ["set_agent_rules"] = async world =>
+        {
+            Assert.Null(Error(await world.Call("create_agent", Obj("""{"agentName":"d-ruled","createMainSession":false}"""))));
+            return new("", "set_agent_rules", Obj("""{"agentName":"d-ruled","rules":[{"op":"env.exec","action":"deny"}]}"""));
+        },
+        ["set_agent_inherit"] = async world =>
+        {
+            Assert.Null(Error(await world.Call("create_agent", Obj("""{"agentName":"d-heir","createMainSession":false}"""))));
+            return new("", "set_agent_inherit", Obj("""{"agentName":"d-heir","inheritAgentName":"alpha"}"""));
+        },
         // A timer that creates a Session when it fires: the creation probe states the Agent;
         // the Node and parent are decided at fire time.
-        ["create_timer new Session"] = world =>
+        ["create_timer new Session"] = _ =>
             Ready(
                 new(
                     "",
                     "create_timer",
                     Obj("""{"afterSeconds":1,"message":"fire","newSession":true,"agentName":"beta"}"""),
                     Deferred: ["session.create:node"],
-                    Probes: (_, _) =>
-                        world
-                            .Timers.Where(timer => MainTimers.Flag(timer["newSession"]))
-                            .Select(timer => ToolAuthorizationEvaluation.CreationTargetOperation(SessionWait.Text(timer["agentName"])!))
+                    Probes: TimerCreationTarget
                 )
             ),
     };
 
     private static Task<Case> Ready(Case value) => Task.FromResult(value);
+
+    // A new-Session timer's creation target, from the call's arguments before it runs: the
+    // stored row's Agent is the named Agent (normalized as TimerArguments stores it), else the
+    // owner Session's.
+    private static IEnumerable<AuthorizationOperation> TimerCreationTarget(Case @case, SessionOwner caller) =>
+        MainTimers.Flag(@case.Args["newSession"])
+            ? [ToolAuthorizationEvaluation.CreationTargetOperation(TimerArguments.Optional(@case.Args["agentName"]) ?? caller.Agent)]
+            : [];
 
     public static TheoryData<string> DifferentialCaseNames()
     {
@@ -166,9 +208,23 @@ public sealed partial class ToolAuthorizationEffectsTests
         return data;
     }
 
+    // Each case, then each whitespace-padded variant of its identifier arguments, each in a
+    // fresh fixture (a variant is derived from the case its own fixture builds).
     [Theory]
     [MemberData(nameof(DifferentialCaseNames))]
     public async Task Operation_plans_match_what_handlers_do(string name)
+    {
+        var (problems, built) = await RunDifferential(name, @case => @case);
+        for (var index = 0; index < Padded(built).Count(); index++)
+        {
+            var variant = index;
+            var (variantProblems, _) = await RunDifferential(name, @case => Padded(@case).ElementAt(variant));
+            problems.AddRange(variantProblems);
+        }
+        Assert.True(problems.Count == 0, name + ":\n" + string.Join("\n", problems));
+    }
+
+    private static async Task<(List<string> Problems, Case Case)> RunDifferential(string name, Func<Case, Case> transform)
     {
         using var temp = new TempDirectory();
         await Seed(temp.Path);
@@ -188,8 +244,14 @@ public sealed partial class ToolAuthorizationEffectsTests
         var caller = await manager.CreateNamedAsync("alpha", "caller", null, null);
         var execution = TimerExecutor(manager, caller, temp.Path, MainLocalToolDefinitions.Definitions());
         await using var mcp = execution.Mcp;
-        var world = new DifferentialWorld(manager, caller, temp.Path, [Path.Combine(temp.Path, "workspace")]);
-        var @case = (await DifferentialCases[name](world)) with { Name = name };
+        var world = new DifferentialWorld(
+            manager,
+            caller,
+            temp.Path,
+            [Path.Combine(temp.Path, "workspace")],
+            (tool, args) => Call(execution.Tools, tool, args)
+        );
+        var @case = transform((await DifferentialCases[name](world)) with { Name = name });
         await Policy(manager, OperationEffectConformance.Policy);
         var fired = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         manager.TimerSessionName = _ => "fired";
@@ -209,7 +271,6 @@ public sealed partial class ToolAuthorizationEffectsTests
                 var result = await Call(execution.Tools, tool, args);
                 if (tool == "create_timer" && result["error"] is null)
                 {
-                    world.Timers.AddRange(manager.Timers.List(caller.Id).OfType<JsonObject>().Select(timer => (JsonObject)timer.DeepClone()));
                     await fired.Task.WaitAsync(TimeSpan.FromSeconds(10));
                     // Publication completes after the hook.
                     for (var attempt = 0; attempt < 100 && manager.Catalog.List().All(row => !SessionWait.Text(row["id"])!.EndsWith("/fired")); attempt++)
@@ -219,6 +280,6 @@ public sealed partial class ToolAuthorizationEffectsTests
             },
             world.Roots
         );
-        Assert.True(problems.Count == 0, name + ":\n" + string.Join("\n", problems));
+        return (problems.Select(problem => "[" + @case.Name + "] " + problem).ToList(), @case);
     }
 }

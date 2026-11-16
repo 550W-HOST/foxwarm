@@ -56,12 +56,26 @@ public sealed partial class NodeAuthorizationTreeTests
         return data;
     }
 
+    // Each case, then each whitespace-padded variant of its identifier arguments, each in a
+    // fresh fixture.
     [Theory]
     [MemberData(nameof(NodeDifferentialCaseNames))]
     public async Task Node_operation_plans_match_what_handlers_do(string name)
     {
+        var (problems, built) = await RunNodeDifferential(name, @case => @case);
+        for (var index = 0; index < Padded(built).Count(); index++)
+        {
+            var variant = index;
+            var (variantProblems, _) = await RunNodeDifferential(name, @case => Padded(@case).ElementAt(variant));
+            problems.AddRange(variantProblems);
+        }
+        Assert.True(problems.Count == 0, name + ":\n" + string.Join("\n", problems));
+    }
+
+    private static async Task<(List<string>, Case)> RunNodeDifferential(string name, Func<Case, Case> transform)
+    {
         await using var f = await Fixture.Create();
-        var @case = NodeDifferentialCases[name](f) with { Name = name };
+        var @case = transform(NodeDifferentialCases[name](f) with { Name = name });
         await f.Policy(OperationEffectConformance.Policy);
         var files = new WorkspaceTools(f.Manager.IdentityWorkspace(f.Owner).ToolDirectory);
         var problems = await Run(
@@ -72,6 +86,6 @@ public sealed partial class NodeAuthorizationTreeTests
             (tool, args) => f.Call(tool, args),
             []
         );
-        Assert.True(problems.Count == 0, name + ":\n" + string.Join("\n", problems));
+        return (problems.Select(problem => "[" + @case.Name + "] " + problem).ToList(), @case);
     }
 }
