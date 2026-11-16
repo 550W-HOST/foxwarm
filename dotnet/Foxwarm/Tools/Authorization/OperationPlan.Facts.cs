@@ -92,8 +92,13 @@ internal sealed partial record OperationPlan
             "move-memory-source" => ["sessionId"],
             "move-memory-target" => ["newAgentName"],
             "agent-main-node" => ["defaultNode"],
-            "source-agent" => ["sourceSessionId"],
-            "source-node" => ["sourceSessionId"],
+            "agent-main-session" => ["agentName"],
+            "creation-source" => ["sourceSessionId"],
+            "source-agent" or "source-session" or "source-node" => ["sourceSessionId"],
+            "pairing-node" => ["pendingId", "nodeId"],
+            "prospective-child" => ["agentName"],
+            "prospective-session" => ["agentName"],
+            "creation-runtime" => ["runtime"],
             "node-target" or "node-target?" => ["nodeId", "parentNode", "providerId"],
             "provider-node" => ["nodeId", "providerId"],
             "target-session" or "timer-owner" => ["sessionId"],
@@ -143,7 +148,6 @@ internal sealed partial record OperationPlan
             case "exec-node":
             case "caller":
             case "caller-agent":
-            case "prospective":
             case "tool":
             case "server-tool":
             case "placement":
@@ -161,9 +165,22 @@ internal sealed partial record OperationPlan
             case "move-memory-target":
                 return ("Agent memory directory", ["MemoryDirectory"]);
             case "agent-main-node":
-                return ("new Agent default Node", ["NewAgentDefaultNode"]);
+                // InstallDefaultNode may be null: no installation default.
+                return ("SessionCreationDefaults (new Agent effective default)", []);
+            case "agent-main-session":
+                return ("SessionCreationDefaults.MainSession", []);
+            case "creation-source":
+                return ("SessionCreationDefaults.CreationSource", []);
             case "source-agent":
-                return ("source Session's Agent", ["SessionAgent"]);
+            case "source-session":
+                return ("SessionCreationDefaults.SourceAgent", ["SessionAgent"]);
+            case "pairing-node":
+                return ("ApprovedNodeRegistry approval ID", ["PairingNodeId"]);
+            case "prospective-child":
+            case "prospective-session":
+                return ("SessionCreationDefaults (prospective Session)", []);
+            case "creation-runtime":
+                return ("SessionCreationDefaults.Runtime", []);
             case "source-node":
                 return ("source Session's Agent default Node", ["SessionAgent", "AgentDefaultNode"]);
             case "child-node":

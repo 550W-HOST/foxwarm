@@ -132,8 +132,11 @@ internal sealed partial class SessionManager
                             "convertSession requires createMainSession=true."
                         );
                     var copyMemory = OptionalBool(args, "inheritMemory") ?? false;
-                    var sourceId = OptionalString(args, "sourceSessionId");
-                    sourceId = string.IsNullOrEmpty(sourceId) ? null : sourceId;
+                    var sourceSelection = SessionCreationDefaults.CreationSource(
+                        OptionalString(args, "sourceSessionId"),
+                        source.Id
+                    );
+                    var sourceId = sourceSelection.Caller ? null : sourceSelection.Id;
                     var inherit = OptionalString(args, "inherit");
                     inherit = string.IsNullOrWhiteSpace(inherit) ? null : inherit.Trim();
                     if (inherit is not null && !agents.Exists(inherit))

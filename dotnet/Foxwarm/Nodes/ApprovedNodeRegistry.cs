@@ -284,6 +284,46 @@ internal sealed partial class ApprovedNodeRegistry
         );
     }
 
+    // The Node ID an approval assigns: the requested ID, else one derived from the pending
+    // request's name with the first free suffix. Approval and its authorization facts
+    // (PreviewApprovalId) both use it.
+    private static string ApprovalId(JsonObject document, JsonObject pending, string? id)
+    {
+        if (!string.IsNullOrWhiteSpace(id))
+            return ValidateId(id);
+        var basis = Slug(
+            SessionWait.Text(pending["requestedName"])
+                ?? SessionWait.Text(pending["nodeType"])
+                ?? "node"
+        );
+        if (basis == "master")
+            basis = "master-node";
+        var allocated = basis;
+        for (var suffix = 2; Reserved(document, allocated); suffix++)
+            allocated = basis + "-" + suffix;
+        return allocated;
+    }
+
+    // The Node ID approving this pending request would assign now; null when the request is
+    // unknown or already approved, or the requested ID is invalid.
+    internal string? PreviewApprovalId(string pendingId, string? id)
+    {
+        Cleanup();
+        lock (gate)
+        {
+            if (Pending(data)[pendingId] is not JsonObject pending || pending["approvedNodeId"] is not null)
+                return null;
+            try
+            {
+                return ApprovalId(data, pending, id);
+            }
+            catch (InvalidDataException)
+            {
+                return null;
+            }
+        }
+    }
+
     internal JsonObject Approve(string pendingId, string? id, Action? beforeMutation = null)
     {
         Cleanup();
@@ -294,21 +334,7 @@ internal sealed partial class ApprovedNodeRegistry
                 ?? throw new InvalidDataException("Pending pairing not found.");
             if (pending["approvedNodeId"] is not null)
                 throw new InvalidDataException("Pairing is no longer awaiting approval.");
-            if (!string.IsNullOrWhiteSpace(id))
-                id = ValidateId(id);
-            else
-            {
-                var basis = Slug(
-                    SessionWait.Text(pending["requestedName"])
-                        ?? SessionWait.Text(pending["nodeType"])
-                        ?? "node"
-                );
-                if (basis == "master")
-                    basis = "master-node";
-                id = basis;
-                for (var suffix = 2; Reserved(next, id); suffix++)
-                    id = basis + "-" + suffix;
-            }
+            id = ApprovalId(next, pending, id);
             RequireFresh(next, id);
             RequireAdmission(next, id, null);
             beforeMutation?.Invoke();

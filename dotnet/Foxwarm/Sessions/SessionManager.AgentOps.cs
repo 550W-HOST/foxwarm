@@ -106,7 +106,10 @@ internal sealed partial class SessionManager
             try
             {
                 if (inheritMemory)
-                    agents.CopyIdentityMemory(sourceSession?.Agent ?? "main", agentName);
+                    agents.CopyIdentityMemory(
+                        SessionCreationDefaults.MemorySourceAgent(sourceSession?.Agent),
+                        agentName
+                    );
                 if (!createMainSession)
                     return (agentName, null);
                 var source = sourceSession?.Entry.Snapshot().AuthorityEnvelope;
@@ -202,7 +205,10 @@ internal sealed partial class SessionManager
                     null,
                     null,
                     exactId: id,
-                    initialNode: agents.EffectiveDefaultNode(SessionIdentity.Agent(id)) ?? "master"
+                    initialNode: SessionCreationDefaults.PlacedNode(
+                        null,
+                        agents.EffectiveDefaultNode(SessionIdentity.Agent(id))
+                    )
                 );
         }
         finally
@@ -336,7 +342,7 @@ internal sealed partial class SessionManager
             )
         )
             throw new InvalidDataException("Claude Code Session forks are not supported.");
-        targetAgent ??= parent.Agent;
+        targetAgent = SessionCreationDefaults.ChildAgent(targetAgent, parent.Agent);
         if (!userInitiated)
             agents.RequireSessionTarget(parent.Agent, targetAgent);
         using var membership = BeginAgentAdmission(parent.Agent, targetAgent);
@@ -398,8 +404,12 @@ internal sealed partial class SessionManager
                     candidate,
                     targetAgent == parent.Agent ? AgentMemory.Selection(parentEnvelope) : null,
                     // Only a same-Agent parent supplies its Node; the target's defaults follow.
-                    initialNode: initialNode
-                        ?? (targetAgent == parent.Agent ? CurrentNode(parent) : null),
+                    initialNode: SessionCreationDefaults.InitialNode(
+                        initialNode,
+                        targetAgent,
+                        parent.Agent,
+                        CurrentNode(parent)
+                    ),
                     runtime: runtime
                 );
                 try
@@ -678,8 +688,10 @@ internal sealed partial class SessionManager
         // User decision 2026-11-06: explicit or same-Agent parent (supplied by the caller as
         // initialNode; a timer's stored owner Node counts as one), Agent default, installation
         // default, then master. Legacy isolation bindings no longer place Sessions (R2).
-        var selectedNode =
-            (timerCreation ? timerNode : initialNode) ?? agents.EffectiveDefaultNode(agentName);
+        var selectedNode = SessionCreationDefaults.PlacedNode(
+            timerCreation ? timerNode : initialNode,
+            agents.EffectiveDefaultNode(agentName)
+        );
         return await WithCreationIdentityAsync(
             id,
             async () =>
@@ -731,7 +743,7 @@ internal sealed partial class SessionManager
                         state.AuthorityEnvelope["parentSessionId"] = parentId;
                     if (displayName is not null)
                         state.AuthorityEnvelope["displayName"] = displayName;
-                    state.AuthorityEnvelope["currentNode"] = selectedNode ?? "master";
+                    state.AuthorityEnvelope["currentNode"] = selectedNode;
                     if (agents.DefaultCwdFor(agentName, selectedNode) is { } defaultCwd)
                         state.AuthorityEnvelope["cwd"] = defaultCwd;
                     if (model is not null)

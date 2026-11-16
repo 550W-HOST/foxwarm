@@ -512,13 +512,17 @@ internal static class OperationRules
         bool restrictive
     )
     {
-        var prospective = value is JsonObject marker && marker["prospective"] is not null;
+        var marker = value as JsonObject;
+        var prospective = marker?["prospective"] is not null;
         if (matcher["id"] is { } ids)
         {
             if (prospective)
-                // The ID is allocated when the Session is created; a restriction applies to any
-                // ID it could get, a grant to none.
-                return restrictive ? OperationMatch.Yes : OperationMatch.No;
+                // A Session the call creates: its ID when the handler fixes it (an Agent's main
+                // Session, a named source); otherwise the ID is allocated at creation, and a
+                // restriction applies to any ID it could get, a grant to none.
+                return SessionWait.Text(marker!["id"]) is string fixedId
+                    ? Of(ToolAuthorizationEvaluation.Pattern(ids, fixedId))
+                    : restrictive ? OperationMatch.Yes : OperationMatch.No;
             var id = target?.Id ?? SessionWait.Text(value);
             return id is null ? OperationMatch.Unknown : Of(ToolAuthorizationEvaluation.Pattern(ids, id));
         }
@@ -527,19 +531,27 @@ internal static class OperationRules
         var condition = matcher["session"]!.AsObject();
         if (prospective)
         {
-            // A Session the call creates: never the caller or its parent; a child when the
-            // operation creates the caller's child; in the caller's Agent when its target Agent is.
+            // A Session the call creates: never the caller or its parent; a child when it is
+            // created as the caller's child; in the caller's Agent when it is created there. Its
+            // Agent and relation are facts of the marker (or of its creation operation); without
+            // them a restriction applies and a grant does not.
             if (condition.ContainsKey("self"))
                 return OperationMatch.No;
             if (condition.ContainsKey("sameAgent"))
             {
-                var agent = SessionWait.Text(operation.Resources["targetAgent"]) ?? request.Agent;
+                var agent =
+                    SessionWait.Text(marker!["agent"])
+                    ?? SessionWait.Text(operation.Resources["targetAgent"]);
+                if (agent is null)
+                    return restrictive ? OperationMatch.Yes : OperationMatch.No;
                 if (agent != request.Agent)
                     return OperationMatch.No;
             }
             if (condition["relation"] is { } relation)
             {
-                var child = SessionWait.Text(operation.With["kind"]) == "child";
+                var child =
+                    marker!["child"]?.GetValue<bool>() == true
+                    || SessionWait.Text(operation.With["kind"]) == "child";
                 var relations = relation is JsonArray list
                     ? list.Select(SessionWait.Text)
                     : [SessionWait.Text(relation)];

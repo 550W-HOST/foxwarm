@@ -356,7 +356,12 @@ internal sealed partial class SessionManager
             sessionName,
             null,
             null,
-            initialNode: parent.Agent == agentName ? CurrentNode(parent) : null,
+            initialNode: SessionCreationDefaults.InitialNode(
+                null,
+                agentName,
+                parent.Agent,
+                CurrentNode(parent)
+            ),
             parentSessionId: parentSessionId,
             runtime: runtime
         );

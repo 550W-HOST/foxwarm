@@ -14,11 +14,21 @@ internal sealed partial class SessionManager
         ResolvedTool resolved,
         ToolAuthorizationRequest request,
         WorkspaceTools? files = null
-    ) =>
-        OperationPlan
-            .AuthorizationOperations(resolved, request, OperationContext(owner, files))
-            .Select(operation => WithFacts(owner, operation, request))
-            .ToArray();
+    )
+    {
+        var operations = OperationPlan.AuthorizationOperations(
+            resolved,
+            request,
+            OperationContext(owner, files)
+        );
+        // Agents this call creates: every operation on them targets a new descendant.
+        var created = operations
+            .Where(operation => operation.Op == "agent.create")
+            .Select(operation => SessionWait.Text(operation.Resources["targetAgent"]))
+            .OfType<string>()
+            .ToHashSet(StringComparer.Ordinal);
+        return operations.Select(operation => WithFacts(owner, operation, request, created)).ToArray();
+    }
 
     // The facts the plan reads beyond the request, from their owners: catalog lookups, Agent
     // defaults, the Node forest and the caller's working directory. Enforcement, explain and
@@ -46,12 +56,12 @@ internal sealed partial class SessionManager
             SessionAgent = id => AuthorizationTarget(id)?.Agent,
             DefaultCwdProbe = DefaultCwdProbe,
             SecretsUnknown = assessment?.SecretsUnknown == true,
-            // Where an Agent's memory lives, also for an Agent the call creates.
+            // Where an Agent memory copy reads or writes, also for an Agent the call creates.
             MemoryDirectory = agent =>
             {
                 try
                 {
-                    return Path.Combine(agents.SourceDirectory(agent), "memory");
+                    return agents.MemoryCopyRoot(agent);
                 }
                 catch (Exception error) when (error is InvalidDataException or ArgumentException)
                 {
@@ -63,14 +73,17 @@ internal sealed partial class SessionManager
                 try
                 {
                     AgentCatalog.ValidateName(agent);
-                    return agents.Exists(agent) ? agents.EffectiveDefaultNode(agent) ?? "master" : null;
+                    return agents.Exists(agent)
+                        ? SessionCreationDefaults.PlacedNode(null, agents.EffectiveDefaultNode(agent))
+                        : null;
                 }
                 catch (Exception error) when (error is InvalidDataException or ArgumentException)
                 {
                     return null;
                 }
             },
-            NewAgentDefaultNode = agents.InstallDefaultNode ?? "master",
+            InstallDefaultNode = agents.InstallDefaultNode,
+            PairingNodeId = (pendingId, nodeId) => Nodes.Registry.PreviewApprovalId(pendingId, nodeId),
             DefaultExecCwd = files is null
                 ? null
                 : () =>
@@ -89,7 +102,8 @@ internal sealed partial class SessionManager
     private AuthorizationOperation WithFacts(
         SessionOwner owner,
         AuthorizationOperation operation,
-        ToolAuthorizationRequest request
+        ToolAuthorizationRequest request,
+        IReadOnlySet<string>? created = null
     )
     {
         if (operation.Underivable is not null)
@@ -112,7 +126,10 @@ internal sealed partial class SessionManager
         if (SessionWait.Text(operation.Resources["parent"]) is { } parent)
             operation = operation with { ParentTarget = Resolve(parent) };
         if (SessionWait.Text(operation.Resources["targetAgent"]) is { } agent)
-            operation = operation with { AgentDescendant = Descendant(owner.Agent, agent, operation.Op) };
+            operation = operation with
+            {
+                AgentDescendant = created?.Contains(agent) == true ? true : Descendant(owner.Agent, agent, operation.Op),
+            };
         if (SessionWait.Text(operation.Resources["task"]) is { } task && task.Length <= 128)
         {
             var id = task.Trim();

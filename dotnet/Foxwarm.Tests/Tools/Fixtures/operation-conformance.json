@@ -1471,7 +1471,9 @@
        "node": "box",
        "parent": "alpha-1",
        "targetSession": {
-        "prospective": true
+        "prospective": true,
+        "agent": "beta",
+        "child": true
        }
       },
       "with": {
@@ -1486,7 +1488,9 @@
       "resources": {
        "task": "task-1",
        "targetSession": {
-        "prospective": true
+        "prospective": true,
+        "agent": "beta",
+        "child": true
        }
       },
       "conditional": true
@@ -1598,7 +1602,6 @@
     "sessionExists": {
      "gamma-src": false
     },
-    "newAgentDefaultNode": "master",
     "agentDefaultNode": {
      "main": "master"
     }
@@ -1617,10 +1620,17 @@
       "op": "session.create",
       "resources": {
        "targetAgent": "gamma",
-       "node": "master"
+       "node": "master",
+       "targetSession": {
+        "prospective": true,
+        "agent": "gamma",
+        "id": "gamma/main"
+       }
       },
       "with": {
-       "kind": "session"
+       "kind": "session",
+       "placement": "inherited",
+       "runtime": "foxwarm"
       },
       "conditional": true
      },
@@ -1629,10 +1639,16 @@
       "resources": {
        "targetAgent": "main",
        "node": "master",
-       "targetSession": "gamma-src"
+       "targetSession": {
+        "prospective": true,
+        "agent": "main",
+        "id": "gamma-src"
+       }
       },
       "with": {
-       "kind": "source"
+       "kind": "source",
+       "placement": "inherited",
+       "runtime": "foxwarm"
       },
       "conditional": true
      }
@@ -1670,10 +1686,17 @@
       "op": "session.create",
       "resources": {
        "targetAgent": "gamma",
-       "node": "master"
+       "node": "master",
+       "targetSession": {
+        "prospective": true,
+        "agent": "gamma",
+        "id": "gamma/main"
+       }
       },
       "with": {
-       "kind": "session"
+       "kind": "session",
+       "placement": "inherited",
+       "runtime": "foxwarm"
       },
       "conditional": true
      }
@@ -1698,7 +1721,6 @@
     }
    },
    "context": {
-    "newAgentDefaultNode": "master",
     "agentDefaultNode": {
      "main": "master"
     }
@@ -1871,7 +1893,8 @@
        "targetAgent": "beta",
        "node": "master",
        "targetSession": {
-        "prospective": true
+        "prospective": true,
+        "agent": "beta"
        }
       },
       "with": {

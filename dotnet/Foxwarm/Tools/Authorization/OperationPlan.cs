@@ -29,9 +29,12 @@ internal sealed record PlanContext(string CurrentNode)
     // default, the installation default, then master); null when unknown.
     internal Func<string, string?>? AgentDefaultNode { get; init; }
 
-    // The Node a new Agent's main Session starts on when the call names no default Node: the
-    // installation default, else master.
-    internal string? NewAgentDefaultNode { get; init; }
+    // The installation default Node of new Sessions (part of an Agent's effective default).
+    internal string? InstallDefaultNode { get; init; }
+
+    // The Node ID approving a pending pairing request would assign (pendingId, nodeId); null
+    // when unknown.
+    internal Func<string, string?, string?>? PairingNodeId { get; init; }
 
     // The effective working directory of an exec without cwd on master; null when unknown.
     internal Func<AuthorizationPath?>? DefaultExecCwd { get; init; }
@@ -369,15 +372,57 @@ internal sealed partial record OperationPlan(
         private bool Unknown(params string[] names) =>
             known is not null && names.Any(name => !known.Contains(name));
 
-        // The Agent of create_agent's selected source Session: an existing Session's Agent, or the
+        // The Agent of create_agent's named source Session: an existing Session's Agent, or the
         // Agent its ID names when the call creates it.
         private string? SourceAgent()
         {
             if (Text("sourceSessionId") is not string text)
                 return null;
             var id = SessionGoal.Trim(text);
-            return context.SessionAgent?.Invoke(id)
-                ?? (Foxwarm.Sessions.SessionIdentity.IsValid(id) ? Foxwarm.Sessions.SessionIdentity.Agent(id) : null);
+            return SessionCreationDefaults.SourceAgent(id, context.SessionAgent?.Invoke(id));
+        }
+
+        // The Agent of create_agent's source Session, named or the caller.
+        private string? CreationSourceAgent() =>
+            facts?.Session is string caller
+            && SessionCreationDefaults.CreationSource(SessionWait.Text(args["sourceSessionId"]), caller).Caller
+                ? facts.Agent
+                : SourceAgent();
+
+        private string? ChildAgent() =>
+            facts?.Agent is string parentAgent
+                ? SessionCreationDefaults.ChildAgent(SessionWait.Text(args["agentName"]), parentAgent)
+                : null;
+
+        // The Agent of the Session move_session moves.
+        private string? MovedAgent()
+        {
+            var moved = Text("sessionId")?.Trim() ?? facts?.Session;
+            return moved is null ? null : context.SessionAgent?.Invoke(moved);
+        }
+
+        private string? MoveTarget() =>
+            MovedAgent() is string moved
+                ? SessionCreationDefaults.MoveTargetAgent(
+                    SessionWait.Text(args["newAgentName"]),
+                    Present("createAgent"),
+                    moved
+                )
+                : null;
+
+        private string? MemoryRoot(string? agent) =>
+            agent is null ? null : context.MemoryDirectory?.Invoke(agent);
+
+        // A Session the call creates: its Agent, its ID when the handler fixes it, and whether it
+        // is the caller's child.
+        private static JsonObject Prospective(string agent, string? id, bool child)
+        {
+            var marker = new JsonObject { ["prospective"] = true, ["agent"] = agent };
+            if (id is not null)
+                marker["id"] = id;
+            if (child)
+                marker["child"] = true;
+            return marker;
         }
 
         private string? Text(string name) =>
@@ -626,44 +671,62 @@ internal sealed partial record OperationPlan(
                     value = resolved.ExecutionNode;
                     return true;
                 case "memory-source":
-                {
-                    // create_agent copies the memory of the selected source Session's Agent,
-                    // else the caller's.
-                    var agent = Text("sourceSessionId") is string
-                        ? SourceAgent()
-                        : facts?.Agent;
-                    value = agent is null ? null : context.MemoryDirectory?.Invoke(agent);
+                    // create_agent copies the memory of its source Session's Agent: the caller's
+                    // unless sourceSessionId names another.
+                    value = MemoryRoot(SessionCreationDefaults.MemorySourceAgent(CreationSourceAgent()));
                     return value is not null;
-                }
                 case "move-memory-source":
-                {
-                    var moved = Text("sessionId")?.Trim() ?? facts?.Session;
-                    var agent = moved is null ? null : context.SessionAgent?.Invoke(moved);
-                    value = agent is null ? null : context.MemoryDirectory?.Invoke(agent);
+                    value = MemoryRoot(MovedAgent());
                     return value is not null;
-                }
                 case "move-memory-target":
-                    value = Text("newAgentName") is string newAgent
-                        ? context.MemoryDirectory?.Invoke(newAgent.Trim())
-                        : null;
+                    value = MemoryRoot(MoveTarget());
+                    return value is not null;
+                case "memory-target":
+                    value = MemoryRoot(SessionWait.Text(args["agentName"]));
                     return value is not null;
                 case "agent-main-node":
-                    // The new Agent's default Node, else the installation default, else master.
-                    value = Text("defaultNode")?.Trim() is { Length: > 0 } defaultNode
-                        ? defaultNode
-                        : context.NewAgentDefaultNode;
+                    // The new Agent's main Session: no initial Node, so its effective default.
+                    value = SessionCreationDefaults.PlacedNode(
+                        null,
+                        SessionCreationDefaults.EffectiveDefaultNode(
+                            SessionWait.Text(args["defaultNode"]),
+                            context.InstallDefaultNode
+                        )
+                    );
+                    return true;
+                case "agent-main-session":
+                    if (SessionWait.Text(args["agentName"]) is not string mainAgent)
+                        return false;
+                    try
+                    {
+                        value = Prospective(mainAgent, SessionCreationDefaults.MainSession(mainAgent), child: false);
+                        return true;
+                    }
+                    catch (InvalidDataException)
+                    {
+                        return false;
+                    }
+                case "creation-source":
+                    value = facts?.Session is string caller
+                        ? SessionCreationDefaults.CreationSource(SessionWait.Text(args["sourceSessionId"]), caller).Id
+                        : null;
                     return value is not null;
                 case "source-agent":
                     value = SourceAgent();
+                    return value is not null;
+                case "source-session":
+                    value = Text("sourceSessionId") is string sourceId && SourceAgent() is string created
+                        ? Prospective(created, SessionGoal.Trim(sourceId), child: false)
+                        : null;
                     return value is not null;
                 case "source-node":
                     value = SourceAgent() is string sourceAgent
                         ? context.AgentDefaultNode?.Invoke(sourceAgent)
                         : null;
                     return value is not null;
-                case "memory-target":
-                    value = Text("agentName") is string name
-                        ? context.MemoryDirectory?.Invoke(name.Trim())
+                case "pairing-node":
+                    value = Text("pendingId") is string pendingId
+                        ? context.PairingNodeId?.Invoke(pendingId, SessionWait.Text(args["nodeId"]))
                         : null;
                     return value is not null;
                 case "node-target":
@@ -693,47 +756,32 @@ internal sealed partial record OperationPlan(
                     return value is not null;
                 case "child-node":
                 {
-                    // create_child_session: the explicit Node, else the caller's current Node in
-                    // its own Agent, else the target Agent's default.
-                    if (args["node"] is JsonNode explicitNode)
-                    {
-                        value = explicitNode.DeepClone();
-                        return true;
-                    }
-                    var agent = SessionWait.Text(args["agentName"]) ?? facts?.Agent;
+                    // create_child_session: the Node the handler passes (explicit, else a
+                    // same-Agent parent's current Node), else the target Agent's default.
+                    if (ChildAgent() is not string childTarget || facts?.Agent is not string parentAgent)
+                        return false;
                     value =
-                        agent is null ? null
-                        : agent == facts?.Agent ? context.CurrentNode
-                        : context.AgentDefaultNode?.Invoke(agent);
+                        SessionCreationDefaults.InitialNode(
+                            SessionWait.Text(args["node"]),
+                            childTarget,
+                            parentAgent,
+                            context.CurrentNode
+                        ) ?? context.AgentDefaultNode?.Invoke(childTarget);
                     return value is not null;
                 }
                 case "session-node":
-                {
                     // create_session: the explicit Node, else the Agent's default.
-                    if (args["node"] is JsonNode explicitNode)
-                    {
-                        value = explicitNode.DeepClone();
-                        return true;
-                    }
-                    value = SessionWait.Text(args["agentName"]) is string agent
-                        ? context.AgentDefaultNode?.Invoke(agent)
-                        : null;
+                    value =
+                        SessionWait.Text(args["node"])
+                        ?? (
+                            SessionWait.Text(args["agentName"]) is string sessionTarget
+                                ? context.AgentDefaultNode?.Invoke(sessionTarget)
+                                : null
+                        );
                     return value is not null;
-                }
                 case "move-agent":
-                {
-                    // move_session: the new Agent when one is named, else the moved Session's.
-                    if (SessionWait.Text(args["newAgentName"]) is { Length: > 0 } named)
-                    {
-                        value = named;
-                        return true;
-                    }
-                    if (Present("createAgent"))
-                        return false;
-                    var moved = Text("sessionId")?.Trim() ?? facts?.Session;
-                    value = moved is null ? null : context.SessionAgent?.Invoke(moved);
+                    value = MoveTarget();
                     return value is not null;
-                }
                 case "session-scope":
                     // The model's list defaults to the caller's Agent; an inbound list has no
                     // scope argument and lists every Session.
@@ -752,7 +800,7 @@ internal sealed partial record OperationPlan(
                     value = facts?.Agent;
                     return value is not null;
                 case "agent-or-caller":
-                    value = Text("agentName")?.Trim() ?? facts?.Agent;
+                    value = ChildAgent();
                     return value is not null;
                 case "timer-owner":
                     value = Text("sessionId")?.Trim() ?? facts?.Session;
@@ -775,9 +823,25 @@ internal sealed partial record OperationPlan(
                 case "has-secret-questions":
                     value = (Items("secret-questions")?.Count ?? 0) > 0;
                     return true;
-                case "prospective":
-                    value = new JsonObject { ["prospective"] = true };
-                    return true;
+                case "prospective-child":
+                    // The child create_child_session makes, in its target Agent.
+                    value = ChildAgent() is string childAgent ? Prospective(childAgent, null, child: true) : null;
+                    return value is not null;
+                case "prospective-session":
+                    value = SessionWait.Text(args["agentName"]) is string sessionAgent
+                        ? Prospective(sessionAgent, null, child: false)
+                        : null;
+                    return value is not null;
+                case "creation-runtime":
+                    try
+                    {
+                        value = SessionCreationDefaults.Runtime(args["runtime"], args.ContainsKey("runtime"));
+                        return true;
+                    }
+                    catch (InvalidDataException)
+                    {
+                        return false;
+                    }
                 case "tool":
                     value = resolved.Name;
                     return true;

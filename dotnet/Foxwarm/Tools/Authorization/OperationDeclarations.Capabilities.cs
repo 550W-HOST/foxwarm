@@ -184,17 +184,17 @@ internal static partial class OperationDeclarations
                         "targetAgent=agent-or-caller",
                         "node=child-node",
                         "parent=caller",
-                        "targetSession=prospective",
+                        "targetSession=prospective-child",
                         "with.kind==child",
                         "with.placement=placement",
-                        "with.runtime=arg?:runtime??foxwarm",
+                        "with.runtime=creation-runtime",
                         "with.fork=arg?:fork??false"
                     ),
                     OpIf(
                         "arg:taskId",
                         "task.assign",
                         "task=arg:taskId",
-                        "targetSession=prospective"
+                        "targetSession=prospective-child"
                     )
                 ),
             ],
@@ -212,10 +212,10 @@ internal static partial class OperationDeclarations
                         "targetAgent=arg:agentName",
                         "node=session-node",
                         "parent=arg?:parentSessionId",
-                        "targetSession=prospective",
+                        "targetSession=prospective-session",
                         "with.kind==session",
                         "with.placement=placement",
-                        "with.runtime=arg?:runtime??foxwarm"
+                        "with.runtime=creation-runtime"
                     )
                 ),
             ],
@@ -365,7 +365,10 @@ internal static partial class OperationDeclarations
                         "session.create",
                         "targetAgent=arg:agentName",
                         "node=agent-main-node",
-                        "with.kind==session"
+                        "targetSession=agent-main-session",
+                        "with.kind==session",
+                        "with.placement==inherited",
+                        "with.runtime==foxwarm"
                     ),
                     OpIf(
                         "source-exists",
@@ -377,8 +380,10 @@ internal static partial class OperationDeclarations
                         "session.create",
                         "targetAgent=source-agent",
                         "node=source-node",
-                        "targetSession=arg:sourceSessionId",
-                        "with.kind==source"
+                        "targetSession=source-session",
+                        "with.kind==source",
+                        "with.placement==inherited",
+                        "with.runtime==foxwarm"
                     ),
                     OpIf("arg:inheritMemory", "env.read", "node==master", "path=memory-source") with
                     {
@@ -391,7 +396,8 @@ internal static partial class OperationDeclarations
                     OpIf(
                         "arg:convertSession",
                         "session.manage",
-                        "targetSession=arg:sourceSessionId",
+                        "targetSession=creation-source",
+                        "targetAgent=arg:agentName",
                         "with.change==move"
                     )
                 ),
@@ -496,7 +502,7 @@ internal static partial class OperationDeclarations
         Simple("builtin:node_pair_list", Op("node.trust", "with.action==pending")),
         Simple(
             "builtin:node_pair_approve",
-            Op("node.trust", "node=arg:nodeId", "with.action==approve")
+            Op("node.trust", "node=pairing-node", "with.action==approve")
         ),
         Declare(
             "builtin:node_remove",

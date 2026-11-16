@@ -470,6 +470,28 @@ internal static class ToolAuthorizationEvaluation
         ToolAuthorizationRequest request
     ) => EvaluateCreationTargetOutcome(policy, request).Decision;
 
+    // The operation a new-Session timer's future creation performs: its Agent is known (the
+    // stored timer's agentName, which the fire uses) and it is an ordinary unforked Session
+    // without a parent; its Node is decided when it fires.
+    internal static AuthorizationOperation CreationTargetOperation(string agent) =>
+        new(
+            "session.create",
+            new JsonObject
+            {
+                ["targetAgent"] = agent,
+                ["node"] = null,
+                ["parent"] = null,
+                ["targetSession"] = new JsonObject { ["prospective"] = true, ["agent"] = agent },
+            },
+            new JsonObject
+            {
+                ["kind"] = "timer",
+                ["placement"] = null,
+                ["runtime"] = "foxwarm",
+                ["fork"] = false,
+            }
+        );
+
     // The creation-target decision with the rule traversal stopped at (the first matching rule
     // whose conditions are all known, or null for the default action) and every contribution.
     internal static CreationTargetOutcome EvaluateCreationTargetOutcome(
@@ -492,25 +514,7 @@ internal static class ToolAuthorizationEvaluation
             : allow ? CreationTargetDecision.Allow
             : deny ? CreationTargetDecision.Deny
             : CreationTargetDecision.Ask;
-        // The operation the future creation performs: its Agent is known, everything else is
-        // decided when the Session is created.
-        var creation = new AuthorizationOperation(
-            "session.create",
-            new JsonObject
-            {
-                ["targetAgent"] = SessionWait.Text(request.Args["agentName"]),
-                ["node"] = null,
-                ["parent"] = null,
-                ["targetSession"] = new JsonObject { ["prospective"] = true },
-            },
-            new JsonObject
-            {
-                ["kind"] = "timer",
-                ["placement"] = null,
-                ["runtime"] = null,
-                ["fork"] = null,
-            }
-        );
+        var creation = CreationTargetOperation(SessionWait.Text(request.Args["agentName"])!);
         foreach (var rule in policy.Value["rules"]!.AsArray().OfType<JsonObject>())
         {
             var match = rule["match"]!.AsObject();

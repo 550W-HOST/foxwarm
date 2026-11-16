@@ -26,7 +26,8 @@ internal sealed partial class AgentCatalog
     /// Placement default for new Sessions: the Agent's own `defaultNode`, else the installation
     /// default. Stored metadata and API views keep only the Agent's own value.
     /// </summary>
-    internal string? EffectiveDefaultNode(string name) => DefaultNode(name) ?? InstallDefaultNode;
+    internal string? EffectiveDefaultNode(string name) =>
+        SessionCreationDefaults.EffectiveDefaultNode(DefaultNode(name), InstallDefaultNode);
 
     internal string? DefaultCwd(string name)
     {
