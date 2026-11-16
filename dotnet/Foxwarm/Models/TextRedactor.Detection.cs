@@ -252,7 +252,7 @@ internal sealed partial class TextRedactor
         var found = new List<Found>();
         var byteCursor = 0;
         var charCursor = 0;
-        foreach (var (start, end, labels) in WithoutSecretMarkers(input, merged))
+        foreach (var (start, end, labels) in WithoutGuarded(input, merged))
         {
             charCursor += Utf8.GetCharCount(input, byteCursor, start - byteCursor);
             var original = Utf8.GetString(input, start, end - start);
@@ -271,33 +271,34 @@ internal sealed partial class TextRedactor
         return found.ToArray();
     }
 
-    // Secret markers from the irreversible secret stage pass through unchanged: a detected
-    // range keeps only its parts outside markers, and parts that are only whitespace stay.
-    private static IEnumerable<(int Start, int End, string[] Labels)> WithoutSecretMarkers(
+    // Convert the shared guarded ranges to byte offsets before clipping detector spans.
+    private IEnumerable<(int Start, int End, string[] Labels)> WithoutGuarded(
         byte[] input,
         List<(int Start, int End, string[] Labels)> spans
     )
     {
-        var prefix = Encoding.ASCII.GetBytes(Foxwarm.Secrets.SecretRedactor.MarkerPrefix);
+        var text = Utf8.GetString(input);
         var markers = new List<(int Start, int End)>();
-        for (
-            var start = input.AsSpan().IndexOf(prefix);
-            start >= 0;
-            start = NextIndex(input, prefix, start + 1)
-        )
+        var charCursor = 0;
+        var byteCursor = 0;
+        foreach (var (start, end) in Guarded(text))
         {
-            var label = input.AsSpan(start + prefix.Length);
-            var close = label.IndexOf("]]"u8);
-            if (close < 0)
-                break;
-            // Labels are names or configuration paths; whitespace means this is not a marker.
-            if (close == 0 || label[..close].IndexOfAny(" \t\r\n"u8) >= 0)
+            // Guarded ranges can overlap (for example a token in a secret-marker label).
+            if (start < charCursor)
+            {
+                if (end > charCursor)
+                {
+                    byteCursor += Utf8.GetByteCount(text.AsSpan(charCursor, end - charCursor));
+                    markers[^1] = (markers[^1].Start, byteCursor);
+                    charCursor = end;
+                }
                 continue;
-            // A path label may itself end in an index (`args[2]`), giving `]]]`.
-            var end = start + prefix.Length + close + 2;
-            while (end < input.Length && input[end] == (byte)']')
-                end++;
-            markers.Add((start, end));
+            }
+            byteCursor += Utf8.GetByteCount(text.AsSpan(charCursor, start - charCursor));
+            var byteStart = byteCursor;
+            byteCursor += Utf8.GetByteCount(text.AsSpan(start, end - start));
+            markers.Add((byteStart, byteCursor));
+            charCursor = end;
         }
         foreach (var (spanStart, spanEnd, labels) in spans)
         {
@@ -313,14 +314,6 @@ internal sealed partial class TextRedactor
             if (cursor < spanEnd && Meaningful(input, cursor, spanEnd))
                 yield return (cursor, spanEnd, labels);
         }
-    }
-
-    private static int NextIndex(byte[] input, byte[] value, int from)
-    {
-        if (from >= input.Length)
-            return -1;
-        var index = input.AsSpan(from).IndexOf(value);
-        return index < 0 ? -1 : from + index;
     }
 
     private static bool Meaningful(byte[] input, int start, int end) =>

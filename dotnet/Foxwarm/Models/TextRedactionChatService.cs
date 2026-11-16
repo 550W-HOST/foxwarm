@@ -70,7 +70,12 @@ internal sealed class TextRedactionChatService(
                 await TextRedactionProjection
                     .RedactHistoryAsync(
                         history.Select(message => (JsonObject)message.DeepClone()).ToArray(),
-                        Collect
+                        Collect,
+                        async values =>
+                        {
+                            await Collect(string.Concat(values));
+                            return values;
+                        }
                     )
                     .ConfigureAwait(false);
                 texts.Add(options.Instructions);
@@ -81,14 +86,20 @@ internal sealed class TextRedactionChatService(
             }
             // Detect every slot in order, then mask known originals everywhere, including
             // ones this request just found.
-            await TextRedactionProjection.RedactHistoryAsync(history, Detect).ConfigureAwait(false);
+            await TextRedactionProjection
+                .RedactHistoryAsync(history, Detect, scope.DetectRunAsync)
+                .ConfigureAwait(false);
             instructions = await Detect(options.Instructions).ConfigureAwait(false);
             tools = await TextRedactionProjection
                 .ToolsAsync(options.Tools, Detect)
                 .ConfigureAwait(false);
             token.ThrowIfCancellationRequested();
             await TextRedactionProjection
-                .RedactHistoryAsync(history, MaskKnown)
+                .RedactHistoryAsync(
+                    history,
+                    MaskKnown,
+                    values => Task.FromResult(scope.MaskKnownRun(values))
+                )
                 .ConfigureAwait(false);
             instructions = scope.MaskKnown(instructions);
             tools = await TextRedactionProjection

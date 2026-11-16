@@ -44,6 +44,7 @@ internal sealed partial class TextRedactor : IDisposable
     private readonly byte[] key;
     private readonly int digestCharacters;
     private readonly Regex placeholder;
+    private readonly Regex placeholderToken;
     private readonly object gate = new();
     private readonly long cacheLimit;
     private readonly long knownLimit;
@@ -112,6 +113,16 @@ internal sealed partial class TextRedactor : IDisposable
         this.digestCharacters = digestCharacters;
         placeholder = new Regex(
             Regex.Escape(Prefix) + "[0-9a-f]{" + digestCharacters + @"}\]\]",
+            RegexOptions.CultureInvariant
+        );
+        placeholderToken = new Regex(
+            Regex.Escape(Prefix)
+                + "[0-9a-f]{"
+                + digestCharacters
+                + @"}\]\]"
+                + "|PRIVATE_[0-9a-f]{"
+                + digestCharacters
+                + "}(?![0-9a-f])",
             RegexOptions.CultureInvariant
         );
         this.store = store;
@@ -206,9 +217,9 @@ internal sealed partial class TextRedactor : IDisposable
         }
         if (Stored(options, text, digest) is not { } stored)
             return null;
-        Admit(options, digest, stored.Spans, stored.Masked);
+        var accepted = Cache(options, digest, stored.Spans, stored.Masked);
         store!.TouchSlot(options, digest);
-        return stored;
+        return accepted;
     }
 
     // Reads a cached slot without refreshing its LRU position or caching a stored result, for
@@ -229,57 +240,62 @@ internal sealed partial class TextRedactor : IDisposable
     // Records the literal pass's spans for a cached slot. The first result is kept, so the
     // slot stays the same for as long as it is cached, whatever is registered later. The
     // finished result is also written to the store.
-    internal void Memoize(
+    internal Found[] Memoize(
         TextRedactionOptions options,
         string digest,
         Found[] spans,
         Found[] masked
     )
     {
-        if (MemoizeInMemory(options, digest, masked))
-            // Encoding and queueing the record happen outside the lock.
-            store?.PutSlot(options, digest, spans, masked);
-    }
-
-    // False when the slot already had a memoized result, which is then kept. An entry evicted
-    // meanwhile is still written: the store may keep it longer.
-    private bool MemoizeInMemory(TextRedactionOptions options, string digest, Found[] masked)
-    {
         lock (gate)
         {
-            if (!detections.TryGetValue(new(options, digest), out var node))
-                return true;
-            if (node.Value.Masked is not null)
-                return false;
-            var entry = node.Value with { Masked = masked, Touched = store?.Today ?? 0 };
-            var size = entry.Size;
-            cacheBytes -= node.Value.Size;
-            if (size > cacheLimit)
+            if (detections.TryGetValue(new(options, digest), out var node))
             {
-                detectionOrder.Remove(node);
-                detections.Remove(entry.Key);
-                return true;
+                // An entry evicted and re-detected while this scope was running can have
+                // different detection offsets. Never attach this scope's literal offsets
+                // to that unrelated detected form.
+                if (!ReferenceEquals(node.Value.Spans, spans))
+                    return masked;
+                if (node.Value.Masked is { } winner)
+                    return winner;
+                RegisterKnown(masked);
+                var entry = node.Value with { Masked = masked, Touched = store?.Today ?? 0 };
+                cacheBytes += entry.Size - node.Value.Size;
+                node.Value = entry;
+                while (cacheBytes > cacheLimit && detectionOrder.First is { } oldest)
+                {
+                    detectionOrder.RemoveFirst();
+                    detections.Remove(oldest.Value.Key);
+                    cacheBytes -= oldest.Value.Size;
+                }
             }
-            node.Value = entry;
-            cacheBytes += size;
-            while (cacheBytes > cacheLimit && detectionOrder.First is { } oldest && oldest != node)
-            {
-                detectionOrder.RemoveFirst();
-                detections.Remove(oldest.Value.Key);
-                cacheBytes -= oldest.Value.Size;
-            }
-            return true;
+            else
+                RegisterKnown(masked);
+            // Queue in the same order as acceptance, so a concurrent request cannot persist
+            // a different first result. Evicted entries can still be retained on disk.
+            store?.PutSlot(options, digest, spans, masked);
+            return masked;
         }
     }
 
-    internal void Cache(TextRedactionOptions options, string digest, Found[] spans)
+    // The first accepted detection wins, including for the callers whose detector finished
+    // later. They must send and register that result, not their losing classification.
+    internal (Found[] Spans, Found[]? Masked) Cache(
+        TextRedactionOptions options,
+        string digest,
+        Found[] spans,
+        Found[]? masked = null
+    )
     {
-        var entry = new Detection(new(options, digest), spans);
+        var entry = new Detection(new(options, digest), spans, masked);
         var size = entry.Size;
         lock (gate)
         {
-            if (size > cacheLimit || detections.ContainsKey(entry.Key))
-                return;
+            if (detections.TryGetValue(entry.Key, out var existing))
+                return (existing.Value.Spans, existing.Value.Masked);
+            RegisterKnown(spans.Concat(masked ?? []));
+            if (size > cacheLimit)
+                return (spans, masked);
             while (cacheBytes + size > cacheLimit && detectionOrder.First is { } oldest)
             {
                 detectionOrder.RemoveFirst();
@@ -288,13 +304,27 @@ internal sealed partial class TextRedactor : IDisposable
             }
             detections[entry.Key] = detectionOrder.AddLast(entry);
             cacheBytes += size;
+            return (spans, masked);
         }
+    }
+
+    private void RegisterKnown(IEnumerable<Found> spans)
+    {
+        foreach (var span in spans)
+            if (!TryRegister(span.Placeholder, span.Original, span.Labels))
+                throw new TextRedactionException(
+                    "Text redaction placeholder collision; no model request was sent.",
+                    false
+                );
     }
 
     // Records that a placeholder replaced an original. False when the placeholder is already
     // registered for a different original; the existing mapping is then kept.
     internal bool TryRegister(string placeholder, string original, string[] labels)
     {
+        // Placeholder-shaped text is syntax, never a new private original.
+        if (ContainsPlaceholder(original))
+            return true;
         lock (gate)
         {
             if (known.TryGetValue(placeholder, out var node))
@@ -365,11 +395,14 @@ internal sealed partial class TextRedactor : IDisposable
     private static bool Excluded(string[] labels, IReadOnlyList<string> excluded) =>
         labels.Length > 0 && labels.All(label => excluded.Contains(label, StringComparer.Ordinal));
 
-    // Placeholder and secret-marker ranges, which literal masking leaves intact.
+    internal bool ContainsPlaceholder(string text) => placeholderToken.IsMatch(text);
+
+    // Placeholder tokens (also their bare cores) and secret-marker ranges. Both detection
+    // and literal masking leave these intact, including partial detector overlaps.
     private List<(int Start, int End)> Guarded(string text)
     {
         var ranges = new List<(int Start, int End)>();
-        foreach (Match match in placeholder.Matches(text))
+        foreach (Match match in placeholderToken.Matches(text))
             ranges.Add((match.Index, match.Index + match.Length));
         ranges.AddRange(MarkerRanges(text));
         ranges.Sort((left, right) => left.Start.CompareTo(right.Start));

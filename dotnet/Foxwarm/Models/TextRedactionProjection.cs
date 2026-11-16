@@ -33,13 +33,15 @@ internal static class TextRedactionProjection
     // image parts. Mutate text slots in place to retain request-local part identity.
     internal static Task RedactHistoryAsync(
         IReadOnlyList<JsonObject> history,
-        Func<string, Task<string>> redact
-    ) => RedactSlotsAsync(history, (_, text) => redact(text));
+        Func<string, Task<string>> redact,
+        Func<string[], Task<string[]>> redactRun
+    ) => RedactSlotsAsync(history, (_, text) => redact(text), (_, texts) => redactRun(texts));
 
     // The same walk, telling the callback which slot each text belongs to.
     internal static async Task RedactSlotsAsync(
         IReadOnlyList<JsonObject> history,
-        Func<TextSlot, string, Task<string>> redactSlot
+        Func<TextSlot, string, Task<string>> redactSlot,
+        Func<TextSlot, string[], Task<string[]>> redactRun
     )
     {
         for (var index = 0; index < history.Count; index++)
@@ -57,7 +59,23 @@ internal static class TextRedactionProjection
                     string? name = null,
                     string? callId = null
                 ) => text => redactSlot(new(index, partIndex, kind, path, name, callId), text);
-                await FieldAsync(part, "text", Slot("text"));
+                var nativeText = AnthropicSearchHistory
+                    .NativeBlocks(part)
+                    .Where(block => SessionWait.Text(block["type"]) == "text")
+                    .ToArray();
+                if (nativeText.Length == 0)
+                    await FieldAsync(part, "text", Slot("text"));
+                else
+                {
+                    var texts = nativeText
+                        .Select(block => SessionWait.Text(block["text"]) ?? "")
+                        .ToArray();
+                    var transformed = await redactRun(new(index, partIndex, "text"), texts);
+                    for (var block = 0; block < nativeText.Length; block++)
+                        nativeText[block]["text"] = transformed[block];
+                    // The native run is the provider slot. Its portable projection follows it.
+                    part["text"] = string.Concat(transformed);
+                }
                 await FieldAsync(part, "system", Slot("system"));
                 if (part["functionCall"] is JsonObject call)
                 {
@@ -241,6 +259,20 @@ internal static class TextRedactionProjection
         {
             if (SessionWait.Text(part["text"]) is string text)
                 part["text"] = scope.Restore(text);
+            // Only ordinary native text participates; citations, signatures, thinking and
+            // encrypted search evidence retain their provider representation.
+            var nativeText = AnthropicSearchHistory
+                .NativeBlocks(part)
+                .Where(block => SessionWait.Text(block["type"]) == "text")
+                .ToArray();
+            if (nativeText.Length > 0)
+            {
+                var restored = scope.RestoreRun(
+                    nativeText.Select(block => SessionWait.Text(block["text"]) ?? "").ToArray()
+                );
+                for (var index = 0; index < nativeText.Length; index++)
+                    nativeText[index]["text"] = restored[index];
+            }
             if (part["functionCall"] is JsonObject call && call["args"] is JsonObject args)
             {
                 var restored = RestoreStrings(args, scope);

@@ -382,12 +382,14 @@ public sealed class TextRedactionRegressionTests
                 .ToList();
         await TextRedactionProjection.RedactHistoryAsync(
             History(2100),
-            redactor.Begin(http, options, default).DetectAsync
+            redactor.Begin(http, options, default).DetectAsync,
+            redactor.Begin(http, options, default).DetectRunAsync
         );
         Assert.Equal(2100, detector.Texts.Count);
         await TextRedactionProjection.RedactHistoryAsync(
             History(2101),
-            redactor.Begin(http, options, default).DetectAsync
+            redactor.Begin(http, options, default).DetectAsync,
+            redactor.Begin(http, options, default).DetectRunAsync
         );
         Assert.Equal(2101, detector.Texts.Count);
         Assert.Equal(2101, redactor.CachedDetectionCount);
@@ -424,13 +426,21 @@ public sealed class TextRedactionRegressionTests
         const string plain = """{"path": "笔记.md", "content": "<div>a & b</div>"}""";
         var scope = redactor.Begin(http, options, default);
         var history = new List<JsonObject> { Call(plain) };
-        await TextRedactionProjection.RedactHistoryAsync(history, scope.RedactAsync);
+        await TextRedactionProjection.RedactHistoryAsync(
+            history,
+            scope.RedactAsync,
+            scope.RedactRunAsync
+        );
         Assert.Equal(plain, Raw(history[0]));
         Assert.Equal(plain, Raw(TextRedactionProjection.RestoreMessage(Call(plain), scope)));
 
         const string named = """{"path": "笔记.md", "content": "<div>Bob & 张三</div>"}""";
         history = [Call(named)];
-        await TextRedactionProjection.RedactHistoryAsync(history, scope.RedactAsync);
+        await TextRedactionProjection.RedactHistoryAsync(
+            history,
+            scope.RedactAsync,
+            scope.RedactRunAsync
+        );
         var sent = Raw(history[0]);
         Assert.DoesNotContain("Bob", sent);
         Assert.StartsWith("""{"path":"笔记.md","content":"<div>""" + TextRedactor.Prefix, sent);

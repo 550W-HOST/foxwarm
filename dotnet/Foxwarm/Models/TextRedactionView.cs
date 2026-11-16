@@ -143,6 +143,13 @@ internal static class TextRedactionView
                     if (text.Length > 0)
                         slots.Add((slot, text));
                     return Task.FromResult(text);
+                },
+                (slot, texts) =>
+                {
+                    var text = string.Concat(texts);
+                    if (text.Length > 0)
+                        slots.Add((slot, text));
+                    return Task.FromResult(texts);
                 }
             )
             .GetAwaiter()

@@ -720,10 +720,15 @@ public sealed class TextRedactionDeltaRegressionTests(Xunit.Abstractions.ITestOu
         {
             // The same two passes as TextRedactionChatService.
             var scope = redactor.Begin(http, options, default);
-            await TextRedactionProjection.RedactHistoryAsync(history, scope.DetectAsync);
             await TextRedactionProjection.RedactHistoryAsync(
                 history,
-                text => Task.FromResult(scope.MaskKnown(text))
+                scope.DetectAsync,
+                scope.DetectRunAsync
+            );
+            await TextRedactionProjection.RedactHistoryAsync(
+                history,
+                text => Task.FromResult(scope.MaskKnown(text)),
+                texts => Task.FromResult(scope.MaskKnownRun(texts))
             );
             return new JsonArray(
                 history.Select(row => (JsonNode)row.DeepClone()).ToArray()

@@ -55,7 +55,7 @@ internal sealed class InstanceKeys
         );
     }
 
-    private static InstanceKeys Read(string path)
+    internal static InstanceKeys Read(string path)
     {
         JsonObject document;
         try

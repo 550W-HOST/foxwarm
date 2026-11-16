@@ -139,6 +139,11 @@ public sealed partial class TextRedactionObservabilityTests
             {
                 slots.Add(slot);
                 return Task.FromResult(text);
+            },
+            (slot, texts) =>
+            {
+                slots.Add(slot);
+                return Task.FromResult(texts);
             }
         );
         Assert.Equal(

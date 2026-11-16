@@ -1,6 +1,6 @@
 # Unit: .NET developer tools
 
-Files: `dotnet/Foxwarm.DevTools/CatalogFixtureCommand.cs`, `dotnet/Foxwarm.DevTools/ConditionalMemoryCommand.cs`, `dotnet/Foxwarm.DevTools/JournalCommand.cs`, `dotnet/Foxwarm.DevTools/MainLogFixtureCommand.cs`, `dotnet/Foxwarm.DevTools/Program.cs`, `dotnet/Foxwarm.DevTools/ResponsesRequestCommand.cs`, `dotnet/Foxwarm.DevTools/ResponsesStreamCommand.cs`, `dotnet/Foxwarm.DevTools/SessionRestartCommand.cs`
+Files: `dotnet/Foxwarm.DevTools/CatalogFixtureCommand.cs`, `dotnet/Foxwarm.DevTools/ConditionalMemoryCommand.cs`, `dotnet/Foxwarm.DevTools/JournalCommand.cs`, `dotnet/Foxwarm.DevTools/MainLogFixtureCommand.cs`, `dotnet/Foxwarm.DevTools/Program.cs`, `dotnet/Foxwarm.DevTools/ResponsesRequestCommand.cs`, `dotnet/Foxwarm.DevTools/ResponsesStreamCommand.cs`, `dotnet/Foxwarm.DevTools/SessionRestartCommand.cs`, `dotnet/Foxwarm.DevTools/TextRedactionStatsCommand.cs`
 Secondary files: `dotnet/Foxwarm.DevTools/SequenceBenchCommand.cs`
 
 ## Purpose
@@ -24,6 +24,8 @@ Its `load-check` probe records only the typed `SessionAuthorityUnavailableExcept
 `catalog-fixture <upsert|replace> ROOT ROWS_JSON` writes only catalog membership/projections in an owned fixture root. Replace removes omitted members through the catalog owner before upserting the supplied rows. Execution-context and timer-lifecycle browser scenarios use it while their hosts are stopped; legacy Archive branch seeding remains a separate Source producer.
 
 `mainlog-fixture ROOT MODE` runs concurrent ordinary Console writers and flushes through the real Main capture. Startup diagnostics tests own its configuration, routing environment, optional failing file device and process deadline; the command records completed-file visibility before disposal and exercises retained writer references afterward. Producer locking and logging consequences belong to [Main Logs](./dotnet-webui-logs.md#real-producer-and-lifetime).
+
+`text-redaction-stats DATA_ROOT [STORE_PATH]` prints aggregate facts about the encrypted known-original set without opening the writable cache or contacting Main. Its read-only contract and output fields belong to [text redaction persistence](./model-text-redaction-persistence.md#read-only-known-set-diagnostic).
 
 ## Tests
 

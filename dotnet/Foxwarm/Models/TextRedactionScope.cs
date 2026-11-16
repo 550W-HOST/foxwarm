@@ -18,16 +18,12 @@ internal sealed class TextRedactionScope(
 
     private readonly Dictionary<string, string> registered = new(StringComparer.Ordinal);
 
-    // Literal masking is memoized per cached slot. `pending` maps detected text awaiting the
-    // literal pass to the cache digests and detected spans of its slots; `finished` maps text
-    // whose result is already known in this attempt to that result and the literal ranges it
-    // adds (none when `DetectAsync` already returned the final form).
-    private readonly Dictionary<string, List<(string Digest, Found[] Spans)>> pending = new(
-        StringComparer.Ordinal
-    );
-    private readonly Dictionary<string, (string Result, Found[] Literal)> finished = new(
-        StringComparer.Ordinal
-    );
+    // The second projection visits the same occurrences in the same order. Keep a queue
+    // per intermediate text, not a text-to-result map: a cached final form can equal the
+    // detected form of a different slot without authorizing it to rewrite that cached slot.
+    private sealed record Slot(string Digest, Found[] Spans, Found[]? Masked);
+
+    private readonly Dictionary<string, Queue<Slot>> pending = new(StringComparer.Ordinal);
     private TextRedactor.KnownOriginals? originals;
 
     // Compaction replaces a slot the detection service rejects as too large instead of
@@ -125,28 +121,17 @@ internal sealed class TextRedactionScope(
         var digest = TextRedactor.Digest(text);
         var cached = redactor.Cached(options, text, digest);
         Stats?.Slot(cached is not null);
-        if (cached is { Masked: { } masked })
-        {
-            // Already through both passes: send it exactly as before.
-            Register(cached.Value.Spans);
-            Register(masked);
-            Stats?.Count(cached.Value.Spans, literal: false);
-            Stats?.Count(masked, literal: true);
-            var result = TextRedactor.Apply(TextRedactor.Apply(text, cached.Value.Spans), masked);
-            finished.TryAdd(result, (result, []));
-            return result;
-        }
-        Found[] spans;
         if (cached is null)
         {
+            Found[] detected;
             try
             {
                 if (prefetched.TryRemove(text, out var early))
-                    spans = early;
+                    detected = early;
                 else
                 {
                     Stats?.Call();
-                    spans = await redactor
+                    detected = await redactor
                         .DetectAsync(http, options, text, token)
                         .ConfigureAwait(false);
                 }
@@ -156,47 +141,47 @@ internal sealed class TextRedactionScope(
                 Stats?.Omit();
                 return OmittedText;
             }
-            // Register before caching: a colliding result is never cached.
-            Register(spans);
-            redactor.Cache(options, digest, spans);
+            // Cache validates collisions before accepting a result. Only its winner grants
+            // this attempt restoration authority; a losing classification was never sent.
+            cached = redactor.Cache(options, digest, detected);
         }
-        else
-        {
-            spans = cached.Value.Spans;
-            Register(spans);
-        }
+        var spans = cached.Value.Spans;
+        var masked = cached.Value.Masked;
+        Register(spans);
+        if (masked is not null)
+            Register(masked);
         Stats?.Count(spans, literal: false);
         // New registrations may need a newer matcher for the literal pass.
         originals = null;
-        var detected = TextRedactor.Apply(text, spans);
-        if (!pending.TryGetValue(detected, out var slots))
-            pending[detected] = slots = [];
-        slots.Add((digest, spans));
-        return detected;
+        var form = TextRedactor.Apply(text, spans);
+        if (masked is not null)
+            form = TextRedactor.Apply(form, masked);
+        if (!pending.TryGetValue(form, out var slots))
+            pending[form] = slots = new();
+        slots.Enqueue(new(digest, spans, masked));
+        return form;
     }
 
-    // Replaces exact occurrences of originals that earlier detections replaced, whatever the
-    // detector reports for this text. A slot detected in this attempt is scanned once, and
-    // its result is kept with the slot's cached detection; a slot that already has one is
-    // returned unchanged even if more originals are known now.
+    // Memoize and use the winning literal pass. Cached final occurrences are never scanned
+    // again, even when another slot happens to produce the same intermediate text.
     internal string MaskKnown(string text)
     {
-        if (pending.Remove(text, out var slots))
+        if (pending.TryGetValue(text, out var slots) && slots.TryDequeue(out var slot))
         {
-            var found = Scan(text);
-            var result = TextRedactor.Apply(text, found);
-            foreach (var (digest, spans) in slots)
-                redactor.Memoize(options, digest, spans, found);
-            finished[text] = (result, found);
+            if (slots.Count == 0)
+                pending.Remove(text);
+            if (slot.Masked is { } already)
+            {
+                Stats?.Count(already, literal: true);
+                return text;
+            }
+            var found = redactor.Memoize(options, slot.Digest, slot.Spans, Scan(text));
+            Register(found);
             Stats?.Count(found, literal: true);
-            return result;
-        }
-        if (finished.TryGetValue(text, out var known))
-        {
-            Stats?.Count(known.Literal, literal: true);
-            return known.Result;
+            return TextRedactor.Apply(text, found);
         }
         var scanned = Scan(text);
+        Register(scanned);
         Stats?.Count(scanned, literal: true);
         return TextRedactor.Apply(text, scanned);
     }
@@ -204,15 +189,29 @@ internal sealed class TextRedactionScope(
     private Found[] Scan(string text)
     {
         originals ??= redactor.KnownSnapshot();
-        var found = redactor.FindKnown(originals, text, options).ToArray();
-        Register(found);
-        return found;
+        return redactor.FindKnown(originals, text, options).ToArray();
     }
 
     internal async Task<string> RedactAsync(string text) =>
         MaskKnown(await DetectAsync(text).ConfigureAwait(false));
 
     internal string Restore(string text) => redactor.Restore(text, registered);
+
+    internal async Task<string[]> DetectRunAsync(string[] texts)
+    {
+        var form = await DetectAsync(string.Concat(texts)).ConfigureAwait(false);
+        return form == OmittedText
+            ? texts.Select((_, index) => index == 0 ? OmittedText : "").ToArray()
+            : redactor.RedactRun(texts, form, registered);
+    }
+
+    internal string[] MaskKnownRun(string[] texts) =>
+        redactor.RedactRun(texts, MaskKnown(string.Concat(texts)), registered);
+
+    internal async Task<string[]> RedactRunAsync(string[] texts) =>
+        MaskKnownRun(await DetectRunAsync(texts).ConfigureAwait(false));
+
+    internal string[] RestoreRun(string[] texts) => redactor.RestoreRun(texts, registered);
 
     internal string RestoreProgress(string text) => redactor.RestoreProgress(text, registered);
 

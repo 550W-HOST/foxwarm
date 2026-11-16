@@ -17,7 +17,7 @@ namespace Foxwarm.Models;
 // The store is a cache. Reads that fail or find an invalid record are misses, writes happen
 // in the background and a failed write only costs a later miss. Deleting the file returns to
 // memory-only behaviour.
-internal sealed class TextRedactionStore : IDisposable
+internal sealed partial class TextRedactionStore : IDisposable
 {
     internal const string FileName = "text-redaction.sqlite";
     internal const long DefaultSlotBytes = 64L * 1024 * 1024;
@@ -507,7 +507,16 @@ internal sealed class TextRedactionStore : IDisposable
         return data;
     }
 
-    private byte[]? Unseal(bool known, byte[] identity, byte[] id, byte[] data)
+    private byte[]? Unseal(bool known, byte[] identity, byte[] id, byte[] data) =>
+        Unseal(encryptionKey, known, identity, id, data);
+
+    private static byte[]? Unseal(
+        byte[] encryptionKey,
+        bool known,
+        byte[] identity,
+        byte[] id,
+        byte[] data
+    )
     {
         if (data.Length < NonceBytes + TagBytes)
             return null;

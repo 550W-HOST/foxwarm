@@ -29,6 +29,11 @@ internal sealed partial class TextRedactor
             {
                 continue;
             }
+            if (ContainsPlaceholder(original))
+            {
+                store.DeleteKnown(mapped);
+                continue;
+            }
             lock (gate)
             {
                 if (known.ContainsKey(mapped))
@@ -59,29 +64,6 @@ internal sealed partial class TextRedactor
         return null;
     }
 
-    // Caches a stored result as a finished entry without writing it again.
-    private void Admit(TextRedactionOptions options, string digest, Found[] spans, Found[]? masked)
-    {
-        Cache(options, digest, spans);
-        lock (gate)
-        {
-            if (
-                !detections.TryGetValue(new(options, digest), out var node)
-                || node.Value.Masked is not null
-            )
-                return;
-            var entry = node.Value with { Masked = masked, Touched = store?.Today ?? 0 };
-            cacheBytes += entry.Size - node.Value.Size;
-            node.Value = entry;
-            while (cacheBytes > cacheLimit && detectionOrder.First is { } oldest)
-            {
-                detectionOrder.RemoveFirst();
-                detections.Remove(oldest.Value.Key);
-                cacheBytes -= oldest.Value.Size;
-            }
-        }
-    }
-
     // Detected ranges must lie in the slot text and literal ranges in its detected form, in
     // order, without overlap, on character boundaries and outside the detected placeholders.
     private (Found[] Spans, Found[] Masked)? Rebuild(string text, TextRedactionStore.Range[] ranges)
@@ -90,31 +72,21 @@ internal sealed partial class TextRedactor
         var literal = new List<Found>();
         try
         {
+            var guarded = Guarded(text);
             var cursor = 0;
             foreach (var range in ranges.Where(range => !range.Literal))
             {
-                if (!Fits(text, range, cursor))
+                if (!Fits(text, range, cursor) || OverlapsGuarded(range, guarded))
                     return null;
                 detected.Add(Rebuilt(text, range));
                 cursor = range.Start + range.Length;
             }
             var form = Apply(text, detected);
-            var guarded = new List<(int Start, int End)>();
-            var shift = 0;
-            foreach (var span in detected)
-            {
-                guarded.Add((span.Start + shift, span.Start + shift + span.Placeholder.Length));
-                shift += span.Placeholder.Length - span.Length;
-            }
+            guarded = Guarded(form);
             cursor = 0;
             foreach (var range in ranges.Where(range => range.Literal))
             {
-                if (
-                    !Fits(form, range, cursor)
-                    || guarded.Any(item =>
-                        item.Start < range.Start + range.Length && range.Start < item.End
-                    )
-                )
+                if (!Fits(form, range, cursor) || OverlapsGuarded(range, guarded))
                     return null;
                 literal.Add(Rebuilt(form, range));
                 cursor = range.Start + range.Length;
@@ -126,6 +98,11 @@ internal sealed partial class TextRedactor
         }
         return (detected.ToArray(), literal.ToArray());
     }
+
+    private static bool OverlapsGuarded(
+        TextRedactionStore.Range range,
+        List<(int Start, int End)> guarded
+    ) => guarded.Any(item => item.Start < range.Start + range.Length && range.Start < item.End);
 
     private static bool Fits(string text, TextRedactionStore.Range range, int cursor) =>
         range.Start >= cursor
