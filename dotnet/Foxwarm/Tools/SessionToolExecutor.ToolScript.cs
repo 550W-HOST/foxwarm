@@ -236,7 +236,8 @@ internal sealed partial class SessionToolExecutor
                     return await sessions.NormalizeToolScriptResultAsync(
                         execution.Response,
                         resolved.Name,
-                        budget
+                        budget,
+                        MainToolScript.ProducesImages(resolved) ? context.ImageProduced : null
                     );
                 }
                 catch (SessionIdentityUnavailableException error)

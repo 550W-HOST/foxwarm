@@ -70,6 +70,7 @@ internal sealed partial class MainToolScript
                     var previousDeliveryCapture = context.SessionMessageDelivered;
                     var previousPlacementCapture = context.ExecPlacementObserved;
                     var previousTargetCapture = context.TargetObserved;
+                    var previousImageCapture = context.ImageProduced;
                     var previousRunId = context.ToolScriptRunId;
                     var previousOrdinal = context.SubCallOrdinal;
                     var previousRunOrdinal = context.RunSubCallOrdinal;
@@ -85,6 +86,7 @@ internal sealed partial class MainToolScript
                         context.ExecPlacementObserved = placement =>
                             subcall["exec"] = placement.DeepClone();
                         context.TargetObserved = target => subcall["target"] = target.DeepClone();
+                        context.ImageProduced = blob => NoteProducedImage(record, blob);
                         context.ToolScriptRunId = Required(record, "runId");
                         context.SubCallOrdinal = ordinal;
                         context.RunSubCallOrdinal = runOrdinal;
@@ -95,12 +97,12 @@ internal sealed partial class MainToolScript
                         context.SessionMessageDelivered = previousDeliveryCapture;
                         context.ExecPlacementObserved = previousPlacementCapture;
                         context.TargetObserved = previousTargetCapture;
+                        context.ImageProduced = previousImageCapture;
                         context.ToolScriptRunId = previousRunId;
                         context.SubCallOrdinal = previousOrdinal;
                         context.RunSubCallOrdinal = previousRunOrdinal;
                     }
                     budget.JsonValue(result);
-                    NoteProducedImages(record, result);
                     (
                         record["executedTools"] as JsonArray
                         ?? throw new InvalidDataException("Missing ToolScript tool history.")
@@ -121,7 +123,7 @@ internal sealed partial class MainToolScript
                         );
                     var answer = await context.RequestModel(prompt, model, budget, run.Token);
                     budget.JsonValue(answer);
-                    NoteProducedImages(record, answer);
+                    NoteModelImages(record, answer);
                     return answer;
                 case "session_create":
                 case "session_step":

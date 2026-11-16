@@ -81,24 +81,7 @@ public sealed partial class ToolAuthorizationEffectsTests
         await AppendImage(owner, own, "own");
         var producedBytes = ImageCodecTests.Raster(SkiaSharp.SKEncodedImageFormat.Png, 5, 4);
         var produced = await manager.Images.PutAsync(producedBytes, "image/png", "produced");
-        execution.Registry.Register(
-            new JsonObject
-            {
-                ["name"] = "produce_image",
-                ["description"] = "test",
-                ["parameters"] = new JsonObject { ["type"] = "object" },
-            },
-            "builtin",
-            false,
-            (_, _, _) =>
-                Task.FromResult(
-                    new JsonObject
-                    {
-                        ["output"] = "made",
-                        ["image"] = new JsonObject { ["inlineDataRef"] = produced.DeepClone() },
-                    }
-                )
-        );
+        RegisterImageProducer(execution.Registry, produced);
         const string ReturnArgument = "return {'parts':[{'inlineDataRef':args['reference']}]}";
 
         // Version-1 deny-all: inline scripts are admitted, but a reference outside the caller's
@@ -132,8 +115,7 @@ public sealed partial class ToolAuthorizationEffectsTests
         Assert.Equal(ownBytes, await Promoted(manager, admitted));
 
         // An image a nested call produced in this run is admitted only when the call passed.
-        const string Produce =
-            "r = call_tool('produce_image', {})\nreturn {'parts':[{'inlineDataRef': r['image']['inlineDataRef']}]}";
+        const string Produce = FirstImage + "r = call_tool('produce_image', {})\nreturn {'parts':[{'inlineDataRef': first_image(r)}]}";
         var deniedNested = await Call(execution.Tools, "run_script", Obj($$"""{"code":{{JsonValue.Create(Produce)!.ToJsonString()}}}"""));
         Assert.Contains("denied", ScriptError(deniedNested));
         Assert.Null(deniedNested["imageParts"]);
@@ -152,6 +134,122 @@ public sealed partial class ToolAuthorizationEffectsTests
             }
         );
         Assert.Contains("which it can't return", ScriptError(earlier));
+    }
+
+    // A script helper: the first image result of a nested call.
+    private const string FirstImage =
+        "def first_image(r):\n    for part in r.get('parts', []):\n        if 'inlineDataRef' in part:\n            return part['inlineDataRef']\n    return None\n";
+
+    // Registers a builtin test tool that returns a stored image as an image result.
+    private static void RegisterImageProducer(ToolRegistry registry, JsonObject reference) =>
+        registry.Register(
+            new JsonObject
+            {
+                ["name"] = "produce_image",
+                ["description"] = "test",
+                ["parameters"] = new JsonObject { ["type"] = "object" },
+            },
+            "builtin",
+            false,
+            (_, _, _) =>
+                Task.FromResult(
+                    new JsonObject
+                    {
+                        ["output"] = "made",
+                        ["imageParts"] = new JsonArray(
+                            new JsonObject { ["inlineDataRef"] = reference.DeepClone() }
+                        ),
+                    }
+                )
+        );
+
+    // A reference that only passed through a nested result proves nothing produced it: echoed
+    // data from self-exempt calls never counts, by call_tool, ctl or a background run. A nested
+    // script's own returned images count, because they passed this same admission.
+    [Fact]
+    public async Task Nested_self_calls_do_not_launder_foreign_image_references()
+    {
+        using var temp = new TempDirectory();
+        await Seed(temp.Path);
+        await using var manager = Manager(temp.Path);
+        await manager.LoadAsync();
+        var owner = await manager.RequiredAsync("opaque");
+        var execution = TimerExecutor(manager, owner, temp.Path);
+        await using var mcp = execution.Mcp;
+        var crop = MainLocalToolDefinitions
+            .Definitions()
+            .OfType<JsonObject>()
+            .Single(item => SessionWait.Text(item["name"]) == "image_crop");
+        execution.Registry.Register(
+            crop,
+            "builtin",
+            false,
+            (_, args, token) => manager.CropImageAsync(owner, args, token)
+        );
+        var bytes = ImageCodecTests.Raster(SkiaSharp.SKEncodedImageFormat.Png);
+        var foreign = await manager.Images.PutAsync(bytes, "image/png", "foreign-only");
+        await AppendImage(await manager.RequiredAsync("foreign"), foreign, "foreign-only");
+        var ownBytes = ImageCodecTests.Raster(SkiaSharp.SKEncodedImageFormat.Png, 8, 6);
+        var own = await manager.Images.PutAsync(ownBytes, "image/png", "own");
+        await AppendImage(owner, own, "own");
+        var producedBytes = ImageCodecTests.Raster(SkiaSharp.SKEncodedImageFormat.Png, 5, 4);
+        var produced = await manager.Images.PutAsync(producedBytes, "image/png", "produced");
+        RegisterImageProducer(execution.Registry, produced);
+        async Task<JsonObject> Run(string code) =>
+            await Call(
+                execution.Tools,
+                "run_script",
+                new JsonObject
+                {
+                    ["code"] = FirstImage + code,
+                    ["args"] = new JsonObject { ["reference"] = foreign.DeepClone() },
+                }
+            );
+        const string ReturnReference = "return {'parts':[{'inlineDataRef':args['reference']}]}";
+        const string Echo = "return args['reference']";
+        await Policy(manager, "version: 1\ndefaultAction: deny\nrules: []\n");
+        var launders = new Dictionary<string, string>
+        {
+            // The reviewer's case: a nested inline script echoes the reference as data.
+            ["call_tool"] =
+                "call_tool('run_script', {'code': \"" + Echo + "\", 'args': {'reference': args['reference']}})\n",
+            ["ctl"] =
+                "ctl('script start --code @code --args @args', {'code': \"" + Echo + "\", 'args': {'reference': args['reference']}})\n",
+            ["start_toolscript_run"] =
+                "r = call_tool('start_toolscript_run', {'code': \"" + Echo + "\", 'args': {'reference': args['reference']}})\n"
+                + "for i in range(200):\n    g = call_tool('get_toolscript_run', {'runId': r['runId']})\n    if g['status'] != 'running':\n        break\n",
+            // A nested script returning it as an image part fails its own admission.
+            ["nested image part"] =
+                "call_tool('run_script', {'code': \"" + ReturnReference + "\", 'args': {'reference': args['reference']}})\n",
+        };
+        foreach (var (name, code) in launders)
+        {
+            var result = await Run(code + ReturnReference);
+            Assert.True(ScriptError(result).Contains("which it can't return"), name + ": " + result.ToJsonString());
+            Assert.Null(result["imageParts"]);
+            Assert.Null(await Promoted(manager, result));
+        }
+
+        // Image results do count: a nested script returning an image its own authorized nested
+        // call produced, and image_crop's new crop of the caller's own history image.
+        await Policy(
+            manager,
+            "version: 1\ndefaultAction: deny\nrules:\n- {action: allow, match: {tool: {source: builtin, name: produce_image}}}\n"
+        );
+        const string Inner = "r = call_tool('produce_image', {})\nreturn {'parts':[{'inlineDataRef': first_image(r)}]}";
+        var recursive = await Run(
+            "r = call_tool('run_script', {'code': args['inner']})\nreturn {'parts':[{'inlineDataRef': first_image(r)}]}"
+                .Replace("args['inner']", JsonValue.Create(FirstImage + Inner)!.ToJsonString())
+        );
+        Assert.Equal("", ScriptError(recursive));
+        Assert.Equal(producedBytes, await Promoted(manager, recursive));
+        var cropped = await Run(
+            "r = call_tool({'toolId': 'builtin:image_crop'}, {'id': 'own', 'x': 0, 'y': 0, 'width': 2, 'height': 2})\nreturn {'parts':[{'inlineDataRef': first_image(r)}]}"
+        );
+        Assert.Equal("", ScriptError(cropped));
+        var croppedBytes = await Promoted(manager, cropped);
+        Assert.NotNull(croppedBytes);
+        Assert.NotEqual(ownBytes, croppedBytes);
     }
 
     [Fact]

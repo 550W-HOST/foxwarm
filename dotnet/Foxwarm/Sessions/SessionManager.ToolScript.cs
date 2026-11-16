@@ -10,7 +10,8 @@ internal sealed partial class SessionManager
     internal async Task<JsonNode?> NormalizeToolScriptResultAsync(
         JsonNode? value,
         string name,
-        ToolScriptDataBudget budget
+        ToolScriptDataBudget budget,
+        Action<string>? imageProduced = null
     )
     {
         budget.JsonValue(value);
@@ -36,6 +37,14 @@ internal sealed partial class SessionManager
             .OfType<JsonObject>()
             .Where(part => part.ContainsKey("inlineDataRef"))
             .ToArray();
+        // Only the parts externalized from the response are image results of the call.
+        if (imageProduced is not null)
+            foreach (var image in images)
+                if (
+                    Foxwarm.Images.ImageBlobStore.NormalizeToolReference(image) is { } reference
+                    && SessionWait.Text(reference["blobId"]) is { Length: > 0 } blob
+                )
+                    imageProduced(blob);
         if (images.Length > 0 && result is JsonObject obj)
         {
             var parts = obj["parts"] as JsonArray ?? new JsonArray();
