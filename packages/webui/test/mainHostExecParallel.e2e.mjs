@@ -107,7 +107,10 @@ try {
   await release('loss4'); await until(async () => await exists(join(marks, 'done-loss4')) && (await history(loss)).session.runtimeState.state === 'running-tool', 'first sibling returns while others remain active'); await sleep(300)
   assert(!await exists(join(own, 'loss5-effect'))); assert(!await exists(join(own, 'loss6-effect'))); assert(!await pair(loss, 'loss1')); assert.equal(records.length, beforeLoss)
   for (const id of held.slice(0, 3)) await release(id); await until(async () => !(await history(loss)).session.busy, 'trusted fatal settles every started sibling')
-  assert.equal((await pair(loss, 'loss5')).response.error.type, 'TOOL_AUTH_POLICY_UNAVAILABLE'); assert.equal((await pair(loss, 'loss6')).response.error.type, 'tool_call_skipped'); assert((await pair(loss, 'loss-preset')).response.canceled); assert(!await exists(join(own, 'loss-file-effect')))
+  // loss6 is skipped when it is dequeued after loss5's fatal; a held sibling released while loss5 is still authorizing
+  // may dequeue it first, and then its own authorization meets the same unavailable policy. Calls after the segment are always skipped.
+  assert.equal((await pair(loss, 'loss5')).response.error.type, 'TOOL_AUTH_POLICY_UNAVAILABLE'); assert(['tool_call_skipped', 'TOOL_AUTH_POLICY_UNAVAILABLE'].includes((await pair(loss, 'loss6')).response.error.type)); assert((await pair(loss, 'loss-preset')).response.canceled)
+  assert.equal((await pair(loss, 'loss-later-file')).response.error.type, 'tool_call_skipped'); assert(!await exists(join(own, 'loss-file-effect')))
   assert.equal((await saved(loss)).queue.length, 1); assert.equal(records.length, beforeLoss); await sleep(150); assert.equal(records.length, beforeLoss)
   await writeFile(policy, 'version: 1\n'); await send(loss, 'repaired'); await idle(loss); assert((await history(loss)).messages.some(row => row.parts?.some(part => part.text === 'DONE-repaired')))
   const stoppedId = await create('stopped'), stopHeld = ['stop1', 'stop2', 'stop3', 'stop4']
