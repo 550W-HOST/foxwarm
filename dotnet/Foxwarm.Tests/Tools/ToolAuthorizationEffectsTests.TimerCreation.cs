@@ -20,9 +20,14 @@ public sealed partial class ToolAuthorizationEffectsTests
         WorkspaceTools Files,
         Foxwarm.McpClient Mcp,
         ToolRegistry Registry
-    ) TimerExecutor(SessionManager manager, SessionOwner owner, string root)
+    ) TimerExecutor(
+        SessionManager manager,
+        SessionOwner owner,
+        string root,
+        IEnumerable<JsonNode?>? extra = null
+    )
     {
-        var execution = Executor(manager, owner, root);
+        var execution = Executor(manager, owner, root, extra);
         foreach (var definition in TimerToolDefinitions.Definitions().OfType<JsonObject>())
         {
             var name = definition["name"]!.GetValue<string>();

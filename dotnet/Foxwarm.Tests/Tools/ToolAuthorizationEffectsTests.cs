@@ -68,7 +68,12 @@ public sealed partial class ToolAuthorizationEffectsTests
         WorkspaceTools Files,
         Foxwarm.McpClient Mcp,
         ToolRegistry Registry
-    ) Executor(SessionManager manager, SessionOwner owner, string root)
+    ) Executor(
+        SessionManager manager,
+        SessionOwner owner,
+        string root,
+        IEnumerable<JsonNode?>? extra = null
+    )
     {
         var files = new WorkspaceTools(
             Path.Combine(root, "workspace", "agents", owner.Agent),
@@ -95,6 +100,8 @@ public sealed partial class ToolAuthorizationEffectsTests
         foreach (var definition in FileDeliveryDefinitions.Definitions())
             definitions.Add(definition?.DeepClone());
         definitions.Add(CompactToolDefinition.Definition());
+        foreach (var definition in extra ?? [])
+            definitions.Add(definition?.DeepClone());
         foreach (var definition in SessionSettingsDefinitions.Definitions())
             definitions.Add(definition?.DeepClone());
         var mcp = new Foxwarm.McpClient(Path.Combine(root, "data"));
