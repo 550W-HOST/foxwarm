@@ -27,7 +27,8 @@ namespace Foxwarm.Tests;
 /// Observed effects come from persisted state: Session catalog rows (Agent, Node, runtime,
 /// parent), the Agent catalog and metadata (an inheritance it sets is a view of the inherited
 /// Agent), Task owners, approved Nodes, the secret store, MCP
-/// server configuration, and file trees. To cover another capability, add a <see cref="Case"/> to
+/// server configuration, file trees, and channel deliveries a case's transport double observes
+/// (the conversation delivered to, compared with the declared `channel.send` resource). To cover another capability, add a <see cref="Case"/> to
 /// a case table (ToolAuthorizationEffectsTests.Differential.cs, NodeAuthorizationTreeTests
 /// .Differential.cs, AgentRulesTreeTests.Differential.cs); each table also runs whitespace-padded
 /// variants of its identifier arguments, which the handler must either reject without effect or
@@ -230,7 +231,7 @@ internal static class OperationEffectConformance
 
     // Operations whose effect is persisted and observed; a declared one must have happened.
     private static bool Observable(AuthorizationOperation operation) =>
-        operation.Op is "session.create" or "agent.create" or "task.assign" or "secret.manage" or "mcp.manage"
+        operation.Op is "session.create" or "agent.create" or "task.assign" or "secret.manage" or "mcp.manage" or "channel.send"
         || operation.Op == "agent.manage" && SessionWait.Text(operation.With["change"]) is "rules" or "inherit"
         || operation.Op == "session.manage" && SessionWait.Text(operation.With["change"]) is "move" or "delete"
         || operation.Op == "node.trust" && SessionWait.Text(operation.With["action"]) is "approve" or "revoke";
@@ -495,6 +496,9 @@ internal static class OperationEffectConformance
             case "mcp.manage":
                 Equal("mcp", operation.Resources["mcp"], SessionWait.Text(resources["mcp"]));
                 break;
+            case "channel.send":
+                Equal("channel", operation.Resources["channel"], SessionWait.Text(resources["channel"]));
+                break;
         }
         return problems;
     }
@@ -526,7 +530,8 @@ internal static class OperationEffectConformance
         Func<string, JsonObject, Task<AuthorizationAssessment>> assess,
         Func<string, JsonObject, Task<JsonNode?>> perform,
         IEnumerable<string> roots,
-        Foxwarm.Secrets.SecretStore? secrets = null
+        Foxwarm.Secrets.SecretStore? secrets = null,
+        Func<IEnumerable<Effect>>? deliveries = null
     )
     {
         var observedRoots = roots.Select(AuthorizationPaths.CanonicalPotential).ToArray();
@@ -545,6 +550,10 @@ internal static class OperationEffectConformance
         var result = await perform(@case.Tool, (JsonObject)@case.Args.DeepClone());
         var after = Take(manager, @case.Tasks ?? [], observedRoots, secrets);
         var effects = Diff(before, after, manager);
+        // Channel deliveries as the transport's test double observed them, as
+        // channel.send {channel: instance:conversation delivered to}.
+        if (deliveries is not null)
+            effects.AddRange(deliveries());
         if (result?["error"] is { } error)
         {
             if (!@case.MayReject)
