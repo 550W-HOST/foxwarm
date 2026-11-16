@@ -16,6 +16,11 @@ internal static class SessionCreationDefaults
 
     // The Node a creation passes to the Session it creates: an explicit Node, else the current
     // Node of a parent in the same Agent. Null leaves placement to the target Agent's default.
+    // An explicit creation Node argument as the creation stores it: trimmed, as execution reads
+    // a Session's Node (SessionManager.ResolveExecutionNode).
+    internal static string? ExplicitNode(string? argument) =>
+        argument is null ? null : SessionGoal.Trim(argument);
+
     internal static string? InitialNode(
         string? explicitNode,
         string targetAgent,

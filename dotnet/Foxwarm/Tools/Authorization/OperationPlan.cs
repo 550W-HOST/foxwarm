@@ -400,7 +400,7 @@ internal sealed partial record OperationPlan(
         // The Agent of the Session move_session moves.
         private string? MovedAgent()
         {
-            var moved = Text("sessionId")?.Trim() ?? facts?.Session;
+            var moved = SessionTrim(Text("sessionId")) ?? facts?.Session;
             return moved is null ? null : context.SessionAgent?.Invoke(moved);
         }
 
@@ -448,6 +448,9 @@ internal sealed partial record OperationPlan(
 
         private string? Action => SessionWait.Text(args["action"]);
 
+        // A Session reference as handlers and target resolution trim it.
+        private static string? SessionTrim(string? text) => text is null ? null : SessionGoal.Trim(text);
+
         // A condition: true, false, or null when the plan cannot know it.
         internal bool? Holds(string when)
         {
@@ -457,6 +460,15 @@ internal sealed partial record OperationPlan(
                 return null;
             if (when.StartsWith("arg:", StringComparison.Ordinal))
                 return Present(when[4..]);
+            if (when.StartsWith("inherited:", StringComparison.Ordinal))
+                // An inheritance argument names an Agent unless it is absent or blank; a
+                // non-string is rejected by the handler.
+                return args[when[10..]] switch
+                {
+                    null => false,
+                    JsonValue raw when raw.TryGetValue<string>(out var text) => AgentCatalog.InheritName(text) is not null,
+                    _ => null,
+                };
             if (when.StartsWith("default-true:", StringComparison.Ordinal))
                 // An omitted boolean the handler defaults to true; a non-boolean is rejected.
                 return args[when[13..]] switch
@@ -633,6 +645,11 @@ internal sealed partial record OperationPlan(
                 value = args[expression[4..]]?.DeepClone();
                 return value is not null;
             }
+            if (expression.StartsWith("inherited:", StringComparison.Ordinal))
+            {
+                value = AgentCatalog.InheritName(SessionWait.Text(args[expression[10..]]));
+                return value is not null;
+            }
             if (expression.StartsWith("has:", StringComparison.Ordinal))
             {
                 value = Present(expression[4..]);
@@ -756,13 +773,13 @@ internal sealed partial record OperationPlan(
                     value =
                         facts?.SessionTarget?.Id
                         ?? (
-                            facts is { Principal: not "internal" } ? Text("sessionId")?.Trim()
+                            facts is { Principal: not "internal" } ? SessionTrim(Text("sessionId"))
                             : facts is null
                             || ToolAuthorizationPolicy.TargetResolvers.ContainsKey(resolved.Name)
                                 ? null
                             : CallerDefaultTargets.Contains(resolved.Name)
-                                ? Text("sessionId")?.Trim() ?? facts.Session
-                            : ArgumentTargets.Contains(resolved.Name) ? Text("sessionId")?.Trim()
+                                ? SessionTrim(Text("sessionId")) ?? facts.Session
+                            : ArgumentTargets.Contains(resolved.Name) ? SessionTrim(Text("sessionId"))
                             : null
                         );
                     return value is not null;
@@ -774,7 +791,7 @@ internal sealed partial record OperationPlan(
                         return false;
                     value =
                         SessionCreationDefaults.InitialNode(
-                            SessionWait.Text(args["node"]),
+                            SessionCreationDefaults.ExplicitNode(SessionWait.Text(args["node"])),
                             childTarget,
                             parentAgent,
                             context.CurrentNode
@@ -784,7 +801,7 @@ internal sealed partial record OperationPlan(
                 case "session-node":
                     // create_session: the explicit Node, else the Agent's default.
                     value =
-                        SessionWait.Text(args["node"])
+                        SessionCreationDefaults.ExplicitNode(SessionWait.Text(args["node"]))
                         ?? (
                             SessionWait.Text(args["agentName"]) is string sessionTarget
                                 ? context.AgentDefaultNode?.Invoke(sessionTarget)
@@ -822,7 +839,7 @@ internal sealed partial record OperationPlan(
                 case "timer-owner":
                     value = facts?.Session is string timerCaller
                         ? SessionManager.TimerOwner(timerCaller, args)
-                        : Text("sessionId")?.Trim();
+                        : SessionTrim(Text("sessionId"));
                     return value is not null;
                 case "timer-kind":
                     if (!args.ContainsKey("action"))

@@ -231,6 +231,72 @@ public sealed partial class ToolAuthorizationEffectsTests
             );
     }
 
+    // A creation's Node is the one the new Session executes on: trimmed.
+    [Fact]
+    public async Task Creation_nodes_are_authorized_as_sessions_execute_on_them()
+    {
+        using var temp = new TempDirectory();
+        await Seed(temp.Path);
+        await using var manager = Manager(temp.Path);
+        await manager.LoadAsync();
+        var caller = await manager.RequiredAsync("opaque");
+        var execution = TimerExecutor(manager, caller, temp.Path);
+        await using var mcp = execution.Mcp;
+        await Policy(manager, "version: 1\nrules:\n- {op: session.create, node: master, action: deny}\n");
+        var index = 0;
+        foreach (var node in new[] { "master", " master ", "\tmaster\n" })
+        {
+            Assert.Equal(
+                "tool_authorization_denied",
+                Error(await Call(execution.Tools, "create_session", new JsonObject { ["agentName"] = "alpha", ["sessionName"] = "placed-" + index++, ["node"] = node }))
+            );
+            Assert.Equal(
+                "tool_authorization_denied",
+                Error(await Call(execution.Tools, "create_child_session", new JsonObject { ["node"] = node }))
+            );
+        }
+        Assert.DoesNotContain(manager.Catalog.List(), row => SessionWait.Text(row["id"])!.Contains("placed-"));
+    }
+
+    // An inheritance names the Agent the handler stores: trimmed, blank meaning none.
+    [Fact]
+    public async Task Inheritance_is_authorized_on_the_agent_it_stores()
+    {
+        using var temp = new TempDirectory();
+        await Seed(temp.Path);
+        await using var manager = Manager(temp.Path);
+        await manager.LoadAsync();
+        var caller = await manager.RequiredAsync("opaque");
+        var execution = TimerExecutor(manager, caller, temp.Path);
+        await using var mcp = execution.Mcp;
+        Assert.Null(Error(await Call(execution.Tools, "create_agent", Obj("""{"agentName":"heir","createMainSession":false}"""))));
+        await Policy(manager, "version: 1\nrules:\n- {op: agent.view, targetAgent: {id: beta}, action: deny}\n");
+        var index = 0;
+        foreach (var name in new[] { "beta", " beta ", "\tbeta\n" })
+        {
+            Assert.Equal(
+                "tool_authorization_denied",
+                Error(await Call(execution.Tools, "create_agent", new JsonObject { ["agentName"] = "denied-" + index++, ["inherit"] = name, ["createMainSession"] = false }))
+            );
+            Assert.Equal(
+                "tool_authorization_denied",
+                Error(await Call(execution.Tools, "set_agent_inherit", new JsonObject { ["agentName"] = "heir", ["inheritAgentName"] = name }))
+            );
+        }
+        Assert.DoesNotContain(manager.Agents(), agent => agent.StartsWith("denied-", StringComparison.Ordinal));
+        Assert.Null(SessionWait.Text(manager.AgentMetadata["heir"]?["inherit"]));
+        // A blank name inherits nothing and views no Agent.
+        var blank = await manager.AssessToolAsync(
+            caller,
+            execution.Registry.Resolve("set_agent_inherit", Obj("""{"agentName":"heir","inheritAgentName":"  "}""")),
+            execution.Files,
+            default
+        );
+        Assert.DoesNotContain(blank.Request.Operations ?? [], operation => operation.Op == "agent.view");
+        Assert.Null(Error(await Call(execution.Tools, "create_agent", Obj("""{"agentName":"orphan","inherit":"  ","createMainSession":false}"""))));
+        Assert.Null(SessionWait.Text(manager.AgentMetadata["orphan"]?["inherit"]));
+    }
+
     // A Session create_session parents to the caller is the caller's child, by ID or alias.
     [Fact]
     public async Task Sessions_parented_to_the_caller_are_its_children()

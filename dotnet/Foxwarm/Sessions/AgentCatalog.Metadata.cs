@@ -129,6 +129,11 @@ internal sealed partial class AgentCatalog
         }
     }
 
+    // The Agent an inheritance argument names: trimmed, blank meaning none. create_agent,
+    // set_agent_inherit and the operation plan (`inherited:<arg>`) all use it.
+    internal static string? InheritName(string? argument) =>
+        string.IsNullOrWhiteSpace(argument) ? null : argument.Trim();
+
     internal async Task SetInheritAsync(string name, string? inherit)
     {
         ValidateName(name);

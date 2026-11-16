@@ -45,6 +45,8 @@ internal sealed partial record OperationPlan
             return [when[4..]];
         if (when.StartsWith("default-true:", StringComparison.Ordinal))
             return [when[13..]];
+        if (when.StartsWith("inherited:", StringComparison.Ordinal))
+            return [when[10..]];
         if (when.StartsWith("action:", StringComparison.Ordinal))
             return ["action"];
         return when switch
@@ -78,7 +80,7 @@ internal sealed partial record OperationPlan
 
     internal static string[] ValueArgs(string expression)
     {
-        foreach (var prefix in new[] { "arg?:", "arg:", "has:", "path?:" })
+        foreach (var prefix in new[] { "arg?:", "arg:", "has:", "path?:", "inherited:" })
             if (expression.StartsWith(prefix, StringComparison.Ordinal))
             {
                 var name = expression[prefix.Length..];
@@ -139,6 +141,8 @@ internal sealed partial record OperationPlan
             return ("required argument", []);
         if (expression.StartsWith("has:", StringComparison.Ordinal))
             return ("argument presence", []);
+        if (expression.StartsWith("inherited:", StringComparison.Ordinal))
+            return ("AgentCatalog.InheritName", []);
         if (expression == "path?:cwd")
             return ("exec cwd path fact, else the Session working directory", ["DefaultExecCwd"]);
         if (expression.StartsWith("path?:", StringComparison.Ordinal))

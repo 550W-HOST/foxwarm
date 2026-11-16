@@ -133,8 +133,7 @@ internal sealed partial class SessionManager
                         source.Id
                     );
                     var sourceId = sourceSelection.Caller ? null : sourceSelection.Id;
-                    var inherit = OptionalString(args, "inherit");
-                    inherit = string.IsNullOrWhiteSpace(inherit) ? null : inherit.Trim();
+                    var inherit = AgentCatalog.InheritName(OptionalString(args, "inherit"));
                     if (inherit is not null && !agents.Exists(inherit))
                         throw new InvalidDataException(
                             $"Inherited Agent '{inherit}' does not exist."
@@ -554,7 +553,7 @@ internal sealed partial class SessionManager
             throw new InvalidDataException(
                 "node must be a bounded non-empty string when provided."
             );
-        return node;
+        return SessionCreationDefaults.ExplicitNode(node);
     }
 
     private static string CurrentSessionTurnAction(JsonObject args)

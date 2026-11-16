@@ -18,7 +18,7 @@ internal sealed partial class SessionManager
     {
         if (!Accepting)
             throw new InvalidOperationException("Host is shutting down.");
-        parent = string.IsNullOrWhiteSpace(parent) ? null : parent.Trim();
+        parent = AgentCatalog.InheritName(parent);
         await agents.SetInheritAsync(name, parent);
         TopologyChanged?.Invoke();
         var affected = new List<string>();

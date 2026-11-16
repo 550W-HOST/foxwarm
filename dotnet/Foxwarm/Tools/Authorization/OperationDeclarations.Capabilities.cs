@@ -359,7 +359,7 @@ internal static partial class OperationDeclarations
             [
                 Call(
                     Op("agent.create", "targetAgent=arg:agentName"),
-                    OpIf("arg:inherit", "agent.view", "targetAgent=arg:inherit"),
+                    OpIf("inherited:inherit", "agent.view", "targetAgent=inherited:inherit"),
                     OpIf(
                         "agent-main-created",
                         "session.create",
@@ -414,9 +414,9 @@ internal static partial class OperationDeclarations
                 Call(
                     Op("agent.manage", "targetAgent=arg:agentName", "with.change==inherit"),
                     OpIf(
-                        "arg:inheritAgentName",
+                        "inherited:inheritAgentName",
                         "agent.view",
-                        "targetAgent=arg:inheritAgentName"
+                        "targetAgent=inherited:inheritAgentName"
                     )
                 ),
             ],
