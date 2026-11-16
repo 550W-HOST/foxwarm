@@ -17,9 +17,9 @@ internal sealed record SessionUpgradeReport(
 
 // One-shot inspection before source output selection. This never composes Main,
 // opens a writer, migrates state, externalizes images or activates an owner.
-internal static class SessionUpgradeInspection
+internal static partial class SessionUpgradeInspection
 {
-    internal static SessionUpgradeReport Inspect(HostPaths paths)
+    internal static SessionUpgradeReport Inspect(HostPaths paths, AccessConfiguration? access = null)
     {
         var issues = new List<SessionUpgradeIssue>();
         var cursors = new Dictionary<string, long>(StringComparer.Ordinal);
@@ -120,6 +120,7 @@ internal static class SessionUpgradeInspection
             }
         }
         Global("legacy Worker evidence", () => InspectWorkers(paths.DataRoot, cursors, issues));
+        InspectToolNames(paths, agents, access, issues);
         return new(entries.Count, cursors.Values.Count(value => value != 0), issues);
     }
 
@@ -130,7 +131,7 @@ internal static class SessionUpgradeInspection
             var configuration = new Foxwarm.Models.ModelConfiguration(
                 HostPaths.Capture(applicationRoot)
             );
-            var report = Inspect(configuration.Paths);
+            var report = Inspect(configuration.Paths, configuration.Access);
             foreach (var issue in report.Issues)
                 Console.Error.WriteLine(
                     $"Upgrade {(issue.Blocking ? "blocked" : "warning")}: {issue.Category}: {issue.Detail}"

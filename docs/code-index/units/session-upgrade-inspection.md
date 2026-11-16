@@ -1,6 +1,6 @@
 # Unit: Session upgrade inspection
 
-Files: `dotnet/Foxwarm/Sessions/Storage/SessionUpgradeInspection.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionCatalog.Inspection.cs`
+Files: `dotnet/Foxwarm/Sessions/Storage/SessionUpgradeInspection.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionUpgradeInspection.ToolNames.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionCatalog.Inspection.cs`
 
 Integration: [source output selection](./source-main-entry.md), [authority readers and diagnostics](./session-authority-json.md), [catalog migration](./session-catalog-schema.md), [Archive identity](./archive-identity-and-moves.md).
 
@@ -21,6 +21,16 @@ The following implementation policy applies the approved local-failure isolation
 
 Inspection does not certify an arbitrary deployment or replace normal startup's authoritative checks. It examines every supported catalog member and retained Worker/mailbox metadata, plus the shared global evidence/schema/identity readers; it does not replay all historical Archive records or run pending migrations.
 
+## Tool-name warnings
+
+**User decision (2026-11-16).** The inspection also reports automation and text written for the tool set before `ctl`, as `tool names` warnings that never block (`SessionUpgradeInspection.ToolNames`):
+
+- ToolScript timers in `state/timers.json` and webhook scripts of access identities (from the captured configuration that `Run` passes) whose inline code calls `search_tools`; a file-backed script is read only when it is an absolute path on master or the current Node;
+- the global policy and every Agent-local layer, through their normal parsers: the existing load warnings for rules naming `search_tools`, `call_tool` or `ctl`, and for deny/ask rules on self-scoped builtins;
+- Agent `memory/**/*.md` and `skills/**/*.md` mentioning `search_tools` or `call_tool`, up to 4,096 files of at most 1 MiB.
+
+Each warning names the timer and Session, the identity, the rule file or Agent, or the Agent file; script code, rule bodies, memory text and configuration values are never printed. A check that fails becomes one warning, not a blocker. User memory is never rewritten.
+
 ## Read-only contract
 
 `HostPaths` and normal configuration capture select the installation/data/Agent roots. `SessionCatalog.ReadForInspection` reads existing schema versions 1–3 or the normal ordered legacy catalog candidates without initializing a database. Projection/candidate parsing is shared with migration. Missing membership is never reconstructed from orphan authority files.
@@ -32,5 +42,7 @@ Existing SQLite databases use ordinary read-only connections with live WAL visib
 ## Evidence
 
 `SessionUpgradeInspectionTests` uses Source-produced catalog/Worker state, actual `performSessionWorkerHandback`, complete cold/required member inspection, fresh roots, legacy candidates, identity conflicts and inline images. It verifies retained authority bytes and durable mailbox/catalog rows rather than pinning SQLite sidecar bytes. `scripts/source-upgrade.test.js` executes the actual staged Core through source promotion, proving warning selection, active-Worker/global-Catalog rejection, unchanged prior selection on rejection, and preserved mailbox input. Ordinary startup and native-exec recipient recovery are covered by the [bootstrap tests](./session-manager-bootstrap.md).
+
+`SessionUpgradeToolNamesTests` covers every tool-name source, file-backed scripts, the quiet cases and that no code, text or token reaches the report.
 
 `LegacyHistoryAuthorityTests` verifies that Source-readable history lacking message metadata and stale null-parent copies pass this same inspection without rewriting authority; ordinary admission/save and first Catalog migration share the result.
