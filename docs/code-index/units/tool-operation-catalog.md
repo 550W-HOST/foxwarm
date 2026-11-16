@@ -101,7 +101,7 @@ Notation:
 | `ask_user` | `user.ask[(secret)]`; `[secret.manage(name)]` per secret question; `[secret.use]` for referenced names | P. Answer-time storage happens after the invocation, without its scope. |
 | `send_to_session` | `session.send` | P |
 | `create_child_session` | `session.create(kind: child, parent: caller, targetAgent, node, prospective child)`; `[task.assign(task, prospective child)]` | P; Task-local rights; the final child ID is bound after allocation. Subsumed: initial message, fork. |
-| `create_session` | `session.create(kind: session, …)` | P; S each prompt file as `node:master/read` |
+| `create_session` | `session.create(kind: session, …)`; its Session is the caller's child when `parentSessionId` resolves to the caller | P; S each prompt file as `node:master/read` |
 | `task` (one branch per action) | `task.create(assigned)` with `[task.assign]` / `task.list` / `task.read` / `task.assign(caller)` for claim / `task.assign` / `task.update` / `task.complete` / `task.cancel` | P. Subsumed: notifications. |
 | `session` (one branch per action) | status: `session.view` / list: `session.list` / rename: `session.control(rename)` / set-parent, clear-parent: `session.manage(reparent)` | P |
 | `view_session` | `session.view` | P |
