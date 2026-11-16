@@ -16,6 +16,11 @@ internal static class ImageGenerationRequests
             is "separate"
                 or "isolated";
 
+    // `imageGeneration.api: images` sends the separate request to the Images API; omitted or
+    // `responses` keeps the Responses request with a forced native image tool.
+    internal static bool UsesImagesApi(JsonObject? configuration) =>
+        SessionWait.Text(configuration?["api"]) == "images";
+
     internal static ResponsesClientOptions Prepare(ResponsesClientOptions options) =>
         options with
         {

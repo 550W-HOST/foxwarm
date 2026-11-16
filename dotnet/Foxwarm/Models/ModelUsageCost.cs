@@ -29,7 +29,7 @@ internal static class ModelUsageCost
             return null;
         var usage = (JsonObject)source.DeepClone();
         usage.Remove("cost");
-        if (model.Configuration["pricing"] is not JsonObject prices)
+        if (result.UsageUnpriced || model.Configuration["pricing"] is not JsonObject prices)
             return usage;
         var cost = 0d;
         foreach (

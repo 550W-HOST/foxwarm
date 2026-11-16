@@ -20,6 +20,34 @@ internal static class ProviderHttpRequest
         return headers;
     }
 
+    // Request defaults first, then provider extraHeaders, which may replace them.
+    internal static void ApplyHeaders(
+        HttpRequestMessage request,
+        ResponsesClientOptions options,
+        IReadOnlyDictionary<string, string> defaults
+    )
+    {
+        void Set(string name, string value)
+        {
+            if (request.Headers.TryAddWithoutValidation(name, value))
+            {
+                request.Headers.Remove(name);
+                request.Headers.TryAddWithoutValidation(name, value);
+            }
+            else if (request.Content is not null)
+            {
+                request.Content.Headers.Remove(name);
+                request.Content.Headers.TryAddWithoutValidation(name, value);
+            }
+        }
+        Set("Accept-Encoding", "gzip, compress, deflate, br");
+        foreach (var (name, value) in defaults)
+            Set(name, value);
+        if (options.ExtraHeaders is not null)
+            foreach (var (name, value) in options.ExtraHeaders)
+                Set(name, value?.ToString() ?? "");
+    }
+
     internal static HttpRequestMessage Create(
         Uri endpoint,
         JsonObject body,
@@ -59,25 +87,7 @@ internal static class ProviderHttpRequest
             {
                 CharSet = "utf-8",
             };
-            void Set(string name, string value)
-            {
-                if (request.Headers.TryAddWithoutValidation(name, value))
-                {
-                    request.Headers.Remove(name);
-                    request.Headers.TryAddWithoutValidation(name, value);
-                }
-                else
-                {
-                    request.Content.Headers.Remove(name);
-                    request.Content.Headers.TryAddWithoutValidation(name, value);
-                }
-            }
-            Set("Accept-Encoding", "gzip, compress, deflate, br");
-            foreach (var (name, value) in defaults)
-                Set(name, value);
-            if (options.ExtraHeaders is not null)
-                foreach (var (name, value) in options.ExtraHeaders)
-                    Set(name, value?.ToString() ?? "");
+            ApplyHeaders(request, options, defaults);
             if (options.RequestCompression is not null)
             {
                 request.Content.Headers.ContentEncoding.Clear();

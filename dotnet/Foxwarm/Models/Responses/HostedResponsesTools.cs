@@ -303,7 +303,7 @@ internal static class HostedResponsesTools
         return safe.Length > 0 ? "ig_" + safe : "ig_image" + (index + 1);
     }
 
-    private static byte[] DecodeBase64(string value, int maxBytes)
+    internal static byte[] DecodeBase64(string value, int maxBytes)
     {
         var compact = new string(
             value.Where(character => !OpenAIRequestText.IsWhitespace(character)).ToArray()
@@ -339,7 +339,7 @@ internal static class HostedResponsesTools
     private static bool IsBase64Ascii(char value) =>
         value is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '+' or '/' or '=';
 
-    private static string? DeclaredMime(string? format) =>
+    internal static string? DeclaredMime(string? format) =>
         format switch
         {
             "png" => "image/png",

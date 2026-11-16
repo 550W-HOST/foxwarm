@@ -191,7 +191,10 @@ internal static class ConfiguredModelRequests
             };
         }
         IChatService service =
-            model.ProviderType == "openai-ws"
+            options.ImageGenerationOnly
+            && ImageGenerationRequests.UsesImagesApi(options.ImageGeneration)
+                ? new ImagesApiChatService(http, options)
+            : model.ProviderType == "openai-ws"
                 ? new ResponsesWsChatService(
                     options,
                     websockets ?? new ResponsesWsTransport(),

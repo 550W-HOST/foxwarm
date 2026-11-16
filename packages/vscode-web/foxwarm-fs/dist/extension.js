@@ -512,7 +512,8 @@ var openaiImageGenerationOptions = {
   properties: {
     enabled: { type: "boolean", description: "Enable the hosted image_generation tool for eligible Responses requests." },
     mode: { enum: ["hosted", "separate", "isolated"], description: "Hosted uses the conversation request. Separate uses generate_image with a reasoning-free request. Isolated is a legacy alias for separate." },
-    model: { type: "string", minLength: 1, description: "Optional hosted image model override. Omitted uses the provider default." },
+    api: { enum: ["responses", "images"], description: "API used in separate mode. responses (default) sends a Responses request with the image tool; images calls the Images API and requires model." },
+    model: { type: "string", minLength: 1, description: "Image model. Required when api is images; for responses, omit it to use the provider default." },
     action: { enum: ["auto", "generate", "edit"], description: "Hosted image action. Defaults to auto." },
     size: { type: "string", minLength: 1, description: "Requested output size for the hosted image model." },
     quality: { enum: ["auto", "low", "medium", "high", "xhigh", "max"], description: "Requested output quality." },

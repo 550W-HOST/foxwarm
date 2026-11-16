@@ -362,6 +362,7 @@ internal sealed partial class HostModels
                 {
                     ["action"] = ["auto", "generate", "edit"],
                     ["mode"] = ["hosted", "separate", "isolated"],
+                    ["api"] = ["responses", "images"],
                     ["quality"] = ["auto", "low", "medium", "high", "xhigh", "max"],
                     ["background"] = ["auto", "opaque", "transparent"],
                     ["outputFormat"] = ["png", "jpeg", "webp"],
@@ -460,13 +461,34 @@ internal sealed partial class HostModels
         var earlier = Normalize(provider);
         var later = Normalize(model);
         if (later is null)
+        {
+            if (image && earlier is not null)
+                CheckImagesApi(earlier);
             return earlier;
+        }
         var merged = earlier ?? new JsonObject();
         foreach (var (key, value) in later)
             merged[key] = value?.DeepClone();
         if (image)
+        {
             CheckImageConflict(merged);
+            CheckImagesApi(merged);
+        }
         return merged;
+    }
+
+    // The Images API backend serves only the separate generate_image request and has no
+    // provider-default image model, so the effective (inherited) settings must name both.
+    private static void CheckImagesApi(JsonObject result)
+    {
+        if (SessionWait.Text(result["api"]) != "images")
+            return;
+        if (SessionWait.Text(result["mode"]) is not ("separate" or "isolated"))
+            throw new InvalidDataException("imageGeneration.api images requires mode separate.");
+        if (SessionWait.Text(result["model"]) is null)
+            throw new InvalidDataException(
+                "imageGeneration.api images requires an image model in imageGeneration.model."
+            );
     }
 
     private static void CheckImageConflict(JsonObject result)
