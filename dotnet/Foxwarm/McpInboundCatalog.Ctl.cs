@@ -25,7 +25,7 @@ internal sealed partial class McpInboundCatalog
             case CtlHelpRequest request:
                 return CtlHelp.Render(request, visible, Ingress) is { } help
                     ? Result(JsonValue.Create(help))
-                    : Error(CtlHelp.Error(CtlHelp.Unknown(request), visible, Ingress));
+                    : Error(CtlHelp.Error(CtlHelp.Unknown(request, Ingress), visible, Ingress));
             case CtlError error:
                 return Error(CtlHelp.Error(error, visible, Ingress));
             case CtlSearch search:

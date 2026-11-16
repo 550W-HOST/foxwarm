@@ -462,7 +462,15 @@ internal static partial class CtlParser
     private static CtlInvocation Command(string nounName, CtlLexer lexer, Values bound, string ingress)
     {
         if (CtlRegistry.Noun(nounName) is null || !Visible(nounName, ingress))
-            throw new CtlUsageException(Unknown(nounName), unknown: nounName);
+        {
+            // A following word is taken as the verb, so `sessions list` can suggest the
+            // command rather than only its noun.
+            var typed =
+                lexer.Next() is { Quoted: false } verb && !verb.Text.StartsWith('-')
+                    ? nounName + " " + verb.Text
+                    : nounName;
+            throw new CtlUsageException(Unknown(typed), unknown: typed);
+        }
 
         var second = lexer.Next();
         if (second is null || second is { Quoted: false, Text: "--help" })
@@ -505,6 +513,38 @@ internal static partial class CtlParser
 
     internal static string Unknown(string typed) => $"Unknown command `{typed}`.";
 
+    // Options close to an unknown one: those it begins (`--old` for `--old-text`) or nearly
+    // spells. A suggestion only; abbreviations are not accepted, so adding an option never
+    // changes what an existing command means.
+    private static string OptionSuggestion(CtlCommand command, string flag)
+    {
+        var names = command
+            .Parameters.Select(parameter => parameter.FlagName)
+            .Where(name =>
+                name.StartsWith(flag + "-", StringComparison.Ordinal)
+                || CtlHelp.Distance(flag, name) <= Math.Max(1, flag.Length / 4)
+            )
+            .Take(2)
+            .Select(name => "`--" + name + "`")
+            .ToArray();
+        return names.Length == 0 ? "" : " Did you mean " + string.Join(" or ", names) + "?";
+    }
+
+    // An extra word: names the positionals the command takes and the words that filled them,
+    // so a value given in the wrong place is visible.
+    private static string Unexpected(CtlCommand command, string text, IReadOnlyList<string> words, Values bound)
+    {
+        var name = "`" + (bound.Literal ? "/" : "") + (command.Display ?? command.Path) + "`";
+        var positionals = command.Parameters.Where(parameter => parameter.Positional).ToArray();
+        if (positionals.Length == 0)
+            return $"Unexpected argument `{text}`: {name} takes no positional arguments.";
+        return $"Unexpected argument `{text}`: {name} takes only "
+            + string.Join(" ", positionals.Select(parameter => parameter.Placeholder))
+            + (positionals.Length == 1 ? " as a positional argument" : " as positional arguments")
+            + (words.Count == 0 ? "" : ", given as " + string.Join(" ", words.Select(word => "`" + word + "`")))
+            + "; pass other values with their options.";
+    }
+
     private static CtlInvocation Arguments(CtlCommand command, CtlLexer lexer, Values bound)
     {
         var assigned = new JsonObject();
@@ -513,6 +553,8 @@ internal static partial class CtlParser
         var nextPositional = 0;
         var flagsEnded = false;
         var help = false;
+        // Words already taken as positionals, for the extra-argument error.
+        var words = new List<string>();
         while (!lexer.AtEnd)
         {
             // A positional already given as an option is filled; use the next one.
@@ -563,7 +605,9 @@ internal static partial class CtlParser
                     negated = true;
                 }
                 if (parameter is null)
-                    throw new InvalidDataException($"Unknown option `--{flag}`.");
+                    throw new InvalidDataException(
+                        $"Unknown option `--{flag}`." + OptionSuggestion(command, flag)
+                    );
                 if (parameter.IsBoolean)
                 {
                     if (negated)
@@ -593,8 +637,9 @@ internal static partial class CtlParser
                 continue;
             }
             if (nextPositional >= positionals.Count)
-                throw new InvalidDataException($"Unexpected argument `{token.Text}`.");
+                throw new InvalidDataException(Unexpected(command, token.Text, words, bound));
             var slot = positionals[nextPositional];
+            words.Add(token.Text);
             if (slot.Variadic)
             {
                 AppendWord(assigned, slot, token.Text, bound);

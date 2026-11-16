@@ -237,7 +237,7 @@ public sealed class CtlCommandTests
         var unknown = Error("session lst");
         Assert.Contains("`session list`", CtlHelp.Error(unknown, visibleAll));
         Assert.Equal("session", unknown.Noun);
-        Assert.Contains("Did you mean `session`", CtlHelp.Error(Error("sesion list"), visibleAll));
+        Assert.Contains("Did you mean `session list`?", CtlHelp.Error(Error("sesion list"), visibleAll));
         // Suggestions come from the commands the caller may see.
         Assert.DoesNotContain(
             "session list",
@@ -254,6 +254,101 @@ public sealed class CtlCommandTests
                         CtlHelp.Render(new(noun.Name, null), visibleAll, ingress)!.Length < CtlHelp.MaxLength
                     )
             );
+    }
+
+    [Fact]
+    public void Errors_for_common_guesses_point_to_the_form_that_runs()
+    {
+        var visibleAll = new Func<CtlCommand, bool>(_ => true);
+        string Message(string command, JsonObject? values = null, Func<CtlCommand, bool>? visible = null) =>
+            CtlHelp.Error(Error(command, values), visible ?? visibleAll);
+
+        // A plural or misspelled noun with a verb suggests the whole command.
+        Assert.Equal("Unknown command `sessions list`. Did you mean `session list`?", Message("sessions list").Split("\n")[0]);
+        Assert.Contains("Did you mean `session`?", Message("sessions"));
+        Assert.Contains("Did you mean `session`?", Message("sessions frobnicate"));
+        // A verb is compared with its noun's verbs only: no distant verb is offered, and the
+        // noun's commands follow.
+        var messages = Message("session messages x --count 3");
+        Assert.StartsWith("Unknown command `session messages`.\n\n", messages);
+        Assert.DoesNotContain("Did you mean", messages);
+        Assert.Contains("session view <session-id>", messages);
+        Assert.Contains("Did you mean `session list`?", Message("session lst"));
+
+        // Unknown options suggest the option they begin or nearly spell.
+        var memory = Error("memory edit MEMORY.md --old @o --new @n", new() { ["o"] = "a", ["n"] = "b" });
+        Assert.Equal("Unknown option `--old`. Did you mean `--old-text`?", memory.Message);
+        Assert.Equal("memory edit", memory.Command!.Path);
+        Assert.Equal(
+            "Unknown option `--file`. Did you mean `--file-path`?",
+            Error("memory edit --file MEMORY.md").Message
+        );
+        Assert.Equal("Unknown option `--cout`. Did you mean `--count`?", Error("session list --cout 3").Message);
+        Assert.Equal("Unknown option `--last`.", Error("session view x --last 3").Message);
+
+        // An extra word names the positionals and the words that filled them.
+        Assert.Equal(
+            "Unexpected argument `New name`: `session rename` takes only <name> as a positional argument, given as `agent/s1`; pass other values with their options.",
+            Error("session rename agent/s1 \"New name\"").Message
+        );
+        Assert.Equal(
+            "Unexpected argument `box`: `node list` takes no positional arguments.",
+            Error("node list box").Message
+        );
+        Assert.Contains(
+            "takes only <source-node> <source-path> <target-node> <target-path> as positional arguments, given as `a` `b` `c` `d`;",
+            Error("node copy a b c d e").Message
+        );
+        Assert.Equal(
+            "Unexpected argument `x`: `/session stop` takes only <session-id> as a positional argument, given as `s1`; pass other values with their options.",
+            Assert.IsType<CtlError>(CtlParser.ParseUser("/session", "stop s1 x")).Message
+        );
+
+        // Node lifecycle commands name their required Provider.
+        Assert.Equal("Missing required option `--provider-id`.", Error("node ensure dev/box").Message);
+        Assert.Equal(
+            "dev",
+            Target("node ensure dev/box --provider-id dev").Args["providerId"]!.GetValue<string>()
+        );
+        Assert.Equal("Missing required option `--provider-id`.", Error("node create --node-id dev/box").Message);
+    }
+
+    [Fact]
+    public void Help_reports_a_hidden_command_as_unavailable_and_a_missing_one_as_unknown()
+    {
+        var visibleAll = new Func<CtlCommand, bool>(_ => true);
+        var noView = new Func<CtlCommand, bool>(command => command.Path != "session view");
+        var view = CtlHelp.Error(CtlHelp.Unknown(new("session", "view")), noView);
+        Assert.StartsWith("`session view` is not available to this Session.\n\nsession: ", view);
+        Assert.Contains("session status", view);
+        Assert.DoesNotContain("Unknown command", view);
+        // Any parse error of a hidden command reports it as unavailable.
+        Assert.StartsWith(
+            "`session view` is not available to this Session.",
+            CtlHelp.Error(Error("session view x --last 3"), noView)
+        );
+        var noConfig = new Func<CtlCommand, bool>(command => command.Noun != "config");
+        Assert.Equal(
+            "No `config` commands are available to this Session.\n\nRun `help` for the available commands.",
+            CtlHelp.Error(CtlHelp.Unknown(new("config", null)), noConfig)
+        );
+        Assert.StartsWith(
+            "`config set` is not available to this Session.\n\nRun `help`",
+            CtlHelp.Error(CtlHelp.Unknown(new("config", "set")), noConfig)
+        );
+        Assert.StartsWith(
+            "`session view` is not available to this connection.",
+            CtlHelp.Error(CtlHelp.Unknown(new("session", "view"), "external"), noView, "external")
+        );
+        // A command or noun the ingress doesn't have stays unknown.
+        Assert.StartsWith(
+            "Unknown command `session missing`.",
+            CtlHelp.Error(CtlHelp.Unknown(new("session", "missing")), visibleAll)
+        );
+        Assert.StartsWith(
+            "Unknown command `memory`.",
+            CtlHelp.Error(CtlHelp.Unknown(new("memory", null), "external"), visibleAll, "external")
+        );
     }
 
     [Fact]
@@ -922,6 +1017,19 @@ public sealed class CtlCommandTests
         Assert.Contains("timer list", timer);
         var hidden = await Run(tools, "ctl", Args("timer create --help"));
         Assert.Equal("invalid_command", SessionWait.Text(hidden.Response!["error"]!["type"]));
+        // A command that exists but is hidden is reported as unavailable, not unknown, with the
+        // noun's visible commands.
+        var unavailable = SessionWait.Text(hidden.Response!["error"]!["message"])!;
+        Assert.StartsWith("`timer create` is not available to this Session.", unavailable);
+        Assert.Contains("timer list", unavailable);
+        Assert.StartsWith(
+            "No `memory` commands are available to this Session.",
+            SessionWait.Text((await Run(tools, "ctl", Args("memory --help"))).Response!["error"]!["message"])
+        );
+        Assert.StartsWith(
+            "`timer create` is not available to this Session.",
+            SessionWait.Text((await Run(tools, "ctl", Args("timer create --bogus"))).Response!["error"]!["message"])
+        );
         Assert.DoesNotContain("mean `timer create`", SessionWait.Text(hidden.Response!["error"]!["message"]));
         var misspelled = SessionWait.Text((await Run(tools, "ctl", Args("timer creat"))).Response!["error"]!["message"])!;
         Assert.DoesNotContain("`timer create`", misspelled);

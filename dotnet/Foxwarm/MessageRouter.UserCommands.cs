@@ -150,7 +150,7 @@ internal sealed partial class MessageRouter
                 case CtlHelpRequest help:
                     await source.Reply(
                         CtlHelp.Render(help, _ => true, UserCommands.Ingress)
-                            ?? CtlHelp.Error(CtlHelp.Unknown(help), _ => true, UserCommands.Ingress)
+                            ?? CtlHelp.Error(CtlHelp.Unknown(help, UserCommands.Ingress), _ => true, UserCommands.Ingress)
                     );
                     break;
                 case CtlError error:

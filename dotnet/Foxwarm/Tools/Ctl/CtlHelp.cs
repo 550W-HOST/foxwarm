@@ -112,6 +112,17 @@ internal static class CtlHelp
     // may see. Suggestions come only from visible commands, like help.
     internal static string Error(CtlError error, Func<CtlCommand, bool> visible, string ingress = CtlRegistry.Ingress)
     {
+        // A command that exists but is hidden from this caller can't run here, whatever its
+        // arguments: say so instead of reporting a usage problem or an unknown command.
+        if (error.Command is { } hidden && !visible(hidden))
+            return Bound(
+                $"`{Prefix(ingress)}{hidden.Display ?? hidden.Path}` is not available to {Caller(ingress)}."
+                    + (
+                        hidden.Display is null && Noun(hidden.Noun, visible, ingress) is { } listing
+                            ? "\n\n" + listing
+                            : HelpPointer(ingress)
+                    )
+            );
         var message = error.Message;
         if (error.Unknown is { } typed && Suggestions(typed, visible, ingress) is { Length: > 0 } candidates)
             message +=
@@ -125,20 +136,33 @@ internal static class CtlHelp
                     : null
             : error.Noun is { } noun ? Noun(noun, visible, ingress)
             : null;
-        return Bound(
-            message
-                + (
-                    usage is not null ? "\n\n" + usage
-                    : ingress == "user" ? "\n\nSend `/help` for the available commands."
-                    : "\n\nRun `help` for the available commands."
-                )
-        );
+        return Bound(message + (usage is not null ? "\n\n" + usage : HelpPointer(ingress)));
     }
 
-    // The error for help on a noun or command the caller has no access to.
-    internal static CtlError Unknown(CtlHelpRequest request)
+    private static string HelpPointer(string ingress) =>
+        ingress == "user"
+            ? "\n\nSend `/help` for the available commands."
+            : "\n\nRun `help` for the available commands.";
+
+    // Who a hidden command is unavailable to.
+    private static string Caller(string ingress) =>
+        ingress switch
+        {
+            "external" => "this connection",
+            "user" => "this conversation",
+            _ => "this Session",
+        };
+
+    // The error for help on a noun or command the caller can't see: unknown when the ingress has
+    // no such noun or command, otherwise the hidden command (reported as unavailable by Error)
+    // or a noun none of whose commands are visible.
+    internal static CtlError Unknown(CtlHelpRequest request, string ingress = CtlRegistry.Ingress)
     {
         var typed = request.Verb is null ? request.Noun! : request.Noun + " " + request.Verb;
+        if (request.Verb is not null && CtlRegistry.Find(request.Noun!, request.Verb, ingress) is { } command)
+            return new(CtlParser.Unknown(typed), command);
+        if (request.Verb is null && CtlRegistry.ForNoun(request.Noun!, ingress).Any())
+            return new($"No `{Prefix(ingress)}{request.Noun}` commands are available to {Caller(ingress)}.");
         return new(
             CtlParser.Unknown(typed),
             Noun: request.Verb is null ? null : request.Noun,
@@ -149,29 +173,53 @@ internal static class CtlHelp
     // Commands are typed after `/` by users and as the command text of `ctl` otherwise.
     internal static string Prefix(string ingress) => ingress == "user" ? "/" : "";
 
-    // Up to three visible nouns (for a one-word command) or commands closest to the typed text.
+    // Up to three visible nouns or commands closest to the typed text. A verb is compared with
+    // the verbs of its noun only, so a long noun doesn't make unrelated verbs look close. Under
+    // an unknown noun, the verb is matched under the closest nouns, else the nouns are offered.
     internal static string[] Suggestions(
         string typed,
         Func<CtlCommand, bool> visible,
         string ingress = CtlRegistry.Ingress
     )
     {
-        var candidates = typed.Contains(' ')
-            ? CtlRegistry
-                .Nouns.SelectMany(noun => Commands(noun.Name, visible, ingress))
-                .Select(command => command.Path)
-            : CtlRegistry.Nouns.Where(noun => Commands(noun.Name, visible, ingress).Any()).Select(noun => noun.Name);
-        return candidates
-            .Select(path => (Path: path, Distance: Distance(typed, path)))
-            .Where(pair => pair.Distance <= Math.Max(2, typed.Length / 3))
-            .OrderBy(pair => pair.Distance)
-            .ThenBy(pair => pair.Path, StringComparer.Ordinal)
-            .Take(3)
-            .Select(pair => pair.Path)
+        var nouns = CtlRegistry
+            .Nouns.Where(noun => Commands(noun.Name, visible, ingress).Any())
+            .Select(noun => noun.Name)
             .ToArray();
+        var space = typed.IndexOf(' ');
+        if (space < 0)
+            return Closest(typed, nouns.Select(noun => (noun, noun)));
+        var nounName = typed[..space];
+        var verb = typed[(space + 1)..];
+        if (nouns.Contains(nounName))
+            return Verbs(nounName, verb);
+        var close = Closest(nounName, nouns.Select(noun => (noun, noun)));
+        var commands = close.SelectMany(noun => Verbs(noun, verb)).Take(3).ToArray();
+        return commands.Length > 0 ? commands : close;
+
+        string[] Verbs(string noun, string word) =>
+            Closest(
+                word,
+                Commands(noun, visible, ingress)
+                    .SelectMany(command =>
+                        command.Aliases.Prepend(command.Verb).Select(alias => (alias, command.Path))
+                    )
+            );
     }
 
-    private static int Distance(string left, string right)
+    // The distinct results whose word is within a third of the typed length (at least 2) of it.
+    private static string[] Closest(string typed, IEnumerable<(string Word, string Result)> candidates) =>
+        candidates
+            .Select(pair => (pair.Result, Distance: Distance(typed, pair.Word)))
+            .Where(pair => pair.Distance <= Math.Max(2, typed.Length / 3))
+            .OrderBy(pair => pair.Distance)
+            .ThenBy(pair => pair.Result, StringComparer.Ordinal)
+            .Select(pair => pair.Result)
+            .Distinct()
+            .Take(3)
+            .ToArray();
+
+    internal static int Distance(string left, string right)
     {
         var previous = Enumerable.Range(0, right.Length + 1).ToArray();
         for (var row = 1; row <= left.Length; row++)

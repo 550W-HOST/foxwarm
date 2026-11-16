@@ -403,7 +403,7 @@
           "name": "count",
           "type": "integer",
           "kind": "flag",
-          "help": "Maximum visible source records to select after applying --parts. Defaults to 10; 0 returns only the header and execution state. Text filters can leave fewer matches."
+          "help": "Maximum visible source records to select after applying --parts; without --start or --before, the newest ones. Defaults to 10; 0 returns only the header and execution state. Text filters can leave fewer matches."
         },
         {
           "name": "historyVersion",
@@ -1853,7 +1853,8 @@
           "name": "providerId",
           "type": "string",
           "kind": "flag",
-          "help": "Configured Provider that creates the Node."
+          "required": true,
+          "help": "Configured Provider that creates the Node. The IDs of its Nodes start with `<provider-id>/`."
         },
         {
           "name": "parameters",
@@ -1887,7 +1888,8 @@
           "name": "providerId",
           "type": "string",
           "kind": "flag",
-          "help": "Configured Provider that creates or reconnects the Node."
+          "required": true,
+          "help": "Configured Provider that creates or reconnects the Node. The IDs of its Nodes start with `<provider-id>/`."
         },
         {
           "name": "parameters",

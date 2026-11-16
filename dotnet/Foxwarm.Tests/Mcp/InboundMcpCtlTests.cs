@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
+using Foxwarm.Tools;
 
 namespace Foxwarm.Tests;
 
@@ -82,9 +83,19 @@ public sealed class InboundMcpCtlTests
         var missing = await Ctl(client, "session view");
         Assert.True(Failed(missing));
         Assert.Contains("Usage: session view <session-id>", Text(missing));
-        Assert.Contains("Unknown command `memory`", Text(await Ctl(client, "memory read MEMORY.md")));
+        Assert.Contains("Unknown command `memory read`.", Text(await Ctl(client, "memory read MEMORY.md")));
         Assert.Contains("Unknown command `node copy`", Text(await Ctl(client, "node copy a b c d")));
-        Assert.Contains("Unknown option `--query`", Text(await Ctl(client, "session list --query x")));
+        // session list is denied here: any error of it reports the command as unavailable.
+        Assert.StartsWith(
+            "`session list` is not available to this connection.",
+            Text(await Ctl(client, "session list --query x"))
+        );
+        Assert.Equal(
+            "Unknown option `--query`.",
+            Assert.IsType<CtlError>(
+                CtlParser.Parse(new JsonObject { ["command"] = "session list --query x" }, "external")
+            ).Message
+        );
         Assert.True(
             Failed(
                 await InboundMcpFixture.CallAsync(
