@@ -2109,9 +2109,12 @@ test('Full width defaults on, remembers its toggle, and bounds only the message 
     assert.ok(await readWidth() > 1100, 'new browsers retain the full-width message layout')
     await page.click('button[aria-label="Open session options"]')
     await page.waitForSelector('[data-session-ui-settings-menu]', { visible: true })
+    // A DOM-visible menu does not settle the accessibility-tree query; wait for the switch itself.
     const toggle = '::-p-aria(Full width[role="switch"])'
-    assert.equal(await page.$eval(toggle, element => element.textContent.trim()), 'Full width')
-    assert.equal(await page.$eval(toggle, element => element.getAttribute('aria-checked')), 'true')
+    const fullWidthSwitch = await page.waitForSelector(toggle)
+    assert.equal(await fullWidthSwitch.evaluate(element => element.textContent.trim()), 'Full width')
+    assert.equal(await fullWidthSwitch.evaluate(element => element.getAttribute('aria-checked')), 'true')
+    await fullWidthSwitch.dispose()
     await page.locator(toggle).click()
     await page.waitForFunction(() => document.querySelector('.foxwarm-chat-messages-content').dataset.fullWidth === 'false')
     assert.ok(await readWidth() <= 1100)
