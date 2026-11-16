@@ -178,7 +178,10 @@ internal sealed partial class MainToolScript
                 if (progress.KindCase == ChildEvent.KindOneofCase.Complete)
                 {
                     var completed = MontyValues.ToJson(progress.Complete.Value, progressBudget);
-                    record["resultImages"] = AdmitResultImages(context.Owner, record, completed);
+                    // A run begun before image admission keeps the old promotion (no
+                    // resultImages) for the result it eventually produces.
+                    if (record.ContainsKey("producedImages"))
+                        record["resultImages"] = AdmitResultImages(context.Owner, record, completed);
                     record["lastResult"] = completed;
                     record["status"] = "completed";
                     record["completedAt"] = Now();

@@ -224,6 +224,9 @@ internal sealed partial class MainToolScript : IAsyncDisposable
                 ["vmRuntime"] = RuntimeIdentity(),
                 ["stdout"] = "",
                 ["executedTools"] = new JsonArray(),
+                // Image provenance: present from the start on every run this code begins, so a
+                // checkpoint without it began before image admission (see MainToolScript.Images).
+                ["producedImages"] = new JsonArray(),
                 ["relatedManagedSessions"] = new JsonArray(),
                 ["hostCallCount"] = 0,
                 ["timeoutSecs"] = seconds,

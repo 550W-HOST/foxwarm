@@ -32,9 +32,13 @@ internal sealed partial class MainToolScript
         Foxwarm.Tools.OperationPlan.SelfReason(resolved) is null
         || resolved.Source == "builtin" && SelfImageProducers.Contains(resolved.Name);
 
-    // Records a stored blob that a nested call produced as an image result.
+    // Records a stored blob that a nested call produced as an image result. A run begun before
+    // admission (its checkpoint has no `producedImages`) records nothing and completes under the
+    // old promotion: read-old for legacy checkpoints, write-new for runs this code begins.
     private static void NoteProducedImage(JsonObject record, string blob)
     {
+        if (!record.ContainsKey("producedImages"))
+            return;
         var produced = record["producedImages"] as JsonArray;
         if (produced is not null && produced.Any(item => Text(item) == blob))
             return;
