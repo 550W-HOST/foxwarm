@@ -653,6 +653,10 @@ internal sealed class RequestChatService(IChatService inner, SessionOwner hosted
     )
     {
         string? requestId = null;
+        // Preparing a request (selection, prompt, journal admission, history projection, redaction
+        // and serialization) is part of it: publish the request phase now rather than leaving the
+        // busy-but-unknown phase between a finished tool batch and the attempt start.
+        hosted.BeginModelAttempt();
         async Task<bool> Prepare(CancellationToken token)
         {
             hosted.ClearDraft();

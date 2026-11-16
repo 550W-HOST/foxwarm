@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using Foxwarm.Models;
 using Foxwarm.Sessions;
 using Foxwarm.Tools;
 
@@ -121,5 +122,63 @@ public sealed partial class LiveActivityTests
             item =>
                 Assert.Equal(item.Call is { } call ? expected[call] : "Third command", item.Tool)
         );
+    }
+    [Fact]
+    public async Task Preparing_the_next_request_is_already_a_request_that_keeps_the_latest_summary()
+    {
+        if (!LocalExecManager.IsSupported || OperatingSystem.IsWindows())
+            return;
+        await using var f = await ActivityIndexTests.Fixture.Create();
+        f.Owner.Registry.TriggerOverride = _ => Task.CompletedTask;
+        await f.InputAsync(QueueItem.UserText("Run one command"));
+        var seen = new List<JsonObject>();
+        var chat = new ProbeChat(
+            new ActivityIndexTests.ScriptedChat(
+                [
+                    ActivityIndexTests.Call(
+                        "first",
+                        "exec",
+                        new JsonObject { ["summary"] = "First command", ["command"] = "true" }
+                    ),
+                ]
+            ),
+            () => seen.Add(f.Owner.RuntimeSnapshot())
+        );
+        var host = new LocalSessionTurnHost(
+            f.Owner.Entry,
+            f.Owner.Registry.Store,
+            new RequestChatService(chat, f.Owner),
+            new SessionToolExecutor(new WorkspaceTools(f.Work), f.Owner, f.Manager, f.Registry)
+        );
+        Assert.True(await host.TryClaimBusyAsync());
+        await host.AppendQueuedInputsAsync(f.Owner.Entry.WithState(state => state.Queue.ToArray()));
+        await host.ChatAsync("turn");
+        await host.ReleaseBusyAsync();
+
+        // The provider is reached only after preparation; by then each request is already published.
+        Assert.Equal(2, seen.Count);
+        Assert.All(
+            seen,
+            runtime =>
+            {
+                Assert.Equal("requesting-model", SessionWait.Text(runtime["state"]));
+                Assert.Equal("normal-turn", SessionWait.Text(runtime["active"]?["phase"]));
+            }
+        );
+        Assert.Null(seen[0]["activity"]);
+        Assert.Equal("First command", SessionWait.Text(seen[1]["activity"]?["tool"]));
+    }
+
+    private sealed class ProbeChat(IChatService inner, Action probe) : IChatService
+    {
+        public Task<ChatResult> ChatAsync(
+            string sessionId,
+            IReadOnlyList<JsonObject> history,
+            CancellationToken cancellationToken
+        )
+        {
+            probe();
+            return inner.ChatAsync(sessionId, history, cancellationToken);
+        }
     }
 }
