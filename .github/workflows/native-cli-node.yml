@@ -104,9 +104,11 @@ jobs:
           include-hidden-files: true
 
   deploy:
-    # Repository variable defaults off. Configure environment protection
-    # before enabling publication.
-    if: github.workflow == 'Native CLI Node' && github.ref == 'refs/heads/main' && vars.NATIVE_CLI_PUBLISH == 'true'
+    # Every push of this workflow on main publishes the qualified archives to
+    # foxwarm.net/downloads (user, 2026-11-17). The account ID and API token are
+    # repository secrets; the protected environment still gates the job. A failed
+    # deploy leaves the previous downloads in place and doesn't affect releases.
+    if: github.workflow == 'Native CLI Node' && github.ref == 'refs/heads/main'
     needs: [build, platforms]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -133,13 +135,13 @@ jobs:
           done
       - name: Require publishing configuration and activate only the approved download route
         env:
-          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          NATIVE_CLI_WRANGLER_VERSION: ${{ vars.NATIVE_CLI_WRANGLER_VERSION }}
+          # Reviewed Wrangler release; `deploy --dry-run` accepts downloads.wrangler.json.
+          NATIVE_CLI_WRANGLER_VERSION: 4.162.0
         run: |
-          : "${CLOUDFLARE_ACCOUNT_ID:?Configure the publishing account}"
-          : "${CLOUDFLARE_API_TOKEN:?Configure the protected publishing token}"
-          : "${NATIVE_CLI_WRANGLER_VERSION:?Pin a reviewed supported Wrangler version}"
+          : "${CLOUDFLARE_ACCOUNT_ID:?Set the CLOUDFLARE_ACCOUNT_ID repository secret}"
+          : "${CLOUDFLARE_API_TOKEN:?Set the CLOUDFLARE_API_TOKEN repository secret}"
           [[ "$NATIVE_CLI_WRANGLER_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
           npm exec --yes --package="wrangler@$NATIVE_CLI_WRANGLER_VERSION" -- \
             wrangler deploy --config scripts/native-aot/downloads.wrangler.json

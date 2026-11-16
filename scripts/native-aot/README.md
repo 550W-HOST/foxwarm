@@ -250,9 +250,9 @@ python3 scripts/native-aot/package-cli.py \
 
 The complete archive, including licenses/notices, must fit the static asset size
 limit. Extract and qualify that archive with the existing probe before publishing.
-The independent workflow performs this sequence; publishing is opt-in and requires
-external account/environment configuration. It does not deploy the documentation
-site or change DNS. The public channel is
+The independent workflow performs this sequence and publishes on every run on
+`main`, with the Cloudflare account ID and API token from repository secrets. It
+does not deploy the documentation site or change DNS. The public channel is
 `https://foxwarm.net/downloads/native-cli-node-latest-v3.tar.gz`.
 See [distribution ownership](../../docs/code-index/units/native-cli-distribution.md)
 for channel retention and publication boundaries. Collection of notices does not
