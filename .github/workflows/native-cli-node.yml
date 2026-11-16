@@ -24,10 +24,6 @@ defaults:
   run:
     shell: bash
 
-concurrency:
-  group: native-cli-downloads
-  cancel-in-progress: false
-
 jobs:
   platforms:
     uses: ./.github/workflows/native-cli-platforms.yml
@@ -113,6 +109,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     environment: native-cli-downloads
+    # Serializes only the publication. A workflow-level group would also be taken by the
+    # runs that release.yml starts from this workflow and cancel their pending jobs.
+    concurrency:
+      group: native-cli-downloads
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

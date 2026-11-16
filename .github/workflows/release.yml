@@ -18,7 +18,7 @@ permissions:
 
 env:
   # The release before this one, for the upgrade checks. Move it forward with each release.
-  PREVIOUS_RELEASE: v0.9.5
+  PREVIOUS_RELEASE: v0.9.6
 
 concurrency:
   group: release-${{ github.ref }}
