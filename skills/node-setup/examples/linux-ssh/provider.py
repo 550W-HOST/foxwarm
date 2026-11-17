@@ -74,9 +74,9 @@ def main():
                 ready = probe.get("ok") is True
                 result["nodes"].append({"id": node["id"], "label": node.get("label", node["id"]),
                                         "kind": "remote", "type": "linux-ssh", "availability": "ready" if ready else "offline",
-                                        "filesystem": "read-write", "exec": True,
+                                        "filesystem": "read-write", "exec": True, "execStop": True,
                                         "defaultCwd": probe.get("result", {}).get("cwd", node.get("cwd", "~"))})
-        elif operation in ("filesystem", "exec-start", "exec-poll"):
+        elif operation in ("filesystem", "exec-start", "exec-poll", "exec-stop"):
             node = next((node for node in nodes if node["id"] == request.get("nodeId")), None)
             if node is None:
                 raise ValueError("Unknown Node ID.")

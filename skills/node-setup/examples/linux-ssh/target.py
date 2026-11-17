@@ -7,9 +7,11 @@ import os
 from pathlib import Path
 import shlex
 import shutil
+import signal
 import stat
 import subprocess
 import sys
+import time
 import uuid
 
 
@@ -92,7 +94,8 @@ def run_command(directory):
             environment = dict(os.environ)
             environment.pop("fw_agentdir", None)
             environment.pop("fw_tmp", None)
-            process = subprocess.Popen(["/bin/bash", str(directory / "command.sh")], cwd=metadata["cwd"],
+            # The shell leads its own process group, so exec-stop can end the command without this supervisor.
+            process = subprocess.Popen(["/bin/bash", str(directory / "command.sh")], cwd=metadata["cwd"], start_new_session=True,
                                        stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT, env=environment)
             atomic_json(directory / "shell.json", {"pid": process.pid, "identity": identity(process.pid)})
             code = process.wait()
@@ -142,7 +145,7 @@ def start(request, cwd, state_dir):
     return {"ref": "process:" + ref, "outputPath": str(directory / "output.log"), "cwd": cwd, "startedAt": started, "pid": process.pid}
 
 
-def poll(request, state_dir):
+def job_directory(request, state_dir):
     reference = request["ref"]
     if not isinstance(reference, str) or not reference.startswith("process:"):
         raise ValueError("Invalid execution reference.")
@@ -152,7 +155,11 @@ def poll(request, state_dir):
             raise ValueError()
     except (ValueError, AttributeError):
         raise ValueError("Invalid execution reference.")
-    directory = state_dir / ref
+    return state_dir / ref
+
+
+def poll(request, state_dir):
+    directory = job_directory(request, state_dir)
     try:
         if (directory / "status.json").exists():
             return json.loads((directory / "status.json").read_text())
@@ -172,6 +179,38 @@ def poll(request, state_dir):
         return snapshot
     except FileNotFoundError:
         return {"state": "lost", "reason": "Execution records are no longer available."}
+
+
+def stop(request, state_dir):
+    """Ends the command's process group: TERM, then KILL after graceMs. The supervisor still records its status."""
+    directory = job_directory(request, state_dir)
+    grace = request.get("graceMs", 5000)
+    if not isinstance(grace, int) or not 0 <= grace <= 60000:
+        raise ValueError("graceMs must be an integer from 0 to 60000.")
+    if (directory / "status.json").exists():
+        return {"state": "finished"}
+    try:
+        shell = json.loads((directory / "shell.json").read_text())
+    except FileNotFoundError:
+        if not (directory / "process.json").exists():
+            return {"state": "lost"}
+        raise ProcessLookupError(errno.ESRCH, "The command has not started yet.")
+    if not shell["identity"] or identity(shell["pid"]) != shell["identity"]:
+        return {"state": "finished"}
+    try:
+        os.killpg(shell["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        return {"state": "finished"}
+    deadline = time.monotonic() + grace / 1000
+    while time.monotonic() < deadline:
+        if (directory / "status.json").exists():
+            return {"state": "stopped"}
+        time.sleep(0.05)
+    try:
+        os.killpg(shell["pid"], signal.SIGKILL)
+    except ProcessLookupError:
+        return {"state": "stopped"}
+    return {"state": "killed"}
 
 
 def main():
@@ -198,6 +237,8 @@ def main():
             result = filesystem(request, cwd)
         elif operation == "exec-start":
             result = start(request, cwd, state_dir)
+        elif operation == "exec-stop":
+            result = stop(request, state_dir)
         elif operation == "exec-poll":
             result = poll(request, state_dir)
         else:
