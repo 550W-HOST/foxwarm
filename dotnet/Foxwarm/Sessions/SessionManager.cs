@@ -219,6 +219,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         );
         executor.ResolveProviderBackend = NodeProviders.ResolveExecBackend;
         executor.ResolveProviderStop = NodeProviders.ExecStopBackendAsync;
+        executor.Untracked = session => Find(session)?.PublishStateChanged();
         executor.RemoteIdentityReserved = (session, id) =>
             Find(session) is { } owner && Nodes.ExecClaims.Has(owner, id, activeOnly: false);
         Nodes.LocalExecActive = (owner, id) => executor.IsOwnedActive(owner.Id, id);
@@ -659,6 +660,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
             ResolveAncestry = CatalogMetadata,
             MainMetadata = OverlayMainMetadata,
         };
+        hosted.RunningExecCount = () => RunningExecs(hosted).Length;
         hosted.Archive = store.Archive;
         hosted.AuthorityStore = store;
         hosted.Executor = executor;

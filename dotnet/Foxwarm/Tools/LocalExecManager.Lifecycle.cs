@@ -145,6 +145,8 @@ internal sealed partial class LocalExecManager
             {
                 gate.Release();
             }
+            if (record.Notify)
+                Untracked?.Invoke(resolveLifetime(record.SessionId));
         }
         catch (Exception)
         {

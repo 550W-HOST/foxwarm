@@ -54,6 +54,7 @@ import {
   ToolResponsesBlock,
   type OpenCodeFileHandler,
 } from './ToolTimelineItems'
+import { withLeadingExecLink } from './execLinks'
 import ThreadLineButton from './ThreadLineButton'
 import SpecialBlock, { MermaidDiagram } from './SpecialBlock'
 import PastedTextBlock from './PastedTextBlock'
@@ -727,6 +728,8 @@ const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, message
       || messageKind.kind
     return `${messageKind.previewPrefix}${body}`
   }, [allLines, messageKind.bodyText, messageKind.kind, messageKind.previewPrefix, renderedText])
+  const completionEvent = messageKind.kind === 'event' && msg.parts.some(part => part.system?.includes('type="background-process-finished"'))
+  const completionLine = completionEvent ? renderedLines.findIndex(line => line.trim() && !isSystemLikeText(line)) : -1
   const surfaceClass = 'bg-fw-system-surface/55 dark:bg-fw-system-surface/10 text-fw-system-text'
   const threadLineClass = 'text-fw-system-accent hover:text-fw-system-accent focus-visible:text-fw-system-accent'
   const headerClass = 'bg-fw-system-surface-strong/80 dark:bg-fw-system-surface-strong/20'
@@ -757,7 +760,7 @@ const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, message
             <span ref={headerFade.ref} {...headerFade.overflowFadeProps} className={`foxwarm-system-message-preview ${THREAD_CARD_HEADER_PREVIEW_CLASS}`} title={messageKind.kind === 'inter-agent' && messageKind.previewSessionId ? `From ${messageKind.previewSessionId}:` : preview}>
               {messageKind.previewSessionId ? (
                 <>From <span onClick={(event) => event.stopPropagation()}><SessionHashLink sessionId={messageKind.previewSessionId} /></span>:{messageKind.kind !== 'inter-agent' ? ` ${preview.slice(messageKind.previewPrefix.length)}` : null}</>
-              ) : preview}
+              ) : completionEvent ? <>{messageKind.previewPrefix}{withLeadingExecLink(preview.slice(messageKind.previewPrefix.length), 'completion', rest => rest)}</> : preview}
             </span>
           )}
         </div>
@@ -780,7 +783,7 @@ const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, message
                     : { opacity: 0.92 }
                   }
                 >
-                  {renderSystemTextWithSessionLinks(line)}{!isPrefix && !nextIsPrefix ? '\n' : null}
+                  {lineIdx === completionLine ? withLeadingExecLink(line, 'completion', renderSystemTextWithSessionLinks) : renderSystemTextWithSessionLinks(line)}{!isPrefix && !nextIsPrefix ? '\n' : null}
                 </span>
               )
             })}

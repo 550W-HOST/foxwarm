@@ -93,7 +93,11 @@ internal sealed partial class SessionManager
             throw; // No success ACK until strict admission/duplicate proof succeeds.
         }
         if (claim is not null)
+        {
             Nodes.ExecClaims.Complete(claim);
+            // Presentation drops it from the running count.
+            owner.PublishStateChanged();
+        }
         if (admitted)
             WakeNodeEventOwner(owner);
     }

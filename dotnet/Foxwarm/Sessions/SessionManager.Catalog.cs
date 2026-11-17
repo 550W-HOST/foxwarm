@@ -159,8 +159,10 @@ internal sealed partial class SessionManager
         var meta = owner.Metadata();
         var context = ExecutionPlacement(owner);
         var runtime = owner.RuntimeSnapshot(meta);
+        var runningExecs = RunningExecs(owner).Length;
         var active =
-            runtime["processing"]?.GetValue<bool>() == true
+            runningExecs > 0
+            || runtime["processing"]?.GetValue<bool>() == true
             || meta.Busy
             || meta.Stopping
             || meta.QueueLength > 0
@@ -215,6 +217,9 @@ internal sealed partial class SessionManager
             .AlsoRuntimeFlags(owner.ToolActive, owner.Compacting);
         if (active)
             projected["_runtimeState"] = runtime;
+        // Volatile only: a Session keeps its local projection while background commands run.
+        if (runningExecs > 0)
+            projected["_runningExecs"] = runningExecs;
         var persisted = Catalog.Get(owner.Id);
         if (persisted is not null)
             SessionCatalog.OverlayMain(projected, persisted);
@@ -340,6 +345,8 @@ internal sealed partial class SessionManager
                 );
                 if (row["_runtimeState"] is JsonObject runtime)
                     dto["runtimeState"] = runtime.DeepClone();
+                if (row["_runningExecs"] is JsonNode runningExecs)
+                    dto["runningExecs"] = runningExecs.DeepClone();
                 dto["aliases"] = row["aliases"]?.DeepClone() ?? new JsonArray();
                 dto["currentNode"] = row["currentNode"]?.DeepClone();
                 dto["cwd"] = row["cwd"]?.DeepClone();

@@ -2875,3 +2875,10 @@ html[data-foxwarm-window~="inactive"] .foxwarm-popup-title { color: var(--foxwar
 [data-foxwarm-popup-framed] { --foxwarm-safe-area-top: 0px; }
 body:has([data-foxwarm-popup-framed]) .foxwarm-frame-strip { background: transparent; }
 @media (forced-colors: active) { .foxwarm-popup-card { border-color: CanvasText; } }
+/* A background command's receipt or completion reached through its execId link. */
+@keyframes fw-exec-link-flash {
+  0%, 35% { background-color: color-mix(in srgb, var(--foxwarm-color-accent) 32%, transparent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--foxwarm-color-accent) 32%, transparent); }
+  100% { background-color: transparent; box-shadow: 0 0 0 3px transparent; }
+}
+.fw-exec-link-flash { animation: fw-exec-link-flash 1.8s ease-out; }
+@media (prefers-reduced-motion: reduce) { .fw-exec-link-flash { animation-duration: 0.01s; outline: 2px solid var(--foxwarm-color-accent); } }

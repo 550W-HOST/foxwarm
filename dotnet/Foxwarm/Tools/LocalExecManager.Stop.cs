@@ -38,6 +38,10 @@ internal sealed partial class LocalExecManager
         Task<ProviderExecBackend?>
     >? ResolveProviderStop { get; set; }
 
+    // Called with the lifetime Session after a delivered or expired background command stops
+    // being tracked, so presentation can drop it from the running count.
+    internal Action<string>? Untracked { get; set; }
+
     internal RunningExec[] Running(string sessionId) =>
         pending
             .Values.Where(record =>

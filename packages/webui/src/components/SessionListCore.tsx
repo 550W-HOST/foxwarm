@@ -34,6 +34,8 @@ export interface Session {
   busyStartedAt?: number | null
   queueLength?: number
   runtimeState?: SessionRuntimeState
+  /** Background commands still tracked for this Session. */
+  runningExecs?: number
   runtime?: 'foxwarm' | 'claude-code'
   displayName?: string
   archived?: boolean

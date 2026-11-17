@@ -37,6 +37,7 @@ import { SyntaxHighlightedText } from './SyntaxHighlightedText'
 import { buildPathDownloadUrl, requestPathDownloadUrl, triggerBrowserDownload } from './downloadShared'
 import DiffPreview, { getUnifiedDiffSearchText } from './DiffPreview'
 import { ExecCommandText, ExecOutputText } from './ToolExecText'
+import { withLeadingExecLink } from './execLinks'
 import ThreadLineButton from './ThreadLineButton'
 import { formatCompactDuration } from '../usageTiming'
 import type { SessionSearchMatch } from './chatSessionSearch'
@@ -677,7 +678,7 @@ const renderToolResponseContent = (resp: FunctionResponse, expanded: boolean, ca
       const output = resp.response.output
       const preview = truncateToolResultPreview(output)
       const displayStr = expanded ? output : preview
-      return <div className="whitespace-pre-wrap break-all cursor-text" style={{ lineHeight: '1.3em' }}><ExecOutputText text={displayStr} command={call?.args?.command} /></div>
+      return <div className="whitespace-pre-wrap break-all cursor-text" style={{ lineHeight: '1.3em' }}>{withLeadingExecLink(displayStr, 'receipt', rest => <ExecOutputText text={rest} command={call?.args?.command} />)}</div>
     }
     return renderTextResult(formatToolResponseText(resp), expanded)
   }
@@ -785,7 +786,7 @@ const renderToolScriptResultContent = (resp: FunctionResponse, expanded: boolean
   return (
     <div className="space-y-1">
       <div className="text-[11px] font-semibold uppercase tracking-wide text-fw-text-muted">ToolScript result</div>
-      <div className="whitespace-pre-wrap break-all cursor-text">{displayText}</div>
+      <div className="whitespace-pre-wrap break-all cursor-text">{withLeadingExecLink(displayText, 'receipt', rest => rest)}</div>
     </div>
   )
 }

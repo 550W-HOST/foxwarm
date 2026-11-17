@@ -46,6 +46,8 @@ type ChatSessionRecord = {
   busyStartedAt?: number | null
   queueLength?: number
   runtimeState?: SessionRuntimeState
+  /** Background commands still tracked for this Session. */
+  runningExecs?: number
   runtime?: 'foxwarm' | 'claude-code'
   externalRuntime?: { status?: string; model?: string; canContinue?: boolean; lastResult?: { total_cost_usd?: number } }
   displayName?: string | null

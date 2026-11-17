@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { Bot, ChevronRight, CircleDot, ExternalLink, GitFork, ListFilter, Search, Server, Sparkles } from 'lucide-react'
 import type { Session } from './SessionListCore'
+import { RunningCommandList } from './RunningCommands'
 import { formatUsdCost } from '../usageCost'
 import type { TokenUsage } from './TokenUsageDetails'
 import type { WebUiNodeTarget } from '../nodeTargets'
@@ -154,6 +155,13 @@ export function SessionInspector({ session, parent, children, childTotal, hasMor
               {waiting.pendingSessions?.length ? <InspectorField label="Pending" value={waiting.pendingSessions.join(', ')} mono /> : null}
               {waiting.waitExecIds?.length ? <InspectorField label="Exec IDs" value={waiting.waitExecIds.join(', ')} mono /> : null}
             </dl>
+          </section>
+        ) : null}
+
+        {session.runningExecs ? (
+          <section data-inspector-running-commands className="mt-4 border-t border-fw-border-muted pt-4 dark:border-fw-border">
+            <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-fw-text-muted">Running commands</h3>
+            <div className="mt-1"><RunningCommandList key={session.id} sessionId={session.id} active revision={session.runningExecs} emptyText="No commands are running." /></div>
           </section>
         ) : null}
 
