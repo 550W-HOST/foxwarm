@@ -8,8 +8,6 @@ export type BlogStrings = {
   feed: string;
   /** Badge on an index entry that exists only in the other language. */
   otherLanguageOnly: string;
-  /** Link from an article to its translation. */
-  translation: string;
   allPosts: string;
   appliesTo: (version: string) => string;
   formatDate: (date: Date) => string;
@@ -22,7 +20,6 @@ export const blogStrings: Record<Lang, BlogStrings> = {
     feedTitle: 'Foxwarm Blog',
     feed: 'RSS feed',
     otherLanguageOnly: 'Chinese only for now',
-    translation: '中文版',
     allPosts: 'All posts',
     appliesTo: (version) => `Applies to ${version}`,
     formatDate: (date) => new Intl.DateTimeFormat('en-US', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' }).format(date)
@@ -33,7 +30,6 @@ export const blogStrings: Record<Lang, BlogStrings> = {
     feedTitle: 'Foxwarm 博客',
     feed: 'RSS 订阅',
     otherLanguageOnly: '暂只有英文',
-    translation: 'English version',
     allPosts: '全部文章',
     appliesTo: (version) => `适用于 ${version}`,
     formatDate: (date) => `${date.getUTCFullYear()} 年 ${date.getUTCMonth() + 1} 月 ${date.getUTCDate()} 日`

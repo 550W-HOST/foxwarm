@@ -20,8 +20,6 @@
 
 .post-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; color: var(--muted); font: .8rem/1.6 var(--font-mono); }
 .post-meta > :not(:first-child)::before { content: '·'; margin-right: 10px; color: var(--line-strong); }
-.post-meta a { color: var(--accent-strong); text-decoration: none; }
-.post-meta a:hover { text-decoration: underline; text-underline-offset: 3px; }
 .post-badge { color: var(--ink-soft); }
 
 /* Article */

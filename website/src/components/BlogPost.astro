@@ -1,7 +1,7 @@
 ---
 import { render } from 'astro:content';
 import BlogLayout from './BlogLayout.astro';
-import { strings, blogPath, type Lang } from '../i18n/home';
+import { blogPath, type Lang } from '../i18n/home';
 import { blogStrings } from '../i18n/blog';
 import type { PostGroup } from '../blog/posts';
 
@@ -34,7 +34,6 @@ const { Content } = await render(post);
       <p class="post-meta">
         <time datetime={post.data.date.toISOString().slice(0, 10)}>{b.formatDate(post.data.date)}</time>
         {post.data.version && <span>{b.appliesTo(post.data.version)}</span>}
-        {translation && <a href={blogPath(other, group.slug)} hreflang={strings[other].htmlLang} lang={strings[other].htmlLang}>{b.translation}</a>}
       </p>
     </header>
     <div class="prose">
