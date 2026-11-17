@@ -210,7 +210,7 @@ test('the WebUI demo is built, unindexed, and linked from both homepages', async
   }
 });
 
-test('the blog lists every post in both languages and links each article to its translation', async () => {
+test('the blog lists every post in both languages and declares each article\'s translation', async () => {
   const posts = await blogPosts();
   assert.ok(posts.length > 0, 'the blog has posts');
   const sitemap = await readFile(path.join(distRoot, 'sitemap-0.xml'), 'utf8');
@@ -248,7 +248,6 @@ test('the blog lists every post in both languages and links each article to its 
       if (post.versions[other]) {
         const translation = `${siteOrigin}${blogPath(other, post.slug)}`;
         assert.ok(alternates.includes(`${lang === 'en' ? 'en' : 'zh-CN'} ${canonical}`) && alternates.includes(`${other === 'en' ? 'en' : 'zh-CN'} ${translation}`), `${route} hreflang alternates`);
-        assert.ok(html.includes(`href="${blogPath(other, post.slug)}"`), `${route} links its translation`);
       } else {
         assert.deepEqual(alternates, [], `${route} has no translation to declare`);
       }
@@ -266,6 +265,50 @@ test('the blog lists every post in both languages and links each article to its 
     assert.match(nav, new RegExp(`<a href="${escapeRegExp(blogPath(lang))}">${label}</a>`), `${route} navigation opens the blog`);
     const footer = homepage.match(/<footer class="site-footer">([\s\S]*?)<\/footer>/)?.[1] ?? '';
     assert.match(footer, new RegExp(`<a href="${escapeRegExp(blogPath(lang))}">${label}</a>`), `${route} footer links the blog`);
+  }
+});
+
+// The header language menu lists English and 中文; the current language links to this page and the
+// other to the translation, or to the nearest equivalent page when there is none.
+test('the header language menu offers every page in both languages', async () => {
+  const otherLang = (lang) => (lang === 'en' ? 'zh' : 'en');
+  const htmlLang = { en: 'en', zh: 'zh-CN' };
+  const pages = [];
+  for (const lang of ['en', 'zh']) {
+    pages.push({ route: lang === 'zh' ? '/zh/' : '/', lang, targets: { en: '/', zh: '/zh/' } });
+    pages.push({ route: blogPath(lang), lang, targets: { en: blogPath('en'), zh: blogPath('zh') } });
+    for (const post of (await blogPosts()).filter((candidate) => candidate.versions[lang])) {
+      const other = otherLang(lang);
+      pages.push({ route: blogPath(lang, post.slug), lang, targets: { [lang]: blogPath(lang, post.slug), [other]: post.versions[other] ? blogPath(other, post.slug) : blogPath(other) } });
+    }
+  }
+  // An attribute's value in a tag's attribute text: '' for a bare boolean attribute, undefined when absent.
+  const attribute = (attributes, name) => {
+    const match = attributes.match(new RegExp(`(?:^|\\s)${name}(?:="([^"]*)")?(?=[\\s/]|$)`));
+    return match ? (match[1] ?? '') : undefined;
+  };
+  for (const { route, lang, targets } of pages) {
+    const html = await readFile(routeToFile(route), 'utf8');
+    const menu = html.match(/<div class="language-menu"[^>]*>([\s\S]*?)<\/div>/)?.[1];
+    assert.ok(menu, `${route} has a language menu`);
+    const button = menu.match(/<button ([^>]*)>/)?.[1] ?? '';
+    assert.equal(attribute(button, 'aria-expanded'), 'false', `${route} language button starts collapsed`);
+    const list = menu.match(/<ul ([^>]*)>([\s\S]*?)<\/ul>/);
+    assert.ok(list && attribute(list[1], 'id') === attribute(button, 'aria-controls'), `${route} language button controls the list`);
+    assert.equal(attribute(list[1], 'hidden'), '', `${route} language list starts hidden`);
+    const items = [...list[2].matchAll(/<a ([^>]*)>([\s\S]*?)<\/a>/g)].map(([, attributes, label]) => ({ attributes, label: decodeEntities(label.replace(/<[^>]*>/g, '')).trim() }));
+    assert.deepEqual(items.map((item) => item.label), ['English', '中文'], `${route} lists both languages in their own names`);
+    ['en', 'zh'].forEach((code, index) => {
+      const { attributes } = items[index];
+      assert.equal(attribute(attributes, 'href'), targets[code], `${route} ${code} target`);
+      assert.equal(attribute(attributes, 'hreflang'), htmlLang[code], `${route} ${code} hreflang`);
+      assert.equal(attribute(attributes, 'lang'), htmlLang[code], `${route} ${code} lang`);
+      assert.equal(attribute(attributes, 'aria-current'), code === lang ? 'true' : undefined, `${route} marks only ${lang} as current`);
+    });
+    // Without scripting, the menu is replaced by a link to the other language.
+    const fallback = menu.match(/<a ([^>]*\blanguage-fallback\b[^>]*)>/)?.[1] ?? '';
+    assert.equal(attribute(fallback, 'href'), targets[otherLang(lang)], `${route} fallback link target`);
+    assert.equal(attribute(fallback, 'hreflang'), htmlLang[otherLang(lang)], `${route} fallback hreflang`);
   }
 });
 

@@ -10,7 +10,7 @@ export const en: HomeStrings = {
     description: 'Foxwarm is an open-source, self-hosted workspace for long-running AI agents: one server holds the agent loop, models and memory, while lightweight Nodes run tools on any machine. Delegate to sessions you can open, and bring any session into a group chat.',
     ogTitle: 'Foxwarm — self-hosted AI agents that keep working'
   },
-  nav: { features: 'Features', install: 'Install', docs: 'Docs', demo: 'Demo', blog: 'Blog', github: 'GitHub', theme: 'Switch color theme', language: '中文', languageLabel: '切换到中文', skip: 'Skip to content' },
+  nav: { features: 'Features', install: 'Install', docs: 'Docs', demo: 'Demo', blog: 'Blog', github: 'GitHub', theme: 'Switch color theme', language: '中文', languageLabel: '切换到中文', languageMenu: 'Select language', skip: 'Skip to content' },
   hero: {
     title: 'It keeps working after you close the laptop.',
     lede: 'Foxwarm runs your AI agents on a server you own. One task can run for days, spread across your machines, and report back wherever you are: in the browser, on your phone or in your team’s group chat.',

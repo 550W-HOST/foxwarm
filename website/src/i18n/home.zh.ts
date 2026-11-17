@@ -10,7 +10,7 @@ export const zh: HomeStrings = {
     description: 'Foxwarm 是开源、自托管的 AI Agent 工作台：Agent loop、模型和记忆集中在一台服务器上，轻量的节点负责在任意机器上执行工具。委派出去的任务都是能打开查看的会话，任何会话都能拉进群聊。',
     ogTitle: 'Foxwarm — 在你自己的机器上持续工作的 AI Agent'
   },
-  nav: { features: '功能', install: '安装', docs: '文档', demo: '演示', blog: '博客', github: 'GitHub', theme: '切换配色', language: 'English', languageLabel: 'Switch to English', skip: '跳到正文' },
+  nav: { features: '功能', install: '安装', docs: '文档', demo: '演示', blog: '博客', github: 'GitHub', theme: '切换配色', language: 'English', languageLabel: 'Switch to English', languageMenu: '选择语言', skip: '跳到正文' },
   hero: {
     title: '合上电脑，它还在干活。',
     lede: 'Foxwarm 把 AI Agent 跑在你自己的服务器上。一个任务可以连续跑好几天，分派到你的多台机器上，并在你所在的地方汇报：浏览器、手机，或者团队群聊。',
