@@ -9,10 +9,10 @@
  * up made the shell up to half a CSS pixel taller than the layout viewport, which gave
  * the document a sub-pixel scroll range and a page-level scrollbar next to the shell.
  *
- * The root also carries the two facts index.css needs for the app shell's bottom
- * geometry: whether this is an installed iOS web app, whose short `100dvh` the at-rest
- * mobile shell extends to the screen bottom, and whether the shell is currently pinned
- * to the visual viewport, which ends that extension and the bottom safe band.
+ * The root also carries the two facts index.css needs for the app's bottom geometry:
+ * whether this is an installed iOS web app, whose mobile document is made screen-tall so
+ * WebKit hands it the full viewport, and whether the shell is currently pinned to the
+ * visual viewport, which leaves no bottom safe band below the shell.
  */
 
 export type ViewportMetrics = {
