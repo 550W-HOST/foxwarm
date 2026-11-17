@@ -1,17 +1,26 @@
 ---
-// Header shared by the homepage and the blog: brand, section links, language switch and theme toggle.
+// Header shared by the homepage and the blog: brand, section links, language menu and theme toggle.
+import { Icon as StarlightIcon } from '@astrojs/starlight/components';
 import Icon from './Icon.astro';
-import { strings, githubUrl, demoUrl, docsPath, blogPath, type Lang } from '../i18n/home';
+import { strings, languageNames, githubUrl, demoUrl, docsPath, blogPath, type Lang } from '../i18n/home';
 
 interface Props {
   lang: Lang;
-  /** Where the language link goes: the same page in the other language, or its nearest equivalent. */
+  /** This page's site-relative path. */
+  path: string;
+  /** The same page in the other language, or its nearest equivalent. */
   languageHref: string;
   current?: 'blog';
 }
-const { lang, languageHref, current } = Astro.props;
+const { lang, path, languageHref, current } = Astro.props;
 const t = strings[lang];
 const other: Lang = lang === 'en' ? 'zh' : 'en';
+const languages = (['en', 'zh'] as const).map((code) => ({
+  code,
+  name: languageNames[code],
+  href: code === lang ? path : languageHref,
+  current: code === lang
+}));
 ---
 <a class="skip-link" href="#main">{t.nav.skip}</a>
 <header class="site-header">
@@ -25,7 +34,23 @@ const other: Lang = lang === 'en' ? 'zh' : 'en';
       <a href={demoUrl}>{t.nav.demo}</a>
       <a href={blogPath(lang)} aria-current={current === 'blog' ? 'page' : undefined}>{t.nav.blog}</a>
       <a class="nav-github" href={githubUrl}>{t.nav.github}</a>
-      <a href={languageHref} hreflang={strings[other].htmlLang} lang={strings[other].htmlLang} aria-label={t.nav.languageLabel}>{t.nav.language}</a>
+      <div class="language-menu">
+        <button class="language-button" type="button" aria-expanded="false" aria-controls="site-languages" aria-label={t.nav.languageMenu} title={t.nav.languageMenu}>
+          <StarlightIcon name="translate" class="language-icon" /><StarlightIcon name="down-caret" class="language-caret" />
+        </button>
+        <ul class="language-list" id="site-languages" hidden>
+          {languages.map(({ code, name, href, current }) => (
+            <li>
+              <a href={href} hreflang={strings[code].htmlLang} lang={strings[code].htmlLang} aria-current={current ? 'true' : undefined}>
+                {name}{current && <Icon name="check" />}
+              </a>
+            </li>
+          ))}
+        </ul>
+        <a class="language-button language-fallback" href={languageHref} hreflang={strings[other].htmlLang} lang={strings[other].htmlLang} aria-label={t.nav.languageLabel} title={t.nav.languageLabel}>
+          <StarlightIcon name="translate" class="language-icon" />
+        </a>
+      </div>
       <button class="theme-toggle" type="button" aria-label={t.nav.theme} title={t.nav.theme}>
         <Icon name="sun" class="theme-icon-light" /><Icon name="moon" class="theme-icon-dark" />
       </button>
@@ -40,5 +65,46 @@ const other: Lang = lang === 'en' ? 'zh' : 'en';
       root.dataset.theme = next;
       try { localStorage.setItem('starlight-theme', next); } catch {}
     });
+
+    // Language menu: a disclosure of links. Without scripting, CSS shows a plain link to the other language instead.
+    const menu = document.querySelector('.language-menu');
+    const button = menu?.querySelector('button');
+    const list = menu?.querySelector('.language-list');
+    if (!menu || !button || !list) return;
+    const items = [...list.querySelectorAll('a')];
+    const isOpen = () => button.getAttribute('aria-expanded') === 'true';
+    const setOpen = (open) => {
+      button.setAttribute('aria-expanded', String(open));
+      list.hidden = !open;
+    };
+    const focusItem = (index) => items[(index + items.length) % items.length]?.focus();
+    button.addEventListener('click', () => setOpen(!isOpen()));
+    button.addEventListener('keydown', (event) => {
+      if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+      event.preventDefault();
+      setOpen(true);
+      focusItem(event.key === 'ArrowDown' ? 0 : -1);
+    });
+    list.addEventListener('keydown', (event) => {
+      const index = items.indexOf(document.activeElement);
+      const moves = { ArrowDown: index + 1, ArrowUp: index - 1, Home: 0, End: -1 };
+      if (!(event.key in moves)) return;
+      event.preventDefault();
+      focusItem(moves[event.key]);
+    });
+    menu.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape' || !isOpen()) return;
+      setOpen(false);
+      button.focus();
+    });
+    // Close when focus moves elsewhere on the page or a click lands outside the menu.
+    menu.addEventListener('focusout', (event) => {
+      if (event.relatedTarget && !menu.contains(event.relatedTarget)) setOpen(false);
+    });
+    document.addEventListener('click', (event) => {
+      if (isOpen() && !menu.contains(event.target)) setOpen(false);
+    });
+    // A page restored from the back-forward cache starts closed.
+    window.addEventListener('pageshow', () => setOpen(false));
   })();
 </script>

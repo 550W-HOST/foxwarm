@@ -58,7 +58,7 @@ const docsHref = (page = '') => docsPath(lang, page);
     <ThemeInit />
   </head>
   <body>
-    <SiteHeader lang={lang} languageHref={strings[other].path} />
+    <SiteHeader lang={lang} path={strings[lang].path} languageHref={strings[other].path} />
 
     <main id="main">
       <section class="hero" aria-labelledby="hero-title">

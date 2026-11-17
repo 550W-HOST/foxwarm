@@ -3,6 +3,9 @@ import { zh } from './home.zh';
 
 export type Lang = 'en' | 'zh';
 
+/** Each language's name, written in that language. */
+export const languageNames: Record<Lang, string> = { en: 'English', zh: '中文' };
+
 export const githubUrl = 'https://github.com/550W-HOST/foxwarm';
 export const siteUrl = 'https://foxwarm.net';
 
@@ -44,7 +47,7 @@ export type HomeStrings = {
   htmlLang: string;
   path: string;
   meta: { title: string; description: string; ogTitle: string };
-  nav: { features: string; install: string; docs: string; demo: string; blog: string; github: string; theme: string; language: string; languageLabel: string; skip: string };
+  nav: { features: string; install: string; docs: string; demo: string; blog: string; github: string; theme: string; language: string; languageLabel: string; languageMenu: string; skip: string };
   hero: {
     title: string;
     lede: string;

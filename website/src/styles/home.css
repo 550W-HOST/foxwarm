@@ -63,6 +63,24 @@ code, pre, time { font-family: var(--font-mono); }
 .theme-icon-dark { display: none; }
 [data-theme='dark'] .theme-icon-light { display: none; }
 [data-theme='dark'] .theme-icon-dark { display: block; }
+/* Language menu: the translate icon and caret of the docs' language picker, opening a list of links. */
+.language-menu { position: relative; display: flex; }
+.language-button { display: inline-flex; align-items: center; gap: 1px; height: 30px; padding: 0 2px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.language-button:hover, .language-button[aria-expanded='true'] { color: var(--ink); }
+.language-icon { width: 16px; height: 16px; }
+.language-caret { width: 18px; height: 18px; }
+.language-list { position: absolute; top: calc(100% + 10px); right: 0; z-index: 30; min-width: 136px; margin: 0; padding: 4px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); box-shadow: 0 10px 30px -12px rgba(15, 18, 22, .35); list-style: none; }
+.language-list[hidden] { display: none; }
+[data-theme='dark'] .language-list { box-shadow: 0 10px 30px -10px rgba(0, 0, 0, .7); }
+.primary-nav .language-list a { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 6px 10px; border-radius: 4px; color: var(--ink-soft); }
+.primary-nav .language-list a:hover, .primary-nav .language-list a:focus-visible { background: var(--bg-alt); color: var(--ink); }
+.primary-nav .language-list a[aria-current] { color: var(--ink); font-weight: 500; }
+.language-list .icon { width: 15px; height: 15px; color: var(--accent-strong); }
+.language-fallback { display: none; }
+@media (scripting: none) {
+  .language-menu > button { display: none; }
+  .language-fallback { display: inline-flex; }
+}
 
 /* Hero */
 .hero { padding: 72px 0 0; }
@@ -228,7 +246,7 @@ code, pre, time { font-family: var(--font-mono); }
   .day-rows::before { left: 59px; }
   .day-row { grid-template-columns: 44px 32px minmax(0, 1fr); }
 }
-/* Docs, Demo, Blog, language and theme fit beside the logo alone on the narrowest phones. */
+/* Docs, Demo, Blog, the language menu and theme fit beside the logo alone on the narrowest phones. */
 @media (max-width: 374px) {
   .site-header .brand span { display: none; }
 }
