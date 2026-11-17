@@ -54,7 +54,13 @@ async function blogPosts() {
       const file = path.join(blogSource, entry.name, `${lang}.md`);
       if (!await exists(file)) continue;
       const frontmatter = (await readFile(file, 'utf8')).match(/^---\n([\s\S]*?)\n---\n/)?.[1] ?? '';
-      const field = (name) => frontmatter.match(new RegExp(`^${name}:\\s*(.+)$`, 'm'))?.[1].trim();
+      const field = (name) => {
+        const value = frontmatter.match(new RegExp(`^${name}:\\s*(.+)$`, 'm'))?.[1].trim();
+        // A value containing ": ", such as most English titles, has to be quoted in YAML.
+        if (value?.length > 1 && value.startsWith('"') && value.endsWith('"')) return JSON.parse(value);
+        if (value?.length > 1 && value.startsWith("'") && value.endsWith("'")) return value.slice(1, -1).replaceAll("''", "'");
+        return value;
+      };
       versions[lang] = { title: field('title') };
       date ??= field('date');
     }
