@@ -79,13 +79,16 @@ Start with the [documentation site](https://foxwarm.net/docs/) for installation,
 ## Docker
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/550W-HOST/foxwarm/main/docker/seccomp-chromium.json
+mkdir -p foxwarm-data
+sudo chown 1000:1000 foxwarm-data
+curl -fsSLO https://foxwarm.net/seccomp-chromium.json
 docker run -d --name foxwarm --init -p 3001:3001 \
-  --security-opt seccomp=seccomp-chromium.json --shm-size 1g \
-  -v "$PWD/foxwarm-data:/data" ghcr.io/550w-host/foxwarm:latest
+  --security-opt seccomp=seccomp-chromium.json \
+  --shm-size 1g -v "$PWD/foxwarm-data:/data" \
+  ghcr.io/550w-host/foxwarm:latest
 ```
 
-The Linux x64 image contains a release package plus the ASP.NET Core 10 runtime, Node.js and Chromium. Data is mounted at `/data`; the default port is 3001. Foxwarm runs as a non-root user with passwordless `sudo`, and browser tools need the seccomp profile shown above. The repository's `docker-compose.yml` runs the same image with it; `docker build .` builds it from a checkout. See the [Docker installation steps](https://foxwarm.net/docs/installing/#docker). Optional Code workbench and HEIC/HEIF support need additional assets.
+The Linux x64 image runs the native Linux release package, without a .NET runtime, and includes Node.js and Chromium. Data is mounted at `/data`; the default port is 3001. Foxwarm runs as the non-root uid 1000 with passwordless `sudo`, so the data directory must be writable by that user, and browser tools need the seccomp profile shown above, a copy of [`docker/seccomp-chromium.json`](docker/seccomp-chromium.json). The repository's `docker-compose.yml` runs the same image with it; `docker build .` builds it from a checkout. See the [Docker installation steps](https://foxwarm.net/docs/installing/#docker). Optional Code workbench and HEIC/HEIF support need additional assets.
 
 ## Development
 

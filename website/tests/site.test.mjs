@@ -408,17 +408,17 @@ test('the homepage downloads each app from the latest release and marks none bef
 });
 
 // The installing guide owns the Docker steps (data owned by the container's uid, Chromium's seccomp
-// profile); the quick starts and the homepage repeat them verbatim.
+// profile); the quick starts, the homepage and the repository README repeat them verbatim.
 test('every Docker quick-install command is the installing guide\'s', async () => {
   const docsRoot = path.join(websiteRoot, 'src', 'content', 'docs');
   const dockerBlock = async (file) => {
-    const markdown = await readFile(path.join(docsRoot, file), 'utf8');
+    const markdown = await readFile(path.isAbsolute(file) ? file : path.join(docsRoot, file), 'utf8');
     return [...markdown.matchAll(/```bash\n([\s\S]*?)\n```/g)].map((match) => match[1]).find((code) => code.includes('docker run'));
   };
   const guide = await dockerBlock('docs/installing.md');
   assert.match(guide ?? '', /chown 1000:1000[\s\S]*https:\/\/foxwarm\.net\/seccomp-chromium\.json[\s\S]*docker run/, 'the guide has the Docker steps and downloads the site\'s seccomp profile');
-  for (const file of ['zh/docs/installing.md', 'docs/quick-start.md', 'zh/docs/quick-start.md']) {
-    assert.equal(await dockerBlock(file), guide, `${file} Docker command`);
+  for (const file of ['zh/docs/installing.md', 'docs/quick-start.md', 'zh/docs/quick-start.md', path.join(repositoryRoot, 'README.md')]) {
+    assert.equal(await dockerBlock(file), guide, `${path.isAbsolute(file) ? path.relative(repositoryRoot, file) : file} Docker command`);
   }
   for (const route of ['/', '/zh/']) {
     const homepage = await readFile(routeToFile(route), 'utf8');
