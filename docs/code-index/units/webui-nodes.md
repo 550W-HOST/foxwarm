@@ -1,7 +1,7 @@
 # Unit: webui-nodes
 
 Files: packages/webui/src/components/SystemNodes.tsx, packages/webui/src/components/NodeActionsModal.tsx, packages/webui/src/useNodeDirectory.ts
-Secondary files: packages/webui/src/components/SystemView.tsx, packages/webui/src/App.tsx, packages/webui/src/components/WorkbenchStatusBar.tsx, packages/webui/src/PopupWebUiApp.tsx, packages/webui/src/popupWebUi.ts, packages/webui/src/workbench/utils.ts, packages/webui/test/nodeOnboarding.e2e.mjs, packages/webui/test/workbenchPreview.e2e.mjs, packages/webui/test/popupMove.e2e.mjs, packages/webui/test/mainHostSystem.e2e.mjs, packages/webui/test/mainHostNodeActions.e2e.mjs
+Secondary files: packages/webui/src/components/SystemView.tsx, packages/webui/src/components/NodePicker.tsx, packages/webui/src/App.tsx, packages/webui/src/components/WorkbenchStatusBar.tsx, packages/webui/src/PopupWebUiApp.tsx, packages/webui/src/popupWebUi.ts, packages/webui/src/workbench/utils.ts, packages/webui/test/nodeOnboarding.e2e.mjs, packages/webui/test/workbenchPreview.e2e.mjs, packages/webui/test/popupMove.e2e.mjs, packages/webui/test/mainHostSystem.e2e.mjs, packages/webui/test/mainHostNodeActions.e2e.mjs
 
 ## Purpose
 
@@ -12,7 +12,7 @@ Owns the Nodes section of the [System page](./webui-system-view.md): connected N
 - `SystemNodes` — Node cards, Online/Total summary, pending approval count and the New nodes action.
 - `NodeOverviewCard` — directory identity, type, online/protocol state, recent activity, service versions and the Sessions placed on the Node.
 - `NodeActionsModal` — native modal dialog for editable existing launch commands, explicit one-time token reissue and descendant-aware deletion; owns abortable requests and secret lifetime.
-- `useNodeDirectory` — directory-only initial read and visibility-aware 30-second refresh, with cancellation and request-identity publication fencing. System owns one instance and passes Node identities to the Nodes section, Session filters, the inspector and Agent isolation choices.
+- `useNodeDirectory` — directory-only initial read and visibility-aware 30-second refresh, with cancellation and request-identity publication fencing. System owns one instance and passes Node identities to the Nodes section, Session filters, the inspector and Agent isolation choices. The composer [Node picker](./webui-chat-composer.md#d-composer-session-node-picker) owns another, enabled only for a remote current Node; `enabled: false` performs no reads, and `loaded` reports whether any read has succeeded.
 
 ## Behavior and integration
 

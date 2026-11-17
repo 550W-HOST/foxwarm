@@ -23,7 +23,13 @@ let fixtureUrl
 await writeFile(entryPath, `
   import { createRoot } from 'react-dom/client'
   import ChatComposer from ${JSON.stringify(path.join(webuiRoot, 'src/components/ChatComposer.tsx'))}
-  window.fetch = async () => ({ ok: true, json: async () => ({ commands: [], nodes: [{ id: 'master', label: 'master', selectable: true, reason: null }, { id: 'build-node', label: 'build-node', selectable: true, reason: null }] }) })
+  window.fixtureOfflineNodes = []
+  window.fetch = async url => {
+    const directory = String(url).endsWith('/api/nodes')
+    return { ok: true, json: async () => directory
+      ? { nodes: ['build-node', 'a-very-long-remote-node-id-that-must-stay-readable-in-the-tooltip'].map(id => ({ id, online: !window.fixtureOfflineNodes.includes(id) })) }
+      : { commands: [], nodes: [{ id: 'master', label: 'master', selectable: true, reason: null }, { id: 'build-node', label: 'build-node', selectable: !window.fixtureOfflineNodes.includes('build-node'), reason: window.fixtureOfflineNodes.includes('build-node') ? 'Offline' : null }] } }
+  }
   const noop = async () => {}
   window.modelSelections = []
   window.childModelSelections = []
@@ -90,7 +96,7 @@ before(async () => {
   server = createServer(async (request, response) => {
     if (request.url === '/fixture.js') { response.writeHead(200, { 'Content-Type': 'text/javascript' }); response.end(await readFile(path.join(outputDirectory, 'fixture.js'))); return }
     response.writeHead(200, { 'Content-Type': 'text/html' })
-    response.end(`<!doctype html><html><head><style>:root { --foxwarm-color-hover: rgb(230 232 236); --foxwarm-color-accent: rgb(0 125 180); --foxwarm-color-text-muted: rgb(94 104 120); --foxwarm-color-text-strong: rgb(25 31 42); --foxwarm-color-surface: white; --foxwarm-color-surface-sunken: rgb(246 248 251); --foxwarm-color-border: rgb(217 224 232); --foxwarm-color-border-strong: rgb(204 212 223); }</style><style>${css}</style></head><body><div id="root"></div><script type="module" src="/fixture.js"></script></body></html>`)
+    response.end(`<!doctype html><html><head><style>:root { --foxwarm-color-hover: rgb(230 232 236); --foxwarm-color-accent: rgb(0 125 180); --foxwarm-color-text-muted: rgb(94 104 120); --foxwarm-color-text-strong: rgb(25 31 42); --foxwarm-color-surface: white; --foxwarm-color-surface-sunken: rgb(246 248 251); --foxwarm-color-border: rgb(217 224 232); --foxwarm-color-border-strong: rgb(204 212 223); --foxwarm-color-warning: rgb(180 83 9); }</style><style>${css}</style></head><body><div id="root"></div><script type="module" src="/fixture.js"></script></body></html>`)
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   fixtureUrl = `http://127.0.0.1:${server.address().port}`
@@ -138,6 +144,32 @@ test('short model and Node triggers share a small gap with free space after Node
     await page.evaluate(() => document.activeElement?.blur())
     await page.mouse.move(0, 0)
   }
+  await page.evaluate(() => window.renderFixture())
+  await page.waitForFunction(() => !document.querySelector('.foxwarm-node-picker-trigger'))
+})
+
+test('an offline remote execution Node is marked on the trigger and clears when it reconnects', async () => {
+  await page.setViewport({ width: 1000, height: 700 })
+  await page.evaluate(() => { window.fixtureOfflineNodes = ['build-node']; window.renderFixture('short-node-remote') })
+  await page.waitForSelector('.foxwarm-node-picker-trigger[title="Execution node: build-node · Offline"]')
+  const offline = await page.evaluate(() => {
+    const trigger = document.querySelector('.foxwarm-node-picker-trigger')
+    const icon = trigger.querySelector('svg')
+    return { label: trigger.getAttribute('aria-label'), status: trigger.dataset.nodeStatus, icon: icon.getAttribute('class'), iconColor: getComputedStyle(icon).color, text: trigger.querySelector('span').textContent, width: icon.getBoundingClientRect().width }
+  })
+  assert.equal(offline.label, 'Execution node: build-node · Offline')
+  assert.equal(offline.status, 'problem')
+  assert.match(offline.icon, /lucide-server-off/)
+  assert.equal(offline.text, 'build-node')
+  assert.equal(offline.iconColor, 'rgb(180, 83, 9)')
+  assert.equal(offline.width, 14)
+  if (process.env.FOXWARM_COMPOSER_SCREENSHOT_DIR) await (await page.$('.foxwarm-chat-composer-form')).screenshot({ path: path.join(process.env.FOXWARM_COMPOSER_SCREENSHOT_DIR, 'composer-node-offline.png') })
+  // Opening the picker rereads the directory, so a reconnected Node clears the mark.
+  await page.evaluate(() => { window.fixtureOfflineNodes = [] })
+  await page.click('.foxwarm-node-picker-trigger')
+  await page.waitForSelector('.foxwarm-node-picker-trigger[title="Execution node: build-node"]:not([data-node-status])')
+  assert.match(await page.$eval('.foxwarm-node-picker-trigger svg', icon => icon.getAttribute('class')), /lucide-server(?!-off)/)
+  await page.keyboard.press('Escape')
   await page.evaluate(() => window.renderFixture())
   await page.waitForFunction(() => !document.querySelector('.foxwarm-node-picker-trigger'))
 })

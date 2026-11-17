@@ -102,6 +102,15 @@ export function getNodeTargetAvailability(node: WebUiNodeTarget, service: NodeTa
   return { available: true }
 }
 
+/** Short status for an execution Node that can't run tools right now; null when it can. */
+export function describeExecutionNodeProblem(nodes: readonly WebUiNodeTarget[], nodeId: string): string | null {
+  const node = nodes.find(candidate => candidate.id === nodeId)
+  if (!node || node.unavailable) return 'Unavailable'
+  if (!node.online) return 'Offline'
+  if (node.protocolStatus === 'upgrade-required') return 'Update required'
+  return null
+}
+
 export function formatNodeTargetLabel(node: WebUiNodeTarget, service: NodeTargetService): string {
   const name = node.displayName && node.displayName !== node.id
     ? `${node.displayName} (${node.id})`
