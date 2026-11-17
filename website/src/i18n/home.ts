@@ -26,7 +26,14 @@ export const downloadFiles = {
 export const installCommands = {
   linux: `curl -fsSL ${siteUrl}/install-foxwarm.sh | bash`,
   windows: `irm ${siteUrl}/install-foxwarm.ps1 | iex`,
-  docker: `docker run -d --name foxwarm --init -p 3001:3001 \\\n  -v "$PWD/foxwarm-data:/data" ghcr.io/550w-host/foxwarm:latest`
+  // The same steps as the installing guide: the container runs as uid 1000, and the seccomp profile keeps Chromium's sandbox working.
+  docker: [
+    'mkdir -p foxwarm-data && sudo chown 1000:1000 foxwarm-data',
+    'curl -fsSLO https://raw.githubusercontent.com/550W-HOST/foxwarm/main/docker/seccomp-chromium.json',
+    'docker run -d --name foxwarm --init -p 3001:3001 \\',
+    '  --security-opt seccomp=seccomp-chromium.json --shm-size 1g \\',
+    '  -v "$PWD/foxwarm-data:/data" ghcr.io/550w-host/foxwarm:latest'
+  ].join('\n')
 };
 
 export type FeatureVisual = 'memory' | 'hands' | 'team' | 'room';

@@ -24,7 +24,7 @@ irm https://foxwarm.net/install-foxwarm.ps1 | iex
 **Docker（Linux x64）**
 
 ```bash
-mkdir -p foxwarm-data
+mkdir -p foxwarm-data && sudo chown 1000:1000 foxwarm-data
 curl -fsSLO https://raw.githubusercontent.com/550W-HOST/foxwarm/main/docker/seccomp-chromium.json
 docker run -d --name foxwarm --init -p 3001:3001 \
   --security-opt seccomp=seccomp-chromium.json --shm-size 1g \
