@@ -112,6 +112,8 @@ Browser setup credentials are modal-owned, not persisted or placed in ordinary s
 
 A Node may advertise optional `capabilities.features.toolCallCancellation: true` for ordinary non-exec calls. C# Main sends correlated `tool_call_cancel {callId}` when that dispatched call's Session cancellation or deadline ends its wait. Only that authenticated connection receives the cancel; unsupported clients retain unknown-outcome behavior. Browser Node aborts the exact call's pending Ask/queued work and discards canceled results; the C# CLI Node forwards the cancel to its managed browser host. Already accepted page effects cannot be undone and are not retried.
 
+[2026-11-18] Current .NET CLI Nodes on native platforms advertise `features.execControl` and answer correlated `exec_control_request` (stop) for a background Session exec with `exec_control_response`; Main sends it only to such Nodes, waits at most 15 seconds and never resends. Contract: [exec control](../units/remote-exec.md#exec-control).
+
 This capability does not change persistent exec. Its separately negotiated `execWaitCancellation` still ends foreground waiting through the existing background-registration handshake while retaining exec reply correlation and process lifetime. No Browser-specific Core routing is introduced.
 
 ### D-node-thread-tool-service-split

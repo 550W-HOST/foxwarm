@@ -1,6 +1,6 @@
 # Unit: External exec authority and Node Session events
 
-Files: `dotnet/Foxwarm/Nodes/NodeConnectionHub.Exec.cs`, `dotnet/Foxwarm/Nodes/RemoteExecAuthority.cs`, `dotnet/Foxwarm/Sessions/SessionManager.NodeEvents.cs`
+Files: `dotnet/Foxwarm/Nodes/NodeConnectionHub.Exec.cs`, `dotnet/Foxwarm/Nodes/NodeConnectionHub.ExecControl.cs`, `dotnet/Foxwarm/Nodes/RemoteExecAuthority.cs`, `dotnet/Foxwarm/Sessions/SessionManager.NodeEvents.cs`
 
 ## Purpose
 
@@ -27,6 +27,10 @@ Stop and Run queued end foreground waiting through actual advertised cancellatio
 An exec error with `execStarted:false` is a definite pre-start rejection. An omitted field is unknown, unless the existing exact validation/collision rejection independently establishes no effect; Main retains its claim as `outcome-unknown` and does not replay it. The .NET CLI's [Windows launch helper](./dotnet-node-primitives.md#windows-persistent-exec-output) uses omission after a lost/unusable receipt, retaining original artifact paths in the error rather than asserting false or inventing a PID. This uses the existing optional wire field and does not change persisted exec records.
 
 Remote cwd is forwarded only for the captured selected Node. Explicit cwd and the official client's default selection work unchanged; stdout is not a cwd protocol. A peer-reported [placement record](../threads/tools-permissions-and-exec.md#d-exec-placement-record) is requested only through the advertised feature, passed to the result-metadata callback and stripped by `RemoteNodeResult`; it never commits Session cwd. Main filesystem resolution never receives a remote namespace. Main-owned status/history and Session creation remain possible offline; an actual remote effect fails without Master fallback. Standalone named Sessions use their explicit or target Agent defaults; same-Agent children, forks and timer-created Sessions follow their parent or captured owner Node, subject to binding. Timer admission and internal wait clocks are Main-owned rather than conditioned on an online external process.
+
+## Exec control
+
+A CLI Node that registered `features.execControl` accepts `exec_control_request {requestId, action:"stop", sessionId, execId, completionCapability}` and answers `exec_control_response {requestId, ok, result:{outcome}}` with `stopped`, `killed`, `ended`, `finished`, `already-requested` or `not-found`. The capability lets the Node check the exact owner grant it persisted at start. `NodeConnectionHub.StopRemoteExecAsync` sends it only for an active claim of the requesting owner (`ExecClaims.Active`), marks `Claim.StopRequested` once, and waits at most 15 seconds; a lost or late reply is an unknown outcome and is never resent, and a Node without the feature is unsupported without any frame. The Node stops with the shared `ExecStop` and records `stopRequestedAt`, so its own completion text reports the stop. Claims also carry command, dispatch time and placement cwd/log for [listing](./tools-local-io.md#d-exec-list-stop); they remain transient across a Main restart. `RemoteExecProtocolTests.ExecControl` and `CliNodeExecTests.Stop` cover the frames and the CLI side.
 
 ## External owners
 

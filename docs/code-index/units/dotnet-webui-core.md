@@ -1,6 +1,6 @@
 # Unit: WebUI channel registration and shared DTO contract
 
-Files: `dotnet/Foxwarm/Channels/WebUi/WebUIChannel.cs`, `dotnet/Foxwarm/Channels/WebUi/WebUIChannel.Nodes.cs`, `dotnet/Foxwarm/Channels/WebUi/WebUiContract.cs`
+Files: `dotnet/Foxwarm/Channels/WebUi/WebUIChannel.cs`, `dotnet/Foxwarm/Channels/WebUi/WebUIChannel.Nodes.cs`, `dotnet/Foxwarm/Channels/WebUi/WebUIChannel.Execs.cs`, `dotnet/Foxwarm/Channels/WebUi/WebUiContract.cs`
 
 ## Purpose
 
@@ -9,6 +9,8 @@ Registers the .NET WebUI route surface and defines shared request/response/event
 ## Stable methods and callers
 
 Session creation accepts the creation-only `runtime` selector. Hot and snapshot Session DTOs share the [external runtime presentation](./session-claude-runtime.md), showing the observed CLI model/source, source-labeled usage estimate and Continue capability rather than a Foxwarm model default.
+
+`WebUIChannel.Execs` serves a Session's [running background commands](./webui-running-commands.md#running-background-commands) (`GET /api/sessions/{id}/execs`, `POST .../execs/{execId}/stop`) with Session Stop's route resolution; they are browser routes for full WebUI access only, and the Session DTO's `runningExecs` count tells the WebUI when to use them.
 
 `WebUIChannel.Register` composes route groups and injects `SessionManager`, `SessionRuntime`, `TaskService`, `ImageBlobStore`, `TerminalRegistry`, `CodeWorkbench`, and realtime publisher dependencies. `WebUiContract` owns parsing/serialization helpers and bounded pagination/operation results consumed by all partial route units and React WebUI units.
 

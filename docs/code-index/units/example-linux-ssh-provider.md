@@ -17,6 +17,7 @@ An optional independently runnable reference implementation of the generic execu
 | `target.py.start()` | Create a private UUID execution directory, preserve command data, launch a detached supervisor and return an actual target log/cwd receipt |
 | `target.py.run_command()` | Run Bash independently of the request connection, retain raw merged output and atomically publish actual exit/cwd state |
 | `target.py.identity()` / `poll()` | Match Linux boot/start identity rather than reused PID alone; read completion, observe running cwd or explicitly report lost records/process |
+| `target.py.stop()` | Optional `exec-stop` (descriptor `execStop`): identity-checked TERM to the command's own process group, KILL after `graceMs`; reports `stopped`, `killed`, `finished` or `lost` while the supervisor records the real exit status |
 | `loopbackSshFixture.cjs` | Shared owned loopback sshd with generated keys, exact trusted-host file and verified owned-PID cleanup; no host service/configuration changes |
 | `linuxSshProvider.test.ts` / `mainHostProviderSsh.e2e.mjs` | Source and ordinary C# Main public-protocol interoperability over the shared real SSH fixture |
 | `providerExecRestartTestFixture.ts` | Separate short-lived Core process for start or persisted-reference recovery |

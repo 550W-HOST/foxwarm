@@ -157,6 +157,10 @@ The tool tag, action controls, and call arguments form one continuous tone-speci
 
 Native Windows drive paths in trusted resolved-path sidecars expose the same plain-label Code icon as POSIX paths. The existing callback retains the original native metadata; App normalizes only the Code request. `toolResolvedPathNavigation.e2e.mjs` covers the real renderer/callback path.
 
+### Exec ID links
+
+A leading `[execId]` of an exec receipt (also as a ToolScript result) or of a `background-process-finished` completion event renders as `ExecIdLink` to its counterpart in the same timeline ([receipt format](./tools-local-io.md#d-exec-id-first-receipts)). Only that position links, so earlier history without the header stays plain text. A click jumps to and highlights the counterpart through Chat's controller and never toggles the card. Without a loaded counterpart the ID stays undecorated with the tooltip `Not finished yet` (receipt) or `Start is not loaded` (completion), and a click does nothing visible. Outside Chat, with no controller, it is plain text.
+
 ### Collapsed native card hit area
 
 A collapsed individual native tool card expands when its non-action surface is clicked, including the result preview and card/header padding. This applies to Detailed mode and members of an expanded counted group. Its clickable surface, including preview text, uses the pointer cursor. Links and buttons retain their own actions without triggering card expansion. An expanded card collapses only through its top tag/call-summary row or thread line; expanded arguments, results and outer padding do not collapse it, and text remains selectable with its normal cursor.

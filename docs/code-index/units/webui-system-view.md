@@ -10,7 +10,7 @@ The **System** page explains how Foxwarm is organized and running, in six sectio
 ## Key Exports
 
 - `SystemView` — owns the bounded Session catalog, Node directory, Agent registry, section switching and filters; renders the six sections. `SystemSection` / `SYSTEM_SECTIONS` name them.
-- `SessionFilterBar`, `SessionOperationRow`, `SessionInspector` (`SystemSessions.tsx`) — Sessions list controls, rows and inspector.
+- `SessionFilterBar`, `SessionOperationRow`, `SessionInspector` (`SystemSessions.tsx`) — Sessions list controls, rows and inspector; the inspector lists [running background commands](./webui-running-commands.md#running-background-commands) with Stop when the row's `runningExecs` count is nonzero.
 - `AgentRegistryCard`, `AgentRegistryInspector` (`SystemAgents.tsx`) — Agent registry.
 - `SystemNodes` ([webui-nodes](./webui-nodes.md)) — Nodes section.
 - `SystemTimers`, `SessionTimersSection` (`SystemTimers.tsx`) — Timers section and the Session inspector's Timers section; `systemTimers.ts` owns their pure list projection, filters, ordering and edit-request building.

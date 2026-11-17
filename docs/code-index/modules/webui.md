@@ -26,6 +26,7 @@ Owns the browser application and WebUI-facing server surface: workbench/session 
 - [webui-realtime](../units/webui-realtime.md) — one page-scoped multiplexed WebSocket, revisioned logical subscriptions, and server hub.
 - [webui-demo](../units/webui-demo.md) — separate static demo build that replays recorded API and realtime data read-only for the website.
 - [webui-chat-composer](../units/webui-chat-composer.md) — draft/input, autocomplete, attachments, and model controls.
+- [webui-running-commands](../units/webui-running-commands.md) — a Session's background commands with Stop, and execId links between receipts and completion events.
 - [WebUI timeline](./webui-timeline.md) — focused module for Timeline modes, pane-local Search, Reasoning, Conversation and Activity contracts, with navigation to the rendering units.
 - [webui-workbench](../units/webui-workbench.md) — persisted tab/pane layout and compatibility normalization.
 - [webui-window-frame](../units/webui-window-frame.md) — title-area layout and window drag for the Desktop hosts and the PWA window-controls overlay.
