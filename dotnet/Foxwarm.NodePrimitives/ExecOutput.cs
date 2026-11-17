@@ -435,18 +435,173 @@ internal static class ExecOutput
 
     private static string Compact(string value) => Regex.Replace(value, "\\s+", " ").Trim();
 
-    internal static string Completion(JsonObject entry, JsonObject status)
+    internal static string CommandPreview(string? value)
     {
-        var command = Compact(Text(entry, "command") ?? "");
+        var command = Compact(value ?? "");
         if (command.Length > 100)
         {
             const string marker = "...[foxwarm: command middle omitted]...";
             var head = (int)Math.Ceiling((100 - marker.Length) * 0.6);
             command = command[..head] + marker + command[^(100 - marker.Length - head)..];
         }
+        return command.Replace("`", "\\`", StringComparison.Ordinal);
+    }
+
+    // A completion event stays in history as ordinary input, so its output excerpt is much
+    // smaller than a foreground result: one ranged read of the log's last 4,096 bytes, of
+    // which at most the last 40 lines are shown (roughly 1k tokens per event at most). That
+    // covers typical test summaries, compiler errors and stack-trace ends; the log keeps the rest.
+    internal const int CompletionTailBytes = 4096;
+    internal const int CompletionTailLines = 40;
+    private const int LongLineCharacters = 550;
+    private const int LongLineKeep = 250;
+
+    internal static async Task<string> Completion(
+        JsonObject entry,
+        JsonObject status,
+        Files? files = null
+    )
+    {
         var node = Text(entry, "nodeId");
         var error = Text(status, "error");
-        return $"Background Process Finished\nexecId: {Text(entry, "id")}\ncommand: `{command.Replace("`", "\\`", StringComparison.Ordinal)}`{(node is not null && node != "master" ? $"\nNode: `{node}`" : "")}\nExit code: {status["exitCode"]?.ToJsonText() ?? "unknown"}\nDuration: {CompletedDuration(entry, status)}{(error is null ? "" : "\nError: " + error)}\nCommand output in {Text(entry, "logPath")}";
+        var lines = new List<string>
+        {
+            "Background Process Finished",
+            "execId: " + Text(entry, "id"),
+            $"command: `{CommandPreview(Text(entry, "command"))}`",
+        };
+        if (node is not null && node != "master")
+            lines.Add($"Node: `{node}`");
+        lines.Add("Exit code: " + (status["exitCode"]?.ToJsonText() ?? "unknown"));
+        lines.Add("Duration: " + CompletedDuration(entry, status));
+        if (error is not null)
+            lines.Add("Error: " + error);
+        if (entry["stopRequestedAt"] is not null)
+            lines.Add("Stopped on request.");
+        var tail = await CompletionTail(entry, files ?? NativeFiles);
+        var log = "Command output in " + Text(entry, "logPath");
+        if (tail.Body is null)
+            return string.Join('\n', lines) + $"\nOutput: {tail.Placeholder}\n{log}";
+        lines.Add(tail.Partial ? "Output tail:" : "Output:");
+        var footer = new List<string> { "---" };
+        footer.AddRange(tail.Notes);
+        footer.Add(log);
+        return string.Join('\n', lines)
+            + "\n"
+            + tail.Body
+            + (tail.Body.EndsWith('\n') ? "" : "\n")
+            + string.Join('\n', footer);
+    }
+
+    private sealed record Tail(
+        string? Body,
+        string? Placeholder,
+        bool Partial,
+        IReadOnlyList<string> Notes
+    );
+
+    private static async Task<Tail> CompletionTail(JsonObject entry, Files files)
+    {
+        long size;
+        byte[] window;
+        try
+        {
+            var path = Text(entry, "logPath") ?? throw new IOException("No command log.");
+            size = await files.Size(path);
+            if (size == 0)
+                return new(null, "(No output)", false, []);
+            var count = (int)Math.Min(size, CompletionTailBytes);
+            window = await files.Read(path, size - count, count);
+            if (window.Length != count)
+                throw new EndOfStreamException("Command output read was incomplete.");
+        }
+        catch (Exception error)
+            when (error
+                    is IOException
+                        or UnauthorizedAccessException
+                        or InvalidOperationException
+                        or OperationCanceledException
+                        or System.Text.Json.JsonException
+            )
+        {
+            // A missing or unreadable log is not evidence of empty output.
+            return new(null, "(Command output unavailable)", true, []);
+        }
+        var start = 0;
+        var cut = size > window.Length;
+        if (cut)
+        {
+            // The window starts inside a line; drop that fragment when a whole line follows.
+            var first = Array.IndexOf(window, (byte)'\n');
+            if (first >= 0 && first < window.Length - 1)
+                start = first + 1;
+        }
+        var endsWithLf = window[^1] == '\n';
+        var found = 0;
+        for (var index = window.Length - (endsWithLf ? 2 : 1); index >= start; index--)
+        {
+            if (window[index] != '\n')
+                continue;
+            if (++found == CompletionTailLines)
+            {
+                start = index + 1;
+                break;
+            }
+        }
+        if (start == 0 && cut)
+            // One line longer than the window: skip a split UTF-8 sequence at its start.
+            while (start < Math.Min(3, window.Length) && window[start] is >= 0x80 and <= 0xbf)
+                start++;
+        var selected = window[start..];
+        var partial = selected.Length < size;
+        var notes = new List<string>();
+        var sample = BoundedTextExcerpt.AnalyzeSamples(selected, []);
+        if (sample.Binary)
+        {
+            var preview = selected.AsSpan(Math.Max(0, selected.Length - 64));
+            return new(
+                $"[foxwarm: command output appears binary; showing a hexadecimal preview of its last {preview.Length} bytes from a {size}-byte log]\nTail ({preview.Length} bytes): {Convert.ToHexStringLower(preview)}\n[foxwarm: raw binary content omitted; the log file is unchanged]\n",
+                null,
+                true,
+                [$"Original log size: {size} bytes."]
+            );
+        }
+        var (text, shortened) = ShortenLongLines(sample.Head);
+        if (partial)
+        {
+            var shown = text.Length == 0 ? 0 : text.Split('\n').Length - (endsWithLf ? 1 : 0);
+            notes.Add(
+                $"Output above is the last {shown} line(s), {selected.Length} of {size} bytes; earlier output is omitted."
+            );
+        }
+        if (shortened > 0)
+            notes.Add(
+                "Foxwarm placeholders above (line-too-long placeholders) are not original output content."
+            );
+        if (!endsWithLf)
+            notes.Add("Original command output had no trailing newline.");
+        if (sample.Escaped > 0)
+            notes.Add(ConversionNote);
+        return new(text, null, partial, notes);
+    }
+
+    private static (string Text, int Shortened) ShortenLongLines(string text)
+    {
+        var lines = text.Split('\n');
+        var shortened = 0;
+        for (var index = 0; index < lines.Length; index++)
+        {
+            var info = new System.Globalization.StringInfo(lines[index]);
+            if (info.LengthInTextElements <= LongLineCharacters)
+                continue;
+            shortened++;
+            var length = info.LengthInTextElements;
+            lines[index] =
+                info.SubstringByTextElements(0, LongLineKeep)
+                + $"...[foxwarm: line too long ({length} chars)]..."
+                + info.SubstringByTextElements(length - LongLineKeep);
+        }
+        return (string.Join('\n', lines), shortened);
     }
 
     private static async Task<string> ProcessTree(int root)

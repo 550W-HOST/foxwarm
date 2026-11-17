@@ -230,6 +230,8 @@ public sealed partial class ProviderFileConsumerTests
         Assert.Single(calls, value => value["operation"]!.GetValue<string>() == "exec-poll");
         var history = JsonSerializer.Serialize(f.Owner.Entry.Snapshot());
         Assert.Contains("background-process-finished", history);
+        // The completion carries the provider log's output, read through the Node's files.
+        Assert.Contains("Output:\\nfast\\n---\\nOriginal command output had no trailing newline.", history);
         Assert.Single(ExecRecords(f.Data));
     }
 

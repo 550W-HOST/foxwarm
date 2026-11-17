@@ -519,7 +519,7 @@ internal sealed partial class NodeExecManager(
                     var status = await Status(entry);
                     if (status is null)
                         return;
-                    await deliver(entry, status, Completion(entry, status));
+                    await deliver(entry, status, await Completion(entry, status));
                     await Remove(entry);
                 }
                 catch (Exception error)

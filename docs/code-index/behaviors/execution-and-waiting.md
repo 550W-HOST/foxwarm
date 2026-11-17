@@ -20,7 +20,7 @@ The following receipts describe persistent exec; limited transports are distingu
 | Completion is already available when interruption is observed | The settled completion wins and its real output/status is retained. | An abort should replace it with a synthetic cancellation error. |
 | Dispatch/start outcome is uncertain | An error/unknown receipt at that boundary, not permission to launch again. | The command definitely never started. |
 
-A background receipt means completion is still outstanding. Normal tracked completion queues a later event to the owning Session, with the same execution identity and exit information. The Agent can do independent work or explicitly wait for that event; repeatedly rerunning the command is not a way to check it. When a log is available, it belongs to the execution Node, not automatically to Main's filesystem. Output excerpts are bounded; a receipt or preview is not necessarily the complete log.
+A background receipt means completion is still outstanding. Normal tracked completion queues a later event to the owning Session, with the same execution identity and exit information and a bounded tail of the captured output ([completion output tail](../units/shared-persistent-exec.md#d-persistent-exec-completion-output-tail)). The Agent can do independent work or explicitly wait for that event; repeatedly rerunning the command is not a way to check it. When a log is available, it belongs to the execution Node, not automatically to Main's filesystem. Output excerpts are bounded; a receipt or preview is not necessarily the complete log.
 
 ### Persistence and capability limits
 

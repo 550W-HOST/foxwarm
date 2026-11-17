@@ -78,6 +78,30 @@ internal sealed partial class LocalExecManager
         }
     }
 
+    // Provider log reads for a completion's output tail are bounded so a slow target cannot
+    // hold back delivery; an unavailable read is reported as unavailable output.
+    private static readonly TimeSpan CompletionOutputBudget = TimeSpan.FromSeconds(5);
+
+    private async Task<string> CompletionMessageAsync(ExecRecord record, JsonObject status)
+    {
+        if (record.ProviderId is null)
+            return await ExecOutput.Completion(record.ToJson(), status);
+        using var budget = new CancellationTokenSource(CompletionOutputBudget);
+        ExecOutput.Files files;
+        try
+        {
+            files = ProviderOutput(record, record.Cwd, budget.Token);
+        }
+        catch (InvalidOperationException)
+        {
+            files = new(
+                _ => throw new IOException("Execution provider is unavailable."),
+                (_, _, _) => throw new IOException("Execution provider is unavailable.")
+            );
+        }
+        return await ExecOutput.Completion(record.ToJson(), status, files);
+    }
+
     private ExecOutput.Files ProviderOutput(ExecRecord record, string? cwd, CancellationToken token)
     {
         var files = ProviderBackend(record).Files(cwd);

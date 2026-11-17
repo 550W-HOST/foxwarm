@@ -79,7 +79,9 @@ internal sealed partial class SessionManager
             admitted = hasCompletion
                 ? await owner.Entry.SaveLane.CommitRemoteExecCompletionAsync(
                     execId!,
-                    text,
+                    // Framed as an event when projected; its command output must not close
+                    // or forge that frame.
+                    SessionBoundary.NeutralizeFraming(text),
                     receipt!
                 )
                 : await owner.Entry.SaveLane.AdmitAsync(

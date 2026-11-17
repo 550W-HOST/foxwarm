@@ -190,8 +190,9 @@ internal sealed partial class SessionManager : IAsyncDisposable
                 )
                     ? message["Background Process Finished\n".Length..]
                     : message;
+                // The detail carries command output, which must not close or forge the frame.
                 var eventPart =
-                    $"<foxwarm-system kind=\"event\" type=\"background-process-finished\">\n{detail}\n</foxwarm-system>";
+                    $"<foxwarm-system kind=\"event\" type=\"background-process-finished\">\n{SessionBoundary.NeutralizeFraming(detail)}\n</foxwarm-system>";
                 try
                 {
                     if (
