@@ -99,18 +99,18 @@ internal sealed partial class HostModels
             model?["asyncCompact"]?.DeepClone()
             ?? provider["asyncCompact"]?.DeepClone()
             ?? JsonValue.Create(true);
-        foreach (var scope in new[] { llm, provider, model })
+        foreach (var scope in new[] { defaults, provider, model })
             if (scope is not null)
                 ValidateIdleCompact(scope);
         config["idleCompactMinutes"] =
             model?["idleCompactMinutes"]?.DeepClone()
             ?? provider["idleCompactMinutes"]?.DeepClone()
-            ?? llm["idleCompactMinutes"]?.DeepClone()
+            ?? defaults["idleCompactMinutes"]?.DeepClone()
             ?? JsonValue.Create(0);
         config["idleCompactMinContextPercent"] =
             model?["idleCompactMinContextPercent"]?.DeepClone()
             ?? provider["idleCompactMinContextPercent"]?.DeepClone()
-            ?? llm["idleCompactMinContextPercent"]?.DeepClone()
+            ?? defaults["idleCompactMinContextPercent"]?.DeepClone()
             ?? JsonValue.Create(.5);
         config["disallowEmptyResponse"] =
             model?["disallowEmptyResponse"]?.DeepClone()
@@ -240,6 +240,8 @@ internal sealed partial class HostModels
                         or "imageInput"
                         or "retryIntervalsMs"
                         or "textRedaction"
+                        or "idleCompactMinutes"
+                        or "idleCompactMinContextPercent"
                     )
                 )
                     throw new InvalidDataException(label + " has unsupported field " + field + ".");

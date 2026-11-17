@@ -149,7 +149,6 @@ internal static class AppConfigurationRules
             llm.ContainsKey("compactKeepPercent") ? "compactKeepPercent" : "compactPercent"
         );
         Fraction(llm, "compactThresholdPercent", "compactThresholdPercent");
-        HostModels.ValidateIdleCompact(llm);
         Fraction(llm, "memoryWarningThresholdPercent", "memoryWarningThresholdPercent");
         if (llm.ContainsKey("providerImageOutputFormat"))
         {

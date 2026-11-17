@@ -67,14 +67,13 @@ test('static config schemas are distinct, permissive, and omit the removed model
   assert.equal(schemas.MODELS_CONFIG_SCHEMA.required?.includes('default') || false, false)
 })
 
-test('idle compaction schema validates global and concrete overrides without enabling omitted values', () => {
-  assert.equal(schemas.APP_CONFIG_SCHEMA.properties.llm.properties.idleCompactMinutes.default, 0)
-  assert.equal(schemas.APP_CONFIG_SCHEMA.properties.llm.properties.idleCompactMinContextPercent.default, 0.5)
+test('idle compaction schema validates models defaults and concrete overrides', () => {
+  assert.equal(Object.hasOwn(schemas.APP_CONFIG_SCHEMA.properties.llm.properties, 'idleCompactMinutes'), false)
+  assert.equal(Object.hasOwn(schemas.APP_CONFIG_SCHEMA.properties.llm.properties, 'idleCompactMinContextPercent'), false)
   const options = { idleCompactMinutes: 55, idleCompactMinContextPercent: 0.5 }
-  assert.equal(validateAppConfigSchema({ llm: options }), true)
-  assert.equal(validateModelsSchema({ providers: { p: { ...options, models: ['inherited', { id: 'off', idleCompactMinutes: 0 }] } } }), true)
+  assert.equal(validateModelsSchema({ defaults: options, providers: { p: { ...options, models: ['inherited', { id: 'off', idleCompactMinutes: 0 }] } } }), true)
   for (const [field, value] of [['idleCompactMinutes', -1], ['idleCompactMinutes', '55'], ['idleCompactMinContextPercent', 0], ['idleCompactMinContextPercent', 1.1]]) {
-    assert.equal(validateAppConfigSchema({ llm: { [field]: value } }), false)
+    assert.equal(validateModelsSchema({ defaults: { [field]: value }, providers: { p: {} } }), false)
     assert.equal(validateModelsSchema({ providers: { p: { [field]: value } } }), false)
     assert.equal(validateModelsSchema({ providers: { p: { models: [{ id: 'wire', [field]: value }] } } }), false)
   }

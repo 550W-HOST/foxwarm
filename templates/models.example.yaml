@@ -28,6 +28,11 @@ defaults:
   #   # Use [] for no reuse, or "all" for every detected label.
   #   knownLabels: [private_email, private_phone, private_address]
   # imageInput: false # text-only models: send a short placeholder instead of each image
+  # Optionally compact an idle Session before its provider prompt cache expires: minutes after
+  # the last request (0 or omitted: off; keep it below the cache lifetime) and the minimum
+  # fraction of the context window that request used.
+  # idleCompactMinutes: 55
+  # idleCompactMinContextPercent: 0.5
 providers:
   openai:
     providerType: openai-completions

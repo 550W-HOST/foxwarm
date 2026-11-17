@@ -7,7 +7,7 @@ namespace Foxwarm.Tests;
 public sealed class IdleCompactConfigurationTests
 {
     [Fact]
-    public void Idle_settings_resolve_model_then_provider_then_application_with_zero_disable()
+    public void Idle_settings_resolve_model_then_provider_then_models_defaults_with_zero_disable()
     {
         var root = JsonNode.Parse("""
             {"providers":{
@@ -20,10 +20,12 @@ public sealed class IdleCompactConfigurationTests
         var defaults = HostModels.Parse(root, new JsonObject()).Resolve("global").Configuration;
         Assert.Equal(0, defaults["idleCompactMinutes"]!.GetValue<int>());
         Assert.Equal(.5, defaults["idleCompactMinContextPercent"]!.GetValue<double>());
-        var app = JsonNode.Parse(
-            """{"llm":{"idleCompactMinutes":55,"idleCompactMinContextPercent":0.5}}"""
-        )!.AsObject();
-        var catalog = HostModels.Parse(root, app);
+        root["defaults"] = new JsonObject
+        {
+            ["idleCompactMinutes"] = 55,
+            ["idleCompactMinContextPercent"] = 0.5,
+        };
+        var catalog = HostModels.Parse(root, new JsonObject());
         Check("global", 55, .5);
         Check("provider/inherited", 40, .6);
         Check("provider/override", 20, .7);
@@ -48,15 +50,12 @@ public sealed class IdleCompactConfigurationTests
     public void Invalid_idle_settings_are_rejected_in_each_configuration_scope(string field, string raw)
     {
         var invalid = JsonNode.Parse("{\"" + field + "\":" + raw + "}")!.AsObject();
-        Assert.Throws<InvalidDataException>(() =>
-            AppConfigurationRules.Validate(new JsonObject { ["llm"] = invalid.DeepClone() })
-        );
-        foreach (var scope in new[] { "global", "provider", "model" })
+        foreach (var scope in new[] { "defaults", "provider", "model" })
         {
             var provider = new JsonObject();
-            var app = new JsonObject();
-            if (scope == "global")
-                app["llm"] = invalid.DeepClone();
+            JsonObject? defaults = null;
+            if (scope == "defaults")
+                defaults = (JsonObject)invalid.DeepClone();
             else if (scope == "provider")
                 provider = (JsonObject)invalid.DeepClone();
             else
@@ -66,7 +65,9 @@ public sealed class IdleCompactConfigurationTests
                 provider["models"] = new JsonArray(model);
             }
             var root = new JsonObject { ["providers"] = new JsonObject { ["p"] = provider } };
-            Assert.Throws<InvalidDataException>(() => HostModels.Parse(root, app));
+            if (defaults is not null)
+                root["defaults"] = defaults;
+            Assert.Throws<InvalidDataException>(() => HostModels.Parse(root, new JsonObject()));
         }
     }
 

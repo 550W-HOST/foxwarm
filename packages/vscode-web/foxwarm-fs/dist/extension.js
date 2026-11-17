@@ -598,6 +598,8 @@ var modelDefaultProperties = {
   retryIntervalsMs: { type: "array", minItems: 1, items: { type: "integer", minimum: 0, maximum: 2147483647 }, default: [2e3, 5e3, 1e4, 2e4, 4e4, 6e4], description: "Delays in milliseconds for successive LLM retries; later retries reuse the last entry. Model overrides provider, then defaults. Virtual providers use only their own value or defaults. Saves apply to the next retry wait; an active wait keeps its deadline." },
   textRedaction,
   contextLimit: { ...positiveInteger, description: "Context limit in tokens." },
+  idleCompactMinutes: { type: "number", minimum: 0, description: "Compact idle Sessions after this many minutes from their last provider request, before the provider prompt cache expires. Zero or omitted disables idle compaction. Model overrides provider, then defaults." },
+  idleCompactMinContextPercent: { type: "number", exclusiveMinimum: 0, maximum: 1, description: "Minimum fraction of the context window the last request must exceed for idle compaction; default 0.5. Model overrides provider, then defaults." },
   maxOutput: { ...positiveInteger, description: "Maximum output tokens requested from the provider. Provider-specific extraFields may override this value." },
   providerImageOutputFormat: { enum: ["webp", "jpeg"], description: "Format used for optimized input images: webp, or jpeg with PNG for transparent images." },
   imageInput: { type: "boolean", default: true, description: "Whether the model accepts image input. When false, images stay in the Session but each request to this model sends a short text placeholder instead." }
@@ -616,8 +618,6 @@ var pricing = {
 var modelOverrideProperties = {
   ...modelDefaultProperties,
   pricing,
-  idleCompactMinutes: { type: "number", minimum: 0, description: "Compact idle Sessions after this many minutes from their last provider request. Zero disables idle compaction. Inherits from provider, then application settings." },
-  idleCompactMinContextPercent: { type: "number", exclusiveMinimum: 0, maximum: 1, description: "Minimum context-window fraction for idle compaction. Inherits from provider, then application settings." },
   asyncCompact: { type: "boolean", description: "Whether background compaction may use this provider or model. Model entries override the provider default." },
   disallowEmptyResponse: { type: "boolean", description: "Treat a completed response with no content and no tool calls as a retryable failure. Default false accepts it as a normal turn end. Model entries override the provider default." },
   streamContentInactivityTimeoutMs: { type: "integer", minimum: 1, maximum: 2147483647, default: 6e4, description: "Streaming output inactivity timeout in milliseconds. Model overrides provider; default 60000. First-output timeout and explicit caller deadline remain independent. Safety buffering uses at least 600000." },
@@ -1137,8 +1137,6 @@ var APP_CONFIG_SCHEMA = {
         contextLimit: { ...modelDefaultProperties.contextLimit, deprecated: true, description: "Legacy fallback. Prefer defaults in models.yaml." },
         compactKeepPercent: { type: "number", exclusiveMinimum: 0, maximum: 1, default: 0.3 },
         compactThresholdPercent: { type: "number", exclusiveMinimum: 0, maximum: 1, default: 0.85 },
-        idleCompactMinutes: { type: "number", minimum: 0, default: 0, description: "Idle compaction delay from the last provider request, in minutes. Zero disables it." },
-        idleCompactMinContextPercent: { type: "number", exclusiveMinimum: 0, maximum: 1, default: 0.5 },
         memoryWarningThresholdPercent: { type: "number", exclusiveMinimum: 0, maximum: 1, default: 0.15, description: "Warn when injected Agent memory exceeds this fraction of the model context window." },
         compactBlockLevelMinTokens: { type: "integer", minimum: 1 },
         compactBlockLevelForceTokens: { type: "integer", minimum: 1 },

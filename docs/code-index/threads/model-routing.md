@@ -28,7 +28,7 @@ Virtual entries do not accept `models`, legacy `model`, `baseUrl`, `apiKey`, `re
 
 The three model settings `contextLimit`, `maxOutput`, and `providerImageOutputFormat` resolve once per concrete leaf from model → provider → root `defaults` → startup-owned legacy app `llm` → built-in defaults. The root defaults object also accepts `imageInput` and `retryIntervalsMs`. Effective limits and image formats participate in the existing leaf fingerprint, while virtual entries expose only their derived safe context limit. Canonical configuration ownership is [src-config](../units/src-config.md#model-resolution).
 
-Concrete leaves also resolve the optional [idle compaction](./context-compaction.md#d-context-idle-compaction) settings from model/provider/application scopes; the idle scheduler checks the currently selected concrete leaf.
+Concrete leaves also resolve the optional [idle compaction](./context-compaction.md#d-context-idle-compaction) settings from model/provider/`defaults` scopes; the idle scheduler checks the currently selected concrete leaf.
 
 The [configuration unit](../units/model-configuration.md#contract-and-side-effects) owns `asyncCompact` and `disallowEmptyResponse` provider/model precedence. Virtual async eligibility uses the resolved leaves; each attempted leaf supplies its own empty-response policy.
 

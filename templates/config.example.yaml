@@ -6,7 +6,3 @@ sessionAutoTitle: true
 llm:
   # Warn when injected Agent memory exceeds 15% of the model context window.
   memoryWarningThresholdPercent: 0.15
-  # Optionally compact before a provider prompt cache expires. Set a delay shorter than its lifetime.
-  # Provider and model entries may override these values.
-  idleCompactMinutes: 0
-  idleCompactMinContextPercent: 0.5
