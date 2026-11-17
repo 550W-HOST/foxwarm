@@ -8,10 +8,15 @@
  * multiple of the device scale (125 % display scaling, 110 % browser zoom). Rounding it
  * up made the shell up to half a CSS pixel taller than the layout viewport, which gave
  * the document a sub-pixel scroll range and a page-level scrollbar next to the shell.
+ *
+ * The root also carries the two facts index.css needs for the app shell's bottom
+ * geometry: whether this is an installed iOS web app, whose short `100dvh` the at-rest
+ * mobile shell extends to the screen bottom, and whether the shell is currently pinned
+ * to the visual viewport, which ends that extension and the bottom safe band.
  */
 
 export type ViewportMetrics = {
-  /** CSS px to pin the shell to, or `null` to keep the `100dvh` default. */
+  /** CSS px to pin the shell to, or `null` to keep the at-rest CSS height. */
   height: number | null
   /** CSS px the visible area is shifted down from the layout viewport's top. */
   topOffset: number
@@ -29,10 +34,16 @@ export function appViewportMetrics(
   return same ? { height: null, topOffset: 0 } : { height: Math.round(visual.height), topOffset: Math.round(visual.offsetTop) }
 }
 
+/** Installed iOS home-screen web app; ordinary Safari tabs and other platforms report no `navigator.standalone`. */
+export function markIosStandaloneViewport() {
+  document.documentElement.toggleAttribute('data-foxwarm-ios-standalone', 'standalone' in navigator && navigator.standalone === true)
+}
+
 export function syncViewportHeight() {
-  const style = document.documentElement.style
+  const root = document.documentElement
   const { height, topOffset } = appViewportMetrics(window.visualViewport, window.innerHeight)
-  if (height === null) style.removeProperty('--foxwarm-app-height')
-  else style.setProperty('--foxwarm-app-height', `${height}px`)
-  style.setProperty('--foxwarm-app-top-offset', `${topOffset}px`)
+  if (height === null) root.style.removeProperty('--foxwarm-app-height')
+  else root.style.setProperty('--foxwarm-app-height', `${height}px`)
+  root.style.setProperty('--foxwarm-app-top-offset', `${topOffset}px`)
+  root.toggleAttribute('data-foxwarm-viewport-pinned', height !== null)
 }

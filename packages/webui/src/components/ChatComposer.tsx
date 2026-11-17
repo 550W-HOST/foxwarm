@@ -1467,7 +1467,7 @@ const ChatComposer = memo(function ChatComposer({
   return (
     <div
       ref={rootRef}
-      className="foxwarm-chat-composer foxwarm-content-gutter pointer-events-none absolute inset-x-0 bottom-0 z-20 pb-4 pt-10"
+      className="foxwarm-chat-composer foxwarm-content-gutter pointer-events-none absolute inset-x-0 bottom-0 z-20 pt-10"
     >
       {isDragging && attachmentEnabled && (
         <div className="absolute inset-0 flex items-center justify-center bg-fw-accent-surface/80 dark:bg-fw-accent-surface-strong/40 pointer-events-none">

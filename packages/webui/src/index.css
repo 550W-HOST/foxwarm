@@ -52,6 +52,52 @@
   }
 }
 
+/*
+ * Bottom geometry of the app shell: the single owner of its effective bottom inset.
+ *
+ * iOS 26 installed web apps (viewport-fit=cover + black-translucent status bar) report
+ * 100dvh, innerHeight and visualViewport.height short by the top safe-area inset
+ * (WebKit bug 301108); only 100lvh is the screen height. At rest the mobile shell grows
+ * by that shortfall, capped at the top inset, so it reaches the physical screen bottom.
+ * Where dvh already is the full height the extension is zero. While main.tsx pins the
+ * shell to the visual viewport (keyboard, zoom) the shell ends at the visible area and
+ * no safe band lies below it. `data-foxwarm-ios-standalone` and
+ * `data-foxwarm-viewport-pinned` come from viewportHeight.ts.
+ *
+ * --foxwarm-app-viewport-extension: how far the shell reaches below the fixed-position
+ *   viewport, which `bottom` of fixed elements resolves against.
+ * --foxwarm-app-safe-area-bottom: bottom safe band at the shell's lower edge.
+ * --foxwarm-app-fixed-safe-area-bottom: the same band edge measured from the
+ *   fixed-position viewport's bottom, for fixed bottom-anchored controls.
+ * --foxwarm-chat-composer-safe-area-bottom: band the Chat composer clears; only in the
+ *   installed iOS shell, which is known to reach the screen bottom.
+ */
+:root {
+  --foxwarm-app-viewport-extension: 0px;
+  --foxwarm-app-safe-area-bottom: var(--foxwarm-safe-area-bottom);
+  --foxwarm-app-fixed-safe-area-bottom: calc(var(--foxwarm-app-safe-area-bottom) - var(--foxwarm-app-viewport-extension));
+  --foxwarm-chat-composer-safe-area-bottom: 0px;
+}
+
+@media (max-width: 768px) {
+  html[data-foxwarm-ios-standalone] {
+    --foxwarm-chat-composer-safe-area-bottom: var(--foxwarm-app-safe-area-bottom);
+  }
+
+  html[data-foxwarm-ios-standalone][data-foxwarm-viewport-pinned] {
+    --foxwarm-app-safe-area-bottom: 0px;
+  }
+}
+
+@supports (height: 100lvh) {
+  @media (max-width: 768px) {
+    html[data-foxwarm-ios-standalone]:not([data-foxwarm-viewport-pinned]) {
+      --foxwarm-app-viewport-extension: max(0px, min(100lvh - 100dvh, var(--foxwarm-safe-area-top)));
+      --foxwarm-app-height: calc(100dvh + var(--foxwarm-app-viewport-extension));
+    }
+  }
+}
+
 .foxwarm-safe-area-shell {
   box-sizing: border-box;
   padding-top: var(--foxwarm-safe-area-top);
@@ -146,6 +192,7 @@ html.dark {
 
 .foxwarm-chat-composer {
   padding-right: calc(var(--foxwarm-content-gutter) + var(--foxwarm-chat-scrollbar-gutter, 0px));
+  padding-bottom: max(1rem, var(--foxwarm-chat-composer-safe-area-bottom));
 }
 
 /* Hide scrolled Timeline text below the floating composer and behind its lower edge.
@@ -2510,15 +2557,6 @@ html .foxwarm-conversation-process .foxwarm-reasoning-card .foxwarm-reasoning-pr
   box-shadow: var(--foxwarm-panel-shadow);
 }
 .dark .mobile-glass-surface { background: color-mix(in srgb, var(--foxwarm-color-surface) 70%, transparent); }
-[data-mobile-session-home] {
-  --foxwarm-home-safe-area-bottom: var(--foxwarm-safe-area-bottom);
-}
-@supports (height: 100dvh) and (height: 100lvh) {
-  [data-mobile-session-home][data-mobile-standalone] {
-    /* Reserve only the safe-area band still inside the installed iOS viewport. */
-    --foxwarm-home-safe-area-bottom: max(0px, calc(var(--foxwarm-safe-area-bottom) + 100dvh - 100lvh));
-  }
-}
 .mobile-primary-nav {
   width: calc(100% - 24px);
   max-width: 440px;
@@ -2527,13 +2565,13 @@ html .foxwarm-conversation-process .foxwarm-reasoning-card .foxwarm-reasoning-pr
   z-index: 30;
   left: 12px;
   right: 12px;
-  bottom: calc(var(--foxwarm-home-safe-area-bottom) + 12px);
+  bottom: calc(var(--foxwarm-app-fixed-safe-area-bottom) + 12px);
   border-radius: calc(var(--foxwarm-radius-large-px) + 12px);
 }
 .mobile-primary-nav [role="tab"] { border-radius: calc(var(--foxwarm-radius-large-px) + 6px); }
 .mobile-primary-nav [aria-selected="true"] { background: color-mix(in srgb, var(--foxwarm-color-accent) 10%, transparent); }
-.mobile-session-scroll { padding-bottom: calc(var(--foxwarm-safe-area-bottom) + 160px); }
-.mobile-primary-panel :is(.tasks-main, [data-history-search-view], [data-setup-section]) { padding-bottom: calc(var(--foxwarm-safe-area-bottom) + 100px); }
+.mobile-session-scroll { padding-bottom: calc(var(--foxwarm-app-safe-area-bottom) + 160px); }
+.mobile-primary-panel :is(.tasks-main, [data-history-search-view], [data-setup-section]) { padding-bottom: calc(var(--foxwarm-app-safe-area-bottom) + 100px); }
 @supports not (backdrop-filter: blur(1px)) { :is(.mobile-glass-surface, .dark .mobile-glass-surface) { background: var(--foxwarm-color-surface); } }
 @media (prefers-reduced-transparency: reduce) {
   :is(.mobile-glass-surface, .dark .mobile-glass-surface) { background: var(--foxwarm-color-surface); -webkit-backdrop-filter: none; backdrop-filter: none; }
