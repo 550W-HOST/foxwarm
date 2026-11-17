@@ -210,6 +210,38 @@ code, pre, time { font-family: var(--font-mono); }
 .extra-list dd { margin: 0; color: var(--muted); font-size: .93rem; }
 
 /* Get started */
+/* Downloads: one row per way to run Foxwarm, with its options beside it. */
+/* A margin, not padding, so the header and hero links land on the heading below the sticky header. */
+.downloads { margin-top: 112px; scroll-margin-top: 80px; }
+.downloads h2 { padding-top: 28px; border-top: 1px solid var(--ink); font-size: clamp(1.5rem, 2.6vw, 2rem); }
+.download-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 48px; margin-top: 32px; padding-top: 28px; border-top: 1px solid var(--line); }
+.download-row:first-of-type { border-top: 0; padding-top: 0; }
+.download-kind h3 { font-size: 1.1rem; }
+.download-kind p { margin-top: 8px; color: var(--ink-soft); font-size: .95rem; }
+.download-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-content: start; }
+.download-option { display: flex; flex-direction: column; gap: 10px; padding: 18px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+.download-option.current { border-color: var(--accent); }
+.download-name { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; font-weight: 600; }
+.download-name span { color: var(--muted); font-weight: 400; font-size: .9rem; }
+.download-name .download-current { margin-left: auto; color: var(--accent-strong); font: 500 .76rem var(--font-mono); text-transform: uppercase; letter-spacing: .02em; }
+.download-current[hidden] { display: none; }
+.download-action { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.download-action code { overflow-wrap: anywhere; color: var(--muted); font: .78rem var(--font-mono); }
+.download-button { display: inline-flex; align-items: center; gap: 7px; padding: 6px 14px 6px 11px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); color: var(--ink); font-weight: 500; font-size: .92rem; text-decoration: none; }
+.download-button .icon { width: 17px; height: 17px; }
+.download-button:hover { border-color: var(--accent); color: var(--accent-strong); }
+.download-option.current .download-button { border-color: var(--accent); background: var(--accent); color: var(--accent-ink); }
+.download-option.current .download-button:hover { border-color: var(--accent-strong); background: var(--accent-strong); }
+.download-note { color: var(--muted); font-size: .88rem; }
+.download-note a, .download-more a { color: var(--accent-strong); font-weight: 500; text-decoration: none; white-space: nowrap; }
+.download-note a:hover, .download-more a:hover, .download-foot a:hover { text-decoration: underline; text-underline-offset: 3px; }
+.download-more { grid-column: 1 / -1; font-size: .9rem; }
+.download-foot { margin-top: 32px; padding-top: 18px; border-top: 1px solid var(--line); font-size: .9rem; }
+.download-foot a { color: var(--ink-soft); text-decoration: none; }
+.install-more { margin-top: 6px; font-size: .86rem; }
+.install-more a { color: var(--accent-strong); font-weight: 500; text-decoration: none; }
+.install-more a:hover { text-decoration: underline; text-underline-offset: 3px; }
+
 .start { padding: 112px 0 104px; }
 .start h2 { padding-top: 28px; border-top: 1px solid var(--ink); font-size: clamp(1.5rem, 2.6vw, 2rem); }
 .steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 40px; margin: 32px 0 0; padding: 0; list-style: none; counter-reset: step; }
@@ -229,6 +261,7 @@ code, pre, time { font-family: var(--font-mono); }
 .footer-inner nav a:hover { color: var(--ink); }
 
 @media (max-width: 1000px) {
+  .download-row { grid-template-columns: minmax(0, 1fr); gap: 18px; }
   .hero-grid, .feature-head, .extras-inner, .hands-grid { grid-template-columns: minmax(0, 1fr); gap: 32px; }
   .hero { padding-top: 48px; }
   .hero-shot { margin-top: 56px; }
@@ -237,9 +270,10 @@ code, pre, time { font-family: var(--font-mono); }
 @media (max-width: 720px) {
   .container { width: min(var(--container), 100% - 32px); }
   .primary-nav { gap: 14px; }
-  .primary-nav a[href*='github'] { display: none; }
+  .primary-nav a[href*='github'], .primary-nav .nav-download { display: none; }
   .footer-inner nav { margin-left: 0; }
   .steps { grid-template-columns: minmax(0, 1fr); gap: 24px; }
+  .download-options { grid-template-columns: minmax(0, 1fr); }
   .extra-list div { grid-template-columns: minmax(0, 1fr); gap: 2px; }
   .shot-stack { padding-bottom: 0; }
   .shot-inset { position: static; width: auto; margin-top: 16px; box-shadow: none; }

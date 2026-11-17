@@ -9,6 +9,20 @@ export const languageNames: Record<Lang, string> = { en: 'English', zh: '中文'
 export const githubUrl = 'https://github.com/550W-HOST/foxwarm';
 export const siteUrl = 'https://foxwarm.net';
 
+// Release files at stable URLs that always serve the latest release.
+export const latestReleaseUrl = `${githubUrl}/releases/latest`;
+const latestReleaseFile = (name: string) => `${latestReleaseUrl}/download/${name}`;
+
+// The visitor platform (see src/scripts/platform.mjs) that each download is emphasized for.
+export type DownloadPlatform = 'windows' | 'macos' | 'android';
+export type DownloadFile = { file: string; href: string; platform: DownloadPlatform };
+export const downloadFiles = {
+  windowsDesktop: { file: 'foxwarm-desktop-win-x64.zip', href: latestReleaseFile('foxwarm-desktop-win-x64.zip'), platform: 'windows' },
+  macDesktop: { file: 'foxwarm-desktop-osx-arm64.zip', href: latestReleaseFile('foxwarm-desktop-osx-arm64.zip'), platform: 'macos' },
+  // The site's /android redirect, also printed as a QR code in the installing guide.
+  androidNode: { file: 'foxwarm-android-node.apk', href: '/android', platform: 'android' }
+} satisfies Record<string, DownloadFile>;
+
 export const installCommands = {
   linux: `curl -fsSL ${siteUrl}/install-foxwarm.sh | bash`,
   windows: `irm ${siteUrl}/install-foxwarm.ps1 | iex`,
@@ -41,13 +55,17 @@ export type Feature = {
 
 export type TimelineRow = { time: string; place?: string; icon?: 'laptop' | 'server' | 'phone' | 'chat' | 'moon' | 'memory'; text: string; quote?: string; highlight?: boolean };
 
+type Link = { label: string; href: string };
+// One way to get Foxwarm: its name, platform detail, what to know before using it and the guide section with the steps.
+export type DownloadOption = { name: string; detail?: string; note: string; guide: Link };
+
 export type ChatMessage = { from: 'me' | 'member' | 'bot' | 'system'; name?: string; text: string; time?: string };
 
 export type HomeStrings = {
   htmlLang: string;
   path: string;
   meta: { title: string; description: string; ogTitle: string };
-  nav: { features: string; install: string; docs: string; demo: string; blog: string; github: string; theme: string; language: string; languageLabel: string; languageMenu: string; skip: string };
+  nav: { features: string; install: string; docs: string; demo: string; blog: string; download: string; github: string; theme: string; language: string; languageLabel: string; languageMenu: string; skip: string };
   hero: {
     title: string;
     lede: string;
@@ -68,6 +86,16 @@ export type HomeStrings = {
     copied: string;
     notes: { linux: string; windows: string; docker: string };
     requirementsLink: string;
+    more: string;
+  };
+  downloads: {
+    title: string;
+    download: string;
+    current: string;
+    desktop: { title: string; body: string; windows: DownloadOption; mac: DownloadOption };
+    server: { title: string; body: string; installers: DownloadOption; docker: DownloadOption; packages: Link };
+    android: { title: string; body: string; app: DownloadOption };
+    release: string;
   };
   strip: { label: string; items: string[] };
   features: Feature[];
@@ -86,7 +114,7 @@ export type HomeStrings = {
   room: { title: string; status: string; messages: ChatMessage[] };
   extras: { eyebrow: string; title: string; items: { title: string; body: string }[] };
   start: { eyebrow: string; title: string; lede: string; steps: { title: string; body: string }[]; guide: string };
-  footer: { tagline: string; docs: string; blog: string; github: string; license: string };
+  footer: { tagline: string; docs: string; download: string; blog: string; github: string; license: string };
 };
 
 export const docsPath = (lang: Lang, page = '') => `${lang === 'zh' ? '/zh' : ''}/docs/${page}`;

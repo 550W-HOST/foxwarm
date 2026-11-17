@@ -8,7 +8,7 @@ import Icon from './Icon.astro';
 import SiteHeader from './SiteHeader.astro';
 import SiteFooter from './SiteFooter.astro';
 import ThemeInit from './ThemeInit.astro';
-import { strings, installCommands, siteUrl, docsPath, demoSession, heroDemoSession, featureDemoSessions, type Lang } from '../i18n/home';
+import { strings, installCommands, siteUrl, docsPath, demoSession, heroDemoSession, featureDemoSessions, downloadFiles, latestReleaseUrl, type Lang } from '../i18n/home';
 
 import HandsDiagram from './HandsDiagram.astro';
 import heroLight from '../assets/screens/hero-light.png';
@@ -34,6 +34,12 @@ const installTabs = [
   { id: 'docker', label: t.install.tabs.docker, command: installCommands.docker, note: t.install.notes.docker, prompt: '$' }
 ];
 const docsHref = (page = '') => docsPath(lang, page);
+const d = t.downloads;
+const desktopDownloads = [
+  { option: d.desktop.windows, file: downloadFiles.windowsDesktop },
+  { option: d.desktop.mac, file: downloadFiles.macDesktop }
+];
+const serverOptions = [d.server.installers, d.server.docker];
 ---
 <!doctype html>
 <html lang={t.htmlLang} data-theme="light">
@@ -82,6 +88,7 @@ const docsHref = (page = '') => docsPath(lang, page);
                   <p class="install-note">{tab.note} <a href={docsHref('installing/')}>{t.install.requirementsLink}</a></p>
                 </div>
               ))}
+              <p class="install-more"><a href="#download">{t.install.more} ↓</a></p>
             </div>
           </div>
 
@@ -202,6 +209,56 @@ const docsHref = (page = '') => docsPath(lang, page);
         </div>
       </section>
 
+      <section class="downloads" id="download" aria-labelledby="download-title">
+        <div class="container">
+          <h2 id="download-title">{d.title}</h2>
+          <div class="download-row">
+            <div class="download-kind">
+              <h3>{d.desktop.title}</h3>
+              <p>{d.desktop.body}</p>
+            </div>
+            <div class="download-options">
+              {desktopDownloads.map(({ option, file }) => (
+                <div class="download-option" data-platform={file.platform}>
+                  <p class="download-name">{option.name} <span>{option.detail}</span><span class="download-current" hidden>{d.current}</span></p>
+                  <p class="download-action"><a class="download-button" href={file.href}><Icon name="download" />{d.download}</a><code>{file.file}</code></p>
+                  <p class="download-note">{option.note} <a href={option.guide.href}>{option.guide.label} →</a></p>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div class="download-row">
+            <div class="download-kind">
+              <h3>{d.server.title}</h3>
+              <p>{d.server.body}</p>
+            </div>
+            <div class="download-options">
+              {serverOptions.map((option) => (
+                <div class="download-option">
+                  <p class="download-name">{option.name} {option.detail && <span>{option.detail}</span>}</p>
+                  <p class="download-note">{option.note} <a href={option.guide.href}>{option.guide.label} {option.guide.href.startsWith('#') ? '↑' : '→'}</a></p>
+                </div>
+              ))}
+              <p class="download-more"><a href={d.server.packages.href}>{d.server.packages.label} →</a></p>
+            </div>
+          </div>
+          <div class="download-row">
+            <div class="download-kind">
+              <h3>{d.android.title}</h3>
+              <p>{d.android.body}</p>
+            </div>
+            <div class="download-options">
+              <div class="download-option" data-platform={downloadFiles.androidNode.platform}>
+                <p class="download-name">{d.android.app.name} <span>{d.android.app.detail}</span><span class="download-current" hidden>{d.current}</span></p>
+                <p class="download-action"><a class="download-button" href={downloadFiles.androidNode.href}><Icon name="download" />{d.download}</a><code>{downloadFiles.androidNode.file}</code></p>
+                <p class="download-note">{d.android.app.note} <a href={d.android.app.guide.href}>{d.android.app.guide.label} →</a></p>
+              </div>
+            </div>
+          </div>
+          <p class="download-foot"><a href={latestReleaseUrl}>{d.release} →</a></p>
+        </div>
+      </section>
+
       <section class="start" aria-labelledby="start-title">
         <div class="container">
           <h2 id="start-title">{t.start.title}</h2>
@@ -217,44 +274,52 @@ const docsHref = (page = '') => docsPath(lang, page);
 
     <SiteFooter lang={lang} languageHref={strings[other].path} />
 
-    <script is:inline>
-      (() => {
-        for (const group of document.querySelectorAll('[data-tabs]')) {
-          const tabs = [...group.querySelectorAll('[role="tab"]')];
-          const select = (tab, focus) => {
-            for (const other of tabs) {
-              const active = other === tab;
-              other.setAttribute('aria-selected', String(active));
-              other.tabIndex = active ? 0 : -1;
-              document.getElementById(other.getAttribute('aria-controls')).hidden = !active;
-            }
-            if (focus) tab.focus();
-          };
-          tabs.forEach((tab, index) => {
-            tab.addEventListener('click', () => select(tab, false));
-            tab.addEventListener('keydown', (event) => {
-              const step = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0;
-              if (!step) return;
-              event.preventDefault();
-              select(tabs[(index + step + tabs.length) % tabs.length], true);
-            });
-          });
-          const platform = (navigator.userAgentData?.platform || navigator.platform || '').toLowerCase();
-          if (platform.startsWith('win')) select(tabs.find((tab) => tab.dataset.tab === 'windows'), false);
-        }
+    <script>
+      import { detectPlatform } from '../scripts/platform.mjs';
 
-        for (const button of document.querySelectorAll('.copy-button')) {
-          button.addEventListener('click', async () => {
-            try {
-              await navigator.clipboard.writeText(button.dataset.copy || '');
-              const previous = button.textContent;
-              button.textContent = button.dataset.copied || 'Copied';
-              button.classList.add('copied');
-              setTimeout(() => { button.textContent = previous; button.classList.remove('copied'); }, 1500);
-            } catch {}
+      const platform = detectPlatform(navigator);
+      for (const group of document.querySelectorAll('[data-tabs]')) {
+        const tabs = [...group.querySelectorAll('[role="tab"]')];
+        const select = (tab, focus) => {
+          for (const other of tabs) {
+            const active = other === tab;
+            other.setAttribute('aria-selected', String(active));
+            other.tabIndex = active ? 0 : -1;
+            document.getElementById(other.getAttribute('aria-controls')).hidden = !active;
+          }
+          if (focus) tab.focus();
+        };
+        tabs.forEach((tab, index) => {
+          tab.addEventListener('click', () => select(tab, false));
+          tab.addEventListener('keydown', (event) => {
+            const step = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0;
+            if (!step) return;
+            event.preventDefault();
+            select(tabs[(index + step + tabs.length) % tabs.length], true);
           });
+        });
+        if (platform === 'windows') select(tabs.find((tab) => tab.dataset.tab === 'windows'), false);
+      }
+
+      // Emphasize the download for this device; every option stays available.
+      if (platform) {
+        for (const option of document.querySelectorAll(`.download-option[data-platform="${platform}"]`)) {
+          option.classList.add('current');
+          option.querySelector('.download-current')?.removeAttribute('hidden');
         }
-      })();
+      }
+
+      for (const button of document.querySelectorAll('.copy-button')) {
+        button.addEventListener('click', async () => {
+          try {
+            await navigator.clipboard.writeText(button.dataset.copy || '');
+            const previous = button.textContent;
+            button.textContent = button.dataset.copied || 'Copied';
+            button.classList.add('copied');
+            setTimeout(() => { button.textContent = previous; button.classList.remove('copied'); }, 1500);
+          } catch {}
+        });
+      }
     </script>
   </body>
 </html>

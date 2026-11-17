@@ -4,6 +4,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { unpackSnapshot } from '../../packages/webui/demo/src/pack.mjs';
+import { detectPlatform } from '../src/scripts/platform.mjs';
 
 const websiteRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const repositoryRoot = path.resolve(websiteRoot, '..');
@@ -365,6 +366,64 @@ test('public content has no unresolved installer host placeholders', async () =>
   }
 });
 
+
+// Homepage downloads use stable latest-release URLs (the APK through /android). The page marks no
+// option as this device's until the browser reports its platform.
+test('the homepage downloads each app from the latest release and marks none before the platform is known', async () => {
+  const latest = 'https://github.com/550W-HOST/foxwarm/releases/latest/download';
+  const downloads = [
+    { platform: 'windows', file: 'foxwarm-desktop-win-x64.zip', href: `${latest}/foxwarm-desktop-win-x64.zip` },
+    { platform: 'macos', file: 'foxwarm-desktop-osx-arm64.zip', href: `${latest}/foxwarm-desktop-osx-arm64.zip` },
+    { platform: 'android', file: 'foxwarm-android-node.apk', href: '/android' }
+  ];
+  // The release workflow publishes every file in dist/, so each download must be built there.
+  const releaseWorkflow = await readFile(path.join(repositoryRoot, '.github', 'workflows', 'release.yml'), 'utf8');
+  for (const { file } of downloads) assert.ok(releaseWorkflow.includes(`dist/${file}`), `the release workflow builds ${file}`);
+  const redirect = await readFile(routeToFile('/android/'), 'utf8');
+  assert.ok(redirect.includes(`${latest}/foxwarm-android-node.apk`), '/android serves the latest APK');
+
+  for (const [route, label] of [['/', 'Download'], ['/zh/', '下载']]) {
+    const homepage = await readFile(routeToFile(route), 'utf8');
+    const section = homepage.match(/<section class="downloads" id="download"[\s\S]*?<\/section>/)?.[0];
+    assert.ok(section, `${route} has a download section`);
+    const options = [...section.matchAll(/<div class="download-option" data-platform="([^"]+)">([\s\S]*?)<\/div>/g)]
+      .map(([, platform, body]) => ({
+        platform,
+        href: body.match(/<a class="download-button" href="([^"]+)"/)?.[1],
+        file: body.match(/<code>([^<]+)<\/code>/)?.[1],
+        markedHidden: /<span class="download-current" hidden>/.test(body)
+      }));
+    assert.deepEqual(options.map(({ markedHidden, ...option }) => option), downloads, `${route} download targets`);
+    assert.ok(options.every((option) => option.markedHidden), `${route} marks no download as this device's in the HTML`);
+    assert.doesNotMatch(section, /class="download-option current"/, `${route} emphasizes no download in the HTML`);
+    assert.match(section, /href="#install"/, `${route} points server installs at the install commands`);
+
+    const nav = homepage.match(/<nav class="primary-nav"[^>]*>([\s\S]*?)<\/nav>/)?.[1] ?? '';
+    assert.match(nav, new RegExp(`<a class="nav-download" href="${escapeRegExp(route)}#download">${label}</a>`), `${route} navigation opens the downloads`);
+    const footer = homepage.match(/<footer class="site-footer">([\s\S]*?)<\/footer>/)?.[1] ?? '';
+    assert.match(footer, new RegExp(`<a href="${escapeRegExp(route)}#download">${label}</a>`), `${route} footer opens the downloads`);
+    const install = homepage.match(/<div class="install" id="install"[\s\S]*?<p class="install-more"><a href="#download">/);
+    assert.ok(install, `${route} install commands point at the other downloads`);
+  }
+});
+
+test('the visitor platform is read from what the browser reports', () => {
+  const cases = [
+    [{ userAgentData: { platform: 'Windows' }, platform: 'Win32', userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/142.0' }, 'windows'],
+    [{ platform: 'Win32', userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:145.0) Gecko/20100101 Firefox/145.0' }, 'windows'],
+    [{ userAgentData: { platform: 'macOS' }, platform: 'MacIntel', userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/142.0', maxTouchPoints: 0 }, 'macos'],
+    [{ platform: 'MacIntel', userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Version/26.0 Safari/605.1.15', maxTouchPoints: 0 }, 'macos'],
+    [{ platform: 'MacIntel', userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Version/26.0 Safari/605.1.15', maxTouchPoints: 5 }, 'ios'],
+    [{ platform: 'iPhone', userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) Mobile/15E148', maxTouchPoints: 5 }, 'ios'],
+    [{ userAgentData: { platform: 'Android' }, platform: 'Linux armv81', userAgent: 'Mozilla/5.0 (Linux; Android 10; K) Chrome/142.0 Mobile' }, 'android'],
+    [{ platform: 'Linux aarch64', userAgent: 'Mozilla/5.0 (Android 15; Mobile; rv:145.0) Gecko/145.0 Firefox/145.0' }, 'android'],
+    [{ userAgentData: { platform: 'Linux' }, platform: 'Linux x86_64', userAgent: 'Mozilla/5.0 (X11; Linux x86_64) Chrome/142.0' }, 'linux'],
+    [{ userAgentData: { platform: 'Chrome OS' }, platform: 'Linux x86_64', userAgent: 'Mozilla/5.0 (X11; CrOS x86_64 16000.0.0) Chrome/142.0' }, ''],
+    [{ platform: 'Linux x86_64', userAgent: 'Mozilla/5.0 (X11; CrOS x86_64 16000.0.0) Chrome/142.0' }, ''],
+    [{}, '']
+  ];
+  for (const [browser, expected] of cases) assert.equal(detectPlatform(browser), expected, JSON.stringify(browser));
+});
 
 test('Android download redirects to the release APK and both install locales include its QR and certificate', async () => {
   const redirect = await readFile(routeToFile('/android/'), 'utf8');

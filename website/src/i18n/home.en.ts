@@ -10,7 +10,7 @@ export const en: HomeStrings = {
     description: 'Foxwarm is an open-source, self-hosted workspace for long-running AI agents: one server holds the agent loop, models and memory, while lightweight Nodes run tools on any machine. Delegate to sessions you can open, and bring any session into a group chat.',
     ogTitle: 'Foxwarm — self-hosted AI agents that keep working'
   },
-  nav: { features: 'Features', install: 'Install', docs: 'Docs', demo: 'Demo', blog: 'Blog', github: 'GitHub', theme: 'Switch color theme', language: '中文', languageLabel: '切换到中文', languageMenu: 'Select language', skip: 'Skip to content' },
+  nav: { features: 'Features', install: 'Install', docs: 'Docs', demo: 'Demo', blog: 'Blog', download: 'Download', github: 'GitHub', theme: 'Switch color theme', language: '中文', languageLabel: '切换到中文', languageMenu: 'Select language', skip: 'Skip to content' },
   hero: {
     title: 'It keeps working after you close the laptop.',
     lede: 'Foxwarm runs your AI agents on a server you own. One task can run for days, spread across your machines, and report back wherever you are: in the browser, on your phone or in your team’s group chat.',
@@ -39,11 +39,60 @@ export const en: HomeStrings = {
     copy: 'Copy',
     copied: 'Copied',
     notes: {
-      linux: 'Linux x64 (including WSL) and macOS arm64. Downloads a prebuilt release and starts it in the background, using tmux when available. Needs no .NET. A macOS desktop app is also available.',
-      windows: 'Windows x64, in PowerShell. Downloads a prebuilt release and runs it in the background. A Windows desktop app is also available.',
+      linux: 'Linux x64 (including WSL) and macOS arm64. Downloads a prebuilt release and starts it in the background, using tmux when available. Needs no .NET.',
+      windows: 'Windows x64, in PowerShell. Downloads a prebuilt release and runs it in the background.',
       docker: 'Linux x64 with Docker. Runs the published image with Chromium and Node.js included; data stays in foxwarm-data.'
     },
-    requirementsLink: 'Packages and requirements'
+    requirementsLink: 'Packages and requirements',
+    more: 'Desktop apps and the Android Node app'
+  },
+  downloads: {
+    title: 'Download Foxwarm',
+    download: 'Download',
+    current: 'This device',
+    desktop: {
+      title: 'Desktop app',
+      body: 'Runs Foxwarm in an app window on your Windows PC or Mac: the quickest way to start, though only that computer can connect to it.',
+      windows: {
+        name: 'Windows',
+        detail: 'x64',
+        note: 'Extract the ZIP and open Foxwarm.Desktop.exe. It needs the WebView2 Runtime, which Windows 10 and 11 normally include.',
+        guide: { label: 'Windows app guide', href: docs('installing/#windows-desktop-app') }
+      },
+      mac: {
+        name: 'macOS',
+        detail: 'Apple Silicon',
+        note: 'Needs macOS 15 or later. The app isn’t notarized, so remove the quarantine flag from the download before you open it.',
+        guide: { label: 'macOS app guide', href: docs('installing/#macos-desktop-app') }
+      }
+    },
+    server: {
+      title: 'Server',
+      body: 'Runs Foxwarm in the background on a machine that stays on, so work continues after you close your laptop, and your phone, other computers and Nodes can connect.',
+      installers: {
+        name: 'Linux, macOS, Windows',
+        note: 'The install command at the top of this page fetches the right package for Linux x64 or WSL, macOS 15 or later on Apple Silicon, or Windows x64, and starts Foxwarm.',
+        guide: { label: 'Install command', href: '#install' }
+      },
+      docker: {
+        name: 'Docker',
+        detail: 'Linux x64',
+        note: 'Runs the published image, with Chromium and Node.js included.',
+        guide: { label: 'Docker guide', href: docs('installing/#docker') }
+      },
+      packages: { label: 'Server packages for each platform', href: docs('installing/#packages') }
+    },
+    android: {
+      title: 'Android Node app',
+      body: 'Connects an Android phone to your server as a Node, so agents can read its screen, tap, type and open apps; it needs a server and doesn’t run Foxwarm by itself.',
+      app: {
+        name: 'Android',
+        detail: '11 or later',
+        note: 'Open the downloaded APK to install it, then pair it in your server’s WebUI under System → Nodes.',
+        guide: { label: 'Android app guide', href: docs('installing/#android-node') }
+      }
+    },
+    release: 'All files of the latest release, with checksums'
   },
   strip: {
     label: 'Works with',
@@ -152,5 +201,5 @@ export const en: HomeStrings = {
     ],
     guide: 'Full installation guide'
   },
-  footer: { tagline: 'Self-hosted AI agents. MIT licensed.', docs: 'Docs', blog: 'Blog', github: 'GitHub', license: 'License' }
+  footer: { tagline: 'Self-hosted AI agents. MIT licensed.', docs: 'Docs', download: 'Download', blog: 'Blog', github: 'GitHub', license: 'License' }
 };

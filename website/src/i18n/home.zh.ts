@@ -10,7 +10,7 @@ export const zh: HomeStrings = {
     description: 'Foxwarm 是开源、自托管的 AI Agent 工作台：Agent loop、模型和记忆集中在一台服务器上，轻量的节点负责在任意机器上执行工具。委派出去的任务都是能打开查看的会话，任何会话都能拉进群聊。',
     ogTitle: 'Foxwarm — 在你自己的机器上持续工作的 AI Agent'
   },
-  nav: { features: '功能', install: '安装', docs: '文档', demo: '演示', blog: '博客', github: 'GitHub', theme: '切换配色', language: 'English', languageLabel: 'Switch to English', languageMenu: '选择语言', skip: '跳到正文' },
+  nav: { features: '功能', install: '安装', docs: '文档', demo: '演示', blog: '博客', download: '下载', github: 'GitHub', theme: '切换配色', language: 'English', languageLabel: 'Switch to English', languageMenu: '选择语言', skip: '跳到正文' },
   hero: {
     title: '合上电脑，它还在干活。',
     lede: 'Foxwarm 把 AI Agent 跑在你自己的服务器上。一个任务可以连续跑好几天，分派到你的多台机器上，并在你所在的地方汇报：浏览器、手机，或者团队群聊。',
@@ -39,11 +39,60 @@ export const zh: HomeStrings = {
     copy: '复制',
     copied: '已复制',
     notes: {
-      linux: '支持 Linux x64（包括 WSL）和 macOS arm64。下载预编译版本并在后台启动，有 tmux 时优先使用；不需要 .NET。另有 macOS 桌面版。',
-      windows: '支持 Windows x64，在 PowerShell 中运行。下载预编译版本并在后台运行；另有 Windows 桌面版。',
+      linux: '支持 Linux x64（包括 WSL）和 macOS arm64。下载预编译版本并在后台启动，有 tmux 时优先使用；不需要 .NET。',
+      windows: '支持 Windows x64，在 PowerShell 中运行。下载预编译版本并在后台运行。',
       docker: '适用于装有 Docker 的 Linux x64。运行已发布的镜像，内含 Chromium 和 Node.js；数据保存在 foxwarm-data。'
     },
-    requirementsLink: '安装包和环境要求'
+    requirementsLink: '安装包和环境要求',
+    more: '桌面版和 Android Node 应用'
+  },
+  downloads: {
+    title: '下载 Foxwarm',
+    download: '下载',
+    current: '本机',
+    desktop: {
+      title: '桌面版',
+      body: '在 Windows 电脑或 Mac 上以应用窗口运行 Foxwarm：上手最快，但只有这台电脑能连接它。',
+      windows: {
+        name: 'Windows',
+        detail: 'x64',
+        note: '解压 ZIP 后打开 Foxwarm.Desktop.exe。需要 WebView2 运行时，Windows 10 和 11 通常已自带。',
+        guide: { label: 'Windows 桌面版说明', href: docs('installing/#windows-桌面版') }
+      },
+      mac: {
+        name: 'macOS',
+        detail: 'Apple Silicon',
+        note: '需要 macOS 15 或更新版本。应用未经公证，打开前需要先移除下载文件的隔离标记。',
+        guide: { label: 'macOS 桌面版说明', href: docs('installing/#macos-桌面版') }
+      }
+    },
+    server: {
+      title: '服务器',
+      body: '在一台常开的机器上后台运行 Foxwarm：合上笔记本后任务照常进行，手机、其他电脑和节点也都能连接它。',
+      installers: {
+        name: 'Linux、macOS、Windows',
+        note: '页面顶部的安装命令会下载对应平台的安装包并启动 Foxwarm，支持 Linux x64 和 WSL、Apple Silicon 上的 macOS 15 或更新版本，以及 Windows x64。',
+        guide: { label: '安装命令', href: '#install' }
+      },
+      docker: {
+        name: 'Docker',
+        detail: 'Linux x64',
+        note: '运行已发布的镜像，内含 Chromium 和 Node.js。',
+        guide: { label: 'Docker 说明', href: docs('installing/#docker') }
+      },
+      packages: { label: '各平台的服务器安装包', href: docs('installing/#安装包') }
+    },
+    android: {
+      title: 'Android Node 应用',
+      body: '把 Android 手机作为节点接入你的服务器，让 Agent 能读取屏幕、点按、输入和打开应用；它需要一台服务器，本身不运行 Foxwarm。',
+      app: {
+        name: 'Android',
+        detail: '11 或更新版本',
+        note: '打开下载的 APK 完成安装，再到服务器 WebUI 的 System → Nodes 中配对。',
+        guide: { label: 'Android Node 说明', href: docs('installing/#android-node') }
+      }
+    },
+    release: '最新 Release 的全部文件和校验和'
   },
   strip: {
     label: '兼容',
@@ -152,5 +201,5 @@ export const zh: HomeStrings = {
     ],
     guide: '完整安装指南'
   },
-  footer: { tagline: '自托管的 AI Agent，MIT 协议开源。', docs: '文档', blog: '博客', github: 'GitHub', license: '许可证' }
+  footer: { tagline: '自托管的 AI Agent，MIT 协议开源。', docs: '文档', download: '下载', blog: '博客', github: 'GitHub', license: '许可证' }
 };
