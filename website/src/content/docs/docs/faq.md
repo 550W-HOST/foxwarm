@@ -35,7 +35,7 @@ The WebUI token, Node pairing tokens and external MCP identity tokens are differ
 
 ### Can I use it from my phone?
 
-Yes. The WebUI works in mobile browsers; if your server is not reachable from the phone, put it behind your usual VPN or reverse proxy. You can also talk to a Session through a chat app with [Channels](/docs/channels/).
+Yes. The WebUI works in mobile browsers; if your server is not reachable from the phone, put it behind your usual VPN or reverse proxy. You can also talk to a Session through a chat app with [Channels](/docs/channels/). To let agents work on the phone itself, install the [Android Node app](/docs/installing/#android-node): it connects the phone to your server as a Node, so agents can read the screen, tap, type and open apps.
 
 ### Can I let someone else use my instance?
 
