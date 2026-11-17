@@ -220,6 +220,10 @@ internal sealed class TextRedactionScope(
 
     internal string RestoreProgress(string text) => redactor.RestoreProgress(text, registered);
 
+    // Raw, possibly incomplete argument JSON: originals are inserted as JSON string content.
+    internal string RestoreArgumentProgress(string raw, Func<string, string> encode) =>
+        redactor.RestoreProgress(raw, registered, encode);
+
     private void Register(IEnumerable<TextRedactor.Found> spans)
     {
         foreach (var span in spans)
