@@ -24,11 +24,13 @@ irm https://foxwarm.net/install-foxwarm.ps1 | iex
 **Docker（Linux x64）**
 
 ```bash
-mkdir -p foxwarm-data && sudo chown 1000:1000 foxwarm-data
-curl -fsSLO https://raw.githubusercontent.com/550W-HOST/foxwarm/main/docker/seccomp-chromium.json
+mkdir -p foxwarm-data
+sudo chown 1000:1000 foxwarm-data
+curl -fsSLO https://foxwarm.net/seccomp-chromium.json
 docker run -d --name foxwarm --init -p 3001:3001 \
-  --security-opt seccomp=seccomp-chromium.json --shm-size 1g \
-  -v "$PWD/foxwarm-data:/data" ghcr.io/550w-host/foxwarm:latest
+  --security-opt seccomp=seccomp-chromium.json \
+  --shm-size 1g -v "$PWD/foxwarm-data:/data" \
+  ghcr.io/550w-host/foxwarm:latest
 ```
 
 安装脚本下载预编译版本，不需要编译，使用不需要 .NET 的原生安装包。Windows 和 Apple Silicon Mac 上另有桌面版，在窗口中运行 Foxwarm，只供这台电脑使用（[Windows](/zh/docs/installing/#windows-桌面版)、[macOS](/zh/docs/installing/#macos-桌面版)）。安装包和环境要求见[安装 Foxwarm](/zh/docs/installing/)。

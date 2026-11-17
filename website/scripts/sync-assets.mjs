@@ -11,6 +11,8 @@ await mkdir(publicDir, { recursive: true });
 const copies = [
   ['install-foxwarm.sh', 'install-foxwarm.sh'],
   ['install-foxwarm.ps1', 'install-foxwarm.ps1'],
+  // The Docker install steps download Chromium's seccomp profile from the site.
+  ['docker/seccomp-chromium.json', 'seccomp-chromium.json'],
   ['packages/webui/public/favicon.svg', 'favicon.svg'],
   ['packages/webui/public/favicon-32x32.png', 'favicon-32x32.png'],
   ['packages/webui/public/favicon-128x128.png', 'favicon-128x128.png']

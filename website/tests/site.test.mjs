@@ -165,9 +165,9 @@ test('in-site links to page sections point at existing headings', async () => {
   assert.deepEqual(missing, []);
 });
 
-test('installer downloads are byte-exact copies of repository scripts', async () => {
-  for (const name of ['install-foxwarm.sh', 'install-foxwarm.ps1']) {
-    const source = await readFile(path.join(repositoryRoot, name));
+test('installer downloads are byte-exact copies of repository files', async () => {
+  for (const [name, sourcePath] of [['install-foxwarm.sh', 'install-foxwarm.sh'], ['install-foxwarm.ps1', 'install-foxwarm.ps1'], ['seccomp-chromium.json', 'docker/seccomp-chromium.json']]) {
+    const source = await readFile(path.join(repositoryRoot, sourcePath));
     const staged = await readFile(path.join(publicRoot, name));
     const built = await readFile(path.join(distRoot, name));
     assert.deepEqual(staged, source, `${name} staged copy differs`);
@@ -416,7 +416,7 @@ test('every Docker quick-install command is the installing guide\'s', async () =
     return [...markdown.matchAll(/```bash\n([\s\S]*?)\n```/g)].map((match) => match[1]).find((code) => code.includes('docker run'));
   };
   const guide = await dockerBlock('docs/installing.md');
-  assert.match(guide ?? '', /chown 1000:1000[\s\S]*seccomp-chromium\.json[\s\S]*docker run/, 'the guide has the Docker steps');
+  assert.match(guide ?? '', /chown 1000:1000[\s\S]*https:\/\/foxwarm\.net\/seccomp-chromium\.json[\s\S]*docker run/, 'the guide has the Docker steps and downloads the site\'s seccomp profile');
   for (const file of ['zh/docs/installing.md', 'docs/quick-start.md', 'zh/docs/quick-start.md']) {
     assert.equal(await dockerBlock(file), guide, `${file} Docker command`);
   }

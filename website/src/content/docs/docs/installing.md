@@ -216,14 +216,16 @@ Logs are under `state/logs/` in the data directory.
 The image runs the native Linux build of Foxwarm, without a .NET runtime, and includes Node.js and Chromium:
 
 ```bash
-mkdir -p foxwarm-data && sudo chown 1000:1000 foxwarm-data
-curl -fsSLO https://raw.githubusercontent.com/550W-HOST/foxwarm/main/docker/seccomp-chromium.json
+mkdir -p foxwarm-data
+sudo chown 1000:1000 foxwarm-data
+curl -fsSLO https://foxwarm.net/seccomp-chromium.json
 docker run -d --name foxwarm --init -p 3001:3001 \
-  --security-opt seccomp=seccomp-chromium.json --shm-size 1g \
-  -v "$PWD/foxwarm-data:/data" ghcr.io/550w-host/foxwarm:latest
+  --security-opt seccomp=seccomp-chromium.json \
+  --shm-size 1g -v "$PWD/foxwarm-data:/data" \
+  ghcr.io/550w-host/foxwarm:latest
 ```
 
-The container runs Foxwarm as the non-root `node` user (uid 1000) with passwordless `sudo`, so Agents can still install packages. The mounted data directory must be writable by uid 1000; Foxwarm does not change its ownership and refuses to start otherwise. A data directory written by an earlier image that ran as root needs a one-time `sudo chown -R 1000:1000 foxwarm-data` before upgrading. The seccomp profile is Docker's default plus the namespace calls Chromium's sandbox needs, so browser tools work with the sandbox on and without extra capabilities. Without it, the first browser call fails with a sandbox error.
+The container runs Foxwarm as the non-root `node` user (uid 1000) with passwordless `sudo`, so Agents can still install packages. The mounted data directory must be writable by uid 1000; Foxwarm does not change its ownership and refuses to start otherwise. A data directory written by an earlier image that ran as root needs a one-time `sudo chown -R 1000:1000 foxwarm-data` before upgrading. The seccomp profile, a copy of the repository's [`docker/seccomp-chromium.json`](https://github.com/550W-HOST/foxwarm/blob/main/docker/seccomp-chromium.json), is Docker's default plus the namespace calls Chromium's sandbox needs, so browser tools work with the sandbox on and without extra capabilities. Without it, the first browser call fails with a sandbox error.
 
 Open `http://localhost:3001/` using the token from `foxwarm-data/state/token`. Tags follow releases, such as `0.9.0`, `0.9` and `latest`; to update, pull the new image and recreate the container. First-run model setup works the same way as a local installation.
 

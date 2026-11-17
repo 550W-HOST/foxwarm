@@ -24,11 +24,13 @@ irm https://foxwarm.net/install-foxwarm.ps1 | iex
 **Docker (Linux x64)**
 
 ```bash
-mkdir -p foxwarm-data && sudo chown 1000:1000 foxwarm-data
-curl -fsSLO https://raw.githubusercontent.com/550W-HOST/foxwarm/main/docker/seccomp-chromium.json
+mkdir -p foxwarm-data
+sudo chown 1000:1000 foxwarm-data
+curl -fsSLO https://foxwarm.net/seccomp-chromium.json
 docker run -d --name foxwarm --init -p 3001:3001 \
-  --security-opt seccomp=seccomp-chromium.json --shm-size 1g \
-  -v "$PWD/foxwarm-data:/data" ghcr.io/550w-host/foxwarm:latest
+  --security-opt seccomp=seccomp-chromium.json \
+  --shm-size 1g -v "$PWD/foxwarm-data:/data" \
+  ghcr.io/550w-host/foxwarm:latest
 ```
 
 The installers download a prebuilt release; nothing is compiled. They use the native package, which needs no .NET. Windows and Apple Silicon Macs also have a desktop app that runs Foxwarm in a window, for use on that computer only ([Windows](/docs/installing/#windows-desktop-app), [macOS](/docs/installing/#macos-desktop-app)). See [Install Foxwarm](/docs/installing/) for packages and requirements.

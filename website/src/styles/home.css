@@ -94,13 +94,18 @@ code, pre, time { font-family: var(--font-mono); }
 .install-tabs button { margin-bottom: -1px; padding: 7px 12px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--muted); font: 500 .86rem var(--font-sans); cursor: pointer; }
 .install-tabs button:hover { color: var(--ink); }
 .install-tabs button[aria-selected='true'] { border-bottom-color: var(--accent); color: var(--ink); }
-.command { position: relative; margin-top: 14px; border: 1px solid var(--line); border-radius: 6px; background: var(--code-bg); }
-.command pre { margin: 0; padding: 14px 80px 14px 16px; overflow-x: auto; font-size: .84rem; line-height: 1.7; }
+/* The copy button has its own column, so it never covers command text; long lines scroll on narrow screens. */
+.command { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; margin-top: 14px; border: 1px solid var(--line); border-radius: 6px; background: var(--code-bg); }
+.command pre { margin: 0; padding: 14px 8px 14px 16px; overflow-x: auto; font-size: .84rem; line-height: 1.7; }
 .command-line { display: block; white-space: pre; }
 .prompt { margin-right: 10px; color: var(--muted); user-select: none; }
-.copy-button { position: absolute; top: 9px; right: 9px; padding: 4px 10px; border: 1px solid var(--line-strong); border-radius: 4px; background: var(--surface); color: var(--ink-soft); font: 500 .78rem var(--font-sans); cursor: pointer; }
-.copy-button:hover { border-color: var(--muted); }
+.copy-button { display: grid; place-items: center; width: 30px; height: 30px; margin: 9px 9px 0 0; padding: 0; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); color: var(--muted); cursor: pointer; }
+.copy-button:hover { border-color: var(--muted); color: var(--ink); }
+.copy-button .icon { width: 16px; height: 16px; }
+.copy-button .copy-done, .copy-button.copied .copy-idle { display: none; }
+.copy-button.copied .copy-done { display: block; }
 .copy-button.copied { border-color: var(--accent); color: var(--accent-strong); }
+.visually-hidden { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .install-note { margin-top: 10px; color: var(--muted); font-size: .86rem; }
 .install-note a { color: var(--ink-soft); text-underline-offset: 3px; }
 

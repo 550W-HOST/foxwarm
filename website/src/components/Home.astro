@@ -83,12 +83,13 @@ const serverOptions = [d.server.installers, d.server.docker];
                 <div class="install-panel" role="tabpanel" id={`panel-${tab.id}`} aria-labelledby={`tab-${tab.id}`} hidden={index !== 0}>
                   <div class="command">
                     <pre><code>{tab.command.split('\n').map((line, i, lines) => (<span class="command-line"><span class="prompt" aria-hidden="true">{i === 0 || !lines[i - 1].endsWith('\\') ? tab.prompt : ' '.repeat(tab.prompt.length)}</span>{line}</span>))}</code></pre>
-                    <button class="copy-button" type="button" data-copy={tab.command} data-copied={t.install.copied}>{t.install.copy}</button>
+                    <button class="copy-button" type="button" data-copy={tab.command} aria-label={t.install.copy} title={t.install.copy}><Icon name="copy" class="copy-idle" /><Icon name="check" class="copy-done" /></button>
                   </div>
                   <p class="install-note">{tab.note} <a href={docsHref('installing/')}>{t.install.requirementsLink}</a></p>
                 </div>
               ))}
               <p class="install-more"><a href="#download">{t.install.more} ↓</a></p>
+              <span class="visually-hidden" role="status" data-copy-status data-copied={t.install.copied}></span>
             </div>
           </div>
 
@@ -309,14 +310,18 @@ const serverOptions = [d.server.installers, d.server.docker];
         }
       }
 
+      // The icon shows a check while the live region tells assistive technology that the command was copied.
+      const copyStatus = document.querySelector('[data-copy-status]');
       for (const button of document.querySelectorAll('.copy-button')) {
         button.addEventListener('click', async () => {
           try {
             await navigator.clipboard.writeText(button.dataset.copy || '');
-            const previous = button.textContent;
-            button.textContent = button.dataset.copied || 'Copied';
             button.classList.add('copied');
-            setTimeout(() => { button.textContent = previous; button.classList.remove('copied'); }, 1500);
+            if (copyStatus) copyStatus.textContent = copyStatus.dataset.copied || '';
+            setTimeout(() => {
+              button.classList.remove('copied');
+              if (copyStatus) copyStatus.textContent = '';
+            }, 1500);
           } catch {}
         });
       }
