@@ -20,8 +20,9 @@ const pair = (state, id) => state.history.flatMap(row => row.parts || []).find(p
 const done = key => [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'EXEC-DONE-' + key }] }]
 const callsFor = id => wire.filter(entry => entry.direction === 'request' && entry.value.type === 'tool_call' && entry.value.sessionId === id)
 const eventsFor = id => wire.filter(entry => entry.direction === 'reply' && entry.value.type === 'session_event' && entry.value.sessionId === id)
-// The official CLI is the TypeScript Node: its result carries execId as a field, and its output keeps its own layout.
-const execId = result => result.execId || receiptExecId(result.output)
+// The official CLI is the TypeScript Node, which keeps its own receipt layout (an `execId:` footer
+// line); Main-run commands and the C# Node start with `[execId]`.
+const execId = result => result.execId || receiptExecId(result.output) || /^execId: ([\w-]+)$/m.exec(result.output)?.[1]
 
 const peer = createServer(async (request, response) => {
   try {
