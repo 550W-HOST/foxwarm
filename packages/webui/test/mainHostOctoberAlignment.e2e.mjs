@@ -5,6 +5,7 @@ import { once } from 'node:events'
 import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createHostFixture, until, sleep } from './mainHostFixture.mjs'
+import { requireReceiptExecId } from './execReceipt.mjs'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
 import { functionCall } from './ctlModelCalls.mjs'
 
@@ -145,7 +146,7 @@ try {
     const id = await create('wait-' + key), release = join(own, 'release-' + key); releases.add(release)
     await send(id, 'wait-' + key, [
       [call('wait-exec-' + key, 'exec', { command: `touch born-${key}; while [ ! -f release-${key} ]; do sleep 0.02; done; printf once-${key}`, timeout: 1 })],
-      body => { const output = received(body, 'wait-exec-' + key).output; const execId = /execId: ([\w-]+)/.exec(output)?.[1]; assert(execId); return [call('wait-' + key, 'wait', { waitExecIds: [execId], ...extra })] }
+      body => { const output = received(body, 'wait-exec-' + key).output; const execId = requireReceiptExecId(output); return [call('wait-' + key, 'wait', { waitExecIds: [execId], ...extra })] }
     ])
     const waiting = await until(async () => { const value = await saved(id); return value.meta.wait && value.history.some(row => row.parts?.some(part => part.functionResponse?.tool_use_id === 'wait-' + key)) ? value : null }, 'actual exec wait ' + key)
     assert.equal(waiting.meta.wait.timeoutSeconds, expected)

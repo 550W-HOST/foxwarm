@@ -6,6 +6,7 @@ import { existsSync, realpathSync } from 'node:fs'
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createHostFixture, until } from './mainHostFixture.mjs'
+import { completionEvent, isCompletionFor, receiptExecId, receiptLogPath } from './execReceipt.mjs'
 
 // FOXWARM_PUBLISHED_CORE names an extracted release package: its NativeAOT executable when
 // the package is native, otherwise its managed Foxwarm.dll.
@@ -50,8 +51,8 @@ const model = createServer(async (request, response) => {
         : [call(phase + '-command', 'exec', { command: commands[phase], timeout: phase === 'stop' ? 15 : 1 })]
     } else if (phase === 'restart') {
       const text = typeof result.output === 'string' ? result.output : result.output.map(part => part.text).join('\n')
-      restartId = /execId: ([a-z]+-[a-z]+)/.exec(text)?.[1]
-      restartLog = /Log file: ([^\n]+)/.exec(text)?.[1]
+      restartId = receiptExecId(text)
+      restartLog = receiptLogPath(text)
       assert(restartId && restartLog, text)
       const event = body.input.some(row => JSON.stringify(row).includes('background-process-finished') && JSON.stringify(row).includes(restartId))
       output = !event ? [call('await-native', 'wait', { waitExecIds: [restartId] })]
@@ -108,7 +109,9 @@ try {
   assert((await registry()).recentExecIds.includes(restartId))
   assert(!(await readdir(join(fixture.data, 'state'))).includes('exec'))
   const resumed = (await history()).messages.flatMap(row => row.parts || [])
-  assert.equal(resumed.filter(part => part.system?.includes('background-process-finished') && part.system.includes(restartId)).length, 1)
+  const completions = resumed.filter(part => isCompletionFor(part, restartId))
+  assert.equal(completions.length, 1)
+  assert.equal(completionEvent(completions[0].system).exitCode, 0)
   assert(resumed.some(part => part.functionResponse?.tool_use_id === 'original-log' && part.functionResponse.response.output.includes('native finished')))
   assert.match(await readFile(join(fixture.data, 'state/logs/foxwarm.log'), 'utf8'), /Main HTTP listening:/)
   await fixture.stop(); assert.deepEqual(failures, []); assert.equal(new Set(fixture.hostPids).size, 2)

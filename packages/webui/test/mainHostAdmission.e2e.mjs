@@ -10,6 +10,7 @@ import { pathToFileURL } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
 import { WebSocket } from 'ws'
 import { createHostFixture, until, sleep } from './mainHostFixture.mjs'
+import { requireReceiptExecId } from './execReceipt.mjs'
 import { writeModelFixture } from './mainModelFixture.mjs'
 import { functionCall } from './ctlModelCalls.mjs'
 
@@ -76,7 +77,7 @@ async function launch(id) {
   const reply = await fixture.api('POST', '/api/sessions', { agentId: 'main', sessionId: id }); assert.equal(reply.status, 200)
   await send(id, 'CASE:' + id); await done(id, id)
   const tool = (await history(id)).flatMap(row => row.parts || []).find(part => part.functionResponse?.tool_use_id === 'shell-' + id)
-  const exec = tool.functionResponse.response.output.match(/execId:\s*([\w-]+)/)[1]; trackedExec.set(id, exec)
+  const exec = requireReceiptExecId(tool.functionResponse.response.output); trackedExec.set(id, exec)
   assert((await execRecords()).some(record => record.id === exec && record.sessionId === id))
 }
 try {

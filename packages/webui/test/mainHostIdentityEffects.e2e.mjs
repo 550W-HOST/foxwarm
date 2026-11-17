@@ -5,6 +5,7 @@ import { once } from 'node:events'
 import { mkdir, readFile, writeFile, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createHostFixture, until, sleep } from './mainHostFixture.mjs'
+import { requireReceiptExecId } from './execReceipt.mjs'
 import { writeModelFixture } from './mainModelFixture.mjs'
 import { functionCall } from './ctlModelCalls.mjs'
 const owned = await createHostFixture('identity-effects'), requests = [], failures = [], counts = new Map(), processes = []
@@ -71,7 +72,7 @@ try {
   await create('background'); assert.equal((await owned.api('POST', route('background') + '/message', { text: 'EFFECT-CASE:background' })).status, 202)
   await until(() => hasFinal('background', 'DONE-EFFECT-background'), 'real shell background result')
   const background = await authority('background'), result = background.history.flatMap(row => row.parts || []).find(part => part.functionResponse?.tool_use_id === 'background-exec').functionResponse.response.output
-  backgroundId = /execId: ([a-z]+-[a-z]+)/.exec(result)[1]
+  backgroundId = requireReceiptExecId(result)
   const metadata = (await execRecords()).find(record => record.id === backgroundId); backgroundLog = metadata.logPath; processes.push(metadata.pid)
   await move('background', 'background-current'); await writeFile(join(owned.work, 'background-release'), 'release')
   await until(async () => (await authority('background-current')).history.some(row => JSON.stringify(row).includes(backgroundId) && JSON.stringify(row).includes('background-process-finished')), 'historical process once-only current-owner completion')

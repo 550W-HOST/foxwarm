@@ -9,6 +9,7 @@ import { pathToFileURL } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
 import { WebSocket } from 'ws'
 import { createHostFixture, until, sleep } from './mainHostFixture.mjs'
+import { receiptExecId } from './execReceipt.mjs'
 import { writeModelFixture } from './mainModelFixture.mjs'
 import { functionCall } from './ctlModelCalls.mjs'
 
@@ -161,8 +162,8 @@ try {
   const execRecords = async () => JSON.parse(await readFile(join(state, 'running-exec.json'), 'utf8')).execs
   async function launch(id) {
     await send(id, id); const current = await saved(id)
-    const result = current.history.flatMap(row => row.parts || []).map(part => part.functionResponse?.response?.output || '').find(value => value.includes('execId:'))
-    const execId = result?.match(/execId: ([a-z-]+)/)?.[1]
+    const result = current.history.flatMap(row => row.parts || []).map(part => part.functionResponse?.response?.output || '').find(value => receiptExecId(value))
+    const execId = receiptExecId(result)
     assert(execId)
     const record = (await execRecords()).find(record => record.id === execId && record.sessionId === id)
     assert(record); shells.push(record.pid); return record

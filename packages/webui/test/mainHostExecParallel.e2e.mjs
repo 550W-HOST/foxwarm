@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process'
 import { access, chmod, mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createHostFixture, until, sleep } from './mainHostFixture.mjs'
+import { requireReceiptExecId } from './execReceipt.mjs'
 import testEnvironment from '../../../scripts/test/test-process-env.cjs'
 import { functionCall } from './ctlModelCalls.mjs'
 
@@ -116,7 +117,7 @@ try {
   const stoppedId = await create('stopped'), stopHeld = ['stop1', 'stop2', 'stop3', 'stop4']
   await send(stoppedId, 'stopped', [...stopHeld.map(id => call(id, shell(id))), call('stop5', 'touch stop5-effect')]); await started(stopHeld)
   assert.equal((await fixture.api('POST', route(stoppedId) + '/stop', {})).status, 200); await until(async () => !(await history(stoppedId)).session.busy, 'Stop complete pairing settles launched calls')
-  for (const id of stopHeld) { const value = await pair(stoppedId, id); assert(value.response.output.includes('execId:')); assert(!await exists(join(marks, 'done-' + id))) }
+  for (const id of stopHeld) { const value = await pair(stoppedId, id); requireReceiptExecId(value.response.output); assert(!await exists(join(marks, 'done-' + id))) }
   assert(!await exists(join(own, 'stop5-effect'))); assert((await pair(stoppedId, 'stop5')).response.canceled)
   for (const id of stopHeld) await release(id); await until(async () => (await Promise.all(stopHeld.map(id => exists(join(marks, 'done-' + id))))).every(Boolean), 'Stop leaves shells alive to finish once')
   const overridden = await create('overridden'), overrideHeld = ['override1', 'override2', 'override3', 'override4']
