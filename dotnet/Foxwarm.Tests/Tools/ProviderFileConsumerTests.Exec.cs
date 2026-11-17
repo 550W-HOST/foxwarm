@@ -169,7 +169,8 @@ public sealed partial class ProviderFileConsumerTests
             var value = await pending;
             Success(value);
             Assert.Contains("Stop", ExecReceipt.Header(value["output"]!.GetValue<string>()));
-            Assert.Contains("output unavailable", value["output"]!.GetValue<string>());
+            // Unavailable capture is stated in the header, never shown as empty output.
+            Assert.Contains("unavailable", ExecReceipt.Header(value["output"]!.GetValue<string>()));
             await Until(() => Task.FromResult(File.Exists(f.FilePath("effect"))));
             Assert.Equal("x", await File.ReadAllTextAsync(f.FilePath("effect")));
             Assert.Single(
@@ -309,7 +310,7 @@ public sealed partial class ProviderFileConsumerTests
         var blocked = await f.Call("exec", Exec("sleep 2; printf late", 1));
         Success(blocked);
         Assert.True(clock.Elapsed < TimeSpan.FromSeconds(3), clock.Elapsed.ToString());
-        Assert.Contains("output unavailable", blocked["output"]!.GetValue<string>());
+        Assert.Contains("unavailable", ExecReceipt.Header(blocked["output"]!.GetValue<string>()));
         // A later ordinary read uses a fresh observation, not the expired foreground token.
         File.Delete(Path.Combine(f.Target, "slow-output"));
         var logPath = Assert.Single(ExecRecords(f.Data))["logPath"]!.GetValue<string>();

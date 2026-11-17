@@ -58,11 +58,8 @@ public sealed class LocalExecRegistryTests
             {
                 Assert.Equal("main/owned", owner);
                 Assert.Equal("exec_source_record_1234", id);
-                Assert.Contains("Exit code: 7", message);
-                Assert.Contains(
-                    "Command output in " + entry["logPath"]!.GetValue<string>(),
-                    message
-                );
+                ExecReceipt.ExitCode(message, 7);
+                Assert.Contains(entry["logPath"]!.GetValue<string>(), message);
                 attempts++;
                 if (!accepted)
                     throw new IOException("Owned receiver rejects admission.");
@@ -501,8 +498,8 @@ public sealed class LocalExecRegistryTests
         await manager.RegisterRecordsAsync(_ => true);
         await manager.ReconcileNowAsync();
         Assert.NotNull(delivered);
-        Assert.Contains("Exit code: unknown", delivered);
-        Assert.Contains("Duration: unknown", delivered);
+        // Neither an exit code nor a duration is invented.
+        Assert.DoesNotMatch(@"\d", ExecReceipt.Summary(delivered));
         Assert.Null(JsonNode.Parse(await File.ReadAllTextAsync(status))!["exitCode"]);
     }
 

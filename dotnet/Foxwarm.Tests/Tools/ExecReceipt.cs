@@ -17,4 +17,15 @@ internal static class ExecReceipt
     }
 
     internal static string Id(string text) => Leading.Match(text).Groups[1].Value;
+
+    // The header line after its `[execId] ` prefix: outcome, exit code and duration.
+    internal static string Summary(string text)
+    {
+        var header = Header(text);
+        return header[(header.IndexOf("] ", StringComparison.Ordinal) + 2)..];
+    }
+
+    // Whether the summary states this exit code: a lone number that is not the duration.
+    internal static void ExitCode(string text, int code) =>
+        Assert.Matches($@"(?<![\d.]){code}(?![\d.]|m?s\b)", Summary(text));
 }
