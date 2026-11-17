@@ -25,7 +25,7 @@ Foxwarm is a server you keep running. Conversations persist and can run for days
 
 ### Does it run on macOS?
 
-Yes, on Apple Silicon Macs with macOS 15 or later, using the same installer command as Linux. Intel Macs are not supported as a server, and there is no macOS desktop app. Any Mac can still join another server as a [Node](/docs/nodes/). See [macOS (Apple Silicon)](/docs/installing/#macos-apple-silicon).
+Yes, on Apple Silicon Macs with macOS 15 or later: install the server with the same installer command as Linux, or use the [macOS desktop app](/docs/installing/#macos-desktop-app). Neither runs on Intel Macs, but any Mac can still join another server as a [Node](/docs/nodes/). See [macOS (Apple Silicon)](/docs/installing/#macos-apple-silicon).
 
 ### Where do I sign in?
 

@@ -25,7 +25,7 @@ Foxwarm 是一个常驻运行的服务器。对话会持久保存，可以持续
 
 ### 能在 macOS 上运行吗？
 
-可以，支持 macOS 15 或更新版本的 Apple Silicon Mac，安装命令和 Linux 相同。Intel Mac 不能作为服务器运行，也没有 macOS 桌面版。任何 Mac 都可以作为[节点](/zh/docs/nodes/)接入其他服务器。见 [macOS（Apple Silicon）](/zh/docs/installing/#macosapple-silicon)。
+可以，支持 macOS 15 或更新版本的 Apple Silicon Mac：可以用和 Linux 相同的安装命令安装服务器，也可以使用 [macOS 桌面版](/zh/docs/installing/#macos-桌面版)。两者都不支持 Intel Mac，但任何 Mac 都可以作为[节点](/zh/docs/nodes/)接入其他服务器。见 [macOS（Apple Silicon）](/zh/docs/installing/#macosapple-silicon)。
 
 ### 在哪里登录？
 
