@@ -49,6 +49,13 @@ Owns the static public project homepage, user documentation, blog, root installe
 - **Indexing.** Blog pages are indexable, appear in the sitemap and carry a canonical URL and Open Graph metadata; each article shows its date, series and the Foxwarm version it applies to.
 - **Content.** Articles are published as written; site work changes only formatting and links. In-site links point at the reader's locale (`/zh/docs/…` from Chinese articles, which falls back to English pages that have no translation).
 
+### D-website-downloads
+
+**User request (user, 2026-11-18).** The homepage offers every way to run Foxwarm, in both languages, with direct downloads where there is a file. A Download section (`#download`), reached from the header navigation, the footer and a link under the hero install commands, has one row per kind, each with one sentence saying what it is for: the desktop app (Windows x64 and Apple Silicon macOS ZIPs; only that computer can connect), the server (the hero install commands, Docker, and the per-platform packages in the installing guide) and the Android Node app (the APK through `/android`; it joins a server and does not run Foxwarm alone). Each download states its requirements and extra steps, such as WebView2 or removing macOS quarantine, as visible text linked to its installing-guide section, never in tooltips.
+
+- **Links.** Downloads use the stable `releases/latest/download/<name>` URLs; the page makes no GitHub API calls. It shows no version number or file size. The only build-time version source, the root `package.json`, does not trigger a site deploy and is bumped before that release's files exist, so a shown number could name a release the links do not serve yet.
+- **Platform emphasis.** The browser-reported operating system emphasizes the matching download and labels it as this device's, and preselects the Windows tab of the hero install commands. It never hides or reorders options; without scripting nothing is emphasized.
+
 ## Integration notes
 
 GitHub repository Pages settings, custom-domain configuration, Cloudflare proxy/download routing, and old-domain redirects preserving paths and queries are external administrative prerequisites. The canonical domain is `foxwarm.net`; Pages remains the documentation origin and the independent downloads Worker owns only `/downloads/*`. The workflow assumes Pages is configured for GitHub Actions and does not attempt to create or administer the Pages site.
