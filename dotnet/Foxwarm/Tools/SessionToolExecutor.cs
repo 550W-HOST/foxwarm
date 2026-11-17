@@ -1338,6 +1338,10 @@ internal sealed partial class SessionToolExecutor(
                 owner.ExecutionNode,
                 owner.ExecutionCwd
             );
+        handlers["exec_list"] = (owner, args, token) =>
+            owner.Manager.ListExecsToolAsync(owner.Hosted, args, token);
+        handlers["exec_stop"] = (owner, args, token) =>
+            owner.Manager.StopExecToolAsync(owner.Hosted, args, token);
         handlers["cancel_transfer"] = (owner, args, token) =>
             owner.Manager.CancelCopyTransferAsync(owner.Hosted, args, token);
         handlers["send_file"] = (owner, args, token) =>

@@ -234,7 +234,7 @@ public sealed class SessionStartupMemoryTests(ITestOutputHelper output)
                     },
                     default
                 );
-                Assert.Contains("Switched to background", result["output"]!.GetValue<string>());
+                ExecReceipt.Header(result["output"]!.GetValue<string>());
             }
             await using var manager = new SessionManager(
                 data,

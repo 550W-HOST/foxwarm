@@ -145,6 +145,38 @@ internal sealed class ProviderExecBackend(ExecutableNodeProvider provider, strin
         return new(status, Cwd(value));
     }
 
+    // Optional exec-stop: the adapter terminates the command (gracefully, then forcibly after
+    // graceMs) and reports what it found. Completion still arrives through ordinary polling.
+    internal async Task<string> StopAsync(
+        string reference,
+        TimeSpan grace,
+        CancellationToken token
+    )
+    {
+        var value = ExecutableNodeProvider.Object(
+            await provider.RunAsync(
+                "exec-stop",
+                new JsonObject
+                {
+                    ["nodeId"] = LocalId,
+                    ["ref"] = reference,
+                    ["graceMs"] = (long)grace.TotalMilliseconds,
+                },
+                token
+            )
+        );
+        ExecutableNodeProvider.Keys(value, ["state"]);
+        return SessionWait.Text(value["state"]) is
+            "stopped"
+            or "killed"
+            or "finished"
+            or "lost"
+            ? SessionWait.Text(value["state"])!
+            : throw ExecutableNodeProvider.Invalid(
+                "Exec stop state must be stopped, killed, finished or lost."
+            );
+    }
+
     private static string? Cwd(JsonObject value) =>
         value.ContainsKey("cwd") ? ExecutableNodeProvider.Bounded(value["cwd"], 4096) : null;
 

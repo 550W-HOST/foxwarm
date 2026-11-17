@@ -208,6 +208,36 @@ internal sealed partial class MessageRouter
                 : ""
         );
 
+    private async Task ExecListAsync(UserCommand command)
+    {
+        var owner = await command.TargetAsync();
+        var listed = await runtime.Manager.ListExecsToolAsync(
+            owner,
+            new JsonObject(),
+            CancellationToken.None
+        );
+        await command.Reply(SessionWait.Text(listed["output"]) ?? "");
+    }
+
+    private async Task ExecStopAsync(UserCommand command)
+    {
+        var owner = await command.TargetAsync();
+        try
+        {
+            var stopped = await runtime.Manager.StopExecToolAsync(
+                owner,
+                new JsonObject { ["execId"] = command.Text("execId") },
+                CancellationToken.None
+            );
+            await command.Reply(SessionWait.Text(stopped["output"]) ?? "");
+        }
+        catch (Exception error)
+            when (error is InvalidDataException or InvalidOperationException or IOException)
+        {
+            await command.Reply("⚠️ " + error.Message);
+        }
+    }
+
     private async Task TimerListAsync(UserCommand command)
     {
         var owner = await command.TargetAsync();

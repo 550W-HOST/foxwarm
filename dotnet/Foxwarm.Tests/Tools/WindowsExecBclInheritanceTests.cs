@@ -66,7 +66,7 @@ public sealed class WindowsExecBclInheritanceTests
                         default,
                         MainNativePaths.Default(agent)
                     );
-                    Assert.Contains("Switched to background", result["output"]!.ToString());
+                    ExecReceipt.Header(result["output"]!.ToString());
                     return Assert.Single(
                         main.Tracked,
                         record => record["sessionId"]!.ToString() == session

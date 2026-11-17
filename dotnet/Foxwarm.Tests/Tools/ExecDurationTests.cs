@@ -75,8 +75,8 @@ public sealed class ExecDurationTests
             },
             default
         );
-        Assert.Contains("Elapsed: ", result["output"]!.GetValue<string>());
-        Assert.DoesNotContain("Elapsed: unknown", result["output"]!.GetValue<string>());
+        // The receipt header carries the measured elapsed time.
+        Assert.DoesNotContain("unknown", ExecReceipt.Header(result["output"]!.GetValue<string>()));
         // Restart uses real persisted process ownership; no guessed finish time on SIGKILL.
         await first.DisposeAsync();
         await using var recovered = new LocalExecManager(

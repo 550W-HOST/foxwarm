@@ -694,6 +694,11 @@ internal sealed partial class NodeConnectionHub : IDisposable
                         HandleServiceEvent(connection, message);
                         continue;
                     }
+                    if (type == "exec_control_response")
+                    {
+                        HandleExecControlReply(connection, message);
+                        continue;
+                    }
                     if (type is "tool_call_response" or "tool_call_error")
                     {
                         HandleToolReply(connection, message, type == "tool_call_response");

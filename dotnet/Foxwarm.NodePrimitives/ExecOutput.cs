@@ -306,6 +306,8 @@ internal static class ExecOutput
         return output.Text + (output.Text.EndsWith('\n') ? "" : "\n") + string.Join('\n', lines);
     }
 
+    // The receipt's first line names the execId, because a collapsed WebUI card shows only its
+    // first lines; the partial output follows directly, then the metadata footer.
     internal static async Task<string> BackgroundOutput(
         JsonObject entry,
         double seconds,
@@ -317,27 +319,34 @@ internal static class ExecOutput
     )
     {
         var output = await CaptureLog(entry, true, files);
-        var notice =
-            entry["externalOwner"] is JsonObject
-                ? $"[Process running longer than {seconds.ToString(CultureInfo.InvariantCulture)}s] Switched to background. Use foxwarm_exec_result within this same MCP context to retrieve results."
+        var elapsed =
+            ExecDuration.Format(
+                (now ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
+                    - Number(entry["startedAt"])
+            ) ?? "an unknown time";
+        var external = entry["externalOwner"] is JsonObject;
+        var header =
+            $"[{Text(entry, "id")}] "
+            + (
+                stopped && !external
+                    ? $"{waitEndedBy ?? "Stop or Run queued"} ended the wait after {elapsed}; the command is still running in the background."
+                    : $"Still running after {elapsed}, moved to background."
+            )
+            + (
+                !output.Empty ? " Output so far:"
+                : output.Truncated ? " Output so far is unavailable."
+                : " No output yet."
+            );
+        var notice = external
+            ? "Use foxwarm_exec_result within this same MCP context to retrieve results."
             : stopped
-                ? $"{waitEndedBy ?? "Stop or Run queued"} ended this call's wait. The command was already started and was not killed; it may still be running in the background. Completion will be reported separately."
-            : $"[Process running longer than {seconds.ToString(CultureInfo.InvariantCulture)}s] Switched to background. The system will send a notification message when done. STOP calling tools to check status. Wait for notification unless working on other tasks in parallel; if you continue other work, remember this process remains outstanding until its completion message arrives.";
+                ? "The command was already started and was not killed. Completion will be reported separately."
+            : "Its completion will be reported in a later message. Avoid busy-polling it with repeated status checks or sleep commands; do other work meanwhile, or wait for that message.";
         var lines = new List<string> { "---", notice };
         if (!output.Empty && !output.EndedWithLf)
             lines.Add("Partial output captured so far had no trailing newline.");
         if (warning is not null)
             lines.Add(warning);
-        lines.Add("execId: " + Text(entry, "id"));
-        lines.Add(
-            "Elapsed: "
-                + (
-                    ExecDuration.Format(
-                        (now ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
-                            - Number(entry["startedAt"])
-                    ) ?? "unknown"
-                )
-        );
         if (Text(entry, "nodeId") is { Length: > 0 } node && node != "master")
             lines.Add($"Node: `{node}`");
         if (!entry.ContainsKey("backend") && entry["pid"] is not null)
@@ -350,10 +359,10 @@ internal static class ExecOutput
             lines.Add($"Original log size: {output.Size} bytes.");
         if (output.Converted)
             lines.Add(ConversionNote);
-        return "Partial Output:\n"
-            + output.Text
-            + (output.Text.EndsWith('\n') ? "" : "\n")
-            + string.Join('\n', lines);
+        var body = output.Empty
+            ? ""
+            : output.Text + (output.Text.EndsWith('\n') ? "" : "\n");
+        return header + "\n" + body + string.Join('\n', lines);
     }
 
     internal static async Task<string> ResolvedCwd(JsonObject entry)
@@ -456,6 +465,7 @@ internal static class ExecOutput
     private const int LongLineCharacters = 550;
     private const int LongLineKeep = 250;
 
+    // The event's first line names the execId and outcome, matching the background receipt.
     internal static async Task<string> Completion(
         JsonObject entry,
         JsonObject status,
@@ -464,32 +474,29 @@ internal static class ExecOutput
     {
         var node = Text(entry, "nodeId");
         var error = Text(status, "error");
+        var duration = CompletedDuration(entry, status);
+        var state =
+            entry["stopRequestedAt"] is not null ? "Stopped on request"
+            : error?.StartsWith("Execution lost:", StringComparison.Ordinal) == true ? "Lost"
+            : "Finished";
         var lines = new List<string>
         {
-            "Background Process Finished",
-            "execId: " + Text(entry, "id"),
-            $"command: `{CommandPreview(Text(entry, "command"))}`",
+            $"[{Text(entry, "id")}] {state}: exit code {status["exitCode"]?.ToJsonText() ?? "unknown"}, {(duration == "unknown" ? "duration unknown" : duration)}",
         };
-        if (node is not null && node != "master")
-            lines.Add($"Node: `{node}`");
-        lines.Add("Exit code: " + (status["exitCode"]?.ToJsonText() ?? "unknown"));
-        lines.Add("Duration: " + CompletedDuration(entry, status));
         if (error is not null)
             lines.Add("Error: " + error);
-        if (entry["stopRequestedAt"] is not null)
-            lines.Add("Stopped on request.");
+        lines.Add($"command: `{CommandPreview(Text(entry, "command"))}`");
+        if (node is not null && node != "master")
+            lines.Add($"Node: `{node}`");
         var tail = await CompletionTail(entry, files ?? NativeFiles);
-        var log = "Command output in " + Text(entry, "logPath");
-        if (tail.Body is null)
-            return string.Join('\n', lines) + $"\nOutput: {tail.Placeholder}\n{log}";
-        lines.Add(tail.Partial ? "Output tail:" : "Output:");
+        var body = tail.Body ?? tail.Placeholder + "\n";
         var footer = new List<string> { "---" };
         footer.AddRange(tail.Notes);
-        footer.Add(log);
+        footer.Add("Log file: " + Text(entry, "logPath"));
         return string.Join('\n', lines)
             + "\n"
-            + tail.Body
-            + (tail.Body.EndsWith('\n') ? "" : "\n")
+            + body
+            + (body.EndsWith('\n') ? "" : "\n")
             + string.Join('\n', footer);
     }
 

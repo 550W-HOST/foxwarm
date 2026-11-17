@@ -333,6 +333,9 @@ internal sealed partial class NodeClient
                     case "external_exec_result_request":
                         ScheduleExternalQuery(connection, frame);
                         break;
+                    case "exec_control_request":
+                        ScheduleExecControl(connection, frame);
+                        break;
                     case "node_service_request":
                     case "node_service_command":
                     case "tool_call":
@@ -646,6 +649,7 @@ internal sealed partial class NodeClient
             capabilities["features"]!.AsObject().Remove("remoteExecBackgroundRegistration");
             capabilities["features"]!.AsObject().Remove(ExecPlacement.Feature);
             capabilities["features"]!.AsObject().Remove("secretEnv");
+            capabilities["features"]!.AsObject().Remove("execControl");
         }
         if (browser is not null)
             foreach (var definition in browser)

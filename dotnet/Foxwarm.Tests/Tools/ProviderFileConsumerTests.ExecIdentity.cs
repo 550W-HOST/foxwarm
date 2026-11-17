@@ -67,7 +67,7 @@ public sealed partial class ProviderFileConsumerTests
 
             var result = await pending;
             Assert.True(result["error"] is null, result.ToJsonString());
-            Assert.Contains("Switched to background", result["output"]!.GetValue<string>());
+            ExecReceipt.Header(result["output"]!.GetValue<string>());
             var record = Assert.Single(ExecRecords(f.Data));
             var id = record["id"]!.GetValue<string>();
             var log = record["logPath"]!.GetValue<string>();

@@ -59,7 +59,8 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
         string? ProcessStartTicks = null,
         string? ProviderId = null,
         string? Reference = null,
-        string? CompletionCapability = null
+        string? CompletionCapability = null,
+        long? StopRequestedAt = null
     )
     {
         internal ExecObservation Observation { get; init; } = new();
@@ -102,6 +103,8 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
                 value["resolvedCwd"] = cwd;
             if (CompletionCapability is not null)
                 value["completionCapability"] = CompletionCapability;
+            if (StopRequestedAt is not null)
+                value["stopRequestedAt"] = StopRequestedAt;
             return value;
         }
     }
@@ -250,7 +253,11 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
                 Text(raw, "processStartTicks"),
                 provider,
                 reference,
-                Text(raw, "completionCapability")
+                Text(raw, "completionCapability"),
+                SessionWait.Number(raw["stopRequestedAt"]) is double stopped
+                && double.IsFinite(stopped)
+                    ? (long)stopped
+                    : null
             );
             record.Observation.Cwd = Text(raw, "resolvedCwd");
             pending[id] = record;

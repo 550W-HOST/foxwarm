@@ -93,7 +93,10 @@
     },
     {
       "name": "exec",
-      "summary": "Read results of commands started through this connection."
+      "summary": "List and stop this Session's background commands.",
+      "copy": {
+        "external": "Read results of commands started through this connection."
+      }
     }
   ],
   "commands": [
@@ -4011,6 +4014,50 @@
           "help": "Maximum executions to list, 1–20. Defaults to 5."
         }
       ]
+    },
+    {
+      "path": "exec list",
+      "summary": "List this Session's commands still running in the background.",
+      "help": "Shows each command's execId, Node, start time and elapsed time, working directory and log. Commands that have finished are not listed, even if their completion has not arrived yet.",
+      "ingress": [
+        "model",
+        "user"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "exec_list"
+      },
+      "params": [],
+      "user": {
+        "handler": "exec-list",
+        "session": "required"
+      }
+    },
+    {
+      "path": "exec stop",
+      "summary": "Stop a background command of this Session.",
+      "help": "Sends the command's process group a termination signal and kills it if it is still running 5 seconds later; on Windows it ends the process tree. The command's completion is still reported once and says it was stopped. Some Nodes cannot stop commands.",
+      "ingress": [
+        "model",
+        "user"
+      ],
+      "target": {
+        "source": "builtin",
+        "name": "exec_stop"
+      },
+      "params": [
+        {
+          "name": "execId",
+          "type": "string",
+          "kind": "positional",
+          "required": true,
+          "help": "execId returned by exec."
+        }
+      ],
+      "user": {
+        "handler": "exec-stop",
+        "session": "required"
+      }
     }
   ],
   "shortcuts": [

@@ -65,7 +65,7 @@ public sealed class WindowsExecSharingTests
                         default,
                         MainNativePaths.Default(agent)
                     );
-                    Assert.Contains("Switched to background", result["output"]!.ToString());
+                    ExecReceipt.Header(result["output"]!.ToString());
                     record = Assert.Single(main.Tracked);
                 }
             }

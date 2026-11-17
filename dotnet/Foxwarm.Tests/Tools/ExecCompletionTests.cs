@@ -34,12 +34,16 @@ public sealed class ExecCompletionTests
         return await ExecOutput.Completion(entry, (JsonObject)Finished.DeepClone());
     }
 
+    // Header lines (state, optional error, command, optional Node), then the output, then the
+    // footer after the last separator.
     private static (string Head, string Body, string Footer) Split(string message)
     {
-        var start = message.IndexOf("\nOutput", StringComparison.Ordinal);
-        var body = message.IndexOf('\n', start + 1) + 1;
+        var command = message.IndexOf("\ncommand: `", StringComparison.Ordinal);
+        var body = message.IndexOf('\n', command + 1) + 1;
+        if (message[body..].StartsWith("Node: `", StringComparison.Ordinal))
+            body = message.IndexOf('\n', body) + 1;
         var footer = message.LastIndexOf("\n---\n", StringComparison.Ordinal);
-        return (message[..start], message[body..(footer + 1)], message[(footer + 5)..]);
+        return (message[..body], message[body..(footer + 1)], message[(footer + 5)..]);
     }
 
     [Fact]
@@ -47,15 +51,16 @@ public sealed class ExecCompletionTests
     {
         using var temp = new TempDirectory();
         var message = await Complete(temp.Path, "  first\n\tsecond  \n"u8.ToArray());
-        Assert.StartsWith("Background Process Finished\nexecId: brave-fox\n", message);
-        Assert.Contains("\nExit code: 3\n", message);
-        Assert.Contains("\nDuration: 2s\n", message);
-        Assert.Contains("\nOutput:\n", message);
-        var (_, body, footer) = Split(message);
+        var header = ExecReceipt.Header(message);
+        Assert.Equal("brave-fox", ExecReceipt.Id(message));
+        Assert.Contains("3", header);
+        Assert.Contains("2s", header);
+        var (head, body, footer) = Split(message);
+        Assert.Equal(2, head.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length);
         Assert.Equal("  first\n\tsecond  \n", body);
-        Assert.EndsWith("Command output in " + Path.Combine(temp.Path, "output.log"), footer);
+        Assert.EndsWith(Path.Combine(temp.Path, "output.log"), footer);
         Assert.DoesNotContain("trailing newline", message);
-        Assert.DoesNotContain("Output tail", message);
+        Assert.DoesNotContain("bytes", footer);
     }
 
     [Fact]
@@ -77,16 +82,15 @@ public sealed class ExecCompletionTests
     {
         using var temp = new TempDirectory();
         var empty = await Complete(temp.Path, []);
-        Assert.Contains("\nOutput: (No output)\nCommand output in ", empty);
-        Assert.DoesNotContain("---", empty);
+        Assert.Equal("(No output)\n", Split(empty).Body);
 
         var missing = await ExecOutput.Completion(
             Entry(temp.Path, Path.Combine(temp.Path, "absent.log")),
             (JsonObject)Finished.DeepClone()
         );
-        Assert.Contains("(Command output unavailable)", missing);
+        Assert.Equal("(Command output unavailable)\n", Split(missing).Body);
         Assert.DoesNotContain("(No output)", missing);
-        Assert.Contains("Exit code: 3", missing);
+        ExecReceipt.Header(missing);
 
         var failing = new ExecOutput.Files(
             _ => throw new IOException("target unreachable"),
@@ -98,7 +102,7 @@ public sealed class ExecCompletionTests
             failing
         );
         Assert.Contains("(Command output unavailable)", provider);
-        Assert.Contains("Command output in provider://log", provider);
+        Assert.EndsWith("provider://log", provider);
         Assert.DoesNotContain("target unreachable", provider);
 
         var cancelled = new ExecOutput.Files(
@@ -121,7 +125,6 @@ public sealed class ExecCompletionTests
         using var temp = new TempDirectory();
         var text = string.Concat(Enumerable.Range(1, 100).Select(line => $"line {line}\n"));
         var message = await Complete(temp.Path, Encoding.UTF8.GetBytes(text));
-        Assert.Contains("\nOutput tail:\n", message);
         var (_, body, footer) = Split(message);
         var lines = body.TrimEnd('\n').Split('\n');
         Assert.Equal(ExecOutput.CompletionTailLines, lines.Length);
@@ -181,7 +184,7 @@ public sealed class ExecCompletionTests
         var wide = Encoding.UTF8.GetBytes(new string('é', 3000) + "\n");
         var cut = await Complete(temp.Path, wide);
         Assert.DoesNotContain("\\x", Split(cut).Body);
-        Assert.Contains("Output tail:", cut);
+        Assert.Contains(wide.Length.ToString(), Split(cut).Footer);
     }
 
     [Fact]
@@ -211,10 +214,32 @@ public sealed class ExecCompletionTests
         );
         var head = Split(message).Head;
         Assert.Contains("\nNode: `provider/target`", head);
-        Assert.Contains("\nExit code: unknown", head);
-        Assert.Contains("\nError: Execution lost: gone", head);
+        Assert.Contains("unknown", ExecReceipt.Header(message));
+        Assert.Contains("\nError: Execution lost: gone\n", head);
         Assert.Contains("command: `echo \\`tick\\` z", head);
         Assert.Contains("[foxwarm: command middle omitted]", head);
+    }
+
+    [Fact]
+    public async Task Stop_request_is_part_of_the_completion_header()
+    {
+        using var temp = new TempDirectory();
+        var entry = Entry(temp.Path);
+        await File.WriteAllTextAsync(entry["logPath"]!.GetValue<string>(), "partial\n");
+        var status = new JsonObject
+        {
+            ["exitCode"] = 143,
+            ["finishedAt"] = "2027-01-15T08:00:02.000Z",
+        };
+        var normal = ExecReceipt.Header(
+            await ExecOutput.Completion(entry, (JsonObject)status.DeepClone())
+        );
+        entry["stopRequestedAt"] = 1_800_000_001_000L;
+        var stopped = ExecReceipt.Header(
+            await ExecOutput.Completion(entry, (JsonObject)status.DeepClone())
+        );
+        Assert.NotEqual(normal, stopped);
+        Assert.Contains("143", stopped);
     }
 
     [Fact]

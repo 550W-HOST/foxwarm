@@ -121,6 +121,16 @@ internal static partial class OperationDeclarations
             [Primary()]
         ),
         Declare(
+            "builtin:exec_list",
+            [SelfBranch("call", null, "lists background commands owned by the caller")],
+            [Primary()]
+        ),
+        Declare(
+            "builtin:exec_stop",
+            [SelfBranch("call", null, "stops a background command owned by the caller")],
+            [Primary()]
+        ),
+        Declare(
             "builtin:cancel_transfer",
             [SelfBranch("call", null, "cancels a transfer owned by the caller")],
             [Primary()]

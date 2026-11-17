@@ -36,6 +36,8 @@
     { "command": "agent create worker --no-create-main-session --rules @r", "values": { "r": [{ "action": "deny" }] }, "descriptor": { "toolId": "builtin:create_agent", "args": { "agentName": "worker", "createMainSession": false, "rules": [{ "action": "deny" }] } } },
     { "command": "help", "descriptor": null },
     { "command": "session", "descriptor": null },
+    { "command": "exec list", "descriptor": { "toolId": "builtin:exec_list", "args": {} } },
+    { "command": "exec stop brave-fox", "descriptor": { "toolId": "builtin:exec_stop", "args": { "execId": "brave-fox" } } },
     { "command": "tool search memory --source builtin", "descriptor": null },
     { "command": "tool call mcp:srv/probe --help", "descriptor": null },
     { "command": "tool call --help builtin:node --args @a", "values": { "a": { "action": "select" } }, "descriptor": null },

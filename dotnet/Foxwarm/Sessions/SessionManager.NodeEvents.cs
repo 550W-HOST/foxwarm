@@ -79,9 +79,7 @@ internal sealed partial class SessionManager
             admitted = hasCompletion
                 ? await owner.Entry.SaveLane.CommitRemoteExecCompletionAsync(
                     execId!,
-                    // Framed as an event when projected; its command output must not close
-                    // or forge that frame.
-                    SessionBoundary.NeutralizeFraming(text),
+                    CompletionEvent(text),
                     receipt!
                 )
                 : await owner.Entry.SaveLane.AdmitAsync(
@@ -98,6 +96,18 @@ internal sealed partial class SessionManager
             Nodes.ExecClaims.Complete(claim);
         if (admitted)
             WakeNodeEventOwner(owner);
+    }
+
+    // A completion is persisted as one framed event. The Node composes its text: current Nodes
+    // start with the `[execId]` header, older ones with the legacy title, which is dropped. The
+    // text carries command output, so framing look-alikes are neutralized.
+    internal static string CompletionEvent(string message)
+    {
+        const string legacy = "Background Process Finished\n";
+        var detail = message.StartsWith(legacy, StringComparison.Ordinal)
+            ? message[legacy.Length..]
+            : message;
+        return $"<foxwarm-system kind=\"event\" type=\"background-process-finished\">\n{SessionBoundary.NeutralizeFraming(detail)}\n</foxwarm-system>";
     }
 
     private void WakeNodeEventOwner(SessionOwner owner)

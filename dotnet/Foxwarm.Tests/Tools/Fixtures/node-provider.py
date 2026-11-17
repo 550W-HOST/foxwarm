@@ -95,6 +95,8 @@ try:
                  {"id": "offline", "type": "fixture", "availability": "offline", "filesystem": "read"}]
         if (root / "exec-env").exists():
             nodes[0]["execEnv"] = True
+        if (root / "exec-stop").exists():
+            nodes[0]["execStop"] = True
         if mode == "duplicate":
             nodes.append(nodes[0])
         if mode == "lifecycle":
@@ -183,6 +185,32 @@ try:
             result = json.loads((job / "status.json").read_text())
         else:
             result = {"state": "running"}
+    elif operation == "exec-stop":
+        assert (root / "exec-stop").exists()
+        assert set(body) == {"nodeId", "ref", "graceMs"}
+        job = root / "exec" / body["ref"]
+        with (root / "stops.jsonl").open("a") as stops:
+            stops.write(json.dumps(body) + "\n")
+        if not job.exists():
+            result = {"state": "lost"}
+        elif (job / "status.json").exists() or not (job / "shell-pid").exists():
+            result = {"state": "finished"}
+        else:
+            group = int((job / "shell-pid").read_text())
+            try:
+                os.killpg(group, signal.SIGTERM)
+                state = "killed"
+                deadline = time.time() + body["graceMs"] / 1000
+                while time.time() < deadline:
+                    if (job / "status.json").exists():
+                        state = "stopped"
+                        break
+                    time.sleep(0.05)
+                if state == "killed":
+                    os.killpg(group, signal.SIGKILL)
+            except ProcessLookupError:
+                state = "finished"
+            result = {"state": state}
     elif operation == "filesystem":
         assert set(body) <= {"nodeId", "operation", "path", "context", "offset", "count", "contentBase64", "flag"}
         assert set(body["context"]) <= {"cwd"}

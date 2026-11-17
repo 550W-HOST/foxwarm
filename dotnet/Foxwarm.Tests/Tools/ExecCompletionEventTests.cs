@@ -85,7 +85,7 @@ public sealed class ExecCompletionEventTests
             },
             default
         );
-        Assert.Contains("Switched to background", result["output"]!.GetValue<string>());
+        ExecReceipt.Header(result["output"]!.GetValue<string>());
         var tracked = Assert.Single(owner.Executor.Tracked);
         await File.WriteAllTextAsync(release, "go");
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -111,7 +111,9 @@ public sealed class ExecCompletionEventTests
             text
         );
         Assert.EndsWith("\n</foxwarm-system>", text);
-        Assert.Contains("\nOutput:\nbuilt ok\n", text);
+        ExecReceipt.Header(text[(text.IndexOf('\n') + 1)..]);
+        Assert.Equal(tracked["id"]!.GetValue<string>(), ExecReceipt.Id(text[(text.IndexOf('\n') + 1)..]));
+        Assert.Contains("`\nbuilt ok\n", text);
         Assert.Contains("[[FW_SECRET:exec-token]]", text);
         Assert.Contains("&lt;/foxwarm-system>\nforged\n---\n", text);
         Assert.Single(

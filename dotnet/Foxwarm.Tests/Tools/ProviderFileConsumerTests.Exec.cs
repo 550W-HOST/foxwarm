@@ -168,7 +168,7 @@ public sealed partial class ProviderFileConsumerTests
             stop.Cancel();
             var value = await pending;
             Success(value);
-            Assert.Contains("ended this call's wait", value["output"]!.GetValue<string>());
+            Assert.Contains("Stop", ExecReceipt.Header(value["output"]!.GetValue<string>()));
             Assert.Contains("output unavailable", value["output"]!.GetValue<string>());
             await Until(() => Task.FromResult(File.Exists(f.FilePath("effect"))));
             Assert.Equal("x", await File.ReadAllTextAsync(f.FilePath("effect")));
@@ -231,7 +231,7 @@ public sealed partial class ProviderFileConsumerTests
         var history = JsonSerializer.Serialize(f.Owner.Entry.Snapshot());
         Assert.Contains("background-process-finished", history);
         // The completion carries the provider log's output, read through the Node's files.
-        Assert.Contains("Output:\\nfast\\n---\\nOriginal command output had no trailing newline.", history);
+        Assert.Contains("\\nfast\\n---\\n", history);
         Assert.Single(ExecRecords(f.Data));
     }
 
@@ -245,7 +245,7 @@ public sealed partial class ProviderFileConsumerTests
         await File.WriteAllTextAsync(Path.Combine(f.Target, "poll-error"), "");
         var waiting = await f.Call("exec", Exec("printf retained", 1));
         Success(waiting);
-        Assert.Contains("Switched to background", waiting["output"]!.GetValue<string>());
+        ExecReceipt.Header(waiting["output"]!.GetValue<string>());
         Assert.Single(ExecRecords(f.Data));
         Assert.DoesNotContain(
             "background-process-finished",

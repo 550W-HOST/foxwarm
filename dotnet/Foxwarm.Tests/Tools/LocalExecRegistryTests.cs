@@ -304,7 +304,7 @@ public sealed class LocalExecRegistryTests
         Directory.CreateDirectory(Registry(temp.Path));
         stop.Cancel();
         var output = (await execution)["output"]!.GetValue<string>();
-        Assert.Contains("ended this call's wait", output);
+        Assert.Contains("Stop", ExecReceipt.Header(output));
         var tracked = Assert.Single(manager.Tracked);
         Assert.True(tracked["notifyOnCompletion"]!.GetValue<bool>());
         Directory.Delete(Registry(temp.Path));

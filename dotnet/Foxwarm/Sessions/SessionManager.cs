@@ -184,15 +184,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
                         "Exec completion owner is unavailable; retry after recovery."
                     );
                 var current = await RequiredAsync(sessionId);
-                var detail = message.StartsWith(
-                    "Background Process Finished\n",
-                    StringComparison.Ordinal
-                )
-                    ? message["Background Process Finished\n".Length..]
-                    : message;
-                // The detail carries command output, which must not close or forge the frame.
-                var eventPart =
-                    $"<foxwarm-system kind=\"event\" type=\"background-process-finished\">\n{SessionBoundary.NeutralizeFraming(detail)}\n</foxwarm-system>";
+                var eventPart = CompletionEvent(message);
                 try
                 {
                     if (
@@ -226,6 +218,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
                 ?? throw new InvalidDataException("Exec Session membership is missing.")
         );
         executor.ResolveProviderBackend = NodeProviders.ResolveExecBackend;
+        executor.ResolveProviderStop = NodeProviders.ExecStopBackendAsync;
         executor.RemoteIdentityReserved = (session, id) =>
             Find(session) is { } owner && Nodes.ExecClaims.Has(owner, id, activeOnly: false);
         Nodes.LocalExecActive = (owner, id) => executor.IsOwnedActive(owner.Id, id);
@@ -254,6 +247,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
         foreach (var definition in SecretToolDefinitions.Definitions())
             definitions.Add(definition?.DeepClone());
         foreach (var definition in FileDeliveryDefinitions.Definitions())
+            definitions.Add(definition?.DeepClone());
+        foreach (var definition in ExecControlDefinitions.Definitions())
             definitions.Add(definition?.DeepClone());
         foreach (var definition in MainLocalToolDefinitions.Definitions())
             definitions.Add(definition?.DeepClone());

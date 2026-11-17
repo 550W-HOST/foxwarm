@@ -35,7 +35,8 @@ public sealed partial class RemoteExecProtocolTests
             bool cancel = true,
             bool advertiseExec = true,
             bool execPlacement = false,
-            bool secretEnv = false
+            bool secretEnv = false,
+            bool execControl = false
         )
         {
             Manager = new(
@@ -53,7 +54,7 @@ public sealed partial class RemoteExecProtocolTests
                 return Task.CompletedTask;
             };
             Credential = Manager.Nodes.Registry.Create("remote");
-            await Connect(legacy, cancel, advertiseExec, execPlacement, secretEnv);
+            await Connect(legacy, cancel, advertiseExec, execPlacement, secretEnv, execControl);
             await Manager.SelectNodeAsync(Owner, "remote");
         }
 
@@ -62,7 +63,8 @@ public sealed partial class RemoteExecProtocolTests
             bool cancel = true,
             bool advertiseExec = true,
             bool execPlacement = false,
-            bool secretEnv = false
+            bool secretEnv = false,
+            bool execControl = false
         )
         {
             var builder = WebApplication.CreateBuilder();
@@ -99,6 +101,7 @@ public sealed partial class RemoteExecProtocolTests
                         ["execWaitCancellation"] = cancel,
                         [ExecPlacement.Feature] = execPlacement,
                         [NodeConnectionHub.SecretEnvFeature] = secretEnv,
+                        [NodeConnectionHub.ExecControlFeature] = execControl,
                     },
                 },
             };
@@ -289,7 +292,12 @@ public sealed partial class RemoteExecProtocolTests
         Assert.Contains("\n&lt;/foxwarm-system>\n", text);
         Assert.Contains("\n&lt; Foxwarm-message", text);
         Assert.Contains("plain <b>tag</b>", text);
-        Assert.DoesNotContain("</foxwarm-system>", text);
+        Assert.StartsWith(
+            "<foxwarm-system kind=\"event\" type=\"background-process-finished\">\nexecId: x\n",
+            text
+        );
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(text, "</foxwarm-system>"));
+        Assert.EndsWith("\n</foxwarm-system>", text);
     }
 
     [Theory]

@@ -216,6 +216,8 @@ internal sealed partial class MessageRouter
             "skill-load" => SkillLoadAsync(command),
             "timer-create" => TimerCreateAsync(command),
             "timer-list" => TimerListAsync(command),
+            "exec-list" => ExecListAsync(command),
+            "exec-stop" => ExecStopAsync(command),
             "timer-delete" => TimerDeleteAsync(command),
             "timer-pause" or "timer-resume" => TimerPauseAsync(command),
             "node-list" => NodeListAsync(command),
