@@ -14,9 +14,9 @@ Foxwarm is a self-hosted runtime for AI agents. It combines persistent conversat
 
 ## Get started
 
-Install Foxwarm on **Linux x64** (including x64 WSL) or **Windows x64**. The installers download a prebuilt [release](https://github.com/550W-HOST/foxwarm/releases); nothing is compiled. When the ASP.NET Core 10 runtime is not installed, they use the package that includes .NET. On Linux, tmux runs Foxwarm in the background. Windows also has a desktop app, and a [container image](#docker) is available.
+Install Foxwarm on **Linux x64** (including x64 WSL), **macOS 15 or later on Apple Silicon** or **Windows x64**. The installers download a prebuilt [release](https://github.com/550W-HOST/foxwarm/releases); nothing is compiled. They start Foxwarm in the background, on Linux and macOS in tmux when it is available. Windows and Apple Silicon Macs also have a desktop app, and a [container image](#docker) is available.
 
-### Linux x64 or x64 WSL
+### Linux x64, x64 WSL or macOS on Apple Silicon
 
 ```bash
 curl -fsSL https://foxwarm.net/install-foxwarm.sh | bash
@@ -30,7 +30,7 @@ irm https://foxwarm.net/install-foxwarm.ps1 | iex
 
 For a new installation, the installer creates `./foxwarm` for the program and `./foxwarm-data` for data, then starts Foxwarm. The program's `data_dir` file remembers the data location. Open the printed WebUI URL and configure your provider in **Setup → Models** to start chatting. `foxwarm/foxwarmctl` (`foxwarmctl.cmd` on Windows) starts, stops and updates the installation.
 
-See the [installation guide](https://foxwarm.net/docs/installing/) for packages, requirements, custom paths, the desktop app and control commands. The installer scripts are available to inspect: [Bash](install-foxwarm.sh) and [PowerShell](install-foxwarm.ps1).
+See the [installation guide](https://foxwarm.net/docs/installing/) for packages, requirements, custom paths, the desktop apps and control commands. The installer scripts are available to inspect: [Bash](install-foxwarm.sh) and [PowerShell](install-foxwarm.ps1).
 
 Keep access tokens private. Back up the whole data directory; see [data, updates, and backups](https://foxwarm.net/docs/data-upgrades-backups/). Optional [semantic history search](https://foxwarm.net/docs/history-search/#enable-semantic-search) has additional platform and embedding-service requirements.
 
