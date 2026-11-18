@@ -58,6 +58,12 @@ export function assetName(name) {
   return `foxwarm-${name}.${TARGETS[name].archive}`
 }
 
+// The Windows Desktop also ships as a per-user installer of the same publication as its ZIP.
+// The name is the OutputBaseFilename of foxwarm-desktop.iss.
+export const installerTarget = 'desktop-win-x64'
+export const installerAssetName = 'foxwarm-desktop-win-x64-setup.exe'
+export const installerScript = path.join(root, 'scripts/release/foxwarm-desktop.iss')
+
 export const codeAssetName = `foxwarm-code-${version}.fwassets`
 const codeAssets = path.join(root, 'packages/vscode-web/assets')
 
@@ -93,11 +99,13 @@ export function packCode(output, source = codeAssets) {
 
 function usage(message) {
   if (message) console.error(message)
-  console.error(`Usage: node scripts/release/package.mjs --output DIR [--target NAME]... [--build-assets] [--directory-only] [--native-libraries DIR] [--checksums-only | --code-only]
+  console.error(`Usage: node scripts/release/package.mjs --output DIR [--target NAME]... [--build-assets] [--directory-only] [--native-libraries DIR] [--inno-setup ISCC] [--checksums-only | --code-only]
 Targets: ${Object.keys(TARGETS).join(', ')}
 (default: the published targets this host can build; native targets build only on their own platform)
 --native-libraries: directory with the LanceDB library and the ToolScript worker built for the targets' RID from pinned source
-(scripts/release/build-lancedb.sh and build-monty.sh); without it, the LanceDB package's libraries and the official worker are used (Windows packages require it: its libraries link the C runtime statically)`)
+(scripts/release/build-lancedb.sh and build-monty.sh); without it, the LanceDB package's libraries and the official worker are used (Windows packages require it: its libraries link the C runtime statically)
+--inno-setup: the Inno Setup compiler (ISCC.exe); ${installerTarget} then also produces ${installerAssetName}
+(scripts/release/install-inno-setup.ps1 installs the pinned version)`)
   process.exit(2)
 }
 
@@ -251,8 +259,17 @@ with open(out, 'wb') as raw:
 `, base, file, epoch, ...entries])
 }
 
+// Compiles the installer from the staged publication before the ZIP's staging directory is removed.
+function installer(staging, output, iscc) {
+  const file = path.join(output, installerAssetName)
+  fs.rmSync(file, { force: true })
+  run(iscc, ['/Qp', `/DAppVersion=${version}`, `/DSourceDir=${staging}`, `/O${output}`, installerScript])
+  if (!fs.statSync(file, { throwIfNoEntry: false })?.isFile()) throw new Error(`Inno Setup did not produce ${file}`)
+  return file
+}
+
 export function writeChecksums(output) {
-  const lines = fs.readdirSync(output).filter(file => /\.(zip|tar\.gz|fwassets|apk)$/.test(file)).sort().map(file =>
+  const lines = fs.readdirSync(output).filter(file => /\.(zip|tar\.gz|fwassets|apk|exe)$/.test(file)).sort().map(file =>
     `${createHash('sha256').update(fs.readFileSync(path.join(output, file))).digest('hex')}  ${file}`)
   fs.writeFileSync(path.join(output, 'SHA256SUMS'), lines.join('\n') + '\n')
 }
@@ -265,6 +282,7 @@ function main(argv) {
   let checksumsOnly = false
   let codeOnly = false
   let nativeLibraries
+  let innoSetup
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
     if (arg === '--output') output = argv[++i]
@@ -274,20 +292,22 @@ function main(argv) {
     else if (arg === '--checksums-only') checksumsOnly = true
     else if (arg === '--code-only') codeOnly = true
     else if (arg === '--native-libraries') nativeLibraries = path.resolve(argv[++i] || usage('--native-libraries requires a directory'))
+    else if (arg === '--inno-setup') innoSetup = path.resolve(argv[++i] || usage('--inno-setup requires the path of ISCC.exe'))
     else usage(`Unknown argument: ${arg}`)
   }
   if (!output) usage('--output is required')
   if (nativeLibraries && !fs.statSync(nativeLibraries, { throwIfNoEntry: false })?.isDirectory()) usage(`No such directory: ${nativeLibraries}`)
   for (const name of targets) if (!TARGETS[name]) usage(`Unknown target: ${name}`)
   output = path.resolve(output)
+  if (innoSetup && !fs.statSync(innoSetup, { throwIfNoEntry: false })?.isFile()) usage(`No such file: ${innoSetup}`)
   if (codeOnly) {
-    if (targets.length || buildAssets || directoryOnly || checksumsOnly) usage('--code-only cannot be combined with other build options')
+    if (targets.length || buildAssets || directoryOnly || checksumsOnly || innoSetup) usage('--code-only cannot be combined with other build options')
     console.log(`Packaged ${packCode(output)}`)
     writeChecksums(output)
     return
   }
   if (checksumsOnly) {
-    if (targets.length || buildAssets || directoryOnly) usage('--checksums-only cannot be combined with build options')
+    if (targets.length || buildAssets || directoryOnly || innoSetup) usage('--checksums-only cannot be combined with build options')
     writeChecksums(output)
     return
   }
@@ -298,6 +318,7 @@ function main(argv) {
   if (selected.some(name => TARGETS[name].rid.startsWith('osx-')) && (process.platform !== 'darwin' || process.arch !== 'arm64')) {
     throw new Error('macOS packages require an arm64 macOS build host for the native PTY library and helper.')
   }
+  if (innoSetup && (!selected.includes(installerTarget) || directoryOnly)) usage(`--inno-setup needs the ${installerTarget} target and an archive`)
   for (const name of selected) {
     if (TARGETS[name].native && TARGETS[name].rid !== hostRid()) throw new Error(`${name} is a NativeAOT package and must be built on ${TARGETS[name].rid}.`)
     // Only libraries linked with the static C runtime keep a Windows package free of the Visual C++ redistributable.
@@ -318,6 +339,7 @@ function main(argv) {
       continue
     }
     console.log(`Packaged ${archive(name, staging, output)}`)
+    if (innoSetup && name === installerTarget) console.log(`Packaged ${installer(staging, output, innoSetup)}`)
     fs.rmSync(path.dirname(staging), { recursive: true, force: true })
   }
   if (!directoryOnly) {

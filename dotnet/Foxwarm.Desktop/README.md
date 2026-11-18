@@ -5,16 +5,24 @@ The macOS Desktop is the separate [AppKit host](../Foxwarm.Desktop.Mac/README.md
 ## Install and run
 
 This is an unsigned **Windows x64** desktop app compiled to native code
-(NativeAOT). It needs no .NET installation, Visual C++ redistributable or
-installer: its components link the C runtime statically or import only Windows DLLs.
+(NativeAOT). It needs no .NET installation or Visual C++ redistributable: its
+components link the C runtime statically or import only Windows DLLs.
 
 1. Install the **Microsoft Edge WebView2 Evergreen Runtime (x64)** if it is not
    already installed (Windows 10 and 11 normally include it). Microsoft Edge alone
-   is not a substitute for this runtime.
-2. Download `foxwarm-desktop-win-x64.zip` from the repository's GitHub releases,
-   extract the entire ZIP to a folder you can read, then open
-   **Foxwarm.Desktop.exe**. Keep `foxwarm.assets`, the DLLs, native assets and
-   templates together. Configure a model/provider in the WebUI's Setup page.
+   is not a substitute for this runtime. Setup detects a missing runtime and
+   offers its download page.
+2. Download `foxwarm-desktop-win-x64-setup.exe` from the repository's GitHub
+   releases and run it. It installs for the current user without elevation, by
+   default into `%LOCALAPPDATA%\Programs\Foxwarm`, with a Start menu shortcut, an
+   entry in **Settings → Apps** and an optional sign-in start. Configure a
+   model/provider in the WebUI's Setup page.
+
+The portable `foxwarm-desktop-win-x64.zip` holds the same files without
+installation: extract the entire ZIP to a folder you can read, then open
+**Foxwarm.Desktop.exe**. Keep `foxwarm.assets`, the DLLs, native assets and
+templates together. The installed and the portable app use the same data, and
+the single-instance lock lets only one of them run at a time.
 
 To prepare image, chart or React artifacts, also install Node.js and make `node`
 available on PATH before starting Desktop. The package includes the collected
@@ -30,8 +38,30 @@ port is occupied, it binds a new available port without connecting to the other
 process; browser-only theme/layout preferences start fresh for that new origin.
 No API keys or existing account settings are included.
 
-To update, exit the app and replace the extracted folder with the new release.
-Settings and data stay in the user profile (see below).
+To update an installation, run the new release's setup; to update the portable
+app, exit it and replace the extracted folder. Uninstalling from **Settings →
+Apps** removes the program, its shortcut and the sign-in start. Settings and data
+stay in the user profile (see below) in every case.
+
+## Installer
+
+`scripts/release/foxwarm-desktop.iss` is an Inno Setup script for the same
+publication as the ZIP; the release packager compiles it (see *Build from
+source*). Its AppId is fixed, so a newer setup upgrades the installation, keeps its
+directory and its sign-in choice, and runs the previous version's uninstaller first,
+so files a release no longer ships do not remain. The sign-in start is a
+`Run` value under `HKCU` with the command `"<directory>\Foxwarm.Desktop.exe" --tray`.
+Program files never hold user data, and neither setup nor uninstallation touches
+the data directory.
+
+Before it replaces or removes the files, setup and uninstallation run
+`Foxwarm.Desktop.exe --exit` from the installation. That asks the copy started from
+that executable to exit, through the same path as the tray's **Exit**, and waits up to
+60 seconds until no process runs that executable. A copy started from another
+directory, such as an extracted ZIP, is left alone. If Foxwarm does not exit, setup
+stops with a message (exit code 7 when silent) and uninstallation is cancelled,
+before any file changes. Inno Setup's Restart Manager integration is off; it would
+close the app without its shutdown.
 
 ## WinUI build qualification
 
@@ -66,11 +96,19 @@ against a local model fixture, indexes and searches through the Vector child
 (only the child loads LanceDB), and checks that the process loaded no CoreCLR.
 It closes the window to the notification area, reopens it from the icon, exits
 through the icon's **Exit** menu item and checks restart persistence and
-ordinary shutdown. It also executes the packaged esbuild/sharp dependencies. A separate
+ordinary shutdown, and a `--tray` start, opened from its icon and stopped by an
+`--exit` request. It also executes the packaged esbuild/sharp dependencies. A separate
 `desktop-acceptance` artifact records the acceptance result without user state,
 tokens or browser profiles.
 
-Real Explorer recreation has also been exercised. Windows sign-out and
+The same job installs the setup silently into a non-ASCII directory and compares the
+installed files with the ZIP's; checks the shortcut, the Apps entry and the sign-in
+start; runs the registered sign-in command from an unrelated directory; reinstalls over
+the running app and uninstalls it while running, each of which must stop it through its
+shutdown; and checks that the data remains and nothing else does
+(`scripts/release/smoke-desktop-installer.ps1`).
+
+Real Explorer recreation has also been exercised. Windows sign-out, sign-in itself and
 power-loss recovery remain outside these checks.
 WebView2 debugging is enabled only for acceptance, through the test child's
 environment or an app-specific policy on the disposable Windows runner. Normal
@@ -79,7 +117,9 @@ Desktop startup does not enable it.
 ## Window and tray
 
 Closing the window hides it to the tray. Double-click the fox tray icon or use
-**Open** to restore it. The icon returns if Explorer recreates the taskbar while
+**Open** to restore it. Started with `--tray`, as the sign-in start is, the app
+runs Main with only the tray icon; the window and WebView2 start when it is first
+opened, and a second `--tray` start exits without the already-running message. The icon returns if Explorer recreates the taskbar while
 Foxwarm is running. Use **Exit** to stop the app and backend. Starting another
 copy shows a message instead of starting another backend. The single-instance
 lock applies to the same user across Windows login sessions, so those sessions
@@ -113,7 +153,7 @@ their own capabilities. Chat, setup, file tools and persistent history remain
 available.
 Linux directory-fsync durability is not claimed on Windows. The release packager
 adds the pinned Code workbench assets; direct .NET publication does not acquire
-them. Optional external tools/services and HEIF support remain unbundled. There is no updater, autostart or installer.
+them. Optional external tools/services and HEIF support remain unbundled. There is no updater.
 
 Artifact preparation uses a short-lived Node process for validation, raster
 inspection and React compilation. Its Windows esbuild/sharp dependencies and
@@ -152,6 +192,11 @@ directory built with `scripts/release/build-lancedb.sh` and `build-monty.sh`:
 ```sh
 node scripts/release/package.mjs --build-assets --output dist --native-libraries <native-libraries-directory> --target desktop-win-x64
 ```
+
+Add `--inno-setup <ISCC.exe>` to compile `foxwarm-desktop-win-x64-setup.exe` from the
+same publication. `scripts/release/install-inno-setup.ps1 -Destination <directory>`
+installs the pinned Inno Setup 7.1.1 there, without registering it, and prints the
+compiler's path.
 
 The Core project supplies the same WebUI, public skills, templates, Node bootstrap,
 artifact runtime and tracked extension resources to Desktop. Missing required built assets fail
