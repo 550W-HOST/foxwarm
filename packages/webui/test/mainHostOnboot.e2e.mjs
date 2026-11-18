@@ -10,6 +10,7 @@ import { pathToFileURL } from 'node:url'
 import { WebSocket } from 'ws'
 import { createHostFixture, until, saveModelsInOriginalApp } from './mainHostFixture.mjs'
 import { functionCall } from './ctlModelCalls.mjs'
+import { filterConditionalMemorySource } from '../../../lib/conditionalMemory.js'
 
 const fixtures = [], requests = [], failures = []
 const text = value => ({ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: value }] })
@@ -100,7 +101,12 @@ try {
   const emptyHistory = await empty.api('GET', route('main') + '/history'); assert.equal(emptyHistory.status, 200); assert.equal(emptyHistory.body.session.modelKey, ''); assert.equal(emptyHistory.body.session.defaultModelKey, ''); assert.equal(emptyHistory.body.session.effortDefault, 'high'); assert.equal(emptyHistory.body.session.effectiveCompactThresholdTokens, Math.floor(200000 * 0.85))
   assert.equal((await empty.api('GET', route('main') + '/state')).status, 200)
   const frames = [], ws = new WebSocket(empty.origin.replace('http:', 'ws:') + '/api/webui/stream', { headers: { authorization: 'Bearer synthetic-onboot-empty-setup-api' } }); ws.on('message', raw => frames.push(JSON.parse(String(raw)))); await once(ws, 'open'); ws.send(JSON.stringify({ type: 'set-subscriptions', revision: 1, sessionIds: ['main'], sessionListIds: ['main'], sessionListActive: true })); await until(() => frames.some(frame => frame.type === 'subscriptions-applied' && frame.revision === 1), 'unconfigured Main state/draft/context subscription applies'); assert(frames.some(frame => frame.type === 'session-state' && frame.session?.modelKey === '')); assert(!frames.some(frame => frame.type === 'session-error')); ws.close(); await once(ws, 'close')
-  const framework = await readFile(resolve('dotnet/Foxwarm/bin/Debug/net10.0/templates/agents/00_SYSTEM.md'), 'utf8')
+  const frameworkSource = await readFile(resolve('dotnet/Foxwarm/bin/Debug/net10.0/templates/agents/00_SYSTEM.md'), 'utf8')
+  // The Session sees the bundled source after conditional filtering for its concrete model.
+  const framework = filterConditionalMemorySource(frameworkSource, 'a/wire')
+  assert(frameworkSource.includes('<foxwarm-if '), 'The bundled framework source has conditional blocks')
+  assert(!framework.includes('<foxwarm-if') && !framework.includes('</foxwarm-if>'), 'Filtering leaves no conditional markup')
+  assert(framework.length < frameworkSource.length, 'Filtering removes the non-matching blocks')
   await assert.rejects(access(join(empty.data, 'agents', '00_SYSTEM.md')), { code: 'ENOENT' })
   for (const name of ['MEMORY.md', 'SOUL.md', 'USER.md']) assert.deepEqual(await readFile(join(empty.work, 'memory', name)), await readFile(resolve('dotnet/Foxwarm/bin/Debug/net10.0/templates/main/memory', name)))
   await assert.rejects(access(join(empty.work, 'memory/BOOTSTRAP.md')), { code: 'ENOENT' })
