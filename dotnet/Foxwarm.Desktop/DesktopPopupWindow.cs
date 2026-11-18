@@ -10,7 +10,8 @@ namespace Foxwarm.Desktop;
 /// <summary>
 /// An app window opened by a page (window.open or a link with a target). It hosts the
 /// opener's new web contents, so <c>window.opener</c> and postMessage keep working. The
-/// WebUI and Code have custom frames; other same-origin documents keep the system title bar. Closing it closes it; only the main window hides to the tray.
+/// WebUI and Code have custom frames; other same-origin documents keep the system title
+/// bar. Closing it closes it; only the main window hides to the tray.
 /// </summary>
 internal sealed partial class DesktopPopupWindow : Window
 {
