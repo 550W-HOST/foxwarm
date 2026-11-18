@@ -35,7 +35,7 @@ Foxwarm 服务器支持 **Linux x64**（包括 x64 WSL）、**macOS arm64**（Ap
 
 每个 Release 还包含：
 
-- `foxwarm-code-<版本>.fwassets`：服务器安装包使用的 Code 编辑器，Windows 桌面版已自带。缺少 Code 时，WebUI 的 Code 页面会给出安装命令。
+- `foxwarm-code-<版本>.fwassets`：服务器安装包使用的 Code 编辑器，桌面版已自带。缺少 Code 时，WebUI 的 Code 页面会给出安装命令。
 - `native-cli-node-*`：Linux、macOS 和 Windows 的独立 [Node](/docs/nodes/) 客户端，Node 的引导命令会自动下载。
 - Docker 镜像 `ghcr.io/550w-host/foxwarm`，标签有完整版本号（如 `0.9.4`）、次版本号（`0.9`）和 `latest`，见 [Docker](#docker)。
 
@@ -165,7 +165,7 @@ ditto -x -k foxwarm-desktop-osx-arm64.zip /Applications
 
 如果已经解压且 Gatekeeper 阻止打开，只对该应用执行 `xattr -dr com.apple.quarantine /Applications/Foxwarm.app`。
 
-Foxwarm.app 在窗口中运行 Foxwarm，数据保存在 `~/Library/Application Support/Foxwarm/Desktop`。关闭窗口后 Foxwarm 继续运行；在其菜单中选择 **Quit Foxwarm** 才会退出。与 Windows 桌面版一样，它只在本机监听。与 Windows 桌面版不同，它不带 Code 编辑器。
+Foxwarm.app 在窗口中运行 Foxwarm，数据保存在 `~/Library/Application Support/Foxwarm/Desktop`。关闭窗口后 Foxwarm 继续运行；在其菜单中选择 **Quit Foxwarm** 才会退出。与 Windows 桌面版一样，它只在本机监听，并自带 Code 编辑器。
 
 ## 打开 WebUI
 
@@ -242,7 +242,7 @@ docker compose up -d foxwarm
 ## 可选组件
 
 - **语义历史检索**：默认关闭，需要 embedding 服务，见[检索要求](/zh/docs/history-search/#enable-semantic-search)（英文）。
-- **Code 工作台**：服务器安装包和 Docker 镜像不包含编辑器。Windows 桌面版已自带，macOS 桌面版不带。每个 Release 都以 `foxwarm-code-<版本>.fwassets` 发布它（见[安装包](#安装包)）。服务器安装缺少 Code 时，WebUI 的 Code 页面会给出一条命令，在运行 Foxwarm 的电脑上执行：它会下载这个文件，用 Release 的 `SHA256SUMS` 校验后安装，刷新页面即可使用。如需从源码构建工作台，见[工作台配置说明](https://github.com/550W-HOST/foxwarm/blob/main/packages/vscode-web/README.md)。
+- **Code 工作台**：桌面版已自带编辑器，服务器安装包和 Docker 镜像不包含。每个 Release 都以 `foxwarm-code-<版本>.fwassets` 发布它（见[安装包](#安装包)）。服务器安装缺少 Code 时，WebUI 的 Code 页面会给出一条命令，在运行 Foxwarm 的电脑上执行：它会下载这个文件，用 Release 的 `SHA256SUMS` 校验后安装，刷新页面即可使用。如需从源码构建工作台，见[工作台配置说明](https://github.com/550W-HOST/foxwarm/blob/main/packages/vscode-web/README.md)。
 - **HEIC/HEIF 图片**：需要额外的原生解码库，见[图片依赖说明](https://github.com/550W-HOST/foxwarm/blob/main/docs/native-image-prerequisites.md)。PNG/JPEG 使用内置的图片支持。
 
 ## 从源码运行

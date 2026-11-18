@@ -37,7 +37,7 @@ Each [release](https://github.com/550W-HOST/foxwarm/releases/latest) provides:
 
 Each release also includes:
 
-- `foxwarm-code-<version>.fwassets`: the Code editor for server packages. The Windows desktop app already includes it. When Code is missing, the WebUI's Code page shows the command that installs it.
+- `foxwarm-code-<version>.fwassets`: the Code editor for server packages. The desktop apps already include it. When Code is missing, the WebUI's Code page shows the command that installs it.
 - `native-cli-node-*`: the standalone [Node](/docs/nodes/) client for Linux, macOS and Windows. Node bootstrap commands download it for you.
 - The Docker image `ghcr.io/550w-host/foxwarm`, tagged with the version (for example `0.9.4`), the minor version (`0.9`) and `latest`; see [Docker](#docker).
 
@@ -167,7 +167,7 @@ ditto -x -k foxwarm-desktop-osx-arm64.zip /Applications
 
 If you already extracted the app and Gatekeeper blocks it, clear quarantine only on the app with `xattr -dr com.apple.quarantine /Applications/Foxwarm.app`.
 
-Foxwarm.app runs Foxwarm inside a window and keeps its data under `~/Library/Application Support/Foxwarm/Desktop`. Closing the window keeps Foxwarm running; **Quit Foxwarm** in its menu stops it. Like the Windows app, it listens only on this computer. Unlike the Windows app, it doesn't include the Code editor.
+Foxwarm.app runs Foxwarm inside a window and keeps its data under `~/Library/Application Support/Foxwarm/Desktop`. Closing the window keeps Foxwarm running; **Quit Foxwarm** in its menu stops it. Like the Windows app, it listens only on this computer and includes the Code editor.
 
 ## Open the WebUI
 
@@ -244,7 +244,7 @@ If you change `bot.httpPort`, update the port mapping and healthcheck as well. L
 ## Optional components
 
 - **Semantic history search:** disabled by default. It needs an embedding service; see [search requirements](/docs/history-search/#enable-semantic-search).
-- **Code workbench:** the server packages and the Docker image don't include the editor. The Windows desktop app includes it; the macOS desktop app doesn't. Each release publishes it as `foxwarm-code-<version>.fwassets` (see [Packages](#packages)). On a server installation without Code, the WebUI's Code page shows a command to run on the computer running Foxwarm: it downloads that file, checks it against the release's `SHA256SUMS` and installs it, and Code works after a page reload. To build the workbench from source instead, see the [workbench setup](https://github.com/550W-HOST/foxwarm/blob/main/packages/vscode-web/README.md).
+- **Code workbench:** the desktop apps include the editor; the server packages and the Docker image don't. Each release publishes it as `foxwarm-code-<version>.fwassets` (see [Packages](#packages)). On a server installation without Code, the WebUI's Code page shows a command to run on the computer running Foxwarm: it downloads that file, checks it against the release's `SHA256SUMS` and installs it, and Code works after a page reload. To build the workbench from source instead, see the [workbench setup](https://github.com/550W-HOST/foxwarm/blob/main/packages/vscode-web/README.md).
 - **HEIC/HEIF images:** require additional native decoders. See [image prerequisites](https://github.com/550W-HOST/foxwarm/blob/main/docs/native-image-prerequisites.md). PNG/JPEG use the bundled image support.
 
 ## Running from source
