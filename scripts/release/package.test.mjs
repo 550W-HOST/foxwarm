@@ -5,7 +5,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
-import { TARGETS, archive, assetName, packCode, codeAssetName, hostRid, validateCodeAssets, writeChecksums } from './package.mjs'
+import { TARGETS, archive, assetName, packCode, codeAssetName, hostRid, includesCode, validateCodeAssets, writeChecksums } from './package.mjs'
 
 import { codePrefix, extractPack, readPack } from '../asset-pack.mjs'
 
@@ -120,6 +120,10 @@ test('every server platform publishes a native package instead of a self-contain
   assert.equal(hostRid('linux', 'x64'), 'linux-x64')
   assert.equal(hostRid('darwin', 'arm64'), 'osx-arm64')
   assert.equal(hostRid('win32', 'x64'), 'win-x64')
+})
+
+test('only the two Desktop packages bundle the workbench', () => {
+  assert.deepEqual(Object.keys(TARGETS).filter(includesCode).sort(), ['desktop-osx-arm64', 'desktop-win-x64'])
 })
 
 test('the Windows Desktop is a NativeAOT package built only on Windows x64', t => {

@@ -30,8 +30,8 @@ export const TARGETS = {
   'desktop-osx-arm64': { kind: 'desktop', rid: 'osx-arm64', selfContained: true, native: true, bundle: 'Foxwarm.app', archive: 'zip' },
 }
 
-// Only the Windows Desktop carries the Code workbench.
-const includesCode = name => TARGETS[name].kind === 'desktop' && !TARGETS[name].bundle
+// Desktop carries the Code workbench; server packages keep it optional.
+export const includesCode = name => TARGETS[name].kind === 'desktop'
 
 // The RID of this build host, for targets that cannot be cross-compiled.
 export function hostRid(platform = process.platform, arch = process.arch) {

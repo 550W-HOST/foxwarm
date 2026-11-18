@@ -11,7 +11,7 @@ import { join, relative, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import { WebSocket } from 'ws'
-import { readPack, packName } from '../../scripts/asset-pack.mjs'
+import { readPack, packName, codePrefix } from '../../scripts/asset-pack.mjs'
 import { runCleanup } from './desktop-cleanup.mjs'
 
 const run = promisify(execFile)
@@ -22,6 +22,7 @@ const repository = resolve(fileURLToPath(import.meta.url), '../../..')
 const version = JSON.parse(await readFile(join(repository, 'package.json'), 'utf8')).version
 const resources = join(app, 'Contents/MonoBundle')
 const plist = async key => (await run('plutil', ['-extract', key, 'raw', join(app, 'Contents/Info.plist')])).stdout.trim()
+const workbenchScript = 'out/vs/workbench/workbench.web.main.internal.js'
 
 // Every load command of the executable must name a system library or a bundled .NET runtime library.
 const SYSTEM_LIBRARY = /^\/(?:usr\/lib|System\/Library)\//
@@ -49,6 +50,15 @@ async function validateBundle() {
   try {
     for (const file of ['webui-dist/index.html', 'packages/webui/login.html']) assert(pack.read(file).length > 0)
     assert(Object.keys(pack.entries).some(file => file.startsWith('webui-dist/assets/') && file.endsWith('.js')))
+    for (const file of [
+      'vscode-web/out/nls.messages.js', `vscode-web/${workbenchScript}`,
+      'vscode-web/out/vs/workbench/workbench.web.main.internal.css',
+      'vscode-web/out/vs/workbench/contrib/webview/browser/pre/index.html',
+      'vscode-web/extensions/typescript-language-features/package.json',
+      'vscode-web/LICENSE.txt', 'vscode-web/ThirdPartyNotices.txt',
+      'extensions/redhat.vscode-yaml/package.json', 'extensions/redhat.vscode-yaml/LICENSE.txt',
+      'extensions/redhat.vscode-yaml/thirdpartynotices.txt',
+    ]) assert(pack.read(`${codePrefix}/${file}`).length > 0, `Empty packed Code resource: ${file}`)
   } finally { pack.close() }
   const contents = join(app, 'Contents')
   const files = (await readdir(contents, { recursive: true, withFileTypes: true })).filter(entry => entry.isFile())
@@ -235,6 +245,21 @@ try {
   assert.match(await readFile(join(data, 'state/logs/foxwarm.log'), 'utf8'), /Main HTTP listening:/)
   // Main loads its native libraries when a feature needs them, not at process start.
   assert(!/liblancedb_ffi|libvips/.test(await mapped(mainPid)), 'Main mapped LanceDB or libvips at startup')
+
+  stage = 'bundled Code workbench'
+  const code = route => fetch(origin + route, {
+    headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(120_000),
+  })
+  const workbench = await code('/vscode-web')
+  assert.equal(workbench.status, 200, 'The bundled Code workbench must be available without installation')
+  assert.match(workbench.headers.get('content-type'), /^text\/html\b/)
+  const html = await workbench.text()
+  assert.match(html, /id="vscode-workbench-web-configuration"/)
+  assert(html.includes(workbenchScript), 'Code bootstrap does not load its workbench script')
+  const script = await code(`/vscode-web/static/${workbenchScript}`)
+  assert.equal(script.status, 200, 'The bundled workbench JavaScript must be served')
+  assert.match(script.headers.get('content-type'), /^text\/javascript\b/)
+  assert((await script.arrayBuffer()).byteLength > 0, 'The served workbench JavaScript is empty')
 
   stage = 'packaged PTY'
   const created = await api('POST', '/api/terminals', { nodeId: 'master', cwd, cols: 80, rows: 24 })

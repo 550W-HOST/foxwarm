@@ -323,7 +323,7 @@ jobs:
   # The Desktop app is a NativeAOT build of the AppKit host, published as its ad-hoc signed bundle.
   macos-desktop:
     name: Build and qualify the macOS Desktop app
-    needs: native-osx-arm64
+    needs: [code-resources, native-osx-arm64]
     runs-on: macos-15
     timeout-minutes: 60
     env:
@@ -363,8 +363,26 @@ jobs:
           path: ${{ runner.temp }}/native
       - name: Make the ToolScript worker executable
         run: chmod +x "$RUNNER_TEMP/native/monty"
+      - name: Download shared Code package
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: code-resources
+          path: ${{ runner.temp }}/code-pack
+      - name: Prepare shared Code resources
+        run: |
+          set -- "$RUNNER_TEMP"/code-pack/foxwarm-code-*.fwassets
+          if [ "$#" -ne 1 ] || [ ! -f "$1" ]; then
+            echo 'Expected one shared Code asset pack' >&2
+            exit 1
+          fi
+          node scripts/asset-pack.mjs extract "$1" "$RUNNER_TEMP/code-assets"
+          mkdir -p packages/vscode-web/assets
+          cp -R "$RUNNER_TEMP/code-assets/packages/vscode-web/assets/." packages/vscode-web/assets/
       - name: Build the Desktop app natively
-        run: node scripts/release/package.mjs --build-assets --output dist --native-libraries "$RUNNER_TEMP/native" --target desktop-osx-arm64
+        run: |
+          node scripts/release/package.mjs --build-assets --output dist --native-libraries "$RUNNER_TEMP/native" --target desktop-osx-arm64
+          bytes=$(stat -f %z dist/foxwarm-desktop-osx-arm64.zip)
+          echo "macOS Desktop archive with Code: $bytes bytes" | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-packages-macos-desktop
