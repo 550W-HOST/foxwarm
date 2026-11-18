@@ -17,7 +17,9 @@ const latestReleaseFile = (name: string) => `${latestReleaseUrl}/download/${name
 export type DownloadPlatform = 'windows' | 'macos' | 'android';
 export type DownloadFile = { file: string; href: string; platform: DownloadPlatform };
 export const downloadFiles = {
-  windowsDesktop: { file: 'foxwarm-desktop-win-x64.zip', href: latestReleaseFile('foxwarm-desktop-win-x64.zip'), platform: 'windows' },
+  windowsDesktop: { file: 'foxwarm-desktop-win-x64-setup.exe', href: latestReleaseFile('foxwarm-desktop-win-x64-setup.exe'), platform: 'windows' },
+  // The same app without installation, offered beside the installer.
+  windowsDesktopPortable: { file: 'foxwarm-desktop-win-x64.zip', href: latestReleaseFile('foxwarm-desktop-win-x64.zip'), platform: 'windows' },
   macDesktop: { file: 'foxwarm-desktop-osx-arm64.zip', href: latestReleaseFile('foxwarm-desktop-osx-arm64.zip'), platform: 'macos' },
   // The site's /android redirect, also printed as a QR code in the installing guide.
   androidNode: { file: 'foxwarm-android-node.apk', href: '/android', platform: 'android' }
@@ -68,6 +70,8 @@ export type TimelineRow = { time: string; place?: string; icon?: 'laptop' | 'ser
 type Link = { label: string; href: string };
 // One way to get Foxwarm: its name, platform detail, what to know before using it and the guide section with the steps.
 export type DownloadOption = { name: string; detail?: string; note: string; guide: Link };
+// A desktop app with a second, smaller download beside its main one.
+export type DesktopDownloadOption = DownloadOption & { alternative: string };
 
 export type ChatMessage = { from: 'me' | 'member' | 'bot' | 'system'; name?: string; text: string; time?: string };
 
@@ -102,7 +106,7 @@ export type HomeStrings = {
     title: string;
     download: string;
     current: string;
-    desktop: { title: string; body: string; windows: DownloadOption; mac: DownloadOption };
+    desktop: { title: string; body: string; windows: DesktopDownloadOption; mac: DownloadOption };
     server: { title: string; body: string; installers: DownloadOption; docker: DownloadOption; packages: Link };
     android: { title: string; body: string; app: DownloadOption };
     release: string;

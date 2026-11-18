@@ -30,7 +30,8 @@ Each [release](https://github.com/550W-HOST/foxwarm/releases/latest) provides:
 | [`foxwarm-osx-arm64.tar.gz`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-osx-arm64.tar.gz) | Apple Silicon Mac server; uses the installed ASP.NET Core 10 runtime |
 | [`foxwarm-win-x64-native.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-win-x64-native.zip) | Windows server compiled to native code (default on Windows) |
 | [`foxwarm-win-x64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-win-x64.zip) | Windows server; uses the installed ASP.NET Core 10 runtime |
-| [`foxwarm-desktop-win-x64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-win-x64.zip) | Windows x64 desktop app; see [Windows desktop app](#windows-desktop-app) |
+| [`foxwarm-desktop-win-x64-setup.exe`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-win-x64-setup.exe) | Windows x64 desktop app installer; see [Windows desktop app](#windows-desktop-app) |
+| [`foxwarm-desktop-win-x64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-win-x64.zip) | The same Windows desktop app as a portable ZIP |
 | [`foxwarm-desktop-osx-arm64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-osx-arm64.zip) | Apple Silicon Mac desktop app; macOS 15 or later, see [macOS desktop app](#macos-desktop-app) |
 | [`foxwarm-android-node.apk`](https://foxwarm.net/android) | Android Node app; Android 11 or later, sideload installation; see [Android Node](#android-node) |
 | [`SHA256SUMS`](https://github.com/550W-HOST/foxwarm/releases/latest/download/SHA256SUMS) | Checksums of the release files |
@@ -154,7 +155,17 @@ Since 0.9.6 the native package replaces `foxwarm-win-x64-self-contained.zip`, th
 
 ## Windows desktop app
 
-Download [`foxwarm-desktop-win-x64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-win-x64.zip) from the [latest release](https://github.com/550W-HOST/foxwarm/releases/latest), extract it and open **Foxwarm.Desktop.exe**. It runs Foxwarm inside a window with a tray icon and keeps its data under `%LOCALAPPDATA%\Foxwarm\Desktop`. It needs the Microsoft Edge WebView2 Runtime, which Windows 10 and 11 normally include. The desktop app listens only on this computer; install the server if other devices should connect.
+Download [`foxwarm-desktop-win-x64-setup.exe`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-win-x64-setup.exe) from the [latest release](https://github.com/550W-HOST/foxwarm/releases/latest) and run it. It installs Foxwarm for your Windows account, without administrator rights, into `%LOCALAPPDATA%\Programs\Foxwarm`, and adds it to the Start menu and to **Settings → Apps**. Select **Start Foxwarm when I sign in to Windows** if Foxwarm should start in the tray when you sign in.
+
+Foxwarm runs inside a window with a tray icon. Closing the window keeps it running in the tray; **Exit** in the tray icon's menu stops it. It keeps its data under `%LOCALAPPDATA%\Foxwarm\Desktop`. It needs the Microsoft Edge WebView2 Runtime, which Windows 10 and 11 normally include; if it is missing, Setup says so and offers Microsoft's download page. The desktop app listens only on this computer; install the server if other devices should connect.
+
+To update, run the setup of the new release. It exits the running Foxwarm first and keeps your data and the sign-in choice.
+
+To uninstall, select Foxwarm in **Settings → Apps** and uninstall it. This exits Foxwarm if it is running and removes the program, its Start menu entry and the sign-in start. Your data stays in `%LOCALAPPDATA%\Foxwarm\Desktop`; delete that folder to remove it too.
+
+### Portable ZIP
+
+[`foxwarm-desktop-win-x64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-win-x64.zip) contains the same app without installation: extract it and open **Foxwarm.Desktop.exe**. To update, exit Foxwarm from the tray and replace the extracted folder. The portable app and an installed one use the same data, and only one of them runs at a time; exit one before starting the other.
 
 ## macOS desktop app
 

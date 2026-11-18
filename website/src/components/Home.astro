@@ -39,8 +39,8 @@ const installTabs: InstallTab[] = [
 const docsHref = (page = '') => docsPath(lang, page);
 const d = t.downloads;
 const desktopDownloads = [
-  { option: d.desktop.windows, file: downloadFiles.windowsDesktop, mark: 'windows' as const },
-  { option: d.desktop.mac, file: downloadFiles.macDesktop, mark: 'macos' as const }
+  { option: d.desktop.windows, file: downloadFiles.windowsDesktop, mark: 'windows' as const, alternative: { label: d.desktop.windows.alternative, file: downloadFiles.windowsDesktopPortable } },
+  { option: d.desktop.mac, file: downloadFiles.macDesktop, mark: 'macos' as const, alternative: undefined }
 ];
 ---
 <!doctype html>
@@ -211,10 +211,11 @@ const desktopDownloads = [
               <p>{d.desktop.body}</p>
             </div>
             <div class="download-options">
-              {desktopDownloads.map(({ option, file, mark }) => (
+              {desktopDownloads.map(({ option, file, mark, alternative }) => (
                 <div class="download-option" data-platform={file.platform}>
                   <p class="download-name"><PlatformMark name={mark} />{option.name} <span>{option.detail}</span><span class="download-current" hidden>{d.current}</span></p>
                   <p class="download-action"><a class="download-button" href={file.href}><Icon name="download" />{d.download}</a><code>{file.file}</code></p>
+                  {alternative && <p class="download-alternative"><a href={alternative.file.href}>{alternative.label}</a><code>{alternative.file.file}</code></p>}
                   <p class="download-note">{option.note} <a href={option.guide.href}>{option.guide.label} →</a></p>
                 </div>
               ))}

@@ -271,6 +271,10 @@ code, pre, time { font-family: var(--font-mono); }
 .download-button:hover { border-color: var(--accent); color: var(--accent-strong); }
 .download-option.current .download-button { border-color: var(--accent); background: var(--accent); color: var(--accent-ink); }
 .download-option.current .download-button:hover { border-color: var(--accent-strong); background: var(--accent-strong); }
+.download-alternative { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin-top: -4px; font-size: .86rem; }
+.download-alternative a { color: var(--accent-strong); font-weight: 500; text-decoration: none; }
+.download-alternative a:hover { text-decoration: underline; text-underline-offset: 3px; }
+.download-alternative code { overflow-wrap: anywhere; color: var(--muted); font: .74rem var(--font-mono); }
 .download-note { color: var(--muted); font-size: .88rem; }
 .download-note a, .download-more a { color: var(--accent-strong); font-weight: 500; text-decoration: none; white-space: nowrap; }
 .download-note a:hover, .download-more a:hover, .download-foot a:hover { text-decoration: underline; text-underline-offset: 3px; }

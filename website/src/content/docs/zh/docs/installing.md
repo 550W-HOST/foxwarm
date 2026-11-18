@@ -28,7 +28,8 @@ Foxwarm 服务器支持 **Linux x64**（包括 x64 WSL）、**macOS arm64**（Ap
 | [`foxwarm-osx-arm64.tar.gz`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-osx-arm64.tar.gz) | Apple Silicon Mac 服务器，使用系统已安装的 ASP.NET Core 10 运行时 |
 | [`foxwarm-win-x64-native.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-win-x64-native.zip) | Windows 服务器，编译为原生程序（Windows 默认） |
 | [`foxwarm-win-x64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-win-x64.zip) | Windows 服务器，使用系统已安装的 ASP.NET Core 10 运行时 |
-| [`foxwarm-desktop-win-x64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-win-x64.zip) | Windows x64 桌面版，见 [Windows 桌面版](#windows-桌面版) |
+| [`foxwarm-desktop-win-x64-setup.exe`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-win-x64-setup.exe) | Windows x64 桌面版安装程序，见 [Windows 桌面版](#windows-桌面版) |
+| [`foxwarm-desktop-win-x64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-win-x64.zip) | 同一 Windows 桌面版的便携版 ZIP |
 | [`foxwarm-desktop-osx-arm64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-osx-arm64.zip) | Apple Silicon Mac 桌面版；需要 macOS 15 或更新版本，见 [macOS 桌面版](#macos-桌面版) |
 | [`foxwarm-android-node.apk`](https://foxwarm.net/android) | Android Node 应用；需要 Android 11 或更新版本，通过 APK 侧载安装，见 [Android Node](#android-node) |
 | [`SHA256SUMS`](https://github.com/550W-HOST/foxwarm/releases/latest/download/SHA256SUMS) | Release 中各文件的校验和 |
@@ -152,7 +153,17 @@ Invoke-WebRequest https://foxwarm.net/install-foxwarm.ps1 -OutFile install-foxwa
 
 ## Windows 桌面版
 
-从[最新 Release](https://github.com/550W-HOST/foxwarm/releases/latest)下载 [`foxwarm-desktop-win-x64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-win-x64.zip)，解压后打开 **Foxwarm.Desktop.exe**。它在窗口中运行 Foxwarm，带托盘图标，数据保存在 `%LOCALAPPDATA%\Foxwarm\Desktop`。需要 Microsoft Edge WebView2 Runtime，Windows 10 和 11 通常已自带。桌面版只在本机监听；需要其他设备访问时请安装服务器版。
+从[最新 Release](https://github.com/550W-HOST/foxwarm/releases/latest)下载并运行 [`foxwarm-desktop-win-x64-setup.exe`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-win-x64-setup.exe)。它为当前 Windows 账户安装 Foxwarm，不需要管理员权限，安装位置是 `%LOCALAPPDATA%\Programs\Foxwarm`，并在开始菜单和**设置 → 应用**中添加 Foxwarm。如果希望登录时让 Foxwarm 在托盘中启动，勾选 **Start Foxwarm when I sign in to Windows**。
+
+Foxwarm 在窗口中运行，带托盘图标。关闭窗口后它继续在托盘中运行；在托盘图标菜单中选择 **Exit** 才会退出。数据保存在 `%LOCALAPPDATA%\Foxwarm\Desktop`。需要 Microsoft Edge WebView2 Runtime，Windows 10 和 11 通常已自带；如果缺少，安装程序会提示并提供微软的下载页面。桌面版只在本机监听；需要其他设备访问时请安装服务器版。
+
+更新时，运行新版本的安装程序即可。它会先退出正在运行的 Foxwarm，并保留数据和登录启动的选择。
+
+卸载时，在**设置 → 应用**中选择 Foxwarm 并卸载。卸载会在 Foxwarm 运行时先退出它，然后删除程序、开始菜单项和登录启动项。数据仍保留在 `%LOCALAPPDATA%\Foxwarm\Desktop`；如需一并删除，请删除该文件夹。
+
+### 便携版 ZIP
+
+[`foxwarm-desktop-win-x64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-win-x64.zip) 是不需要安装的同一个应用：解压后打开 **Foxwarm.Desktop.exe**。更新时，从托盘退出 Foxwarm，再替换解压出的文件夹。便携版和安装版使用同一份数据，同一时间只能运行其中一个；启动其中一个前，请先退出另一个。
 
 ## macOS 桌面版
 

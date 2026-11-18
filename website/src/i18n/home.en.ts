@@ -51,7 +51,8 @@ export const en: HomeStrings = {
       windows: {
         name: 'Windows',
         detail: 'x64',
-        note: 'Extract the ZIP and open Foxwarm.Desktop.exe. It needs the WebView2 Runtime, which Windows 10 and 11 normally include.',
+        note: 'Installs for your Windows account without administrator rights; the portable ZIP runs without installing. Both need the WebView2 Runtime, which Windows 10 and 11 normally include.',
+        alternative: 'Portable ZIP',
         guide: { label: 'Windows app guide', href: docs('installing/#windows-desktop-app') }
       },
       mac: {

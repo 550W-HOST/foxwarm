@@ -51,7 +51,8 @@ export const zh: HomeStrings = {
       windows: {
         name: 'Windows',
         detail: 'x64',
-        note: '解压 ZIP 后打开 Foxwarm.Desktop.exe。需要 WebView2 运行时，Windows 10 和 11 通常已自带。',
+        note: '为当前 Windows 账户安装，不需要管理员权限；便携版 ZIP 解压即用。两者都需要 WebView2 运行时，Windows 10 和 11 通常已自带。',
+        alternative: '便携版 ZIP',
         guide: { label: 'Windows 桌面版说明', href: docs('installing/#windows-桌面版') }
       },
       mac: {

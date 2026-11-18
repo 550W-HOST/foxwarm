@@ -367,18 +367,45 @@ test('public content has no unresolved installer host placeholders', async () =>
 });
 
 
+// The release files that release.yml publishes: its PACKAGE_ARTIFACTS list of brace and * patterns.
+function releasePackagePatterns(workflow) {
+  const list = workflow.match(/^\s*PACKAGE_ARTIFACTS:\s*'([^']+)'/m)?.[1];
+  assert.ok(list, 'the release workflow lists its package artifacts');
+  const expand = (text) => {
+    const open = text.indexOf('{');
+    if (open < 0) return [text];
+    const parts = [];
+    let depth = 0, start = open + 1, close = -1;
+    for (let i = open; i < text.length && close < 0; i++) {
+      if (text[i] === '{') depth++;
+      else if (text[i] === '}' && --depth === 0) close = i;
+      if ((text[i] === ',' && depth === 1) || close === i) { parts.push(text.slice(start, i)); start = i + 1; }
+    }
+    return parts.flatMap((part) => expand(text.slice(0, open) + part + text.slice(close + 1)));
+  };
+  return expand(list).map((glob) => new RegExp(`^${glob.split('*').map(escapeRegExp).join('[^/]*')}$`));
+}
+
 // Homepage downloads use stable latest-release URLs (the APK through /android). The page marks no
 // option as this device's until the browser reports its platform.
 test('the homepage downloads each app from the latest release and marks none before the platform is known', async () => {
   const latest = 'https://github.com/550W-HOST/foxwarm/releases/latest/download';
   const downloads = [
-    { platform: 'windows', file: 'foxwarm-desktop-win-x64.zip', href: `${latest}/foxwarm-desktop-win-x64.zip` },
+    {
+      platform: 'windows', file: 'foxwarm-desktop-win-x64-setup.exe', href: `${latest}/foxwarm-desktop-win-x64-setup.exe`,
+      alternative: { file: 'foxwarm-desktop-win-x64.zip', href: `${latest}/foxwarm-desktop-win-x64.zip` }
+    },
     { platform: 'macos', file: 'foxwarm-desktop-osx-arm64.zip', href: `${latest}/foxwarm-desktop-osx-arm64.zip` },
     { platform: 'android', file: 'foxwarm-android-node.apk', href: '/android' }
   ];
-  // The release workflow publishes every file in dist/, so each download must be built there.
+  // Each file is uploaded as its own workflow artifact and is in the list the release publishes.
   const releaseWorkflow = await readFile(path.join(repositoryRoot, '.github', 'workflows', 'release.yml'), 'utf8');
-  for (const { file } of downloads) assert.ok(releaseWorkflow.includes(`dist/${file}`), `the release workflow builds ${file}`);
+  const published = releasePackagePatterns(releaseWorkflow);
+  assert.ok(published.some((pattern) => pattern.test('foxwarm-code-0.9.7.fwassets')) && !published.some((pattern) => pattern.test('SHA256SUMS')), 'the package list patterns expand');
+  for (const file of downloads.flatMap((download) => [download.file, download.alternative?.file]).filter(Boolean)) {
+    assert.ok(published.some((pattern) => pattern.test(file)), `the release publishes ${file}`);
+    assert.match(releaseWorkflow, new RegExp(`path: dist/${escapeRegExp(file)}\\n\\s+archive: false\\n`), `the release workflow uploads ${file}`);
+  }
   const redirect = await readFile(routeToFile('/android/'), 'utf8');
   assert.ok(redirect.includes(`${latest}/foxwarm-android-node.apk`), '/android serves the latest APK');
 
@@ -387,12 +414,16 @@ test('the homepage downloads each app from the latest release and marks none bef
     const section = homepage.match(/<section class="downloads" id="download"[\s\S]*?<\/section>/)?.[0];
     assert.ok(section, `${route} has a download section`);
     const options = [...section.matchAll(/<div class="download-option" data-platform="([^"]+)">([\s\S]*?)<\/div>/g)]
-      .map(([, platform, body]) => ({
-        platform,
-        href: body.match(/<a class="download-button" href="([^"]+)"/)?.[1],
-        file: body.match(/<code>([^<]+)<\/code>/)?.[1],
-        markedHidden: /<span class="download-current" hidden>/.test(body)
-      }));
+      .map(([, platform, body]) => {
+        const alternative = body.match(/<p class="download-alternative"><a href="([^"]+)">[^<]+<\/a><code>([^<]+)<\/code><\/p>/);
+        return {
+          platform,
+          href: body.match(/<a class="download-button" href="([^"]+)"/)?.[1],
+          file: body.match(/<code>([^<]+)<\/code>/)?.[1],
+          ...(alternative ? { alternative: { file: alternative[2], href: alternative[1] } } : {}),
+          markedHidden: /<span class="download-current" hidden>/.test(body)
+        };
+      });
     assert.deepEqual(options.map(({ markedHidden, ...option }) => option), downloads, `${route} download targets`);
     assert.ok(options.every((option) => option.markedHidden), `${route} marks no download as this device's in the HTML`);
     assert.doesNotMatch(section, /class="download-option current"/, `${route} emphasizes no download in the HTML`);
