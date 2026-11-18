@@ -11,6 +11,7 @@ This module documents current .NET source behavior. Cross-module contracts belon
 - [Managed source Main entry](../units/source-main-entry.md)
 - [Core delivery resources and public one-shot CLI](../units/core-delivery-cli.md)
 - [Release packages, installers and package controls](../units/release-packages.md)
+- [Desktop packages and qualification](../units/desktop-packages.md)
 - [Host startup, configuration, and HTTP ingress](../units/host-runtime.md)
 - [Packed and loose HTTP resources](../units/http-assets.md)
 - [macOS Desktop host](../units/desktop-macos.md)
