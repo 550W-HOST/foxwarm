@@ -114,8 +114,8 @@ async function api(method, route, body) {
   }).catch(error => { throw new Error(`${method} ${route.split('?')[0]}: ${error.message}`) })
   return { status: response.status, body: await response.json().catch(() => ({})) }
 }
-async function start() {
-  child = spawn(executable, [], { cwd, env, stdio: ['ignore', 'ignore', 'pipe'] })
+async function launch(args = []) {
+  child = spawn(executable, args, { cwd, env, stdio: ['ignore', 'ignore', 'pipe'] })
   let stderr = ''
   child.stderr.on('data', bytes => { stderr = (stderr + bytes).slice(-8000) })
   exited = new Promise(done => {
@@ -131,6 +131,9 @@ async function start() {
     token = (await readFile(join(data, 'state/token'), 'utf8')).trim()
     return (await api('GET', '/health').catch(() => null))?.body.status === 'ready'
   }, 'extracted Desktop loopback startup')
+}
+// The WebUI in the Desktop's own WebView2, signed in by its native cookie.
+async function attach() {
   let debugPort
   await until(async () => {
     const active = await readFile(join(data, 'webview2/EBWebView/DevToolsActivePort'), 'utf8').catch(() => '')
@@ -157,6 +160,10 @@ async function start() {
   const auth = cookies.find(cookie => cookie.name === 'foxwarm_token')
   assert(auth?.httpOnly && auth.sameSite === 'Strict', 'Native WebView2 authentication cookie is missing')
   return page
+}
+async function start() {
+  await launch()
+  return attach()
 }
 async function stopped(label) {
   const result = await Promise.race([
@@ -290,14 +297,41 @@ try {
   assert(JSON.stringify((await api('GET', route + '/history')).body).includes('DESKTOP-NATIVE-DONE'))
   stage = 'Main shutdown'
   await stop()
+
+  stage = 'sign-in start in the notification area and the exit request'
+  // The installer registers `--tray` as the sign-in start and stops a running copy with `--exit`.
+  const exitRequest = () => run(executable, ['--exit'], { cwd, env, windowsHide: true, timeout: 90_000 })
+  await exitRequest()
+  await launch(['--tray'])
+  const trayPid = child.pid
+  assert.equal((await desktop('tray', trayPid)).registered, true, 'A sign-in start has no notification icon')
+  assert.equal((await desktop('window', trayPid)).visible, false, 'A sign-in start must not show the window')
+  assert(!(await descendants(trayPid)).some(row => /msedgewebview2\.exe/i.test(row.args)), 'WebView2 must start with the window')
+  // A further sign-in start exits by itself: it shows no already-running message.
+  await run(executable, ['--tray'], { cwd, env, windowsHide: true, timeout: 30_000 })
+  await desktop('open', trayPid)
+  await until(async () => (await desktop('window', trayPid)).visible, 'window opened from the notification icon')
+  await attach()
+  assert(JSON.stringify((await api('GET', route + '/history')).body).includes('DESKTOP-NATIVE-DONE'))
+  browser?.disconnect(); browser = undefined
+  const trayChildren = await descendants(trayPid)
+  const mainStops = async () => (await readFile(join(data, 'state/logs/foxwarm.log'), 'utf8')).match(/Main stopped\./g)?.length ?? 0
+  const stopsBefore = await mainStops()
+  await exitRequest()
+  await stopped('the exit request')
+  assert.equal(await mainStops(), stopsBefore + 1, 'The exit request must stop Main through its normal shutdown')
+  await until(async () => {
+    for (const row of trayChildren) if (await alive(row.pid) && !/msedgewebview2\.exe/i.test(row.args)) return false
+    return true
+  }, 'Desktop child processes ended after the exit request', 30_000)
   Object.assign(summary, {
     extractedDesktop: true, importsComplete: true, noCoreClr: true, nativeWebView2Cookie: true, setup: true, nativeToolScript: true,
     nativeExecHelper: true, canonicalAgentRoot: true, configuredAgentRoot: true, webSocketCookie: true, artifactDependencies: true,
     extensionBundles: 4, vectorChild: true, mainLoadsNoLanceDb: true, trayIcon: true, closeToTray: true, trayOpen: true, trayExit: true,
-    restartPreserved: true, mainShutdown: true,
+    restartPreserved: true, mainShutdown: true, trayStart: true, exitRequest: true,
   })
   await writeFile(report, JSON.stringify(summary, null, 2) + '\n')
-  console.log('Extracted native Desktop startup, WebView2, ToolScript, Vector, notification icon, Exit and restart acceptance passed.')
+  console.log('Extracted native Desktop startup, WebView2, ToolScript, Vector, notification icon, Exit, restart, sign-in start and exit request acceptance passed.')
 } catch (error) {
   acceptanceFailed = true
   // Keep diagnostics useful without uploading tokens, state, profiles or request bodies.
