@@ -692,6 +692,83 @@ test('PWA window-controls overlay maps the insets to app-region and switches off
   } finally { await close() }
 })
 
+/**
+ * The window-drag region Chromium builds from app-region, composed from the page's computed
+ * values (headless Chromium reports no regions): every visible box in layout-tree order
+ * (LocalFrameView::CollectDraggableRegions), drag added and no-drag subtracted in that order
+ * (DraggableRegionsToSkRegion), so the last box containing a point decides. As in Chromium
+ * 152, app-region inherits into descendants and boxes are not clipped by their scrollers;
+ * inline boxes and SVG content add nothing, and top-layer elements come last.
+ */
+function chromiumDragRegion(page) {
+  return page.evaluate(() => {
+    const subtract = (base, hole) => {
+      const x1 = Math.max(base.x, hole.x), y1 = Math.max(base.y, hole.y)
+      const x2 = Math.min(base.x + base.w, hole.x + hole.w), y2 = Math.min(base.y + base.h, hole.y + hole.h)
+      if (x1 >= x2 || y1 >= y2) return [base]
+      const out = []
+      if (y1 > base.y) out.push({ x: base.x, y: base.y, w: base.w, h: y1 - base.y })
+      if (y2 < base.y + base.h) out.push({ x: base.x, y: y2, w: base.w, h: base.y + base.h - y2 })
+      if (x1 > base.x) out.push({ x: base.x, y: y1, w: x1 - base.x, h: y2 - y1 })
+      if (x2 < base.x + base.w) out.push({ x: x2, y: y1, w: base.x + base.w - x2, h: y2 - y1 })
+      return out
+    }
+    const replaced = 'img, svg, video, canvas, iframe, embed, object, input, select, textarea, button'
+    const mode = new Map([[document.documentElement.parentNode, 'none']])
+    const boxes = [], topLayer = []
+    for (const element of document.querySelectorAll('*')) {
+      const style = getComputedStyle(element)
+      const own = style.appRegion || style.webkitAppRegion || 'none'
+      const value = own !== 'none' ? own : mode.get(element.parentNode) ?? 'none'
+      mode.set(element, value)
+      if (value === 'none' || style.visibility !== 'visible' || element.parentElement?.closest('svg')) continue
+      if (style.display === 'contents' || (style.display === 'inline' && !element.matches(replaced))) continue
+      const r = element.getBoundingClientRect()
+      if (r.width <= 0 || r.height <= 0) continue
+      const box = { drag: value === 'drag', x: r.left, y: r.top, w: r.width, h: r.height }
+      let inTopLayer = false
+      try { inTopLayer = !!element.closest(':modal, :popover-open') } catch {}
+      ;(inTopLayer ? topLayer : boxes).push(box)
+    }
+    let region = []
+    for (const box of [...boxes, ...topLayer]) {
+      region = region.flatMap(part => subtract(part, box))
+      if (box.drag) region.push({ x: box.x, y: box.y, w: box.w, h: box.h })
+    }
+    return region.filter(part => part.w > 0 && part.h > 0).map(part => [part.x, part.y, part.w, part.h])
+  })
+}
+
+test('PWA window-controls overlay: no control is a window-drag area in Chromium\'s region order', async () => {
+  // Controls at the top right (Windows, Linux) and at the top left (macOS).
+  const overlays = { right: { left: 0, right: 186, top: 33 }, left: { left: 78, right: 0, top: 30 } }
+  for (const [side, overlay] of Object.entries(overlays)) {
+    for (const [layout, collapsed] of [['tabs', false], ['tabs', true], ['split50', false], ['split25', true], ['column', true]]) {
+      const label = `controls ${side}, ${layout} collapsed=${collapsed}`
+      const { page, errors, close } = await open({ overlay, layout, collapsed })
+      try {
+        const region = await chromiumDragRegion(page)
+        const info = await inspect(page)
+        assert.equal(info.frame, 'overlay')
+        assert.ok(info.interactive.length > 10, `${label}: the app rendered its controls`)
+        for (const control of info.interactive) {
+          const covering = region.filter(part => overlaps(part, control))
+          assert.deepEqual(covering, [], `${label}: "${control.name}" is a window-drag area`)
+        }
+        // The title row stays draggable around its controls: the toggle's row, the blank strip
+        // and the gap beside the window controls.
+        const toggle = await page.$eval(collapsed ? '.foxwarm-sidebar-rail-toggle' : '[data-sidebar-toggle]', element => element.getBoundingClientRect().toJSON())
+        const middle = Math.round((toggle.top + toggle.bottom) / 2)
+        assert.ok(inRegion(region, Math.round(toggle.left) - 3, middle), `${label}: drag before the sidebar toggle`)
+        assert.ok(inRegion(region, Math.round(toggle.right) + 3, middle), `${label}: drag after the sidebar toggle`)
+        const beside = side === 'right' ? info.width - overlay.right - 20 : overlay.left / 2
+        assert.ok(inRegion(region, beside, 4) && inRegion(region, beside, overlay.top - 4), `${label}: drag ${side === 'right' ? 'in the gap beside' : 'under'} the window controls`)
+        assert.deepEqual(errors, [])
+      } finally { await close() }
+    }
+  }
+})
+
 test('drag overlays draw the real tab and a compact pane summary, framed or not, light and dark', async () => {
   for (const host of [WINDOWS, null]) for (const dark of [false, true]) {
     const label = `host=${host ? 'windows' : 'none'} dark=${dark}`

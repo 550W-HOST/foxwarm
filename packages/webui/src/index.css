@@ -2731,6 +2731,9 @@ html[data-foxwarm-frame] [data-frame-row="inline"][data-frame-banded] > .foxwarm
 html[data-foxwarm-frame] [data-frame-row="inline"][data-frame-banded] > .foxwarm-frame-edge[data-frame-edge="end"] { left: 0; width: auto; bottom: auto; height: var(--foxwarm-frame-pad-top, 0px); }
 /* Fills carry title-row drag surfaces through the shell gutter and panel padding to the window edges. */
 .foxwarm-frame-fill { position: fixed; }
+/* PWA overlay: no-drag holes after the page content for controls a later drag surface covers;
+ * invisible and never hit, they only take part in app-region. */
+.foxwarm-frame-hole { position: fixed; pointer-events: none; }
 /* Narrow layouts keep their mobile shell under a plain draggable strip. */
 html[data-foxwarm-frame][data-foxwarm-frame-narrow] { --foxwarm-safe-area-top: var(--foxwarm-frame-top, 0px); }
 .foxwarm-frame-strip {
@@ -2740,12 +2743,13 @@ html[data-foxwarm-frame][data-foxwarm-frame-narrow] { --foxwarm-safe-area-top: v
 }
 /* Drag surfaces for the PWA overlay; the Desktop hosts get the same surfaces as
  * rectangles. Since Chromium 152 app-region inherits into descendants, so every
- * interactive descendant and floating layer opts out. */
+ * interactive descendant and floating layer opts out. Chromium applies the boxes in
+ * document order, the last one deciding: fills come first, holes last. */
 html[data-foxwarm-frame] :is([data-frame-row][data-frame-in-band] [data-frame-drag], [data-frame-row][data-frame-in-band][data-frame-drag], .foxwarm-frame-fill, .foxwarm-frame-strip) {
   app-region: drag; -webkit-app-region: drag; user-select: none; -webkit-user-select: none;
 }
 html[data-foxwarm-frame] [data-frame-drag] :is(button, a[href], input, select, textarea, summary, label, iframe, [contenteditable], [role="button"], [role="tab"], [role="menuitem"], [tabindex]:not([tabindex="-1"]), [data-tab-id], [data-frame-no-drag]),
-html[data-foxwarm-frame] :is([role="menu"], [role="dialog"], [role="listbox"], [role="tooltip"], [aria-modal="true"], [data-frame-no-drag]) {
+html[data-foxwarm-frame] :is([role="menu"], [role="dialog"], [role="listbox"], [role="tooltip"], [aria-modal="true"], [data-frame-no-drag], .foxwarm-frame-hole) {
   app-region: no-drag; -webkit-app-region: no-drag;
 }
 @media (forced-colors: active) { .foxwarm-frame-strip { background: Canvas; } }
