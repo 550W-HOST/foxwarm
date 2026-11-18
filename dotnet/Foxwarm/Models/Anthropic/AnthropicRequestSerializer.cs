@@ -49,11 +49,19 @@ internal static class AnthropicRequestSerializer
                 if (Native(part) is JsonArray native)
                 {
                     foreach (var block in native)
+                    {
+                        // A response can carry citations on an empty text block, but Messages rejects it on input.
+                        if (
+                            block is JsonObject textBlock
+                            && SessionWait.Text(textBlock["type"]) == "text"
+                            && SessionWait.Text(textBlock["text"]) is ""
+                        )
+                            continue;
                         blocks.Add(block?.DeepClone());
+                    }
                     continue;
                 }
-                // Portable evidence is for other protocols/models. The native
-                // continuation must replay the returned assistant blocks unchanged.
+                // Portable evidence is for other protocols/models, not native replay.
                 if (
                     nativeSearch
                     && part["providerMeta"]?["anthropicSearchEvidence"]?.GetValue<bool>() == true
