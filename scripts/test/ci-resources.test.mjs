@@ -5,6 +5,7 @@ import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import yaml from 'js-yaml'
+import { assetName, codeAssetName, TARGETS } from '../release/package.mjs'
 import testEnvironment from './test-process-env.cjs'
 
 testEnvironment.initializeTestEnvironment()
@@ -163,18 +164,60 @@ test('Tests and Release reuse one cache-backed Code producer and consume its per
   assert.ok(packaged < codeProducer.steps.indexOf(uploaded))
   const downloads = (job, name) => job.steps.find(step => step.uses?.startsWith('actions/download-artifact@') && step.with.name === name)
   const builtCode = job => job.steps.some(step => /build:code|prepare-browser.mjs --code-only/.test(step.run || ''))
-  // Release's server producer forwards the Code archive; Windows extracts it for Desktop.
-  const forwarded = release.jobs.packages.steps.find(step => step.uses?.startsWith('actions/upload-artifact@'))
+  // The Linux producer forwards the Code archive as a standalone file; Windows extracts it for Desktop.
+  const forwarded = release.jobs.packages.steps.find(step => step.uses?.startsWith('actions/upload-artifact@')
+    && path.matchesGlob(`dist/${codeAssetName}`, step.with.path))
   assert.ok(downloads(release.jobs.packages, uploaded.with.name))
-  assert.equal(forwarded.with.path, 'dist/')
+  assert.equal(forwarded.with.archive, false)
   assert.ok(!builtCode(release.jobs.packages))
-  for (const [job, artifact] of [[jobs.chromium, uploaded.with.name], [release.jobs.windows, forwarded.with.name]]) {
-    const download = downloads(job, artifact)
+  const windowsDownload = release.jobs.windows.steps.find(step => step.uses?.startsWith('actions/download-artifact@')
+    && step.with.pattern && path.matchesGlob(codeAssetName, step.with.pattern))
+  for (const [job, download] of [[jobs.chromium, downloads(jobs.chromium, uploaded.with.name)], [release.jobs.windows, windowsDownload]]) {
     assert.ok(download)
     const extraction = job.steps.find(step => step.run?.includes('asset-pack.mjs extract') && step.run.includes('foxwarm-code-'))
     assert.ok(extraction)
     assert.ok(job.steps.indexOf(download) < job.steps.indexOf(extraction))
     assert.ok(!builtCode(job))
+  }
+})
+
+test('Release downloads the original package files, without platform bundles or unrelated artifacts', () => {
+  const cliPackages = [
+    'native-cli-node-latest-v3.tar.gz',
+    'native-cli-node-win-x64-latest-v3.zip',
+    'native-cli-node-osx-arm64-latest-v3.tar.gz',
+  ]
+  const mainPackages = [...Object.keys(TARGETS).map(assetName), 'foxwarm-android-node.apk', codeAssetName]
+  const packages = [...mainPackages, ...cliPackages]
+  const derived = ['SHA256SUMS', 'foxwarm-osx-arm64-self-contained.tar.gz', 'foxwarm-win-x64-self-contained.zip']
+  const uploads = Object.values(release.jobs).flatMap(job => job.steps ?? [])
+    .filter(step => step.uses?.startsWith('actions/upload-artifact@'))
+  for (const file of [...mainPackages, ...derived]) {
+    const producers = uploads.filter(step => step.with.archive === false && path.matchesGlob(`dist/${file}`, step.with.path))
+    assert.equal(producers.length, 1, file)
+  }
+  assert.ok(!uploads.some(step => step.with.name?.startsWith('release-packages')))
+  const candidates = [...packages, ...derived, 'code-resources', 'desktop-acceptance', 'desktop-mac-acceptance',
+    'native-cli-linux-x64-source-sha', 'native-linux-x64']
+  for (const [jobId, expected] of [
+    ['linux', ['foxwarm-linux-x64.tar.gz', 'foxwarm-linux-x64-native.tar.gz']],
+    ['windows', [codeAssetName]],
+    ['image', ['foxwarm-linux-x64-native.tar.gz']],
+    ['checksums', packages],
+    ['release', [...packages, ...derived]],
+  ]) {
+    const downloads = release.jobs[jobId].steps.filter(step => step.uses?.startsWith('actions/download-artifact@')
+      && step.with.path === 'dist')
+    const selected = downloads.flatMap(step => {
+      assert.equal(step.with['skip-decompress'], true, jobId)
+      const pattern = step.with.pattern === '${{ env.PACKAGE_ARTIFACTS }}'
+        ? release.env.PACKAGE_ARTIFACTS
+        : step.with.pattern
+      const matches = candidates.filter(file => pattern ? path.matchesGlob(file, pattern) : file === step.with.name)
+      if (matches.length > 1) assert.equal(step.with['merge-multiple'], true, jobId)
+      return matches
+    })
+    assert.deepEqual(selected.sort(), expected.toSorted(), jobId)
   }
 })
 

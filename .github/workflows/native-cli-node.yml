@@ -16,6 +16,11 @@ on:
       - '.github/workflows/native-cli-node.yml'
   workflow_dispatch:
   workflow_call:
+    inputs:
+      standalone-artifacts:
+        description: Upload each package directly and keep build evidence separate
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -27,6 +32,8 @@ defaults:
 jobs:
   platforms:
     uses: ./.github/workflows/native-cli-platforms.yml
+    with:
+      standalone-artifacts: ${{ inputs.standalone-artifacts || false }}
 
   build:
     runs-on: ubuntu-24.04
@@ -94,10 +101,21 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: native-cli-linux-x64-${{ github.sha }}
-          path: .temp/native-cli-downloads/
+          path: |
+            .temp/native-cli-downloads/
+            ${{ inputs.standalone-artifacts && '!.temp/native-cli-downloads/assets/downloads/*.tar.gz' || '' }}
           if-no-files-found: error
           retention-days: 30
           include-hidden-files: true
+      - name: Upload the release package
+        if: inputs.standalone-artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          path: .temp/native-cli-downloads/assets/downloads/native-cli-node-latest-v3.tar.gz
+          include-hidden-files: true
+          archive: false
+          if-no-files-found: error
+          retention-days: 14
 
   deploy:
     # Every push of this workflow on main publishes the qualified archives to
