@@ -37,17 +37,26 @@ OutputBaseFilename=foxwarm-desktop-win-x64-setup
 Compression=lzma2/max
 SolidCompression=yes
 SetupMutex=FoxwarmDesktopSetup
+; Simplified Chinese for a Chinese Windows display language, English otherwise; /LANG= overrides it.
+ShowLanguageDialog=no
+LanguageDetectionMethod=uilanguage
 ; [Code] stops Foxwarm through its own exit path; the Restart Manager would not.
 CloseApplications=no
 
 [Languages]
+; English comes first: it is the language when no other matches.
 Name: "english"; MessagesFile: "compiler:Default.isl"
+Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
 
 [CustomMessages]
-AutostartTask=Start Foxwarm when I sign in to Windows
-StillRunning=Foxwarm is still running and could not be closed. Exit Foxwarm from its icon in the notification area, then try again.
-WebView2Missing=Foxwarm needs the Microsoft Edge WebView2 Runtime, which is not installed on this computer. Install the Evergreen x64 Runtime from Microsoft's WebView2 download page before you start Foxwarm.
-OpenWebView2Download=Open the WebView2 Runtime download page
+english.AutostartTask=Start Foxwarm when I sign in to Windows
+english.StillRunning=Foxwarm is still running and could not be closed. Exit Foxwarm from its icon in the notification area, then try again.
+english.WebView2Missing=Foxwarm needs the Microsoft Edge WebView2 Runtime, which is not installed on this computer. Install the Evergreen x64 Runtime from Microsoft's WebView2 download page before you start Foxwarm.
+english.OpenWebView2Download=Open the WebView2 Runtime download page
+chinesesimplified.AutostartTask=登录 Windows 时启动 Foxwarm
+chinesesimplified.StillRunning=Foxwarm 仍在运行，无法关闭。请在托盘图标菜单中选择 Exit 退出 Foxwarm，然后重试。
+chinesesimplified.WebView2Missing=Foxwarm 需要 Microsoft Edge WebView2 Runtime，但这台电脑上没有安装。启动 Foxwarm 前，请从微软的 WebView2 下载页面安装 Evergreen x64 运行时。
+chinesesimplified.OpenWebView2Download=打开 WebView2 Runtime 下载页面
 
 [Tasks]
 Name: "autostart"; Description: "{cm:AutostartTask}"; Flags: unchecked

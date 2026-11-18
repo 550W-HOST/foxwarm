@@ -15,8 +15,9 @@ components link the C runtime statically or import only Windows DLLs.
 2. Download `foxwarm-desktop-win-x64-setup.exe` from the repository's GitHub
    releases and run it. It installs for the current user without elevation, by
    default into `%LOCALAPPDATA%\Programs\Foxwarm`, with a Start menu shortcut, an
-   entry in **Settings → Apps** and an optional sign-in start. Configure a
-   model/provider in the WebUI's Setup page.
+   entry in **Settings → Apps** and an optional sign-in start. Setup is in
+   Simplified Chinese on a Chinese Windows display language and in English
+   otherwise. Configure a model/provider in the WebUI's Setup page.
 
 The portable `foxwarm-desktop-win-x64.zip` holds the same files without
 installation: extract the entire ZIP to a folder you can read, then open

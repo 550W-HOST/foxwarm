@@ -147,6 +147,18 @@ test('the Windows Desktop installer keeps its name and installation identity', (
   assert.match(script, /^PrivilegesRequired=lowest$/m)
 })
 
+test('the installer text exists in English and Simplified Chinese', () => {
+  const script = fs.readFileSync(installerScript, 'utf8')
+  const languages = [...script.matchAll(/^Name: "([a-z]+)"; MessagesFile: /gm)].map(match => match[1])
+  assert.deepEqual(languages, ['english', 'chinesesimplified'])
+  const messages = language => [...script.matchAll(new RegExp(`^${language}\\.(\\w+)=.+$`, 'gm'))].map(match => match[1]).sort()
+  assert.ok(messages('english').length > 0)
+  assert.deepEqual(messages('chinesesimplified'), messages('english'))
+  // Every custom message a script uses is defined.
+  const used = [...new Set([...script.matchAll(/\{cm:(\w+)|CustomMessage\('(\w+)'\)/g)].map(match => match[1] ?? match[2]))].sort()
+  assert.deepEqual(used.filter(name => name !== 'LaunchProgram'), messages('english'))
+})
+
 test('the installer is built only with the Windows Desktop archive', t => {
   const output = scratch(t)
   const iscc = path.join(output, 'ISCC.exe')

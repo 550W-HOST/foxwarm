@@ -153,7 +153,7 @@ Invoke-WebRequest https://foxwarm.net/install-foxwarm.ps1 -OutFile install-foxwa
 
 ## Windows 桌面版
 
-从[最新 Release](https://github.com/550W-HOST/foxwarm/releases/latest)下载并运行 [`foxwarm-desktop-win-x64-setup.exe`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-win-x64-setup.exe)。它为当前 Windows 账户安装 Foxwarm，不需要管理员权限，安装位置是 `%LOCALAPPDATA%\Programs\Foxwarm`，并在开始菜单和**设置 → 应用**中添加 Foxwarm。如果希望登录时让 Foxwarm 在托盘中启动，勾选 **Start Foxwarm when I sign in to Windows**。
+从[最新 Release](https://github.com/550W-HOST/foxwarm/releases/latest)下载并运行 [`foxwarm-desktop-win-x64-setup.exe`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-win-x64-setup.exe)。它为当前 Windows 账户安装 Foxwarm，不需要管理员权限，安装位置是 `%LOCALAPPDATA%\Programs\Foxwarm`，并在开始菜单和**设置 → 应用**中添加 Foxwarm。如果希望登录时让 Foxwarm 在托盘中启动，勾选**登录 Windows 时启动 Foxwarm**。中文 Windows 上安装程序显示中文界面，其他语言的系统显示英文。
 
 Foxwarm 在窗口中运行，带托盘图标。关闭窗口后它继续在托盘中运行；在托盘图标菜单中选择 **Exit** 才会退出。数据保存在 `%LOCALAPPDATA%\Foxwarm\Desktop`。需要 Microsoft Edge WebView2 Runtime，Windows 10 和 11 通常已自带；如果缺少，安装程序会提示并提供微软的下载页面。桌面版只在本机监听；需要其他设备访问时请安装服务器版。
 
