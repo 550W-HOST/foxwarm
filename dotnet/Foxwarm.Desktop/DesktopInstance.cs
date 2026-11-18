@@ -5,8 +5,9 @@ using Microsoft.Win32.SafeHandles;
 
 namespace Foxwarm.Desktop;
 
-// The per-user single-instance lock, and the exit request through which the installer stops a
-// running copy before it replaces or removes the program files.
+// The per-user single-instance lock; the open request through which a further start shows the
+// running copy's window; and the exit request through which the installer stops a running copy
+// before it replaces or removes the program files.
 internal static class DesktopInstance
 {
     private const int ExitTimeoutMilliseconds = 60_000;
@@ -19,9 +20,31 @@ internal static class DesktopInstance
 
     internal static Mutex Lock() => new(false, "Foxwarm.Desktop." + User, Options);
 
+    // Created by the copy that holds the lock; a signal shows its window as its Open menu item does.
+    internal static EventWaitHandle OpenRequests() =>
+        new(false, EventResetMode.AutoReset, "Foxwarm.Desktop.Open." + User, Options, out _);
+
     // Created by the copy that holds the lock; a signal makes it exit as its Exit menu item does.
     internal static EventWaitHandle ExitRequests() =>
         new(false, EventResetMode.AutoReset, "Foxwarm.Desktop.Exit." + User, Options, out _);
+
+    // A further ordinary start: asks the running copy to show its window. The running copy may
+    // still be starting, so its request event is awaited briefly.
+    internal static void RequestOpen()
+    {
+        // This start came from the user; let the running copy bring its window to the front.
+        AllowSetForegroundWindow(-1);
+        for (var attempt = 0; attempt < 40; attempt++)
+        {
+            if (EventWaitHandle.TryOpenExisting("Foxwarm.Desktop.Open." + User, Options, out var request))
+            {
+                using (request)
+                    request.Set();
+                return;
+            }
+            Thread.Sleep(250);
+        }
+    }
 
     // `Foxwarm.Desktop.exe --exit`: stops the Foxwarm started from this executable, if any, and
     // waits until no process runs this executable. A copy elsewhere, such as an extracted ZIP, is
@@ -105,4 +128,8 @@ internal static class DesktopInstance
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern uint WaitForSingleObject(SafeProcessHandle handle, uint milliseconds);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool AllowSetForegroundWindow(int processId);
 }

@@ -204,7 +204,7 @@ internal sealed partial class DesktopWindow : Window
             ExitApplication();
     }
 
-    private void OpenWindow()
+    internal void OpenWindow()
     {
         if (exiting)
             return;

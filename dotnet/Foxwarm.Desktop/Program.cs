@@ -35,12 +35,14 @@ internal static class Program
         {
             acquired = true;
         }
+        // A further start shows the running copy's window; a further sign-in start changes nothing.
         if (!acquired)
         {
             if (!tray)
-                DesktopNative.ShowMessage("Foxwarm is already running. Open it from the tray icon.");
+                DesktopInstance.RequestOpen();
             return;
         }
+        using var openRequests = DesktopInstance.OpenRequests();
         using var exitRequests = DesktopInstance.ExitRequests();
         try
         {
@@ -52,7 +54,7 @@ internal static class Program
                 SynchronizationContext.SetSynchronizationContext(
                     new DispatcherQueueSynchronizationContext(DispatcherQueue.GetForCurrentThread())
                 );
-                _ = new DesktopApplication(tray, exitRequests);
+                _ = new DesktopApplication(tray, openRequests, exitRequests);
             });
         }
         finally
@@ -65,13 +67,16 @@ internal static class Program
 public sealed partial class DesktopApplication : Application
 {
     private readonly bool tray;
+    private readonly WaitHandle openRequests;
     private readonly WaitHandle exitRequests;
     private DesktopWindow? window;
+    private RegisteredWaitHandle? openRequest;
     private RegisteredWaitHandle? exitRequest;
 
-    internal DesktopApplication(bool tray, WaitHandle exitRequests)
+    internal DesktopApplication(bool tray, WaitHandle openRequests, WaitHandle exitRequests)
     {
         this.tray = tray;
+        this.openRequests = openRequests;
         this.exitRequests = exitRequests;
         InitializeComponent();
     }
@@ -81,6 +86,13 @@ public sealed partial class DesktopApplication : Application
         var window = new DesktopWindow();
         this.window = window;
         window.Start(tray);
+        openRequest = ThreadPool.RegisterWaitForSingleObject(
+            openRequests,
+            (_, _) => window.DispatcherQueue.TryEnqueue(window.OpenWindow),
+            null,
+            Timeout.Infinite,
+            executeOnlyOnce: false
+        );
         exitRequest = ThreadPool.RegisterWaitForSingleObject(
             exitRequests,
             (_, _) => window.DispatcherQueue.TryEnqueue(window.ExitApplication),

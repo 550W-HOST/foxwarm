@@ -298,7 +298,7 @@ try {
   stage = 'Main shutdown'
   await stop()
 
-  stage = 'sign-in start in the notification area and the exit request'
+  stage = 'sign-in start, further starts and the exit request'
   // The installer registers `--tray` as the sign-in start and stops a running copy with `--exit`.
   const exitRequest = () => run(executable, ['--exit'], { cwd, env, windowsHide: true, timeout: 90_000 })
   await exitRequest()
@@ -307,10 +307,12 @@ try {
   assert.equal((await desktop('tray', trayPid)).registered, true, 'A sign-in start has no notification icon')
   assert.equal((await desktop('window', trayPid)).visible, false, 'A sign-in start must not show the window')
   assert(!(await descendants(trayPid)).some(row => /msedgewebview2\.exe/i.test(row.args)), 'WebView2 must start with the window')
-  // A further sign-in start exits by itself: it shows no already-running message.
+  // A further sign-in start exits by itself and leaves the window hidden.
   await run(executable, ['--tray'], { cwd, env, windowsHide: true, timeout: 30_000 })
-  await desktop('open', trayPid)
-  await until(async () => (await desktop('window', trayPid)).visible, 'window opened from the notification icon')
+  assert.equal((await desktop('window', trayPid)).visible, false, 'A further sign-in start must not show the window')
+  // A further ordinary start, such as from the Start menu, shows the running copy's window and exits.
+  await run(executable, [], { cwd, env, windowsHide: true, timeout: 30_000 })
+  await until(async () => (await desktop('window', trayPid)).visible, 'window opened by a further start')
   await attach()
   assert(JSON.stringify((await api('GET', route + '/history')).body).includes('DESKTOP-NATIVE-DONE'))
   browser?.disconnect(); browser = undefined
@@ -328,10 +330,10 @@ try {
     extractedDesktop: true, importsComplete: true, noCoreClr: true, nativeWebView2Cookie: true, setup: true, nativeToolScript: true,
     nativeExecHelper: true, canonicalAgentRoot: true, configuredAgentRoot: true, webSocketCookie: true, artifactDependencies: true,
     extensionBundles: 4, vectorChild: true, mainLoadsNoLanceDb: true, trayIcon: true, closeToTray: true, trayOpen: true, trayExit: true,
-    restartPreserved: true, mainShutdown: true, trayStart: true, exitRequest: true,
+    restartPreserved: true, mainShutdown: true, trayStart: true, furtherStartOpens: true, exitRequest: true,
   })
   await writeFile(report, JSON.stringify(summary, null, 2) + '\n')
-  console.log('Extracted native Desktop startup, WebView2, ToolScript, Vector, notification icon, Exit, restart, sign-in start and exit request acceptance passed.')
+  console.log('Extracted native Desktop startup, WebView2, ToolScript, Vector, notification icon, Exit, restart, sign-in start, further start and exit request acceptance passed.')
 } catch (error) {
   acceptanceFailed = true
   // Keep diagnostics useful without uploading tokens, state, profiles or request bodies.

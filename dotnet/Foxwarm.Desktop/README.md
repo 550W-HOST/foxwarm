@@ -119,11 +119,13 @@ Desktop startup does not enable it.
 Closing the window hides it to the tray. Double-click the fox tray icon or use
 **Open** to restore it. Started with `--tray`, as the sign-in start is, the app
 runs Main with only the tray icon; the window and WebView2 start when it is first
-opened, and a second `--tray` start exits without the already-running message. The icon returns if Explorer recreates the taskbar while
-Foxwarm is running. Use **Exit** to stop the app and backend. Starting another
-copy shows a message instead of starting another backend. The single-instance
-lock applies to the same user across Windows login sessions, so those sessions
-cannot run competing writers against the same user data. External links open in
+opened. The icon returns if Explorer recreates the taskbar while Foxwarm is
+running. Use **Exit** to stop the app and backend. Starting the app again while
+it runs shows the running window instead of starting another backend; a further
+`--tray` start leaves it as it is. The single-instance lock applies to the same
+user across Windows login sessions, so those sessions cannot run competing
+writers against the same user data, and to every copy: starting an installed
+copy while a portable one runs shows the portable one's window. External links open in
 your default browser; the app view remains on its own local WebUI.
 
 Settings, conversations and the owned WebView2 profile live under
