@@ -26,6 +26,7 @@ export const zh: HomeStrings = {
       footer: '每一步都是一个会话，随时可以打开、查看、插话。',
       link: 'Foxwarm 如何工作'
     },
+    actions: { demo: '浏览演示', more: '桌面版、Docker 和 Android' },
     shotCaption: '同一个任务在 Foxwarm WebUI 里的样子。真实截图，演示项目。',
     screenshotAlt: 'Foxwarm WebUI 的 Conversation 视图：用户请 Agent 修复失败的测试，Agent 汇报了原因、修复方式和提交记录。侧边栏列出了其他会话，其中一些带有子会话。',
     demo: {
@@ -35,16 +36,10 @@ export const zh: HomeStrings = {
   },
   featureDemo: '在演示中打开',
   install: {
-    tabs: { linux: 'Linux / macOS', windows: 'Windows', docker: 'Docker' },
+    title: '安装服务器',
+    tabs: { linux: 'Linux / macOS', windows: 'Windows' },
     copy: '复制',
-    copied: '已复制',
-    notes: {
-      linux: '支持 Linux x64（包括 WSL）和 macOS arm64。下载预编译版本并在后台启动，有 tmux 时优先使用。',
-      windows: '支持 Windows x64，在 PowerShell 中运行。下载预编译版本并在后台运行。',
-      docker: '适用于装有 Docker 的 Linux x64。运行已发布的镜像，内含 Chromium 和 Node.js；数据保存在 foxwarm-data。'
-    },
-    requirementsLink: '安装包和环境要求',
-    more: '桌面版和 Android Node 应用'
+    copied: '已复制'
   },
   downloads: {
     title: '下载 Foxwarm',
@@ -71,13 +66,13 @@ export const zh: HomeStrings = {
       body: '在一台常开的机器上后台运行 Foxwarm：合上笔记本后任务照常进行，手机、其他电脑和节点也都能连接它。',
       installers: {
         name: 'Linux、macOS、Windows',
-        note: '页面顶部的安装命令会下载对应平台的安装包并启动 Foxwarm，支持 Linux x64 和 WSL、Apple Silicon 上的 macOS 15 或更新版本，以及 Windows x64。',
-        guide: { label: '安装命令', href: '#install' }
+        note: '下载对应平台的安装包并在后台启动 Foxwarm，支持 Linux x64 和 WSL、Apple Silicon 上的 macOS 15 或更新版本，以及 Windows x64（在 PowerShell 中运行）。',
+        guide: { label: '安装包和环境要求', href: docs('installing/') }
       },
       docker: {
         name: 'Docker',
         detail: 'Linux x64',
-        note: '运行已发布的镜像，内含 Chromium 和 Node.js。',
+        note: '运行已发布的镜像，内含 Chromium 和 Node.js；数据保存在 foxwarm-data。',
         guide: { label: 'Docker 说明', href: docs('installing/#docker') }
       },
       packages: { label: '各平台的服务器安装包', href: docs('installing/#安装包') }
@@ -92,7 +87,8 @@ export const zh: HomeStrings = {
         guide: { label: 'Android Node 说明', href: docs('installing/#android-node') }
       }
     },
-    release: '最新 Release 的全部文件和校验和'
+    release: '最新 Release 的全部文件和校验和',
+    attribution: 'Android 是 Google LLC 的商标。Android 机器人图案复制或修改自 Google 创作并分享的作品，依据知识共享署名 3.0 许可协议使用。'
   },
   strip: {
     label: '兼容',

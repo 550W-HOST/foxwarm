@@ -26,6 +26,7 @@ export const en: HomeStrings = {
       footer: 'Every step is a session you can open, read and talk to.',
       link: 'How Foxwarm works'
     },
+    actions: { demo: 'Explore the demo', more: 'Desktop apps, Docker and Android' },
     shotCaption: 'The same task in the Foxwarm WebUI. Real screenshot, demo project.',
     screenshotAlt: 'The Foxwarm WebUI in Conversation view: the user asks an agent to fix a failing test suite, and the agent reports the cause, the fix and the commit. The sidebar lists other sessions, some with child sessions.',
     demo: {
@@ -35,16 +36,10 @@ export const en: HomeStrings = {
   },
   featureDemo: 'Open in the demo',
   install: {
-    tabs: { linux: 'Linux / macOS', windows: 'Windows', docker: 'Docker' },
+    title: 'Install the server',
+    tabs: { linux: 'Linux / macOS', windows: 'Windows' },
     copy: 'Copy',
-    copied: 'Copied',
-    notes: {
-      linux: 'Linux x64 (including WSL) and macOS arm64. Downloads a prebuilt release and starts it in the background, using tmux when available.',
-      windows: 'Windows x64, in PowerShell. Downloads a prebuilt release and runs it in the background.',
-      docker: 'Linux x64 with Docker. Runs the published image with Chromium and Node.js included; data stays in foxwarm-data.'
-    },
-    requirementsLink: 'Packages and requirements',
-    more: 'Desktop apps and the Android Node app'
+    copied: 'Copied'
   },
   downloads: {
     title: 'Download Foxwarm',
@@ -71,13 +66,13 @@ export const en: HomeStrings = {
       body: 'Runs Foxwarm in the background on a machine that stays on, so work continues after you close your laptop, and your phone, other computers and Nodes can connect.',
       installers: {
         name: 'Linux, macOS, Windows',
-        note: 'The install command at the top of this page fetches the right package for Linux x64 or WSL, macOS 15 or later on Apple Silicon, or Windows x64, and starts Foxwarm.',
-        guide: { label: 'Install command', href: '#install' }
+        note: 'Downloads the package for Linux x64 or WSL, macOS 15 or later on Apple Silicon, or Windows x64 (run it in PowerShell), and starts Foxwarm in the background.',
+        guide: { label: 'Packages and requirements', href: docs('installing/') }
       },
       docker: {
         name: 'Docker',
         detail: 'Linux x64',
-        note: 'Runs the published image, with Chromium and Node.js included.',
+        note: 'Runs the published image, with Chromium and Node.js included; your data stays in foxwarm-data.',
         guide: { label: 'Docker guide', href: docs('installing/#docker') }
       },
       packages: { label: 'Server packages for each platform', href: docs('installing/#packages') }
@@ -92,7 +87,8 @@ export const en: HomeStrings = {
         guide: { label: 'Android app guide', href: docs('installing/#android-node') }
       }
     },
-    release: 'All files of the latest release, with checksums'
+    release: 'All files of the latest release, with checksums',
+    attribution: 'Android is a trademark of Google LLC. The Android robot is reproduced or modified from work created and shared by Google and used according to terms described in the Creative Commons 3.0 Attribution License.'
   },
   strip: {
     label: 'Works with',

@@ -396,14 +396,32 @@ test('the homepage downloads each app from the latest release and marks none bef
     assert.deepEqual(options.map(({ markedHidden, ...option }) => option), downloads, `${route} download targets`);
     assert.ok(options.every((option) => option.markedHidden), `${route} marks no download as this device's in the HTML`);
     assert.doesNotMatch(section, /class="download-option current"/, `${route} emphasizes no download in the HTML`);
-    assert.match(section, /href="#install"/, `${route} points server installs at the install commands`);
+    // The server row carries its own commands, so visitors arriving from other pages can install from here.
+    const commandsIn = (html) => [...html.matchAll(/data-copy="([^"]*)"/g)].map((match) => decodeEntities(match[1]));
+    const serverCommands = commandsIn(section);
+    for (const command of ['https://foxwarm.net/install-foxwarm.sh', 'https://foxwarm.net/install-foxwarm.ps1', 'docker run']) {
+      assert.ok(serverCommands.some((copied) => copied.includes(command)), `${route} downloads include ${command}`);
+    }
+    // Each download shows its platform's mark; the marks and schematics are decorative.
+    for (const { platform } of downloads) {
+      assert.ok(options.find((option) => option.platform === platform), `${route} ${platform} option`);
+      assert.match(section, new RegExp(`data-platform="${platform}"><p class="download-name"><svg class="platform-mark platform-mark-${platform}"`), `${route} ${platform} mark`);
+    }
+    for (const mark of ['linux', 'docker']) assert.match(section, new RegExp(`platform-mark-${mark}`), `${route} ${mark} mark`);
+    for (const svg of section.match(/<svg class="(?:platform-mark|schematic)[^>]*>/g) ?? []) assert.match(svg, /aria-hidden="true"/, `${route} decorative ${svg}`);
+    assert.equal((section.match(/<svg class="schematic /g) ?? []).length, 3, `${route} one schematic per kind`);
+    // The Android robot's license requires this attribution wherever the robot appears.
+    assert.match(section, /Creative Commons 3\.0|知识共享署名 3\.0/, `${route} attributes the Android robot`);
 
     const nav = homepage.match(/<nav class="primary-nav"[^>]*>([\s\S]*?)<\/nav>/)?.[1] ?? '';
     assert.match(nav, new RegExp(`<a class="nav-download" href="${escapeRegExp(route)}#download">${label}</a>`), `${route} navigation opens the downloads`);
     const footer = homepage.match(/<footer class="site-footer">([\s\S]*?)<\/footer>/)?.[1] ?? '';
     assert.match(footer, new RegExp(`<a href="${escapeRegExp(route)}#download">${label}</a>`), `${route} footer opens the downloads`);
-    const install = homepage.match(/<div class="install" id="install"[\s\S]*?<p class="install-more"><a href="#download">/);
-    assert.ok(install, `${route} install commands point at the other downloads`);
+    const start = homepage.match(/<div class="hero-start" id="install">[\s\S]*?<\/p>\s*<\/div>/)?.[0] ?? '';
+    const heroCommands = commandsIn(start);
+    assert.ok(heroCommands.some((copied) => copied.includes('install-foxwarm.sh')) && heroCommands.some((copied) => copied.includes('install-foxwarm.ps1')), `${route} hero offers the install commands`);
+    assert.match(start, /<a class="hero-more" href="#download">/, `${route} hero points at the other downloads`);
+    assert.match(start, /<a class="hero-demo" href="\/demo\/#session\/tidepool%2Ffix-ci">/, `${route} hero opens the demo`);
   }
 });
 
@@ -423,7 +441,7 @@ test('every Docker quick-install command is the installing guide\'s', async () =
   for (const route of ['/', '/zh/']) {
     const homepage = await readFile(routeToFile(route), 'utf8');
     const copied = [...homepage.matchAll(/data-copy="([^"]*)"/g)].map((match) => decodeEntities(match[1])).find((command) => command.includes('docker run'));
-    assert.equal(copied, guide, `${route} Docker tab`);
+    assert.equal(copied, guide, `${route} Docker command`);
   }
 });
 

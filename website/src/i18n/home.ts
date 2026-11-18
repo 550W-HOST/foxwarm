@@ -85,18 +85,18 @@ export type HomeStrings = {
       footer: string;
       link: string;
     };
+    // The next steps beside the install command: the demo, and the other downloads further down.
+    actions: { demo: string; more: string };
     shotCaption: string;
     screenshotAlt: string;
     demo: { link: string; note: string };
   };
   featureDemo: string;
   install: {
-    tabs: { linux: string; windows: string; docker: string };
+    title: string;
+    tabs: { linux: string; windows: string };
     copy: string;
     copied: string;
-    notes: { linux: string; windows: string; docker: string };
-    requirementsLink: string;
-    more: string;
   };
   downloads: {
     title: string;
@@ -106,6 +106,8 @@ export type HomeStrings = {
     server: { title: string; body: string; installers: DownloadOption; docker: DownloadOption; packages: Link };
     android: { title: string; body: string; app: DownloadOption };
     release: string;
+    // Required by the Android robot's license and Google's trademark rules, since the Android download shows the robot.
+    attribution: string;
   };
   strip: { label: string; items: string[] };
   features: Feature[];

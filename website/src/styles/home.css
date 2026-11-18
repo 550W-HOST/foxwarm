@@ -89,16 +89,33 @@ code, pre, time { font-family: var(--font-mono); }
 :lang(zh) .hero h1 { letter-spacing: -.01em; line-height: 1.2; }
 .lede { margin-top: 22px; max-width: 34em; color: var(--ink-soft); font-size: 1.12rem; line-height: 1.6; }
 
-.install { margin-top: 36px; }
-.install-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); }
-.install-tabs button { margin-bottom: -1px; padding: 7px 12px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--muted); font: 500 .86rem var(--font-sans); cursor: pointer; }
-.install-tabs button:hover { color: var(--ink); }
-.install-tabs button[aria-selected='true'] { border-bottom-color: var(--accent); color: var(--ink); }
-/* The copy button has its own column, so it never covers command text; long lines scroll on narrow screens. */
-.command { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; margin-top: 14px; border: 1px solid var(--line); border-radius: 6px; background: var(--code-bg); }
+/* Hero next steps: the server install command, then the demo and the other downloads. */
+.hero-start { margin-top: 36px; }
+.hero-command { max-width: 560px; }
+.hero-command pre { font-size: .9rem; }
+.hero-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 22px; margin-top: 20px; }
+.hero-demo { display: inline-flex; align-items: center; padding: 8px 16px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); color: var(--ink); font-weight: 500; font-size: .94rem; text-decoration: none; }
+.hero-demo:hover { border-color: var(--accent); color: var(--accent-strong); }
+.hero-more { color: var(--accent-strong); font-weight: 500; font-size: .94rem; text-decoration: none; }
+.hero-more:hover { text-decoration: underline; text-underline-offset: 3px; }
+
+/* Shell commands. A card holds one command, or platform tabs above one command per tab. */
+.command-card { overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--code-bg); }
+.command-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 14px 0 8px; border-bottom: 1px solid var(--line); }
+.command-tabs { display: flex; gap: 4px; }
+.command-title { color: var(--muted); font: .8rem var(--font-sans); white-space: nowrap; }
+.command-tabs button { margin-bottom: -1px; padding: 9px 8px 8px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--muted); font: 500 .84rem var(--font-sans); cursor: pointer; }
+.command-tabs button:hover { color: var(--ink); }
+.command-tabs button[aria-selected='true'] { border-bottom-color: var(--accent); color: var(--ink); }
+/* The copy button has its own column, so it never covers command text. */
+.command { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; }
 .command pre { margin: 0; padding: 14px 8px 14px 16px; overflow-x: auto; font-size: .84rem; line-height: 1.7; }
-.command-line { display: block; white-space: pre; }
-.prompt { margin-right: 10px; color: var(--muted); user-select: none; }
+/* The prompt has its own column, so continued and wrapped lines align with the command. */
+.command code { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 10px; }
+.command-line { display: contents; }
+.command-text { white-space: pre; }
+.command-wrap .command-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.prompt { color: var(--muted); user-select: none; }
 .copy-button { display: grid; place-items: center; width: 30px; height: 30px; margin: 9px 9px 0 0; padding: 0; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); color: var(--muted); cursor: pointer; }
 .copy-button:hover { border-color: var(--muted); color: var(--ink); }
 .copy-button .icon { width: 16px; height: 16px; }
@@ -106,8 +123,6 @@ code, pre, time { font-family: var(--font-mono); }
 .copy-button.copied .copy-done { display: block; }
 .copy-button.copied { border-color: var(--accent); color: var(--accent-strong); }
 .visually-hidden { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
-.install-note { margin-top: 10px; color: var(--muted); font-size: .86rem; }
-.install-note a { color: var(--ink-soft); text-underline-offset: 3px; }
 
 /* A day with one task */
 .day { margin: 6px 0 0; padding: 0; }
@@ -222,11 +237,30 @@ code, pre, time { font-family: var(--font-mono); }
 .download-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 48px; margin-top: 32px; padding-top: 28px; border-top: 1px solid var(--line); }
 .download-row:first-of-type { border-top: 0; padding-top: 0; }
 .download-kind h3 { font-size: 1.1rem; }
+/* Schematics: orange is where Foxwarm runs, gray the devices around it. */
+.schematic { display: block; width: 100%; max-width: 240px; height: auto; margin-bottom: 20px; }
+.sch-device { fill: var(--surface); stroke: var(--muted); stroke-width: 1.6; stroke-linejoin: round; }
+.sch-screen { fill: var(--bg-alt); stroke: none; }
+.sch-tile { fill: var(--line-strong); }
+.sch-detail { fill: none; stroke: var(--muted); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.sch-foxwarm { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.6; }
+.sch-foxwarm-line { fill: none; stroke: var(--accent); stroke-width: 1.6; stroke-linecap: round; }
+.sch-dot { fill: var(--accent); }
+.sch-wire { fill: none; stroke: var(--line-strong); stroke-width: 1.6; }
+.sch-wire-end { fill: var(--line-strong); }
+.sch-faint { fill: none; stroke: var(--line-strong); stroke-width: 1.6; stroke-dasharray: 3 4; stroke-linecap: round; }
+.sch-stop { fill: none; stroke: var(--muted); stroke-width: 1.8; stroke-linecap: round; }
+.sch-tap-ring { fill: none; stroke: var(--accent); stroke-width: 1.4; opacity: .55; }
 .download-kind p { margin-top: 8px; color: var(--ink-soft); font-size: .95rem; }
 .download-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-content: start; }
+/* Server options carry whole commands, so each gets the full width. */
+.download-options-wide { grid-template-columns: minmax(0, 1fr); }
 .download-option { display: flex; flex-direction: column; gap: 10px; padding: 18px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
 .download-option.current { border-color: var(--accent); }
-.download-name { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; font-weight: 600; }
+.download-name { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-weight: 600; }
+.platform-mark { flex: none; width: 20px; height: 20px; color: var(--ink-soft); }
+.platform-marks { display: inline-flex; gap: 6px; margin-right: 2px; }
+.download-option.current .platform-mark { color: var(--accent-strong); }
 .download-name span { color: var(--muted); font-weight: 400; font-size: .9rem; }
 .download-name .download-current { margin-left: auto; color: var(--accent-strong); font: 500 .76rem var(--font-mono); text-transform: uppercase; letter-spacing: .02em; }
 .download-current[hidden] { display: none; }
@@ -241,11 +275,9 @@ code, pre, time { font-family: var(--font-mono); }
 .download-note a, .download-more a { color: var(--accent-strong); font-weight: 500; text-decoration: none; white-space: nowrap; }
 .download-note a:hover, .download-more a:hover, .download-foot a:hover { text-decoration: underline; text-underline-offset: 3px; }
 .download-more { grid-column: 1 / -1; font-size: .9rem; }
-.download-foot { margin-top: 32px; padding-top: 18px; border-top: 1px solid var(--line); font-size: .9rem; }
+.download-foot { display: grid; gap: 10px; margin-top: 32px; padding-top: 18px; border-top: 1px solid var(--line); font-size: .9rem; }
 .download-foot a { color: var(--ink-soft); text-decoration: none; }
-.install-more { margin-top: 6px; font-size: .86rem; }
-.install-more a { color: var(--accent-strong); font-weight: 500; text-decoration: none; }
-.install-more a:hover { text-decoration: underline; text-underline-offset: 3px; }
+.download-attribution { max-width: 56em; color: var(--muted); font-size: .76rem; }
 
 .start { padding: 112px 0 104px; }
 .start h2 { padding-top: 28px; border-top: 1px solid var(--ink); font-size: clamp(1.5rem, 2.6vw, 2rem); }
@@ -267,6 +299,7 @@ code, pre, time { font-family: var(--font-mono); }
 
 @media (max-width: 1000px) {
   .download-row { grid-template-columns: minmax(0, 1fr); gap: 18px; }
+  .schematic { max-width: 200px; margin-bottom: 14px; }
   .hero-grid, .feature-head, .extras-inner, .hands-grid { grid-template-columns: minmax(0, 1fr); gap: 32px; }
   .hero { padding-top: 48px; }
   .hero-shot { margin-top: 56px; }
@@ -279,11 +312,16 @@ code, pre, time { font-family: var(--font-mono); }
   .footer-inner nav { margin-left: 0; }
   .steps { grid-template-columns: minmax(0, 1fr); gap: 24px; }
   .download-options { grid-template-columns: minmax(0, 1fr); }
+  .download-option { padding: 16px 14px; }
   .extra-list div { grid-template-columns: minmax(0, 1fr); gap: 2px; }
   .shot-stack { padding-bottom: 0; }
   .shot-inset { position: static; width: auto; margin-top: 16px; box-shadow: none; }
   .day-rows::before { left: 59px; }
   .day-row { grid-template-columns: 44px 32px minmax(0, 1fr); }
+}
+/* The hero's tabs need the whole width on phones. */
+@media (max-width: 420px) {
+  .command-title { display: none; }
 }
 /* Docs, Demo, Blog, the language menu and theme fit beside the logo alone on the narrowest phones. */
 @media (max-width: 374px) {

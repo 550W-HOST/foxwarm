@@ -5,6 +5,10 @@ import '@fontsource/ibm-plex-mono/500.css';
 import '../styles/home.css';
 import Screenshot from './Screenshot.astro';
 import Icon from './Icon.astro';
+import Command from './Command.astro';
+import InstallCommands, { type InstallTab } from './InstallCommands.astro';
+import PlatformMark from './PlatformMark.astro';
+import DownloadSchematic from './DownloadSchematic.astro';
 import SiteHeader from './SiteHeader.astro';
 import SiteFooter from './SiteFooter.astro';
 import ThemeInit from './ThemeInit.astro';
@@ -28,18 +32,16 @@ const t = strings[lang];
 const other: Lang = lang === 'en' ? 'zh' : 'en';
 const featureSizes = '(min-width: 1200px) 1120px, 100vw';
 const featureWidths = [640, 960, 1360, 1800];
-const installTabs = [
-  { id: 'linux', label: t.install.tabs.linux, command: installCommands.linux, note: t.install.notes.linux, prompt: '$' },
-  { id: 'windows', label: t.install.tabs.windows, command: installCommands.windows, note: t.install.notes.windows, prompt: 'PS>' },
-  { id: 'docker', label: t.install.tabs.docker, command: installCommands.docker, note: t.install.notes.docker, prompt: '$' }
+const installTabs: InstallTab[] = [
+  { id: 'linux', label: t.install.tabs.linux, command: installCommands.linux, prompt: '$' },
+  { id: 'windows', label: t.install.tabs.windows, command: installCommands.windows, prompt: 'PS>' }
 ];
 const docsHref = (page = '') => docsPath(lang, page);
 const d = t.downloads;
 const desktopDownloads = [
-  { option: d.desktop.windows, file: downloadFiles.windowsDesktop },
-  { option: d.desktop.mac, file: downloadFiles.macDesktop }
+  { option: d.desktop.windows, file: downloadFiles.windowsDesktop, mark: 'windows' as const },
+  { option: d.desktop.mac, file: downloadFiles.macDesktop, mark: 'macos' as const }
 ];
-const serverOptions = [d.server.installers, d.server.docker];
 ---
 <!doctype html>
 <html lang={t.htmlLang} data-theme="light">
@@ -73,23 +75,12 @@ const serverOptions = [d.server.installers, d.server.docker];
             <h1 id="hero-title">{t.hero.title}</h1>
             <p class="lede">{t.hero.lede}</p>
 
-            <div class="install" id="install" data-tabs>
-              <div class="install-tabs" role="tablist" aria-label={t.nav.install}>
-                {installTabs.map((tab, index) => (
-                  <button type="button" role="tab" id={`tab-${tab.id}`} aria-controls={`panel-${tab.id}`} aria-selected={index === 0 ? 'true' : 'false'} tabindex={index === 0 ? 0 : -1} data-tab={tab.id}>{tab.label}</button>
-                ))}
-              </div>
-              {installTabs.map((tab, index) => (
-                <div class="install-panel" role="tabpanel" id={`panel-${tab.id}`} aria-labelledby={`tab-${tab.id}`} hidden={index !== 0}>
-                  <div class="command">
-                    <pre><code>{tab.command.split('\n').map((line, i, lines) => (<span class="command-line"><span class="prompt" aria-hidden="true">{i === 0 || !lines[i - 1].endsWith('\\') ? tab.prompt : ' '.repeat(tab.prompt.length)}</span>{line}</span>))}</code></pre>
-                    <button class="copy-button" type="button" data-copy={tab.command} aria-label={t.install.copy} title={t.install.copy}><Icon name="copy" class="copy-idle" /><Icon name="check" class="copy-done" /></button>
-                  </div>
-                  <p class="install-note">{tab.note} <a href={docsHref('installing/')}>{t.install.requirementsLink}</a></p>
-                </div>
-              ))}
-              <p class="install-more"><a href="#download">{t.install.more} ↓</a></p>
-              <span class="visually-hidden" role="status" data-copy-status data-copied={t.install.copied}></span>
+            <div class="hero-start" id="install">
+              <InstallCommands idPrefix="hero" label={t.nav.install} title={t.install.title} tabs={installTabs} copy={t.install.copy} class="hero-command" />
+              <p class="hero-actions">
+                <a class="hero-demo" href={demoSession(heroDemoSession)}>{t.hero.actions.demo}</a>
+                <a class="hero-more" href="#download">{t.hero.actions.more} ↓</a>
+              </p>
             </div>
           </div>
 
@@ -215,13 +206,14 @@ const serverOptions = [d.server.installers, d.server.docker];
           <h2 id="download-title">{d.title}</h2>
           <div class="download-row">
             <div class="download-kind">
+              <DownloadSchematic kind="desktop" />
               <h3>{d.desktop.title}</h3>
               <p>{d.desktop.body}</p>
             </div>
             <div class="download-options">
-              {desktopDownloads.map(({ option, file }) => (
+              {desktopDownloads.map(({ option, file, mark }) => (
                 <div class="download-option" data-platform={file.platform}>
-                  <p class="download-name">{option.name} <span>{option.detail}</span><span class="download-current" hidden>{d.current}</span></p>
+                  <p class="download-name"><PlatformMark name={mark} />{option.name} <span>{option.detail}</span><span class="download-current" hidden>{d.current}</span></p>
                   <p class="download-action"><a class="download-button" href={file.href}><Icon name="download" />{d.download}</a><code>{file.file}</code></p>
                   <p class="download-note">{option.note} <a href={option.guide.href}>{option.guide.label} →</a></p>
                 </div>
@@ -230,33 +222,42 @@ const serverOptions = [d.server.installers, d.server.docker];
           </div>
           <div class="download-row">
             <div class="download-kind">
+              <DownloadSchematic kind="server" />
               <h3>{d.server.title}</h3>
               <p>{d.server.body}</p>
             </div>
-            <div class="download-options">
-              {serverOptions.map((option) => (
-                <div class="download-option">
-                  <p class="download-name">{option.name} {option.detail && <span>{option.detail}</span>}</p>
-                  <p class="download-note">{option.note} <a href={option.guide.href}>{option.guide.label} {option.guide.href.startsWith('#') ? '↑' : '→'}</a></p>
-                </div>
-              ))}
+            <div class="download-options download-options-wide">
+              <div class="download-option">
+                <p class="download-name"><span class="platform-marks"><PlatformMark name="linux" /><PlatformMark name="macos" /><PlatformMark name="windows" /></span>{d.server.installers.name}</p>
+                <InstallCommands idPrefix="server" label={d.server.installers.name} tabs={installTabs} copy={t.install.copy} />
+                <p class="download-note">{d.server.installers.note} <a href={d.server.installers.guide.href}>{d.server.installers.guide.label} →</a></p>
+              </div>
+              <div class="download-option">
+                <p class="download-name"><PlatformMark name="docker" />{d.server.docker.name} <span>{d.server.docker.detail}</span></p>
+                <div class="command-card"><Command command={installCommands.docker} prompt="$" copy={t.install.copy} /></div>
+                <p class="download-note">{d.server.docker.note} <a href={d.server.docker.guide.href}>{d.server.docker.guide.label} →</a></p>
+              </div>
               <p class="download-more"><a href={d.server.packages.href}>{d.server.packages.label} →</a></p>
             </div>
           </div>
           <div class="download-row">
             <div class="download-kind">
+              <DownloadSchematic kind="android" />
               <h3>{d.android.title}</h3>
               <p>{d.android.body}</p>
             </div>
             <div class="download-options">
               <div class="download-option" data-platform={downloadFiles.androidNode.platform}>
-                <p class="download-name">{d.android.app.name} <span>{d.android.app.detail}</span><span class="download-current" hidden>{d.current}</span></p>
+                <p class="download-name"><PlatformMark name="android" />{d.android.app.name} <span>{d.android.app.detail}</span><span class="download-current" hidden>{d.current}</span></p>
                 <p class="download-action"><a class="download-button" href={downloadFiles.androidNode.href}><Icon name="download" />{d.download}</a><code>{downloadFiles.androidNode.file}</code></p>
                 <p class="download-note">{d.android.app.note} <a href={d.android.app.guide.href}>{d.android.app.guide.label} →</a></p>
               </div>
             </div>
           </div>
-          <p class="download-foot"><a href={latestReleaseUrl}>{d.release} →</a></p>
+          <div class="download-foot">
+            <p><a href={latestReleaseUrl}>{d.release} →</a></p>
+            <p class="download-attribution">{d.attribution}</p>
+          </div>
         </div>
       </section>
 
@@ -271,6 +272,7 @@ const serverOptions = [d.server.installers, d.server.docker];
           <p class="start-foot">{t.start.lede} <a href={docsHref('installing/')}>{t.start.guide} →</a></p>
         </div>
       </section>
+      <span class="visually-hidden" role="status" data-copy-status data-copied={t.install.copied}></span>
     </main>
 
     <SiteFooter lang={lang} languageHref={strings[other].path} />
