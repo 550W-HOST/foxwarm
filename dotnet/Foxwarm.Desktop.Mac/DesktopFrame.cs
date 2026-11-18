@@ -17,6 +17,7 @@ internal sealed class DesktopFrame : NSObject, IWKScriptMessageHandler
 {
     internal const string HandlerName = "foxwarmFrame";
     private readonly NSWindow window;
+    private readonly bool codeWindow;
     private readonly NSToolbar toolbar = new("FoxwarmFrame") { ShowsBaselineSeparator = false };
     private readonly List<NSObject> observers = [];
     private WKWebView? view;
@@ -26,9 +27,10 @@ internal sealed class DesktopFrame : NSObject, IWKScriptMessageHandler
     private DesktopFrameRegions? regions;
     private bool fullScreen;
 
-    internal DesktopFrame(NSWindow window)
+    internal DesktopFrame(NSWindow window, DesktopWindowFrame frameKind = DesktopWindowFrame.WebUi)
     {
         this.window = window;
+        codeWindow = frameKind == DesktopWindowFrame.Code;
         window.StyleMask |= NSWindowStyle.FullSizeContentView;
         window.TitlebarAppearsTransparent = true;
         window.TitleVisibility = NSWindowTitleVisibility.Hidden;
@@ -140,9 +142,9 @@ internal sealed class DesktopFrame : NSObject, IWKScriptMessageHandler
         var (left, top) = ControlZone();
         var tokens = new JsonArray();
         if (!window.IsKeyWindow)
-            tokens.Add("inactive");
+            tokens.Add((JsonNode)"inactive");
         if (fullScreen)
-            tokens.Add("fullscreen");
+            tokens.Add((JsonNode)"fullscreen");
         return new JsonObject
         {
             ["platform"] = "macos",
@@ -183,6 +185,22 @@ internal sealed class DesktopFrame : NSObject, IWKScriptMessageHandler
         if (dragView is null)
             return;
         var (left, top) = ControlZone();
+        if (codeWindow && view?.Superview is { } content)
+        {
+            // The native strip remains above setup/error responses without a frame report.
+            var frame = content.Bounds;
+            if (regions is null)
+                frame = new CGRect(frame.X, frame.Y, frame.Width, Math.Max(0, frame.Height - top));
+            if (view.Frame != frame)
+                view.Frame = frame;
+            if (regions is null)
+            {
+                var width = dragView.Bounds.Width - left;
+                dragView.Regions = width > 0 && top > 0 ? [new FrameRect(left, 0, width, top)] : [];
+                dragView.Lights = new CGRect(0, 0, left, top);
+                return;
+            }
+        }
         var bounds = dragView.Bounds;
         dragView.Regions =
             regions?.Clip(1, new FrameRect(0, 0, bounds.Width, bounds.Height), [new FrameRect(0, 0, left, top)])

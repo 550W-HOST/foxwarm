@@ -14,6 +14,7 @@
   <ItemGroup>
     <ProjectReference Include="../Foxwarm.NodePrimitives/Foxwarm.NodePrimitives.csproj" />
     <EmbeddedResource Include="Code/workbench.html" />
+    <EmbeddedResource Include="Code/workbenchFrame.js" />
     <EmbeddedResource Include="McpInboundTools.json" />
     <EmbeddedResource Include="Tools/Ctl/CtlCommands.json" />
     <PackageReference Include="ModelContextProtocol.Core" Version="2.2.0" />

@@ -10,8 +10,7 @@ namespace Foxwarm.Desktop;
 /// <summary>
 /// An app window opened by a page (window.open or a link with a target). It hosts the
 /// opener's new web contents, so <c>window.opener</c> and postMessage keep working. The
-/// WebUI's own document gets the main window's custom frame; other same-origin documents
-/// keep the system title bar. Closing it closes it; only the main window hides to the tray.
+/// WebUI and Code have custom frames; other same-origin documents keep the system title bar. Closing it closes it; only the main window hides to the tray.
 /// </summary>
 internal sealed partial class DesktopPopupWindow : Window
 {
@@ -26,7 +25,7 @@ internal sealed partial class DesktopPopupWindow : Window
     internal DesktopPopupWindow(
         DesktopWebViews webViews,
         Window opener,
-        bool framed,
+        DesktopWindowFrame frameKind,
         bool blank,
         double? width,
         double? height
@@ -39,8 +38,8 @@ internal sealed partial class DesktopPopupWindow : Window
         content.Children.Add(view);
         Content = content;
         AppWindow.SetIcon(Path.Combine(AppContext.BaseDirectory, "Foxwarm.ico"));
-        if (framed)
-            frame = new DesktopFrame(this, view, webViews.IsAppUri);
+        if (frameKind != DesktopWindowFrame.System)
+            frame = new DesktopFrame(this, view, webViews.IsAppUri, frameKind);
         Place(opener, width, height);
         Closed += (_, _) =>
         {

@@ -29,15 +29,23 @@ public sealed class DesktopNavigationTests
         Assert.Equal(expected, DesktopNavigation.Classify(Origin, uri).ToString());
 
     [Theory]
-    [InlineData("http://127.0.0.1:49152/", true)]
-    [InlineData("http://127.0.0.1:49152/?foxwarmPopup=chat&sessionId=a%2Fb#tab", true)]
-    [InlineData("http://127.0.0.1:49152/vscode-web/?nodeId=master", false)]
-    [InlineData("http://127.0.0.1:49152/login.html", false)]
-    [InlineData("http://127.0.0.1:49152/api/files/x.png", false)]
-    [InlineData("about:blank", false)]
-    [InlineData("https://example.com/", false)]
-    public void Only_the_app_root_document_gets_the_custom_frame(string uri, bool expected) =>
-        Assert.Equal(expected, DesktopNavigation.IsFramed(Origin, uri));
+    [InlineData("http://127.0.0.1:49152/", "WebUi")]
+    [InlineData("http://127.0.0.1:49152/?foxwarmPopup=chat&sessionId=a%2Fb#tab", "WebUi")]
+    [InlineData("http://127.0.0.1:49152/vscode-web", "Code")]
+    [InlineData("http://127.0.0.1:49152/vscode-web/?nodeId=master#tab", "Code")]
+    [InlineData("http://127.0.0.1:49152/VSCODE-WEB", "Code")]
+    [InlineData("http://127.0.0.1:49152/vscode-web//", "System")]
+    [InlineData("http://127.0.0.1:49152/vscode-web/static/index.html", "System")]
+    [InlineData("http://127.0.0.1:49152/vscode-web/callback", "System")]
+    [InlineData("http://127.0.0.1:49152/vscode-web-preview", "System")]
+    [InlineData("http://127.0.0.1:49152/login.html", "System")]
+    [InlineData("http://127.0.0.1:49152/api/files/x.png", "System")]
+    [InlineData("about:blank", "System")]
+    [InlineData(null, "System")]
+    [InlineData("http://127.0.0.1:49153/vscode-web", "System")]
+    [InlineData("https://example.com/vscode-web", "System")]
+    public void Only_the_app_root_and_Code_documents_get_custom_frames(string? uri, string expected) =>
+        Assert.Equal(expected, DesktopNavigation.FrameFor(Origin, uri).ToString());
 
     [Fact]
     public void Window_size_honours_requests_within_the_minimum_and_the_work_area()

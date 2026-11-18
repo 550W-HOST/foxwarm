@@ -23,6 +23,7 @@ internal sealed class DesktopFrame
     private readonly Window window;
     private readonly WebView2 view;
     private readonly Func<string, bool> isAppUri;
+    private readonly bool codeWindow;
     private CoreWebView2? core;
     private string origin = "";
     private string? scriptId;
@@ -30,16 +31,20 @@ internal sealed class DesktopFrame
     private DesktopFrameRegions? regions;
     private bool active = true;
 
-    internal DesktopFrame(Window window, WebView2 view, Func<string, bool> isAppUri)
+    internal DesktopFrame(
+        Window window,
+        WebView2 view,
+        Func<string, bool> isAppUri,
+        DesktopWindowFrame frameKind = DesktopWindowFrame.WebUi
+    )
     {
         this.window = window;
         this.view = view;
         this.isAppUri = isAppUri;
+        codeWindow = frameKind == DesktopWindowFrame.Code;
         var bar = window.AppWindow.TitleBar;
         bar.ExtendsContentIntoTitleBar = true;
-        // Tall (48 epx) caption buttons: the page makes its title row (brand row and tab
-        // strips) exactly as tall as the buttons and centres its controls on them.
-        bar.PreferredHeightOption = TitleBarHeightOption.Tall;
+        bar.PreferredHeightOption = codeWindow ? TitleBarHeightOption.Standard : TitleBarHeightOption.Tall;
         bar.ButtonBackgroundColor = Colors.Transparent;
         bar.ButtonInactiveBackgroundColor = Colors.Transparent;
         ApplyButtonColors(dark: false);
@@ -111,6 +116,8 @@ internal sealed class DesktopFrame
         this.origin = origin.GetLeftPart(UriPartial.Authority);
         view.XamlRoot.Changed += (_, _) => Update();
         state = StateJson();
+        if (codeWindow)
+            ApplyRegions();
         scriptId = await core.AddScriptToExecuteOnDocumentCreatedAsync(DocumentScript(state));
     }
 
@@ -190,6 +197,22 @@ internal sealed class DesktopFrame
             return;
         var bar = window.AppWindow.TitleBar;
         var size = window.AppWindow.ClientSize;
+        if (codeWindow)
+        {
+            // Before a page reports, keep a native drag strip over the document. This also
+            // covers setup/error responses that never render a workbench (even non-HTML).
+            var top = regions is null ? bar.Height / Scale : 0;
+            if (view.Margin.Top != top)
+                view.Margin = new Thickness(0, top, 0, 0);
+            if (regions is null)
+            {
+                var width = size.Width - bar.LeftInset - bar.RightInset;
+                Source().SetRegionRects(NonClientRegionKind.Caption, width > 0 && bar.Height > 0
+                    ? [new RectInt32(bar.LeftInset, 0, width, bar.Height)]
+                    : []);
+                return;
+            }
+        }
         var rects = regions?.Clip(
                 Scale,
                 new FrameRect(0, 0, size.Width, size.Height),

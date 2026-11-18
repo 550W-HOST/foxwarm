@@ -232,7 +232,7 @@ internal sealed partial class DesktopApplication : NSApplicationDelegate
             configuration,
             ruleList!,
             endpoint!,
-            DesktopNavigation.IsFramed(endpoint!, url),
+            DesktopNavigation.FrameFor(endpoint!, url),
             target == DesktopTarget.Blank,
             features,
             closed => popups.Remove(closed)
