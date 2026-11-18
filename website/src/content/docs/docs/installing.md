@@ -24,14 +24,14 @@ Each [release](https://github.com/550W-HOST/foxwarm/releases/latest) provides:
 
 | Package | Use |
 | --- | --- |
-| [`foxwarm-linux-x64-native.tar.gz`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-linux-x64-native.tar.gz) | Linux server compiled to native code; needs no .NET runtime (default on Linux) |
+| [`foxwarm-linux-x64-native.tar.gz`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-linux-x64-native.tar.gz) | Linux server compiled to native code (default on Linux) |
 | [`foxwarm-linux-x64.tar.gz`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-linux-x64.tar.gz) | Linux server; uses the installed ASP.NET Core 10 runtime |
-| [`foxwarm-osx-arm64-native.tar.gz`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-osx-arm64-native.tar.gz) | Apple Silicon Mac server compiled to native code; needs no .NET runtime (default on macOS) |
+| [`foxwarm-osx-arm64-native.tar.gz`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-osx-arm64-native.tar.gz) | Apple Silicon Mac server compiled to native code (default on macOS) |
 | [`foxwarm-osx-arm64.tar.gz`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-osx-arm64.tar.gz) | Apple Silicon Mac server; uses the installed ASP.NET Core 10 runtime |
-| [`foxwarm-win-x64-native.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-win-x64-native.zip) | Windows server compiled to native code; needs no .NET runtime (default on Windows) |
+| [`foxwarm-win-x64-native.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-win-x64-native.zip) | Windows server compiled to native code (default on Windows) |
 | [`foxwarm-win-x64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-win-x64.zip) | Windows server; uses the installed ASP.NET Core 10 runtime |
-| [`foxwarm-desktop-win-x64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-win-x64.zip) | Windows desktop app compiled to native code; needs no .NET or Visual C++ runtime |
-| [`foxwarm-desktop-osx-arm64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-osx-arm64.zip) | Apple Silicon Mac desktop app compiled to native code; needs no .NET runtime |
+| [`foxwarm-desktop-win-x64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-win-x64.zip) | Windows x64 desktop app; see [Windows desktop app](#windows-desktop-app) |
+| [`foxwarm-desktop-osx-arm64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-osx-arm64.zip) | Apple Silicon Mac desktop app; macOS 15 or later, see [macOS desktop app](#macos-desktop-app) |
 | [`foxwarm-android-node.apk`](https://foxwarm.net/android) | Android Node app; Android 11 or later, sideload installation; see [Android Node](#android-node) |
 | [`SHA256SUMS`](https://github.com/550W-HOST/foxwarm/releases/latest/download/SHA256SUMS) | Checksums of the release files |
 
@@ -213,7 +213,7 @@ Logs are under `state/logs/` in the data directory.
 
 ## Docker
 
-The image runs the native Linux build of Foxwarm, without a .NET runtime, and includes Node.js and Chromium:
+The image runs the native Linux build of Foxwarm and includes Node.js and Chromium:
 
 ```bash
 mkdir -p foxwarm-data

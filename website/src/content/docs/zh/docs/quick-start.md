@@ -33,7 +33,7 @@ docker run -d --name foxwarm --init -p 3001:3001 \
   ghcr.io/550w-host/foxwarm:latest
 ```
 
-安装脚本下载预编译版本，不需要编译，使用不需要 .NET 的原生安装包。Windows 和 Apple Silicon Mac 上另有桌面版，在窗口中运行 Foxwarm，只供这台电脑使用（[Windows](/zh/docs/installing/#windows-桌面版)、[macOS](/zh/docs/installing/#macos-桌面版)）。安装包和环境要求见[安装 Foxwarm](/zh/docs/installing/)。
+安装脚本下载预编译版本，不需要编译。Windows 和 Apple Silicon Mac 上另有桌面版，在窗口中运行 Foxwarm，只供这台电脑使用（[Windows](/zh/docs/installing/#windows-桌面版)、[macOS](/zh/docs/installing/#macos-桌面版)）。安装包和环境要求见[安装 Foxwarm](/zh/docs/installing/)。
 
 安装完成后，脚本会启动 Foxwarm，并输出一个登录链接，形如 `http://localhost:3001/#token=...`。请像对待密码一样保管它。
 

@@ -22,14 +22,14 @@ Foxwarm 服务器支持 **Linux x64**（包括 x64 WSL）、**macOS arm64**（Ap
 
 | 安装包 | 用途 |
 | --- | --- |
-| [`foxwarm-linux-x64-native.tar.gz`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-linux-x64-native.tar.gz) | Linux 服务器，编译为原生程序，不需要 .NET 运行时（Linux 默认） |
+| [`foxwarm-linux-x64-native.tar.gz`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-linux-x64-native.tar.gz) | Linux 服务器，编译为原生程序（Linux 默认） |
 | [`foxwarm-linux-x64.tar.gz`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-linux-x64.tar.gz) | Linux 服务器，使用系统已安装的 ASP.NET Core 10 运行时 |
-| [`foxwarm-osx-arm64-native.tar.gz`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-osx-arm64-native.tar.gz) | Apple Silicon Mac 服务器，编译为原生程序，不需要 .NET 运行时（macOS 默认） |
+| [`foxwarm-osx-arm64-native.tar.gz`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-osx-arm64-native.tar.gz) | Apple Silicon Mac 服务器，编译为原生程序（macOS 默认） |
 | [`foxwarm-osx-arm64.tar.gz`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-osx-arm64.tar.gz) | Apple Silicon Mac 服务器，使用系统已安装的 ASP.NET Core 10 运行时 |
-| [`foxwarm-win-x64-native.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-win-x64-native.zip) | Windows 服务器，编译为原生程序，不需要 .NET 运行时（Windows 默认） |
+| [`foxwarm-win-x64-native.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-win-x64-native.zip) | Windows 服务器，编译为原生程序（Windows 默认） |
 | [`foxwarm-win-x64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-win-x64.zip) | Windows 服务器，使用系统已安装的 ASP.NET Core 10 运行时 |
-| [`foxwarm-desktop-win-x64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-win-x64.zip) | Windows 桌面版，编译为原生代码，不需要 .NET 或 Visual C++ 运行时 |
-| [`foxwarm-desktop-osx-arm64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-osx-arm64.zip) | Apple Silicon Mac 桌面版，编译为原生代码，不需要 .NET 运行时 |
+| [`foxwarm-desktop-win-x64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-win-x64.zip) | Windows x64 桌面版，见 [Windows 桌面版](#windows-桌面版) |
+| [`foxwarm-desktop-osx-arm64.zip`](https://github.com/550W-HOST/foxwarm/releases/latest/download/foxwarm-desktop-osx-arm64.zip) | Apple Silicon Mac 桌面版；需要 macOS 15 或更新版本，见 [macOS 桌面版](#macos-桌面版) |
 | [`foxwarm-android-node.apk`](https://foxwarm.net/android) | Android Node 应用；需要 Android 11 或更新版本，通过 APK 侧载安装，见 [Android Node](#android-node) |
 | [`SHA256SUMS`](https://github.com/550W-HOST/foxwarm/releases/latest/download/SHA256SUMS) | Release 中各文件的校验和 |
 
@@ -211,7 +211,7 @@ bot:
 
 ## Docker
 
-镜像运行 Foxwarm 的原生 Linux 版本，不含 .NET 运行时，并包含 Node.js 和 Chromium：
+镜像运行 Foxwarm 的原生 Linux 版本，包含 Node.js 和 Chromium：
 
 ```bash
 mkdir -p foxwarm-data

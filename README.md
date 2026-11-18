@@ -88,7 +88,7 @@ docker run -d --name foxwarm --init -p 3001:3001 \
   ghcr.io/550w-host/foxwarm:latest
 ```
 
-The Linux x64 image runs the native Linux release package, without a .NET runtime, and includes Node.js and Chromium. Data is mounted at `/data`; the default port is 3001. Foxwarm runs as the non-root uid 1000 with passwordless `sudo`, so the data directory must be writable by that user, and browser tools need the seccomp profile shown above, a copy of [`docker/seccomp-chromium.json`](docker/seccomp-chromium.json). The repository's `docker-compose.yml` runs the same image with it; `docker build .` builds it from a checkout. See the [Docker installation steps](https://foxwarm.net/docs/installing/#docker). Optional Code workbench and HEIC/HEIF support need additional assets.
+The Linux x64 image runs the native Linux release package and includes Node.js and Chromium. Data is mounted at `/data`; the default port is 3001. Foxwarm runs as the non-root uid 1000 with passwordless `sudo`, so the data directory must be writable by that user, and browser tools need the seccomp profile shown above, a copy of [`docker/seccomp-chromium.json`](docker/seccomp-chromium.json). The repository's `docker-compose.yml` runs the same image with it; `docker build .` builds it from a checkout. See the [Docker installation steps](https://foxwarm.net/docs/installing/#docker). Optional Code workbench and HEIC/HEIF support need additional assets.
 
 ## Development
 
