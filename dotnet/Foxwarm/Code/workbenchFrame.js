@@ -32,6 +32,10 @@
       html[data-foxwarm-code-frame="windows"] .monaco-workbench.web .split-view-view:has(> .part.titlebar .menubar-menu-button.open) {
         z-index: 1000;
       }
+      /* Code dims the whole inactive title container; an open menu must stay opaque. */
+      html[data-foxwarm-code-frame="windows"] .monaco-workbench .part.titlebar.inactive > .titlebar-container:has(.menubar-menu-button.open) {
+        opacity: 1;
+      }
       html[data-foxwarm-code-frame="macos"] .monaco-workbench.web.mac .part.titlebar > .titlebar-container > :is(.titlebar-left, .titlebar-center, .titlebar-right) {
         padding-top: 0;
       }
