@@ -163,8 +163,18 @@ test('the served bundled workbench uses Code’s own WCO layout only with a top-
     await win.waitForSelector('.menubar-menu-items-holder', { visible: true })
     const menuRect = await win.$eval('.menubar-menu-items-holder', element => element.getBoundingClientRect().toJSON())
     assert.ok((await snapshot(win)).report.regions.every(region => !intersects(region, menuRect)))
-    await win.keyboard.press('Escape')
-    await win.click(`${title} .command-center-quick-pick`)
+    const menuItem = await win.waitForFunction(() => {
+      const item = [...document.querySelectorAll('.menubar-menu-items-holder [role="menuitem"]')]
+        .find(element => element.textContent.includes('New Text File'))
+      if (!item) return false
+      const bounds = item.getBoundingClientRect()
+      const x = bounds.left + 14, y = bounds.top + bounds.height / 2
+      return item.contains(document.elementFromPoint(x, y)) && { x, y }
+    })
+    const point = await menuItem.jsonValue()
+    await win.mouse.click(point.x, point.y)
+    await win.waitForFunction(() => [...document.querySelectorAll('.tab')].some(tab => tab.textContent.includes('Untitled')))
+    await win.locator(`${title} .command-center-quick-pick`).click()
     await win.waitForSelector('.quick-input-widget input', { visible: true })
     await win.keyboard.press('Escape')
 

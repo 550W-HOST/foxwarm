@@ -28,6 +28,10 @@
       html[data-foxwarm-code-frame] .monaco-workbench.web .part.titlebar .counter-zoom .window-controls-container {
         --zoom-factor: 1;
       }
+      /* The fixed File menu can otherwise paint behind the editor in WebView2. */
+      html[data-foxwarm-code-frame="windows"] .monaco-workbench.web .split-view-view:has(> .part.titlebar .menubar-menu-button.open) {
+        z-index: 1000;
+      }
       html[data-foxwarm-code-frame="macos"] .monaco-workbench.web.mac .part.titlebar > .titlebar-container > :is(.titlebar-left, .titlebar-center, .titlebar-right) {
         padding-top: 0;
       }
