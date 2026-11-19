@@ -114,22 +114,191 @@ public sealed class ToolScriptMontyLanguageTests
     }
 
     [Theory]
-    [InlineData("import datetime\ndatetime.datetime.now()", "datetime.now")]
-    [InlineData("import datetime\ndatetime.date.today()", "date.today")]
-    [InlineData("import time\ntime.time()", "time.time")]
-    [InlineData("import time\ntime.sleep(0.01)", "time.sleep")]
-    [InlineData("import random\nrandom.random()", "os.urandom")]
-    [InlineData("import os\nos.getenv('HOME')", "os.getenv")]
-    public async Task Clock_sleep_entropy_and_environment_stay_rejected_as_host_requests(
+    [InlineData("import os\nos.getenv('HOME')", "RuntimeError: 'os.getenv'")]
+    [InlineData("import os\nos.environ['HOME']", "RuntimeError: 'os.environ'")]
+    [InlineData("import os\nos.urandom(4)", "RuntimeError: 'os.urandom'")]
+    [InlineData("from pathlib import Path\nPath('/etc/hostname').read_text()", "PermissionError")]
+    [InlineData("import helpers", "ModuleNotFoundError")]
+    public async Task Environment_files_and_local_imports_stay_rejected_as_host_requests(
         string code,
-        string name
+        string error
     )
     {
         await using var f = await ScriptFixture.Create();
         var failed = await f.Call("run_script", new JsonObject { ["code"] = code });
         Assert.Equal("failed", SessionWait.Text(failed["status"]));
-        Assert.Contains("RuntimeError", SessionWait.Text(failed["error"]));
-        Assert.Contains(name, SessionWait.Text(failed["error"]));
+        Assert.Contains(error, SessionWait.Text(failed["error"]));
+    }
+
+    [Fact]
+    public async Task Clock_and_unseeded_random_read_the_worker_clock_and_entropy()
+    {
+        await using var f = await ScriptFixture.Create();
+        const string code =
+            "import datetime, time, random\n"
+            + "return [time.time(), datetime.datetime.now().isoformat(), str(datetime.date.today()),"
+            + " str(datetime.datetime.now().tzinfo), random.random(), random.Random().random()]\n";
+        var before = DateTimeOffset.UtcNow;
+        var first = await f.Call("run_script", new JsonObject { ["code"] = code });
+        var second = await f.Call("run_script", new JsonObject { ["code"] = code });
+        var after = DateTimeOffset.UtcNow;
+        Assert.Equal("completed", SessionWait.Text(first["status"]));
+        Assert.Equal("completed", SessionWait.Text(second["status"]));
+        var a = first["result"]!.AsArray();
+        var b = second["result"]!.AsArray();
+        var now = DateTimeOffset.FromUnixTimeMilliseconds((long)(a[0]!.GetValue<double>() * 1000));
+        Assert.InRange(now, before.AddSeconds(-1), after.AddSeconds(1));
+        // Naive datetime.now() and date.today() read in UTC.
+        var naive = DateTime.Parse(a[1]!.GetValue<string>(), System.Globalization.CultureInfo.InvariantCulture);
+        Assert.InRange(naive, before.UtcDateTime.AddSeconds(-1), after.UtcDateTime.AddSeconds(1));
+        Assert.Equal(naive.ToString("yyyy-MM-dd"), a[2]!.GetValue<string>());
+        Assert.Equal("None", a[3]!.GetValue<string>());
+        // Unseeded generators start from fresh entropy in every run.
+        Assert.NotEqual(a[4]!.GetValue<double>(), b[4]!.GetValue<double>());
+        Assert.NotEqual(a[5]!.GetValue<double>(), b[5]!.GetValue<double>());
+    }
+
+    [Fact]
+    public async Task Sleep_waits_within_the_time_limit_and_returns_none()
+    {
+        await using var f = await ScriptFixture.Create();
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var run = await f.Call(
+            "run_script",
+            new JsonObject
+            {
+                ["code"] =
+                    "import time, asyncio\n"
+                    + "a = time.monotonic()\n"
+                    + "r = time.sleep(0.3)\n"
+                    + "async def nap():\n    await asyncio.sleep(0.2)\n    return 'woke'\n"
+                    + "return [r, asyncio.run(nap()), time.monotonic() - a]\n",
+                ["timeoutSecs"] = 5,
+            }
+        );
+        Assert.Equal("completed", SessionWait.Text(run["status"]));
+        var values = run["result"]!.AsArray();
+        Assert.Null(values[0]);
+        Assert.Equal("woke", values[1]!.GetValue<string>());
+        Assert.True(values[2]!.GetValue<double>() >= 0.5, values.ToJsonString());
+        Assert.True(watch.Elapsed >= TimeSpan.FromSeconds(0.5));
+    }
+
+    [Fact]
+    public async Task A_sleep_past_the_time_limit_pauses_there_and_continues_until_its_end_instant()
+    {
+        await using var f = await ScriptFixture.Create();
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var paused = await f.Call(
+            "run_script",
+            new JsonObject
+            {
+                ["code"] = "import time\nprint('before')\ntime.sleep(2)\nreturn 'slept'\n",
+                ["timeoutSecs"] = .4,
+            }
+        );
+        var first = watch.Elapsed;
+        Assert.Equal("waiting", SessionWait.Text(paused["status"]));
+        Assert.Equal("timeout", SessionWait.Text(paused["waitingReason"]));
+        // The slice ends at its limit, not at the end of the sleep.
+        Assert.InRange(first, TimeSpan.FromSeconds(.35), TimeSpan.FromSeconds(1.5));
+        var record = await f.Manager.ToolScript.Store.ReadAsync(
+            SessionWait.Text(paused["runId"])!,
+            default
+        );
+        Assert.Equal(
+            "time.sleep",
+            SessionWait.Text(record!["waiting"]!["timeout"]!["pausedAtFunctionName"])
+        );
+        Assert.Equal(
+            "sleep",
+            SessionWait.Text(record["waiting"]!["timeout"]!["pendingResume"]!["mode"])
+        );
+        // A continuation with a short limit sleeps on and pauses again.
+        var again = await f.Call("continue_script", Resume(paused, null, .4));
+        Assert.Equal("waiting", SessionWait.Text(again["status"]));
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(1.9));
+        // A continuation with room waits only for the rest of the sleep.
+        var done = await f.Call("continue_script", Resume(again, null, 10));
+        Assert.Equal("completed", SessionWait.Text(done["status"]));
+        Assert.Equal("slept", done["result"]!.GetValue<string>());
+        Assert.InRange(watch.Elapsed, TimeSpan.FromSeconds(1.95), TimeSpan.FromSeconds(4));
+        Assert.Equal("before\n", SessionWait.Text(done["stdout"]) ?? "before\n");
+    }
+
+    [Fact]
+    public async Task A_sleep_whose_end_passed_while_paused_resumes_at_once()
+    {
+        await using var f = await ScriptFixture.Create();
+        var paused = await f.Call(
+            "run_script",
+            new JsonObject { ["code"] = "import time\ntime.sleep(0.6)\nreturn 1\n", ["timeoutSecs"] = .2 }
+        );
+        Assert.Equal("waiting", SessionWait.Text(paused["status"]));
+        await Task.Delay(700);
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var done = await f.Call("continue_script", Resume(paused, null, 10));
+        Assert.Equal("completed", SessionWait.Text(done["status"]));
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(.5), watch.Elapsed.ToString());
+    }
+
+    [Fact]
+    public async Task Stop_interrupts_a_sleeping_script_promptly_with_an_exception_at_the_sleep()
+    {
+        await using var f = await ScriptFixture.Create();
+        using var stop = new CancellationTokenSource(TimeSpan.FromMilliseconds(400));
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var result = (
+            await f.Tools.ExecuteAsync(
+                new JsonObject
+                {
+                    ["id"] = "sleeping-script",
+                    ["name"] = "run_script",
+                    ["args"] = new JsonObject
+                    {
+                        ["code"] =
+                            "import time\ntry:\n    time.sleep(60)\nexcept RuntimeError as e:\n    print('caught', e)\n"
+                            + "time.sleep(60)\nreturn 'not reached'\n",
+                        ["timeoutSecs"] = 120,
+                    },
+                },
+                stop.Token
+            )
+        )!.AsObject();
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(5), watch.Elapsed.ToString());
+        var record = await f.Manager.ToolScript.Store.ReadAsync(
+            SessionWait.Text(result["runId"])!,
+            default
+        );
+        Assert.Equal("failed", SessionWait.Text(record!["status"]));
+        // The first sleep is interrupted; the second is refused at once.
+        Assert.Contains("caught Sleep was interrupted", SessionWait.Text(record["stdout"]));
+        Assert.Contains("Sleep was interrupted", SessionWait.Text(record["error"]));
+    }
+
+    [Fact]
+    public async Task Cancellation_ends_a_sleeping_foreground_run_promptly()
+    {
+        await using var f = await ScriptFixture.Create();
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var running = f.Call(
+            "run_script",
+            new JsonObject { ["code"] = "import time\ntime.sleep(60)\n", ["timeoutSecs"] = 120 }
+        );
+        string? runId = null;
+        while (runId is null && watch.Elapsed < TimeSpan.FromSeconds(10))
+        {
+            await Task.Delay(50);
+            var rows = await f.Manager.ToolScript.Store.ListAsync(f.Owner.Id, 10, "running", default);
+            runId = rows.Count > 0 ? SessionWait.Text(rows[0]["runId"]) : null;
+        }
+        Assert.NotNull(runId);
+        await Task.Delay(300);
+        var cancelled = await f.Call("cancel_toolscript_run", new JsonObject { ["runId"] = runId });
+        Assert.True(cancelled["cancellationRequested"]!.GetValue<bool>());
+        var result = await running.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal("cancelled", SessionWait.Text(result["status"]));
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(10));
     }
 
     [Fact]

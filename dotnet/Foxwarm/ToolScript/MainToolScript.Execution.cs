@@ -107,6 +107,7 @@ internal sealed partial class MainToolScript
             worker = new MontyWorker(binary);
             WorkerEvent progress;
             ToolScriptDataBudget progressBudget;
+            DateTimeOffset? sleepUntil = null;
             if (resume is null)
             {
                 // A detachable run has no execution-time budget, like a background exec.
@@ -159,7 +160,12 @@ internal sealed partial class MainToolScript
                     print,
                     run.Cancel.Token
                 );
-                if (progress.KindCase != WorkerEvent.KindOneofCase.FunctionCall)
+                var sleeping = Text(resume!["mode"]) == "sleep";
+                if (
+                    sleeping
+                        ? SleepSeconds(progress) is null
+                        : progress.KindCase != WorkerEvent.KindOneofCase.FunctionCall
+                )
                     throw new InvalidDataException(
                         "ToolScript persisted snapshot is not a resumable host-call snapshot."
                     );
@@ -172,14 +178,20 @@ internal sealed partial class MainToolScript
                 oldSnapshot = null;
                 restoredSnapshot = null;
                 progressBudget = Budget();
-                progress = await ResumeAsync(
-                    worker,
-                    progress.FunctionCall.CallId,
-                    resume,
-                    progressBudget,
-                    print,
-                    run.Cancel.Token
-                );
+                // A sleep paused at the time limit keeps its end instant; the loop waits out the rest.
+                if (sleeping)
+                    sleepUntil = DateTimeOffset.FromUnixTimeMilliseconds(
+                        (long)Number(resume["untilUnixMs"], 0)
+                    );
+                else
+                    progress = await ResumeAsync(
+                        worker,
+                        progress.FunctionCall.CallId,
+                        resume,
+                        progressBudget,
+                        print,
+                        run.Cancel.Token
+                    );
                 resume = null;
             }
             while (true)
@@ -232,6 +244,39 @@ internal sealed partial class MainToolScript
                     }
                     progress = await worker.TurnAsync(
                         new() { ResumeNameLookup = lookup },
+                        progressBudget,
+                        print,
+                        run.Cancel.Token
+                    );
+                    continue;
+                }
+                if (SleepSeconds(progress) is double delay)
+                {
+                    context.WaitScope.Pending = null;
+                    var until = sleepUntil ?? DateTimeOffset.UtcNow + TimeSpan.FromSeconds(delay);
+                    sleepUntil = null;
+                    var slept = await SleepAsync(until);
+                    if (slept is null)
+                    {
+                        await WaitAsync(
+                            "timeout",
+                            null,
+                            new JsonObject
+                            {
+                                ["mode"] = "sleep",
+                                ["untilUnixMs"] = until.ToUnixTimeMilliseconds(),
+                            },
+                            progress.OsCall.CallCase == OsCall.CallOneofCase.AsyncSleep
+                                ? "asyncio.sleep"
+                                : "time.sleep"
+                        );
+                        return ProjectSlice();
+                    }
+                    progressBudget = Budget();
+                    progress = await ResumeAsync(
+                        worker,
+                        progress.OsCall.CallId,
+                        slept,
                         progressBudget,
                         print,
                         run.Cancel.Token
@@ -340,7 +385,47 @@ internal sealed partial class MainToolScript
                     run.Cancel.Token
                 );
             }
-            async Task WaitAsync(string reason, JsonObject? fields, JsonObject? pending)
+            // Waits until the sleep's end instant within the slice's time limit. Returns the answer
+            // for the sleep, or null when the limit comes first and the run should pause there.
+            async Task<JsonObject?> SleepAsync(DateTimeOffset until)
+            {
+                var stopped = Failure(
+                    "RuntimeError",
+                    $"Sleep was interrupted because {context.Owner.Entry.ToolCancellationSource} cancelled the tool call."
+                );
+                if (run.Caller.IsCancellationRequested)
+                    return stopped;
+                var rest = until - DateTimeOffset.UtcNow;
+                var pause = false;
+                // Detachable segments have no time limit, like a background exec.
+                if (detach is null)
+                {
+                    var remaining = TimeSpan.FromSeconds(Number(record["timeoutSecs"], 30)) - Elapsed();
+                    if (rest > remaining)
+                        (rest, pause) = (remaining, true);
+                }
+                try
+                {
+                    // A timer can fire a little early; a sleep never ends before its time.
+                    var waited = Stopwatch.StartNew();
+                    for (var left = rest; left > TimeSpan.Zero; left = rest - waited.Elapsed)
+                        await Task.Delay(
+                            TimeSpan.FromMilliseconds(Math.Ceiling(left.TotalMilliseconds)),
+                            run.Token
+                        );
+                }
+                catch (OperationCanceledException) when (!run.Cancel.IsCancellationRequested)
+                {
+                    return stopped;
+                }
+                return pause ? null : new JsonObject { ["mode"] = "return", ["value"] = null };
+            }
+            async Task WaitAsync(
+                string reason,
+                JsonObject? fields,
+                JsonObject? pending,
+                string pausedAt = "call_tool"
+            )
             {
                 var budget = Budget();
                 var dump = await worker.TurnAsync(
@@ -362,9 +447,11 @@ internal sealed partial class MainToolScript
                         ["timeoutSecs"] = record["timeoutSecs"]!.DeepClone(),
                         ["pendingResume"] = pending,
                         ["elapsedMs"] = WholeMilliseconds(Elapsed()),
-                        ["pausedAtFunctionName"] = "call_tool",
-                        ["pausedAtSummaryName"] = record["lastHostCall"]
-                            ?["functionName"]?.DeepClone(),
+                        ["pausedAtFunctionName"] = pausedAt,
+                        ["pausedAtSummaryName"] =
+                            pausedAt == "call_tool"
+                                ? record["lastHostCall"]?["functionName"]?.DeepClone()
+                                : null,
                     };
                 if (pending is not null && context.WaitScope.Pending is { } intent)
                     waiting["timeout"]!["pendingSessionWait"] = intent.DeepClone();
@@ -409,6 +496,16 @@ internal sealed partial class MainToolScript
             run.Dispose();
         }
     }
+
+    /// <summary>The requested seconds when the worker suspends for a host-performed sleep.</summary>
+    private static double? SleepSeconds(WorkerEvent progress) =>
+        progress.KindCase != WorkerEvent.KindOneofCase.OsCall ? null
+        : progress.OsCall.CallCase switch
+        {
+            OsCall.CallOneofCase.Sleep => progress.OsCall.Sleep.Seconds,
+            OsCall.CallOneofCase.AsyncSleep => progress.OsCall.AsyncSleep.Delay,
+            _ => null,
+        };
 
     private static JsonObject Failure(string type, string message) =>
         new()

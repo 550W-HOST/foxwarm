@@ -135,15 +135,16 @@ internal sealed class MontyWorker : IAsyncDisposable
     }
 
     /// <summary>
-    /// The sandbox asks the host for its clock, sleeps and random seed, and ToolScript answers
-    /// "not handled", so these stay rejected as they were before the sandbox could serve them itself.
+    /// The sandbox reads the worker's clock (UTC) and seeds unseeded random generators from the
+    /// worker's entropy. Sleeps suspend to ToolScript, which waits them out against the slice's
+    /// time limit and its cancellation; the worker excludes them from its execution budget.
     /// </summary>
     private static OsPolicy HostOsPolicy() =>
         new()
         {
-            CallHost = new Unit(),
+            System = new Unit(),
             Sleep = new SleepMode { CallHost = new Unit() },
-            RandomCallHost = new Unit(),
+            RandomSystem = new Unit(),
         };
 
     internal async Task<WorkerEvent> TurnAsync(
