@@ -177,7 +177,7 @@ try {
   await turn(actor, 'install-exec-policy', [call('exec-policy', 'set_config', { target: 'tool-rules', filePath: 'deny-exec.yaml' })])
   const authorizedCalls = callsFor(actor).length
   state = await turn(actor, 'denied-exec', [call('denied-direct', 'exec', { command: 'printf forbidden > denied-direct' }), call('denied-call', 'call_tool', { toolId: 'node:official-cli/exec', args: { command: 'printf forbidden > denied-call' } }), call('denied-native', 'run_script', { code: "return call_tool('node:official-cli/exec', {'command':'printf forbidden > denied-native'})" })])
-  assert.equal(pair(state, 'denied-direct').error.type, 'tool_authorization_denied'); assert.equal(pair(state, 'denied-call').error.type, 'tool_authorization_denied')
+  assert.equal(pair(state, 'denied-direct').code, 'tool_authorization_denied'); assert.equal(pair(state, 'denied-call').code, 'tool_authorization_denied')
   assert.equal(pair(state, 'denied-native').status, 'failed'); assert.equal(callsFor(actor).length, authorizedCalls)
   await writeFile(join(fixture.work, 'restore-exec.yaml'), 'version: 1\n')
   await turn(actor, 'restore-exec-policy', [call('restore-exec-policy', 'set_config', { target: 'tool-rules', filePath: 'restore-exec.yaml' })])

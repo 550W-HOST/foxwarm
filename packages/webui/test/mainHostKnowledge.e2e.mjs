@@ -246,7 +246,7 @@ try {
   await turn('leaf/main', 'UNRELATED-AGENT', [call('unrelated-agent', 'create_agent', { agentName: 'model-unrelated', inherit: 'base', createMainSession: false })])
   const rejectedAgent = toolValue(await history('leaf/main'), 'unrelated-agent')
   assert(rejectedAgent.error, JSON.stringify(rejectedAgent))
-  assert.equal(rejectedAgent.error.type, 'agent_tool_error'); assert.match(rejectedAgent.error.message, /strict creator ancestors/)
+  assert.match(rejectedAgent.error, /strict creator ancestors/)
   const creatorMetadata = JSON.parse(await readFile(join(dataRoot, 'state', 'agents.json'), 'utf8'))
   assert.equal(creatorMetadata.leaf.createdBy, undefined)
   assert.equal(creatorMetadata['model-made'].createdBy, 'leaf'); assert.equal(creatorMetadata['model-made'].inherit, 'leaf')

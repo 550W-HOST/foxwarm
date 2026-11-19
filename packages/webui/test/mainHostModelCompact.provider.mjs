@@ -86,7 +86,7 @@ export async function startScriptedProvider({ alphaToken, betaToken }) {
             sourceStart: 99999, sourceEnd: 100000, summary: 'Invalid source range.' }] })
           return
         }
-        if (layerPlanCount === 0) assert(input.includes('compact_plan_invalid'), 'The invalid plan must receive actual validation feedback')
+        if (layerPlanCount === 0) assert(input.includes('Compact plan rejected') && input.includes('replaceAsBlocks[0] (sourceKind=message, sourceStart=99999, sourceEnd=100000) is not a required operation'), 'The invalid plan must receive actual validation feedback')
         const blocks = plannerBlocks(planPrompt, layerPlanCount + 1)
         assert(blocks.length > 0, { index: layerPlanCount, prompt: planPrompt.slice(0, 700) })
         layerPlanCount++

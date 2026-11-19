@@ -64,7 +64,7 @@ function peer(label) {
         if (plannerRound === 1) {
           held.set('compact-old', { record, finish: () => finish(response, protocols[label], [tool('plan-invalid', 'submit_compact_plan', { replaceAsBlocks: [{ level: 1, sourceKind: 'message', sourceStart: 999999, sourceEnd: 1000000, summary: 'Invalid.' }] })]) }); return
         }
-        assert(JSON.stringify(body).includes('compact_plan_invalid')); assert.equal(request.headers['x-generation'], 'new-compact')
+        assert(JSON.stringify(body).includes('Compact plan rejected') && JSON.stringify(body).includes('replaceAsBlocks[0] (sourceKind=message, sourceStart=999999, sourceEnd=1000000) is not a required operation')); assert.equal(request.headers['x-generation'], 'new-compact')
         assert.deepEqual(ranges, held.get('compact-old').record.ranges)
         finish(response, protocols[label], [tool('plan-valid', 'submit_compact_plan', { replaceAsBlocks: [{ level: 1, sourceKind: 'message', sourceStart: ranges[0][0], sourceEnd: ranges.at(-1)[1], summary: 'Source-owned route, paired local effects and immutable history evidence.' }] })]); return
       }
@@ -83,7 +83,7 @@ function peer(label) {
       }
       if (scenario === 'paired') {
         assert.equal(await readFile(join(fixture.work, 'route.txt'), 'utf8'), 'route-effect')
-        assert(JSON.stringify(body).includes('invalid_tool_arguments')); assert(JSON.stringify(body).includes('previous') || JSON.stringify(body).includes('prevLLMReqTime'))
+        assert(JSON.stringify(body).includes('\\nerror: Invalid workspace tool arguments.'), 'malformed write arguments return their error to the model'); assert(JSON.stringify(body).includes('previous') || JSON.stringify(body).includes('prevLLMReqTime'))
       }
       finish(response, protocols[label], output('DONE-' + scenario + '-' + label), scenario === 'compact-trigger' ? 30000 : 30)
     } catch (error) { errors.push(error.stack); response.destroy(error) }

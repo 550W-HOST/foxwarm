@@ -86,7 +86,7 @@ try {
   assert.equal(bootRows(await saved(oldQueue)).length, 1)
   assert.equal((await saved(oldQueue)).queue.length, 0)
   await assert.rejects(access(join(oldQueue.work, 'forbidden-onboot-effect')))
-  assert((await saved(oldQueue)).history.some(value => value.parts?.some(part => part.functionResponse?.response?.error?.type === 'tool_authorization_denied')))
+  assert((await saved(oldQueue)).history.some(value => value.parts?.some(part => part.functionResponse?.response?.code === 'tool_authorization_denied')))
   await oldQueue.stop(); const settledRequests = requests.length
   await oldQueue.start(); await send(oldQueue, 'legacy-restart'); await done(oldQueue, 'legacy-restart')
   assert.equal(bootRows(await saved(oldQueue)).length, 1)

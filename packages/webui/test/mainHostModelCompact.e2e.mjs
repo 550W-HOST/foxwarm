@@ -291,7 +291,7 @@ try {
     throw error
   }
   assert(provider.invalidSent, 'First planner request submitted an invalid range')
-  assert(provider.requests.some(item => item.planner && item.input.includes('compact_plan_invalid')),
+  assert(provider.requests.some(item => item.planner && item.input.includes('Compact plan rejected') && item.input.includes('replaceAsBlocks[0] (sourceKind=message, sourceStart=99999, sourceEnd=100000) is not a required operation')),
     'Planner saw source-derived invalid-plan feedback and retried')
   await until(() => compactIdle(hostPort, layeredId), 'automatic compaction idle')
   // Each compaction writes one new L1 block; the fourth leaves four L1 blocks, more than the
