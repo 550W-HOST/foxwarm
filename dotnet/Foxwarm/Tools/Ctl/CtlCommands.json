@@ -3530,7 +3530,7 @@
     {
       "path": "script list",
       "summary": "List this Session's ToolScript runs.",
-      "help": "Shows each run's status and progress summary.",
+      "help": "Shows each run's status and timestamps; script get shows one run in full.",
       "ingress": [
         "model"
       ],

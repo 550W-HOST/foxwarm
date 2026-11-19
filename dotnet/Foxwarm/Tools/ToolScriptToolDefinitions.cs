@@ -136,7 +136,7 @@ internal static class ToolScriptToolDefinitions
   {
     "type": "function",
     "name": "list_toolscript_runs",
-    "description": "List this session's ToolScript runs with their status and progress summaries.",
+    "description": "List this session's ToolScript runs with their status and timestamps; use script get for one run's details.",
     "parameters": {
       "type": "object",
       "additionalProperties": false,
