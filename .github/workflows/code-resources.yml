@@ -36,8 +36,8 @@ jobs:
       - name: Build missing Code resources once
         if: ${{ steps.cache.outputs.cache-hit != 'true' }}
         env:
-          # The pinned Code fetcher base64-encodes this value verbatim for HTTP Basic auth.
-          GITHUB_TOKEN: x-access-token:${{ secrets.GITHUB_TOKEN }}
+          # The build script derives each Code tool's GITHUB_TOKEN format per phase.
+          FOXWARM_CODE_OSS_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: node scripts/test/prepare-browser.mjs --code-only
       - name: Check Code resources
         run: node scripts/test/prepare-browser.mjs --check-code

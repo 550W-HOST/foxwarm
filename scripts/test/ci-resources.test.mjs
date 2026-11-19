@@ -162,8 +162,9 @@ test('Tests and Release reuse one cache-backed Code producer and consume its per
   const build = codeProducer.steps.find(step => step.run?.includes('--code-only') && step.run.includes('prepare-browser'))
   assert.equal(build.if, "${{ steps.cache.outputs.cache-hit != 'true' }}")
   assert.deepEqual(shared.permissions, { contents: 'read' })
-  assert.equal(build.env.GITHUB_TOKEN, 'x-access-token:${{ secrets.GITHUB_TOKEN }}')
-  assert.ok(codeProducer.steps.every(step => step === build || !step.env?.GITHUB_TOKEN))
+  // The build script gives each Code tool the GITHUB_TOKEN format it expects.
+  assert.deepEqual(build.env, { FOXWARM_CODE_OSS_GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}' })
+  assert.ok(codeProducer.steps.every(step => step === build || !Object.keys(step.env ?? {}).some(name => /TOKEN/.test(name))))
   const uploaded = codeProducer.steps.find(step => step.uses?.startsWith('actions/upload-artifact@'))
   assert.equal(uploaded.with.name, 'code-resources')
   const packaged = codeProducer.steps.findIndex(step => step.run?.includes('package.mjs --code-only'))

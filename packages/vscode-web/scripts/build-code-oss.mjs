@@ -10,6 +10,15 @@ const packageRoot = path.resolve(scriptDir, '..')
 const versionConfig = JSON.parse(await fs.readFile(path.join(packageRoot, 'code-oss-version.json'), 'utf8'))
 const defaultOutDir = path.join(packageRoot, 'assets', 'vscode-web')
 const defaultCacheRoot = path.join(packageRoot, '.cache', 'code-oss')
+// Raw GitHub token for authenticated upstream downloads. Code's build tools read
+// GITHUB_TOKEN, but in different formats, so it is only set per build phase.
+const githubTokenVariable = 'FOXWARM_CODE_OSS_GITHUB_TOKEN'
+const githubCredentialFormats = {
+  // @vscode/ripgrep's postinstall sends `Authorization: token <GITHUB_TOKEN>`.
+  raw: token => token,
+  // build/lib/fetch.ts sends `Authorization: Basic base64(<GITHUB_TOKEN>)`.
+  basic: token => `x-access-token:${token}`,
+}
 const requiredAssets = [
   'out/nls.messages.js',
   'out/vs/workbench/workbench.web.main.internal.css',
@@ -49,7 +58,10 @@ Options:
 Environment equivalents:
   FOXWARM_CODE_OSS_COMMIT
   FOXWARM_CODE_OSS_REPOSITORY
-  FOXWARM_CODE_OSS_CACHE_DIR`)
+  FOXWARM_CODE_OSS_CACHE_DIR
+
+Optional GitHub token for upstream release downloads (never printed or passed as an argument):
+  ${githubTokenVariable}`)
       process.exit(0)
     } else throw new Error(`Unknown argument: ${arg}`)
   }
@@ -63,12 +75,24 @@ Environment equivalents:
   return result
 }
 
+function childEnv(options) {
+  const env = { ...process.env, ...options.env }
+  const token = env[githubTokenVariable]
+  delete env[githubTokenVariable]
+  // Without the Foxwarm variable, GITHUB_TOKEN is left as the caller's.
+  if (token) {
+    if (options.githubCredential) env.GITHUB_TOKEN = githubCredentialFormats[options.githubCredential](token)
+    else delete env.GITHUB_TOKEN
+  }
+  return env
+}
+
 function run(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     console.log(`\n> ${command} ${args.join(' ')}`)
     const child = spawn(command, args, {
       cwd: options.cwd,
-      env: { ...process.env, ...options.env },
+      env: childEnv(options),
       stdio: 'inherit',
     })
     child.on('error', reject)
@@ -151,7 +175,7 @@ async function installDependencies(sourceDir, commit, nodeVersion, forceInstall)
   // Match upstream CI: install and overlay Electron headers before dependency
   // install scripts compile native addons. npm ci runs the root preinstall too late.
   await run(process.execPath, ['build/npm/preinstall.ts'], installOptions)
-  await run('npm', ['ci'], installOptions)
+  await run('npm', ['ci'], { ...installOptions, githubCredential: 'raw' })
   await fs.writeFile(markerPath, JSON.stringify({ commit, nodeMajor: nodeVersion.split('.')[0] }, null, 2))
 }
 
@@ -200,11 +224,11 @@ async function main() {
   }
   const nodeVersion = await assertNodeVersion(sourceDir)
   await installDependencies(sourceDir, options.commit, nodeVersion, options.forceInstall)
-  await run('npm', ['run', 'download-builtin-extensions'], { cwd: sourceDir })
+  await run('npm', ['run', 'download-builtin-extensions'], { cwd: sourceDir, githubCredential: 'basic' })
   // The current standalone CI packager bundles directly from TypeScript source
   // with esbuild. Avoid the all-in-one task's unrelated desktop/server
   // declaration build and symbol mangler, which consume substantially more RAM.
-  await run('npm', ['run', 'gulp', 'vscode-web-min-ci'], { cwd: sourceDir })
+  await run('npm', ['run', 'gulp', 'vscode-web-min-ci'], { cwd: sourceDir, githubCredential: 'basic' })
 
   const packageJson = JSON.parse(await fs.readFile(path.join(sourceDir, 'package.json'), 'utf8'))
   await publishAssets(sourceDir, options.outDir, {
