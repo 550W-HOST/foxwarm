@@ -1,16 +1,16 @@
 # ToolScript native protocol dependencies
 
-The native ToolScript engine is the Pydantic Monty 0.0.19 standalone
+The native ToolScript engine is the Pydantic Monty 1.6.0 standalone
 `monty subprocess` executable. Ordinary builds acquire the exact official
-`@pydantic/monty-*` 0.0.19 package for the target RID and include only its standalone
+`@pydantic/monty-*` 1.6.0 package for the target RID and include only its standalone
 worker in application output. Release packages ship an executable built from the
-upstream source of tag v0.0.19 (MIT License, `monty-source.json`) with
-`monty-no-type-check.patch`, which leaves out the type-checking crate; the interpreter and
-the worker protocol are unchanged. Packages that include it carry
+upstream source of tag v1.6.0 (MIT License, `monty-source.json`) with
+`monty-no-type-check.patch`, which replaces the type-checking crate by a stub of the same API;
+the interpreter and the worker protocol are unchanged. Packages that include it carry
 `Monty-native-crates.txt`, which lists the Rust crates linked into the executable with their
 declared licenses and includes their license texts. Native binaries are build
 outputs, not tracked repository source.
-The protocol schema is from official Monty tag v0.0.19. Its MIT license is
+The protocol schema is from official Monty tag v1.6.0. Its MIT license is
 included in `MONTY-LICENSE`.
 
 The .NET protocol binding uses Google.Protobuf 3.35.1 under BSD-3-Clause; see

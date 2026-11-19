@@ -1,86 +1,185 @@
-Foxwarm build patch for the Monty standalone worker (pydantic/monty v0.0.19, MIT License; see
-MONTY-LICENSE). It removes the ty-based type checker (crate monty-type-checking, with ruff, ty,
-salsa and the embedded typeshed) from the `monty` executable. Foxwarm starts `monty subprocess` and
-never asks for type checking, so the checker is unreachable there; a request for it reports that
-type checking is not available. The interpreter and the worker protocol are unchanged.
+Foxwarm build patch for the Monty standalone worker (pydantic/monty v1.6.0, MIT License; see
+MONTY-LICENSE). It replaces the ty-based type checker (crate monty-type-checking, with ruff, ty,
+salsa and the embedded typeshed) by a stub of the same API, so the `monty` executable links none of
+it. Foxwarm starts `monty subprocess` and never asks for type checking, so the checker is
+unreachable there; a request for type checking reports that type checking is not available. The
+interpreter and the worker protocol are unchanged. The crate's other source files stay in the
+tree, unreferenced.
 Applied by scripts/release/native-source.py (git apply) before scripts/release/build-monty.sh builds.
 
-diff --git a/crates/monty-proto/Cargo.toml b/crates/monty-proto/Cargo.toml
-index 23868ff..9742f3a 100644
---- a/crates/monty-proto/Cargo.toml
-+++ b/crates/monty-proto/Cargo.toml
-@@ -21,8 +21,6 @@ num-bigint = { workspace = true }
- # Optional: the worker feature's Child state machine drives the interpreter
- monty = { workspace = true, optional = true }
- prost = { workspace = true }
--# Optional: used with the worker feature
--monty-type-checking = { workspace = true, optional = true }
- # Optional: powers the `python` feature's Python ↔ MontyObject conversion layer
- pyo3 = { workspace = true, optional = true, features = ["num-bigint"] }
- # generation-only dependencies (see src/bin/generate.rs); exact pins so the
-@@ -41,7 +39,7 @@ python = ["dep:pyo3"]
- # Enables the `worker` module: the child-side Child state machine that drives
- # the interpreter. Off by default so host-side consumers (monty-pool, the
- # bindings) never link the interpreter itself.
--worker = ["dep:monty", "dep:monty-type-checking"]
-+worker = ["dep:monty"]
+diff --git a/crates/monty-type-checking/Cargo.toml b/crates/monty-type-checking/Cargo.toml
+index 78cd865b..0bd0690d 100644
+--- a/crates/monty-type-checking/Cargo.toml
++++ b/crates/monty-type-checking/Cargo.toml
+@@ -1,6 +1,5 @@
+ [package]
+ name = "monty-type-checking"
+-readme = "README.md"
+ version = { workspace = true }
+ rust-version = { workspace = true }
+ edition = { workspace = true }
+@@ -18,30 +17,3 @@ path = "src/lib.rs"
  
- [[bin]]
- name = "generate-proto"
-diff --git a/crates/monty-proto/src/worker.rs b/crates/monty-proto/src/worker.rs
-index a8dc3c2..639c33e 100644
---- a/crates/monty-proto/src/worker.rs
-+++ b/crates/monty-proto/src/worker.rs
-@@ -19,7 +19,16 @@
- use std::{borrow::Cow, mem};
- 
- use monty::{MontyRepl, ReplProgress, ReplStartError};
--use monty_type_checking::{SourceFile, type_check};
-+// Foxwarm build: the ty-based type checker is not linked into this build.
-+// Foxwarm never requests `type_check` (it sends Configure without it), so these stubs are
-+// unreachable from its `monty subprocess` use; a request for type checking reports an error.
-+struct SourceFile<'a>(#[allow(dead_code)] &'a str);
-+impl<'a> SourceFile<'a> {
-+    fn new(code: &'a str, _name: &str) -> Self { Self(code) }
-+}
-+fn type_check(_code: &SourceFile<'_>, _stubs: Option<&SourceFile<'_>>) -> Result<Option<String>, String> {
-+    Err("type checking is not available in this build".to_string())
-+}
- use monty_types::{
-     AssertMessageAnnotations, CompileOptions, ExcType, ExtFunctionResult, LimitedTracker, MontyException, MontyObject,
-     OsFunctionCall, PrintWriter, PrintWriterCallback,
-diff --git a/crates/monty-runtime/Cargo.toml b/crates/monty-runtime/Cargo.toml
-index ceb47b4..1d8e7b3 100644
---- a/crates/monty-runtime/Cargo.toml
-+++ b/crates/monty-runtime/Cargo.toml
-@@ -21,7 +21,6 @@ clap = { workspace = true }
- monty = { workspace = true }
- monty-fs = { workspace = true }
- monty-proto = { workspace = true, features = ["worker"] }
--monty-type-checking = { workspace = true }
+ [dependencies]
  monty-types = { workspace = true }
- rustyline = "15"
+-monty-typeshed = { workspace = true }
+-ruff_python_ast = { workspace = true }
+-ruff_python_parser = { workspace = true }
+-ruff_python_stdlib = { workspace = true }
+-ruff_db = { workspace = true }
+-ruff_text_size = { workspace = true }
+-ty_python_semantic = { workspace = true }
+-ty_python_core = { workspace = true }
+-ty_module_resolver = { workspace = true }
+-salsa = { workspace = true }
+-
+-[dev-dependencies]
+-pretty_assertions = { workspace = true }
+-insta = { workspace = true }
+-# Use codspeed-criterion-compat for CI benchmarks, real criterion for local flamegraphs
+-codspeed-criterion-compat = "5.0.1"
+-criterion = "0.5"
+-
+-[target.'cfg(unix)'.dev-dependencies]
+-pprof = { version = "0.15", features = ["flamegraph", "criterion"] }
+-
+-[[bench]]
+-name = "type_check"
+-harness = false
+-
+-[lints]
+-workspace = true
+diff --git a/crates/monty-type-checking/src/lib.rs b/crates/monty-type-checking/src/lib.rs
+index fc58d211..b5c35ccd 100644
+--- a/crates/monty-type-checking/src/lib.rs
++++ b/crates/monty-type-checking/src/lib.rs
+@@ -1,10 +1,121 @@
+-#![doc = include_str!("../README.md")]
++//! Foxwarm build stub: the ty-based type checker is not linked into this build.
++//!
++//! Foxwarm starts `monty subprocess` and never asks for type checking, so the checker is
++//! unreachable there. This crate keeps the API `monty-proto` and `monty-runtime` call, so they
++//! compile unchanged; a request for type checking reports that it is not available.
  
-diff --git a/crates/monty-runtime/src/main.rs b/crates/monty-runtime/src/main.rs
-index bd37047..9d3eb47 100644
---- a/crates/monty-runtime/src/main.rs
-+++ b/crates/monty-runtime/src/main.rs
-@@ -16,8 +16,16 @@ use monty_types::{
- use rustyline::{DefaultEditor, error::ReadlineError};
- // disabled due to format failing on https://github.com/pydantic/monty/pull/75 where CI and local wanted imports ordered differently
- // TODO re-enabled soon!
--#[rustfmt::skip]
--use monty_type_checking::{SourceFile, type_check};
-+// Foxwarm build: the ty-based type checker is not linked into this build.
-+// Foxwarm never requests `type_check` (it sends Configure without it), so these stubs are
-+// unreachable from its `monty subprocess` use; a request for type checking reports an error.
-+struct SourceFile<'a>(#[allow(dead_code)] &'a str);
+-mod db;
+-mod imports;
+-mod type_check;
++use std::{fmt, marker::PhantomData};
+ 
+-pub use crate::{
+-    imports::{ImportedModule, SnippetImports, scan_imports},
+-    type_check::{SourceFile, TypeCheckContext, TypeChecker, TypeCheckingDiagnostics},
+-};
++use monty_types::{ModuleStub, TypeCheckingConfig};
++
++/// Definition of a source file.
++#[derive(Debug, Clone, Copy)]
++pub struct SourceFile<'a> {
++    /// source code
++    pub source_code: &'a str,
++    /// file path
++    pub path: &'a str,
++}
++
 +impl<'a> SourceFile<'a> {
-+    fn new(code: &'a str, _name: &str) -> Self { Self(code) }
++    /// Create a new source file.
++    #[must_use]
++    pub fn new(source_code: &'a str, path: &'a str) -> Self {
++        Self { source_code, path }
++    }
 +}
-+fn type_check(_code: &SourceFile<'_>, _stubs: Option<&SourceFile<'_>>) -> Result<Option<String>, String> {
-+    Err("type checking is not available in this build".to_string())
++
++/// Session declarations and imports for [`TypeChecker::run_with`].
++#[derive(Debug, Default, Clone, Copy)]
++pub struct TypeCheckContext<'a> {
++    pub stubs: Option<&'a SourceFile<'a>>,
++    pub module_stubs: &'a [ModuleStub],
++    pub prelude: &'a str,
 +}
- 
- mod subprocess;
- 
++
++/// Diagnostics of a failed check; this build never produces one.
++#[derive(Debug)]
++pub struct TypeCheckingDiagnostics<'a>(PhantomData<&'a ()>);
++
++impl fmt::Display for TypeCheckingDiagnostics<'_> {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        f.write_str("type checking is not available in this build")
++    }
++}
++
++#[derive(Debug, Default)]
++pub struct TypeChecker;
++
++const UNAVAILABLE: &str = "type checking is not available in this build";
++
++impl TypeChecker {
++    /// Always reports that type checking is not available.
++    pub fn run<'a>(
++        &'a mut self,
++        _python_source: &SourceFile<'_>,
++        _stubs_file: Option<&SourceFile<'_>>,
++        _config: TypeCheckingConfig,
++    ) -> Result<Option<TypeCheckingDiagnostics<'a>>, String> {
++        Err(UNAVAILABLE.to_owned())
++    }
++
++    /// Always reports that type checking is not available.
++    pub fn run_with<'a>(
++        &'a mut self,
++        _python_source: &SourceFile<'_>,
++        _context: &TypeCheckContext<'_>,
++        _config: TypeCheckingConfig,
++    ) -> Result<Option<TypeCheckingDiagnostics<'a>>, String> {
++        Err(UNAVAILABLE.to_owned())
++    }
++}
++
++/// A byte offset into a snippet.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub struct Offset(u32);
++
++impl Offset {
++    #[must_use]
++    pub fn to_u32(self) -> u32 {
++        self.0
++    }
++}
++
++/// A byte range in a snippet.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub struct Range {
++    start: Offset,
++    end: Offset,
++}
++
++impl Range {
++    #[must_use]
++    pub fn start(&self) -> Offset {
++        self.start
++    }
++
++    #[must_use]
++    pub fn end(&self) -> Offset {
++        self.end
++    }
++}
++
++/// A top-level module a snippet imports.
++#[derive(Debug, PartialEq, Eq)]
++pub struct ImportedModule {
++    pub name: String,
++    pub range: Range,
++}
++
++/// Imports collected by [`scan_imports`].
++#[derive(Debug, Default, PartialEq, Eq)]
++pub struct SnippetImports {
++    pub prelude: String,
++    pub modules: Vec<ImportedModule>,
++}
++
++/// Collects no imports: without a checker there are no host stubs to request.
++#[must_use]
++pub fn scan_imports(_source: &str) -> SnippetImports {
++    SnippetImports::default()
++}

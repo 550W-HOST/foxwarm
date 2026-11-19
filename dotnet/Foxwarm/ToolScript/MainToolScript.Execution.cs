@@ -105,7 +105,7 @@ internal sealed partial class MainToolScript
             run.Token.ThrowIfCancellationRequested();
             context.Owner.Entry.RequireIdentityAuthority();
             worker = new MontyWorker(binary);
-            ChildEvent progress;
+            WorkerEvent progress;
             ToolScriptDataBudget progressBudget;
             if (resume is null)
             {
@@ -116,16 +116,15 @@ internal sealed partial class MainToolScript
                     Budget(),
                     run.Cancel.Token
                 );
-                if (configured.KindCase != ChildEvent.KindOneofCase.Ok)
+                if (configured.KindCase != WorkerEvent.KindOneofCase.Ok)
                     throw new InvalidDataException(
                         "Monty configure did not acknowledge the qualified version."
                     );
                 var budget = Budget();
                 budget.Charge(8L * System.Text.Encoding.UTF8.GetByteCount(code!));
-                var feed = new Feed { Code = code! };
-                feed.Inputs.Add(
-                    new NamedValue { Name = "args", Value = MontyValues.FromJson(input, budget) }
-                );
+                var (values, root) = MontyValues.FromJson(input, budget);
+                var feed = new Feed { Code = code!, Values = values };
+                feed.Inputs.Add(new NamedRef { Name = "args", Value = root });
                 progressBudget = budget;
                 progress = await worker.TurnAsync(
                     new() { Feed = feed },
@@ -142,13 +141,25 @@ internal sealed partial class MainToolScript
                 budget.Charge(4L * oldSnapshot!.Length * 3 / 4);
                 var snapshot = restoredSnapshot!;
                 progressBudget = budget;
+                // The snapshot restores the limits; the session policy is applied by this Configure.
+                var configured = await worker.ConfigureAsync(
+                    Required(record, "scriptName"),
+                    null,
+                    Budget(),
+                    run.Cancel.Token,
+                    restoring: true
+                );
+                if (configured.KindCase != WorkerEvent.KindOneofCase.Ok)
+                    throw new InvalidDataException(
+                        "Monty configure did not acknowledge the qualified version."
+                    );
                 progress = await worker.TurnAsync(
                     new() { Load = new Load { State = ByteString.CopyFrom(snapshot) } },
                     progressBudget,
                     print,
                     run.Cancel.Token
                 );
-                if (progress.KindCase != ChildEvent.KindOneofCase.FunctionCall)
+                if (progress.KindCase != WorkerEvent.KindOneofCase.FunctionCall)
                     throw new InvalidDataException(
                         "ToolScript persisted snapshot is not a resumable host-call snapshot."
                     );
@@ -175,9 +186,13 @@ internal sealed partial class MainToolScript
             {
                 run.Cancel.Token.ThrowIfCancellationRequested();
                 context.Owner.Entry.RequireIdentityAuthority();
-                if (progress.KindCase == ChildEvent.KindOneofCase.Complete)
+                if (progress.KindCase == WorkerEvent.KindOneofCase.Complete)
                 {
-                    var completed = MontyValues.ToJson(progress.Complete.Value, progressBudget);
+                    var completed = MontyValues.ToJson(
+                        progress.Complete.Values,
+                        progress.Complete.Value,
+                        progressBudget
+                    );
                     // A run begun before image admission keeps the old promotion (no
                     // resultImages) for the result it eventually produces.
                     if (record.ContainsKey("producedImages"))
@@ -190,29 +205,40 @@ internal sealed partial class MainToolScript
                     await CommitAsync();
                     return ProjectSlice();
                 }
-                if (progress.KindCase == ChildEvent.KindOneofCase.Error)
+                if (progress.KindCase == WorkerEvent.KindOneofCase.Error)
                     throw new InvalidDataException(
                         progress.Error.Exception.ExcType + ": " + progress.Error.Exception.Message
                     );
-                if (progress.KindCase == ChildEvent.KindOneofCase.NameLookup)
+                if (progress.KindCase == WorkerEvent.KindOneofCase.NameLookup)
                 {
                     var name = progress.NameLookup.Name;
                     progressBudget = Budget();
-                    progress = await worker.TurnAsync(
-                        new()
+                    // Every name is offered as a host function; the call itself is admitted or refused
+                    // by HostCallAsync. No host object exists, so a lazy attribute lookup finds nothing.
+                    var lookup = new ResumeNameLookup();
+                    if (progress.NameLookup.ObjectId is not null)
+                        lookup.Undefined = new Unit();
+                    else
+                    {
+                        lookup.Values = new Arena
                         {
-                            ResumeNameLookup = new ResumeNameLookup
+                            NodeCount = 1,
+                            Nodes =
                             {
-                                Value = new() { Function = new Function { Name = name } },
+                                new MontyNode { Function = new Monty.V1.Function { Name = name } },
                             },
-                        },
+                        };
+                        lookup.Value = 0;
+                    }
+                    progress = await worker.TurnAsync(
+                        new() { ResumeNameLookup = lookup },
                         progressBudget,
                         print,
                         run.Cancel.Token
                     );
                     continue;
                 }
-                if (progress.KindCase == ChildEvent.KindOneofCase.OsCall)
+                if (progress.KindCase == WorkerEvent.KindOneofCase.OsCall)
                 {
                     context.WaitScope.Pending = null;
                     progressBudget = Budget();
@@ -231,24 +257,26 @@ internal sealed partial class MainToolScript
                     );
                     continue;
                 }
-                if (progress.KindCase != ChildEvent.KindOneofCase.FunctionCall)
+                if (progress.KindCase != WorkerEvent.KindOneofCase.FunctionCall)
                     throw new InvalidDataException(
                         "Unsupported Monty suspension: " + progress.KindCase
                     );
                 context.WaitScope.Pending = null;
                 var call = progress.FunctionCall;
+                if (call.ObjectId is not null)
+                    throw new InvalidDataException("Unsupported Monty host object call.");
                 var hostBudget = progressBudget;
                 var positional = new JsonArray();
                 var kwargs = new JsonObject();
                 foreach (var value in call.Args)
-                    positional.Add(MontyValues.ToJson(value, hostBudget));
+                    positional.Add(MontyValues.ToJson(call.Values, value, hostBudget));
                 foreach (var pair in call.Kwargs)
                     kwargs[
-                        MontyValues.ToJson(pair.Key, hostBudget)?.GetValue<string>()
+                        MontyValues.ToJson(call.Values, pair.Key, hostBudget)?.GetValue<string>()
                             ?? throw new InvalidDataException(
                                 "Monty keyword name must be a string."
                             )
-                    ] = MontyValues.ToJson(pair.Value, hostBudget);
+                    ] = MontyValues.ToJson(call.Values, pair.Value, hostBudget);
                 if (call.FunctionName == "ask_agent")
                 {
                     run.RequireHostAdmission();
@@ -321,7 +349,7 @@ internal sealed partial class MainToolScript
                     print,
                     run.Cancel.Token
                 );
-                if (dump.KindCase != ChildEvent.KindOneofCase.DumpResult)
+                if (dump.KindCase != WorkerEvent.KindOneofCase.DumpResult)
                     throw new InvalidDataException("Monty snapshot dump failed.");
                 budget.Charge(4L * dump.DumpResult.State.Length);
                 record["snapshotBase64"] = Convert.ToBase64String(dump.DumpResult.State.Span);
@@ -389,7 +417,7 @@ internal sealed partial class MainToolScript
             ["exception"] = new JsonObject { ["type"] = type, ["message"] = message },
         };
 
-    private static Task<ChildEvent> ResumeAsync(
+    private static Task<WorkerEvent> ResumeAsync(
         MontyWorker worker,
         uint id,
         JsonObject outcome,
@@ -399,6 +427,7 @@ internal sealed partial class MainToolScript
     )
     {
         var result = new ExtFunctionResult();
+        var values = new Arena();
         if (Text(outcome["mode"]) == "exception")
             result.Error = new RaisedException
             {
@@ -406,13 +435,18 @@ internal sealed partial class MainToolScript
                 Message = Text(outcome["exception"]?["message"]) ?? "ToolScript host call failed.",
             };
         else if (Text(outcome["mode"]) == "return")
-            result.ReturnValue = MontyValues.FromJson(outcome["value"], budget);
+            (values, result.ReturnValue) = MontyValues.FromJson(outcome["value"], budget);
         else
             throw new InvalidDataException("Unknown ToolScript pending resume mode.");
         return worker.TurnAsync(
             new()
             {
-                ResumeCall = new ResumeCall { CallId = id, Result = result },
+                ResumeCall = new ResumeCall
+                {
+                    CallId = id,
+                    Result = result,
+                    Values = values,
+                },
             },
             budget,
             print,

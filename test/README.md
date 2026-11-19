@@ -25,7 +25,7 @@ The build installs committed npm lockfiles, prepares Shared/TS CLI Node,
 original WebUI and tracked Code extensions, then publishes complete managed
 Main. `Delivery.targets` owns the resource/notices graph: templates, global
 Skills and resources, Node archive/bootstrap inputs and bundles, extensions,
-native PTY and Monty 0.0.19, raster dependencies and their notices. No second
+native PTY and Monty 1.6.0, raster dependencies and their notices. No second
 Docker asset collector is maintained. Host `dist`, `node_modules`, `bin`/`obj`,
 state, workspace, `data_dir`, caches and private images are not build inputs.
 

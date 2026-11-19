@@ -322,7 +322,7 @@ internal sealed partial class MainToolScript : IAsyncDisposable
                 identity is null
                 || Text(identity["engine"]) != "@pydantic/monty"
                 || Text(identity["version"]) != MontyWorker.Version
-                || Text(identity["snapshotFormat"]) != "monty-pool-snapshot-v0.0.19"
+                || Text(identity["snapshotFormat"]) != MontyWorker.SnapshotFormat
             )
                 throw new NotSupportedException(
                     "ToolScript snapshot runtime is incompatible. The historical record and snapshot were retained."
@@ -553,6 +553,6 @@ internal sealed partial class MainToolScript : IAsyncDisposable
         {
             ["engine"] = "@pydantic/monty",
             ["version"] = MontyWorker.Version,
-            ["snapshotFormat"] = "monty-pool-snapshot-v0.0.19",
+            ["snapshotFormat"] = MontyWorker.SnapshotFormat,
         };
 }

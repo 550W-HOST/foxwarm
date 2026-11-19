@@ -146,7 +146,7 @@ settings do not change the Desktop loopback listener.
 ## Runtime limits
 
 The existing WebUI and .NET host provide native Windows PowerShell execution,
-ConPTY terminals and ordinary Monty 0.0.19 ToolScript. Independent exec commands
+ConPTY terminals and ordinary Monty 1.6.0 ToolScript. Independent exec commands
 survive normal Main shutdown; interactive terminals belong to Main and close
 with it. The same Desktop executable serves the private Code helper before
 UI/single-instance startup. These native tools require no console apphost/runtimeconfig,
@@ -181,7 +181,7 @@ its notice/license is included with the package.
 
 Native worker preparation needs Python 3 (`python3` on Linux, `python` on
 Windows) and access to the official npm registry during the first target build.
-The exact official Monty 0.0.19 standalone worker is cached only under `obj`
+The exact official Monty 1.6.0 standalone worker is cached only under `obj`
 and copied with its notices into output; no native binary is tracked. Git is
 an optional external tool for Code SCM, not a bundled dependency.
 

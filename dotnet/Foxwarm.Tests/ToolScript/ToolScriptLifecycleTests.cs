@@ -28,6 +28,9 @@ public sealed class ToolScriptLifecycleTests
             ["continuationId"] = paused["continuationId"]!.DeepClone(),
         };
 
+    // The fixtures are real Monty 0.0.19 snapshots written by the earlier Source runtime. A Monty
+    // upgrade accepts no earlier snapshot: continuation fails with the restart-the-run error and the
+    // record and its snapshot stay as they were.
     [Theory]
     [InlineData("native", "agent")]
     [InlineData("native", "return")]
@@ -35,7 +38,7 @@ public sealed class ToolScriptLifecycleTests
     [InlineData("wasm", "agent")]
     [InlineData("wasm", "return")]
     [InlineData("wasm", "exception")]
-    public async Task Production_driver_resumes_actual_Source_native_and_WASM_snapshot_without_source_or_repeated_host_effects(
+    public async Task Earlier_Monty_snapshots_fail_continuation_with_the_restart_error_and_stay_unchanged(
         string backend,
         string kind
     )
@@ -53,6 +56,11 @@ public sealed class ToolScriptLifecycleTests
                 )
             )!
             .AsObject();
+        Assert.NotEqual(MontyWorker.Version, fixture["vmRuntime"]!["version"]!.GetValue<string>());
+        Assert.NotEqual(
+            MontyWorker.SnapshotFormat,
+            fixture["vmRuntime"]!["snapshotFormat"]!.GetValue<string>()
+        );
         var record = new JsonObject
         {
             ["runId"] = fixture["runId"]!.DeepClone(),
@@ -78,68 +86,36 @@ public sealed class ToolScriptLifecycleTests
         if (kind != "agent")
             record["waiting"]!["timeout"] = new JsonObject
             {
-                ["pendingResume"] =
-                    kind == "return"
-                        ? new JsonObject
-                        {
-                            ["mode"] = "return",
-                            ["value"] = fixture["resumeValue"]!.DeepClone(),
-                        }
-                        : new JsonObject
-                        {
-                            ["mode"] = "exception",
-                            ["exception"] = new JsonObject
-                            {
-                                ["type"] = "RuntimeError",
-                                ["message"] = fixture["pendingException"]!.DeepClone(),
-                            },
-                        },
+                ["pendingResume"] = new JsonObject
+                {
+                    ["mode"] = "return",
+                    ["value"] = fixture["resumeValue"]?.DeepClone(),
+                },
             };
         await f.Manager.ToolScript.Store.WriteAsync(record, default);
-        var result = await f.Manager.ToolScript.ExecuteAsync(
-            "continue_script",
-            new JsonObject
-            {
-                ["runId"] = record["runId"]!.DeepClone(),
-                ["continuationId"] = "source-continuation",
-                ["input"] = "agent-input",
-            },
-            Context(f),
-            default
+        var original = await File.ReadAllBytesAsync(
+            f.Manager.ToolScript.Store.PathFor(record["runId"]!.GetValue<string>())
         );
-        Assert.Equal("completed", result["status"]!.GetValue<string>());
-        Assert.Null(result["error"]);
-        if (kind == "agent")
-        {
-            var values = result["result"]!.AsArray();
-            Assert.Equal("agent-input", values[0]!.GetValue<string>());
-            Assert.Null(values[1]);
-            Assert.False(values[2]!.GetValue<bool>());
-            Assert.Equal(0, values[3]!.GetValue<long>());
-            Assert.Equal(
-                new[] { "first", "second" },
-                values[4]!.AsObject().Select(pair => pair.Key)
-            );
-        }
-        if (kind == "return")
-            Assert.Equal(
-                "qualified-source-text\n",
-                result["result"]!["content"]!.GetValue<string>()
-            );
-        if (kind == "exception")
-            Assert.Equal(
-                fixture["pendingException"]!.GetValue<string>(),
-                result["result"]!["error"]!.GetValue<string>()
-            );
-        var saved = await f.Manager.ToolScript.Store.ReadAsync(
-            record["runId"]!.GetValue<string>(),
-            default
+        var error = await Assert.ThrowsAsync<NotSupportedException>(() =>
+            f.Manager.ToolScript.ExecuteAsync(
+                "continue_script",
+                new JsonObject
+                {
+                    ["runId"] = record["runId"]!.DeepClone(),
+                    ["continuationId"] = "source-continuation",
+                    ["input"] = "agent-input",
+                },
+                Context(f),
+                default
+            )
         );
+        Assert.Contains("incompatible", error.Message);
         Assert.Equal(
-            "source-before\n" + result["stdout"]!.GetValue<string>(),
-            saved!["stdout"]!.GetValue<string>()
+            original,
+            await File.ReadAllBytesAsync(
+                f.Manager.ToolScript.Store.PathFor(record["runId"]!.GetValue<string>())
+            )
         );
-        Assert.Null(saved["snapshotBase64"]);
     }
 
     [Fact]
@@ -375,7 +351,7 @@ public sealed class ToolScriptLifecycleTests
             original,
             await File.ReadAllBytesAsync(f.Manager.ToolScript.Store.PathFor(id))
         );
-        record["vmRuntime"]!["version"] = "0.0.19";
+        record["vmRuntime"]!["version"] = MontyWorker.Version;
         var snapshot = record["snapshotBase64"]!.DeepClone();
         record["snapshotBase64"] = "not-valid-base64";
         await f.Manager.ToolScript.Store.WriteAsync(record, default);
@@ -547,9 +523,38 @@ public sealed class ToolScriptLifecycleTests
     }
 
     [Fact]
-    public async Task Native_wide_repeated_none_result_obeys_combined_parent_budget_after_real_started_effect()
+    public async Task Native_shared_container_result_obeys_combined_parent_budget_after_real_started_effect()
     {
         await using var f = await ScriptFixture.Create();
+        // The worker sends each shared container once, so the frame is tiny; the JSON a parent would
+        // materialize from it doubles with every level.
+        var result = await f.Call(
+                "run_script",
+                new JsonObject
+                {
+                    ["code"] =
+                        "call_tool('write', {'filePath':'budget-before','content':'real'})\nx = [None] * 8\nfor _ in range(30):\n    x = [x, x]\nreturn x\n",
+                }
+            )
+            .WaitAsync(TimeSpan.FromSeconds(60));
+        Assert.Equal("failed", result["status"]!.GetValue<string>());
+        Assert.Contains("1 GiB", result["error"]!.GetValue<string>());
+        Assert.Equal("real", await File.ReadAllTextAsync(Path.Combine(f.Work, "budget-before")));
+        var record = await f.Manager.ToolScript.Store.ReadAsync(
+            result["runId"]!.GetValue<string>(),
+            default
+        );
+        Assert.Equal("failed", record!["status"]!.GetValue<string>());
+        Assert.Null(record["lastResult"]);
+        Assert.Null(record["snapshotBase64"]);
+    }
+
+    [Fact]
+    public async Task Native_result_beyond_the_worker_memory_limit_fails_with_the_workers_reason_after_real_started_effect()
+    {
+        await using var f = await ScriptFixture.Create();
+        // The list fits the 64 MiB limit; the arena that carries it out does not, and the worker
+        // aborts without a final frame.
         var result = await f.Call(
                 "run_script",
                 new JsonObject
@@ -560,7 +565,9 @@ public sealed class ToolScriptLifecycleTests
             )
             .WaitAsync(TimeSpan.FromSeconds(30));
         Assert.Equal("failed", result["status"]!.GetValue<string>());
-        Assert.Contains("1 GiB", result["error"]!.GetValue<string>());
+        var error = result["error"]!.GetValue<string>();
+        Assert.Contains("exited without a result", error);
+        Assert.Contains("memory limit", error);
         Assert.Equal("real", await File.ReadAllTextAsync(Path.Combine(f.Work, "budget-before")));
         var record = await f.Manager.ToolScript.Store.ReadAsync(
             result["runId"]!.GetValue<string>(),

@@ -72,7 +72,7 @@
     <MontyExecutable
       Condition="'$(MontyTargetRid)' == 'linux-x64' or '$(MontyTargetRid)' == 'osx-x64' or '$(MontyTargetRid)' == 'osx-arm64'"
       >monty</MontyExecutable>
-    <MontyNativePrefix>$(MSBuildProjectDirectory)/obj/monty-0.0.19/$(MontyTargetRid)</MontyNativePrefix>
+    <MontyNativePrefix>$(MSBuildProjectDirectory)/obj/monty-1.6.0/$(MontyTargetRid)</MontyNativePrefix>
     <MontyPython Condition="'$(OS)' != 'Windows_NT'">python3</MontyPython>
     <MontyPython Condition="'$(OS)' == 'Windows_NT'">python</MontyPython>
     <MontyExecutablePath>$(MontyNativePrefix)/bin/$(MontyExecutable)</MontyExecutablePath>

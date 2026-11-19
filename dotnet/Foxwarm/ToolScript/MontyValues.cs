@@ -9,19 +9,49 @@ namespace Foxwarm.ToolScript;
 /// <summary>Source-compatible JSON host values; protocol markers convey values, never tool authority.</summary>
 internal static class MontyValues
 {
-    internal static MontyObject FromJson(JsonNode? node, ToolScriptDataBudget budget, int depth = 0)
+    /// <summary>Builds one node arena for a host value; every node follows its children.</summary>
+    internal sealed class Builder
+    {
+        private readonly Arena arena = new();
+
+        internal uint Add(MontyNode node)
+        {
+            arena.Nodes.Add(node);
+            return checked((uint)(arena.Nodes.Count - 1));
+        }
+
+        internal Arena Build()
+        {
+            arena.NodeCount = checked((uint)arena.Nodes.Count);
+            return arena;
+        }
+    }
+
+    internal static (Arena Values, uint Root) FromJson(JsonNode? node, ToolScriptDataBudget budget)
+    {
+        var builder = new Builder();
+        var root = FromJson(builder, node, budget);
+        return (builder.Build(), root);
+    }
+
+    internal static uint FromJson(
+        Builder builder,
+        JsonNode? node,
+        ToolScriptDataBudget budget,
+        int depth = 0
+    )
     {
         if (depth > 97)
             throw new InvalidDataException("Monty input value exceeds its protocol depth.");
         budget.Charge(128);
         if (node is null)
-            return new() { None = new Unit() };
+            return builder.Add(new() { None = new Unit() });
         if (node is JsonArray array)
         {
-            var list = new ObjectList();
+            var list = new Indexes();
             foreach (var item in array)
-                list.Items.Add(FromJson(item, budget, depth + 2));
-            return new() { List = list };
+                list.Items.Add(FromJson(builder, item, budget, depth + 2));
+            return builder.Add(new() { List = list });
         }
         if (node is JsonObject obj)
         {
@@ -29,91 +59,109 @@ internal static class MontyValues
                 obj["__monty_type__"] is JsonValue marker
                 && marker.TryGetValue<string>(out var type)
             )
-                return Marker(obj, type, budget, depth);
-            var map = new Dict();
+                return Marker(builder, obj, type, budget, depth);
+            var map = new NodePairs();
             foreach (var (key, item) in OwnEntries(obj))
             {
                 budget.Charge(64 + 8L * System.Text.Encoding.UTF8.GetByteCount(key));
+                var keyIndex = builder.Add(new() { Str = key });
                 map.Pairs.Add(
-                    new Pair
+                    new NodePair
                     {
-                        Key = new() { Str = key },
-                        Value = FromJson(item, budget, depth + 3),
+                        Key = keyIndex,
+                        Value = FromJson(builder, item, budget, depth + 3),
                     }
                 );
             }
-            return new() { Dict = map };
+            return builder.Add(new() { Dict = map });
         }
         var scalar = (JsonValue)node;
         if (scalar.TryGetValue<bool>(out var boolean))
-            return new() { Boolean = boolean };
+            return builder.Add(new() { Boolean = boolean });
         if (scalar.TryGetValue<string>(out var text))
         {
             budget.Charge(8L * System.Text.Encoding.UTF8.GetByteCount(text));
-            return new() { Str = text };
+            return builder.Add(new() { Str = text });
         }
         if (scalar.TryGetValue<long>(out var integer))
-            return new() { Int = integer };
+            return builder.Add(new() { Int = integer });
         if (scalar.TryGetValue<int>(out var int32))
-            return new() { Int = int32 };
+            return builder.Add(new() { Int = int32 });
         if (scalar.TryGetValue<uint>(out var uint32))
-            return new() { Int = uint32 };
+            return builder.Add(new() { Int = uint32 });
         if (scalar.TryGetValue<ulong>(out var uint64) && uint64 <= long.MaxValue)
-            return new() { Int = (long)uint64 };
+            return builder.Add(new() { Int = (long)uint64 });
         if (scalar.TryGetValue<float>(out var floatValue) && float.IsFinite(floatValue))
-            return new() { Float = floatValue };
+            return builder.Add(new() { Float = floatValue });
         if (scalar.TryGetValue<double>(out var number) && double.IsFinite(number))
-            return new() { Float = number };
+            return builder.Add(new() { Float = number });
         throw new InvalidDataException(
             "ToolScript host value is not a supported finite JSON value."
         );
     }
 
-    internal static JsonNode? ToJson(MontyObject value, ToolScriptDataBudget budget, int depth = 0)
+    internal static JsonNode? ToJson(
+        Arena arena,
+        uint index,
+        ToolScriptDataBudget budget,
+        int depth = 0
+    ) => ToJson(arena, index, uint.MaxValue, budget, depth);
+
+    /// <summary>Converts one arena node; a child must precede the node that holds it.</summary>
+    private static JsonNode? ToJson(
+        Arena arena,
+        uint index,
+        uint holder,
+        ToolScriptDataBudget budget,
+        int depth
+    )
     {
         if (depth > 97)
             throw new InvalidDataException("Monty output value exceeds its protocol depth.");
+        if (index >= arena.Nodes.Count || holder != uint.MaxValue && index >= holder)
+            throw new InvalidDataException("Monty value node index is outside its arena.");
+        var value = arena.Nodes[(int)index];
         budget.Charge(96);
         switch (value.KindCase)
         {
-            case MontyObject.KindOneofCase.None_:
+            case MontyNode.KindOneofCase.None_:
                 return null;
-            case MontyObject.KindOneofCase.Boolean:
+            case MontyNode.KindOneofCase.Boolean:
                 return JsonValue.Create(value.Boolean);
-            case MontyObject.KindOneofCase.Int:
+            case MontyNode.KindOneofCase.Int:
                 budget.Charge(128);
                 return JsonValue.Create(JsonData.SerializeToElement(value.Int));
-            case MontyObject.KindOneofCase.Float:
+            case MontyNode.KindOneofCase.Float:
                 budget.Charge(128);
                 return double.IsFinite(value.Float)
                     ? JsonValue.Create(JsonData.SerializeToElement(value.Float))
                     : null;
-            case MontyObject.KindOneofCase.Str:
+            case MontyNode.KindOneofCase.Str:
                 return JsonValue.Create(value.Str);
-            case MontyObject.KindOneofCase.Bytes:
+            case MontyNode.KindOneofCase.Bytes:
                 budget.Charge(checked(4L * value.Bytes.Length));
                 return JsonValue.Create(Convert.ToBase64String(value.Bytes.Span));
-            case MontyObject.KindOneofCase.List:
-                return List(value.List.Items, budget, depth);
-            case MontyObject.KindOneofCase.Tuple:
-                return List(value.Tuple.Items, budget, depth);
-            case MontyObject.KindOneofCase.NamedTuple:
+            case MontyNode.KindOneofCase.List:
+                return List(arena, value.List.Items, index, budget, depth);
+            case MontyNode.KindOneofCase.Tuple:
+                return List(arena, value.Tuple.Items, index, budget, depth);
+            case MontyNode.KindOneofCase.NamedTuple:
                 if (value.NamedTuple.Values.Count != value.NamedTuple.FieldNames.Count)
                     throw new InvalidDataException("Invalid Monty named tuple.");
-                return List(value.NamedTuple.Values, budget, depth);
-            case MontyObject.KindOneofCase.Set:
-                return List(value.Set.Items, budget, depth);
-            case MontyObject.KindOneofCase.FrozenSet:
-                return List(value.FrozenSet.Items, budget, depth);
-            case MontyObject.KindOneofCase.Dict:
+                return List(arena, value.NamedTuple.Values, index, budget, depth);
+            case MontyNode.KindOneofCase.Set:
+                return List(arena, value.Set.Items, index, budget, depth);
+            case MontyNode.KindOneofCase.FrozenSet:
+                return List(arena, value.FrozenSet.Items, index, budget, depth);
+            case MontyNode.KindOneofCase.Dict:
                 var map = new JsonObject();
                 foreach (var pair in value.Dict.Pairs)
                 {
-                    var key = Key(ToJson(pair.Key, budget, depth + 3));
-                    map[key] = ToJson(pair.Value, budget, depth + 3);
+                    var key = Key(ToJson(arena, pair.Key, index, budget, depth + 3));
+                    map[key] = ToJson(arena, pair.Value, index, budget, depth + 3);
                 }
                 return map;
-            case MontyObject.KindOneofCase.Date:
+            case MontyNode.KindOneofCase.Date:
                 ValidateDate(value.Date.Year, value.Date.Month, value.Date.Day);
                 return new JsonObject
                 {
@@ -122,7 +170,7 @@ internal static class MontyValues
                     ["month"] = value.Date.Month,
                     ["day"] = value.Date.Day,
                 };
-            case MontyObject.KindOneofCase.Datetime:
+            case MontyNode.KindOneofCase.Datetime:
                 var time = value.Datetime;
                 ValidateDate(time.Year, time.Month, time.Day);
                 if (
@@ -153,7 +201,7 @@ internal static class MontyValues
                     date["timezoneName"] = time.TimezoneName;
                 }
                 return date;
-            case MontyObject.KindOneofCase.Timedelta:
+            case MontyNode.KindOneofCase.Timedelta:
                 var delta = value.Timedelta;
                 if (delta.Seconds is < 0 or >= 86400 || delta.Microseconds is < 0 or >= 1000000)
                     throw new InvalidDataException("Invalid Monty timedelta.");
@@ -164,7 +212,7 @@ internal static class MontyValues
                     ["seconds"] = delta.Seconds,
                     ["microseconds"] = delta.Microseconds,
                 };
-            case MontyObject.KindOneofCase.Timezone:
+            case MontyNode.KindOneofCase.Timezone:
                 if (Math.Abs((long)value.Timezone.OffsetSeconds) >= 86400)
                     throw new InvalidDataException("Invalid Monty timezone.");
                 var zone = new JsonObject
@@ -175,42 +223,49 @@ internal static class MontyValues
                 if (value.Timezone.HasName)
                     zone["name"] = value.Timezone.Name;
                 return zone;
-            case MontyObject.KindOneofCase.Exception:
+            case MontyNode.KindOneofCase.Exception:
                 return new JsonObject
                 {
                     ["__monty_type__"] = "Exception",
                     ["excType"] = value.Exception.ExcType,
                     ["message"] = value.Exception.HasArg ? value.Exception.Arg : "",
                 };
-            case MontyObject.KindOneofCase.Type:
-                return new JsonObject { ["__monty_type__"] = "Type", ["value"] = value.Type };
-            case MontyObject.KindOneofCase.BuiltinFunction:
+            case MontyNode.KindOneofCase.Type:
+                // A sandbox-defined class is the repr string the earlier worker returned for it, so it
+                // cannot be mistaken for a builtin type marker.
+                return value.Type.Origin switch
+                {
+                    TypeOrigin.Builtin => new JsonObject
+                    {
+                        ["__monty_type__"] = "Type",
+                        ["value"] = value.Type.Name,
+                    },
+                    TypeOrigin.Sandbox => JsonValue.Create("<class '" + value.Type.Name + "'>"),
+                    _ => throw new InvalidDataException(
+                        "ToolScript result contains a host class, which has no JSON form."
+                    ),
+                };
+            case MontyNode.KindOneofCase.BuiltinFunction:
                 return new JsonObject
                 {
                     ["__monty_type__"] = "BuiltinFunction",
                     ["value"] = value.BuiltinFunction,
                 };
-            case MontyObject.KindOneofCase.Ellipsis:
+            case MontyNode.KindOneofCase.Ellipsis:
                 return new JsonObject { ["__monty_type__"] = "Ellipsis" };
-            case MontyObject.KindOneofCase.Path:
+            case MontyNode.KindOneofCase.Path:
                 return JsonValue.Create(value.Path);
-            case MontyObject.KindOneofCase.Function:
+            case MontyNode.KindOneofCase.Function:
                 return JsonValue.Create(value.Function.Name);
-            case MontyObject.KindOneofCase.Repr:
+            case MontyNode.KindOneofCase.Repr:
                 return JsonValue.Create(value.Repr);
-            case MontyObject.KindOneofCase.Cycle:
-                return JsonValue.Create(value.Cycle.Placeholder);
-            case MontyObject.KindOneofCase.InstanceType:
-                return new JsonObject
-                {
-                    ["__monty_type__"] = "InstanceType",
-                    ["value"] = value.InstanceType,
-                };
-            case MontyObject.KindOneofCase.Bigint:
-            case MontyObject.KindOneofCase.Dataclass:
-                // Source's normalized JS BigInt (also dataclass typeId) cannot be persisted by its JSON writer.
+            case MontyNode.KindOneofCase.Cycle:
+                return JsonValue.Create(value.Cycle);
+            case MontyNode.KindOneofCase.Bigint:
+            case MontyNode.KindOneofCase.ClassInstance:
+                // Source's normalized JS BigInt (also a class instance's identity) cannot be persisted by its JSON writer.
                 throw new InvalidDataException(
-                    "ToolScript result contains a non-JSON integer or dataclass identity. Return a JSON-compatible projection."
+                    "ToolScript result contains a non-JSON integer or class instance. Return a JSON-compatible projection."
                 );
             default:
                 throw new InvalidDataException(
@@ -220,14 +275,16 @@ internal static class MontyValues
     }
 
     private static JsonArray List(
-        IEnumerable<MontyObject> items,
+        Arena arena,
+        IEnumerable<uint> items,
+        uint holder,
         ToolScriptDataBudget budget,
         int depth
     )
     {
         var output = new JsonArray();
         foreach (var item in items)
-            output.Add(ToJson(item, budget, depth + 2));
+            output.Add(ToJson(arena, item, holder, budget, depth + 2));
         return output;
     }
 
@@ -268,7 +325,8 @@ internal static class MontyValues
         }
     }
 
-    private static MontyObject Marker(
+    private static uint Marker(
+        Builder builder,
         JsonObject obj,
         string type,
         ToolScriptDataBudget budget,
@@ -281,37 +339,57 @@ internal static class MontyValues
         string Text(string key) =>
             obj[key]?.GetValue<string>()
             ?? throw new InvalidDataException("Monty " + type + " requires " + key + ".");
+        // Validates a built value through the output conversion, in a scratch arena.
+        void Validate(MontyNode node)
+        {
+            var scratch = new Arena();
+            scratch.Nodes.Add(node);
+            _ = ToJson(scratch, 0, budget, depth);
+        }
         switch (type)
         {
             case "Ellipsis":
-                return new() { Ellipsis = new Unit() };
+                return builder.Add(new() { Ellipsis = new Unit() });
             case "Type":
-                return new() { Type = Text("value") };
-            case "BuiltinFunction":
-                return new() { BuiltinFunction = Text("value") };
-            case "Exception":
-                return new()
-                {
-                    Exception = new Monty.V1.Exception
+                return builder.Add(
+                    new()
                     {
-                        ExcType = Text("excType"),
-                        Arg = obj["message"]?.GetValue<string>() ?? "",
-                    },
-                };
+                        Type = new Monty.V1.Type
+                        {
+                            Name = Text("value"),
+                            Origin = TypeOrigin.Builtin,
+                        },
+                    }
+                );
+            case "BuiltinFunction":
+                return builder.Add(new() { BuiltinFunction = Text("value") });
+            case "Exception":
+                return builder.Add(
+                    new()
+                    {
+                        Exception = new Monty.V1.Exception
+                        {
+                            ExcType = Text("excType"),
+                            Arg = obj["message"]?.GetValue<string>() ?? "",
+                        },
+                    }
+                );
             case "Date":
                 var year = Int("year");
                 var month = checked((uint)Int("month"));
                 var day = checked((uint)Int("day"));
                 ValidateDate(year, month, day);
-                return new()
-                {
-                    Date = new Date
+                return builder.Add(
+                    new()
                     {
-                        Year = year,
-                        Month = month,
-                        Day = day,
-                    },
-                };
+                        Date = new Date
+                        {
+                            Year = year,
+                            Month = month,
+                            Day = day,
+                        },
+                    }
+                );
             case "DateTime":
                 var date = new Monty.V1.DateTime
                 {
@@ -327,8 +405,8 @@ internal static class MontyValues
                     date.OffsetSeconds = Int("offsetSeconds");
                 if (obj["timezoneName"] is not null)
                     date.TimezoneName = Text("timezoneName");
-                _ = ToJson(new MontyObject { Datetime = date }, budget, depth);
-                return new() { Datetime = date };
+                Validate(new() { Datetime = date });
+                return builder.Add(new() { Datetime = date });
             case "TimeDelta":
                 var delta = new TimeDelta
                 {
@@ -336,14 +414,14 @@ internal static class MontyValues
                     Seconds = Int("seconds"),
                     Microseconds = Int("microseconds"),
                 };
-                _ = ToJson(new MontyObject { Timedelta = delta }, budget, depth);
-                return new() { Timedelta = delta };
+                Validate(new() { Timedelta = delta });
+                return builder.Add(new() { Timedelta = delta });
             case "TimeZone":
                 var zone = new Monty.V1.TimeZone { OffsetSeconds = Int("offsetSeconds") };
                 if (obj["name"] is not null)
                     zone.Name = Text("name");
-                _ = ToJson(new MontyObject { Timezone = zone }, budget, depth);
-                return new() { Timezone = zone };
+                Validate(new() { Timezone = zone });
+                return builder.Add(new() { Timezone = zone });
             default:
                 throw new InvalidDataException("Unsupported Monty value marker: " + type);
         }
