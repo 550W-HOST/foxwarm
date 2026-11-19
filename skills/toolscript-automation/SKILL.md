@@ -301,8 +301,8 @@ A sleep is checked against the same budget. A sleep that would outlast it waits 
 
 Run management uses the `ctl script` commands:
 
-- `ctl script list` (`list_toolscript_runs`)
-- `ctl script get <run-id>` (`get_toolscript_run`)
+- `ctl script list` (`list_toolscript_runs`): one summary row per run with `runId`, `status`, `mode`, `scriptPath`, `createdAt` and, once finished, `completedAt`
+- `ctl script get <run-id>` (`get_toolscript_run`): the run's full record, including a waiting run's `continuationId`
 - `ctl script cancel <run-id>` (`cancel_toolscript_run`)
  A run can be inspected or resumed only by its owner session.
 
@@ -322,7 +322,7 @@ Managed-event waits return `waitingReason: "managed_event"` and `waitingFor` ide
 
 The execution response does not include internal paths, owner/VM details, timestamps, or tool-activity diagnostics. Nested-call activity remains available in the UI, including after reloading history. Fields inside the script's own `result` are preserved.
 
-Use `get_toolscript_run` or `list_toolscript_runs` for full diagnostics:
+Use `get_toolscript_run` for full diagnostics:
 
 | Diagnostic field | Scope |
 | --- | --- |

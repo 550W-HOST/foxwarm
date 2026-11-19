@@ -43,6 +43,49 @@ Local callable declarations carry `type: function`; the channel, notification, a
 - Read-old, write-new: `ToolFailure.Message` and `ToolFailure.Code` accept both shapes (legacy `error.message`, legacy `error.type` as the code). Activity indexing, the Session sequence projection (`code`, else legacy `error.type`), compaction plan input and repair feedback, and the WebUI/command timer and recall replies read through them. Persisted rows are not migrated; they render with the [shared text format](./shared-node-tools.md#d-tool-result-text).
 - ToolScript receives the same value; programmatic `ctl` failures are still raised as exceptions carrying the message.
 
+### D-builtin-result-shapes
+
+**User decision (2026-11-20).** A builtin returns the value its reader needs, and the model, the WebUI and ToolScript see that same value; the model and WebUI read it through the [readable text format](./shared-node-tools.md#d-tool-result-text). No result carries an `output` sentence that repeats its own fields, and no record is double-encoded as JSON text in `output`.
+
+- **Records** (lists, status, settings, receipts of actions that produce identifiers) are structured objects without `output`. A hint the reader needs and that used to exist only in the sentence becomes an explicit field, normally `note` (`ask_user`, `exec stop`, `image save`, `artifact prepare`, a background `node copy`, `submit_compact_plan`); a follow-up command is a field holding the exact `ctl` command (`session list` `nextPage`, written by `CtlCommandText.For`). Fields are dropped only when they are internal or empty: absent optional values are left out rather than written as null, except where null itself means something (an unset override or effort).
+- **Documents and prose** keep `output` text: `session view`, history recall, `memory read`, `skill load`, `--help`, `tool search`, `read`, `exec` and command output. Their script-only named fields follow [D-dispatch-programmatic-tool-data](../threads/tool-dispatch-node-execution.md#d-dispatch-programmatic-tool-data).
+- **Action confirmations without data** (rename, send, delete, memory writes) keep a short `output` sentence. Image-carrying results keep their image parts.
+- The object is the same for every caller: there is no ToolScript-only structure behind model text (`node list` and `config explain-auth` formerly branched on `programmatic`).
+- User commands that share an owner operation render their own reply text from the record (`/status` through `SessionStatus.Text`, `/exec list` through `SessionManager.ExecListText`, `/exec stop` from `note`); other `/` commands already had their own text.
+
+Records under this rule, with their top-level fields:
+
+| Command (builtin) | Result |
+| --- | --- |
+| `timer list` (`list_timers`) | `timers` |
+| `timer create/update/pause/resume` (`create_timer`, `update_timer`) | `timer` |
+| `timer delete` (`delete_timer`) | `deleted` |
+| `exec list` / `exec stop` | `execs` / `execId`, `outcome`, `note` |
+| `node list` (`node`) | `currentNode`, `nodes`, `providers` |
+| `node select` | `nodeId`, `defaultCwd`, `cwdCleared` |
+| `node pending` (`node_pair_list`) | `requests` |
+| `node approve` (`node_pair_approve`) | the approval receipt (`nodeId`, `authToken`, `deliveredLive`, ...) |
+| `node bootstrap-info` | the bootstrap info with `pairingTokenFile` |
+| `node copy` (`copy_between_nodes`) | `sourceNode`, `sourcePath`, `targetNode`, `fullPath`, `sizeBytes`, `sha256`, `warning`?; in the background `transferId`, `bytesCopied`, `sizeBytes`, `elapsed`, `note`, `warning`? |
+| `node cancel-transfer` | `transferId`, `status` and, when known, `sizeBytes`, `sha256` or `reason`; a finished copy returns its copy receipt |
+| `file send` (`send_file`) | `fullPath`, `fileDelivery`, `delivered`, `skipped`?, `failed`? |
+| `image save` (`image_write_to_file`) | `fullPath`, `note` |
+| `artifact prepare` / `publish` / `get` | `marker`, `preparedArtifact`, `note` / `marker`, `artifact` / `marker`, `metadata` |
+| `ask_user` | `questionId`, `status`, `note` (`close`: `questionId`, `status`) |
+| `submit_compact_plan` | `accepted`, `applied`, `operationId`, `note`, `overBudget`?; a rejected plan keeps `error` with `argsFilePath`, `nodeId`, `cwd`?, `note` |
+| `script list` (`list_toolscript_runs`) | `runs` of `runId`, `status`, `mode`, `scriptPath`, `createdAt`, `completedAt`?; `script get` keeps the full record |
+| `session child-model` | `sessionId`, `change`?, `model`, `effectiveModel`, `policySource`, `policyChain`, `effort`, `effectiveEffort`, `allowedEfforts` |
+| `session compact-threshold` | `sessionId`, `change`?, `thresholdTokens`, `effectiveThresholdTokens` |
+| `session status` | `sessionId`, `displayName`?, `agent`, `node`, `agentDirectory`, `cwd`?, `parentSessionId`?, `archived`?, model and effort fields, message, token, image and usage fields, compaction threshold, child defaults, `runtime`, `busy`?, `recentChildren` |
+| `session list` | `currentSession`, `parentSession`?, `query`?, `total`, `start`, `sessions`, `nextPage`? |
+| `agent list` (`list_agents`) | `agents` of `id`, `sessionCount`, `inherit`?, `createdBy`?, `ruleCount`, `defaultNode`?, `defaultCwd`? |
+| `skill list` | `agent`, `skills` of `name`, `description`?, `source` |
+| `agent inherit`, `config set`, `config explain-auth` | their former JSON payload as the object itself |
+
+Session rows (`session list` `sessions`, `session status` `recentChildren`) come from `SessionStatus.Row`: `id`, `displayName`?, `current`?, `latestMessageSeq`?, `activeMessages`, the runtime fields of `SessionStatus.RuntimeFields` (`state`, `phase`?, `waitingFor`?, `waitReason`?, `pendingSessions`?, `waitExecIds`?, `waitQuestionIds`?, `activity`?, `queueLength`?) and `lastMessageAt`?.
+
+Request prefixes ([D-request-prefix-stability](../overview.md#d-request-prefix-stability)): persisted results keep their stored shapes and render as before, and no tool declaration changes, so existing history is not rewritten and consecutive requests still extend one prefix. A one-time prefix change at deployment was accepted (user, 2026-11-19) and is not needed. Readers that matched old sentences in `output` read fields instead. Tests check field structure, not wording.
+
 ### D-tools-node-independent-default-declarations
 
 **Directly selected for request-prefix stability (2026-11-04).** Default model requests use the canonical framework `DefaultInject` declarations in stable order. Selecting master, a Provider Node, or a compatible external Node never replaces their names, descriptions or schemas with advertised capabilities, or removes them when connectivity changes. Default Node builtins remain declared even when no selected-Node capability or permission allows the call, including for restricted Agents. No enumeration of all Nodes or permission union is required. Hidden Node tools, including browsers, remain discovery-only. Other builtin visibility and external-runtime support restrictions retain their existing filtering; explicit schema overrides remain caller-owned. Configuration, non-Node policy, and provider-native tool changes are separate from execution placement.
