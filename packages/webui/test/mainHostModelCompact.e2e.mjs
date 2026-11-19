@@ -232,7 +232,7 @@ try {
   assert(!(await setting('effort-unset', 'set_session_child_model', { effort: 'unset' })).error)
   assert.equal((await view(parentId)).childEffortDefault, null)
   const threshold = await setting('fraction', 'set_session_compact_threshold', { thresholdTokens: .9 })
-  assert(threshold.output.includes('override: 0 tokens') && threshold.output.includes('15300'))
+  assert.equal(threshold.thresholdTokens, 0); assert.equal(threshold.effectiveThresholdTokens, 15300)
   assert.equal((await view(parentId)).compactThresholdTokens, 0)
   await setting('inspect-negative', 'set_session_compact_threshold', { thresholdTokens: -1 }); assert.equal((await view(parentId)).compactThresholdTokens, 0)
   await setting('threshold-clear', 'set_session_compact_threshold', { clear: true }); assert.equal((await view(parentId)).compactThresholdTokens, null)

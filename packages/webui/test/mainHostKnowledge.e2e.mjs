@@ -227,7 +227,7 @@ try {
   await until(async () => { const leaf = (await request('GET', '/api/agents')).body.agents.find(agent => agent.id === 'leaf'); return !leaf.defaultNode && leaf.defaultCwd === agentDir('leaf') }, 'Architecture default placement PUT')
   assert.equal(await snapshot('leaf/main'), initial); heldKnowledge.release(); await final('leaf/main', 'FROZEN-DONE')
   await turn('leaf/main', 'REUSE', body => { assert.equal(prompt(body), initial); return [call('live-list', 'skill', { action: 'list' })] })
-  assert(toolValue(await history('leaf/main'), 'live-list').output.includes('LEAF-SHARED-V2'))
+  assert(JSON.stringify(toolValue(await history('leaf/main'), 'live-list').skills).includes('LEAF-SHARED-V2'))
   assert.equal(await snapshot('leaf/main'), initial)
 
   // Fresh children use their owning Agent's current graph, not the parent's captured old prefix.
@@ -286,7 +286,7 @@ try {
   assert.equal((await request('PUT', '/api/agents/base', { inheritAgent: null })).status, 200)
   assert.equal((await request('PUT', '/api/agents/base', { inheritAgent: 'missing' })).status, 400)
   await turn(control, 'REFRESH-RECENT', [call('refresh-chain', 'set_agent_inherit', { agentName: 'base', inheritAgentName: 'main', refreshSnapshots: true })])
-  const result = JSON.parse(toolValue(await history(control), 'refresh-chain').output)
+  const result = toolValue(await history(control), 'refresh-chain')
   assert(result.affectedSessions.includes('leaf/main') && result.affectedSessions.includes(unrelated)); assert(!result.affectedSessions.includes(old) && !result.affectedSessions.includes(oldSuccess) && !result.affectedSessions.includes('outside/main'))
   assert.equal(await snapshot(old), oldBefore); assert.equal(await snapshot('outside/main'), outsideBefore)
   assert((await snapshot('leaf/main')).includes('MAIN-KNOWLEDGE')); assert((await snapshot('leaf/main')).includes('ONLY-B'), 'Recent refresh uses recorded B')
@@ -301,8 +301,8 @@ try {
 
   // Live foreign-Agent skill view is knowledge selection, not inherited workspace/tool access.
   await turn('leaf/main', 'FOREIGN-SKILLS', [call('foreign-list', 'skill', { action: 'list', agentName: 'base' })])
-  assert(toolValue(await history('leaf/main'), 'foreign-list').output.includes('BASE-SHARED'))
-  assert(!toolValue(await history('leaf/main'), 'foreign-list').output.includes('LEAF-SHARED'))
+  assert(JSON.stringify(toolValue(await history('leaf/main'), 'foreign-list').skills).includes('BASE-SHARED'))
+  assert(!JSON.stringify(toolValue(await history('leaf/main'), 'foreign-list').skills).includes('LEAF-SHARED'))
   assert.equal(errors.length, 0, errors.join('\n'))
   const archived = JSON.parse(execFileSync('python3', ['-c', 'import sqlite3,json,sys; c=sqlite3.connect(sys.argv[1]); print(json.dumps(c.execute("select session_id,count(*) from archive_messages group by session_id").fetchall()))', join(dataRoot, 'state', 'archive-store.sqlite')], { encoding: 'utf8' }))
   for (const [id, count] of archived) assert.equal((await history(id)).length, count, id)

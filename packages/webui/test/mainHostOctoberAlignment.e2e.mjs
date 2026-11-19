@@ -175,7 +175,7 @@ try {
   const rawModels = '# retained model comments\r\n' + JSON.stringify(models) + '\r\n'
   await writeFile(join(own, 'app-candidate'), appRaw); await writeFile(join(own, 'model-candidate'), rawModels)
   state = await turn(actor, 'install', [call('install-app', 'call_tool', { toolId: 'builtin:set_config', args: { target: 'config', filePath: 'app-candidate' } }), call('install-models', 'call_tool', { toolId: 'builtin:set_config', args: { target: 'models', filePath: 'model-candidate' } })])
-  const appResult = JSON.parse(pair(state, 'install-app').response.output), modelResult = JSON.parse(pair(state, 'install-models').response.output)
+  const appResult = pair(state, 'install-app').response, modelResult = pair(state, 'install-models').response
   assert.equal(appResult.saved, true); assert.deepEqual(appResult.applied, ['access.identities', 'access.surfaces.mcp', 'channels']); assert.deepEqual(appResult.notApplied, ['channels.webui']); assert(appResult.restartRequired.includes('llm'))
   assert.deepEqual(modelResult.applied, ['models']); assert.equal(await readFile(join(fixture.data, 'state/config.yaml'), 'utf8'), appRaw); assert.equal(await readFile(fixture.modelPath, 'utf8'), rawModels)
   await writeFile(join(own, 'invalid-model'), 'providers: null\ndefault: absent\n')
