@@ -98,6 +98,25 @@ internal sealed partial class SessionManager
             }
             return result;
         }
+        if (action == "status")
+        {
+            ToolRegistry.Keys(args, ["action"]);
+            var current = CurrentNode(owner);
+            var status = new JsonObject
+            {
+                ["currentNode"] = current,
+                ["connected"] = NodeProviders.Connected(current),
+            };
+            // An unset Session cwd means commands start in the Node's default directory.
+            var cwd = owner.Entry.WithState(state => SessionWait.Text(state.AuthorityEnvelope["cwd"]));
+            if (!string.IsNullOrWhiteSpace(cwd))
+                status["cwd"] = cwd;
+            var defaultCwd =
+                current == "master" ? agents.AgentDirectory(owner.Agent) : NodeProviders.DefaultCwd(current);
+            if (defaultCwd is not null)
+                status["defaultCwd"] = defaultCwd;
+            return status;
+        }
         if (action == "select")
         {
             ToolRegistry.Keys(args, ["action", "nodeId"]);
@@ -106,7 +125,7 @@ internal sealed partial class SessionManager
         }
         if (action is not ("create" or "ensure" or "inspect" or "destroy"))
             throw new InvalidDataException(
-                "node action must be list, select, create, ensure, inspect, or destroy."
+                "node action must be list, status, select, create, ensure, inspect, or destroy."
             );
         ToolRegistry.Keys(
             args,

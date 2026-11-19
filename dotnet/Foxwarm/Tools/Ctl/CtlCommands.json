@@ -1730,8 +1730,9 @@
     },
     {
       "path": "node status",
-      "summary": "Show this connection's current Node and working directory.",
+      "summary": "Show this Session's current Node and working directory.",
       "ingress": [
+        "model",
         "external"
       ],
       "target": {
@@ -1741,7 +1742,12 @@
           "action": "status"
         }
       },
-      "params": []
+      "params": [],
+      "copy": {
+        "external": {
+          "summary": "Show this connection's current Node and working directory."
+        }
+      }
     },
     {
       "path": "node select",

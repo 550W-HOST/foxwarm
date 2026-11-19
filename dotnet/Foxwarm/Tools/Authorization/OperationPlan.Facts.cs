@@ -208,7 +208,7 @@ internal sealed partial record OperationPlan
             case "move-agent":
                 return ("moved Session's Agent", ["SessionAgent"]);
             case "status-node":
-                return ("the inbound caller's selected Node", []);
+                return ("the calling Session's current Node, or the inbound caller's selected Node", []);
             case "target-session":
                 if (
                     declaration.FrontEnd is not null

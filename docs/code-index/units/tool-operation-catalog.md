@@ -18,7 +18,7 @@ This is the reference table for [tool operation authorization](./tool-operation-
 | `env.browser` | Node | — | execution Node of `browser_*` |
 | `env.tool` | Node, name (`nodeTool`) | — | custom Node tool identity |
 | `node.list` | — | — | rows filtered by visibility |
-| `node.view` | Node, or a Provider via `node: {provider}` | — | `node inspect`; external `node status` of the selected Node |
+| `node.view` | Node, or a Provider via `node: {provider}` | — | `node inspect`; `node status` of the calling Session's current Node, or of an inbound connection's selected Node |
 | `node.select` | Node | — | `node select` (internal and external) |
 | `node.lifecycle` | Node (fresh create: the Provider parent and the requested facts) | `action: create\|ensure\|destroy` | `NodeProviders.AuthorizationTargets` / `EnsureAuthorizationTargetsAsync` |
 | `node.trust` | Node (credential parent, pairing target, revoked member; none for a root credential or the pending list) | `action: credential\|approve\|revoke\|pending` | token, pairing and removal builtins |
@@ -142,7 +142,7 @@ From phase 3, inbound front ends map through the [adapter](./tool-operation-auth
 | Session read | `session.view` (canonical ID) |
 | Session send | `session.send` (canonical ID) |
 | `node list` | `node.list` |
-| external-only `node status` | `node.view` of the selected Node |
+| `node status` | `node.view` of the caller's current Node (Session or inbound selection) |
 | `node select` | `node.select`, with the optional `get_default_cwd` sub-request |
 | Node tools, exec and exec result | `env.*` |
 | pairing | `node.trust` |

@@ -442,8 +442,8 @@
    "now": true
   },
   "deny-node-select-raw / help:node --help": {
-   "reason": "per-command help: a command is listed only when its capability might be allowed with the command's fixed arguments; node create and node ensure mark --provider-id required, so their synopses show it",
-   "now": "ok: node: List, select and manage Nodes; copy files between them.\n\n  node list\n      List Nodes and Providers.\n  node inspect [<node-id>] [options]\n      Show Node or Provider details.\n  node create --provider-id <text> [options]\n      Create a Node through its Provider.\n  node ensure [<node-id>] --provider-id <text> [options]\n      Create a Node through its Provider unless it already exists.\n  node destroy <node-id> [options]\n      Request a Node's removal through its Provider.\n  node copy <source-node> <source-path> <target-node> <target-path> [options]\n      Copy a file between Nodes, inclu"
+   "reason": "per-command help: a command is listed only when its capability might be allowed with the command's fixed arguments; node create and node ensure mark --provider-id required, so their synopses show it; node status is available to the model (2026-11-19)",
+   "now": "ok: node: List, select and manage Nodes; copy files between them.\n\n  node list\n      List Nodes and Providers.\n  node status\n      Show this Session's current Node and working directory.\n  node inspect [<node-id>] [options]\n      Show Node or Provider details.\n  node create --provider-id <text> [options]\n      Create a Node through its Provider.\n  node ensure [<node-id>] --provider-id <text> [options]\n      Create a Node through its Provider unless it already exists.\n  node destroy <node-id> [options]\n      Request a Node's removal through its Provider.\n  node copy <source-node> <source-path> "
   },
   "node-list-only / help:node --help": {
    "reason": "per-command help: a command is listed only when its capability might be allowed with the command's fixed arguments",
@@ -550,32 +550,32 @@
    "now": "ok: script: Start, inspect and cancel ToolScript runs.\n\n  script start [options]\n      Start a background ToolScript run.\n  script list [options]\n      List this Session's ToolScript runs.\n  script get <run-id>\n      Inspect a ToolScript run.\n  script cancel <run-id>\n      Cancel a ToolScript run owned by this Session.\n\nRun `script <verb> --help` for a command's arguments."
   },
   "empty / help:node --help": {
-   "reason": "node create and node ensure mark --provider-id required, so their synopses show it",
-   "now": "ok: node: List, select and manage Nodes; copy files between them.\n\n  node list\n      List Nodes and Providers.\n  node select <node-id>\n      Select this Session's execution Node.\n  node inspect [<node-id>] [options]\n      Show Node or Provider details.\n  node create --provider-id <text> [options]\n      Create a Node through its Provider.\n  node ensure [<node-id>] --provider-id <text> [options]\n      Create a Node through its Provider unless it already exists.\n  node destroy <node-id> [options]\n      Request a Node's removal through its Provider.\n  node copy <source-node> <source-path> <target-"
+   "reason": "node create and node ensure mark --provider-id required, so their synopses show it; node status is available to the model (2026-11-19)",
+   "now": "ok: node: List, select and manage Nodes; copy files between them.\n\n  node list\n      List Nodes and Providers.\n  node status\n      Show this Session's current Node and working directory.\n  node select <node-id>\n      Select this Session's execution Node.\n  node inspect [<node-id>] [options]\n      Show Node or Provider details.\n  node create --provider-id <text> [options]\n      Create a Node through its Provider.\n  node ensure [<node-id>] --provider-id <text> [options]\n      Create a Node through its Provider unless it already exists.\n  node destroy <node-id> [options]\n      Request a Node's re"
   },
   "deny-default / help:session --help": {
    "reason": "ctl help reports a noun whose commands are all hidden as unavailable, not unknown",
    "now": "invalid_command: No `session` commands are available to this Session.\n\nRun `help` for the available commands."
   },
   "deny-scripts / help:node --help": {
-   "reason": "node create and node ensure mark --provider-id required, so their synopses show it",
-   "now": "ok: node: List, select and manage Nodes; copy files between them.\n\n  node list\n      List Nodes and Providers.\n  node select <node-id>\n      Select this Session's execution Node.\n  node inspect [<node-id>] [options]\n      Show Node or Provider details.\n  node create --provider-id <text> [options]\n      Create a Node through its Provider.\n  node ensure [<node-id>] --provider-id <text> [options]\n      Create a Node through its Provider unless it already exists.\n  node destroy <node-id> [options]\n      Request a Node's removal through its Provider.\n  node copy <source-node> <source-path> <target-"
+   "reason": "node create and node ensure mark --provider-id required, so their synopses show it; node status is available to the model (2026-11-19)",
+   "now": "ok: node: List, select and manage Nodes; copy files between them.\n\n  node list\n      List Nodes and Providers.\n  node status\n      Show this Session's current Node and working directory.\n  node select <node-id>\n      Select this Session's execution Node.\n  node inspect [<node-id>] [options]\n      Show Node or Provider details.\n  node create --provider-id <text> [options]\n      Create a Node through its Provider.\n  node ensure [<node-id>] --provider-id <text> [options]\n      Create a Node through its Provider unless it already exists.\n  node destroy <node-id> [options]\n      Request a Node's re"
   },
   "deny-self-tools / help:node --help": {
-   "reason": "node create and node ensure mark --provider-id required, so their synopses show it",
-   "now": "ok: node: List, select and manage Nodes; copy files between them.\n\n  node list\n      List Nodes and Providers.\n  node select <node-id>\n      Select this Session's execution Node.\n  node inspect [<node-id>] [options]\n      Show Node or Provider details.\n  node create --provider-id <text> [options]\n      Create a Node through its Provider.\n  node ensure [<node-id>] --provider-id <text> [options]\n      Create a Node through its Provider unless it already exists.\n  node destroy <node-id> [options]\n      Request a Node's removal through its Provider.\n  node copy <source-node> <source-path> <target-"
+   "reason": "node create and node ensure mark --provider-id required, so their synopses show it; node status is available to the model (2026-11-19)",
+   "now": "ok: node: List, select and manage Nodes; copy files between them.\n\n  node list\n      List Nodes and Providers.\n  node status\n      Show this Session's current Node and working directory.\n  node select <node-id>\n      Select this Session's execution Node.\n  node inspect [<node-id>] [options]\n      Show Node or Provider details.\n  node create --provider-id <text> [options]\n      Create a Node through its Provider.\n  node ensure [<node-id>] --provider-id <text> [options]\n      Create a Node through its Provider unless it already exists.\n  node destroy <node-id> [options]\n      Request a Node's re"
   },
   "ask-exec-deny-read / help:node --help": {
-   "reason": "node create and node ensure mark --provider-id required, so their synopses show it",
-   "now": "ok: node: List, select and manage Nodes; copy files between them.\n\n  node list\n      List Nodes and Providers.\n  node select <node-id>\n      Select this Session's execution Node.\n  node inspect [<node-id>] [options]\n      Show Node or Provider details.\n  node create --provider-id <text> [options]\n      Create a Node through its Provider.\n  node ensure [<node-id>] --provider-id <text> [options]\n      Create a Node through its Provider unless it already exists.\n  node destroy <node-id> [options]\n      Request a Node's removal through its Provider.\n  node copy <source-node> <source-path> <target-"
+   "reason": "node create and node ensure mark --provider-id required, so their synopses show it; node status is available to the model (2026-11-19)",
+   "now": "ok: node: List, select and manage Nodes; copy files between them.\n\n  node list\n      List Nodes and Providers.\n  node status\n      Show this Session's current Node and working directory.\n  node select <node-id>\n      Select this Session's execution Node.\n  node inspect [<node-id>] [options]\n      Show Node or Provider details.\n  node create --provider-id <text> [options]\n      Create a Node through its Provider.\n  node ensure [<node-id>] --provider-id <text> [options]\n      Create a Node through its Provider unless it already exists.\n  node destroy <node-id> [options]\n      Request a Node's re"
   },
   "local-deny-all / help:session --help": {
    "reason": "ctl help reports a noun whose commands are all hidden as unavailable, not unknown",
    "now": "invalid_command: No `session` commands are available to this Session.\n\nRun `help` for the available commands."
   },
   "local-deny-scripts / help:node --help": {
-   "reason": "node create and node ensure mark --provider-id required, so their synopses show it",
-   "now": "ok: node: List, select and manage Nodes; copy files between them.\n\n  node list\n      List Nodes and Providers.\n  node select <node-id>\n      Select this Session's execution Node.\n  node inspect [<node-id>] [options]\n      Show Node or Provider details.\n  node create --provider-id <text> [options]\n      Create a Node through its Provider.\n  node ensure [<node-id>] --provider-id <text> [options]\n      Create a Node through its Provider unless it already exists.\n  node destroy <node-id> [options]\n      Request a Node's removal through its Provider.\n  node copy <source-node> <source-path> <target-"
+   "reason": "node create and node ensure mark --provider-id required, so their synopses show it; node status is available to the model (2026-11-19)",
+   "now": "ok: node: List, select and manage Nodes; copy files between them.\n\n  node list\n      List Nodes and Providers.\n  node status\n      Show this Session's current Node and working directory.\n  node select <node-id>\n      Select this Session's execution Node.\n  node inspect [<node-id>] [options]\n      Show Node or Provider details.\n  node create --provider-id <text> [options]\n      Create a Node through its Provider.\n  node ensure [<node-id>] --provider-id <text> [options]\n      Create a Node through its Provider unless it already exists.\n  node destroy <node-id> [options]\n      Request a Node's re"
   }
  }
 }
