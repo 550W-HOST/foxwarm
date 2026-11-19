@@ -60,9 +60,9 @@ const formatToolResponseText = (resp: FunctionResponse): string => resp.__meta?.
   : formatToolResponsePayload(resp.response)
 
 // A non-blank string stays raw; anything else is an argument value in YAML flow (`''`, `{TOKEN: gh}`).
-const argumentValue = (value: unknown): string => typeof value === 'string' && value.trim().length > 0
-  ? value
-  : formatToolArgumentValue(value)
+const argumentValue = (value: unknown): string => typeof value !== 'string'
+  ? formatToolArgumentValue(value)
+  : value.trim().length > 0 ? value : dumpToolYaml(value, 0)
 
 // The ToolScript input is the one large nested argument, so it is block YAML under its label.
 const toolScriptInputText = (key: string, value: unknown): string => {
