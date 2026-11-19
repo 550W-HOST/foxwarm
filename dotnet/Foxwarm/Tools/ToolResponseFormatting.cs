@@ -1,21 +1,14 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using System.Text.RegularExpressions;
-using YamlDotNet.Core;
-using YamlDotNet.Serialization;
-using YamlDotNet.Serialization.EventEmitters;
 
 namespace Foxwarm.Tools;
 
+// Model-facing text of tool results; the port of packages/shared/src/toolResponseFormatting.ts,
+// which the WebUI uses for the same results. Both produce identical text
+// (packages/shared/src/toolResponseFormatting.fixtures.json runs against both).
 internal static class ToolResponseFormatting
 {
-    private static readonly JsonSerializerOptions QuotedOptions = new()
-    {
-        TypeInfoResolver = MainJsonContext.Default,
-        Encoder = JsonText.Encoder,
-    };
-
     internal static string Format(JsonNode? value)
     {
         if (value is JsonObject { Count: 1 } single && single.ContainsKey("output"))
@@ -23,61 +16,42 @@ internal static class ToolResponseFormatting
         return FormatStructuredValue(value);
     }
 
+    // Strings as they are; a mapping or sequence as YAML in the readable layout.
     internal static string FormatStructuredValue(JsonNode? value)
     {
         if (value is null)
             return "";
         if (value is JsonValue leaf)
-            return leaf.TryGetValue<string>(out var text) ? text : leaf.ToJsonText();
-        if (value is JsonObject { Count: 0 })
-            return "{}";
-        if (value is JsonObject obj)
-            return string.Join(
-                '\n',
-                obj.Select(pair => Scalar(pair.Key) + ": " + Flow(pair.Value))
-            );
-        return Flow(value);
+            return leaf.GetValueKind() switch
+            {
+                JsonValueKind.String => leaf.GetValue<string>(),
+                JsonValueKind.Number => ToolResponseYaml.JavaScriptNumber(
+                    ToolResponseYaml.NumberValue(leaf)
+                ),
+                JsonValueKind.True => "true",
+                JsonValueKind.False => "false",
+                JsonValueKind.Null => "",
+                _ => leaf.ToJsonText(),
+            };
+        return ToolResponseYaml.Dump(value, ToolResponseYaml.Readable);
     }
 
-    private static readonly ISerializer BlockYaml = new SerializerBuilder()
-        .DisableAliases()
-        .WithIndentedSequences()
-        .WithEventEmitter(next => new LiteralBlockEmitter(next))
-        .WithQuotingNecessaryStrings()
-        .WithNewLine("\n")
-        .Build();
-
-    private sealed class LiteralBlockEmitter(IEventEmitter next) : ChainedEventEmitter(next)
-    {
-        public override void Emit(ScalarEventInfo info, IEmitter emitter)
-        {
-            if (info.Source.Value is string text && text.Contains('\n'))
-                info.Style = ScalarStyle.Literal;
-            else if (info.Source.Value is null)
-                info.RenderedValue = "null";
-            base.Emit(info, emitter);
-        }
-    }
-
+    // A cleaned outer ToolScript execution result: print and return sections, then metadata.
     internal static string FormatToolScriptExecution(JsonNode? value)
     {
         if (
             value is not JsonObject response
-            || response["truncated"] is JsonValue flag
-                && flag.TryGetValue<bool>(out var truncated)
-                && truncated
-            || response["outputTruncated"] is JsonValue outputFlag
-                && outputFlag.TryGetValue<bool>(out var outputTruncated)
-                && outputTruncated
+            || Flag(response["truncated"])
+            || Flag(response["outputTruncated"])
             || response.ContainsKey("output")
                 && !response.ContainsKey("result")
                 && !response.ContainsKey("stdout")
         )
             return Format(value);
-        var metadata = (JsonObject)response.DeepClone();
-        metadata.Remove("stdout");
-        metadata.Remove("result");
-        metadata.Remove("output");
+        var metadata = new JsonObject();
+        foreach (var (key, item) in response)
+            if (key is not ("stdout" or "result" or "output"))
+                metadata[key] = item?.DeepClone();
         var sections = new StringBuilder();
         void AppendSection(string label, string text)
         {
@@ -87,67 +61,21 @@ internal static class ToolResponseFormatting
         }
         if (
             response["stdout"] is JsonValue stdout
-            && stdout.TryGetValue<string>(out var printed)
-            && printed.Length > 0
+            && stdout.GetValueKind() == JsonValueKind.String
+            && stdout.GetValue<string>() is { Length: > 0 } printed
         )
             AppendSection("print", printed);
         if (response.ContainsKey("result"))
             AppendSection(
                 "return",
                 response["result"] is JsonValue result
-                && result.TryGetValue<string>(out var returned)
-                    ? returned
-                    : DumpBlock(response["result"])
+                && result.GetValueKind() == JsonValueKind.String
+                    ? result.GetValue<string>()
+                    : ToolResponseYaml.Dump(response["result"], -1)
             );
-        return sections.Append("---\n").Append(DumpBlock(metadata)).ToString();
+        return sections.Append("---\n").Append(ToolResponseYaml.Dump(metadata, -1)).ToString();
     }
 
-    private static string DumpBlock(JsonNode? value) =>
-        value is null ? "null" : BlockYaml.Serialize(Native(value)).TrimEnd();
-
-    private static object? Native(JsonNode? value) =>
-        value switch
-        {
-            null => null,
-            JsonObject obj => obj.ToDictionary(pair => pair.Key, pair => Native(pair.Value)),
-            JsonArray array => array.Select(Native).ToArray(),
-            JsonValue leaf when leaf.TryGetValue<string>(out var text) => text,
-            JsonValue leaf when leaf.TryGetValue<bool>(out var flag) => flag,
-            JsonValue leaf when leaf.TryGetValue<long>(out var integer) => integer,
-            _ => JsonData.Deserialize<JsonElement>(value.ToJsonText()).GetDouble(),
-        };
-
-    private static string Flow(JsonNode? value) =>
-        value switch
-        {
-            null => "null",
-            JsonObject obj => "{"
-                + string.Join(", ", obj.Select(pair => Scalar(pair.Key) + ": " + Flow(pair.Value)))
-                + "}",
-            JsonArray array => "[" + string.Join(", ", array.Select(Flow)) + "]",
-            JsonValue leaf when leaf.TryGetValue<string>(out var text) => Scalar(text),
-            _ => value.ToJsonText(),
-        };
-
-    private static string Scalar(string text)
-    {
-        if (
-            text.Length > 0
-            && Regex.IsMatch(text, "^[a-zA-Z_][a-zA-Z0-9_./-]*$", RegexOptions.CultureInvariant)
-            && text
-                is not (
-                    "true"
-                    or "false"
-                    or "null"
-                    or "True"
-                    or "False"
-                    or "Null"
-                    or "NULL"
-                    or "TRUE"
-                    or "FALSE"
-                )
-        )
-            return text;
-        return JsonData.Serialize(text, QuotedOptions);
-    }
+    private static bool Flag(JsonNode? value) =>
+        value is JsonValue flag && flag.GetValueKind() == JsonValueKind.True;
 }

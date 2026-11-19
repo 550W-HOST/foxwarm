@@ -1,6 +1,6 @@
 # Unit: shared-node-tools
 
-Files: packages/shared/src/nodeIdentity.ts, packages/shared/src/unifiedEdit.ts, packages/shared/src/unifiedEdit.test.ts, packages/shared/src/exactReplacement.ts, packages/shared/src/exactReplacement.test.ts, packages/shared/src/fileOperations.ts, packages/shared/src/fileToolCore.ts, packages/shared/src/fileToolCore.test.ts, packages/shared/src/rasterImageMime.ts, packages/shared/src/nodeTools.ts, packages/shared/src/nodeTools.test.ts, packages/shared/src/agentPathVariables.ts, packages/shared/src/agentPathVariables.test.ts, packages/shared/src/resolvedPathMetadata.ts, packages/shared/src/nodeCapabilities.ts, packages/shared/src/nodeFileTransfer.ts, packages/shared/src/nodeFileTransfer.test.ts, packages/shared/src/execCwd.ts, packages/shared/src/index.ts, packages/shared/src/tokenCount.ts, packages/shared/src/toolResponseFormatting.ts, packages/shared/src/toolResponseFormatting.test.ts, packages/shared/src/foxwarmMarkup.ts, packages/shared/src/webuiToolRendering.ts, packages/shared/src/webuiToolRendering.test.ts
+Files: packages/shared/src/nodeIdentity.ts, packages/shared/src/unifiedEdit.ts, packages/shared/src/unifiedEdit.test.ts, packages/shared/src/exactReplacement.ts, packages/shared/src/exactReplacement.test.ts, packages/shared/src/fileOperations.ts, packages/shared/src/fileToolCore.ts, packages/shared/src/fileToolCore.test.ts, packages/shared/src/rasterImageMime.ts, packages/shared/src/nodeTools.ts, packages/shared/src/nodeTools.test.ts, packages/shared/src/agentPathVariables.ts, packages/shared/src/agentPathVariables.test.ts, packages/shared/src/resolvedPathMetadata.ts, packages/shared/src/nodeCapabilities.ts, packages/shared/src/nodeFileTransfer.ts, packages/shared/src/nodeFileTransfer.test.ts, packages/shared/src/execCwd.ts, packages/shared/src/index.ts, packages/shared/src/tokenCount.ts, packages/shared/src/toolResponseFormatting.ts, packages/shared/src/toolResponseFormatting.test.ts, packages/shared/src/toolResponseFormatting.fixtures.json, packages/shared/src/toolResponseYaml.ts, packages/shared/src/foxwarmMarkup.ts, packages/shared/src/webuiToolRendering.ts, packages/shared/src/webuiToolRendering.test.ts
 Secondary files: packages/shared/src/outputTruncation.ts, packages/shared/src/outputTruncation.test.ts
 
 Trusted foreground exec signals enter the shared wait and launch fence, not process termination. Interruption uses the existing background-registration and completion path under [Stop and Run queued](../threads/message-processing-pipeline.md#d-pipeline-control-commands).
@@ -29,7 +29,9 @@ Provides shared file system tools, shell execution and utility functions used by
 - `detectTransferMimeType` — MIME type detection for file transfers
 - `resolveExecCwd`, `validateResolvedExecCwd`, `resolveValidatedExecCwd` — exec working directory resolution and validation
 - `estimateTokenCount` — lightweight token count estimator
-- `formatStructuredValue`, `formatToolResponsePayload`, `formatCompactObjectPreview` — YAML-based response formatting for model-facing and WebUI display paths
+- `formatStructuredValue`, `formatToolResponsePayload` — the text of a tool result as models and the WebUI full-result view see it; [D-tool-result-text](#d-tool-result-text)
+- `formatCompactObjectPreview` — WebUI previews of call arguments and compact values (unwraps any single-key object)
+- `dumpToolYaml`, `containsMultilineString` — the YAML emitter behind both formatters (`toolResponseYaml.ts`)
 - `formatToolScriptExecutionResponse` — literal print/return sections and block-YAML metadata at the exact outer execution presentation boundary; [canonical contract](../threads/tool-dispatch-node-execution.md#d-dispatch-toolscript-execution-projection)
 - `escapeFoxwarmAttributeValue`, `escapeFoxwarmTextContent`, `formatFoxwarmAttributes`, `formatFoxwarmAttachmentTag`, `buildFoxwarmAttachmentText` — browser/server parity helpers for safe ordered Foxwarm metadata attributes, explicitly structured nested text, and attachment descriptors
 - Shared patch parsing, line-count, and per-operation summary helpers are re-exported from the package index.
@@ -84,8 +86,9 @@ Provides shared file system tools, shell execution and utility functions used by
 | `validateResolvedExecCwd(resolved, nodeId)` | ~49 | Validates that resolved cwd exists and is accessible |
 | `resolveValidatedExecCwd(options)` | ~73 | Resolves and validates exec cwd in one call |
 | `estimateTokenCount(text)` | ~1 | Estimates token count using codepoint heuristics |
-| `formatStructuredValue(value)` | ~20 | Formats a value as YAML or string |
-| `formatToolResponsePayload(response)` | ~32 | Formats tool response, unwrapping single `output` key |
+| `formatStructuredValue(value)` | `toolResponseFormatting.ts` | String as is, number/boolean as text, mapping or sequence as readable-layout YAML |
+| `formatToolResponsePayload(response)` | `toolResponseFormatting.ts` | Unwraps a sole `output` key, then `formatStructuredValue` |
+| `dumpToolYaml(value, layout)` | `toolResponseYaml.ts` | js-yaml 4.1.1 dumper subset with the `readable` layout or a js-yaml `flowLevel` |
 | `formatToolScriptExecutionResponse(response)` | `toolResponseFormatting.ts` | Formats cleaned outer execution results while preserving native values and guard-summary locators |
 | `formatCompactObjectPreview(response)` | ~42 | Formats compact preview of single-key objects |
 | `parseSessionLinkText(text)` | (webuiToolRendering.ts) | Parses legacy session references plus recognized Session reference fields in XML attributes and JSON/YAML-shaped text into link/text segments |
@@ -120,6 +123,20 @@ Provides shared file system tools, shell execution and utility functions used by
 - Shared cached-write retry formatting emits the executable `write({ ... })` call for the failing path, states that the scoped ref may use another independently authorized `filePath`, explicitly prohibits including `content` alongside `contentRef`, and directs intentional replacements to omit `contentRef` and submit only the new content plus the desired path and required flags; the canonical guidance contract is [D-tools-write-contentref-retry-guidance](./src-tools.md#d-tools-write-contentref-retry-guidance).
 
 ## Design Decisions
+
+### D-tool-result-text
+
+**User decisions (2026-11-19).** A tool result reaches the model and the WebUI full-result view as the same text, and no multi-line string in it appears as an escaped one-line scalar.
+
+- `formatToolResponsePayload` unwraps a sole `output` key; a string stays raw, a number or boolean is its JavaScript text, `null` is empty.
+- A mapping or sequence is YAML in the `readable` layout: one line per top-level entry. A top-level entry whose value is a non-empty array, and a top-level array, become block sequences with one item per line. An entry or item containing a multi-line string anywhere is block all the way down, with literal (`|`) scalars; every other entry or item keeps flow style (`- {name: exa, enabled: true}`). Nested arrays inside a flow item and empty arrays/objects stay flow (`[]`, `{}`).
+- Scalars follow js-yaml 4.1.1 (indent 2, unlimited width, single quoting, YAML 1.1 compatibility quoting such as `'y'`, `'12'`, `'2026-11-19'`), except that a multi-line string in a block position is always a literal block, even with tabs, carriage returns or control characters that js-yaml would escape. Single-line strings with such characters stay double-quoted with escapes. Numbers and key order follow JavaScript (`Number.prototype.toString`, array-index keys first), because the WebUI formats `JSON.parse` values.
+- `formatToolScriptExecutionResponse` keeps literal print/return sections and renders return values and metadata fully block (`flowLevel -1`) with the same emitter.
+- The C# port must equal the TypeScript text byte for byte. `toolResponseFormatting.fixtures.json` is the golden set: `toolResponseFormatting.test.ts` and `ToolResponseFormattingParityTests` run it, and the TypeScript emitter is additionally compared with js-yaml for its flow levels.
+
+Previous behavior, for comparison: js-yaml with `flowLevel: 1` wrote every value below a top-level key in flow style, so multi-line strings, including top-level `error` messages, were double-quoted one-liners (`error: "Traceback:\n..."`), arrays of rows were one long line, and a top-level array was a single flow sequence. The C# port quoted every non-identifier string as JSON, which diverged from the WebUI.
+
+Request-prefix consequence, accepted once (user decision 2026-11-19): already persisted results render with the new text after deployment, so the first request of each existing Session after the upgrade changes its history prefix. No legacy rendering branch keeps the old text. Formatting is a pure function of the persisted value, so consecutive requests after the change still extend one byte-identical prefix ([D-request-prefix-stability](../overview.md#d-request-prefix-stability)).
 
 ### D-unified-edit
 
@@ -156,7 +173,7 @@ Non-image file reads above 1 MiB must not full-read or decode their source befor
 - `nodeTools` object is the primary interface invoked by the node runtime when dispatching tool calls
 - `execCwd` utilities are used by `exec` to resolve and validate working directories before spawning processes
 - `nodeFileTransfer` supports inter-node file transfer operations (read/write with base64 encoding and SHA-256 verification)
-- `toolResponseFormatting` is used upstream to serialize tool results into YAML for LLM consumption and by WebUI to format full tool response payloads consistently
+- `toolResponseFormatting` produces the tool-result text for the retained TypeScript providers and the WebUI full-result view; the C# Main port (`ToolResponseFormatting`/`ToolResponseYaml`) produces the same text for every C# provider serializer and the external Claude runtime ([D-tool-result-text](#d-tool-result-text))
 - `webuiToolRendering` supplies pure, testable helper logic for WebUI session-link text parsing and streaming partial tool-call guards
 - `foxwarmMarkup` supplies one attribute/nested-text escaping and attachment-tag implementation to root channel code and WebUI previews.
 - `estimateTokenCount` is shared across master and node packages for context budget management

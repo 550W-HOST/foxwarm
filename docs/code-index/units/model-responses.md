@@ -34,6 +34,8 @@ Indexed reasoning-summary part-added, part-done, text-delta and text-done events
 
 Enabled [text redaction](./model-text-redaction.md) restores ordinary progress, completed commentary and canonical results before their consumers. Its wrapper keeps provider-form completed rows and normalizes structured argument replay for WS prefix finalization; thinking and citation offsets are unchanged.
 
+Tool results become `function_call_output` text through `ProviderImageParts.GroupBlocks` and the shared [tool-result text](./shared-node-tools.md#d-tool-result-text), like every other provider serializer. [2026-11-19] The Responses-only `FormatToolResponsePayload` (raw JSON for recall pages and exec poll results, `error: {type, message}` for typed errors) was removed: it had no caller since the 2026-10-04 image-input rework, no decision recorded it, and the retained TypeScript Responses serializer never had these cases.
+
 ## Replay and hosted output boundaries
 
 WebSocket state belongs to the concrete request/cache generation and its owned connection lease. The complete semantic body is prepared and its digest recorded before connection-specific suffix selection or reconnect. Reuse depends on compatible committed input and tool pairs, not merely a prior response ID. Malformed function arguments use the shared [per-call argument-error boundary](./session-domain.md#tool-argument-parsing), preserving valid siblings and safe replay instead of retrying the complete response. A reconnect sends the appropriate complete request rather than pretending a failed socket retained state.

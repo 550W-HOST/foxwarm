@@ -1,25 +1,14 @@
-import yaml from 'js-yaml'
-
-const YAML_OPTIONS = {
-  flowLevel: 1,
-  lineWidth: -1,
-  noRefs: true,
-  sortKeys: false,
-} as const
-
-const YAML_FLOW_OPTIONS = {
-  ...YAML_OPTIONS,
-  flowLevel: 0,
-} as const
-
-function dumpYaml(value: unknown, flowOnly = false): string {
-  return yaml.dump(value, flowOnly ? YAML_FLOW_OPTIONS : YAML_OPTIONS).trimEnd()
-}
+import { dumpToolYaml } from './toolResponseYaml'
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value)
 }
 
+/**
+ * Model-facing and WebUI text of a structured tool value. Strings are returned as they are; a
+ * mapping or sequence is YAML with the `readable` layout: one line per top-level entry or item,
+ * block sequences for top-level arrays, flow style below, and literal blocks for multi-line text.
+ */
 export function formatStructuredValue(value: unknown): string {
   if (value === undefined || value === null) {
     return ''
@@ -33,7 +22,7 @@ export function formatStructuredValue(value: unknown): string {
     return String(value)
   }
 
-  return dumpYaml(value, !isPlainObject(value))
+  return dumpToolYaml(value, 'readable')
 }
 
 export function formatToolResponsePayload(response: unknown): string {
@@ -50,7 +39,7 @@ export function formatToolResponsePayload(response: unknown): string {
 /** Render a cleaned outer ToolScript execution result without changing its native value. */
 export function formatToolScriptExecutionResponse(response: unknown): string {
   // Guard summaries and historical pruned responses already carry their excerpt.
-  if (!isPlainObject(response) || response.truncated === true
+  if (!isPlainObject(response) || response.truncated === true || response.outputTruncated === true
     || (response.output !== undefined && response.result === undefined && response.stdout === undefined)) {
     return formatToolResponsePayload(response)
   }
@@ -64,9 +53,9 @@ export function formatToolScriptExecutionResponse(response: unknown): string {
   if (result !== undefined) {
     appendSection('return', typeof result === 'string'
       ? result
-      : yaml.dump(result, { ...YAML_OPTIONS, flowLevel: -1 }).trimEnd())
+      : dumpToolYaml(result, -1))
   }
-  sections.push(`---\n${yaml.dump(metadata, { ...YAML_OPTIONS, flowLevel: -1 }).trimEnd()}`)
+  sections.push(`---\n${dumpToolYaml(metadata, -1)}`)
   return sections.join('')
 }
 

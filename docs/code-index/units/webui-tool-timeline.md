@@ -24,7 +24,7 @@ Renders tool call/response timeline items in the chat web UI, displaying functio
 
 | Function | Lines (approx) | Description (one phrase) |
 |----------|------|-------------|
-| `formatToolResponseText(resp)` | ~1 | Delegates to shared WebUI response formatter for the full response payload |
+| `formatToolResponseText(resp)` | ~1 | Full-result text: `formatToolResponsePayload`, the text the model receives ([D-tool-result-text](./shared-node-tools.md#d-tool-result-text)), or the ToolScript execution sections |
 | `getSendFileDownload(call, resp)` | ~20 | Extracts download URL/filename for send_file tool responses |
 | `ToolDownloadButton({ url, fileName })` | ~35 | Requests an action-local signed URL before native download, with pending/error state |
 | `ToolGroupSummaryCard({ items, onExpand, expanded?, children? })` | ~15 | Neutral Tool-style group card with a persistent counted-tag header (`exec ×4`; failures separate, most frequent first), shared header/line toggle, and nested member body when expanded |
@@ -67,7 +67,7 @@ Unified `edit` patch calls use the existing patch summaries, hunks and Code acti
 ## Dependencies
 
 - `./chatShared` — shared types (`FunctionCall`, `FunctionResponse`, `Message`, `MessagePart`, `ToolScriptSubCall`, `ToolTagItem`), utilities (`formatToolLabel`, `formatCompactObjectPreview`, `parseApplyPatchPreview`, `buildPatchHunkSnippets`, `clampContentStyle`, `parseAnsi`, `summarizeToolTagCounts`), and UI components (`IconToggleButton`, `MiniToggleButton`, `ToolTag`, `ToolTagList`, `SessionHashLink`)
-- `../../../shared/src/toolResponseFormatting` — `formatCompactObjectPreview`, `formatToolScriptExecutionResponse`
+- `../../../shared/src/toolResponseFormatting` — `formatToolResponsePayload`, `formatToolScriptExecutionResponse`
 - `../../../shared/src/webuiToolRendering` — pure helpers for streaming partial-tool guards and session-link text parsing tests
 - `./ImageParts` — renders image message parts
 - `./SyntaxHighlightedText` — code syntax highlighting component

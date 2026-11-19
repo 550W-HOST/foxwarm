@@ -31,7 +31,7 @@ import { ToolScriptProgressContext } from './ToolScriptProgressContext'
 import JsonInspectorDialog from './JsonInspectorDialog'
 import { toolActivitySummary, toolActivityTarget } from '../../../shared/src/toolActivity'
 import { shouldUseStreamingToolPlaceholder } from '../../../shared/src/webuiToolRendering'
-import { formatToolScriptExecutionResponse } from '../../../shared/src/toolResponseFormatting'
+import { formatToolResponsePayload, formatToolScriptExecutionResponse } from '../../../shared/src/toolResponseFormatting'
 import ImageParts from './ImageParts'
 import { SyntaxHighlightedText } from './SyntaxHighlightedText'
 import { buildPathDownloadUrl, requestPathDownloadUrl, triggerBrowserDownload } from './downloadShared'
@@ -53,9 +53,10 @@ import type { ReasoningBadgeInfo } from './reasoningParts'
 import { SentVersionButton, sentVersionTargets } from './SentVersionDialog'
 import { ctlAsUnified, ctlCommandText, ctlConcrete } from '../ctlCall'
 
+// The same text the model receives for this result (see the shared formatter).
 const formatToolResponseText = (resp: FunctionResponse): string => resp.__meta?.toolScriptSubCalls !== undefined
   ? formatToolScriptExecutionResponse(resp.response)
-  : formatCompactObjectPreview(resp.response)
+  : formatToolResponsePayload(resp.response)
 
 const argumentValue = (value: unknown): string => typeof value === 'string' && value.trim().length > 0
   ? value

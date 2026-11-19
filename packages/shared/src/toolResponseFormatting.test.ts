@@ -1,6 +1,30 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import yaml from 'js-yaml'
 import { formatCompactObjectPreview, formatToolResponsePayload, formatToolScriptExecutionResponse } from './toolResponseFormatting'
+import { dumpToolYaml } from './toolResponseYaml'
+import fixtures from './toolResponseFormatting.fixtures.json'
+
+// The same golden file runs against the C# formatter (ToolResponseFormattingParityTests).
+test('golden tool response texts', () => {
+  for (const { name, value, text } of fixtures.payload) {
+    assert.equal(formatToolResponsePayload(value), text, name)
+  }
+  for (const { name, value, text } of fixtures.toolScript) {
+    assert.equal(formatToolScriptExecutionResponse(value), text, name)
+  }
+})
+
+test('the YAML emitter matches js-yaml for its flow levels', () => {
+  const values: unknown[] = fixtures.payload.map(item => item.value).filter(value => value !== null && typeof value === 'object')
+  for (const value of values) {
+    for (const flowLevel of [-1, 0, 1, 2]) {
+      // Multi-line strings with characters js-yaml escapes are literal blocks here by design.
+      if (flowLevel !== 0 && JSON.stringify(value).match(/\\(r|t|u00)/)) continue
+      assert.equal(dumpToolYaml(value, flowLevel), yaml.dump(value, { flowLevel, lineWidth: -1, noRefs: true, sortKeys: false }).slice(0, -1))
+    }
+  }
+})
 
 test('formatCompactObjectPreview unwraps single-key error and output objects', () => {
   assert.equal(formatCompactObjectPreview({ error: 'bad' }), 'bad')
@@ -26,7 +50,7 @@ test('WebUI payload formatting keeps structured fields and applies single-key sh
     count: 1,
     totalMatched: 1,
     tools: [{ name: 'read', toolId: 'builtin:read' }],
-  }), 'count: 1\ntotalMatched: 1\ntools: [{name: read, toolId: builtin:read}]')
+  }), 'count: 1\ntotalMatched: 1\ntools:\n  - {name: read, toolId: builtin:read}')
   assert.equal(formatCompactObjectPreview({ count: 3 }), '3')
   assert.equal(formatToolResponsePayload({ count: 3 }), 'count: 3')
   assert.equal(formatToolResponsePayload({ content: 'hello' }), 'content: hello')

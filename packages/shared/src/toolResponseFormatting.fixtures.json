@@ -1,0 +1,661 @@
+{
+  "payload": [
+    {
+      "name": "plain string",
+      "value": "plain",
+      "text": "plain"
+    },
+    {
+      "name": "top-level multi-line string stays raw",
+      "value": "line one\nline two\n",
+      "text": "line one\nline two\n"
+    },
+    {
+      "name": "number",
+      "value": 42,
+      "text": "42"
+    },
+    {
+      "name": "negative zero number",
+      "value": 0,
+      "text": "0"
+    },
+    {
+      "name": "float number",
+      "value": 1.5,
+      "text": "1.5"
+    },
+    {
+      "name": "large number",
+      "value": 1e+21,
+      "text": "1e+21"
+    },
+    {
+      "name": "small number",
+      "value": 1e-7,
+      "text": "1e-7"
+    },
+    {
+      "name": "boolean",
+      "value": false,
+      "text": "false"
+    },
+    {
+      "name": "null",
+      "value": null,
+      "text": ""
+    },
+    {
+      "name": "empty object",
+      "value": {},
+      "text": "{}"
+    },
+    {
+      "name": "empty array",
+      "value": [],
+      "text": "[]"
+    },
+    {
+      "name": "sole output unwraps",
+      "value": {
+        "output": "ok"
+      },
+      "text": "ok"
+    },
+    {
+      "name": "sole output multi-line",
+      "value": {
+        "output": "Patch applied successfully.\n- Updated src/example.ts (+3 -2)\n- Added src/new.ts (+4)"
+      },
+      "text": "Patch applied successfully.\n- Updated src/example.ts (+3 -2)\n- Added src/new.ts (+4)"
+    },
+    {
+      "name": "sole output structured",
+      "value": {
+        "output": {
+          "a": 1,
+          "b": [
+            1,
+            2
+          ]
+        }
+      },
+      "text": "a: 1\nb:\n  - 1\n  - 2"
+    },
+    {
+      "name": "sole output number",
+      "value": {
+        "output": 3
+      },
+      "text": "3"
+    },
+    {
+      "name": "sole output null",
+      "value": {
+        "output": null
+      },
+      "text": ""
+    },
+    {
+      "name": "output beside other fields",
+      "value": {
+        "output": "ok",
+        "count": 2
+      },
+      "text": "output: ok\ncount: 2"
+    },
+    {
+      "name": "single count",
+      "value": {
+        "count": 3
+      },
+      "text": "count: 3"
+    },
+    {
+      "name": "single content",
+      "value": {
+        "content": "hello"
+      },
+      "text": "content: hello"
+    },
+    {
+      "name": "plain error",
+      "value": {
+        "error": "bad"
+      },
+      "text": "error: bad"
+    },
+    {
+      "name": "multi-line error",
+      "value": {
+        "error": "Traceback (most recent call last):\n  File \"x.py\", line 1\nValueError: failed"
+      },
+      "text": "error: |-\n  Traceback (most recent call last):\n    File \"x.py\", line 1\n  ValueError: failed"
+    },
+    {
+      "name": "error with code",
+      "value": {
+        "error": "Denied by rule deny-exec.",
+        "code": "tool_authorization_denied"
+      },
+      "text": "error: Denied by rule deny-exec.\ncode: tool_authorization_denied"
+    },
+    {
+      "name": "structured error object",
+      "value": {
+        "error": {
+          "message": "failed",
+          "code": "E_FAIL"
+        }
+      },
+      "text": "error: {message: failed, code: E_FAIL}"
+    },
+    {
+      "name": "legacy typed error multi-line",
+      "value": {
+        "error": {
+          "type": "tool_error",
+          "message": "first\nsecond"
+        }
+      },
+      "text": "error:\n  type: tool_error\n  message: |-\n    first\n    second"
+    },
+    {
+      "name": "tool search rows",
+      "value": {
+        "count": 1,
+        "totalMatched": 1,
+        "tools": [
+          {
+            "name": "read",
+            "toolId": "builtin:read"
+          }
+        ]
+      },
+      "text": "count: 1\ntotalMatched: 1\ntools:\n  - {name: read, toolId: builtin:read}"
+    },
+    {
+      "name": "server list",
+      "value": {
+        "count": 3,
+        "servers": [
+          {
+            "name": "exa",
+            "enabled": true,
+            "transport": "http",
+            "tools": 4
+          },
+          {
+            "name": "github",
+            "enabled": false,
+            "transport": "stdio",
+            "tools": 0,
+            "args": [
+              "--read-only",
+              "--toolsets",
+              "repos"
+            ]
+          },
+          {
+            "name": "notes",
+            "enabled": true,
+            "description": "Team notes.\nRead-only."
+          }
+        ]
+      },
+      "text": "count: 3\nservers:\n  - {name: exa, enabled: true, transport: http, tools: 4}\n  - {name: github, enabled: false, transport: stdio, tools: 0, args: ['--read-only', '--toolsets', repos]}\n  - name: notes\n    enabled: true\n    description: |-\n      Team notes.\n      Read-only."
+    },
+    {
+      "name": "array of scalars",
+      "value": {
+        "ids": [
+          "a",
+          "b c",
+          "true",
+          12,
+          null,
+          false,
+          ""
+        ]
+      },
+      "text": "ids:\n  - a\n  - b c\n  - 'true'\n  - 12\n  - null\n  - false\n  - ''"
+    },
+    {
+      "name": "array with nested arrays and empty values",
+      "value": {
+        "rows": [
+          [
+            1,
+            2
+          ],
+          [],
+          {},
+          [
+            [
+              3
+            ]
+          ],
+          {
+            "list": [],
+            "map": {}
+          }
+        ]
+      },
+      "text": "rows:\n  - [1, 2]\n  - []\n  - {}\n  - [[3]]\n  - {list: [], map: {}}"
+    },
+    {
+      "name": "array item with multi-line text goes block",
+      "value": {
+        "items": [
+          {
+            "text": "first\nsecond",
+            "done": false,
+            "tags": [
+              "x",
+              "y"
+            ]
+          },
+          {
+            "text": "single",
+            "done": true
+          },
+          "loose\nstring",
+          "loose"
+        ]
+      },
+      "text": "items:\n  - text: |-\n      first\n      second\n    done: false\n    tags:\n      - x\n      - 'y'\n  - {text: single, done: true}\n  - |-\n    loose\n    string\n  - loose"
+    },
+    {
+      "name": "empty array and object entries",
+      "value": {
+        "list": [],
+        "map": {},
+        "value": null
+      },
+      "text": "list: []\nmap: {}\nvalue: null"
+    },
+    {
+      "name": "nested multi-line goes block for the entry",
+      "value": {
+        "result": {
+          "status": "failed",
+          "stderr": "warning: a\nerror: b\n",
+          "exit": {
+            "code": 1,
+            "signal": null
+          }
+        },
+        "elapsedMs": 12
+      },
+      "text": "result:\n  status: failed\n  stderr: |\n    warning: a\n    error: b\n  exit:\n    code: 1\n    signal: null\nelapsedMs: 12"
+    },
+    {
+      "name": "nested without multi-line stays flow",
+      "value": {
+        "result": {
+          "status": "ok",
+          "files": [
+            "a.ts",
+            "b.ts"
+          ],
+          "nested": {
+            "deep": {
+              "deeper": [
+                1,
+                {
+                  "x": "y"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "text": "result: {status: ok, files: [a.ts, b.ts], nested: {deep: {deeper: [1, {x: 'y'}]}}}"
+    },
+    {
+      "name": "top-level array",
+      "value": [
+        1,
+        "two",
+        {
+          "a": 1,
+          "b": [
+            2,
+            3
+          ]
+        },
+        [
+          4,
+          5
+        ],
+        [],
+        {},
+        null
+      ],
+      "text": "- 1\n- two\n- {a: 1, b: [2, 3]}\n- [4, 5]\n- []\n- {}\n- null"
+    },
+    {
+      "name": "top-level array with multi-line item",
+      "value": [
+        {
+          "title": "one",
+          "body": "para 1\n\npara 2"
+        },
+        {
+          "title": "two",
+          "body": "short"
+        },
+        "x\ny"
+      ],
+      "text": "- title: one\n  body: |-\n    para 1\n\n    para 2\n- {title: two, body: short}\n- |-\n  x\n  y"
+    },
+    {
+      "name": "multi-line chomping and indentation",
+      "value": {
+        "clip": "a\nb\n",
+        "keep": "a\nb\n\n",
+        "strip": "a\nb",
+        "leadingSpace": "  indented\nnext",
+        "leadingBlank": "\n  after blank",
+        "onlyNewline": "\n",
+        "trailingSpaces": "x  \ny  "
+      },
+      "text": "clip: |\n  a\n  b\nkeep: |+\n  a\n  b\n\nstrip: |-\n  a\n  b\nleadingSpace: |2-\n    indented\n  next\nleadingBlank: |2-\n\n    after blank\nonlyNewline: |+\n\ntrailingSpaces: |-\n  x  \n  y  "
+    },
+    {
+      "name": "multi-line with tab, carriage return and controls",
+      "value": {
+        "text": "col1\tcol2\r\nv1\tv2\r\n",
+        "ansi": "\u001b[31mred\u001b[0m\nplain"
+      },
+      "text": "text: |\n  col1\tcol2\r\n  v1\tv2\r\nansi: |-\n  \u001b[31mred\u001b[0m\n  plain"
+    },
+    {
+      "name": "single-line strings with special characters",
+      "value": {
+        "tab": "a\tb",
+        "cr": "a\rb",
+        "nul": "a\u0000b",
+        "bell": "\u0007",
+        "esc": "\u001b[0m",
+        "del": "x",
+        "nel": "x",
+        "nbsp": "x y",
+        "ls": "x y",
+        "bom": "﻿x",
+        "quote": "say \"hi\"",
+        "backslash": "C:\\path\\file",
+        "apostrophe": "it's"
+      },
+      "text": "tab: \"a\\tb\"\ncr: \"a\\rb\"\nnul: \"a\\0b\"\nbell: \"\\a\"\nesc: \"\\e[0m\"\ndel: \"x\\x7F\"\nnel: \"x\\N\"\nnbsp: \"x\\_y\"\nls: \"x\\Ly\"\nbom: \"\\uFEFFx\"\nquote: say \"hi\"\nbackslash: C:\\path\\file\napostrophe: it's"
+    },
+    {
+      "name": "unicode",
+      "value": {
+        "cjk": "中文テキスト",
+        "emoji": "ok 😀",
+        "accented": "café",
+        "math": "∑ x²",
+        "key中文": "value",
+        "😀": "emoji key",
+        "multiline": "第一行\n第二行 😀"
+      },
+      "text": "cjk: 中文テキスト\nemoji: ok 😀\naccented: café\nmath: ∑ x²\nkey中文: value\n😀: emoji key\nmultiline: |-\n  第一行\n  第二行 😀"
+    },
+    {
+      "name": "yaml-special strings",
+      "value": {
+        "empty": "",
+        "t": "true",
+        "f": "False",
+        "n": "null",
+        "tilde": "~",
+        "yes": "yes",
+        "y": "y",
+        "N": "N",
+        "on": "ON",
+        "int": "12",
+        "neg": "-3",
+        "hex": "0x1F",
+        "oct": "0o17",
+        "bin": "0b101",
+        "under": "1_000",
+        "float": "1.5",
+        "exp": "1e3",
+        "dotFloat": ".5",
+        "inf": ".inf",
+        "nan": ".NaN",
+        "date": "2026-11-19",
+        "timestamp": "2026-11-19T10:00:00Z",
+        "base60": "1:20",
+        "merge": "<<",
+        "zero": "0",
+        "plus": "+1"
+      },
+      "text": "empty: ''\nt: 'true'\nf: 'False'\n'n': 'null'\ntilde: '~'\n'yes': 'yes'\n'y': 'y'\n'N': 'N'\n'on': 'ON'\nint: '12'\nneg: '-3'\nhex: '0x1F'\noct: '0o17'\nbin: '0b101'\nunder: '1_000'\nfloat: '1.5'\nexp: '1e3'\ndotFloat: '.5'\ninf: '.inf'\nnan: '.NaN'\ndate: '2026-11-19'\ntimestamp: '2026-11-19T10:00:00Z'\nbase60: '1:20'\nmerge: '<<'\nzero: '0'\nplus: '+1'"
+    },
+    {
+      "name": "indicator characters",
+      "value": {
+        "dash": "-",
+        "dashSpace": "- item",
+        "question": "? x",
+        "colonStart": ":x",
+        "colonSpace": "a: b",
+        "colonInside": "a:b",
+        "colonEnd": "end:",
+        "hashStart": "#x",
+        "spaceHash": "a #b",
+        "hashInside": "a#b",
+        "amp": "&anchor",
+        "star": "*alias",
+        "bang": "!tag",
+        "pipe": "|x",
+        "gt": ">x",
+        "eq": "=x",
+        "pct": "%x",
+        "at": "@x",
+        "grave": "`x",
+        "squote": "'q'",
+        "dquote": "\"q\"",
+        "brackets": "[x]",
+        "braces": "{x}",
+        "comma": "a,b",
+        "leadSpace": " x",
+        "trailSpace": "x ",
+        "url": "https://example.com/a?b=c#d",
+        "path": "src/a-b_c.ts"
+      },
+      "text": "dash: '-'\ndashSpace: '- item'\nquestion: '? x'\ncolonStart: ':x'\ncolonSpace: 'a: b'\ncolonInside: a:b\ncolonEnd: 'end:'\nhashStart: '#x'\nspaceHash: 'a #b'\nhashInside: a#b\namp: '&anchor'\nstar: '*alias'\nbang: '!tag'\npipe: '|x'\ngt: '>x'\neq: '=x'\npct: '%x'\nat: '@x'\ngrave: '`x'\nsquote: '''q'''\ndquote: '\"q\"'\nbrackets: '[x]'\nbraces: '{x}'\ncomma: a,b\nleadSpace: ' x'\ntrailSpace: 'x '\nurl: https://example.com/a?b=c#d\npath: src/a-b_c.ts"
+    },
+    {
+      "name": "flow context indicators",
+      "value": {
+        "inFlow": {
+          "comma": "a,b",
+          "bracket": "a]b",
+          "brace": "a}b",
+          "colon": "a: b",
+          "hash": "a #b",
+          "url": "https://x.test/#a"
+        },
+        "list": [
+          [
+            "a,b",
+            "c]d",
+            "{e}"
+          ]
+        ]
+      },
+      "text": "inFlow: {comma: 'a,b', bracket: 'a]b', brace: 'a}b', colon: 'a: b', hash: 'a #b', url: https://x.test/#a}\nlist:\n  - ['a,b', 'c]d', '{e}']"
+    },
+    {
+      "name": "special keys",
+      "value": {
+        "key with spaces": 1,
+        "true": 2,
+        "y": 3,
+        "": 4,
+        "-dash": 5,
+        "a: b": 6,
+        "#hash": 7,
+        "multi\nline key": 8
+      },
+      "text": "key with spaces: 1\n'true': 2\n'y': 3\n'': 4\n'-dash': 5\n'a: b': 6\n'#hash': 7\n\"multi\\nline key\": 8"
+    },
+    {
+      "name": "integer-like keys order",
+      "value": {
+        "2": 3,
+        "10": 2,
+        "4294967294": 8,
+        "b": 1,
+        "a": 4,
+        "01": 5,
+        "-1": 6,
+        "4294967295": 7
+      },
+      "text": "'2': 3\n'10': 2\n'4294967294': 8\nb: 1\na: 4\n'01': 5\n'-1': 6\n'4294967295': 7"
+    },
+    {
+      "name": "numbers",
+      "value": {
+        "int": 7,
+        "neg": -12,
+        "zero": 0,
+        "negZero": 0,
+        "float": 0.1,
+        "sci": 1e+21,
+        "tiny": 5e-324,
+        "small": 1e-7,
+        "smallish": 0.000001,
+        "max": 1.7976931348623157e+308,
+        "big": 123456789012345680,
+        "frac": -2.5e-10,
+        "round": 100000000000000000000
+      },
+      "text": "int: 7\nneg: -12\nzero: 0\nnegZero: 0\nfloat: 0.1\nsci: 1e+21\ntiny: 5.e-324\nsmall: 1.e-7\nsmallish: 0.000001\nmax: 1.7976931348623157e+308\nbig: 123456789012345680\nfrac: -2.5e-10\nround: 100000000000000000000"
+    },
+    {
+      "name": "booleans and null",
+      "value": {
+        "yes": true,
+        "no": false,
+        "nothing": null,
+        "list": [
+          true,
+          false,
+          null
+        ]
+      },
+      "text": "'yes': true\n'no': false\nnothing: null\nlist:\n  - true\n  - false\n  - null"
+    }
+  ],
+  "toolScript": [
+    {
+      "name": "print and string return stay literal",
+      "value": {
+        "status": "completed",
+        "runId": "tsr_literal",
+        "stdout": "printed \"quotes\" and \\path\n--- return ---\n",
+        "result": "{\"text\":\"not decoded\"}\n---\nlast \\line"
+      },
+      "text": "--- print ---\nprinted \"quotes\" and \\path\n--- return ---\n--- return ---\n{\"text\":\"not decoded\"}\n---\nlast \\line\n---\nstatus: completed\nrunId: tsr_literal"
+    },
+    {
+      "name": "metadata only",
+      "value": {
+        "status": "completed",
+        "runId": "tsr_values"
+      },
+      "text": "---\nstatus: completed\nrunId: tsr_values"
+    },
+    {
+      "name": "null return",
+      "value": {
+        "status": "completed",
+        "runId": "tsr_values",
+        "result": null
+      },
+      "text": "--- return ---\nnull\n---\nstatus: completed\nrunId: tsr_values"
+    },
+    {
+      "name": "false return",
+      "value": {
+        "status": "completed",
+        "runId": "tsr_values",
+        "result": false
+      },
+      "text": "--- return ---\nfalse\n---\nstatus: completed\nrunId: tsr_values"
+    },
+    {
+      "name": "empty array and object returns",
+      "value": {
+        "status": "completed",
+        "runId": "tsr_values",
+        "result": {
+          "list": [],
+          "map": {}
+        }
+      },
+      "text": "--- return ---\nlist: []\nmap: {}\n---\nstatus: completed\nrunId: tsr_values"
+    },
+    {
+      "name": "structured return is block",
+      "value": {
+        "status": "completed",
+        "runId": "tsr_values",
+        "result": {
+          "items": [
+            {
+              "text": "first\nsecond",
+              "done": false
+            }
+          ],
+          "count": 1.5
+        }
+      },
+      "text": "--- return ---\nitems:\n  - text: |-\n      first\n      second\n    done: false\ncount: 1.5\n---\nstatus: completed\nrunId: tsr_values"
+    },
+    {
+      "name": "multi-line error metadata",
+      "value": {
+        "status": "failed",
+        "runId": "tsr_error",
+        "stdout": "partial\n",
+        "error": "Traceback:\nValueError: failed"
+      },
+      "text": "--- print ---\npartial\n---\nstatus: failed\nrunId: tsr_error\nerror: |-\n  Traceback:\n  ValueError: failed"
+    },
+    {
+      "name": "truncated summary uses payload formatting",
+      "value": {
+        "status": "completed",
+        "runId": "tsr_long",
+        "truncated": true,
+        "output": "excerpt",
+        "fullOutputPath": "saved.txt"
+      },
+      "text": "status: completed\nrunId: tsr_long\ntruncated: true\noutput: excerpt\nfullOutputPath: saved.txt"
+    },
+    {
+      "name": "guard save failure uses payload formatting",
+      "value": {
+        "status": "completed",
+        "runId": "tsr_guard",
+        "outputTruncated": true,
+        "output": "excerpt\nmore"
+      },
+      "text": "status: completed\nrunId: tsr_guard\noutputTruncated: true\noutput: |-\n  excerpt\n  more"
+    },
+    {
+      "name": "historical pruned output uses payload formatting",
+      "value": {
+        "output": "head\n[historical response pruned; recall msg#3]\ntail",
+        "status": "completed",
+        "runId": "tsr_history"
+      },
+      "text": "output: |-\n  head\n  [historical response pruned; recall msg#3]\n  tail\nstatus: completed\nrunId: tsr_history"
+    }
+  ]
+}

@@ -130,7 +130,7 @@ public sealed class OutboundMcpResultsTests
             .OfType<JsonObject>()
             .Where(row => row["type"]?.GetValue<string>() == "function_call_output")
             .ToArray();
-        Assert.Equal("[1, null, false]", outputs[0]["output"]!.GetValue<string>());
+        Assert.Equal("- 1\n- null\n- false", outputs[0]["output"]!.GetValue<string>());
         Assert.Equal("false", outputs[1]["output"]!.GetValue<string>());
         Assert.Single(peer.Requests, row => row["method"]!.GetValue<string>() == "server/discover");
         Assert.DoesNotContain(
