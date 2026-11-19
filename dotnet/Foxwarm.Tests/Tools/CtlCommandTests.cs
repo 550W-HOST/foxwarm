@@ -528,10 +528,11 @@ public sealed class CtlCommandTests
                 _ => strings.Select(text => (JsonNode?)text).ToArray(),
             };
         }
-        var builtins = new[] { "recall", "view_session", "send_to_channel", "cancel_toolscript_run", "image_crop", "image_write_to_file", "send_file" };
+        var builtins = new[] { "recall", "view_session", "session", "send_to_channel", "cancel_toolscript_run", "image_crop", "image_write_to_file", "send_file" };
         var checkedCount = 0;
         foreach (var builtin in builtins)
-        foreach (var command in CtlRegistry.ForTarget("builtin", builtin))
+        // Of `session`, hints name only `session list`.
+        foreach (var command in CtlRegistry.ForTarget("builtin", builtin).Where(command => builtin != "session" || command.Path == "session list"))
         {
             var required = command.Parameters.Where(parameter => parameter.Required).ToArray();
             JsonObject Base(int variant)
@@ -682,6 +683,7 @@ public sealed class CtlCommandTests
             ("recall", new JsonObject { ["sessionId"] = "a/b", ["target"] = "msg#3", ["toolDetail"] = "full", ["previewLength"] = 20000 }),
             ("recall", new JsonObject { ["sessionId"] = "a/b", ["text_query"] = "it's a \"quote\" | here", ["beforeSeq"] = 40 }),
             ("view_session", new JsonObject { ["sessionId"] = "a/b", ["before"] = 10, ["count"] = 5, ["historyVersion"] = 3, ["parts"] = new JsonArray("text", "tools") }),
+            ("session", new JsonObject { ["action"] = "list", ["query"] = "it's main", ["start"] = 3, ["count"] = 2, ["scope"] = "all" }),
             ("image_crop", new JsonObject { ["id"] = "img_1", ["x"] = 0, ["y"] = 0, ["width"] = 100, ["height"] = 100 }),
             ("image_write_to_file", new JsonObject { ["id"] = "@img", ["filePath"] = "artifacts/my file.png" }),
             ("send_to_channel", new JsonObject { ["channelTargetId"] = "webui:x", ["message"] = "--starts like a flag" }),

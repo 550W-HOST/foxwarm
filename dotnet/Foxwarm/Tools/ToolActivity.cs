@@ -85,6 +85,26 @@ internal static class ToolActivity
     internal static string SingleLine(string text, int limit = 200) =>
         ContextPreviewRenderer.Clip(Regex.Replace(text, @"\s+", " ").Trim(), limit);
 
+    // The name and summary an activity preview shows for a call, named like the WebUI timeline
+    // tag (ProgressName). The fixed arguments a ctl command path already states, such as
+    // `action: list` of `session list`, are left out of the summary.
+    internal static (string Name, string Summary) Preview(string name, JsonObject args)
+    {
+        var (target, targetArgs) = Target(name, args);
+        var label = ProgressName(name, args);
+        if (
+            name == "ctl"
+            && label != target
+            && CtlParser.CommandFor(target, targetArgs)?.Fixed is { Count: > 0 } fixedArgs
+        )
+        {
+            targetArgs = (JsonObject)targetArgs.DeepClone();
+            foreach (var key in fixedArgs.Select(pair => pair.Key))
+                targetArgs.Remove(key);
+        }
+        return (label, Summary(target, targetArgs));
+    }
+
     internal static string Summary(string name, JsonObject args)
     {
         (name, args) = Target(name, args);

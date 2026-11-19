@@ -52,6 +52,28 @@ public sealed class ToolActivityPreviewTests
         );
 
     [Fact]
+    public void Ctl_calls_are_named_by_command_path_without_restating_fixed_arguments()
+    {
+        JsonObject Ctl(string command) => new() { ["command"] = command };
+        var rows = new[]
+        {
+            Call(1, "timers", "ctl", Ctl("timer list")),
+            Call(2, "view", "ctl", Ctl("session view main/other --count 2")),
+            Call(3, "rename", "ctl", Ctl("session rename \"Release notes\"")),
+            Call(4, "recall", "ctl", Ctl("history recall msg#1-2")),
+            Call(5, "help", "ctl", Ctl("node --help")),
+        };
+        var text = Preview(rows);
+        Assert.Contains("timer list (#1)", text);
+        Assert.Contains("session view — main/other (#2)", text);
+        Assert.Contains("session rename (#3)", text);
+        Assert.Contains("history recall — msg#1-2 (#4)", text);
+        Assert.Contains("ctl (#5)", text);
+        foreach (var concrete in new[] { "list_timers", "view_session", "update-display-name", "Z recall" })
+            Assert.DoesNotContain(concrete, text);
+    }
+
+    [Fact]
     public void Names_preserve_distinct_purposes_pair_by_id_and_keep_output_out_of_activity()
     {
         var rows = new[]

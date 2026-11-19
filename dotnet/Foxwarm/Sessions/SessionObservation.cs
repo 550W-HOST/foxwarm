@@ -352,13 +352,21 @@ internal sealed partial class SessionManager
                     $"No sessions found in the requested range. Total sessions{matching}: {total}."
                 );
             var parent = source.Metadata().ParentSessionId;
+            var next = new JsonObject { ["action"] = "list" };
+            if (query is not null)
+                next["query"] = query;
+            next["start"] = start + page.Length;
+            if (args.ContainsKey("count"))
+                next["count"] = count;
+            if (scope != "current-agent")
+                next["scope"] = scope;
             return Output(
                 $"Current session: `{source.Id}`\n"
                     + (parent is null ? "" : $"Parent session: `{parent}`\n")
                     + $"\nFound {total} session(s){matching}. Showing {start + 1}-{start + page.Length}."
                     + (
                         start + page.Length < total
-                            ? $" Use `start: {start + page.Length}` to see the next page."
+                            ? "\nNext page: " + CtlCommandText.For("session", next)
                             : ""
                     )
                     + "\n\n"

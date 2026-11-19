@@ -105,7 +105,7 @@ public sealed partial class AgentRulesTreeTests
 
         var page = await SessionList(f, extra: new JsonObject { ["start"] = 1, ["count"] = 2 });
         Assert.Contains(
-            "Found 4 session(s). Showing 2-3. Use `start: 3` to see the next page.",
+            "Found 4 session(s). Showing 2-3.\nNext page: ctl session list --start 3 --count 2 --scope all\n",
             page
         );
         Assert.Equal(2, ListedSessions(page).Length);

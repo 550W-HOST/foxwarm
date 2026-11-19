@@ -57,7 +57,12 @@ public sealed class SessionListQueryTests
             }
         );
         Assert.Contains("Found 3 session(s) matching `main`. Showing 2-2.", page);
-        Assert.Contains("Use `start: 2` to see the next page.", page);
+        var next = page.Split('\n')
+            .Single(line => line.StartsWith("Next page: ", StringComparison.Ordinal));
+        Assert.Equal("Next page: ctl session list main --start 2 --count 1", next);
+        // The hint is a command the parser reads back to the same next-page arguments.
+        var hinted = CtlTestArgs.Hint(next["Next page: ".Length..], "session");
+        Assert.Equal("""{"query":"main","start":2,"count":1}""", hinted.ToJsonString());
         Assert.Contains(
             "No sessions found in the requested range. Total sessions matching `main`: 3.",
             await List(f, new JsonObject { ["query"] = "main", ["start"] = 5 })
