@@ -716,12 +716,7 @@ internal sealed partial class SessionToolExecutor(
                                 ? $" (lines {Text(args["startLine"])}-{Text(args["endLine"])})"
                                 : ""
                         ),
-                    _ => args.Count == 1
-                        ? Text(args.First().Value)
-                        : string.Join(
-                            '\n',
-                            args.Select(pair => pair.Key + ": " + Text(pair.Value))
-                        ),
+                    _ => ToolResponseFormatting.FormatArguments(args, singleLine: true),
                 }
             );
         return preview.Length > 200 ? preview[..197] + "..." : preview;

@@ -6,7 +6,8 @@ using System.Text.RegularExpressions;
 
 namespace Foxwarm.Tools;
 
-// YAML text for tool results: the port of packages/shared/src/toolResponseYaml.ts, which is the
+// YAML text for tool results and tool-call arguments: the port of
+// packages/shared/src/toolResponseYaml.ts, which is the
 // js-yaml 4.1.1 dumper restricted to JSON values (indent 2, lineWidth -1, noRefs, unsorted keys,
 // single quoting, compat mode) with per-node layout decisions and literal blocks for every
 // multi-line string in a block position. Output must equal the TypeScript text byte for byte;
@@ -17,9 +18,18 @@ namespace Foxwarm.Tools;
 // indices come first in ascending order (Object.keys order).
 internal static partial class ToolResponseYaml
 {
-    // The readable layout; any other value is js-yaml's flowLevel: block below that depth,
-    // flow from it (-1: all block).
+    // The readable layout (tool results); see ToolYamlLayout in the TypeScript emitter.
     internal const int Readable = int.MinValue;
+
+    // Tool-call arguments: the root collection is block and everything below it is flow, except
+    // that a top-level multi-line string is a literal block.
+    internal const int Arguments = int.MinValue + 1;
+
+    // Arguments without the literal-block exception, for one-line text (js-yaml's flowLevel 1).
+    internal const int ArgumentsLine = int.MinValue + 2;
+
+    // Any other layout value is js-yaml's flowLevel: block below that depth, flow from it
+    // (-1: all block).
 
     private readonly record struct Style(bool Block, bool Full);
 
@@ -94,6 +104,16 @@ internal static partial class ToolResponseYaml
         bool full
     )
     {
+        if (layout is Arguments or ArgumentsLine)
+        {
+            var literal =
+                layout == Arguments
+                && level == 1
+                && value is JsonValue leaf
+                && leaf.GetValueKind() == JsonValueKind.String
+                && leaf.GetValue<string>().Contains('\n');
+            return new(level == 0 || literal, false);
+        }
         if (layout != Readable)
             return new(layout < 0 || layout > level, false);
         if (full || level == 0)

@@ -31,7 +31,8 @@ import { ToolScriptProgressContext } from './ToolScriptProgressContext'
 import JsonInspectorDialog from './JsonInspectorDialog'
 import { toolActivitySummary, toolActivityTarget } from '../../../shared/src/toolActivity'
 import { shouldUseStreamingToolPlaceholder } from '../../../shared/src/webuiToolRendering'
-import { formatToolResponsePayload, formatToolScriptExecutionResponse } from '../../../shared/src/toolResponseFormatting'
+import { dumpToolYaml } from '../../../shared/src/toolResponseYaml'
+import { formatToolArguments, formatToolArgumentValue, formatToolResponsePayload, formatToolScriptExecutionResponse } from '../../../shared/src/toolResponseFormatting'
 import ImageParts from './ImageParts'
 import { SyntaxHighlightedText } from './SyntaxHighlightedText'
 import { buildPathDownloadUrl, requestPathDownloadUrl, triggerBrowserDownload } from './downloadShared'
@@ -58,9 +59,18 @@ const formatToolResponseText = (resp: FunctionResponse): string => resp.__meta?.
   ? formatToolScriptExecutionResponse(resp.response)
   : formatToolResponsePayload(resp.response)
 
+// A non-blank string stays raw; anything else is an argument value in YAML flow (`''`, `{TOKEN: gh}`).
 const argumentValue = (value: unknown): string => typeof value === 'string' && value.trim().length > 0
   ? value
-  : JSON.stringify(value, null, 2) ?? String(value)
+  : formatToolArgumentValue(value)
+
+// The ToolScript input is the one large nested argument, so it is block YAML under its label.
+const toolScriptInputText = (key: string, value: unknown): string => {
+  if (key === 'argsJson' && typeof value === 'string') {
+    try { return dumpToolYaml({ [key]: JSON.parse(value) }, -1) } catch { return `${key}: ${argumentValue(value)}` }
+  }
+  return dumpToolYaml({ [key]: value === undefined ? null : value }, -1)
+}
 
 /** One argument partition shared by expanded rendering and its search projection. */
 const executionArguments = (call: FunctionCall) => {
@@ -71,7 +81,7 @@ const executionArguments = (call: FunctionCall) => {
   const source = typeof args[sourceKey] === 'string' ? { key: sourceKey, text: args[sourceKey] as string } : undefined
   const fields = Object.entries(args)
     .filter(([key]) => !(purpose !== undefined && key === 'summary') && key !== source?.key)
-    .map(([key, value]) => ({ key, text: `${key}: ${argumentValue(value)}` }))
+    .map(([key, value]) => ({ key, text: key === 'args' || key === 'argsJson' ? toolScriptInputText(key, value) : `${key}: ${argumentValue(value)}` }))
   return {
     purpose,
     source,
@@ -157,12 +167,12 @@ export const getToolCallSearchText = (stored: FunctionCall): string => {
           return [...hunk.anchors, getUnifiedDiffSearchText(snippets.oldText, snippets.newText)]
         }) : operation.action === 'add' ? operation.lines : []),
       ]).join('\u0000')
-    } catch { return String(patchText(call) || JSON.stringify(args, null, 2)) }
+    } catch { return String(patchText(call) || formatToolArguments(args)) }
   }
   if (call.name === 'exec' || call.name === 'run_script') return executionArgumentsSearchText(call)
-  if (call.name === 'send_to_session') return [args.sessionId, typeof args.message === 'string' ? args.message : formatCompactObjectPreview(args.message)].join('\u0000')
-  if (call.name === 'create_child_session') return [args.suffix, args.taskId, args.agentName, args.displayName, args.node, args.currentSessionTurnAction ?? args.afterSend, typeof args.model === 'object' ? formatCompactObjectPreview(args.model) : args.model, typeof args.forceModel === 'object' ? formatCompactObjectPreview(args.forceModel) : args.forceModel, args.message].filter(value => typeof value === 'string').join('\u0000')
-  return formatCompactObjectPreview(call.name === 'session' ? call.args || { action: 'status' } : call.args)
+  if (call.name === 'send_to_session') return [args.sessionId, formatToolArgumentValue(args.message)].join('\u0000')
+  if (call.name === 'create_child_session') return [args.suffix, args.taskId, args.agentName, args.displayName, args.node, args.currentSessionTurnAction ?? args.afterSend, typeof args.model === 'object' ? formatToolArgumentValue(args.model) : args.model, typeof args.forceModel === 'object' ? formatToolArgumentValue(args.forceModel) : args.forceModel, args.message].filter(value => typeof value === 'string').join('\u0000')
+  return formatToolArguments(call.name === 'session' ? call.args || { action: 'status' } : call.args)
 }
 
 export const getToolResponseSearchText = (stored: FunctionResponse, call?: FunctionCall): string => {
@@ -395,7 +405,7 @@ const renderToolCallPreview = (original: FunctionCall, options: { partial?: bool
     return <span className="truncate break-all whitespace-pre-wrap font-mono text-fw-text-muted">{preview}</span>
   }
   if (options.partial) {
-    const argsFormatted = typeof call.args === 'string' ? call.args : formatCompactObjectPreview(call.args)
+    const argsFormatted = typeof call.args === 'string' ? call.args : formatToolArguments(call.args, { singleLine: true })
     const preview = argsFormatted.length > 200 ? `${argsFormatted.slice(0, 200)}...` : argsFormatted
     return <span className="truncate break-all text-fw-text-muted">{preview || 'streaming tool call…'}</span>
   }
@@ -477,7 +487,7 @@ const renderToolCallPreview = (original: FunctionCall, options: { partial?: bool
 
   if (call.name === 'send_to_session') {
     const targetSessionId = String(call.args.sessionId || '')
-    const message = typeof call.args.message === 'string' ? call.args.message : formatCompactObjectPreview(call.args.message)
+    const message = formatToolArgumentValue(call.args.message, { singleLine: true })
     const preview = message.length > 160 ? `${message.slice(0, 160)}...` : message
     return (
       <span className="flex items-center gap-1 min-w-0" title={`${targetSessionId}: ${message}`}>
@@ -510,7 +520,7 @@ const renderToolCallPreview = (original: FunctionCall, options: { partial?: bool
     )
   }
 
-  const argsFormatted = formatCompactObjectPreview(call.args)
+  const argsFormatted = formatToolArguments(call.args, { singleLine: true })
   const preview = argsFormatted.length > 200 ? `${argsFormatted.substring(0, 200)}...` : argsFormatted
   return <span className="truncate break-all">{preview}</span>
 }
@@ -520,7 +530,7 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
     return <pre className="whitespace-pre-wrap break-all text-xs font-mono text-fw-text-muted">{call.rawArgsText}</pre>
   }
   if (options.partial) {
-    return <pre className="whitespace-pre-wrap break-all text-xs text-fw-text-muted">{typeof call.args === 'string' ? call.args : JSON.stringify(call.args, null, 2)}</pre>
+    return <pre className="whitespace-pre-wrap break-all text-xs text-fw-text-muted">{typeof call.args === 'string' ? call.args : formatToolArguments(call.args)}</pre>
   }
 
   if (call.name === 'read') {
@@ -560,7 +570,7 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
         <DiffPreview oldText={call.args.oldText} newText={call.args.newText} diffViewMode={diffViewMode} filePath={call.args.filePath} />
       </div>
     ) : (
-      <pre className="whitespace-pre-wrap text-xs bg-fw-surface dark:bg-fw-canvas p-2 rounded border border-fw-border-strong dark:border-fw-border-strong cursor-text">{JSON.stringify(call.args, null, 2)}</pre>
+      <pre className="whitespace-pre-wrap text-xs bg-fw-surface dark:bg-fw-canvas p-2 rounded border border-fw-border-strong dark:border-fw-border-strong cursor-text">{formatToolArguments(call.args)}</pre>
     )
   }
 
@@ -608,7 +618,7 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
       )
     } catch (e) {
       const error = e instanceof Error ? e.message : String(e)
-      return <pre className="whitespace-pre-wrap text-xs bg-fw-surface dark:bg-fw-canvas p-2 rounded border border-fw-border-strong dark:border-fw-border-strong cursor-text">{error}\n\n{patchText(call) || JSON.stringify(call.args, null, 2)}</pre>
+      return <pre className="whitespace-pre-wrap text-xs bg-fw-surface dark:bg-fw-canvas p-2 rounded border border-fw-border-strong dark:border-fw-border-strong cursor-text">{error}\n\n{patchText(call) || formatToolArguments(call.args)}</pre>
     }
   }
 
@@ -616,7 +626,7 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
 
   if (call.name === 'send_to_session') {
     const targetSessionId = String(call.args.sessionId || '')
-    const message = typeof call.args.message === 'string' ? call.args.message : formatCompactObjectPreview(call.args.message)
+    const message = formatToolArgumentValue(call.args.message)
     return (
       <div className="space-y-1">
         <div className="whitespace-pre-wrap break-all"><span className="foxwarm-tool-session-prefix mr-1">To</span>{isSpecialSessionAlias(targetSessionId) ? <span className="font-mono">{targetSessionId}</span> : <SessionHashLink sessionId={targetSessionId} />}<span>:</span></div>
@@ -626,7 +636,7 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
   }
 
   if (call.name === 'session') {
-    return <div className="whitespace-pre-wrap break-all">{formatCompactObjectPreview(call.args || { action: 'status' })}</div>
+    return <div className="whitespace-pre-wrap break-all">{formatToolArguments(call.args || { action: 'status' })}</div>
   }
 
   if (call.name === 'create_child_session') {
@@ -646,13 +656,13 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
     return (
       <div className="space-y-1">
         <div className="whitespace-pre-wrap break-all"><span className="mr-1 text-fw-text-muted">Child suffix</span><span className="font-mono">{suffix}</span><span className="ml-1 text-fw-text-muted">({mode})</span></div>
-        {optionalFields.map(([label, value]) => <div key={label} className="whitespace-pre-wrap break-all"><span className="mr-1 text-fw-text-muted">{label}:</span>{typeof value === 'string' ? value : formatCompactObjectPreview(value)}</div>)}
+        {optionalFields.map(([label, value]) => <div key={label} className="whitespace-pre-wrap break-all"><span className="mr-1 text-fw-text-muted">{label}:</span>{formatToolArgumentValue(value)}</div>)}
         {initialMessage && <div className="whitespace-pre-wrap break-all"><span className="mr-1 text-fw-text-muted">Initial message:</span>{initialMessage}</div>}
       </div>
     )
   }
 
-  return <div className="whitespace-pre-wrap break-all">{formatCompactObjectPreview(call.args)}</div>
+  return <div className="whitespace-pre-wrap break-all">{formatToolArguments(call.args)}</div>
 }
 
 const renderToolResponseContent = (resp: FunctionResponse, expanded: boolean, call?: FunctionCall): ReactNode | null => {

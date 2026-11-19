@@ -59,6 +59,33 @@ export function formatToolScriptExecutionResponse(response: unknown): string {
   return sections.join('')
 }
 
+export type ToolArgumentsTextOptions = {
+  /** For one-line surfaces: no line break comes from a value, only between top-level arguments. */
+  singleLine?: boolean
+}
+
+const LINE_BREAK = /[\n\r\u0085\u2028\u2029]/
+
+/**
+ * Display text of tool-call arguments: one `key: value` line per argument with values in YAML
+ * flow style (`waitAnySessions: [a]`). A sole argument shows only its value; no arguments show
+ * nothing. The C# port is `ToolResponseFormatting.FormatArguments`.
+ */
+export function formatToolArguments(args: unknown, options: ToolArgumentsTextOptions = {}): string {
+  if (!isPlainObject(args)) return formatToolArgumentValue(args, options)
+  const keys = Object.keys(args)
+  if (keys.length === 0) return ''
+  if (keys.length === 1) return formatToolArgumentValue(args[keys[0]], options)
+  return dumpToolYaml(args, options.singleLine ? 'argumentsLine' : 'arguments')
+}
+
+/** One argument value: a string as it is (escaped when one-line text has a line break), anything else as YAML flow. */
+export function formatToolArgumentValue(value: unknown, options: ToolArgumentsTextOptions = {}): string {
+  if (value === undefined) return ''
+  if (typeof value === 'string' && !(options.singleLine && LINE_BREAK.test(value))) return value
+  return dumpToolYaml(value, 0)
+}
+
 export function formatCompactObjectPreview(response: unknown): string {
   if (isPlainObject(response)) {
     const entries = Object.entries(response)

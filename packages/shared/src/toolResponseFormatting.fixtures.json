@@ -657,5 +657,190 @@
       },
       "text": "output: |-\n  head\n  [historical response pruned; recall msg#3]\n  tail\nstatus: completed\nrunId: tsr_history"
     }
+  ],
+  "arguments": [
+    {
+      "name": "top-level array stays flow",
+      "value": {
+        "waitAnySessions": [
+          "a"
+        ],
+        "anotherProp": "anotherValue"
+      },
+      "text": "waitAnySessions: [a]\nanotherProp: anotherValue",
+      "line": "waitAnySessions: [a]\nanotherProp: anotherValue"
+    },
+    {
+      "name": "nested mappings and empty collections stay flow",
+      "value": {
+        "model": {
+          "key": "opus",
+          "effort": "high"
+        },
+        "tags": [],
+        "meta": {}
+      },
+      "text": "model: {key: opus, effort: high}\ntags: []\nmeta: {}",
+      "line": "model: {key: opus, effort: high}\ntags: []\nmeta: {}"
+    },
+    {
+      "name": "array of mappings is one flow line",
+      "value": {
+        "items": [
+          {
+            "name": "a",
+            "n": 1
+          },
+          {
+            "name": "b",
+            "done": false
+          }
+        ],
+        "flag": true
+      },
+      "text": "items: [{name: a, 'n': 1}, {name: b, done: false}]\nflag: true",
+      "line": "items: [{name: a, 'n': 1}, {name: b, done: false}]\nflag: true"
+    },
+    {
+      "name": "multi-line string argument",
+      "value": {
+        "sessionId": "reviewer",
+        "message": "line one\nline two"
+      },
+      "text": "sessionId: reviewer\nmessage: |-\n  line one\n  line two",
+      "line": "sessionId: reviewer\nmessage: \"line one\\nline two\""
+    },
+    {
+      "name": "multi-line string with trailing newline",
+      "value": {
+        "body": "first\nsecond\n",
+        "title": "Notes"
+      },
+      "text": "body: |\n  first\n  second\ntitle: Notes",
+      "line": "body: \"first\\nsecond\\n\"\ntitle: Notes"
+    },
+    {
+      "name": "multi-line string with tab and carriage return",
+      "value": {
+        "script": "a\tb\r\nc",
+        "timeout": 5
+      },
+      "text": "script: |-\n  a\tb\r\n  c\ntimeout: 5",
+      "line": "script: \"a\\tb\\r\\nc\"\ntimeout: 5"
+    },
+    {
+      "name": "multi-line string inside a nested value",
+      "value": {
+        "edits": [
+          {
+            "oldText": "a\nb",
+            "newText": "c"
+          }
+        ],
+        "filePath": "src/a.ts"
+      },
+      "text": "edits: [{oldText: \"a\\nb\", newText: c}]\nfilePath: src/a.ts",
+      "line": "edits: [{oldText: \"a\\nb\", newText: c}]\nfilePath: src/a.ts"
+    },
+    {
+      "name": "YAML 1.1 quoting of scalars",
+      "value": {
+        "query": "yes",
+        "date": "2026-11-19",
+        "path": "a: b",
+        "count": "12",
+        "empty": ""
+      },
+      "text": "query: 'yes'\ndate: '2026-11-19'\npath: 'a: b'\ncount: '12'\nempty: ''",
+      "line": "query: 'yes'\ndate: '2026-11-19'\npath: 'a: b'\ncount: '12'\nempty: ''"
+    },
+    {
+      "name": "numbers, booleans and null",
+      "value": {
+        "ratio": 0.5,
+        "big": 1e+21,
+        "flag": false,
+        "missing": null
+      },
+      "text": "ratio: 0.5\nbig: 1e+21\nflag: false\nmissing: null",
+      "line": "ratio: 0.5\nbig: 1e+21\nflag: false\nmissing: null"
+    },
+    {
+      "name": "array-index keys come first",
+      "value": {
+        "1": "y",
+        "2": "x",
+        "b": 1
+      },
+      "text": "'1': 'y'\n'2': x\nb: 1",
+      "line": "'1': 'y'\n'2': x\nb: 1"
+    },
+    {
+      "name": "sole string argument shows the raw value",
+      "value": {
+        "reason": "Waiting for: review [1]"
+      },
+      "text": "Waiting for: review [1]",
+      "line": "Waiting for: review [1]"
+    },
+    {
+      "name": "sole multi-line string argument",
+      "value": {
+        "reason": "first\nsecond"
+      },
+      "text": "first\nsecond",
+      "line": "\"first\\nsecond\""
+    },
+    {
+      "name": "sole string argument with a carriage return",
+      "value": {
+        "text": "a\rb"
+      },
+      "text": "a\rb",
+      "line": "\"a\\rb\""
+    },
+    {
+      "name": "sole array argument",
+      "value": {
+        "waitAnySessions": [
+          "a",
+          "b"
+        ]
+      },
+      "text": "[a, b]",
+      "line": "[a, b]"
+    },
+    {
+      "name": "sole mapping argument",
+      "value": {
+        "model": {
+          "key": "opus"
+        }
+      },
+      "text": "{key: opus}",
+      "line": "{key: opus}"
+    },
+    {
+      "name": "sole number argument",
+      "value": {
+        "count": 3
+      },
+      "text": "3",
+      "line": "3"
+    },
+    {
+      "name": "sole null argument",
+      "value": {
+        "value": null
+      },
+      "text": "null",
+      "line": "null"
+    },
+    {
+      "name": "no arguments",
+      "value": {},
+      "text": "",
+      "line": ""
+    }
   ]
 }

@@ -1,4 +1,5 @@
-// YAML text for tool results, shared by model requests and the WebUI.
+// YAML text for tool results and tool-call arguments, shared by model requests, the WebUI and the
+// Main server previews.
 //
 // This is the js-yaml 4.1.1 dumper restricted to JSON values and the options the formatter uses
 // (indent 2, lineWidth -1, noRefs, unsorted keys, single quoting, compat mode), with two changes:
@@ -9,12 +10,19 @@
 // toolResponseFormatting.fixtures.json is run against both implementations.
 
 /**
- * `readable`: the root collection is block; a top-level mapping entry whose value is a non-empty
- * array is a block sequence; each top-level entry, top-level sequence item or item of such an
- * entry sequence that contains a multi-line string is block all the way down; everything else is
- * flow. A number is js-yaml's `flowLevel`: block below that depth, flow from it (-1: all block).
+ * `readable` (tool results): the root collection is block; a top-level mapping entry whose value
+ * is a non-empty array is a block sequence; each top-level entry, top-level sequence item or item
+ * of such an entry sequence that contains a multi-line string is block all the way down;
+ * everything else is flow.
+ *
+ * `arguments` (tool-call arguments): the root collection is block and everything below it is flow
+ * (`key: [a]`, `key: {k: v}`), except that a top-level multi-line string is a literal block.
+ * `argumentsLine` is the same without that exception, so no line break comes from a value; it is
+ * js-yaml's flowLevel 1.
+ *
+ * A number is js-yaml's `flowLevel`: block below that depth, flow from it (-1: all block).
  */
-export type ToolYamlLayout = 'readable' | number
+export type ToolYamlLayout = 'readable' | 'arguments' | 'argumentsLine' | number
 
 type Style = { block: boolean; full: boolean }
 
@@ -58,6 +66,10 @@ export function containsMultilineString(value: unknown): boolean {
 }
 
 function decide(layout: ToolYamlLayout, level: number, value: unknown, parentIsSequence: boolean, full: boolean): Style {
+  if (layout === 'arguments' || layout === 'argumentsLine') {
+    const literal = layout === 'arguments' && level === 1 && typeof value === 'string' && value.includes('\n')
+    return { block: level === 0 || literal, full: false }
+  }
   if (layout !== 'readable') return { block: layout < 0 || layout > level, full: false }
   if (full || level === 0) return { block: true, full }
   if (level === 1 && !parentIsSequence && Array.isArray(value)) return { block: true, full: false }

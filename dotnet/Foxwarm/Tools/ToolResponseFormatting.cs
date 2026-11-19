@@ -36,6 +36,41 @@ internal static class ToolResponseFormatting
         return ToolResponseYaml.Dump(value, ToolResponseYaml.Readable);
     }
 
+    // Display text of tool-call arguments: one `key: value` line per argument with values in YAML
+    // flow style. A sole argument shows only its value; no arguments show nothing. singleLine is for
+    // one-line surfaces: no line break comes from a value. Port of formatToolArguments.
+    internal static string FormatArguments(JsonNode? args, bool singleLine)
+    {
+        if (args is not JsonObject obj)
+            return FormatArgumentValue(args, singleLine);
+        return obj.Count switch
+        {
+            0 => "",
+            1 => FormatArgumentValue(obj.First().Value, singleLine),
+            _ => ToolResponseYaml.Dump(
+                obj,
+                singleLine ? ToolResponseYaml.ArgumentsLine : ToolResponseYaml.Arguments
+            ),
+        };
+    }
+
+    // One argument value: a string as it is (escaped when one-line text has a line break),
+    // anything else as YAML flow.
+    internal static string FormatArgumentValue(JsonNode? value, bool singleLine)
+    {
+        if (
+            value is JsonValue leaf
+            && leaf.GetValueKind() == JsonValueKind.String
+            && leaf.GetValue<string>() is var text
+            && !(singleLine && text.AsSpan().IndexOfAny(LineBreaks) >= 0)
+        )
+            return text;
+        return ToolResponseYaml.Dump(value, 0);
+    }
+
+    private static readonly System.Buffers.SearchValues<char> LineBreaks =
+        System.Buffers.SearchValues.Create("\n\r\u0085\u2028\u2029");
+
     // A cleaned outer ToolScript execution result: print and return sections, then metadata.
     internal static string FormatToolScriptExecution(JsonNode? value)
     {

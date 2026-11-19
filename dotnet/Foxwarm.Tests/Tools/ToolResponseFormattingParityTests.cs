@@ -4,7 +4,8 @@ using Foxwarm.Tools;
 namespace Foxwarm.Tests.Tools;
 
 // The golden texts the shared TypeScript formatter is tested against
-// (packages/shared/src/toolResponseFormatting.test.ts): model and WebUI text must be identical.
+// (packages/shared/src/toolResponseFormatting.test.ts): model and WebUI text must be identical,
+// and tool-call arguments must preview alike in the WebUI and Main server records.
 public sealed class ToolResponseFormattingParityTests
 {
     private static JsonObject Fixtures() =>
@@ -51,6 +52,25 @@ public sealed class ToolResponseFormattingParityTests
                     )
                 )
             );
+    }
+
+    [Fact]
+    public void ArgumentTextsMatchTheSharedFormatter()
+    {
+        var cases = Fixtures()["arguments"]!.AsArray();
+        Assert.NotEmpty(cases);
+        foreach (var item in cases)
+        {
+            var name = item!["name"]!.GetValue<string>();
+            Assert.Equal(
+                (Name: name, Text: item["text"]!.GetValue<string>()),
+                (Name: name, Text: ToolResponseFormatting.FormatArguments(item["value"]?.DeepClone(), false))
+            );
+            Assert.Equal(
+                (Name: name, Text: item["line"]!.GetValue<string>()),
+                (Name: name, Text: ToolResponseFormatting.FormatArguments(item["value"]?.DeepClone(), true))
+            );
+        }
     }
 
     [Fact]
