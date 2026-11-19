@@ -50,7 +50,7 @@ internal sealed partial class SessionCompactor
             ["accepted"] = true,
             ["applied"] = false,
             ["operationId"] = run.OperationId,
-            ["output"] =
+            ["note"] =
                 "Plan accepted for application after this complete tool batch is recorded. Acceptance does not mean it applied; cancellation or changed history can prevent application. Inspect the resulting active history and compaction boundary.",
         };
         // Budgets are advisory here; regular compaction returns such summaries for revision.

@@ -13,16 +13,14 @@ internal sealed partial class MessageRouter
     {
         var target = await command.TargetAsync();
         await command.Reply(
-            SessionWait.Text(
-                (
-                    await runtime.Manager.ObserveAsync(
-                        target,
-                        "session",
-                        new JsonObject { ["action"] = "status" },
-                        administrator: true
-                    )
-                )["output"]
-            )!
+            SessionStatus.Text(
+                await runtime.Manager.ObserveAsync(
+                    target,
+                    "session",
+                    new JsonObject { ["action"] = "status" },
+                    administrator: true
+                )
+            )
         );
     }
 

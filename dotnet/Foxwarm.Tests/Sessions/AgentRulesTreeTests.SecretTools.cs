@@ -212,7 +212,7 @@ public sealed partial class AgentRulesTreeTests
                 ),
             }
         );
-        var explained = JsonNode.Parse(SessionWait.Text(explainResult!.AsObject()["output"])!)!;
+        var explained = explainResult!.AsObject();
         var active = explained["probes"]![0]!["active"]!;
         Assert.Equal("""["agent-token"]""", active["facts"]!["secrets"]!.ToJsonString());
         Assert.Equal("""["agent-token"]""", active["facts"]!["ownedSecrets"]!.ToJsonString());

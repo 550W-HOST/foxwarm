@@ -84,7 +84,8 @@ internal sealed partial class SessionToolExecutor
                 result["nodeId"] = ExecutionNode;
                 if (ExecutionCwd is not null)
                     result["cwd"] = ExecutionCwd;
-                result["output"] = CompactPlanInput.RepairGuidance + "\n" + path;
+                result["note"] =
+                    "Plan validation failed. The submitted plan was saved to argsFilePath. Correct the reported error with edit, then resubmit using argsFilePath.";
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
             {

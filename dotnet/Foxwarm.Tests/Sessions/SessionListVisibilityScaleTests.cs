@@ -107,11 +107,7 @@ public sealed class SessionListVisibilityScaleTests(ITestOutputHelper output)
                 }
             );
             var queryTime = timer.Elapsed;
-            var found = System.Text.RegularExpressions.Regex.Match(
-                SessionWait.Text(list["output"])!,
-                @"Found (\d+) session"
-            );
-            Assert.Equal(memoIds.Length.ToString(), found.Groups[1].Value);
+            Assert.Equal(memoIds.Length, SessionWait.Number(list["total"]));
             output.WriteLine(
                 $"{name}: listed {memoIds.Length}/{presentations.Length}; class memo {memo.Evaluations} probes in {memoTime.TotalMilliseconds:F1} ms; per-row {exact.Evaluations} probes in {exactTime.TotalMilliseconds:F1} ms; list call {listTime.TotalMilliseconds:F1} ms; keyword list {queryTime.TotalMilliseconds:F1} ms"
             );

@@ -243,9 +243,18 @@ public sealed class MainFileDeliveryTests
         f.Manager.RegisterWebUiFileDelivery((_, _, _) => { });
         var result = await f.Call("send_file", Args(path));
         Assert.Null(Error(result));
-        Assert.Contains("Delivered: 1", result.ToJsonString());
-        Assert.Contains("missing:room", result.ToJsonString());
-        Assert.Contains("send-only", result.ToJsonString());
+        Assert.Null(result["output"]);
+        Assert.Equal(
+            ["webui:" + f.Owner.Id],
+            result["delivered"]!.AsArray().Select(item => item!.GetValue<string>()).ToArray()
+        );
+        Assert.Equal(
+            "missing:room",
+            Assert.Single(result["failed"]!.AsArray())!["channelTargetId"]!.GetValue<string>()
+        );
+        var skipped = Assert.Single(result["skipped"]!.AsArray())!;
+        Assert.Equal("other:room", skipped["channelTargetId"]!.GetValue<string>());
+        Assert.Equal("send-only", skipped["reason"]!.GetValue<string>());
         channels["channels"]!.AsObject().Remove("webui:" + f.Owner.Id);
         await File.WriteAllTextAsync(
             Path.Combine(f.Data, "state", "channels.json"),

@@ -498,8 +498,8 @@ public sealed partial class ToolAuthorizationEffectsTests
             }
         );
         Assert.Null(response["error"]);
-        var row = JsonNode
-            .Parse(response["output"]!.GetValue<string>())!["probes"]![0]!;
+        Assert.Null(response["output"]);
+        var row = response["probes"]![0]!;
         Assert.Equal("BAD exec foreign", row["label"]!.GetValue<string>());
         Assert.Equal("deny", row["decision"]!.GetValue<string>());
         Assert.Equal("beta-no-exec", row["rules"]![0]!["rule"]!.GetValue<string>());

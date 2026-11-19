@@ -31,7 +31,11 @@ public sealed partial class ProviderFileConsumerTests
         await using var f = await Fixture.Create("lifecycle");
         var list = await f.Call("node", Lifecycle("list"));
         Success(list);
-        Assert.Contains("fixture", list["output"]!.GetValue<string>());
+        Assert.Null(list["output"]);
+        Assert.Contains(
+            "fixture",
+            list["providers"]!.AsArray().Select(provider => provider!["id"]!.GetValue<string>())
+        );
         var structured = await f.Call(
             "run_script",
             new JsonObject { ["code"] = "return call_tool('node', {'action':'list'})" }

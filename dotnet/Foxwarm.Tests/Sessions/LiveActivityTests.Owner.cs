@@ -317,7 +317,8 @@ public sealed partial class LiveActivityTests
         var dto = owner.BuildDto();
         Assert.Equal(2, dto["latestMessageSeq"]!.GetValue<long>());
         var row = SessionStatus.Row(dto);
-        Assert.Contains(" - msg#2 latest · 2 active - ", row);
-        Assert.Contains("activity: \"Line one line two\"", row);
+        Assert.Equal(2, row["latestMessageSeq"]!.GetValue<long>());
+        Assert.Equal(2, row["activeMessages"]!.GetValue<long>());
+        Assert.Equal("Line one line two", row["activity"]!.GetValue<string>());
     }
 }

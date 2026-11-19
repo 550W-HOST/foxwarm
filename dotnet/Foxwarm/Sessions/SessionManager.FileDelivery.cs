@@ -144,8 +144,8 @@ internal sealed partial class SessionManager
             mimeType
         );
         var delivered = new List<string>();
-        var skipped = new List<string>();
-        var failed = new List<string>();
+        var skipped = new JsonArray();
+        var failed = new JsonArray();
         foreach (var destination in destinations)
         {
             token.ThrowIfCancellationRequested();
@@ -159,7 +159,7 @@ internal sealed partial class SessionManager
                 && SessionCatalog.Text(bindings[destination]?["mode"]) == "send-only"
             )
             {
-                skipped.Add($"`{destination}` (send-only)");
+                skipped.Add(DeliveryOutcome(destination, "send-only"));
                 continue;
             }
             try
@@ -194,7 +194,7 @@ internal sealed partial class SessionManager
                             throw new InvalidOperationException(
                                 "Channel does not support file delivery."
                             );
-                        skipped.Add($"`{destination}` (no file support)");
+                        skipped.Add(DeliveryOutcome(destination, "no file support"));
                         continue;
                     }
                     var mime = SessionWait.Text(artifact["mimeType"]);
@@ -217,30 +217,47 @@ internal sealed partial class SessionManager
             {
                 if (direct.Length > 0)
                     throw;
-                failed.Add($"`{destination}` ({error.Message})");
+                failed.Add(DeliveryOutcome(destination, error.Message));
             }
         }
-        var lines = new List<string>
-        {
-            $"File `{name}` is ready for session `{target ?? direct}`.",
-            "Delivered: " + delivered.Count,
-        };
-        if (delivered.Count > 0)
-            lines.Add("Channels: " + string.Join(", ", delivered.Select(id => "`" + id + "`")));
-        if (skipped.Count > 0)
-            lines.Add("Skipped: " + string.Join(", ", skipped));
-        if (failed.Count > 0)
-            lines.Add("Failed: " + string.Join(", ", failed));
-        var output = string.Join("\n", lines);
         if (delivered.Count == 0)
-            throw new InvalidOperationException(output);
-        return new JsonObject
         {
-            ["output"] = output,
+            var lines = new List<string>
+            {
+                $"File `{name}` is ready for session `{target ?? direct}`.",
+                "Delivered: 0",
+            };
+            if (skipped.Count > 0)
+                lines.Add("Skipped: " + DeliveryOutcomeText(skipped));
+            if (failed.Count > 0)
+                lines.Add("Failed: " + DeliveryOutcomeText(failed));
+            throw new InvalidOperationException(string.Join("\n", lines));
+        }
+        var result = new JsonObject
+        {
             ["fullPath"] = path,
             ["fileDelivery"] = artifact,
+            ["delivered"] = new JsonArray(
+                delivered.Select(id => (JsonNode?)JsonValue.Create(id)).ToArray()
+            ),
         };
+        if (skipped.Count > 0)
+            result["skipped"] = skipped;
+        if (failed.Count > 0)
+            result["failed"] = failed;
+        return result;
     }
+
+    private static JsonObject DeliveryOutcome(string channelTargetId, string reason) =>
+        new() { ["channelTargetId"] = channelTargetId, ["reason"] = reason };
+
+    private static string DeliveryOutcomeText(JsonArray outcomes) =>
+        string.Join(
+            ", ",
+            outcomes
+                .OfType<JsonObject>()
+                .Select(item => $"`{SessionWait.Text(item["channelTargetId"])}` ({SessionWait.Text(item["reason"])})")
+        );
 
     private string FileSession(string requested) =>
         SessionCatalog.Text(Catalog.Resolve(requested)["sessionId"])
@@ -346,9 +363,9 @@ internal sealed partial class SessionManager
         }
         return new JsonObject
         {
-            ["output"] =
-                $"Image `{id}` written to `{raw}` on node `{node}`.\nYou can deliver it with `{CtlCommandText.For("send_file", new JsonObject { ["filePath"] = raw, ["node"] = node })}`.",
             ["fullPath"] = path,
+            ["note"] =
+                $"Image `{id}` written on node `{node}`. You can deliver it with `{CtlCommandText.For("send_file", new JsonObject { ["filePath"] = raw, ["node"] = node })}`.",
         };
     }
 

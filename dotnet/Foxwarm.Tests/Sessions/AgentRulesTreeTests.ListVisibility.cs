@@ -36,7 +36,7 @@ public sealed partial class AgentRulesTreeTests
     private static Task ListPolicy(ExternalChannelFixture f, string yaml) =>
         f.Manager.Authorization.InstallAsync(Encoding.UTF8.GetBytes(yaml), default);
 
-    private static async Task<string> SessionList(
+    private static async Task<JsonObject> SessionList(
         ExternalChannelFixture f,
         SessionOwner? caller = null,
         string scope = "all",
@@ -49,15 +49,28 @@ public sealed partial class AgentRulesTreeTests
         args["count"] ??= 100;
         var result = await f.ToolAsync("session", args, caller);
         Successful(result);
-        return SessionWait.Text(result!["output"])!;
+        Assert.Null(result!["output"]);
+        return result.AsObject();
     }
 
-    private static string[] ListedSessions(string output) =>
-        Regex
-            .Matches(output, "🤖 `([^`]+)`")
-            .Select(match => match.Groups[1].Value)
+    private static string[] ListedSessions(JsonObject list) =>
+        list["sessions"]!
+            .AsArray()
+            .Select(row => row!["id"]!.GetValue<string>())
             .Order(StringComparer.Ordinal)
             .ToArray();
+
+    // Agent ID to listed Session count, from an agent list result.
+    private static Dictionary<string, int> AgentRows(JsonObject result)
+    {
+        Assert.Null(result["output"]);
+        return result["agents"]!
+            .AsArray()
+            .ToDictionary(
+                row => row!["id"]!.GetValue<string>(),
+                row => row!["sessionCount"]!.GetValue<int>()
+            );
+    }
 
     private static string[] Sorted(params string[] ids) =>
         ids.Order(StringComparer.Ordinal).ToArray();
@@ -97,26 +110,28 @@ public sealed partial class AgentRulesTreeTests
         );
         var all = await SessionList(f);
         Assert.Equal(Sorted(source, "ops/kid", "main/kid2", "ops/b"), ListedSessions(all));
-        Assert.Contains("Found 4 session(s). Showing 1-4.", all);
+        Assert.Equal(4, all["total"]!.GetValue<long>());
+        Assert.Null(all["nextPage"]);
         Assert.Equal(
             Sorted(source, "main/kid2"),
             ListedSessions(await SessionList(f, scope: "current-agent"))
         );
 
         var page = await SessionList(f, extra: new JsonObject { ["start"] = 1, ["count"] = 2 });
-        Assert.Contains(
-            "Found 4 session(s). Showing 2-3.\nNext page: ctl session list --start 3 --count 2 --scope all\n",
-            page
+        Assert.Equal(4, page["total"]!.GetValue<long>());
+        Assert.Equal(1, page["start"]!.GetValue<int>());
+        Assert.Equal(
+            "ctl session list --start 3 --count 2 --scope all",
+            page["nextPage"]!.GetValue<string>()
         );
         Assert.Equal(2, ListedSessions(page).Length);
-        Assert.Contains(
-            "No sessions found in the requested range. Total sessions: 4.",
-            await SessionList(f, extra: new JsonObject { ["start"] = 9 })
-        );
+        var beyond = await SessionList(f, extra: new JsonObject { ["start"] = 9 });
+        Assert.Equal(4, beyond["total"]!.GetValue<long>());
+        Assert.Empty(ListedSessions(beyond));
 
         // Keyword search matches listed Sessions only, and its totals count only them.
         var query = await SessionList(f, extra: new JsonObject { ["query"] = "ops" });
-        Assert.Contains("Found 2 session(s) matching `ops`.", query);
+        Assert.Equal(2, query["total"]!.GetValue<long>());
         Assert.Equal(Sorted("ops/b", "ops/kid"), ListedSessions(query));
     }
 
@@ -141,7 +156,7 @@ public sealed partial class AgentRulesTreeTests
             - {tool: session, action: allow}
             """
         );
-        Assert.Equal(unfiltered, await SessionList(f));
+        Assert.Equal(unfiltered.ToJsonString(), (await SessionList(f)).ToJsonString());
 
         await ListPolicy(
             f,
@@ -220,13 +235,10 @@ public sealed partial class AgentRulesTreeTests
         );
         f.Manager.ChangePresentation(catalog => catalog.SetParent(worker.Id, source));
         Assert.Equal(Sorted(worker.Id, source), ListedSessions(await SessionList(f, worker)));
-        var agents = SessionWait.Text(
-            (await f.ToolAsync("list_agents", new(), worker))!["output"]
-        )!;
-        Assert.Contains("Found 2 agent(s):", agents);
-        Assert.Contains("- **main** (1 session)", agents);
-        Assert.Contains("- **worker** (1 session)", agents);
-        Assert.DoesNotContain("**ops**", agents);
+        var agents = AgentRows((await f.ToolAsync("list_agents", new(), worker))!.AsObject());
+        Assert.Equal(["main", "worker"], agents.Keys.Order(StringComparer.Ordinal).ToArray());
+        Assert.Equal(1, agents["main"]);
+        Assert.Equal(1, agents["worker"]);
     }
 
     [Fact]
@@ -237,20 +249,16 @@ public sealed partial class AgentRulesTreeTests
         await f.Manager.CreateAgentAsync("ops", createMainSession: false);
         await f.Manager.CreateAgentAsync("spare", createMainSession: false);
         var child = await ChildAgent(f, "child");
-        async Task<string> Agents(SessionOwner? caller = null) =>
-            SessionWait.Text((await f.ToolAsync("list_agents", new(), caller))!["output"])!;
-        string[] Names(string output) =>
-            Regex
-                .Matches(output, @"^- \*\*([^*]+)\*\*", RegexOptions.Multiline)
-                .Select(match => match.Groups[1].Value)
-                .Order(StringComparer.Ordinal)
-                .ToArray();
+        async Task<Dictionary<string, int>> Agents(SessionOwner? caller = null) =>
+            AgentRows((await f.ToolAsync("list_agents", new(), caller))!.AsObject());
+        string[] Names(Dictionary<string, int> agents) =>
+            agents.Keys.Order(StringComparer.Ordinal).ToArray();
 
         var unrestricted = await Agents();
         Assert.Equal(Sorted("child", "main", "ops", "spare"), Names(unrestricted));
         var mainTotal = f.Manager.AgentListEntries().Single(row => row.Id == "main").SessionCount;
         Assert.True(mainTotal > 1);
-        Assert.Contains($"- **main** ({mainTotal} sessions)", unrestricted);
+        Assert.Equal(mainTotal, unrestricted["main"]);
 
         await ListPolicy(
             f,
@@ -266,9 +274,8 @@ public sealed partial class AgentRulesTreeTests
         var listed = await Agents();
         Assert.Equal(Sorted("main", "ops", "spare"), Names(listed));
         // Counts show listed Sessions only, with no hidden count.
-        Assert.Contains("- **main** (1 session)", listed);
-        Assert.Contains("- **ops** (1 session)", listed);
-        Assert.Contains("Found 3 agent(s):", listed);
+        Assert.Equal(1, listed["main"]);
+        Assert.Equal(1, listed["ops"]);
 
         // Rule replacement is limited to strict creator descendants.
         await ListPolicy(
@@ -313,14 +320,15 @@ public sealed partial class AgentRulesTreeTests
         );
         var status = await f.ToolAsync("session", new JsonObject());
         Successful(status);
-        var text = SessionWait.Text(status!["output"])!;
-        Assert.Contains("`ops/kid`", text);
-        Assert.DoesNotContain("`main/kid2`", text);
-        var administrator = SessionWait.Text(
-            (await f.Manager.ObserveAsync(f.Owner, "session", new(), administrator: true))["output"]
-        )!;
-        Assert.Contains("`ops/kid`", administrator);
-        Assert.Contains("`main/kid2`", administrator);
+        string[] Children(JsonNode? result) =>
+            result!["recentChildren"]!.AsArray().Select(row => row!["id"]!.GetValue<string>()).ToArray();
+        Assert.Contains("ops/kid", Children(status));
+        Assert.DoesNotContain("main/kid2", Children(status));
+        var administrator = Children(
+            await f.Manager.ObserveAsync(f.Owner, "session", new(), administrator: true)
+        );
+        Assert.Contains("ops/kid", administrator);
+        Assert.Contains("main/kid2", administrator);
     }
 
     [Fact]
@@ -338,7 +346,7 @@ public sealed partial class AgentRulesTreeTests
             f.Manager.ObserveAsync(f.Owner, "session", new JsonObject { ["action"] = "list" })
         );
         Assert.Throws<ToolAuthorizationUnavailableException>(() =>
-            f.Manager.ListAgentsText(f.Owner)
+            f.Manager.ListAgents(f.Owner)
         );
     }
 }

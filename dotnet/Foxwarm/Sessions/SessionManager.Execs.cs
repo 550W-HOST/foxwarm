@@ -143,34 +143,40 @@ internal sealed partial class SessionManager
         ToolRegistry.Keys(args, []);
         token.ThrowIfCancellationRequested();
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        var execs = RunningExecs(owner);
         var rows = new JsonArray();
+        foreach (var exec in RunningExecs(owner))
+            rows.Add(ExecRow(exec, now));
+        return Task.FromResult(new JsonObject { ["execs"] = rows });
+    }
+
+    // The text of `/exec list`: the running commands of a Session, as listed by exec list.
+    internal static string ExecListText(JsonArray execs, long now)
+    {
         var lines = new List<string>
         {
-            execs.Length switch
+            execs.Count switch
             {
                 0 => "No commands of this Session are running in the background.",
                 1 => "1 running command:",
-                _ => $"{execs.Length} running commands:",
+                _ => $"{execs.Count} running commands:",
             },
         };
-        foreach (var exec in execs)
+        foreach (var exec in execs.OfType<JsonObject>())
         {
-            var heading = "- " + exec.Id;
-            if (exec.NodeId != "master")
-                heading += $" · Node `{exec.NodeId}`";
-            heading += $" · started {StartedText(exec.StartedAt, now)} ({ExecDuration.Format(now - exec.StartedAt) ?? "unknown"} ago)";
-            if (exec.StopRequested)
+            var startedAt = (long)(SessionWait.Number(exec["startedAt"]) ?? now);
+            var nodeId = SessionWait.Text(exec["nodeId"]) ?? "master";
+            var heading = "- " + SessionWait.Text(exec["execId"]);
+            if (nodeId != "master")
+                heading += $" · Node `{nodeId}`";
+            heading += $" · started {StartedText(startedAt, now)} ({ExecDuration.Format(now - startedAt) ?? "unknown"} ago)";
+            if (SessionCatalog.Flag(exec["stopRequested"]))
                 heading += " · stop requested";
             lines.Add(heading);
-            lines.Add($"  command: `{ExecOutput.CommandPreview(exec.Command ?? "")}`");
-            lines.Add("  cwd: " + (exec.Cwd ?? "unknown"));
-            lines.Add("  log: " + (exec.LogPath ?? "unknown"));
-            rows.Add(ExecRow(exec, now));
+            lines.Add($"  command: `{ExecOutput.CommandPreview(SessionWait.Text(exec["command"]) ?? "")}`");
+            lines.Add("  cwd: " + (SessionWait.Text(exec["cwd"]) ?? "unknown"));
+            lines.Add("  log: " + (SessionWait.Text(exec["logPath"]) ?? "unknown"));
         }
-        return Task.FromResult(
-            new JsonObject { ["output"] = string.Join('\n', lines), ["execs"] = rows }
-        );
+        return string.Join('\n', lines);
     }
 
     internal static JsonObject ExecRow(SessionExec exec, long now) =>
@@ -207,7 +213,7 @@ internal sealed partial class SessionManager
         if (string.IsNullOrWhiteSpace(id))
             throw new InvalidDataException("exec stop requires an execId.");
         var (result, node, resident) = await StopExecAsync(owner, id, token);
-        var output = result switch
+        var note = result switch
         {
             ExecStopResult.Stopped =>
                 $"Stopped `{id}`; it exited after the termination signal. Its completion will be reported separately.",
@@ -234,7 +240,6 @@ internal sealed partial class SessionManager
         };
         return new JsonObject
         {
-            ["output"] = output,
             ["execId"] = id,
             ["outcome"] = result switch
             {
@@ -244,6 +249,7 @@ internal sealed partial class SessionManager
                 ExecStopResult.Finished => "finished",
                 _ => "already-requested",
             },
+            ["note"] = note,
         };
     }
 }

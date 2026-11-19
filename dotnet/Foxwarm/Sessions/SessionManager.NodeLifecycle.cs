@@ -10,8 +10,7 @@ internal sealed partial class SessionManager
     internal async Task<JsonObject> ExecuteNodeToolAsync(
         SessionOwner owner,
         JsonObject args,
-        CancellationToken token,
-        bool programmatic = false
+        CancellationToken token
     )
     {
         owner.Entry.RequireIdentityAuthority();
@@ -57,46 +56,16 @@ internal sealed partial class SessionManager
                 visible["lifecycle"] = actions;
                 providers.Add(visible);
             }
-            var currentNode = visibility.CurrentNode;
-            var result = new JsonObject
+            // An absent parent is left out rather than listed as null.
+            foreach (var node in nodes.OfType<JsonObject>())
+                if (node["parentNode"] is null)
+                    node.Remove("parentNode");
+            return new JsonObject
             {
-                ["output"] =
-                    $"Current node: `{currentNode}`.\n"
-                    + string.Join(
-                        '\n',
-                        nodes
-                            .OfType<JsonObject>()
-                            .Select(value =>
-                                $"- `{value["id"]!.GetValue<string>()}` ({value["kind"]!.GetValue<string>()}) — {value["availability"]!.GetValue<string>()}"
-                                + (
-                                    value["select"]!.GetValue<bool>()
-                                    || value["id"]!.GetValue<string>() == currentNode
-                                        ? ""
-                                        : "; not selectable"
-                                )
-                            )
-                    )
-                    + (
-                        providers.Count == 0
-                            ? ""
-                            : "\nProviders:\n"
-                                + string.Join(
-                                    '\n',
-                                    providers
-                                        .OfType<JsonObject>()
-                                        .Select(value =>
-                                            $"- `{value["id"]!.GetValue<string>()}` ({string.Join(", ", value["lifecycle"]!.AsArray().Select(SessionWait.Text))})"
-                                        )
-                                )
-                    ),
+                ["currentNode"] = visibility.CurrentNode,
+                ["nodes"] = nodes,
+                ["providers"] = providers,
             };
-            if (programmatic)
-            {
-                result["nodes"] = nodes;
-                result["providers"] = providers;
-                result["currentNode"] = currentNode;
-            }
-            return result;
         }
         if (action == "status")
         {

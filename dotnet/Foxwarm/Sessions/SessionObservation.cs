@@ -136,31 +136,61 @@ internal sealed partial class SessionOwner
 
 internal static class SessionStatus
 {
-    internal static string Runtime(JsonObject state)
+    // A Session's runtime state as record fields: its state, and the compaction phase, wait,
+    // live activity and queue only when present.
+    internal static JsonObject RuntimeFields(JsonObject state, JsonObject? target = null)
     {
-        var name = SessionWait.Text(state["state"]) ?? "idle";
+        target ??= new JsonObject();
+        target["state"] = SessionWait.Text(state["state"]) ?? "idle";
         if (
             state["active"] is JsonObject active
             && SessionWait.Text(active["phase"]) == "compaction"
         )
-            name += " (compaction)";
+            target["phase"] = "compaction";
         if (state["waiting"] is JsonObject wait)
         {
-            name += " (" + (SessionWait.Text(wait["waitingFor"]) ?? "waiting") + ")";
+            target["waitingFor"] = SessionWait.Text(wait["waitingFor"]) ?? "waiting";
             if (SessionWait.Text(wait["reason"]) is string reason)
-                name += "; reason: " + reason;
-            if (SessionWait.Strings(wait["pendingSessions"]) is { Length: > 0 } pending)
-                name += "; pending: " + string.Join(", ", pending);
-            if (SessionWait.Strings(wait["waitExecIds"]) is { Length: > 0 } exec)
-                name += "; exec: " + string.Join(", ", exec);
-            if (SessionWait.Strings(wait["waitQuestionIds"]) is { Length: > 0 } questions)
-                name += "; questions: " + string.Join(", ", questions);
+                target["waitReason"] = reason;
+            foreach (var key in new[] { "pendingSessions", "waitExecIds", "waitQuestionIds" })
+                if (SessionWait.Strings(wait[key]) is { Length: > 0 } values)
+                    target[key] = Strings(values);
         }
         if (Activity(state) is { } activity)
+            target["activity"] = activity;
+        if (SessionWait.Number(state["queueLength"]) is > 0 and var queued)
+            target["queueLength"] = (long)queued;
+        return target;
+    }
+
+    // The runtime sentence of session view and `/status`, from RuntimeFields.
+    internal static string Runtime(JsonObject state) => RuntimeText(RuntimeFields(state));
+
+    private static string RuntimeText(JsonObject fields)
+    {
+        var name = SessionWait.Text(fields["state"]) ?? "idle";
+        if (SessionWait.Text(fields["phase"]) == "compaction")
+            name += " (compaction)";
+        if (SessionWait.Text(fields["waitingFor"]) is { } waitingFor)
+        {
+            name += " (" + waitingFor + ")";
+            if (SessionWait.Text(fields["waitReason"]) is string reason)
+                name += "; reason: " + reason;
+            if (SessionWait.Strings(fields["pendingSessions"]) is { Length: > 0 } pending)
+                name += "; pending: " + string.Join(", ", pending);
+            if (SessionWait.Strings(fields["waitExecIds"]) is { Length: > 0 } exec)
+                name += "; exec: " + string.Join(", ", exec);
+            if (SessionWait.Strings(fields["waitQuestionIds"]) is { Length: > 0 } questions)
+                name += "; questions: " + string.Join(", ", questions);
+        }
+        if (SessionWait.Text(fields["activity"]) is { } activity)
             name += "; activity: " + Quote(activity);
-        var queued = SessionWait.Number(state["queueLength"]) ?? 0;
+        var queued = SessionWait.Number(fields["queueLength"]) ?? 0;
         return "Session execution state: " + name + (queued > 0 ? "; queue: " + queued : "") + ".";
     }
+
+    private static JsonArray Strings(IEnumerable<string> values) =>
+        new(values.Select(value => (JsonNode?)JsonValue.Create(value)).ToArray());
 
     // The later of the live reasoning heading and tool summary, already bounded to one line.
     private static string? Activity(JsonObject state)
@@ -193,17 +223,81 @@ internal static class SessionStatus
                     System.Globalization.CultureInfo.InvariantCulture
                 );
 
-    internal static string Row(JsonObject dto, string? current = null) =>
-        $"🤖 `{SessionWait.Text(dto["id"])}`"
-        + (SessionWait.Text(dto["displayName"]) is { } name ? " (" + name + ")" : "")
-        + (SessionWait.Text(dto["id"]) == current ? " **CURRENT**" : "")
-        + $" - {Messages((long)(SessionWait.Number(dto["latestMessageSeq"]) ?? 0), (long)(SessionWait.Number(dto["messageCount"]) ?? 0))} - {Runtime(dto["runtimeState"]!.AsObject())} - Last: {Date(SessionWait.Number(dto["lastMessageTime"]) ?? 0)}";
+    // One Session of session list and of the recent children of session status. The message
+    // seq, display name and last message time are left out when there are none.
+    internal static JsonObject Row(JsonObject dto, string? current = null)
+    {
+        var id = SessionWait.Text(dto["id"]);
+        var row = new JsonObject { ["id"] = id };
+        if (SessionWait.Text(dto["displayName"]) is { } name)
+            row["displayName"] = name;
+        if (current is not null && id == current)
+            row["current"] = true;
+        if ((long)(SessionWait.Number(dto["latestMessageSeq"]) ?? 0) is > 0 and var latest)
+            row["latestMessageSeq"] = latest;
+        row["activeMessages"] = (long)(SessionWait.Number(dto["messageCount"]) ?? 0);
+        RuntimeFields(dto["runtimeState"]!.AsObject(), row);
+        if (SessionWait.Number(dto["lastMessageTime"]) is > 0 and var last)
+            row["lastMessageAt"] = Date(last);
+        return row;
+    }
 
-    internal static string Row(SessionOwner owner, SessionMetadata meta, string? current = null) =>
-        $"🤖 `{meta.Id}`"
-        + (meta.DisplayName is null ? "" : " (" + meta.DisplayName + ")")
-        + (meta.Id == current ? " **CURRENT**" : "")
-        + $" - {Messages(Math.Max(0, meta.NextMessageSeq - 1), meta.MessageCount)} - {Runtime(owner.BuildDto(meta)["runtimeState"]!.AsObject())} - Last: {Date(meta.LastMessageTime)}";
+    // A session list or recent-children row as `/status` shows it.
+    private static string RowText(JsonObject row) =>
+        $"🤖 `{SessionWait.Text(row["id"])}`"
+        + (SessionWait.Text(row["displayName"]) is { } name ? " (" + name + ")" : "")
+        + $" - {Messages((long)(SessionWait.Number(row["latestMessageSeq"]) ?? 0), (long)(SessionWait.Number(row["activeMessages"]) ?? 0))} - {RuntimeText(row)} - Last: {SessionWait.Text(row["lastMessageAt"]) ?? "never"}";
+
+    // The `/status` reply, from the session status record.
+    internal static string Text(JsonObject status)
+    {
+        string Value(string key) => SessionWait.Text(status[key]) ?? status[key]?.ToJsonText() ?? "";
+        static string Count(JsonNode? value) =>
+            (SessionWait.Number(value) ?? 0).ToString("N0", System.Globalization.CultureInfo.CurrentCulture);
+        var node = status["node"]!.AsObject();
+        var usage = status["lastUsage"] as JsonObject;
+        var usageText = usage is null
+            ? "none"
+            : $"cached={Count(usage["cachedTokens"])}, input={Count(usage["inputTokens"])}, output={Count(usage["outputTokens"])}"
+                + (usage["reasoningTokens"] is { } reasoning ? $" (reasoning={Count(reasoning)})" : "")
+                + $", total={Count(usage["totalTokens"])}"
+                + (
+                    SessionWait.Number(usage["cost"]) is double cost
+                        ? $", estimated cost={ModelUsageCost.FormatUsd(cost)}"
+                        : ""
+                );
+        var children = (status["recentChildren"] as JsonArray ?? []).OfType<JsonObject>().ToArray();
+        var images = (long)(SessionWait.Number(status["images"]) ?? 0);
+        return "📊 *Session Status*\n\n"
+            + $"- session id: `{Value("sessionId")}`\n- name: {SessionWait.Text(status["displayName"]) ?? "unset"}\n- agent id/name: `{Value("agent")}`\n- current node: `{SessionWait.Text(node["id"])}` (connected={(SessionCatalog.Flag(node["connected"]) ? "true" : "false")}, type={SessionWait.Text(node["type"])})\n- agent directory: `{Value("agentDirectory")}`\n- current cwd: {(SessionWait.Text(status["cwd"]) is { } cwd ? $"`{cwd}`" : $"not set (defaults to current node agent directory; master: `{Value("agentDirectory")}`)")}\n"
+            + (
+                SessionWait.Text(status["parentSessionId"]) is { } parent
+                    ? $"- parent session id: `{parent}`\n"
+                    : ""
+            )
+            + (SessionCatalog.Flag(status["archived"]) ? "- 📦 archived\n" : "")
+            + $"- model: `{Value("model")}`\n- effort: raw={SessionWait.Text(status["effort"]) ?? "unset"}, effective={SessionWait.Text(status["effectiveEffort"]) ?? "per-leaf default"}, allowed={string.Join('|', SessionWait.Strings(status["allowedEfforts"]))}, default={Value("defaultEffort")}\n"
+            + $"- messages: {Messages((long)(SessionWait.Number(status["latestMessageSeq"]) ?? 0), (long)(SessionWait.Number(status["activeMessages"]) ?? 0))}\n- token estimate: ~{Value("tokenEstimate")} / {Value("contextLimit")}\n- images: {images}{(status["imagesSent"] is not null && !SessionCatalog.Flag(status["imagesSent"]) ? " (not sent: the current model does not support image input)" : "")}\n- last usage: {usageText}\n- last message: {SessionWait.Text(status["lastMessageAt"]) ?? "never"}\n- auto-compact threshold: ~{Value("compactThresholdTokens")} tokens ({(SessionWait.Text(status["compactThresholdSource"]) == "override" ? "override" : "model default")})\n"
+            + (
+                SessionWait.Number(status["totalCost"]) is double totalCost
+                    ? $"- total estimated cost: {ModelUsageCost.FormatUsd(totalCost)}\n"
+                    : ""
+            )
+            + $"- child model: raw={SessionWait.Text(status["childModel"]) ?? "follow current"}, effective={Value("effectiveChildModel")}; child effort: raw={SessionWait.Text(status["childEffort"]) ?? "unset"}, effective={Value("effectiveChildEffort")}\n"
+            + $"- runtime state: {RuntimeText(status["runtime"]!.AsObject())}\n"
+            + (SessionCatalog.Flag(status["busy"]) ? "- busy: yes\n" : "")
+            + (
+                SessionWait.Number(status["runtime"]?["queueLength"]) is > 0 and var queue
+                    ? $"- queue: {queue}\n"
+                    : ""
+            )
+            + "\nRecent child sessions (max 10):"
+            + (
+                children.Length == 0
+                    ? " none\n"
+                    : "\n" + string.Join('\n', children.Select(RowText)) + "\n"
+            );
+    }
 }
 
 internal sealed partial class SessionManager
@@ -344,35 +438,30 @@ internal sealed partial class SessionManager
                     ? CatalogMetadataOffset(start, count, agent)
                     : VisibleMetadata(visibility, query, start, count, agent);
             start = (int)Math.Min(start, total);
-            var matching = query is null ? "" : $" matching `{query}`";
-            if (total == 0)
-                return Output($"No sessions found{matching}.");
-            if (page.Length == 0)
-                return Output(
-                    $"No sessions found in the requested range. Total sessions{matching}: {total}."
-                );
             var parent = source.Metadata().ParentSessionId;
-            var next = new JsonObject { ["action"] = "list" };
+            var list = new JsonObject { ["currentSession"] = source.Id };
+            if (parent is not null)
+                list["parentSession"] = parent;
             if (query is not null)
-                next["query"] = query;
-            next["start"] = start + page.Length;
-            if (args.ContainsKey("count"))
-                next["count"] = count;
-            if (scope != "current-agent")
-                next["scope"] = scope;
-            return Output(
-                $"Current session: `{source.Id}`\n"
-                    + (parent is null ? "" : $"Parent session: `{parent}`\n")
-                    + $"\nFound {total} session(s){matching}. Showing {start + 1}-{start + page.Length}."
-                    + (
-                        start + page.Length < total
-                            ? "\nNext page: " + CtlCommandText.For("session", next)
-                            : ""
-                    )
-                    + "\n\n"
-                    + string.Join('\n', page.Select(row => SessionStatus.Row(row, source.Id)))
-                    + "\n"
+                list["query"] = query;
+            list["total"] = total;
+            list["start"] = start;
+            list["sessions"] = new JsonArray(
+                page.Select(row => (JsonNode?)SessionStatus.Row(row, source.Id)).ToArray()
             );
+            if (page.Length > 0 && start + page.Length < total)
+            {
+                var next = new JsonObject { ["action"] = "list" };
+                if (query is not null)
+                    next["query"] = query;
+                next["start"] = start + page.Length;
+                if (args.ContainsKey("count"))
+                    next["count"] = count;
+                if (scope != "current-agent")
+                    next["scope"] = scope;
+                list["nextPage"] = CtlCommandText.For("session", next);
+            }
+            return list;
         }
         if (action != "status")
             throw new InvalidDataException(
@@ -396,53 +485,86 @@ internal sealed partial class SessionManager
             ? CatalogMetadataOffset(0, 10, parent: statusTarget.Id).Page
             : VisibleChildren(SessionVisibilityFor(source), statusTarget.Id, 10);
         var currentNode = SessionWait.Text(dto["currentNode"])!;
-        var usage = summary.Usage;
-        var cached = SessionWait.Number(usage?["cachedTokens"]) ?? 0;
-        var input = SessionWait.Number(usage?["inputTokens"]) ?? 0;
-        var output = SessionWait.Number(usage?["outputTokens"]) ?? 0;
-        var usageText = usage is null
-            ? "none"
-            : $"cached={cached:N0}, input={input:N0}, output={output:N0}"
-                + (
-                    SessionWait.Number(usage["reasoningTokens"]) is { } reasoning
-                        ? $" (reasoning={reasoning:N0})"
-                        : ""
-                )
-                + $", total={cached + input + output:N0}"
-                + (
-                    SessionWait.Number(usage["cost"]) is double cost
-                        ? $", estimated cost={ModelUsageCost.FormatUsd(cost)}"
-                        : ""
-                );
-        return Output(
-            "📊 *Session Status*\n\n"
-                + $"- session id: `{meta.Id}`\n- name: {meta.DisplayName ?? "unset"}\n- agent id/name: `{statusTarget.Agent}`\n- current node: `{currentNode}` (connected={(NodeProviders.Connected(currentNode) ? "true" : "false")}, type={(currentNode == "master" ? "master" : NodeSummaries().OfType<JsonObject>().FirstOrDefault(node => SessionWait.Text(node["id"]) == currentNode)?["type"]?.GetValue<string>() ?? "unknown")})\n- agent directory: `{agents.AgentDirectory(statusTarget.Agent)}`\n- current cwd: {(currentCwd is string cwd && SessionGoal.Trim(cwd).Length > 0 ? $"`{SessionGoal.Trim(cwd)}`" : $"not set (defaults to current node agent directory; master: `{agents.AgentDirectory(statusTarget.Agent)}`)")}\n"
-                + (
-                    meta.ParentSessionId is null
-                        ? ""
-                        : $"- parent session id: `{meta.ParentSessionId}`\n"
-                )
-                + (meta.Archived ? "- 📦 archived\n" : "")
-                + $"- model: `{leaf?.Key ?? catalog.DefaultKey}`\n- effort: raw={meta.Effort ?? "unset"}, effective={(SessionWait.Text(dto["effectiveEffort"]) ?? "per-leaf default")}, allowed={string.Join('|', leaf?.AllowedEfforts ?? HostModels.Efforts)}, default={(leaf is null ? "high" : leaf.DefaultEffort)}\n"
-                + $"- messages: {SessionStatus.Messages(Math.Max(0, meta.NextMessageSeq - 1), meta.MessageCount)}\n- token estimate: ~{summary.Estimate} / {leaf?.ContextLimit ?? catalog.PresentationContextLimit}\n- images: {summary.Images}{(summary.Images > 0 && leaf?.ImageInput == false ? " (not sent: the current model does not support image input)" : "")}\n- last usage: {usageText}\n- last message: {SessionStatus.Date(meta.LastMessageTime)}\n- auto-compact threshold: ~{dto["effectiveCompactThresholdTokens"]} tokens ({(summary.Threshold is > 0 ? "override" : "model default")})\n"
-                + (
-                    meta.Cost is double totalCost
-                        ? $"- total estimated cost: {ModelUsageCost.FormatUsd(totalCost)}\n"
-                        : ""
-                )
-                + $"- child model: raw={meta.ChildModel ?? "follow current"}, effective={dto["effectiveChildModelKey"]}; child effort: raw={meta.ChildEffort ?? "unset"}, effective={dto["effectiveChildEffort"]}\n"
-                + $"- runtime state: {SessionStatus.Runtime(dto["runtimeState"]!.AsObject())}\n"
-                + (meta.Busy ? "- busy: yes\n" : "")
-                + (meta.QueueLength > 0 ? $"- queue: {meta.QueueLength}\n" : "")
-                + "\nRecent child sessions (max 10):"
-                + (
-                    children.Length == 0
-                        ? " none\n"
-                        : "\n"
-                            + string.Join('\n', children.Select(row => SessionStatus.Row(row)))
-                            + "\n"
-                )
+        var status = new JsonObject { ["sessionId"] = meta.Id };
+        if (meta.DisplayName is not null)
+            status["displayName"] = meta.DisplayName;
+        status["agent"] = statusTarget.Agent;
+        status["node"] = new JsonObject
+        {
+            ["id"] = currentNode,
+            ["connected"] = NodeProviders.Connected(currentNode),
+            ["type"] =
+                currentNode == "master"
+                    ? "master"
+                    : SessionWait.Text(
+                        NodeSummaries()
+                            .OfType<JsonObject>()
+                            .FirstOrDefault(node => SessionWait.Text(node["id"]) == currentNode)
+                            ?["type"]
+                    ) ?? "unknown",
+        };
+        status["agentDirectory"] = agents.AgentDirectory(statusTarget.Agent);
+        // Without a Session cwd, commands start in the Node's default directory.
+        if (currentCwd is string cwd && SessionGoal.Trim(cwd).Length > 0)
+            status["cwd"] = SessionGoal.Trim(cwd);
+        if (meta.ParentSessionId is not null)
+            status["parentSessionId"] = meta.ParentSessionId;
+        if (meta.Archived)
+            status["archived"] = true;
+        status["model"] = leaf?.Key ?? catalog.DefaultKey;
+        // A null effort is unset, and a null effective effort is the leaf's default.
+        status["effort"] = meta.Effort;
+        status["effectiveEffort"] = dto["effectiveEffort"]?.DeepClone();
+        status["allowedEfforts"] = new JsonArray(
+            (leaf?.AllowedEfforts ?? HostModels.Efforts)
+                .Select(value => (JsonNode?)JsonValue.Create(value))
+                .ToArray()
         );
+        status["defaultEffort"] = leaf is null ? "high" : leaf.DefaultEffort;
+        if (Math.Max(0, meta.NextMessageSeq - 1) is > 0 and var latest)
+            status["latestMessageSeq"] = latest;
+        status["activeMessages"] = meta.MessageCount;
+        status["tokenEstimate"] = summary.Estimate;
+        status["contextLimit"] = leaf?.ContextLimit ?? catalog.PresentationContextLimit;
+        status["images"] = summary.Images;
+        if (summary.Images > 0 && leaf?.ImageInput == false)
+            status["imagesSent"] = false;
+        if (summary.Usage is { } usage)
+        {
+            var cached = SessionWait.Number(usage["cachedTokens"]) ?? 0;
+            var input = SessionWait.Number(usage["inputTokens"]) ?? 0;
+            var output = SessionWait.Number(usage["outputTokens"]) ?? 0;
+            var last = new JsonObject
+            {
+                ["cachedTokens"] = cached,
+                ["inputTokens"] = input,
+                ["outputTokens"] = output,
+            };
+            if (SessionWait.Number(usage["reasoningTokens"]) is { } reasoning)
+                last["reasoningTokens"] = reasoning;
+            last["totalTokens"] = cached + input + output;
+            if (SessionWait.Number(usage["cost"]) is double cost)
+                last["cost"] = cost;
+            status["lastUsage"] = last;
+        }
+        if (meta.LastMessageTime > 0)
+            status["lastMessageAt"] = SessionStatus.Date(meta.LastMessageTime);
+        status["compactThresholdTokens"] = dto["effectiveCompactThresholdTokens"]?.DeepClone();
+        status["compactThresholdSource"] = summary.Threshold is > 0 ? "override" : "model-default";
+        if (meta.Cost is double totalCost)
+            status["totalCost"] = totalCost;
+        // A null child model follows the current model; a null child effort is unset.
+        status["childModel"] = meta.ChildModel;
+        status["effectiveChildModel"] = dto["effectiveChildModelKey"]?.DeepClone();
+        status["childEffort"] = meta.ChildEffort;
+        status["effectiveChildEffort"] = dto["effectiveChildEffort"]?.DeepClone();
+        status["runtime"] = SessionStatus.RuntimeFields(dto["runtimeState"]!.AsObject());
+        if (meta.Busy)
+            status["busy"] = true;
+        status["recentChildren"] = new JsonArray(
+            children.Select(row => (JsonNode?)SessionStatus.Row(row)).ToArray()
+        );
+        return status;
     }
 
     private bool IsCurrentSessionReference(SessionOwner source, string requested)

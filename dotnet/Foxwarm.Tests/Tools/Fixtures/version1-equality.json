@@ -576,6 +576,110 @@
   "local-deny-scripts / help:node --help": {
    "reason": "node create and node ensure mark --provider-id required, so their synopses show it; node status is available to the model (2026-11-19)",
    "now": "ok: node: List, select and manage Nodes; copy files between them.\n\n  node list\n      List Nodes and Providers.\n  node status\n      Show this Session's current Node and working directory.\n  node select <node-id>\n      Select this Session's execution Node.\n  node inspect [<node-id>] [options]\n      Show Node or Provider details.\n  node create --provider-id <text> [options]\n      Create a Node through its Provider.\n  node ensure [<node-id>] --provider-id <text> [options]\n      Create a Node through its Provider unless it already exists.\n  node destroy <node-id> [options]\n      Request a Node's re"
+  },
+  "empty / node-list": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  },
+  "empty / node-select-spelled": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  },
+  "empty / session-default": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  },
+  "empty / session-status": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  },
+  "deny-scripts / node-list": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  },
+  "deny-scripts / node-select-spelled": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  },
+  "deny-scripts / session-default": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  },
+  "deny-scripts / session-status": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  },
+  "deny-self-tools / node-list": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  },
+  "deny-self-tools / node-select-spelled": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  },
+  "deny-self-tools / session-default": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  },
+  "deny-self-tools / session-status": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  },
+  "deny-node-select-raw / node-list": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  },
+  "deny-node-select-raw / node-select-spelled": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  },
+  "deny-node-select-raw / session-default": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  },
+  "deny-node-select-raw / session-status": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  },
+  "node-list-only / node-list": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  },
+  "node-list-only / session-status": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  },
+  "ask-exec-deny-read / node-list": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  },
+  "ask-exec-deny-read / node-select-spelled": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  },
+  "ask-exec-deny-read / session-default": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  },
+  "ask-exec-deny-read / session-status": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  },
+  "local-deny-scripts / node-list": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  },
+  "local-deny-scripts / node-select-spelled": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  },
+  "local-deny-scripts / session-default": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
+  },
+  "local-deny-scripts / session-status": {
+   "reason": "builtin result shape (D-builtin-result-shapes): the call still succeeds; its record has no output sentence",
+   "now": "ok"
   }
  }
 }

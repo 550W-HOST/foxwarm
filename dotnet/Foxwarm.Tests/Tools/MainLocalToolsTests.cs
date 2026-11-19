@@ -308,7 +308,11 @@ public sealed partial class MainLocalToolsTests
         await using var f = await Fixture.Create();
         var result = await f.Call("list_agents", new JsonObject());
         Assert.Null(Error(result));
-        Assert.Contains("**main**", result["output"]!.GetValue<string>());
+        Assert.Null(result["output"]);
+        Assert.Contains(
+            "main",
+            result["agents"]!.AsArray().Select(agent => agent!["id"]!.GetValue<string>())
+        );
     }
 
     [Fact]
@@ -901,10 +905,11 @@ public sealed partial class MainLocalToolsTests
             new JsonObject { ["action"] = "status", ["sessionId"] = target.Id }
         );
         Assert.True(Error(status) is null, status.ToJsonString());
-        var output = status["output"]!.GetValue<string>();
-        Assert.Contains($"session id: `{target.Id}`", output);
-        Assert.Contains("/target/cwd", output);
-        Assert.Contains("messages: msg#1 latest · 1 active", output);
+        Assert.Null(status["output"]);
+        Assert.Equal(target.Id, status["sessionId"]!.GetValue<string>());
+        Assert.Equal("/target/cwd", status["cwd"]!.GetValue<string>());
+        Assert.Equal(1, SessionWait.Number(status["latestMessageSeq"]));
+        Assert.Equal(1, SessionWait.Number(status["activeMessages"]));
 
         var unified = await f.Call(
             "ctl",
@@ -916,7 +921,7 @@ public sealed partial class MainLocalToolsTests
             })
         );
         Assert.True(Error(unified) is null, unified.ToJsonString());
-        Assert.Contains($"session id: `{target.Id}`", unified["output"]!.GetValue<string>());
+        Assert.Equal(target.Id, unified["sessionId"]!.GetValue<string>());
 
         var previousSourceId = f.Owner.Id;
         await f.Manager.MoveIdentityAsync(
@@ -928,7 +933,7 @@ public sealed partial class MainLocalToolsTests
             new JsonObject { ["action"] = "status", ["sessionId"] = $"  {previousSourceId}  " }
         );
         Assert.True(Error(aliasStatus) is null, aliasStatus.ToJsonString());
-        Assert.Contains($"session id: `{f.Owner.Id}`", aliasStatus["output"]!.GetValue<string>());
+        Assert.Equal(f.Owner.Id, aliasStatus["sessionId"]!.GetValue<string>());
 
         var missing = await f.Call(
             "session",
@@ -1158,8 +1163,8 @@ public sealed partial class MainLocalToolsTests
         Assert.Contains("inspect", firstRequest.Body);
         var statusRequest = await peer.RequestAt(1).WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Contains("/target/cwd", statusRequest.Body);
-        Assert.Contains($"token estimate: ~{targetEstimate}", statusRequest.Body);
-        Assert.Contains("Recent child sessions", statusRequest.Body);
+        Assert.Contains($"tokenEstimate: {targetEstimate}", statusRequest.Body);
+        Assert.Contains("recentChildren:", statusRequest.Body);
 
         var attachRequest = await peer.RequestAt(2).WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Contains(parent.Id, attachRequest.Body);

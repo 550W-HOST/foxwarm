@@ -216,7 +216,12 @@ internal sealed partial class MessageRouter
             new JsonObject(),
             CancellationToken.None
         );
-        await command.Reply(SessionWait.Text(listed["output"]) ?? "");
+        await command.Reply(
+            SessionManager.ExecListText(
+                listed["execs"] as JsonArray ?? [],
+                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+            )
+        );
     }
 
     private async Task ExecStopAsync(UserCommand command)
@@ -229,7 +234,7 @@ internal sealed partial class MessageRouter
                 new JsonObject { ["execId"] = command.Text("execId") },
                 CancellationToken.None
             );
-            await command.Reply(SessionWait.Text(stopped["output"]) ?? "");
+            await command.Reply(SessionWait.Text(stopped["note"]) ?? "");
         }
         catch (Exception error)
             when (error is InvalidDataException or InvalidOperationException or IOException)

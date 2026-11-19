@@ -34,11 +34,20 @@ public sealed partial class TelegramChannelTests
         await File.WriteAllTextAsync(path, "file bytes");
         var sent = await f.ToolAsync("send_file", new JsonObject { ["filePath"] = path });
         Assert.Null(sent!["error"]);
-        var output = SessionWait.Text(sent["output"])!;
-        Assert.Contains("Delivered: 2", output);
-        Assert.Contains("beta:42` (send-only)", output);
-        Assert.Contains("text-only:42` (no file support)", output);
-        Assert.Contains("missing:42", output);
+        Assert.Null(sent["output"]);
+        Assert.Equal(2, sent["delivered"]!.AsArray().Count);
+        static string[] Outcomes(JsonNode? list) =>
+            list!
+                .AsArray()
+                .Select(item =>
+                    SessionWait.Text(item!["channelTargetId"]) + " " + SessionWait.Text(item["reason"])
+                )
+                .ToArray();
+        Assert.Equal(
+            new[] { "beta:42 send-only", "text-only:42 no file support" },
+            Outcomes(sent["skipped"]).Order().ToArray()
+        );
+        Assert.Equal("missing:42", Assert.Single(sent["failed"]!.AsArray())!["channelTargetId"]!.GetValue<string>());
         Assert.Single(peer.Sent("a", "sendDocument"));
         Assert.Empty(peer.Sent("b", "sendDocument"));
         Assert.NotNull(sent["fileDelivery"]);
@@ -186,7 +195,8 @@ public sealed partial class TelegramChannelTests
             new JsonObject { ["target"] = "config", ["filePath"] = candidate }
         );
         Assert.Null(installed!["error"]);
-        var toolResult = JsonNode.Parse(SessionWait.Text(installed["output"])!)!;
+        Assert.Null(installed["output"]);
+        var toolResult = installed;
         Assert.True(SessionCatalog.Flag(toolResult["saved"]));
         Assert.NotNull(toolResult["reload"]);
         Assert.Equal(

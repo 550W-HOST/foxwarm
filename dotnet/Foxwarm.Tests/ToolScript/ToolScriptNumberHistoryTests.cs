@@ -134,7 +134,9 @@ public sealed class ToolScriptNumberHistoryTests
         var listed = Assert.Single(
             responses["list_toolscript_runs"]["response"]!["runs"]!.AsArray()
         )!;
-        Assert.Equal(0.1, listed["result"]!["ratio"]!.GetValue<double>());
+        // The list row is a summary: results stay in the run's full record.
+        Assert.Equal("completed", SessionWait.Text(listed["status"]));
+        Assert.Null(listed["result"]);
 
         // Recorded timings are whole milliseconds, in the live result and the stored record.
         static void WholeMilliseconds(JsonNode? value)
@@ -146,7 +148,6 @@ public sealed class ToolScriptNumberHistoryTests
         var subcall = Assert.Single(inspected["subCalls"]!.AsArray())!;
         WholeMilliseconds(subcall["durationMs"]);
         WholeMilliseconds(inspected["lastHostCall"]!["durationMs"]);
-        WholeMilliseconds(listed["subCalls"]![0]!["durationMs"]);
         foreach (var response in responses.Values)
             WholeMilliseconds(response["executionTiming"]!["durationMs"]);
         WholeMilliseconds(

@@ -100,7 +100,7 @@ internal sealed partial class SessionManager
             ClaudeRuntimeState.RequireFoxwarm(owner, "Foxwarm context settings");
         var clear = OptionalBool(args, "clear") == true;
         var patch = new JsonObject();
-        var action = "status";
+        string? change = null;
         if (child)
         {
             if (clear && args.ContainsKey("model"))
@@ -124,7 +124,7 @@ internal sealed partial class SessionManager
         else if (clear)
         {
             patch["compactThresholdTokens"] = null;
-            action = "cleared";
+            change = "cleared";
         }
         else if (
             SessionWait.Number(args["thresholdTokens"]) is double threshold
@@ -133,40 +133,49 @@ internal sealed partial class SessionManager
         )
         {
             patch["compactThresholdTokens"] = threshold;
-            action = "updated";
+            change = "updated";
         }
         if (patch.Count > 0)
             await owner.Entry.SaveLane.CommitSettingsAsync(patch, models);
         var dto = owner.BuildDto();
+        var result = new JsonObject { ["sessionId"] = owner.Id };
         if (!child)
         {
-            var raw = dto["compactThresholdTokens"];
-            return Output(
-                $"Session `{id}` compact threshold {action}.\noverride: {(raw is null ? "inherit global default" : raw + " tokens")}\neffective: {dto["effectiveCompactThresholdTokens"]} tokens"
-            );
+            if (change is not null)
+                result["change"] = change;
+            // A null override inherits the global default.
+            result["thresholdTokens"] = dto["compactThresholdTokens"]?.DeepClone();
+            result["effectiveThresholdTokens"] = dto["effectiveCompactThresholdTokens"]?.DeepClone();
+            return result;
         }
-        var prefix =
-            patch.Count == 0 ? ""
-            : clear && !args.ContainsKey("effort") ? "Child default model cleared.\n"
-            : "Child model/effort defaults updated.\n";
-        var chain = string.Join(
-            " → ",
+        if (patch.Count > 0)
+            result["change"] = clear && !args.ContainsKey("effort") ? "cleared" : "updated";
+        // A null model follows the current model; a null effort is unset.
+        result["model"] = dto["childModelDefault"]?.DeepClone();
+        result["effectiveModel"] = dto["effectiveChildModelKey"]?.DeepClone();
+        result["policySource"] = dto["childModelPolicySource"]?.DeepClone();
+        // From the root ancestor to this Session; the supplying hop is marked.
+        result["policyChain"] = new JsonArray(
             dto["childPolicyChain"]!
                 .AsArray()
                 .OfType<JsonObject>()
                 .Reverse()
                 .Select(hop =>
-                    (hop["supplies"]?.GetValue<bool>() == true ? "*" : "")
-                    + (
-                        SessionWait.Text(hop["childModelDefault"])
-                        ?? SessionWait.Text(hop["modelKey"])
-                        ?? "follow"
-                    )
-                )
+                {
+                    var row = new JsonObject { ["sessionId"] = hop["sessionId"]?.DeepClone() };
+                    if (hop["childModelDefault"] is { } childModel)
+                        row["childModel"] = childModel.DeepClone();
+                    if (hop["modelKey"] is { } model)
+                        row["model"] = model.DeepClone();
+                    if (hop["supplies"]?.GetValue<bool>() == true)
+                        row["supplies"] = true;
+                    return (JsonNode?)row;
+                })
+                .ToArray()
         );
-        return Output(
-            prefix
-                + $"Session `{id}` child model/effort defaults:\nmodel override: {SessionWait.Text(dto["childModelDefault"]) ?? "follow current model"}\npolicy source: {dto["childModelPolicySource"]}\neffective model: `{dto["effectiveChildModelKey"]}`\npolicy chain: {chain}\neffort override: {SessionWait.Text(dto["childEffortDefault"]) ?? "unset"}\neffective effort: {dto["effectiveChildEffort"]}\nallowed: {string.Join(", ", dto["childEffortAllowed"]!.AsArray().Select(value => value!.GetValue<string>()))}"
-        );
+        result["effort"] = dto["childEffortDefault"]?.DeepClone();
+        result["effectiveEffort"] = dto["effectiveChildEffort"]?.DeepClone();
+        result["allowedEfforts"] = dto["childEffortAllowed"]?.DeepClone();
+        return result;
     }
 }

@@ -409,7 +409,7 @@ public sealed partial class NodeAuthorizationTreeTests
         await f.Policy("version: 1\nrules:\n- {op: env.exec, action: deny}\n");
         var allowed = await f.Call("node_pair_approve", new JsonObject { ["pendingId"] = pending["id"]!.DeepClone() });
         Assert.Null(allowed?["error"]);
-        Assert.Equal("fact-paired", SessionWait.Text(JsonNode.Parse(SessionWait.Text(allowed?["output"])!)!["nodeId"]));
+        Assert.Equal("fact-paired", SessionWait.Text(allowed?["nodeId"]));
         // The assigned ID is the fact: a deny on the suffixed ID it would get applies.
         var second = Pending("fact-paired");
         await f.Policy("version: 1\nrules:\n- {op: node.trust, node: fact-paired-2, action: deny}\n");

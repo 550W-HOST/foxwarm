@@ -123,10 +123,9 @@ internal sealed partial class SessionManager
         await owner.Entry.SaveLane.CommitNodeAsync(id, clearCwd);
         return new JsonObject
         {
-            ["output"] =
-                $"Current node changed to `{id}`. {(clearCwd ? "Session cwd cleared." : "Session cwd retained.")} Node default cwd: `{defaultCwd}`.",
             ["nodeId"] = id,
             ["defaultCwd"] = defaultCwd,
+            ["cwdCleared"] = clearCwd,
         };
     }
 
@@ -225,7 +224,7 @@ internal sealed partial class SessionManager
             text = text.Replace(pairing, "PAIRING_TOKEN", StringComparison.Ordinal);
         var result = JsonNode.Parse(text)!.AsObject();
         result["pairingTokenFile"] = path;
-        return new() { ["output"] = result.ToJsonText() };
+        return result;
     }
 
     internal JsonObject NodePairList(JsonObject args)
@@ -233,13 +232,13 @@ internal sealed partial class SessionManager
         ToolRegistry.Keys(args, []);
         return new()
         {
-            ["output"] = new JsonArray(
+            ["requests"] = new JsonArray(
                 Nodes
                     .ListPending()
                     .Where(value => value?["approvedNodeId"] is null)
                     .Select(value => value?.DeepClone())
                     .ToArray()
-            ).ToJsonText(),
+            ),
         };
     }
 
@@ -270,6 +269,6 @@ internal sealed partial class SessionManager
             ToolRegistry.Text(args, "nodeId"),
             RequireCaller
         );
-        return new() { ["output"] = result.ToJsonText() };
+        return result;
     }
 }

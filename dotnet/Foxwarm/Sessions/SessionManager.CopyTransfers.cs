@@ -118,23 +118,24 @@ internal sealed partial class SessionManager
         delayStop.Cancel();
         if (!background)
         {
-            var result = await transfer.Work;
+            var result = (JsonObject)(await transfer.Work).DeepClone();
             if (warning is not null)
-                result["output"] = warning + "\n" + SessionWait.Text(result["output"]);
+                result["warning"] = warning;
             return result;
         }
         var copied = Interlocked.Read(ref transfer.Copied);
         var size = Interlocked.Read(ref transfer.Size);
-        return new JsonObject
+        var running = new JsonObject
         {
-            ["output"] =
-                (warning is null ? "" : warning + "\n")
-                + $"Copy continues in the background ({transfer.Id}).",
             ["transferId"] = transfer.Id,
             ["bytesCopied"] = copied,
             ["sizeBytes"] = size < 0 ? null : JsonValue.Create(size),
             ["elapsed"] = transfer.Clock.Elapsed.TotalSeconds,
+            ["note"] = "Copy continues in the background; its completion is reported as an event.",
         };
+        if (warning is not null)
+            running["warning"] = warning;
+        return running;
     }
 
     private async Task<JsonObject> CopyTransferCoreAsync(CopyTransfer transfer, JsonObject args)
@@ -193,8 +194,8 @@ internal sealed partial class SessionManager
             var result = await writing!;
             return new JsonObject
             {
-                ["output"] =
-                    $"Copied `{transfer.SourcePath}` on `{transfer.Source}` to `{transfer.TargetPath}` on `{transfer.Target}` ({source.Length} bytes).",
+                ["sourceNode"] = transfer.Source,
+                ["sourcePath"] = transfer.SourcePath,
                 ["targetNode"] = transfer.Target,
                 ["fullPath"] = result.Path,
                 ["sizeBytes"] = source.Length,
@@ -353,12 +354,6 @@ internal sealed partial class SessionManager
                         ["status"] = completed.Status,
                         ["sizeBytes"] = completed.Size,
                         ["sha256"] = completed.Sha256,
-                        ["output"] = completed.Status switch
-                        {
-                            "completed" => "Copy completed.",
-                            "cancelled" => "Copy was cancelled.",
-                            _ => "Copy failed.",
-                        },
                     };
             }
             if (transfer is null || !ReferenceEquals(transfer.Owner, owner) || !transfer.HandedOff)
@@ -375,12 +370,7 @@ internal sealed partial class SessionManager
         catch (ObjectDisposedException) { }
         if (transfer.Work.IsCompleted)
             return await CompletedCopyReceiptAsync(transfer);
-        return new JsonObject
-        {
-            ["output"] = $"Cancellation requested for copy {id}.",
-            ["transferId"] = id,
-            ["status"] = "cancelling",
-        };
+        return new JsonObject { ["transferId"] = id, ["status"] = "cancelling" };
     }
 
     private static async Task<JsonObject> CompletedCopyReceiptAsync(CopyTransfer transfer)
@@ -395,10 +385,7 @@ internal sealed partial class SessionManager
             {
                 ["transferId"] = transfer.Id,
                 ["status"] = transfer.Stop.IsCancellationRequested ? "cancelled" : "failed",
-                ["output"] =
-                    "Copy "
-                    + (transfer.Stop.IsCancellationRequested ? "was cancelled: " : "failed: ")
-                    + error.Message,
+                ["reason"] = error.Message,
             };
         }
     }

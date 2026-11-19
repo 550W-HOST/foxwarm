@@ -1365,9 +1365,7 @@ internal sealed partial class SessionToolExecutor(
             handlers[name] = (owner, args, token) =>
                 MemoryTools.ExecuteAsync(owner.Hosted, owner.Manager, name, args, token);
         handlers["list_agents"] = (owner, _, _) =>
-            Task.FromResult(
-                new JsonObject { ["output"] = owner.Manager.ListAgentsText(owner.Hosted) }
-            );
+            Task.FromResult(owner.Manager.ListAgents(owner.Hosted));
         handlers["set_config"] = (owner, args, token) =>
             owner.Manager.InstallConfigAsync(
                 owner.Hosted,
@@ -1405,21 +1403,15 @@ internal sealed partial class SessionToolExecutor(
                 args,
                 token
             );
-        handlers["explain_tool_authorization"] = async (owner, args, token) =>
-        {
-            var explanation = await owner.Manager.ExplainToolAuthorizationAsync(
+        handlers["explain_tool_authorization"] = (owner, args, token) =>
+            owner.Manager.ExplainToolAuthorizationAsync(
                 owner.Hosted,
                 owner.Files ?? throw new NotSupportedException("This executor has no file reader."),
                 args,
                 token
             );
-            // ToolScript receives the structure; a model receives its JSON text.
-            return owner.Programmatic
-                ? explanation
-                : new JsonObject { ["output"] = explanation.ToJsonText() };
-        };
         handlers["node"] = (owner, args, token) =>
-            owner.Manager.ExecuteNodeToolAsync(owner.Hosted, args, token, owner.Programmatic);
+            owner.Manager.ExecuteNodeToolAsync(owner.Hosted, args, token);
         handlers["node_create_auth_token"] = (owner, args, token) =>
             owner.Manager.CreateNodeAuthTokenAsync(owner.Hosted, args, token);
         handlers["node_remove"] = (owner, args, token) =>

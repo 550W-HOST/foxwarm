@@ -159,8 +159,8 @@ public sealed partial class AgentRulesTreeTests
                 ),
             }
         );
-        Assert.True(explainResult?["output"] is not null, explainResult?.ToJsonString());
-        var explained = JsonNode.Parse(SessionWait.Text(explainResult!["output"])!)!;
+        Assert.True(explainResult?["probes"] is not null, explainResult?.ToJsonString());
+        var explained = explainResult!;
         var active = explained["probes"]![0]!["active"]!;
         Assert.Equal("deny", SessionWait.Text(active["decision"]));
         Assert.Equal("""["provider-key"]""", active["facts"]!["secrets"]!.ToJsonString());

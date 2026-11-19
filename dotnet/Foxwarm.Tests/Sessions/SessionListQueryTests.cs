@@ -4,12 +4,16 @@ namespace Foxwarm.Tests;
 
 public sealed class SessionListQueryTests
 {
-    private static async Task<string> List(OutboundMcpFixture f, JsonObject args)
+    private static async Task<JsonObject> List(OutboundMcpFixture f, JsonObject args)
     {
         args["action"] = "list";
         var result = await f.Manager.ObserveAsync(f.First, "session", args);
-        return result["output"]!.GetValue<string>();
+        Assert.Null(result["output"]);
+        return result;
     }
+
+    private static string[] Ids(JsonObject list) =>
+        list["sessions"]!.AsArray().Select(row => row!["id"]!.GetValue<string>()).ToArray();
 
     [Fact]
     public async Task List_query_filters_metadata_within_scope_before_pagination()
@@ -32,20 +36,21 @@ public sealed class SessionListQueryTests
         );
 
         var local = await List(f, new JsonObject { ["query"] = "  RELEASE " });
-        Assert.Contains("Found 1 session(s) matching `RELEASE`. Showing 1-1.", local);
-        Assert.Contains(named.Id, local);
-        Assert.DoesNotContain(other.Id, local);
+        Assert.Equal("RELEASE", local["query"]!.GetValue<string>());
+        Assert.Equal(1, local["total"]!.GetValue<long>());
+        Assert.Equal(0, local["start"]!.GetValue<int>());
+        Assert.Equal([named.Id], Ids(local));
+        Assert.Null(local["nextPage"]);
 
         var all = await List(f, new JsonObject { ["query"] = "release", ["scope"] = "all" });
-        Assert.Contains("Found 2 session(s) matching `release`.", all);
-        Assert.Contains(named.Id, all);
-        Assert.Contains(other.Id, all);
+        Assert.Equal(2, all["total"]!.GetValue<long>());
+        Assert.Contains(named.Id, Ids(all));
+        Assert.Contains(other.Id, Ids(all));
 
         // Whole-string literal match: separate words do not match independently.
-        Assert.Contains(
-            "No sessions found matching `notes release`.",
-            await List(f, new JsonObject { ["query"] = "notes release" })
-        );
+        var none = await List(f, new JsonObject { ["query"] = "notes release" });
+        Assert.Equal(0, none["total"]!.GetValue<long>());
+        Assert.Empty(Ids(none));
 
         var page = await List(
             f,
@@ -56,17 +61,17 @@ public sealed class SessionListQueryTests
                 ["count"] = 1,
             }
         );
-        Assert.Contains("Found 3 session(s) matching `main`. Showing 2-2.", page);
-        var next = page.Split('\n')
-            .Single(line => line.StartsWith("Next page: ", StringComparison.Ordinal));
-        Assert.Equal("Next page: ctl session list main --start 2 --count 1", next);
+        Assert.Equal(3, page["total"]!.GetValue<long>());
+        Assert.Equal(1, page["start"]!.GetValue<int>());
+        Assert.Single(Ids(page));
+        var next = page["nextPage"]!.GetValue<string>();
+        Assert.Equal("ctl session list main --start 2 --count 1", next);
         // The hint is a command the parser reads back to the same next-page arguments.
-        var hinted = CtlTestArgs.Hint(next["Next page: ".Length..], "session");
+        var hinted = CtlTestArgs.Hint(next, "session");
         Assert.Equal("""{"query":"main","start":2,"count":1}""", hinted.ToJsonString());
-        Assert.Contains(
-            "No sessions found in the requested range. Total sessions matching `main`: 3.",
-            await List(f, new JsonObject { ["query"] = "main", ["start"] = 5 })
-        );
+        var beyond = await List(f, new JsonObject { ["query"] = "main", ["start"] = 5 });
+        Assert.Equal(3, beyond["total"]!.GetValue<long>());
+        Assert.Empty(Ids(beyond));
 
         foreach (var invalid in new JsonNode?[] { "   ", new string('x', 257), 3, null })
             await Assert.ThrowsAsync<InvalidDataException>(() =>

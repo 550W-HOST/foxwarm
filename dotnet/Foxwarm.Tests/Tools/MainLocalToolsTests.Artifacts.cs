@@ -65,10 +65,8 @@ public sealed partial class MainLocalToolsTests
         );
         Assert.Null(get["error"]);
         Assert.Null(get["artifact"]);
-        Assert.Equal(
-            1,
-            SessionWait.Number(JsonNode.Parse(SessionWait.Text(get["output"])!)!["revision"])
-        );
+        Assert.Null(get["output"]);
+        Assert.Equal(1, SessionWait.Number(get["metadata"]!["revision"]));
         // Generic file policy and independent concrete read policy are both required.
         var policy = Path.Combine(f.Temp.Path, "data", "state", "tool-authorization.yaml");
         await File.WriteAllTextAsync(

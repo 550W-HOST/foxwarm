@@ -86,7 +86,7 @@ internal sealed partial class SessionManager
     // The model-facing Agent list: Agents that own a listed Session or that an Agent-targeted
     // action might address, with counts of listed Sessions only. The caller's Agent is always
     // listed. Administrator surfaces use AgentListEntries unfiltered.
-    internal string ListAgentsText(SessionOwner caller)
+    internal JsonObject ListAgents(SessionOwner caller)
     {
         var visibility = SessionVisibilityFor(caller);
         var rows = AgentListEntries()
@@ -102,26 +102,26 @@ internal sealed partial class SessionManager
                 || visibility.AgentAddressable(row.Id)
             )
             .ToArray();
-        if (rows.Length == 0)
-            return "No agents found.";
-        var result = $"Found {rows.Length} agent(s):\n\n";
+        var agentRows = new JsonArray();
         foreach (var row in rows)
         {
-            result +=
-                $"- **{row.Id}**"
-                + (
-                    row.SessionCount > 0
-                        ? $" ({row.SessionCount} session{(row.SessionCount == 1 ? "" : "s")})"
-                        : ""
-                )
-                + (row.Inherit is null ? "" : $" [inherits: {row.Inherit}]")
-                + (row.CreatedBy is null ? "" : $" [created by: {row.CreatedBy}]")
-                + $" [local rules:{row.RuleCount}]"
-                + (row.DefaultNode is null ? "" : $" [default Node: {row.DefaultNode}]")
-                + (row.DefaultCwd is null ? "" : $" [default cwd: {row.DefaultCwd}]")
-                + "\n";
+            var agent = new JsonObject
+            {
+                ["id"] = row.Id,
+                ["sessionCount"] = row.SessionCount,
+            };
+            if (row.Inherit is not null)
+                agent["inherit"] = row.Inherit;
+            if (row.CreatedBy is not null)
+                agent["createdBy"] = row.CreatedBy;
+            agent["ruleCount"] = row.RuleCount;
+            if (row.DefaultNode is not null)
+                agent["defaultNode"] = row.DefaultNode;
+            if (row.DefaultCwd is not null)
+                agent["defaultCwd"] = row.DefaultCwd;
+            agentRows.Add(agent);
         }
-        return result.TrimEnd();
+        return new JsonObject { ["agents"] = agentRows };
     }
 
     internal AgentListEntry[] AgentListEntries()

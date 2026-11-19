@@ -230,9 +230,10 @@ public sealed partial class NodeFileTransferTests
                 new JsonObject { ["transferId"] = id },
                 default
             );
-            if (SessionWait.Text(completed["output"]) == "Copy failed.")
+            // The retained summary of a finished background copy has no failure reason.
+            if (SessionWait.Text(completed["status"]) == "failed" && completed["reason"] is null)
             {
-                Assert.Equal("failed", SessionWait.Text(completed["status"]));
+                Assert.Null(completed["output"]);
                 Assert.DoesNotContain("private source path", completed.ToJsonString());
                 break;
             }
@@ -278,7 +279,9 @@ public sealed partial class NodeFileTransferTests
         foreground.Cancel();
         var receipt = await copying.WaitAsync(TimeSpan.FromSeconds(5));
         var id = receipt!["transferId"]!.ToString();
-        Assert.Contains("using 60s", receipt["output"]!.ToString());
+        Assert.Contains("using 60s", receipt["warning"]!.ToString());
+        Assert.NotNull(receipt["note"]);
+        Assert.Null(receipt["output"]);
         using var http = new HttpClient { BaseAddress = new Uri(f.App.Urls.Single()) };
         http.DefaultRequestHeaders.Add("X-Foxwarm-Node", "stop-node");
         http.DefaultRequestHeaders.Authorization = new(
@@ -314,9 +317,12 @@ public sealed partial class NodeFileTransferTests
                     new JsonObject { ["transferId"] = id },
                     default
                 );
-                if (SessionWait.Text(completed["output"]) == "Copy was cancelled.")
+                if (
+                    SessionWait.Text(completed["status"]) == "cancelled"
+                    && completed["reason"] is null
+                )
                 {
-                    Assert.Equal("cancelled", SessionWait.Text(completed["status"]));
+                    Assert.Null(completed["output"]);
                     Assert.DoesNotContain("source.bin", completed.ToJsonString());
                     break;
                 }
