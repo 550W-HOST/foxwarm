@@ -30,7 +30,8 @@ Provides shared file system tools, shell execution and utility functions used by
 - `resolveExecCwd`, `validateResolvedExecCwd`, `resolveValidatedExecCwd` — exec working directory resolution and validation
 - `estimateTokenCount` — lightweight token count estimator
 - `formatStructuredValue`, `formatToolResponsePayload` — the text of a tool result as models and the WebUI full-result view see it; [D-tool-result-text](#d-tool-result-text)
-- `formatCompactObjectPreview` — WebUI previews of call arguments and compact values (unwraps any single-key object)
+- `formatToolArguments`, `formatToolArgumentValue` — display text of tool-call arguments, expanded or one-line; [D-tool-call-argument-text](#d-tool-call-argument-text)
+- `formatCompactObjectPreview` — WebUI previews of compact result values (unwraps any single-key object)
 - `dumpToolYaml`, `containsMultilineString` — the YAML emitter behind both formatters (`toolResponseYaml.ts`)
 - `formatToolScriptExecutionResponse` — literal print/return sections and block-YAML metadata at the exact outer execution presentation boundary; [canonical contract](../threads/tool-dispatch-node-execution.md#d-dispatch-toolscript-execution-projection)
 - `escapeFoxwarmAttributeValue`, `escapeFoxwarmTextContent`, `formatFoxwarmAttributes`, `formatFoxwarmAttachmentTag`, `buildFoxwarmAttachmentText` — browser/server parity helpers for safe ordered Foxwarm metadata attributes, explicitly structured nested text, and attachment descriptors
@@ -88,9 +89,10 @@ Provides shared file system tools, shell execution and utility functions used by
 | `estimateTokenCount(text)` | ~1 | Estimates token count using codepoint heuristics |
 | `formatStructuredValue(value)` | `toolResponseFormatting.ts` | String as is, number/boolean as text, mapping or sequence as readable-layout YAML |
 | `formatToolResponsePayload(response)` | `toolResponseFormatting.ts` | Unwraps a sole `output` key, then `formatStructuredValue` |
-| `dumpToolYaml(value, layout)` | `toolResponseYaml.ts` | js-yaml 4.1.1 dumper subset with the `readable` layout or a js-yaml `flowLevel` |
+| `dumpToolYaml(value, layout)` | `toolResponseYaml.ts` | js-yaml 4.1.1 dumper subset with the `readable`, `arguments` or `argumentsLine` layout or a js-yaml `flowLevel` |
+| `formatToolArguments(args, { singleLine })` / `formatToolArgumentValue(value, { singleLine })` | `toolResponseFormatting.ts` | Tool-call argument text: sole-argument unwrap, then the `arguments` or `argumentsLine` layout; one value as raw string or YAML flow |
 | `formatToolScriptExecutionResponse(response)` | `toolResponseFormatting.ts` | Formats cleaned outer execution results while preserving native values and guard-summary locators |
-| `formatCompactObjectPreview(response)` | ~42 | Formats compact preview of single-key objects |
+| `formatCompactObjectPreview(response)` | ~42 | Formats compact preview of single-key result objects |
 | `parseSessionLinkText(text)` | (webuiToolRendering.ts) | Parses legacy session references plus recognized Session reference fields in XML attributes and JSON/YAML-shaped text into link/text segments |
 | `shouldUseStreamingToolPlaceholder(options)` | (webuiToolRendering.ts) | Detects synthetic streaming tool calls whose args should not be parsed yet |
 
@@ -137,6 +139,16 @@ Provides shared file system tools, shell execution and utility functions used by
 Previous behavior, for comparison: js-yaml with `flowLevel: 1` wrote every value below a top-level key in flow style, so multi-line strings, including top-level `error` messages, were double-quoted one-liners (`error: "Traceback:\n..."`), arrays of rows were one long line, and a top-level array was a single flow sequence. The C# port quoted every non-identifier string as JSON, which diverged from the WebUI.
 
 Request-prefix consequence, accepted once (user decision 2026-11-19): already persisted results render with the new text after deployment, so the first request of each existing Session after the upgrade changes its history prefix. No legacy rendering branch keeps the old text. Formatting is a pure function of the persisted value, so consecutive requests after the change still extend one byte-identical prefix ([D-request-prefix-stability](../overview.md#d-request-prefix-stability)).
+
+### D-tool-call-argument-text
+
+**User decision (2026-11-20).** Tool-call arguments have one layout on every surface that shows them as text: each top-level argument on its own line as `key: value`, with nested values in YAML flow style (`waitAnySessions: [a]`, `model: {key: opus}`, `edits: [{oldText: "a\nb"}]`). This is the js-yaml `flowLevel: 1` form the WebUI used before tool results moved to the `readable` layout; tool results keep [D-tool-result-text](#d-tool-result-text) unchanged. A collapsed card folds the lines into `waitAnySessions: [a] anotherProp: anotherValue`.
+
+- `formatToolArguments(args, { singleLine })` (C# `ToolResponseFormatting.FormatArguments`) is the one formatter. A sole argument shows only its value and an empty argument object shows nothing, as both previews did before. A value is a string as it is, otherwise YAML flow (`formatToolArgumentValue`).
+- Two variants of the layout in the shared emitter. `arguments` (expanded views) writes a top-level multi-line string as a literal block (`message: |-`). `argumentsLine` (one-line surfaces) is exactly `flowLevel 1`: such a string is a double-quoted escaped scalar, and a sole multi-line string value is escaped the same way, so line breaks in one-line text only separate arguments. The two variants are equal whenever no top-level string has a line break.
+- Scalars, quoting and key order follow the shared emitter, so the C# text equals the TypeScript text; the `arguments` cases of `toolResponseFormatting.fixtures.json` run against both, and the TypeScript test checks `argumentsLine` against js-yaml.
+- Main server previews (`SessionToolExecutor.ToolArgsPreview`, and the retained TypeScript `buildToolArgsPreview`) use the one-line variant for tools without a special case. They feed runtime status and the Inspector `Arguments` field, approval `summary`, activity summaries and the verbose channel `🛠 [tool]: ...` notice, which include one-line surfaces. Their special cases (exec/run_script/call_tool/ctl purpose or command, edit/write file path or patch text, read path and range, `add_secret` name only) and the 200-character cap are unchanged.
+- WebUI surfaces are listed with the timeline: [argument text](./webui-tool-timeline.md#d-webui-tool-call-argument-text). Approval review of the full arguments and the JSON inspector stay exact JSON.
 
 ### D-unified-edit
 
