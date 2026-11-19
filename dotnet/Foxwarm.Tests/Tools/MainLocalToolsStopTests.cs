@@ -66,10 +66,7 @@ public sealed partial class MainLocalToolsTests
             .Select(part => part!["functionResponse"]!)
             .ToArray();
         Assert.Equal(2, responses.Length);
-        Assert.Equal(
-            "tool_call_cancelled",
-            responses[1]["response"]!["error"]!["type"]!.GetValue<string>()
-        );
+        Assert.Equal("tool_call_cancelled", responses[1]["response"]!.FailureCode());
         Assert.True(responses[1]["response"]!["canceled"]!.GetValue<bool>());
         if (nested)
         {

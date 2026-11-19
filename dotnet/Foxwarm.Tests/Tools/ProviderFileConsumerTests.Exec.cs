@@ -182,7 +182,7 @@ public sealed partial class ProviderFileConsumerTests
         {
             Success(await f.Manager.SelectNodeAsync(f.Owner, f.Node));
             var value = await f.Call("exec", Exec("printf x >> effect"));
-            Assert.Contains("outcome is unknown", value["error"]!["message"]!.GetValue<string>());
+            Assert.Contains("outcome is unknown", value.FailureMessage()!);
             await Until(() => Task.FromResult(File.Exists(f.FilePath("effect"))));
             Assert.Equal("x", await File.ReadAllTextAsync(f.FilePath("effect")));
             Assert.Single(

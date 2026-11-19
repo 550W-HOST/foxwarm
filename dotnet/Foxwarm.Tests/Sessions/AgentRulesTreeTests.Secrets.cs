@@ -86,8 +86,8 @@ public sealed partial class AgentRulesTreeTests
             f.ToolAsync("mcp_config", Obj(args), owner);
         void SecretsDenied(JsonNode? result)
         {
-            Assert.Equal("tool_authorization_denied", SessionWait.Text(result?["error"]?["type"]));
-            Assert.Contains("`provider-key`", SessionWait.Text(result?["error"]?["message"]));
+            Assert.Equal("tool_authorization_denied", result?.FailureCode());
+            Assert.Contains("`provider-key`", result?.FailureMessage());
         }
         string Installed() => File.ReadAllText(f.Configuration.ActivePath);
 

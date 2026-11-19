@@ -276,7 +276,7 @@ public sealed partial class SessionCreationParityTests
                 ["convertSession"] = true,
             }
         );
-        Assert.Equal("tool_authorization_denied", denied!["error"]!["type"]!.ToString());
+        Assert.Equal("tool_authorization_denied", denied!.FailureCode()!);
         Assert.DoesNotContain("policy-denied", f.Manager.Agents());
         await f.Manager.CreateAgentAsync("reserved-conversion");
         await f.Manager.DeleteAgentAsync("reserved-conversion");

@@ -215,7 +215,7 @@ public sealed partial class SessionCreationParityTests
         var child = await f.Manager.CreateNamedAsync("worker", "owned", null, null);
         Assert.Equal("worker-node", f.Manager.CurrentNode(child));
         var denied = await f.ToolAsync("skill", new JsonObject { ["action"] = "list" }, child);
-        Assert.Equal("tool_authorization_denied", denied!["error"]!["type"]!.ToString());
+        Assert.Equal("tool_authorization_denied", denied!.FailureCode()!);
         // The retired legacy isolation parameters are unknown arguments now.
         foreach (var retired in new[] { "isolatedNode", "toolRules" })
         {
@@ -420,7 +420,7 @@ public sealed partial class SessionCreationParityTests
             "refresh_session_snapshot",
             new JsonObject { ["sessionId"] = target.Id }
         );
-        Assert.Equal("tool_authorization_denied", denied!["error"]!["type"]!.ToString());
+        Assert.Equal("tool_authorization_denied", denied!.FailureCode()!);
     }
 
     [Fact]

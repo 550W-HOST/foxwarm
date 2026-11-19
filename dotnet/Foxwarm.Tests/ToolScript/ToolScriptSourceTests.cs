@@ -181,6 +181,6 @@ public sealed class ToolScriptSourceTests
             found["output"]!.GetValue<string>()
         );
         var denied = await f.Call("run_script", new JsonObject { ["filePath"] = "missing.py" });
-        Assert.Equal("tool_authorization_denied", denied["error"]!["type"]!.GetValue<string>());
+        Assert.Equal("tool_authorization_denied", denied.FailureCode()!);
     }
 }

@@ -434,7 +434,7 @@ public sealed partial class ToolAuthorizationEffectsTests
         );
         Assert.Contains(
             "Invalid tool-rules candidate",
-            invalid["error"]!["message"]!.GetValue<string>()
+            invalid.FailureMessage()!
         );
         Assert.NotNull(
             Error(

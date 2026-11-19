@@ -11,7 +11,7 @@ public sealed class MainFileDeliveryTests
 {
     private static JsonObject Args(string path) => new() { ["filePath"] = path };
 
-    private static string? Error(JsonObject value) => SessionWait.Text(value["error"]?["type"]);
+    private static string? Error(JsonObject value) => value.FailureIdentity();
 
     private static JsonObject Image(JsonObject reference) =>
         new()
@@ -633,7 +633,7 @@ public sealed class MainFileDeliveryTests
             "image_write_to_file",
             new JsonObject { ["id"] = "heic", ["filePath"] = path }
         );
-        Assert.Equal("image_export_partial", Error(partial));
+        Assert.NotNull(partial.FailureMessage());
         Assert.True(partial["fileWritten"]!.GetValue<bool>());
         Assert.Equal(path, SessionWait.Text(partial["fullPath"]));
         Assert.Equal(bytes, await File.ReadAllBytesAsync(path));

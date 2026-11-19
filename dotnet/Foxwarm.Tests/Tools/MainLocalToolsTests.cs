@@ -10,7 +10,7 @@ namespace Foxwarm.Tests;
 
 public sealed partial class MainLocalToolsTests
 {
-    private static string? Error(JsonObject result) => SessionWait.Text(result["error"]?["type"]);
+    private static string? Error(JsonObject result) => result.FailureIdentity();
 
     private sealed class Fixture : IAsyncDisposable
     {
@@ -115,13 +115,11 @@ public sealed partial class MainLocalToolsTests
         Assert.Contains("`folder/` (dir)", output);
         Assert.Contains("`link` (symlink)", output);
         Assert.Contains("`broken` (symlink)", output);
-        Assert.Equal(
-            "not_file",
-            Error(await f.Call("read", new JsonObject { ["filePath"] = "kinds/pipe" }))
+        Assert.NotNull(
+            ToolFailure.Message(await f.Call("read", new JsonObject { ["filePath"] = "kinds/pipe" }))
         );
-        Assert.Equal(
-            "not_file",
-            Error(
+        Assert.NotNull(
+            ToolFailure.Message(
                 await f.Call(
                     "write",
                     new JsonObject
@@ -227,8 +225,8 @@ public sealed partial class MainLocalToolsTests
                     "*** Begin Patch\n*** Update File: notes/partial.md\n-old\n+new\n*** Update File: notes/missing.md\n-old\n+new\n*** End Patch",
             }
         );
-        Assert.Equal("tool_error", Error(partial));
-        Assert.Contains("Applied operations:", partial["error"]!["message"]!.GetValue<string>());
+        Assert.NotNull(partial.FailureMessage());
+        Assert.Contains("Applied operations:", partial.FailureMessage()!);
         Assert.Equal(
             "new",
             await File.ReadAllTextAsync(Path.Combine(memory, "notes", "partial.md"))
@@ -875,8 +873,8 @@ public sealed partial class MainLocalToolsTests
         Assert.False(f.Owner.Entry.Snapshot().Stopping);
 
         var missing = await f.Call("stop_session", new JsonObject { ["sessionId"] = "missing" });
-        Assert.Equal("tool_error", Error(missing));
-        Assert.Contains("not found", missing["error"]!["message"]!.GetValue<string>());
+        Assert.NotNull(missing.FailureMessage());
+        Assert.Contains("not found", missing.FailureMessage()!);
     }
 
     [Fact]
@@ -936,10 +934,10 @@ public sealed partial class MainLocalToolsTests
             "session",
             new JsonObject { ["action"] = "status", ["sessionId"] = "missing-target" }
         );
-        Assert.Equal("agent_tool_error", Error(missing));
+        Assert.NotNull(missing.FailureMessage());
         Assert.Contains(
             "Session `missing-target` not found.",
-            missing["error"]!["message"]!.GetValue<string>()
+            missing.FailureMessage()!
         );
         Assert.Equal(before, f.Manager.Owners().Count());
     }
@@ -1024,8 +1022,8 @@ public sealed partial class MainLocalToolsTests
                 ["parentSessionId"] = child.Id,
             }
         );
-        Assert.Equal("agent_tool_error", Error(cycle));
-        Assert.Contains("cycle", cycle["error"]!["message"]!.GetValue<string>());
+        Assert.NotNull(cycle.FailureMessage());
+        Assert.Contains("cycle", cycle.FailureMessage()!);
     }
 
     [Fact]

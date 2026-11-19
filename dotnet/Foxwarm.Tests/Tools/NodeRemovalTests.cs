@@ -88,7 +88,7 @@ public sealed class NodeRemovalTests
                 ["args"] = new JsonObject { ["nodeId"] = "offline" },
             })
         );
-        Assert.Equal("tool_authorization_denied", denied["error"]!["type"]!.GetValue<string>());
+        Assert.Equal("tool_authorization_denied", denied.FailureCode()!);
         Assert.True(manager.Nodes.Registry.Authenticate("offline", auth));
         await File.WriteAllTextAsync(
             Path.Combine(data, "state", "tool-authorization.yaml"),

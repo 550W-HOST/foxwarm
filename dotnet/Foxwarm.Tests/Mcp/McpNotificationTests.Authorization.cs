@@ -193,7 +193,7 @@ public sealed partial class McpNotificationTests
         );
         Assert.Contains(
             "Synthetic transport failure",
-            failed!["error"]!["message"]!.GetValue<string>()
+            failed!.FailureMessage()!
         );
         Assert.Single(sent);
     }

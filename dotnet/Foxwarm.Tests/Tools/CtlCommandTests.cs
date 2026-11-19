@@ -878,7 +878,7 @@ public sealed class CtlCommandTests
         foreach (var command in new[] { "help", "tool", "tool --help", "tool search --help", "tool call --help", "tool call", "tool call builtin:x --args notjson", "tool frob" })
         {
             var response = (await Run(tools, "ctl", Args(command))).Response!;
-            var text = SessionWait.Text(response["output"]) ?? SessionWait.Text(response["error"]?["message"])!;
+            var text = SessionWait.Text(response["output"]) ?? response.FailureMessage()!;
             Assert.DoesNotContain("builtin:", text);
         }
         foreach (var ingress in new[] { "model", "external" })
@@ -981,19 +981,19 @@ public sealed class CtlCommandTests
         // Both name their ctl replacement, for model calls and ToolScript alike.
         Assert.Equal(
             "Unknown tool: call_tool. Use `ctl tool call <tool-id>` or the tool's `ctl` command.",
-            SessionWait.Text(removed.Response!["error"]!["message"])
+            removed.Response!.FailureMessage()
         );
         Assert.Equal(
             "Unknown tool: search_tools. Use `ctl tool search <words>`.",
-            SessionWait.Text(search.Response!["error"]!["message"])
+            search.Response!.FailureMessage()
         );
         var script = await Run(tools, "run_script", new JsonObject { ["code"] = "return call_tool('search_tools', {'query': 'x'})" });
         Assert.Contains("Unknown tool: search_tools. Use `ctl tool search <words>`.", SessionWait.Text(script.Response!["error"]));
         var nested = await Run(tools, "ctl", Args("tool call builtin:ctl --args @a", new() { ["a"] = Args("help") }));
         Assert.Contains("not a concrete tool", nested.Response!.ToJsonString());
         var invalid = await Run(tools, "ctl", Args("session list --count many"));
-        Assert.Equal("invalid_command", SessionWait.Text(invalid.Response!["error"]!["type"]));
-        Assert.Contains("Usage: session list", SessionWait.Text(invalid.Response["error"]!["message"]));
+        Assert.NotNull(invalid.Response!.FailureMessage());
+        Assert.Contains("Usage: session list", invalid.Response.FailureMessage());
     }
 
     [Fact]
@@ -1029,29 +1029,29 @@ public sealed class CtlCommandTests
         Assert.DoesNotContain("timer create", timer);
         Assert.Contains("timer list", timer);
         var hidden = await Run(tools, "ctl", Args("timer create --help"));
-        Assert.Equal("invalid_command", SessionWait.Text(hidden.Response!["error"]!["type"]));
+        Assert.NotNull(hidden.Response!.FailureMessage());
         // A command that exists but is hidden is reported as unavailable, not unknown, with the
         // noun's visible commands.
-        var unavailable = SessionWait.Text(hidden.Response!["error"]!["message"])!;
+        var unavailable = hidden.Response!.FailureMessage()!;
         Assert.StartsWith("`timer create` is not available to this Session.", unavailable);
         Assert.Contains("timer list", unavailable);
         Assert.StartsWith(
             "No `memory` commands are available to this Session.",
-            SessionWait.Text((await Run(tools, "ctl", Args("memory --help"))).Response!["error"]!["message"])
+            SessionWait.Text((await Run(tools, "ctl", Args("memory --help"))).Response!.FailureMessageNode())
         );
         Assert.StartsWith(
             "`timer create` is not available to this Session.",
-            SessionWait.Text((await Run(tools, "ctl", Args("timer create --bogus"))).Response!["error"]!["message"])
+            SessionWait.Text((await Run(tools, "ctl", Args("timer create --bogus"))).Response!.FailureMessageNode())
         );
-        Assert.DoesNotContain("mean `timer create`", SessionWait.Text(hidden.Response!["error"]!["message"]));
-        var misspelled = SessionWait.Text((await Run(tools, "ctl", Args("timer creat"))).Response!["error"]!["message"])!;
+        Assert.DoesNotContain("mean `timer create`", hidden.Response!.FailureMessage());
+        var misspelled = SessionWait.Text((await Run(tools, "ctl", Args("timer creat"))).Response!.FailureMessageNode())!;
         Assert.DoesNotContain("`timer create`", misspelled);
         Assert.Contains(
             "`timer list`",
-            SessionWait.Text((await Run(tools, "ctl", Args("timer lst"))).Response!["error"]!["message"])
+            SessionWait.Text((await Run(tools, "ctl", Args("timer lst"))).Response!.FailureMessageNode())
         );
         var denied = await Run(tools, "ctl", Args("memory read MEMORY.md"));
-        Assert.Equal("tool_authorization_denied", SessionWait.Text(denied.Response!["error"]!["type"]));
+        Assert.Equal("tool_authorization_denied", denied.Response!.FailureCode());
         Assert.Equal("read_memory", SessionWait.Text(denied.Target!["name"]));
         var discovered = SessionWait.Text((await Run(tools, "ctl", Args("tool search memory --source builtin --limit 50"))).Response!["output"])!;
         Assert.DoesNotContain("memory read", discovered);

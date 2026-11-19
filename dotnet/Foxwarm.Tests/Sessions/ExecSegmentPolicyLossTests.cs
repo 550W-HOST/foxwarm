@@ -95,10 +95,7 @@ public sealed class ExecSegmentPolicyLossTests
                 return new JsonObject { ["output"] = "ran " + id };
             Interlocked.Exchange(ref latched, 1);
             Latched.TrySetResult();
-            return UnsupportedTurnToolExecutor.ToolError(
-                ToolAuthorizationUnavailableException.Code,
-                "policy unavailable"
-            );
+            return ToolFailure.Result("policy unavailable", ToolAuthorizationUnavailableException.Code);
         }
     }
 
@@ -145,7 +142,7 @@ public sealed class ExecSegmentPolicyLossTests
     }
 
     private static string? ErrorType(JsonObject response) =>
-        SessionWait.Text(response["error"]?["type"]);
+        response.FailureIdentity();
 
     [Fact]
     public async Task Siblings_dequeued_after_the_fatal_is_latched_are_skipped_without_starting()

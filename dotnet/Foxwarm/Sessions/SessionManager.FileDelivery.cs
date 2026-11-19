@@ -336,8 +336,7 @@ internal sealed partial class SessionManager
                         or TimeoutException
             )
         {
-            var partial = UnsupportedTurnToolExecutor.ToolError(
-                "image_export_partial",
+            var partial = ToolFailure.Result(
                 "Image was written; a later step failed. The file was not removed or retried. "
                     + error.Message
             );

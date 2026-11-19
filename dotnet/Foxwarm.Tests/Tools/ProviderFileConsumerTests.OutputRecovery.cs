@@ -111,7 +111,7 @@ public sealed partial class ProviderFileConsumerTests
         var result = await f.Call("read", Args("missing"));
         Assert.Equal(
             ToolAuthorizationUnavailableException.Code,
-            result["error"]!["type"]!.GetValue<string>()
+            result.FailureCode()!
         );
         Assert.True(f.Tools.PolicyUnavailable);
     }
@@ -262,7 +262,7 @@ public sealed partial class ProviderFileConsumerTests
             );
             Assert.Equal(
                 "tool_call_skipped",
-                parts[1]!["functionResponse"]!["response"]!["error"]!["type"]!.GetValue<string>()
+                parts[1]!["functionResponse"]!["response"]!.FailureCode()!
             );
             f.Tools.BeginTurn();
             Assert.False(f.Tools.PolicyUnavailable);

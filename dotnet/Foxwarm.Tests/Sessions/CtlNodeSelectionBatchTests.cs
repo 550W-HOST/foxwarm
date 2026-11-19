@@ -185,7 +185,7 @@ public sealed class CtlNodeSelectionBatchTests
         Assert.NotNull(results[0]["response"]!["error"]);
         Assert.Contains(
             "Node selection failed",
-            results[1]["response"]!["error"]!["message"]!.GetValue<string>()
+            results[1]["response"]!.FailureMessage()!
         );
     }
 }

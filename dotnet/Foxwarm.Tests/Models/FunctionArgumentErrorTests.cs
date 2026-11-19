@@ -201,10 +201,7 @@ public sealed class FunctionArgumentErrorTests(ITestOutputHelper output)
                 new[] { "bad", "good" },
                 results.Select(result => SessionWait.Text(result["tool_use_id"]))
             );
-            Assert.Equal(
-                "invalid_tool_arguments",
-                SessionWait.Text(results[0]["response"]?["error"]?["type"])
-            );
+            Assert.NotNull(results[0]["response"]?.FailureMessage());
             Assert.DoesNotContain("rawArgsText", results[0]["response"]!.ToJsonString());
             Assert.Null(results[1]["response"]?["error"]);
             Assert.Equal(

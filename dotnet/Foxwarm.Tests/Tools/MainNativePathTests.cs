@@ -267,7 +267,7 @@ public sealed class MainNativePathTests
         );
         var reference = System
             .Text.RegularExpressions.Regex.Match(
-                refused!["error"]!["message"]!.GetValue<string>(),
+                refused!.FailureMessage()!,
                 "contentRef: \"([^\"]+)\""
             )
             .Groups[1]

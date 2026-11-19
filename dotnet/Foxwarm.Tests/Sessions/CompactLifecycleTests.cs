@@ -262,7 +262,7 @@ public sealed partial class CompactLifecycleTests
         );
         Assert.Contains("plan file must contain valid JSON", (await peer.RequestAt(3)).Body);
         Assert.Contains("Compact repair canceled", (await peer.RequestAt(4)).Body);
-        Assert.Contains("invalid_tool_control_argument", (await peer.RequestAt(6)).Body);
+        Assert.Contains("accepts only the boolean value true", (await peer.RequestAt(6)).Body);
         Assert.Contains("Compact repair failed", (await peer.RequestAt(7)).Body);
         var failedHunkRequest = JsonNode.Parse((await peer.RequestAt(7)).Body)!;
         var failedHunkOutput = Assert.Single(

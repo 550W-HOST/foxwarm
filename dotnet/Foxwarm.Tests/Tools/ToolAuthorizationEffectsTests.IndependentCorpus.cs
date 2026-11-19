@@ -95,8 +95,13 @@ public sealed partial class ToolAuthorizationEffectsTests
             foreach (var c in calls)
             {
                 var response = await Call(execution.Tools, c.Tool, Obj(c.Args)).WaitAsync(TimeSpan.FromSeconds(15));
-                var error = response["error"];
-                var outcome = error is null ? "ok" : error.ToJsonString().Replace(temp.Path, "<root>", StringComparison.Ordinal);
+                var outcome = response["error"] is null
+                    ? "ok"
+                    : ((response.FailureCode() ?? "error") + ": " + response.FailureMessage()).Replace(
+                        temp.Path,
+                        "<root>",
+                        StringComparison.Ordinal
+                    );
                 row[c.Name] = Regex.Replace(outcome, "(ap|tmr|tsr)[-_][A-Za-z0-9]+", "$1-<id>");
             }
             row["approvals"] = caller.Entry.WithState(state => SessionApprovals.Records(state.Meta).Count());
@@ -138,13 +143,12 @@ public sealed partial class ToolAuthorizationEffectsTests
     // With the policy unavailable, calls whose arguments or paths are invalid report those
     // errors first, as before staging.
     [Theory]
-    [InlineData("read", """{"filePath":"$unknown/seed.txt"}""", "invalid_path", "Unknown Agent path variable: $unknown")]
-    [InlineData("read", "{\"filePath\":\"x\\u0000y\"}", "invalid_path", "Invalid path.")]
-    [InlineData("edit", """{"apply_patch":"bad"}""", "tool_error", "Invalid apply_patch input:")]
+    [InlineData("read", """{"filePath":"$unknown/seed.txt"}""", "Unknown Agent path variable: $unknown")]
+    [InlineData("read", "{\"filePath\":\"x\\u0000y\"}", "Invalid path.")]
+    [InlineData("edit", """{"apply_patch":"bad"}""", "Invalid apply_patch input:")]
     public async Task Invalid_calls_report_their_own_error_before_an_unavailable_policy(
         string tool,
         string args,
-        string type,
         string message
     )
     {
@@ -158,8 +162,9 @@ public sealed partial class ToolAuthorizationEffectsTests
         await File.WriteAllTextAsync(manager.Authorization.PolicyPath, "not a policy");
         manager.Authorization.Invalidate();
         var response = await Call(execution.Tools, tool, Obj(args)).WaitAsync(TimeSpan.FromSeconds(15));
-        Assert.Equal(type, Error(response));
-        Assert.StartsWith(message, SessionWait.Text(response["error"]!["message"]));
+        // Not the policy failure, which carries its code.
+        Assert.Null(response.FailureCode());
+        Assert.StartsWith(message, response.FailureMessage());
         Assert.Empty(Records(caller));
     }
 }

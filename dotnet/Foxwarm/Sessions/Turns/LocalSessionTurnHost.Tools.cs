@@ -23,9 +23,9 @@ public sealed partial class LocalSessionTurnHost
             if (selectionFailed)
             {
                 results[cursor++] = new(
-                    UnsupportedTurnToolExecutor.ToolError(
-                        "tool_call_skipped",
-                        "Tool call was not started because Node selection failed."
+                    ToolFailure.Result(
+                        "Tool call was not started because Node selection failed.",
+                        "tool_call_skipped"
                     )
                 );
                 continue;
@@ -170,8 +170,7 @@ public sealed partial class LocalSessionTurnHost
                 }
                 catch (Foxwarm.Images.ImageInputException error)
                 {
-                    response["response"] = UnsupportedTurnToolExecutor.ToolError(
-                        "image_materialization_failed",
+                    response["response"] = ToolFailure.Result(
                         error.Message + " The tool call completed; its effects were not reversed."
                     );
                     response.Remove("__meta");
@@ -224,12 +223,9 @@ public sealed partial class LocalSessionTurnHost
                     new JsonObject
                     {
                         ["canceled"] = true,
-                        ["error"] = new JsonObject
-                        {
-                            ["type"] = "tool_call_cancelled",
-                            ["message"] =
-                                $"Tool call was not started because {(Closing && !entry.WithState(state => state.Stopping) ? "process shutdown" : entry.ToolCancellationSource)} cancelled it; it was not executed.",
-                        },
+                        ["error"] =
+                            $"Tool call was not started because {(Closing && !entry.WithState(state => state.Stopping) ? "process shutdown" : entry.ToolCancellationSource)} cancelled it; it was not executed.",
+                        ["code"] = "tool_call_cancelled",
                     }
                 )
             );
@@ -238,9 +234,9 @@ public sealed partial class LocalSessionTurnHost
         if (tools is ITurnToolControl fatal && fatal.PolicyUnavailable)
             return await Skipped(
                 new(
-                    UnsupportedTurnToolExecutor.ToolError(
-                        "tool_call_skipped",
-                        "Tool call was not started because tool authorization policy was unavailable."
+                    ToolFailure.Result(
+                        "Tool call was not started because tool authorization policy was unavailable.",
+                        "tool_call_skipped"
                     )
                 )
             );
@@ -262,7 +258,7 @@ public sealed partial class LocalSessionTurnHost
                     index,
                     total
                 );
-            return new(UnsupportedTurnToolExecutor.ToolError("invalid_tool_arguments", error));
+            return new(ToolFailure.Result(error));
         }
         if (prepared?.Response is not null && tools is SessionToolExecutor executor)
             return executor.PreparedFailure(prepared);
@@ -279,16 +275,16 @@ public sealed partial class LocalSessionTurnHost
         catch (OperationCanceledException)
         {
             return new(
-                UnsupportedTurnToolExecutor.ToolError(
-                    "tool_call_cancelled",
-                    $"Tool request canceled by {entry.ToolCancellationSource} after dispatch. Started effects may have occurred and were not reversed."
+                ToolFailure.Result(
+                    $"Tool request canceled by {entry.ToolCancellationSource} after dispatch. Started effects may have occurred and were not reversed.",
+                    "tool_call_cancelled"
                 )
             );
         }
         catch (Exception exception)
             when (exception is InvalidOperationException or IOException or ArgumentException)
         {
-            return new(UnsupportedTurnToolExecutor.ToolError("tool_error", exception.Message));
+            return new(ToolFailure.Result(exception.Message));
         }
         finally
         {

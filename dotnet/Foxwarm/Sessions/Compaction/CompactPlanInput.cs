@@ -132,9 +132,9 @@ internal sealed class CompactPlanFiles(
                     )
                 ) as JsonObject
                 ?? throw new IOException("The plan file operation returned no result.");
-        if (result["error"] is JsonNode error)
+        if (result["error"] is not null)
             throw new InvalidDataException(
-                SessionWait.Text(error["message"]) ?? "The plan file operation failed."
+                ToolFailure.Message(result) ?? "The plan file operation failed."
             );
     }
 

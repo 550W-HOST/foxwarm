@@ -12,7 +12,7 @@ public sealed class NodePolicyCliTests
 {
     private static JsonObject Obj(string json) => JsonNode.Parse(json)!.AsObject();
 
-    private static string? Error(JsonObject result) => SessionWait.Text(result["error"]?["type"]);
+    private static string? Error(JsonObject result) => result.FailureIdentity();
 
     [Fact]
     public async Task Official_CLI_actual_effect_policy_preserves_copy_image_delivery_exact_exec_owner_cwd_completion_and_external_MCP()

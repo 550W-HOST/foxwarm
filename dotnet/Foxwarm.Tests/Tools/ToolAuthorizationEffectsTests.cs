@@ -133,7 +133,7 @@ public sealed partial class ToolAuthorizationEffectsTests
         )!.AsObject();
 
     private static string? Error(JsonObject response) =>
-        response["error"]?["type"]?.GetValue<string>();
+        response.FailureIdentity();
 
     [Fact]
     public async Task Loader_root_cache_expiration_fresh_async_retry_sync_unavailable_and_exact_missing_are_not_stale_allow()
@@ -218,7 +218,7 @@ public sealed partial class ToolAuthorizationEffectsTests
         );
         var reference = Regex
             .Match(
-                refused["error"]!["message"]!.GetValue<string>(),
+                refused.FailureMessage()!,
                 "contentRef: \"(write_[a-f0-9]+)\""
             )
             .Groups[1]

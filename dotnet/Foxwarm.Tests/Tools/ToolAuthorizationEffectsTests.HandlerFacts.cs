@@ -415,7 +415,7 @@ public sealed partial class NodeAuthorizationTreeTests
         await f.Policy("version: 1\nrules:\n- {op: node.trust, node: fact-paired-2, action: deny}\n");
         Assert.Equal(
             "tool_authorization_denied",
-            SessionWait.Text((await f.Call("node_pair_approve", new JsonObject { ["pendingId"] = second["id"]!.DeepClone() }))?["error"]?["type"])
+            SessionWait.Text((await f.Call("node_pair_approve", new JsonObject { ["pendingId"] = second["id"]!.DeepClone() }))?.FailureCodeNode())
         );
     }
 }

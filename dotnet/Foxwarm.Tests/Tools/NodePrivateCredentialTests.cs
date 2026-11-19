@@ -158,7 +158,7 @@ public sealed class NodePrivateCredentialTests
         var outside = fixture.PathFor("outside");
         Assert.Equal(
             "tool_authorization_denied",
-            (await fixture.Call("outside", outside))["error"]?["type"]?.GetValue<string>()
+            (await fixture.Call("outside", outside)).FailureCode()
         );
         Assert.False(File.Exists(outside));
         var allowed = fixture.PathFor("work/allowed");
@@ -172,7 +172,7 @@ public sealed class NodePrivateCredentialTests
         );
         Assert.Equal(
             "tool_authorization_denied",
-            (await fixture.Call("denied", allowed))["error"]?["type"]?.GetValue<string>()
+            (await fixture.Call("denied", allowed)).FailureCode()
         );
         Assert.False(File.Exists(allowed));
         await fixture.Manager.Authorization.InstallAsync(

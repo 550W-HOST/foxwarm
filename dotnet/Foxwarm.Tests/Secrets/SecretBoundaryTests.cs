@@ -570,7 +570,7 @@ public sealed class SecretBoundaryTests
                 new JsonObject { ["target"] = "config", ["filePath"] = candidate }
             );
             Assert.Equal(saved, f.Configuration.ReadCurrentAppRaw());
-            return SessionWait.Text(result?["error"]?["message"]);
+            return result?.FailureMessage();
         }
         // Each refusal applies on its own and neither lets the other's change through.
         Assert.Contains(

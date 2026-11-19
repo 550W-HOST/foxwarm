@@ -137,7 +137,7 @@ public sealed partial class McpOAuthTests
         await peer.ReleaseAsync("slow");
         var blocked = await slow;
         Assert.NotNull(blocked!["error"]);
-        Assert.Contains("credential", blocked["error"]!["message"]!.GetValue<string>());
+        Assert.Contains("credential", blocked.FailureMessage()!);
         var state = await peer.StateAsync();
         Assert.Equal(6, Count(state, "effects"));
         foreach (

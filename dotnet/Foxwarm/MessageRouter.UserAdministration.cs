@@ -24,7 +24,7 @@ internal sealed partial class MessageRouter
         await command.Reply(
             SessionWait.Text(result["output"])
                 ?? "❌ Search failed: "
-                    + (SessionWait.Text(result["error"]?["message"]) ?? "Search unavailable.")
+                    + (ToolFailure.Message(result) ?? "Search unavailable.")
         );
     }
 
@@ -201,7 +201,7 @@ internal sealed partial class MessageRouter
     private static string TimerFailure(JsonObject result, string prefix) =>
         "❌ "
         + prefix
-        + (SessionWait.Text(result["error"]?["message"]) ?? "Timer unavailable.")
+        + (ToolFailure.Message(result) ?? "Timer unavailable.")
         + (
             SessionCatalog.Flag(result["timerCommitted"])
                 ? $" Timer `{result["timerId"]}` change was committed."

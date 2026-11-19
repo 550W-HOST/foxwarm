@@ -236,10 +236,7 @@ internal sealed partial class SessionManager
         }
         catch (TimerCommittedException error)
         {
-            var result = UnsupportedTurnToolExecutor.ToolError(
-                "timer_committed_partial",
-                error.Message
-            );
+            var result = ToolFailure.Result(error.Message);
             result["timerCommitted"] = true;
             result["timerId"] = error.TimerId;
             return result;

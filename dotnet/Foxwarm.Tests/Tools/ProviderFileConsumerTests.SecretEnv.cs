@@ -38,7 +38,7 @@ public sealed partial class ProviderFileConsumerTests
         var refused = await f.Call("exec", Args());
         Assert.Contains(
             "can't pass stored secrets to commands",
-            refused["error"]!["message"]!.GetValue<string>()
+            refused.FailureMessage()!
         );
         Assert.DoesNotContain(
             await f.Requests(),

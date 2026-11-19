@@ -406,7 +406,7 @@ public sealed partial class ImagesApiImageGenerationTests
         Assert.Equal("call_image", response["tool_use_id"]!.GetValue<string>());
         Assert.Contains(
             providerMessage,
-            response["response"]!["error"]!["message"]!.GetValue<string>()
+            response["response"]!.FailureMessage()!
         );
         Assert.Contains(
             run.Owner.History(),
@@ -534,7 +534,7 @@ public sealed partial class ImagesApiImageGenerationTests
         Assert.Equal("call_image", response["tool_use_id"]!.GetValue<string>());
         Assert.Contains(
             "Image generation failed",
-            response["response"]!["error"]!["message"]!.GetValue<string>()
+            response["response"]!.FailureMessage()!
         );
         Assert.Equal(
             "Done.",

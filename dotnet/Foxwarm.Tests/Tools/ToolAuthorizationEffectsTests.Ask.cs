@@ -477,7 +477,7 @@ public sealed partial class ToolAuthorizationEffectsTests
         Assert.Equal("tool_authorization_denied", Error(response));
         Assert.Equal(
             "Tool authorization rules require approval to create Sessions in Agent 'alpha'. A scheduled creation can't be approved in advance, so this timer was not registered. Rule `rule-1` (#1) in the global policy requires approval for the create_session creation target (`builtin:create_session`) for `builtin:create_timer`, called as `create_timer`.",
-            response["error"]!["message"]!.GetValue<string>()
+            response.FailureMessage()!
         );
         Assert.Empty(manager.Timers.List(owner.Id));
     }

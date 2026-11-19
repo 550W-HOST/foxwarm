@@ -148,14 +148,14 @@ public sealed partial class ToolApprovalGateTests
         );
         var execution = await call.WaitAsync(TimeSpan.FromSeconds(30));
         var response = execution.Response!.AsObject();
-        Assert.Equal("tool_approval_rejected", response["error"]!["type"]!.GetValue<string>());
+        Assert.Equal("tool_approval_rejected", response.FailureCode()!);
         Assert.Equal(
             "An approver rejected this tool call. It was not executed. Don't repeat it unchanged; follow the approver's note if there is one.",
-            response["error"]!["message"]!.GetValue<string>()
+            response.FailureMessage()!
         );
         Assert.Equal(
             "Use the staging copy instead.",
-            response["error"]!["note"]!.GetValue<string>()
+            response["note"]!.GetValue<string>()
         );
         Assert.Equal(id, response["approvalId"]!.GetValue<string>());
         Assert.Null(response["approvalNote"]);
@@ -255,8 +255,8 @@ public sealed partial class ToolApprovalGateTests
         var id = Assert.Single(await PendingAsync(f.Owner))["id"]!.GetValue<string>();
         stop.Cancel();
         var response = (await call.WaitAsync(TimeSpan.FromSeconds(30))).Response!.AsObject();
-        Assert.Equal("tool_call_cancelled", response["error"]!["type"]!.GetValue<string>());
-        Assert.Contains("was not started", response["error"]!["message"]!.GetValue<string>());
+        Assert.Equal("tool_call_cancelled", response.FailureCode()!);
+        Assert.Contains("was not started", response.FailureMessage()!);
         var record = Assert.Single(Approvals(f.Owner));
         Assert.Equal(id, record["id"]!.GetValue<string>());
         Assert.Equal("cancelled", record["status"]!.GetValue<string>());
@@ -278,7 +278,7 @@ public sealed partial class ToolApprovalGateTests
         await f.Manager.DecideToolApprovalAsync(f.Owner, id, true, null, Administrator);
         var result = await call.WaitAsync(TimeSpan.FromSeconds(30));
         var response = result.Response!.AsObject();
-        Assert.Equal("tool_authorization_denied", response["error"]!["type"]!.GetValue<string>());
+        Assert.Equal("tool_authorization_denied", response.FailureCode()!);
         Assert.False(File.Exists(Path.Combine(f.Work, "policy.txt")));
         // The record says what happened: approved, then not run.
         var record = Assert.Single(Approvals(f.Owner));
@@ -458,10 +458,10 @@ public sealed partial class ToolApprovalGateTests
             await Start(f, "call-full", "write", Write("full.txt"))
                 .WaitAsync(TimeSpan.FromSeconds(30))
         ).Response!.AsObject();
-        Assert.Equal("tool_approval_unavailable", response["error"]!["type"]!.GetValue<string>());
+        Assert.Equal("tool_approval_unavailable", response.FailureCode()!);
         Assert.Equal(
             "This Session already has 32 tool calls waiting for approval. This call was not executed.",
-            response["error"]!["message"]!.GetValue<string>()
+            response.FailureMessage()!
         );
         Assert.Equal(SessionApprovals.MaxPending, Approvals(f.Owner).Length);
     }
@@ -511,7 +511,7 @@ public sealed partial class ToolApprovalGateTests
         Assert.Null(preparations[0]!.Response);
         Assert.Equal(
             "tool_approval_rejected",
-            preparations[1]!.Response!["error"]!["type"]!.GetValue<string>()
+            preparations[1]!.Response!.FailureCode()!
         );
         var rejected = f.Tools.PreparedFailure(preparations[1]!);
         Assert.Equal("rejected", rejected.Approval!["status"]!.GetValue<string>());
@@ -616,10 +616,10 @@ public sealed partial class ToolApprovalGateTests
             Administrator
         );
         var result = (await call.WaitAsync(TimeSpan.FromSeconds(30))).Response!.AsObject();
-        Assert.Equal("tool_approval_unavailable", result["error"]!["type"]!.GetValue<string>());
+        Assert.Equal("tool_approval_unavailable", result.FailureCode()!);
         Assert.Equal(
             "This call changed while it waited for approval: node `write` now needs approval under rule confirm-write, which the approval did not cover. It was not executed.",
-            result["error"]!["message"]!.GetValue<string>()
+            result.FailureMessage()!
         );
         // The approval was for facts the call no longer had; it never ran, and no other was
         // requested.

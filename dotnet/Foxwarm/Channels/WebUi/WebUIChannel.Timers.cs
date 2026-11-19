@@ -82,7 +82,7 @@ internal sealed partial class WebUIChannel
                 {
                     ["code"] = "TIMER_PARTIAL",
                     ["error"] =
-                        SessionWait.Text(result["error"]?["message"]) ?? "Timer change failed.",
+                        ToolFailure.Message(result) ?? "Timer change failed.",
                     ["timerCommitted"] = SessionCatalog.Flag(result["timerCommitted"]),
                 },
                 statusCode: 500

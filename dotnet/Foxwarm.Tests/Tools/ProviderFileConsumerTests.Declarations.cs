@@ -44,12 +44,12 @@ public sealed partial class ProviderFileConsumerTests
         Assert.Contains("\nread (declared tool) — ", discovery["output"]!.GetValue<string>());
         var before = (await f.Requests()).Length;
         var direct = await f.Call("write", args);
-        Assert.Equal("tool_authorization_denied", direct["error"]!["type"]!.GetValue<string>());
+        Assert.Equal("tool_authorization_denied", direct.FailureCode()!);
         var unified = await f.Call(
             "ctl",
             CtlTestArgs.Unified(new JsonObject { ["toolId"] = "node:" + f.Node + "/write", ["args"] = args.DeepClone() })
         );
-        Assert.Equal("tool_authorization_denied", unified["error"]!["type"]!.GetValue<string>());
+        Assert.Equal("tool_authorization_denied", unified.FailureCode()!);
         var script = await f.Call(
             "run_script",
             new JsonObject

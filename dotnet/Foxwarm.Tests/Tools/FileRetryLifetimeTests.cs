@@ -34,7 +34,7 @@ public sealed class FileRetryLifetimeTests
             );
             var id = Regex
                 .Match(
-                    refused["error"]!["message"]!.GetValue<string>(),
+                    refused.FailureMessage()!,
                     "contentRef: \"(write_[a-f0-9]+)\""
                 )
                 .Groups[1]
@@ -49,7 +49,7 @@ public sealed class FileRetryLifetimeTests
                     ["overwrite"] = true,
                 }
             );
-            Assert.Contains(id, failed["error"]!["message"]!.GetValue<string>());
+            Assert.Contains(id, failed.FailureMessage()!);
             Assert.False(Directory.Exists(Path.Combine(root, "another")));
             now += 60 * 1000;
             var expired = await Write(
@@ -63,7 +63,7 @@ public sealed class FileRetryLifetimeTests
             );
             Assert.Contains(
                 "not found or expired",
-                expired["error"]!["message"]!.GetValue<string>()
+                expired.FailureMessage()!
             );
             Assert.False(Directory.Exists(Path.Combine(root, "another")));
             Assert.Empty(Directory.EnumerateFileSystemEntries(root));

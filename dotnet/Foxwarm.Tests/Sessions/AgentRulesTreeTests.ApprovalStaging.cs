@@ -95,7 +95,7 @@ public sealed partial class AgentRulesTreeTests
         var before = File.ReadAllText(f.Configuration.ActivePath);
         var result = await f.ToolAsync("set_config", ModelsCall(candidate));
         Assert.Equal("tool_authorization_denied", ErrorType(result));
-        Assert.Contains("`confirm-read`", SessionWait.Text(result?["error"]?["message"]));
+        Assert.Contains("`confirm-read`", result?.FailureMessage());
         // No approval was requested, neither for the read nor for the call.
         Assert.Empty(Records(f.Owner));
         Assert.Equal(before, File.ReadAllText(f.Configuration.ActivePath));
@@ -183,7 +183,7 @@ public sealed partial class AgentRulesTreeTests
         var before = File.ReadAllText(f.Configuration.ActivePath);
         var result = await f.ToolAsync("set_config", ModelsCall(candidate)).WaitAsync(TimeSpan.FromSeconds(15));
         Assert.Equal("tool_authorization_denied", ErrorType(result));
-        Assert.Contains("`forbid-config`", SessionWait.Text(result?["error"]?["message"]));
+        Assert.Contains("`forbid-config`", result?.FailureMessage());
         // Neither the input nor the call was offered for approval.
         Assert.Empty(Records(f.Owner));
         Assert.Equal(before, File.ReadAllText(f.Configuration.ActivePath));

@@ -270,7 +270,7 @@ public sealed partial class ProviderFileConsumerTests
         {
             f.Manager.BeforeFileStage = null;
         }
-        Assert.Equal("image_export_partial", SessionWait.Text(partial["error"]?["type"]));
+        Assert.NotNull(partial.FailureMessage());
         Assert.True(partial["fileWritten"]!.GetValue<bool>());
         Assert.False(string.IsNullOrEmpty(SessionWait.Text(partial["fullPath"])));
         Assert.Equal(bytes, await File.ReadAllBytesAsync(f.FilePath("images/partial.png")));

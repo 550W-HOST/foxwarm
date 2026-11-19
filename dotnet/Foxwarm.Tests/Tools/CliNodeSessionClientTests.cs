@@ -191,7 +191,7 @@ public sealed class CliNodeSessionClientTests
         var rejected = await peer.Next();
         Assert.Equal("tool_call_error", rejected["type"]!.ToString());
         Assert.False(rejected["execStarted"]!.GetValue<bool>());
-        Assert.Contains("not executed", rejected["error"]!["message"]!.ToString());
+        Assert.Contains("not executed", rejected.FailureMessage()!);
         lateApproval.SetResult(ToolApproval.Approved);
         var admitted = Path.Combine(peer.Root, "admitted");
         await peer.Send(

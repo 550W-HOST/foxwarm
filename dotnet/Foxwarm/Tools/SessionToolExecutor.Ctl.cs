@@ -73,7 +73,7 @@ internal sealed partial class SessionToolExecutor
                         : "Unknown tool. Find tools with `tool search`.";
                 if (Programmatic)
                     throw new InvalidDataException(message);
-                return UnsupportedTurnToolExecutor.ToolError("unknown_tool", message);
+                return ToolFailure.Result(message);
             }
             default:
                 // Commands naming a capability resolve to it before dispatch.
@@ -86,6 +86,6 @@ internal sealed partial class SessionToolExecutor
         var message = CtlHelp.Error(error, visible);
         if (Programmatic)
             throw new InvalidDataException(message);
-        return UnsupportedTurnToolExecutor.ToolError("invalid_command", message);
+        return ToolFailure.Result(message);
     }
 }

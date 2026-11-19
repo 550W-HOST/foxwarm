@@ -229,7 +229,9 @@ internal static partial class SqliteArchiveSequence
               'id',json_extract(message_json,{Part}||'.functionResponse.tool_use_id'),
               'name',json_extract(message_json,{Part}||'.functionResponse.name'),
               'timing',json_extract(message_json,{Part}||'.functionResponse.executionTiming'),
-              'error',json_extract(message_json,{Part}||'.functionResponse.response.error.type'),
+              'error',CASE WHEN json_type(message_json,{Part}||'.functionResponse.response.error') IS NOT NULL
+                THEN coalesce(json_extract(message_json,{Part}||'.functionResponse.response.code'),
+                  json_extract(message_json,{Part}||'.functionResponse.response.error.type')) END,
               'failed',json_type(message_json,{Part}||'.functionResponse.response.error') IS NOT NULL,
               'canceled',json_extract(message_json,{Part}||'.functionResponse.response.canceled'),
               'deliveries',(SELECT json_group_array(json_object(

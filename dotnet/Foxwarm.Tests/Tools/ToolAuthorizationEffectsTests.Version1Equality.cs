@@ -214,13 +214,8 @@ public sealed partial class ToolAuthorizationEffectsTests
     private static string Version1Outcome(JsonObject response, string root)
     {
         string text;
-        if (response["error"] is JsonObject error)
-            text =
-                SessionWait.Text(error["type"])
-                + ": "
-                + (SessionWait.Text(error["message"]) ?? "");
-        else if (response["error"] is JsonValue scripted)
-            text = "script-error: " + scripted.ToString();
+        if (response["error"] is not null)
+            text = (response.FailureCode() ?? "error") + ": " + (response.FailureMessage() ?? "");
         else if (SessionWait.Text(response["output"]) is { } output)
             text = "ok: " + output;
         else

@@ -170,7 +170,7 @@ public sealed class TaskNativeResultTests
                 ["notifySession"] = true,
             }
         );
-        Assert.Equal("TASK_INVALID_ARGS", SessionWait.Text(rejected["error"]?["type"]));
+        Assert.Equal("TASK_INVALID_ARGS", rejected.FailureCode());
         Assert.True(
             JsonNode.DeepEquals(
                 detail,

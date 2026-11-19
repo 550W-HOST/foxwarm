@@ -33,7 +33,7 @@ public sealed partial class ToolAuthorizationEffectsTests
         // The scheduled creation can never be approved, so neither is the timer.
         var response = await Call(execution.Tools, "create_timer", FreshTimer("alpha"));
         Assert.Equal("tool_authorization_denied", Error(response));
-        Assert.Contains("can't be approved in advance", response["error"]!["message"]!.GetValue<string>());
+        Assert.Contains("can't be approved in advance", response.FailureMessage()!);
         Assert.Equal(0, ApprovalCount(owner));
         Assert.Empty(manager.Timers.List(owner.Id));
 

@@ -63,7 +63,7 @@ public sealed partial class NodeAuthorizationTreeTests
         );
         var result = await f.Call("node_remove", CascadeRoot);
         Assert.Equal("tool_authorization_denied", ErrorType(result));
-        Assert.Contains("`keep-child`", SessionWait.Text(result?["error"]?["message"]));
+        Assert.Contains("`keep-child`", result?.FailureMessage());
         Assert.Empty(Records(f.Owner));
         Assert.True(Registered(f, "root"));
         Assert.True(Registered(f, "child"));
@@ -143,7 +143,7 @@ public sealed partial class NodeAuthorizationTreeTests
         await Approve(f.Manager, f.Owner, pending);
         var result = await call.WaitAsync(TimeSpan.FromSeconds(30));
         Assert.Equal("tool_approval_unavailable", ErrorType(result));
-        Assert.Contains("under rule elsewhere", SessionWait.Text(result?["error"]?["message"]));
+        Assert.Contains("under rule elsewhere", result?.FailureMessage());
         Assert.True(Registered(f, "child"));
         Assert.Equal("cancelled", SessionWait.Text(Assert.Single(Records(f.Owner))["status"]));
     }
@@ -169,7 +169,7 @@ public sealed partial class NodeAuthorizationTreeTests
         await Approve(f.Manager, f.Owner, pending);
         var result = await call.WaitAsync(TimeSpan.FromSeconds(30));
         Assert.Equal("tool_approval_unavailable", ErrorType(result));
-        Assert.Contains("under rule read-elsewhere", SessionWait.Text(result?["error"]?["message"]));
+        Assert.Contains("under rule read-elsewhere", result?.FailureMessage());
         Assert.Equal("cancelled", SessionWait.Text(Assert.Single(Records(f.Owner))["status"]));
     }
 }

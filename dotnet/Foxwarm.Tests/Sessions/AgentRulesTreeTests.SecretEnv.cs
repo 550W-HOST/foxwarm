@@ -60,8 +60,8 @@ public sealed partial class AgentRulesTreeTests
             Output(await Exec(runner, "RUNNER_TOKEN", "runner-token"))
         );
         var denied = await Exec(runner, "PROVIDER_KEY", "provider-key");
-        Assert.Equal("tool_authorization_denied", SessionWait.Text(denied?["error"]?["type"]));
-        Assert.Contains("`provider-key`", SessionWait.Text(denied?["error"]?["message"]));
+        Assert.Equal("tool_authorization_denied", denied?.FailureCode());
+        Assert.Contains("`provider-key`", denied?.FailureMessage());
 
         // Missing values and variables Foxwarm sets are refused before anything starts.
         var missing = await Exec(f.Owner, "CI_TOKEN", "missing-token");

@@ -1023,14 +1023,8 @@ public sealed class SessionTurnTests
             new[] { "bad_args", "unknown" },
             parts.Select(part => part!["functionResponse"]!["tool_use_id"]!.GetValue<string>())
         );
-        Assert.Equal(
-            "invalid_tool_arguments",
-            parts[0]?["functionResponse"]?["response"]?["error"]?["type"]?.GetValue<string>()
-        );
-        Assert.Equal(
-            "unknown_tool",
-            parts[1]?["functionResponse"]?["response"]?["error"]?["type"]?.GetValue<string>()
-        );
+        Assert.NotNull(parts[0]?["functionResponse"]?["response"]?.FailureMessage());
+        Assert.NotNull(parts[1]?["functionResponse"]?["response"]?.FailureMessage());
         Assert.Equal(1, tools.Invocations);
         Assert.Equal(2, chat.Calls.Count);
     }
@@ -1364,7 +1358,7 @@ internal sealed class RecordingToolExecutor(JsonObject? response = null) : ITurn
 {
     private readonly JsonObject response =
         response
-        ?? UnsupportedTurnToolExecutor.ToolError("unknown_tool", "Unknown tool: other_tool");
+        ?? ToolFailure.Result("Unknown tool: other_tool");
     private int invocations;
     public int Invocations => Volatile.Read(ref invocations);
 

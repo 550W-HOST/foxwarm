@@ -252,16 +252,13 @@ internal sealed partial class SessionToolExecutor(
             catch (OperationCanceledException)
             {
                 return new(
-                    UnsupportedTurnToolExecutor.ToolError(
-                        "tool_call_cancelled",
-                        "Tool call canceled before execution."
-                    )
+                    ToolFailure.Result("Tool call canceled before execution.", "tool_call_cancelled")
                 );
             }
             catch (Exception error)
                 when (error is InvalidOperationException or IOException or InvalidDataException)
             {
-                return new(UnsupportedTurnToolExecutor.ToolError("tool_error", error.Message));
+                return new(ToolFailure.Result(error.Message));
             }
         }
         var settled = await Task.WhenAll(preparations.Select(Settle));
@@ -419,19 +416,13 @@ internal sealed partial class SessionToolExecutor(
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
             return new(
-                UnsupportedTurnToolExecutor.ToolError(
-                    "tool_call_cancelled",
-                    "Tool call canceled before execution."
-                )
+                ToolFailure.Result("Tool call canceled before execution.", "tool_call_cancelled")
             );
         }
         catch (ToolAuthorizationUnavailableException error)
         {
             return new(
-                UnsupportedTurnToolExecutor.ToolError(
-                    ToolAuthorizationUnavailableException.Code,
-                    error.Message
-                ),
+                ToolFailure.Result(error.Message, ToolAuthorizationUnavailableException.Code),
                 true
             );
         }
@@ -449,7 +440,7 @@ internal sealed partial class SessionToolExecutor(
             )
         {
             return new(
-                UnsupportedTurnToolExecutor.ToolError("tool_error", error.Message),
+                ToolFailure.Result(error.Message),
                 Target: target
             );
         }
@@ -864,15 +855,12 @@ internal sealed partial class SessionToolExecutor(
         }
         catch (TaskError error)
         {
-            return UnsupportedTurnToolExecutor.ToolError(error.Code, error.Message);
+            return ToolFailure.Result(error.Message, error.Code);
         }
         catch (ToolAuthorizationUnavailableException error)
         {
             Interlocked.Exchange(ref policyUnavailable, 1);
-            return UnsupportedTurnToolExecutor.ToolError(
-                ToolAuthorizationUnavailableException.Code,
-                error.Message
-            );
+            return ToolFailure.Result(error.Message, ToolAuthorizationUnavailableException.Code);
         }
         catch (ToolAuthorizationDeniedException error)
         {
@@ -884,13 +872,13 @@ internal sealed partial class SessionToolExecutor(
         {
             if (Programmatic)
                 throw;
-            return UnsupportedTurnToolExecutor.ToolError("invalid_path", error.Message);
+            return ToolFailure.Result(error.Message);
         }
         catch (UnauthorizedAccessException error)
         {
             if (Programmatic)
                 throw;
-            return UnsupportedTurnToolExecutor.ToolError("tool_io_error", error.Message);
+            return ToolFailure.Result(error.Message);
         }
         catch (OperationCanceledException error)
             when (cancellationToken.IsCancellationRequested || error is SessionTurnShutdownException
@@ -900,11 +888,11 @@ internal sealed partial class SessionToolExecutor(
                 hosted.Registry.Runner.Closing && !hosted.Entry.WithState(state => state.Stopping)
                     ? "process shutdown"
                     : hosted.Entry.ToolCancellationSource;
-            return UnsupportedTurnToolExecutor.ToolError(
-                "tool_call_cancelled",
+            return ToolFailure.Result(
                 dispatched
                     ? $"Tool request canceled by {source} after dispatch. Started effects may have occurred and were not reversed."
-                    : $"Tool call was not started because {source} cancelled it; it was not executed."
+                    : $"Tool call was not started because {source} cancelled it; it was not executed.",
+                "tool_call_cancelled"
             );
         }
         catch (Exception error)
@@ -920,7 +908,7 @@ internal sealed partial class SessionToolExecutor(
         {
             if (Programmatic)
                 throw;
-            return UnsupportedTurnToolExecutor.ToolError("tool_error", error.Message);
+            return ToolFailure.Result(error.Message);
         }
     }
 
@@ -1069,7 +1057,7 @@ internal sealed partial class SessionToolExecutor(
         {
             return execution with
             {
-                Response = UnsupportedTurnToolExecutor.ToolError("tool_error", error.Message),
+                Response = ToolFailure.Result(error.Message),
                 DeferredCwd = null,
                 DeferredCwdNode = null,
                 ResolvedPaths = null,
@@ -1185,7 +1173,7 @@ internal sealed partial class SessionToolExecutor(
         {
             if (error is CommittedWaitDeclarationException committed)
                 explicitWaitIds.Add(committed.WaitId);
-            return UnsupportedTurnToolExecutor.ToolError("wait_error", error.Message);
+            return ToolFailure.Result(error.Message);
         }
     }
 
@@ -1220,7 +1208,7 @@ internal sealed partial class SessionToolExecutor(
         catch (Exception error)
             when (error is InvalidDataException or InvalidOperationException or IOException)
         {
-            return UnsupportedTurnToolExecutor.ToolError("ask_user_error", error.Message);
+            return ToolFailure.Result(error.Message);
         }
     }
 

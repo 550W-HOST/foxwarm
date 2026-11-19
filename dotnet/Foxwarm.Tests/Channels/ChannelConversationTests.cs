@@ -14,7 +14,7 @@ public sealed class ChannelConversationTests
     private static Task Policy(ExternalChannelFixture f, string yaml) =>
         f.Manager.Authorization.InstallAsync(Encoding.UTF8.GetBytes(yaml), default);
 
-    private static string? Error(JsonNode? result) => SessionWait.Text(result?["error"]?["type"]);
+    private static string? Error(JsonNode? result) => result.FailureIdentity();
 
     private static JsonObject Send(string target, string message = "fixture") =>
         new() { ["channelTargetId"] = target, ["message"] = message };

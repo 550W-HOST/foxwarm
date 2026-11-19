@@ -205,10 +205,7 @@ public sealed partial class HandoffConfirmationTests
             [Call("send_to_session", missing), Call("create_child_session", good), malformed],
             true
         );
-        Assert.Equal(
-            HandoffConfirmation.ErrorCode,
-            direct[0].Preset!["error"]!["type"]!.GetValue<string>()
-        );
+        Assert.NotNull(direct[0].Preset.FailureMessage());
         Assert.True(direct[1].Preset!["canceled"]!.GetValue<bool>());
         Assert.Null(direct[2].Preset);
         Assert.True(good.ContainsKey("__cancelTool"));
@@ -282,7 +279,7 @@ public sealed partial class HandoffConfirmationTests
             ],
             true
         )[0];
-        var message = planned.Preset!["error"]!["message"]!.GetValue<string>();
+        var message = planned.Preset!.FailureMessage()!;
         Assert.Contains("afterSend was renamed to currentSessionTurnAction", message);
         Assert.DoesNotContain("must follow every argument", message);
         Assert.DoesNotContain("Resend in this order", message);

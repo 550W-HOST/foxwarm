@@ -580,7 +580,7 @@ public sealed class ResponsesClientTests
                 ),
                 CancellationToken.None
             );
-            Assert.Equal("invalid_path", response["error"]?["type"]?.GetValue<string>());
+            Assert.NotNull(response.FailureMessage());
             Assert.Equal(0, executor.SuccessfulEffects);
             Assert.Empty(Directory.EnumerateFileSystemEntries(root));
         }
@@ -613,7 +613,7 @@ public sealed class ResponsesClientTests
                     ),
                     CancellationToken.None
                 );
-                Assert.Equal("file_exists", response["error"]?["type"]?.GetValue<string>());
+                Assert.NotNull(response.FailureMessage());
             }
             Assert.Equal("old", await File.ReadAllTextAsync(existing));
             Assert.Equal("target", await File.ReadAllTextAsync(target));
@@ -654,8 +654,8 @@ public sealed class ResponsesClientTests
                 CancellationToken.None
             );
 
-            Assert.Equal("unknown_tool", unknown["error"]?["type"]?.GetValue<string>());
-            Assert.Equal("invalid_tool_arguments", invalid["error"]?["type"]?.GetValue<string>());
+            Assert.NotNull(unknown.FailureMessage());
+            Assert.NotNull(invalid.FailureMessage());
             Assert.Equal(0, executor.SuccessfulEffects);
             Assert.Empty(Directory.EnumerateFileSystemEntries(root));
         }
@@ -702,8 +702,8 @@ public sealed class ResponsesClientTests
                 CancellationToken.None
             );
 
-            Assert.Equal("tool_io_error", openFailure["error"]?["type"]?.GetValue<string>());
-            Assert.Equal("tool_io_error", writeFailure["error"]?["type"]?.GetValue<string>());
+            Assert.NotNull(openFailure.FailureMessage());
+            Assert.NotNull(writeFailure.FailureMessage());
             Assert.Equal(1, writeAttempts);
             Assert.Equal(0, openExecutor.SuccessfulEffects);
             Assert.Equal(0, writeExecutor.SuccessfulEffects);

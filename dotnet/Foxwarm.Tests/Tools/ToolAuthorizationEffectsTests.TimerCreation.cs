@@ -97,13 +97,13 @@ public sealed partial class ToolAuthorizationEffectsTests
             )
         );
         Assert.Single(manager.Timers.List(owner.Id));
-        Assert.Equal(
-            "tool_error",
-            Error(await Call(execution.Tools, "create_timer", FreshTimer("missing-agent")))
+        Assert.NotNull(
+            (await Call(execution.Tools, "create_timer", FreshTimer("missing-agent"))).FailureMessage()
         );
-        Assert.Equal(
-            "tool_error",
-            Error(await Call(execution.Tools, "create_timer", FreshTimer(owner: "missing-session")))
+        Assert.NotNull(
+            (
+                await Call(execution.Tools, "create_timer", FreshTimer(owner: "missing-session"))
+            ).FailureMessage()
         );
         await Policy(
             manager,

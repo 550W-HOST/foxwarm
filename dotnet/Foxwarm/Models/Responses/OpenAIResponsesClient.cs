@@ -749,7 +749,7 @@ public sealed class WriteFixtureToolExecutor : ITurnToolExecutor
         cancellationToken.ThrowIfCancellationRequested();
         var name = functionCall["name"]?.GetValue<string>() ?? "";
         if (name != "write_fixture")
-            return UnsupportedTurnToolExecutor.ToolError("unknown_tool", $"Unknown tool: {name}");
+            return ToolFailure.Result($"Unknown tool: {name}");
         if (
             functionCall["args"] is not JsonObject args
             || args.Count != 2
@@ -758,19 +758,15 @@ public sealed class WriteFixtureToolExecutor : ITurnToolExecutor
             || args["content"] is not JsonValue contentValue
             || !contentValue.TryGetValue<string>(out var content)
         )
-            return UnsupportedTurnToolExecutor.ToolError(
-                "invalid_tool_arguments",
+            return ToolFailure.Result(
                 "write_fixture requires exactly string fileName and content."
             );
         if (!IsPlainFileName(fileName))
-            return UnsupportedTurnToolExecutor.ToolError(
-                "invalid_path",
-                "fileName must be a plain file name."
-            );
+            return ToolFailure.Result("fileName must be a plain file name.");
 
         var path = Path.Combine(sandboxRoot, fileName);
         if (TargetExists(path))
-            return UnsupportedTurnToolExecutor.ToolError("file_exists", "File already exists.");
+            return ToolFailure.Result("File already exists.");
         var bytes = Utf8NoBom.GetBytes(content);
         cancellationToken.ThrowIfCancellationRequested();
         Stream stream;
@@ -781,7 +777,7 @@ public sealed class WriteFixtureToolExecutor : ITurnToolExecutor
         catch (IOException)
         {
             return TargetExists(path)
-                ? UnsupportedTurnToolExecutor.ToolError("file_exists", "File already exists.")
+                ? ToolFailure.Result("File already exists.")
                 : ToolIoError();
         }
         catch (UnauthorizedAccessException)
@@ -842,10 +838,7 @@ public sealed class WriteFixtureToolExecutor : ITurnToolExecutor
     }
 
     private static JsonObject ToolIoError() =>
-        UnsupportedTurnToolExecutor.ToolError(
-            "tool_io_error",
-            "write_fixture failed due to an I/O error."
-        );
+        ToolFailure.Result("write_fixture failed due to an I/O error.");
 
     private static bool IsPlainFileName(string fileName) =>
         fileName.Length > 0

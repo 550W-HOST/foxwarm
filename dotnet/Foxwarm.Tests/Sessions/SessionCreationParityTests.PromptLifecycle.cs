@@ -244,7 +244,7 @@ public sealed partial class SessionCreationParityTests
         );
         Assert.Contains(
             "Tool authorization rule denies node capability `read`",
-            response!["error"]!["message"]!.GetValue<string>()
+            response!.FailureMessage()!
         );
         Assert.False(published);
         Assert.Null(f.Manager.Catalog.Get("denied-selection"));

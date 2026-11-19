@@ -414,11 +414,10 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
     {
         if (!IsSupported)
             return Error(
-                "exec_unavailable",
                 "Local shell execution is not supported on this platform. Select a supported Node."
             );
         if (closing)
-            return Error("exec_unavailable", "Host is shutting down.");
+            return Error("Host is shutting down.");
         if (
             args is null
             || args.Count
@@ -430,7 +429,6 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
             || (args.ContainsKey("cwd") && Text(args, "cwd") is null)
         )
             return Error(
-                "invalid_tool_arguments",
                 "exec requires command, optional cwd, optional timeout and optional secretEnv."
             );
         double seconds;
@@ -441,12 +439,12 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
         }
         catch (InvalidDataException error)
         {
-            return Error("invalid_tool_arguments", error.Message);
+            return Error(error.Message);
         }
         ct.ThrowIfCancellationRequested();
         paths ??= MainNativePaths.Default(workspaceForSession(sessionId));
         if (backend is not null && string.IsNullOrWhiteSpace(command))
-            return Error("invalid_tool_arguments", "exec requires command.");
+            return Error("exec requires command.");
         string? cwd = Text(args, "cwd") ?? providerCwd;
         if (backend is null)
         {
@@ -458,11 +456,11 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
             }
             catch (ArgumentException error)
             {
-                return Error("invalid_path", error.Message);
+                return Error(error.Message);
             }
         }
         else if (cwd is { Length: 0 })
-            return Error("invalid_tool_arguments", "Exec cwd must be a non-empty string.");
+            return Error("Exec cwd must be a non-empty string.");
         IReadOnlyDictionary<string, string>? environment = null;
         if (args.ContainsKey("secretEnv"))
             try
@@ -475,7 +473,7 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
             }
             catch (InvalidDataException error)
             {
-                return Error("invalid_tool_arguments", error.Message);
+                return Error(error.Message);
             }
         // A supported identity move may commit while reservation or start is awaiting a receipt.
         var agent = agentForSession(sessionId);

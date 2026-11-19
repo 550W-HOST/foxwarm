@@ -38,12 +38,12 @@ public sealed partial class InContextCompactTests
         var result = f.ToolResponse("unified")["response"]!;
         if (malformed)
         {
-            Assert.Equal("invalid_command", SessionWait.Text(result["error"]?["type"]));
+            Assert.NotNull(result.FailureMessage());
             Assert.Null(result["argsFilePath"]);
         }
         else
         {
-            Assert.Equal("compact_plan_invalid", SessionWait.Text(result["error"]?["type"]));
+            Assert.NotNull(result.FailureMessage());
             Assert.True(
                 JsonNode.DeepEquals(
                     JsonNode.Parse(submitted),

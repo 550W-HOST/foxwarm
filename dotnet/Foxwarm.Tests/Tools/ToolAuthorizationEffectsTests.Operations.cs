@@ -26,7 +26,7 @@ public sealed partial class ToolAuthorizationEffectsTests
         """;
 
     private static string Message(JsonObject response) =>
-        response["error"]!["message"]!.GetValue<string>();
+        response.FailureMessage()!;
 
     [Fact]
     public async Task Denials_name_the_rule_obligation_capability_and_command_without_running_the_effect()

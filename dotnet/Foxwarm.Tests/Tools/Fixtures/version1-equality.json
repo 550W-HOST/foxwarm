@@ -7,10 +7,10 @@
    "script-inline": "ok",
    "script-nested-read": "ok",
    "script-file": "ok",
-   "script-model": "script-error: RuntimeError: Unknown model: missing",
+   "script-model": "error: RuntimeError: Unknown model: missing",
    "runs-list": "ok",
-   "run-get": "tool_error: ToolScript run not found: tsr-<id>",
-   "transfer-cancel": "tool_error: No background copy with that transfer ID belongs to this Session, or it has already finished.",
+   "run-get": "error: ToolScript run not found: tsr-<id>",
+   "transfer-cancel": "error: No background copy with that transfer ID belongs to this Session, or it has already finished.",
    "node-list": "ok: Current node: `master`.\n- `master` (master) — ready\nProviders:\n- `master` (inspect)\n- `authenticated-remote` (inspect)",
    "node-select-spelled": "ok: Current node changed to `master`. Session cwd cleared. Node default cwd: `<root>/workspace/agents/beta`.",
    "session-default": "ok: 📊 *Session Status*\n\n- session id: `foreign`\n- name: unset\n- agent id/name: `beta`\n- current node: `master` (connected=true, type=master)\n- agent directory: `<root>/workspace/agents/beta`\n- current cwd: not set (defaults to current node agent directory; master: `<root>/workspace/agents/beta`)\n- model: `a`\n- effort: raw=unset, effective=high, allowed=none|low|medium|high|xhigh|max, default=high\n- messages: 0 active\n- token estimate: ~0 / 200000\n- images: 0\n- last usage: none\n- last message: never\n- auto-compact threshold: ~170000 tokens (model default)\n- child model: raw=follow current, eff",
@@ -65,9 +65,9 @@
    "visible:task": false,
    "visible:view_session": false,
    "visible:create_session": false,
-   "help:node --help": "invalid_command: Unknown command `node`.\n\nRun `help` for the available commands.",
-   "help:session --help": "invalid_command: Unknown command `session`.\n\nRun `help` for the available commands.",
-   "help:script --help": "invalid_command: Unknown command `script`.\n\nRun `help` for the available commands."
+   "help:node --help": "error: Unknown command `node`.\n\nRun `help` for the available commands.",
+   "help:session --help": "error: Unknown command `session`.\n\nRun `help` for the available commands.",
+   "help:script --help": "error: Unknown command `script`.\n\nRun `help` for the available commands."
   },
   "deny-scripts": {
    "write": "ok: written",
@@ -78,7 +78,7 @@
    "script-model": "tool_authorization_denied: Tool authorization rule denies builtin capability `run_script`. Rule `no-scripts` (#1) in the global policy denied `builtin:run_script`, called as `run_script`.",
    "runs-list": "tool_authorization_denied: Tool authorization rule denies builtin capability `list_toolscript_runs`. Rule `no-scripts` (#1) in the global policy denied `builtin:list_toolscript_runs`, called as `list_toolscript_runs`.",
    "run-get": "tool_authorization_denied: Tool authorization rule denies builtin capability `get_toolscript_run`. Rule `no-scripts` (#1) in the global policy denied `builtin:get_toolscript_run`, called as `get_toolscript_run`.",
-   "transfer-cancel": "tool_error: No background copy with that transfer ID belongs to this Session, or it has already finished.",
+   "transfer-cancel": "error: No background copy with that transfer ID belongs to this Session, or it has already finished.",
    "node-list": "ok: Current node: `master`.\n- `master` (master) — ready\nProviders:\n- `master` (inspect)\n- `authenticated-remote` (inspect)",
    "node-select-spelled": "ok: Current node changed to `master`. Session cwd cleared. Node default cwd: `<root>/workspace/agents/beta`.",
    "session-default": "ok: 📊 *Session Status*\n\n- session id: `foreign`\n- name: unset\n- agent id/name: `beta`\n- current node: `master` (connected=true, type=master)\n- agent directory: `<root>/workspace/agents/beta`\n- current cwd: not set (defaults to current node agent directory; master: `<root>/workspace/agents/beta`)\n- model: `a`\n- effort: raw=unset, effective=high, allowed=none|low|medium|high|xhigh|max, default=high\n- messages: 0 active\n- token estimate: ~0 / 200000\n- images: 0\n- last usage: none\n- last message: never\n- auto-compact threshold: ~170000 tokens (model default)\n- child model: raw=follow current, eff",
@@ -101,7 +101,7 @@
    "visible:create_session": true,
    "help:node --help": "ok: node: List, select and manage Nodes; copy files between them.\n\n  node list\n      List Nodes and Providers.\n  node select <node-id>\n      Select this Session's execution Node.\n  node inspect [<node-id>] [options]\n      Show Node or Provider details.\n  node create [options]\n      Create a Node through its Provider.\n  node ensure [<node-id>] [options]\n      Create a Node through its Provider unless it already exists.\n  node destroy <node-id> [options]\n      Request a Node's removal through its Provider.\n  node copy <source-node> <source-path> <target-node> <target-path> [options]\n      Copy a",
    "help:session --help": "ok: session: Inspect, list, rename, view and manage Sessions.\n\n  session status [<session-id>]\n      Show a Session's status: Node, working directory, model, context usage and recent children.\n  session list [<query>] [options]\n      List Sessions, the current Agent's by default.\n  session rename <name> [options]\n      Set or clear a Session's display name.\n  session set-parent <parent-session-id> [options]\n      Change a Session's parent.\n  session clear-parent [options]\n      Remove a Session's parent.\n  session view <session-id> [options]\n      Read a Session's current conversation and exec",
-   "help:script --help": "invalid_command: Unknown command `script`.\n\nRun `help` for the available commands."
+   "help:script --help": "error: Unknown command `script`.\n\nRun `help` for the available commands."
   },
   "deny-self-tools": {
    "write": "ok: written",
@@ -109,9 +109,9 @@
    "script-inline": "ok",
    "script-nested-read": "ok",
    "script-file": "ok",
-   "script-model": "script-error: RuntimeError: Unknown model: missing",
+   "script-model": "error: RuntimeError: Unknown model: missing",
    "runs-list": "ok",
-   "run-get": "tool_error: ToolScript run not found: tsr-<id>",
+   "run-get": "error: ToolScript run not found: tsr-<id>",
    "transfer-cancel": "tool_authorization_denied: Tool authorization rule denies builtin capability `cancel_transfer`. Rule `no-self` (#1) in the global policy denied `builtin:cancel_transfer`, called as `cancel_transfer`.",
    "node-list": "ok: Current node: `master`.\n- `master` (master) — ready\nProviders:\n- `master` (inspect)\n- `authenticated-remote` (inspect)",
    "node-select-spelled": "ok: Current node changed to `master`. Session cwd cleared. Node default cwd: `<root>/workspace/agents/beta`.",
@@ -143,10 +143,10 @@
    "script-inline": "ok",
    "script-nested-read": "ok",
    "script-file": "ok",
-   "script-model": "script-error: RuntimeError: Unknown model: missing",
+   "script-model": "error: RuntimeError: Unknown model: missing",
    "runs-list": "ok",
-   "run-get": "tool_error: ToolScript run not found: tsr-<id>",
-   "transfer-cancel": "tool_error: No background copy with that transfer ID belongs to this Session, or it has already finished.",
+   "run-get": "error: ToolScript run not found: tsr-<id>",
+   "transfer-cancel": "error: No background copy with that transfer ID belongs to this Session, or it has already finished.",
    "node-list": "ok: Current node: `master`.\n- `master` (master) — ready\nProviders:\n- `master` (inspect)\n- `authenticated-remote` (inspect)",
    "node-select-spelled": "ok: Current node changed to `master`. Session cwd cleared. Node default cwd: `<root>/workspace/agents/beta`.",
    "session-default": "ok: 📊 *Session Status*\n\n- session id: `foreign`\n- name: unset\n- agent id/name: `beta`\n- current node: `master` (connected=true, type=master)\n- agent directory: `<root>/workspace/agents/beta`\n- current cwd: not set (defaults to current node agent directory; master: `<root>/workspace/agents/beta`)\n- model: `a`\n- effort: raw=unset, effective=high, allowed=none|low|medium|high|xhigh|max, default=high\n- messages: 0 active\n- token estimate: ~0 / 200000\n- images: 0\n- last usage: none\n- last message: never\n- auto-compact threshold: ~170000 tokens (model default)\n- child model: raw=follow current, eff",
@@ -177,10 +177,10 @@
    "script-inline": "ok",
    "script-nested-read": "ok",
    "script-file": "ok",
-   "script-model": "script-error: RuntimeError: Unknown model: missing",
+   "script-model": "error: RuntimeError: Unknown model: missing",
    "runs-list": "ok",
-   "run-get": "tool_error: ToolScript run not found: tsr-<id>",
-   "transfer-cancel": "tool_error: No background copy with that transfer ID belongs to this Session, or it has already finished.",
+   "run-get": "error: ToolScript run not found: tsr-<id>",
+   "transfer-cancel": "error: No background copy with that transfer ID belongs to this Session, or it has already finished.",
    "node-list": "ok: Current node: `master`.\n- `master` (master) — ready",
    "node-select-spelled": "tool_authorization_denied: Tool authorization rule denies builtin capability `node`. Rule `no-node` (#2) in the global policy denied `builtin:node`, called as `node`.",
    "session-default": "tool_authorization_denied: Tool authorization rule denies builtin capability `session`. Rule `no-session` (#4) in the global policy denied `builtin:session`, called as `session`.",
@@ -209,12 +209,12 @@
    "write": "ok: written",
    "read": "tool_authorization_denied: Tool authorization rule denies node capability `read`. Rule `no-read` (#2) in the global policy denied `node:master/read`, called as `read`.",
    "script-inline": "ok",
-   "script-nested-read": "script-error: RuntimeError: Tool authorization rule denies node capability `read`. Rule `no-read` (#2) in the global policy denied `node:master/read`, called as `call_tool`.",
+   "script-nested-read": "error: RuntimeError: Tool authorization rule denies node capability `read`. Rule `no-read` (#2) in the global policy denied `node:master/read`, called as `call_tool`.",
    "script-file": "tool_authorization_denied: Tool authorization rule denies node capability `read`. Rule `no-read` (#2) in the global policy denied the read of the script source file on its Node (`node:master/read`) for `builtin:run_script`, called as `run_script`.",
-   "script-model": "script-error: RuntimeError: Unknown model: missing",
+   "script-model": "error: RuntimeError: Unknown model: missing",
    "runs-list": "ok",
-   "run-get": "tool_error: ToolScript run not found: tsr-<id>",
-   "transfer-cancel": "tool_error: No background copy with that transfer ID belongs to this Session, or it has already finished.",
+   "run-get": "error: ToolScript run not found: tsr-<id>",
+   "transfer-cancel": "error: No background copy with that transfer ID belongs to this Session, or it has already finished.",
    "node-list": "ok: Current node: `master`.\n- `master` (master) — ready\nProviders:\n- `master` (inspect)\n- `authenticated-remote` (inspect)",
    "node-select-spelled": "ok: Current node changed to `master`. Session cwd cleared. Node default cwd: `<root>/workspace/agents/beta`.",
    "session-default": "ok: 📊 *Session Status*\n\n- session id: `foreign`\n- name: unset\n- agent id/name: `beta`\n- current node: `master` (connected=true, type=master)\n- agent directory: `<root>/workspace/agents/beta`\n- current cwd: not set (defaults to current node agent directory; master: `<root>/workspace/agents/beta`)\n- model: `a`\n- effort: raw=unset, effective=high, allowed=none|low|medium|high|xhigh|max, default=high\n- messages: 0 active\n- token estimate: ~0 / 200000\n- images: 0\n- last usage: none\n- last message: never\n- auto-compact threshold: ~170000 tokens (model default)\n- child model: raw=follow current, eff",
@@ -269,9 +269,9 @@
    "visible:task": false,
    "visible:view_session": false,
    "visible:create_session": false,
-   "help:node --help": "invalid_command: Unknown command `node`.\n\nRun `help` for the available commands.",
-   "help:session --help": "invalid_command: Unknown command `session`.\n\nRun `help` for the available commands.",
-   "help:script --help": "invalid_command: Unknown command `script`.\n\nRun `help` for the available commands."
+   "help:node --help": "error: Unknown command `node`.\n\nRun `help` for the available commands.",
+   "help:session --help": "error: Unknown command `session`.\n\nRun `help` for the available commands.",
+   "help:script --help": "error: Unknown command `script`.\n\nRun `help` for the available commands."
   },
   "local-deny-scripts": {
    "write": "ok: written",
@@ -281,8 +281,8 @@
    "script-file": "tool_authorization_denied: Tool authorization rule denies builtin capability `run_script`. Rule `no-scripts` (#1) in the rules of Agent `alpha` denied `builtin:run_script`, called as `run_script`.",
    "script-model": "tool_authorization_denied: Tool authorization rule denies builtin capability `run_script`. Rule `no-scripts` (#1) in the rules of Agent `alpha` denied `builtin:run_script`, called as `run_script`.",
    "runs-list": "tool_authorization_denied: Tool authorization rule denies builtin capability `list_toolscript_runs`. Rule `no-scripts` (#1) in the rules of Agent `alpha` denied `builtin:list_toolscript_runs`, called as `list_toolscript_runs`.",
-   "run-get": "tool_error: ToolScript run not found: tsr-<id>",
-   "transfer-cancel": "tool_error: No background copy with that transfer ID belongs to this Session, or it has already finished.",
+   "run-get": "error: ToolScript run not found: tsr-<id>",
+   "transfer-cancel": "error: No background copy with that transfer ID belongs to this Session, or it has already finished.",
    "node-list": "ok: Current node: `master`.\n- `master` (master) — ready\nProviders:\n- `master` (inspect)\n- `authenticated-remote` (inspect)",
    "node-select-spelled": "ok: Current node changed to `master`. Session cwd cleared. Node default cwd: `<root>/workspace/agents/alpha`.",
    "session-default": "ok: 📊 *Session Status*\n\n- session id: `opaque`\n- name: unset\n- agent id/name: `alpha`\n- current node: `master` (connected=true, type=master)\n- agent directory: `<root>/workspace/agents/alpha`\n- current cwd: not set (defaults to current node agent directory; master: `<root>/workspace/agents/alpha`)\n- model: `a`\n- effort: raw=unset, effective=high, allowed=none|low|medium|high|xhigh|max, default=high\n- messages: 0 active\n- token estimate: ~0 / 200000\n- images: 0\n- last usage: none\n- last message: never\n- auto-compact threshold: ~170000 tokens (model default)\n- child model: raw=follow current, e",
@@ -319,7 +319,7 @@
   },
   "deny-default / script-model": {
    "reason": "self exemption with the model.request gate: the slice runs, and its model request is denied as the slice invocation",
-   "now": "script-error: RuntimeError: Model request `missing` was not sent. The default action of the global policy denied `builtin:run_script`, called as `run_script`."
+   "now": "error: RuntimeError: Model request `missing` was not sent. The default action of the global policy denied `builtin:run_script`, called as `run_script`."
   },
   "deny-default / runs-list": {
    "reason": "self exemption: a self-scoped call passes valid deny layers",
@@ -327,11 +327,11 @@
   },
   "deny-default / run-get": {
    "reason": "self exemption: a self-scoped call passes valid deny layers",
-   "now": "tool_error: ToolScript run not found: tsr-<id>"
+   "now": "error: ToolScript run not found: tsr-<id>"
   },
   "deny-default / transfer-cancel": {
    "reason": "self exemption: a self-scoped call passes valid deny layers",
-   "now": "tool_error: No background copy with that transfer ID belongs to this Session, or it has already finished."
+   "now": "error: No background copy with that transfer ID belongs to this Session, or it has already finished."
   },
   "deny-default / visible:run_script": {
    "reason": "self exemption: a capability with a self-scoped branch stays visible",
@@ -387,7 +387,7 @@
   },
   "deny-scripts / script-model": {
    "reason": "self exemption with the model.request gate: the slice runs, and its model request is denied as the slice invocation",
-   "now": "script-error: RuntimeError: Model request `missing` was not sent. Rule `no-scripts` (#1) in the global policy denied `builtin:run_script`, called as `run_script`."
+   "now": "error: RuntimeError: Model request `missing` was not sent. Rule `no-scripts` (#1) in the global policy denied `builtin:run_script`, called as `run_script`."
   },
   "deny-scripts / runs-list": {
    "reason": "self exemption: a self-scoped call passes valid deny layers",
@@ -395,7 +395,7 @@
   },
   "deny-scripts / run-get": {
    "reason": "self exemption: a self-scoped call passes valid deny layers",
-   "now": "tool_error: ToolScript run not found: tsr-<id>"
+   "now": "error: ToolScript run not found: tsr-<id>"
   },
   "deny-scripts / visible:run_script": {
    "reason": "self exemption: a capability with a self-scoped branch stays visible",
@@ -419,7 +419,7 @@
   },
   "deny-self-tools / transfer-cancel": {
    "reason": "self exemption: a self-scoped call passes valid deny layers",
-   "now": "tool_error: No background copy with that transfer ID belongs to this Session, or it has already finished."
+   "now": "error: No background copy with that transfer ID belongs to this Session, or it has already finished."
   },
   "deny-self-tools / visible:artifact": {
    "reason": "self exemption: a capability with a self-scoped branch stays visible",
@@ -463,7 +463,7 @@
   },
   "local-deny-all / script-model": {
    "reason": "self exemption with the model.request gate: the slice runs, and its model request is denied as the slice invocation",
-   "now": "script-error: RuntimeError: Model request `missing` was not sent. Rule `rest` (#2) in the rules of Agent `alpha` denied `builtin:run_script`, called as `run_script`."
+   "now": "error: RuntimeError: Model request `missing` was not sent. Rule `rest` (#2) in the rules of Agent `alpha` denied `builtin:run_script`, called as `run_script`."
   },
   "local-deny-all / runs-list": {
    "reason": "self exemption: a self-scoped call passes valid deny layers",
@@ -471,11 +471,11 @@
   },
   "local-deny-all / run-get": {
    "reason": "self exemption: a self-scoped call passes valid deny layers",
-   "now": "tool_error: ToolScript run not found: tsr-<id>"
+   "now": "error: ToolScript run not found: tsr-<id>"
   },
   "local-deny-all / transfer-cancel": {
    "reason": "self exemption: a self-scoped call passes valid deny layers",
-   "now": "tool_error: No background copy with that transfer ID belongs to this Session, or it has already finished."
+   "now": "error: No background copy with that transfer ID belongs to this Session, or it has already finished."
   },
   "local-deny-all / visible:run_script": {
    "reason": "self exemption: a capability with a self-scoped branch stays visible",
@@ -531,7 +531,7 @@
   },
   "local-deny-scripts / script-model": {
    "reason": "self exemption with the model.request gate: the slice runs, and its model request is denied as the slice invocation",
-   "now": "script-error: RuntimeError: Model request `missing` was not sent. Rule `no-scripts` (#1) in the rules of Agent `alpha` denied `builtin:run_script`, called as `run_script`."
+   "now": "error: RuntimeError: Model request `missing` was not sent. Rule `no-scripts` (#1) in the rules of Agent `alpha` denied `builtin:run_script`, called as `run_script`."
   },
   "local-deny-scripts / runs-list": {
    "reason": "self exemption: a self-scoped call passes valid deny layers",
@@ -555,7 +555,7 @@
   },
   "deny-default / help:session --help": {
    "reason": "ctl help reports a noun whose commands are all hidden as unavailable, not unknown",
-   "now": "invalid_command: No `session` commands are available to this Session.\n\nRun `help` for the available commands."
+   "now": "error: No `session` commands are available to this Session.\n\nRun `help` for the available commands."
   },
   "deny-scripts / help:node --help": {
    "reason": "node create and node ensure mark --provider-id required, so their synopses show it; node status is available to the model (2026-11-19)",
@@ -571,7 +571,7 @@
   },
   "local-deny-all / help:session --help": {
    "reason": "ctl help reports a noun whose commands are all hidden as unavailable, not unknown",
-   "now": "invalid_command: No `session` commands are available to this Session.\n\nRun `help` for the available commands."
+   "now": "error: No `session` commands are available to this Session.\n\nRun `help` for the available commands."
   },
   "local-deny-scripts / help:node --help": {
    "reason": "node create and node ensure mark --provider-id required, so their synopses show it; node status is available to the model (2026-11-19)",

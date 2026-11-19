@@ -250,7 +250,7 @@ public sealed class UnifiedToolSearchTests
         Assert.Single(nativeFiltered["result"]!.AsArray());
         // `tool call <tool-id> --help` follows the same visibility.
         var hidden = await f.Call("ctl", new JsonObject { ["command"] = "tool call node:master/" + Prefix + "01 --help" });
-        Assert.Equal("unknown_tool", hidden["error"]!["type"]!.GetValue<string>());
+        Assert.NotNull(hidden.FailureMessage());
     }
 
     [Fact]
@@ -269,7 +269,7 @@ public sealed class UnifiedToolSearchTests
             (await f.Call("ctl", new JsonObject { ["command"] = "tool call --source node --name " + Prefix + "00 --help" }))["output"]!.GetValue<string>()
         );
         var unknown = await f.Call("ctl", new JsonObject { ["command"] = "tool call node:master/missing --help" });
-        Assert.Equal("unknown_tool", unknown["error"]!["type"]!.GetValue<string>());
+        Assert.NotNull(unknown.FailureMessage());
         // A declared Node tool on the current Node is called directly.
         var declared = await f.Call("ctl", new JsonObject { ["command"] = "tool call node:master/exec --help" });
         Assert.Contains("exec is a declared tool", declared["output"]!.GetValue<string>());

@@ -37,7 +37,7 @@ public sealed partial class AgentRulesTreeTests
     }
 
     private static string? ErrorMessage(JsonNode? result) =>
-        SessionWait.Text(result?["error"]?["message"]);
+        result?.FailureMessage();
 
     [Fact]
     public async Task Agents_add_secrets_they_own_without_reading_them_back()
@@ -100,7 +100,7 @@ public sealed partial class AgentRulesTreeTests
             keeper,
             """{"name":"pending-key","value":"synthetic-pending-0505"}"""
         );
-        Assert.Equal("tool_authorization_denied", SessionWait.Text(pending?["error"]?["type"]));
+        Assert.Equal("tool_authorization_denied", pending?.FailureCode());
         Assert.Contains("`pending-key`", ErrorMessage(pending));
         Assert.False(store.Contains("pending-key"));
 

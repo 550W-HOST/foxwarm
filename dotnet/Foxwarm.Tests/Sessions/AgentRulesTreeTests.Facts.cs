@@ -151,10 +151,10 @@ public sealed partial class AgentRulesTreeTests
                 },
                 default
             );
-            Assert.Equal("tool_error", SessionWait.Text(response?["error"]?["type"]));
+            Assert.NotNull(response?.FailureMessage());
             Assert.Equal(
                 invalidAuthority.Message,
-                SessionWait.Text(response?["error"]?["message"])
+                response?.FailureMessage()
             );
             Assert.False(File.Exists(path));
         }

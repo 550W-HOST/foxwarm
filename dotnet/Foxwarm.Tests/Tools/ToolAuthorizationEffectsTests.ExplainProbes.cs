@@ -77,7 +77,7 @@ public sealed partial class ToolAuthorizationEffectsTests
         foreach (var count in new[] { 0, 257 })
         {
             var response = await Call(execution.Tools, "explain_tool_authorization", Args(count, true));
-            Assert.Contains("1 to 256 probe objects", response["error"]!["message"]!.GetValue<string>());
+            Assert.Contains("1 to 256 probe objects", response.FailureMessage()!);
         }
     }
 
@@ -422,7 +422,7 @@ public sealed partial class ToolAuthorizationEffectsTests
                     "explain_tool_authorization",
                     new JsonObject { ["probes"] = Probes((JsonObject)maximal.DeepClone()), ["compact"] = "yes" }
                 )
-            )["error"]!["message"]!.GetValue<string>()
+            ).FailureMessage()!
         );
     }
 

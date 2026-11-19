@@ -281,8 +281,8 @@ internal static class ArchiveToolEffects
                 && flag
             )
                 return "cancelled";
-            if (value["error"] is JsonObject error)
-                return Text(error["type"]) switch
+            if (value["error"] is not null)
+                return ToolFailure.Code(value) switch
                 {
                     "tool_authorization_denied" or "tool_authorization_unresolved" => "denied",
                     "tool_approval_rejected" => "approval-rejected",
@@ -290,8 +290,6 @@ internal static class ArchiveToolEffects
                     "tool_call_skipped" => "skipped",
                     _ => "error",
                 };
-            if (value["error"] is not null)
-                return "error";
         }
         return approval is "rejected" ? "approval-rejected" : "ok";
     }
@@ -455,7 +453,7 @@ internal static class ArchiveToolEffects
                     Node(target, exec, meta),
                     Bounded(Text(target?["action"]) ?? Text(innerArgs?["action"]), MaxAction),
                     Outcome(response["response"], approvalStatus),
-                    Bounded(Text(response["response"]?["error"]?["type"]), MaxText),
+                    Bounded(ToolFailure.Code(response["response"]), MaxText),
                     approvalStatus,
                     Approver(approval?["decidedBy"]),
                     Compact(target?["rules"], MaxRules),
@@ -589,7 +587,7 @@ internal static class ArchiveToolEffects
             Node(target, exec, null) ?? fallbackNode,
             Bounded(Text(target?["action"]), MaxAction),
             Outcome(response, null),
-            Bounded(Text(response?["error"]?["type"]), MaxText),
+            Bounded(ToolFailure.Code(response), MaxText),
             null,
             null,
             Compact(target?["rules"], MaxRules),

@@ -378,7 +378,7 @@ public sealed class AnthropicStreamingTests
                         );
                         Assert.All(
                             results.Skip(1),
-                            block => Assert.Contains("invalid_tool_arguments", block.ToJsonString())
+                            block => Assert.Contains("Invalid tool arguments", block.ToJsonString())
                         );
                         content.Add(Obj("""{"type":"text","text":"final"}"""));
                     }
