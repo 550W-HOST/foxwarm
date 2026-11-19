@@ -200,6 +200,8 @@ internal sealed partial class SessionManager
                         false
                     );
                 }
+                case "set_session_model":
+                    return (await SessionModelAsync(source, args), false);
                 case "set_session_child_model":
                 case "set_session_compact_threshold":
                     return (await SessionSettingsAsync(source, name, args), false);

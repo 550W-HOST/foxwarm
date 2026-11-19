@@ -62,6 +62,7 @@ internal static partial class OperationDeclarations
             "builtin:set_agent_inherit#primary",
             "builtin:set_agent_rules#primary",
             "builtin:session#primary",
+            "builtin:set_session_model#primary",
             "builtin:set_session_child_model#primary",
             "builtin:set_session_compact_threshold#primary",
             "builtin:compact_session#primary"

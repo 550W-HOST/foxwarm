@@ -105,7 +105,7 @@ Notation:
 | `task` (one branch per action) | `task.create(assigned)` with `[task.assign]` / `task.list` / `task.read` / `task.assign(caller)` for claim / `task.assign` / `task.update` / `task.complete` / `task.cancel` | P. Subsumed: notifications. |
 | `session` (one branch per action) | status: `session.view` / list: `session.list` / rename: `session.control(rename)` / set-parent, clear-parent: `session.manage(reparent)` | P |
 | `view_session` | `session.view` | P |
-| `stop_session`, `compact_session`, `refresh_session_snapshot`, `set_session_child_model`, `set_session_compact_threshold` | `session.control(stop\|compact\|snapshot\|settings)` | P |
+| `stop_session`, `compact_session`, `refresh_session_snapshot`, `set_session_model`, `set_session_child_model`, `set_session_compact_threshold` | `session.control(stop\|compact\|snapshot\|settings)` | P |
 | `move_session` / `delete_session` | `session.manage(move)`, `[agent.create]`, `[env.read]`/`[env.write]` memory legs / `session.manage(delete)` | P |
 | `recall` | `history.read(target, mode)`, or `history.search` for Agent scope | P |
 | `get_archived_messages/blocks` | `history.read(exact)` | P |

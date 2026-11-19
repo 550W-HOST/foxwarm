@@ -298,6 +298,7 @@ internal static partial class OperationDeclarations
         Control("stop_session", "stop"),
         Control("compact_session", "compact"),
         Control("refresh_session_snapshot", "snapshot"),
+        Control("set_session_model", "settings"),
         Control("set_session_child_model", "settings"),
         Control("set_session_compact_threshold", "settings"),
         Declare(

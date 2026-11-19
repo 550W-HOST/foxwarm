@@ -16,6 +16,7 @@ internal sealed partial record OperationPlan
     {
         "compact_session",
         "refresh_session_snapshot",
+        "set_session_model",
         "set_session_child_model",
         "set_session_compact_threshold",
         "move_session",

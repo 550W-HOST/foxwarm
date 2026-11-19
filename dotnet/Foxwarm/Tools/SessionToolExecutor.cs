@@ -1294,6 +1294,7 @@ internal sealed partial class SessionToolExecutor(
                 "set_agent_rules",
                 "session",
                 "view_session",
+                "set_session_model",
                 "set_session_child_model",
                 "set_session_compact_threshold",
                 "compact_session",

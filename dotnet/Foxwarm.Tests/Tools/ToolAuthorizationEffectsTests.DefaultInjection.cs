@@ -17,6 +17,7 @@ public sealed partial class ToolAuthorizationEffectsTests
         await using var mcp = execution.Mcp;
         string[] hidden =
         [
+            "set_session_model",
             "set_session_child_model",
             "set_session_compact_threshold",
             "refresh_session_snapshot",
