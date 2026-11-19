@@ -45,12 +45,12 @@ test('resource cache keys change with pins, build inputs and runner/toolchain co
     'packages/vscode-web/scripts/build-code-oss.mjs',
     'packages/vscode-web/scripts/build-code-docker.mjs',
     'packages/vscode-web/scripts/yaml-extension-assets.mjs',
+    'packages/vscode-web/third-party/redhat-vscode-yaml/LICENSE.txt',
+    'packages/vscode-web/third-party/redhat-vscode-yaml/thirdpartynotices.txt',
     'packages/vscode-web/Dockerfile.code-oss',
     'packages/vscode-web/package.json',
     'package.json',
-    'package-lock.json',
     'scripts/test/prepare-browser.mjs',
-    'scripts/release/package.mjs',
     '.github/workflows/code-resources.yml',
   ]], [heif, ['dotnet/scripts/build-image-decoder.sh', '.github/workflows/tests.yml']]]) {
     const original = digest(inputs)
@@ -60,6 +60,10 @@ test('resource cache keys change with pins, build inputs and runner/toolchain co
       changed.set(file, Buffer.concat([inputs.get(file), Buffer.from('\nchanged input')]))
       assert.notEqual(digest(changed), original, file)
     }
+  }
+  for (const file of ['scripts/release/package.mjs', 'scripts/asset-pack.mjs', 'package-lock.json',
+    'packages/vscode-web/scripts/prepare-assets.mjs', 'packages/vscode-web/scripts/prepare-yaml-extension.mjs']) {
+    assert.ok(!code.has(file), `Code cache key should not depend on ${file}`)
   }
 })
 
@@ -157,6 +161,9 @@ test('Tests and Release reuse one cache-backed Code producer and consume its per
   assert.equal(cache.with['fail-on-cache-miss'], undefined)
   const build = codeProducer.steps.find(step => step.run?.includes('--code-only') && step.run.includes('prepare-browser'))
   assert.equal(build.if, "${{ steps.cache.outputs.cache-hit != 'true' }}")
+  assert.deepEqual(shared.permissions, { contents: 'read' })
+  assert.equal(build.env.GITHUB_TOKEN, 'x-access-token:${{ secrets.GITHUB_TOKEN }}')
+  assert.ok(codeProducer.steps.every(step => step === build || !step.env?.GITHUB_TOKEN))
   const uploaded = codeProducer.steps.find(step => step.uses?.startsWith('actions/upload-artifact@'))
   assert.equal(uploaded.with.name, 'code-resources')
   const packaged = codeProducer.steps.findIndex(step => step.run?.includes('package.mjs --code-only'))

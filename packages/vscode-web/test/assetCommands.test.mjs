@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
-import { readFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import test from 'node:test'
@@ -59,6 +60,38 @@ test('Code preparation commands document pinned, explicit behavior', async () =>
   assert.match(downloadHelp.stdout, /Microsoft's prebuilt VS Code web-standalone product/)
   assert.match(downloadHelp.stdout, new RegExp(version.commit))
   assert.match(downloadHelp.stdout, /--latest/)
+})
+
+test('Docker Code build forwards optional GitHub credentials by name only', { skip: process.platform === 'win32' }, async t => {
+  const bin = await mkdtemp(path.join(os.tmpdir(), 'code-docker-'))
+  t.after(() => rm(bin, { recursive: true, force: true }))
+  const token = 'code-build-test-token'
+  const credential = `x-access-token:${token}`
+  const logFile = path.join(bin, 'docker-calls.jsonl')
+  await writeFile(path.join(bin, 'docker'), String.raw`#!${process.execPath}
+const fs = require('node:fs');
+fs.appendFileSync(${JSON.stringify(logFile)}, JSON.stringify({ args: process.argv.slice(2),
+  credentialMatches: process.env.GITHUB_TOKEN === ${JSON.stringify(credential)},
+  credentialAbsent: process.env.GITHUB_TOKEN === undefined }) + '\n');
+`, { mode: 0o755 })
+  const env = { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}` }
+  delete env.GITHUB_TOKEN
+  for (const authenticated of [false, true]) {
+    await writeFile(logFile, '')
+    const { stdout, stderr } = await execFileAsync(process.execPath, [path.join(packageRoot, 'scripts/build-code-docker.mjs')], {
+      env: authenticated ? { ...env, GITHUB_TOKEN: credential } : env,
+    })
+    const calls = (await readFile(logFile, 'utf8')).trim().split('\n').map(JSON.parse)
+    assert.deepEqual(calls.map(call => call.args[0]), ['version', 'build', 'run'])
+    const [, build, run] = calls
+    assert.ok(!build.args.some(arg => arg.includes('GITHUB_TOKEN')))
+    assert.equal(run.credentialMatches, authenticated)
+    assert.equal(run.credentialAbsent, !authenticated)
+    assert.deepEqual(run.args.flatMap((arg, i) => arg === '--env' && run.args[i + 1]?.startsWith('GITHUB_TOKEN')
+      ? [run.args[i + 1]] : []), authenticated ? ['GITHUB_TOKEN'] : [])
+    assert.ok(!calls.some(call => call.args.some(arg => arg.includes(token))))
+    assert.ok(!stdout.includes(token) && !stderr.includes(token))
+  }
 })
 
 test('source build uses the official standalone web packaging task and verifies its output', async () => {
