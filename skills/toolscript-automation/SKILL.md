@@ -72,17 +72,20 @@ return {"content": content}
 
 ## Python subset
 
-ToolScript uses Monty rather than CPython. Use ordinary expressions, functions, loops, branching, f-strings, comprehensions, generator expressions, lambdas, `try`/`except`, simple classes, and synchronous `with` statements. Generator expressions currently materialize as lists rather than lazy generators.
+ToolScript uses Monty rather than CPython. Use ordinary expressions, functions, loops, branching, f-strings, `%` formatting, `str.format()` and `format()`, comprehensions, generator expressions, lambdas, `try`/`except`, simple classes, function decorators, `match`, and synchronous `with` statements. Generator expressions currently materialize as lists rather than lazy generators.
 
 Module support is deliberately limited:
 
-- `json`, `re`, `math`, `datetime`, and `unicodedata` support common pure operations.
+- `json`, `re`, `math`, `datetime`, `unicodedata`, `itertools`, `functools`, `hashlib`, `base64`, `copy`, `decimal`, `bisect`, and `csv` support common pure operations. `dataclasses` provides the `@dataclass` decorator only. `collections` is partial.
+- `random`, `time`, and `datetime` read the real clock and OS entropy. `time.sleep()` and `asyncio.sleep()` wait for real and count against the slice's time budget.
 - `pathlib` supports lexical path manipulation, but it does not grant host filesystem access.
 - Type annotations parse, but runtime `typing` objects are only partially supported.
-- `asyncio`, `os`, `pathlib`, and `sys` are partial; operations that ask the host for files, environment, working-directory, clock, or process state are rejected.
-- Common CPython modules including `shlex`, `collections`, `itertools`, `functools`, `random`, `time`, `subprocess`, and local or third-party modules are unavailable.
-- Simple classes work, but inheritance, metaclasses, function/method decorators, and most custom dunder protocols do not.
-- `match`, `yield`, `del`, async iteration, and async context managers are unavailable.
+- `asyncio`, `os`, and `sys` are partial. Operations that ask the host for files or the environment are rejected, `os.getcwd()` reports the sandbox root `/`, and process functions such as `os.getpid()`, `os.system()`, and `sys.exit()` do not exist.
+- `shlex`, `subprocess`, `io`, `string`, `heapq`, `operator`, `struct`, `urllib`, and local or third-party modules are unavailable.
+- Classes cannot inherit or use metaclasses, and methods cannot be decorated, so `@property`, `@staticmethod`, and `@classmethod` are unavailable. Common dunder methods such as `__eq__`, `__repr__`, `__iter__`, and `__getitem__` work, but `__lt__`, `__len__`, `__bool__`, and `__getattr__` are ignored.
+- `yield`, `del`, async iteration, and async context managers are unavailable.
+
+A script's return value must be JSON-compatible. Convert class instances, dataclasses, and other objects to dicts, lists, strings, or numbers before returning them.
 
 Use `call_tool("read", ...)`, `call_tool("write", ...)`, or `call_tool("exec", ...)` for permitted host filesystem and process work. Normal session, Node, and tool authorization apply.
 
@@ -292,6 +295,8 @@ Each foreground `run_script` or `continue_script` slice has a 30-second timeout 
 
 A long host call can therefore take longer than `timeoutSecs` before the timeout wait is reported.
 
+A sleep is checked against the same budget. A sleep that would outlast it waits until the budget ends and pauses there with `waitingReason: "timeout"`; `continue_script(...)` then waits only for the rest of the sleep. Stop or Run queued interrupts a sleep with a `RuntimeError` in the script, and `cancel_toolscript_run` cancels a sleeping run.
+
 ### Run management
 
 Run management uses the `ctl script` commands:
@@ -338,7 +343,7 @@ Default VM limits include:
 
 - 64 MB memory
 - recursion depth 200
-- a Monty execution-duration limit initialized from the run's timeout budget and retained in snapshots
+- a Monty execution-duration limit initialized from the run's timeout budget and retained in snapshots; time spent sleeping does not count toward it
 - a 30-second Foxwarm safe-checkpoint budget per run/continue slice unless `timeoutSecs` is provided
 
 Monty does not expose an allocation-count limit. Memory, recursion, and execution-duration limits remain enforced in its isolated worker process.
