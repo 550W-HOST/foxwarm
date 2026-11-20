@@ -45,7 +45,7 @@ after(async () => {
   if (server) await new Promise(resolve => server.close(resolve))
 })
 
-for (const patchTool of ['apply_patch', 'edit']) test(`Code icons use per-response Node and resolved path with ${patchTool}, preserve raw label and read lines`, async () => {
+for (const patchTool of ['apply_patch', 'edit']) test(`Expanded file paths open Code with the per-response Node and resolved path with ${patchTool}, preserve raw label and read lines`, async () => {
   await page.goto(url)
   await page.evaluate(patchTool => {
     window.renderCase('read', { id: 'read-a', name: 'read', args: { filePath: '~/file.txt', startLine: 2, endLine: 4 } },
@@ -62,20 +62,27 @@ for (const patchTool of ['apply_patch', 'edit']) test(`Code icons use per-respon
     window.renderCase('historical', { id: 'old-d', name: 'read', args: { filePath: '~/old.txt' } },
       { tool_use_id: 'old-d', name: 'read', response: { output: 'ok' } })
   }, patchTool)
-  await page.waitForFunction(() => document.querySelectorAll('#read .foxwarm-tool-code-open, #relative .foxwarm-tool-code-open').length === 2)
+  // Collapsed headers keep plain paths; the whole collapsed surface expands the card.
+  await page.waitForSelector('#read .foxwarm-tool-code-path')
+  assert.equal(await page.$$eval('#read a.foxwarm-code-link, #relative a.foxwarm-code-link, #patch a.foxwarm-code-link', links => links.length), 0)
   assert.equal(await page.$eval('#read .foxwarm-tool-code-path', element => element.textContent), '~/file.txt')
-  assert.equal(await page.$$eval('#historical .foxwarm-tool-code-open', buttons => buttons.length), 0)
-  await page.click('#read .foxwarm-tool-code-open')
-  await page.click('#relative .foxwarm-tool-code-open')
-  await page.click('#patch .foxwarm-tool-header-toggle')
-  await page.waitForFunction(() => document.querySelectorAll('#patch .foxwarm-tool-code-open').length >= 2)
-  await page.$$eval('#patch .foxwarm-tool-code-open', buttons => buttons[0].click())
-  await page.$$eval('#patch .foxwarm-tool-code-open', buttons => buttons[buttons.length - 1].click())
+  for (const id of ['read', 'relative', 'patch', 'historical']) {
+    await page.click(`#${id} .foxwarm-tool-header-toggle`)
+    await page.waitForSelector(`#${id} .foxwarm-tool-call-args`)
+  }
+  assert.equal(await page.$eval('#read .foxwarm-tool-call-args a.foxwarm-code-link', element => element.textContent), '~/file.txt')
+  assert.equal(await page.$$eval('#historical a.foxwarm-code-link', links => links.length), 0)
+  await page.click('#read .foxwarm-tool-call-args a.foxwarm-code-link')
+  await page.click('#relative .foxwarm-tool-call-args a.foxwarm-code-link')
+  assert.equal(await page.$$eval('#patch a.foxwarm-code-link', links => links.length), 2, 'deleted files stay plain')
+  await page.$$eval('#patch a.foxwarm-code-link', links => links[0].click())
+  await page.$$eval('#patch a.foxwarm-code-link', links => links[links.length - 1].click())
+  for (const id of ['read', 'relative', 'patch']) assert.ok(await page.$(`#${id} .foxwarm-tool-call-args`), 'link clicks do not collapse the card')
   assert.deepEqual(await page.evaluate(() => window.clicks), [
-    { raw: '~/file.txt', lines: { startLine: 2, endLine: 4 }, target: { resolvedPath: '/home/owner/file.txt', nodeId: 'remote-a' } },
-    { raw: './relative.txt', target: { resolvedPath: '/earlier/cwd/relative.txt', nodeId: 'master' } },
-    { raw: '$fw_tmp/a.txt', target: { resolvedPath: '/agent/tmp/a.txt', nodeId: 'remote-a' } },
-    { raw: '$fw_tmp/b.txt', target: { resolvedPath: '/agent/tmp/b.txt', nodeId: 'remote-a' } },
+    { raw: '~/file.txt', lines: { startLine: 2, endLine: 4 }, target: { nodeId: 'remote-a', resolvedPath: '/home/owner/file.txt' } },
+    { raw: './relative.txt', target: { nodeId: 'master', resolvedPath: '/earlier/cwd/relative.txt' } },
+    { raw: '$fw_tmp/a.txt', target: { nodeId: 'remote-a', resolvedPath: '/agent/tmp/a.txt' } },
+    { raw: '$fw_tmp/b.txt', target: { nodeId: 'remote-a', resolvedPath: '/agent/tmp/b.txt' } },
   ])
 })
 
@@ -87,11 +94,14 @@ test('Windows native resolved paths retain their real callback target and plain 
     { tool_use_id: 'windows-read', name: 'read', response: { output: 'ok' }, __meta: { resolvedPaths: [
       { raw: '$fw_agentdir/input.txt', resolved: 'W:\\work space\\input.txt', nodeId: 'master' },
     ] } }))
-  await page.waitForSelector('#read .foxwarm-tool-code-open')
-  assert.equal(await page.$eval('#read .foxwarm-tool-code-path', element => element.textContent), '$fw_agentdir/input.txt')
-  await page.click('#read .foxwarm-tool-code-open')
+  await page.click('#read .foxwarm-tool-header-toggle')
+  await page.waitForSelector('#read .foxwarm-tool-call-args a.foxwarm-code-link')
+  assert.equal(await page.$eval('#read a.foxwarm-code-link', element => element.textContent), '$fw_agentdir/input.txt')
+  const href = new URL(await page.$eval('#read a.foxwarm-code-link', element => element.href))
+  assert.equal(href.searchParams.get('openFilePath'), '/W:/work space/input.txt')
+  await page.click('#read a.foxwarm-code-link')
   assert.deepEqual(await page.evaluate(() => window.clicks), [
-    { raw: '$fw_agentdir/input.txt', lines: {}, target: { resolvedPath: 'W:\\work space\\input.txt', nodeId: 'master' } },
+    { raw: '$fw_agentdir/input.txt', target: { nodeId: 'master', resolvedPath: 'W:\\work space\\input.txt' } },
   ])
 })
 
@@ -105,10 +115,10 @@ test('pending cross-Node wrapper paths stay readable without borrowing native Co
   }))
   await page.waitForSelector('#read .foxwarm-tool-call-summary')
   assert.equal(await page.$eval('#read .foxwarm-tool-call-summary', element => element.textContent), '/workspace/input.txt')
-  assert.equal(await page.$$eval('#read .foxwarm-tool-code-open', buttons => buttons.length), 0)
+  assert.equal(await page.$$eval('#read a.foxwarm-code-link', links => links.length), 0)
   await page.click('#read .foxwarm-tool-call-summary')
   await page.waitForSelector('#read .foxwarm-tool-call-args')
   assert.match(await page.$eval('#read .foxwarm-tool-call-args', element => element.textContent), /node:other-node\/read/)
-  assert.equal(await page.$$eval('#read .foxwarm-tool-code-open', buttons => buttons.length), 0)
+  assert.equal(await page.$$eval('#read a.foxwarm-code-link', links => links.length), 0)
   assert.deepEqual(await page.evaluate(() => window.clicks), [])
 })

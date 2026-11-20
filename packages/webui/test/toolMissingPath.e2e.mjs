@@ -55,6 +55,6 @@ test('tool calls without a file path remain visible without offering invalid Cod
   await page.waitForFunction(() => document.querySelectorAll('.foxwarm-tool-card').length === 2)
   for (const id of ['incompleteRead', 'failedMalformedEdit']) {
     assert.match(await page.$eval(`#${id}`, element => element.textContent || ''), /Path unavailable/)
-    assert.equal(await page.$$eval(`#${id} .foxwarm-tool-code-open`, buttons => buttons.length), 0)
+    assert.equal(await page.$$eval(`#${id} a.foxwarm-code-link`, links => links.length), 0)
   }
 })

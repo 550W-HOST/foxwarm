@@ -139,49 +139,42 @@ after(async () => {
   await new Promise((resolve) => server?.close(resolve))
 })
 
-test('desktop collapsed exec/wait/edit summaries stay one-line ellipsized and direct file paths use icon-only Code actions', async () => {
+test('desktop collapsed exec/wait/edit summaries stay one-line ellipsized; direct file paths become Code links only when expanded', async () => {
   await mountFixture({ width: 900, height: 700 })
   await assertCollapsedTools()
 
-  const collapsedAlignment = await page.$eval('#edit .foxwarm-tool-code-path-wrap', (wrap) => {
-    const button = wrap.querySelector('.foxwarm-tool-code-open')
-    const path = wrap.querySelector('.foxwarm-tool-code-path')
-    const buttonRect = button.getBoundingClientRect()
-    const pathRect = path.getBoundingClientRect()
-    return Math.abs((buttonRect.top + buttonRect.height / 2) - (pathRect.top + pathRect.height / 2))
-  })
-  assert.ok(collapsedAlignment <= 1, 'collapsed Code icon and path share a centered cross axis')
-
-  for (const id of ['read', 'write', 'edit', 'apply']) {
-    const pathAction = await page.$eval(`#${id} .foxwarm-tool-code-open`, (button) => ({
-      tagName: button.tagName,
-      tabIndex: button.tabIndex,
-      pathTagName: button.nextElementSibling?.tagName,
-      pathRole: button.nextElementSibling?.getAttribute('role'),
-      pathTabIndex: button.nextElementSibling?.getAttribute('tabindex'),
-    }))
-    assert.deepEqual(pathAction, { tagName: 'BUTTON', tabIndex: 0, pathTagName: 'SPAN', pathRole: null, pathTabIndex: null })
-    await page.click(`#${id} .foxwarm-tool-code-open`)
-  }
-  assert.deepEqual(await page.evaluate(() => window.openedCodePaths), [
-    { filePath: '/workspace/' + 'deep-directory-segment/'.repeat(20) + 'target-file.tsx', lines: { startLine: 7, endLine: 13 } },
-    { filePath: '/workspace/' + 'deep-directory-segment/'.repeat(20) + 'target-file.tsx' },
-    { filePath: '/workspace/' + 'deep-directory-segment/'.repeat(20) + 'target-file.tsx' },
-    { filePath: '/workspace/' + 'deep-directory-segment/'.repeat(20) + 'target-file.tsx' },
-  ], 'icon actions retain direct-path and read-range bridge requests')
-  assert.equal(await page.$eval('#edit .foxwarm-tool-card', (card) => card.querySelectorAll('.foxwarm-diff-preview').length), 0, 'Code click must not expand the card')
-  assert.equal(await page.$('#write-no-code .foxwarm-tool-code-open'), null, 'paths without the current Code handler have no action icon')
-
-  await page.focus('#write .foxwarm-tool-code-open')
-  await page.keyboard.press('Enter')
-  assert.equal((await page.evaluate(() => window.openedCodePaths.length)), 5, 'the icon keeps native keyboard activation')
-
+  const longPath = '/workspace/' + 'deep-directory-segment/'.repeat(20) + 'target-file.tsx'
+  assert.equal(await page.$$eval('.fixture a.foxwarm-code-link', links => links.length), 0, 'collapsed headers keep plain paths')
+  // The collapsed path is part of the card surface: it expands instead of opening Code.
   await page.click('#edit .foxwarm-tool-code-path')
   await page.waitForSelector('#edit .foxwarm-tool-call-args')
-  assert.equal((await page.evaluate(() => window.openedCodePaths.length)), 5, 'plain path text follows the header collapse action instead of opening Code')
+  assert.equal(await page.evaluate(() => window.openedCodePaths.length), 0)
+  for (const id of ['read', 'write', 'apply', 'write-no-code']) {
+    await page.click(`#${id} .foxwarm-tool-tag`)
+    await page.waitForSelector(`#${id} .foxwarm-tool-call-args`)
+  }
+  for (const id of ['read', 'write', 'edit', 'apply']) {
+    const link = await page.$eval(`#${id} .foxwarm-tool-call-args a.foxwarm-code-link`, (anchor) => ({
+      text: anchor.textContent, role: anchor.getAttribute('role'), tabIndex: anchor.tabIndex,
+    }))
+    assert.deepEqual(link, { text: longPath, role: 'link', tabIndex: 0 })
+    await page.click(`#${id} .foxwarm-tool-call-args a.foxwarm-code-link`)
+  }
+  assert.deepEqual(await page.evaluate(() => window.openedCodePaths), [
+    { filePath: longPath, lines: { startLine: 7, endLine: 13 } },
+    { filePath: longPath },
+    { filePath: longPath },
+    { filePath: longPath },
+  ], 'path links retain direct-path and read-range bridge requests')
+  for (const id of ['read', 'write', 'edit', 'apply']) assert.ok(await page.$(`#${id} .foxwarm-tool-call-args`), 'a Code link click does not collapse the card')
+  assert.equal(await page.$('#write-no-code a.foxwarm-code-link'), null, 'paths without the current Code handler stay plain')
+
+  await page.focus('#write .foxwarm-tool-call-args a.foxwarm-code-link')
+  await page.keyboard.press('Enter')
+  assert.equal((await page.evaluate(() => window.openedCodePaths.length)), 5, 'the link keeps keyboard activation')
 
   await page.waitForSelector('#edit .foxwarm-diff-preview')
-  const expandedPath = await page.$eval('#edit .foxwarm-tool-code-path', (path) => {
+  const expandedPath = await page.$eval('#edit .foxwarm-tool-call-args .foxwarm-tool-code-path', (path) => {
     const style = getComputedStyle(path)
     return {
       whiteSpace: style.whiteSpace,
@@ -195,12 +188,6 @@ test('desktop collapsed exec/wait/edit summaries stay one-line ellipsized and di
   assert.ok(['anywhere', 'break-word'].includes(expandedPath.overflowWrap))
   assert.ok(expandedPath.height > expandedPath.lineHeight * 1.5, 'expanded long path wraps onto multiple lines')
   assert.ok(expandedPath.rootOverflow <= 1)
-  const expandedAlignment = await page.$eval('#edit .foxwarm-tool-call-args .foxwarm-tool-code-path-wrap', (wrap) => {
-    const button = wrap.querySelector('.foxwarm-tool-code-open')
-    const path = wrap.querySelector('.foxwarm-tool-code-path')
-    return Math.abs(button.getBoundingClientRect().top - path.getBoundingClientRect().top)
-  })
-  assert.ok(expandedAlignment <= 1, 'expanded Code icon aligns with the first path text line')
 
   await page.click('#exec .foxwarm-tool-tag')
   const expandedExec = await page.$eval('#exec .foxwarm-tool-call-args .whitespace-pre-wrap', (content) => {

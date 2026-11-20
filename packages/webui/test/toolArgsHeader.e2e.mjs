@@ -400,16 +400,14 @@ test('default desktop keeps call args in the dark header and results on the ligh
   await mountFixture({ width: 900, height: 800 })
   for (const id of ['exec', 'edit', 'error']) assertCollapsed(await readVisualState(id))
 
-  await clickSettled('#edit .foxwarm-tool-code-open')
-  assert.equal(await page.evaluate(() => window.openedCodePaths.length), 1)
-  assert.equal(await page.$eval('#edit', root => !!root.querySelector('.foxwarm-tool-call-args')), false, 'Code click does not expand')
+  assert.equal(await page.$('#edit a.foxwarm-code-link'), null, 'collapsed paths are plain text')
 
   for (const id of ['exec', 'edit', 'error', 'noResult']) {
     await clickSettled(`#${id} .foxwarm-tool-tag`)
     assertExpanded(await readVisualState(id), { hasResult: id !== 'noResult' })
   }
-  await clickSettled('#edit .foxwarm-tool-call-args .foxwarm-tool-code-open')
-  assert.equal(await page.evaluate(() => window.openedCodePaths.length), 2)
+  await clickSettled('#edit .foxwarm-tool-call-args a.foxwarm-code-link')
+  assert.equal(await page.evaluate(() => window.openedCodePaths.length), 1)
   assert.equal(await page.$eval('#edit', root => !!root.querySelector('.foxwarm-tool-call-args')), true, 'expanded Code click does not collapse')
   const exec = await readVisualState('exec')
   assert.equal(exec.expandedWhiteSpace, 'pre-wrap')
@@ -540,9 +538,7 @@ test('Code, JSON, links, and diff actions keep their own behavior without toggli
     assert.equal(await page.evaluate(() => location.hash), '#session/agent%2Fchild')
     assert.equal(await page.$('#send .foxwarm-tool-call-args, #child .foxwarm-tool-call-args'), null, 'session links navigate without expanding')
   }
-  await clickSettled('#edit .foxwarm-tool-code-open')
-  assert.equal(await page.evaluate(() => window.openedCodePaths.length), 1)
-  assert.equal(await page.$('#edit .foxwarm-tool-call-args'), null)
+  assert.equal(await page.$('#edit a.foxwarm-code-link'), null)
   await hoverSettled('#edit .foxwarm-tool-header-toggle')
   await clickSettled('#edit button[title="JSON"]')
   await page.waitForSelector('[data-json-inspector-dialog]')
@@ -553,8 +549,8 @@ test('Code, JSON, links, and diff actions keep their own behavior without toggli
   await page.waitForSelector('#edit .foxwarm-tool-call-args')
   await clickSettled('#edit button[title="Split"]')
   assert.ok(await page.$('#edit .foxwarm-tool-call-args'))
-  await clickSettled('#edit .foxwarm-tool-code-open')
-  assert.equal(await page.evaluate(() => window.openedCodePaths.length), 2)
+  await clickSettled('#edit .foxwarm-tool-call-args a.foxwarm-code-link')
+  assert.equal(await page.evaluate(() => window.openedCodePaths.length), 1)
   assert.ok(await page.$('#edit .foxwarm-tool-call-args'))
 })
 
@@ -687,7 +683,7 @@ test('expanded execution arguments retain complete copyable source, inputs and e
   const input = await page.$eval('#summarizedScript .foxwarm-tool-execution-input', element => element.textContent)
   assert.equal(input, 'args:\n  enabled: false\n  limit: 0\n  marker: null')
   assert.equal(await page.$('#fileScript .foxwarm-tool-execution-code'), null)
-  assert.equal(await page.$('#fileScript .foxwarm-tool-code-open'), null)
+  assert.equal(await page.$('#fileScript a.foxwarm-code-link'), null)
   const fileArgs = await page.$eval('#fileScript .foxwarm-tool-call-args', element => element.textContent)
   for (const value of ['filePath: ./scripts/audit.py', 'node: other-node', 'argsJson:\n  limit: 0\n  enabled: false', 'timeoutSecs: 0']) assert.ok(fileArgs.includes(value))
   assert.equal(await page.$eval('#summarizedExec .foxwarm-tool-result-content', element => element.textContent), beforeResult)

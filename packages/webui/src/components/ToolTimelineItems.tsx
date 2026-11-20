@@ -1,7 +1,7 @@
 import { memo, useCallback, useContext, useMemo, useState } from 'react'
 import { normalizeCodePath } from '../vscodeWeb'
 import type { ReactNode } from 'react'
-import { Code2, FileJson, Download, Timer, Copy, Check } from 'lucide-react'
+import { FileJson, Download, Timer, Copy, Check } from 'lucide-react'
 import {
   IconToggleButton,
   copyTextToClipboard,
@@ -39,6 +39,7 @@ import { buildPathDownloadUrl, requestPathDownloadUrl, triggerBrowserDownload } 
 import DiffPreview, { getUnifiedDiffSearchText } from './DiffPreview'
 import { ExecCommandText, ExecOutputText } from './ToolExecText'
 import { withLeadingExecLink } from './execLinks'
+import { CodeFileLink, type OpenCodeFileHandler, type ResolvedCodePath } from './CodeFileLink'
 import ThreadLineButton from './ThreadLineButton'
 import { formatCompactDuration } from '../usageTiming'
 import type { SessionSearchMatch } from './chatSessionSearch'
@@ -332,8 +333,7 @@ const renderTextResult = (text: string, expanded: boolean): ReactNode => (
   <div className="whitespace-pre-wrap break-all cursor-text">{expanded ? text : truncateToolResultPreview(text)}</div>
 )
 
-type ResolvedCodePath = { nodeId: string; resolvedPath: string }
-export type OpenCodeFileHandler = (filePath: string, lines?: { startLine?: number; endLine?: number }, target?: ResolvedCodePath) => void
+export type { OpenCodeFileHandler } from './CodeFileLink'
 
 type DisplayResolvedPaths = NonNullable<FunctionResponse['__meta']>['resolvedPaths']
 const resolvedCodePath = (paths: DisplayResolvedPaths | undefined, raw: unknown, index = 0): ResolvedCodePath | undefined => {
@@ -344,6 +344,10 @@ const resolvedCodePath = (paths: DisplayResolvedPaths | undefined, raw: unknown,
   return { nodeId: match.nodeId, resolvedPath: match.resolved }
 }
 
+/**
+ * A direct file-tool path. Collapsed headers keep plain text so the whole surface toggles the
+ * card; in an expanded card the path itself is the Code link.
+ */
 const ToolCodePath = memo(function ToolCodePath({ filePath, lines, onOpenCodeFile, target, prefix, collapsed = false }: {
   filePath?: unknown
   lines?: { startLine?: number; endLine?: number }
@@ -354,7 +358,7 @@ const ToolCodePath = memo(function ToolCodePath({ filePath, lines, onOpenCodeFil
 }) {
   const pathFade = useThreadCardOverflowFade<HTMLSpanElement>('right', collapsed)
   const displayPath = typeof filePath === 'string' ? filePath : 'Path unavailable'
-  const canOpenCode = typeof filePath === 'string' && !!onOpenCodeFile && (!!target || !!normalizeCodePath(filePath))
+  const canOpenCode = !collapsed && typeof filePath === 'string' && !!onOpenCodeFile && (!!target || !!normalizeCodePath(filePath))
   const layoutClass = collapsed
     ? 'foxwarm-tool-code-path-collapsed min-w-0 max-w-full truncate whitespace-nowrap'
     : 'min-w-0 max-w-full whitespace-normal break-words'
@@ -362,22 +366,13 @@ const ToolCodePath = memo(function ToolCodePath({ filePath, lines, onOpenCodeFil
     ? 'foxwarm-tool-code-path min-w-0 truncate whitespace-nowrap'
     : 'foxwarm-tool-code-path whitespace-normal break-words'
   if (!canOpenCode) return <span ref={pathFade.ref} {...pathFade.overflowFadeProps} className={`${layoutClass} ${pathClass}`}>{prefix}{displayPath}</span>
+  const definedLines = lines && (lines.startLine !== undefined || lines.endLine !== undefined)
+    ? { ...(lines.startLine !== undefined ? { startLine: lines.startLine } : {}), ...(lines.endLine !== undefined ? { endLine: lines.endLine } : {}) }
+    : undefined
   return (
-    <span className={`foxwarm-tool-code-path-wrap ${layoutClass} ${collapsed ? 'inline-flex items-center gap-1' : ''}`}>
+    <span className={layoutClass}>
       {prefix}
-      <button
-        type="button"
-        className={`foxwarm-tool-code-open inline-flex shrink-0 p-0 ${collapsed ? 'self-center' : 'align-text-top'} leading-none text-current hover:opacity-70 focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-1`}
-        title={`Open ${displayPath} in Code`}
-        aria-label={`Open ${displayPath} in Code`}
-        onClick={(event) => {
-          event.stopPropagation()
-          onOpenCodeFile?.(displayPath, lines, target)
-        }}
-      >
-        <Code2 size={13} aria-hidden="true" />
-      </button>
-      <span ref={pathFade.ref} {...pathFade.overflowFadeProps} className={pathClass}>{displayPath}</span>
+      <CodeFileLink label={displayPath} lines={definedLines} target={target} onOpen={onOpenCodeFile} className={pathClass}>{displayPath}</CodeFileLink>
     </span>
   )
 })

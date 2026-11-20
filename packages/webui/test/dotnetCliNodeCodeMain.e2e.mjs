@@ -87,9 +87,9 @@ for (const runtime of ['source', 'dotnet']) {
     await until(async () => { const state = JSON.parse(await readFile(join(fixture.data, 'state/sessions', id + '.json'), 'utf8')); return state.history.some(row => row.parts?.some(part => part.text?.includes('CLI-CODE-DONE'))) }, 'normal model remote file turn', 30000)
     await page.waitForSelector('[aria-label="Expand activity"]'); await page.click('[aria-label="Expand activity"]')
     await page.waitForFunction(() => document.querySelector('[data-activity-expanded="true"]')?.style.height === '')
-    await page.waitForSelector('button[title$="renamed.txt in Code"]')
+    await page.waitForFunction(name => [...document.querySelectorAll('.foxwarm-tool-code-path')].some(element => element.textContent.endsWith(name)), {}, 'renamed.txt'); await page.evaluate(name => [...document.querySelectorAll('.foxwarm-tool-code-path')].find(element => element.textContent.endsWith(name)).click(), 'renamed.txt'); await page.waitForFunction(() => [...document.querySelectorAll('.foxwarm-tool-card, [data-tool-group]')].every(node => !node.style.height)); await page.waitForSelector('a.foxwarm-code-link[title$="renamed.txt in Code"]')
     if (assets) {
-      await page.click('button[title$="renamed.txt in Code"]'); let code = await codeFrame()
+      await page.click('a.foxwarm-code-link[title$="renamed.txt in Code"]'); let code = await codeFrame()
       await code.waitForSelector('.editor-instance .view-lines', { timeout: 45000 }); await code.waitForFunction(() => document.querySelector('.editor-instance .view-lines')?.textContent.replaceAll('\u00a0', ' ').includes('selected second'))
       await code.click('.editor-instance .view-lines'); await page.keyboard.down('Control'); await page.keyboard.press('End'); await page.keyboard.up('Control'); await page.keyboard.type('\nSaved through native-capable CLI Code service'); await page.keyboard.down('Control'); await page.keyboard.press('S'); await page.keyboard.up('Control')
       await until(async () => (await readFile(join(repo, 'renamed.txt'), 'utf8')).includes('Saved through native-capable CLI Code service'), 'official FS extension saved remotely')

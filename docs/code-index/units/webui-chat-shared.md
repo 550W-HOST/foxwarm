@@ -14,7 +14,7 @@ Shared utilities, types, and rendering helpers for the chat UI components. Provi
 - `renderMarkdownSegments` / `renderMarkdownSegmentsWithSanitizer` — render the same complete lexer result as stable top-level ordinary HTML segments
 - `renderMarkdownWithSanitizer` — testable markdown renderer variant that accepts an injected sanitizer
 - `prepareWebSearchCitations` / `uniqueWebSearchCitations` / `safeWebSearchUrl` — current-text-part citation lexemes, exact annotation-span matching, safe URL normalization, and source-list deduplication; see [hosted-search citation integrity](../threads/web-search-citations.md#d-hosted-search-citation-integrity).
-- `renderAssistantMarkdownSegments` / `renderAssistantMarkdownSegmentsWithSanitizer` — render assistant Markdown into sanitized HTML, interactive display-LaTeX, and Mermaid segments without introducing a second parser
+- `renderAssistantMarkdownSegments` / `renderAssistantMarkdownSegmentsWithSanitizer` — render assistant Markdown into sanitized HTML, interactive display-LaTeX, and Mermaid segments without introducing a second parser; an optional `FileLinkRenderer` decides per link destination whether it stays an ordinary link, renders as text, or becomes a Code link ([reply file links](./webui-tool-timeline.md#d-webui-code-file-links))
 - `SpecialBlock` / `MermaidDiagram` — reusable per-block rendered/raw/copy surface and lazy strict Mermaid renderer
 - `MarkdownHtmlSegment` — memoized sanitized-HTML leaf whose stable token key lets unchanged streamed blocks retain DOM identity
 - `handleMarkdownLinkClick` — click handler that intercepts links with a confirmation dialog; in app windows it names a new window or the browser ([app windows](./webui-app.md#app-windows-and-new-window-copy))
@@ -73,7 +73,7 @@ Shared utilities, types, and rendering helpers for the chat UI components. Provi
 - `../../../shared/src/toolResponseFormatting` — `formatCompactObjectPreview`
 - `../../../shared/src/webuiToolRendering` — `parseSessionLinkText` shared with tests for session link text patterns
 
-- `FunctionResponse.__meta.resolvedPaths` is WebUI-only per-call data; Code icons use it without changing the displayed tool response or labels. See [D-dispatch-native-agent-paths-and-code-targets](../threads/tool-dispatch-node-execution.md#d-dispatch-native-agent-paths-and-code-targets).
+- `FunctionResponse.__meta.resolvedPaths` is WebUI-only per-call data; expanded tool-path Code links use it without changing the displayed tool response or labels. See [D-dispatch-native-agent-paths-and-code-targets](../threads/tool-dispatch-node-execution.md#d-dispatch-native-agent-paths-and-code-targets).
 ## Behavior
 
 - Assistant citation parsing uses position-bearing lexer placeholders and restores literal token fields before rendering. Only unambiguous whole-marker annotation spans resolve links; UTF-16 and Unicode code-point candidates are bounds-checked independently. Unresolved references retain bounded inspectable IDs, while Raw/copy retains complete source. The shared sanitizer and external-link handler still own link safety. The end-to-end contract belongs to [hosted-search citation integrity](../threads/web-search-citations.md#d-hosted-search-citation-integrity).

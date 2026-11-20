@@ -54,6 +54,8 @@ import {
   ToolResponsesBlock,
   type OpenCodeFileHandler,
 } from './ToolTimelineItems'
+import { CodeLinkBaseProvider, codeFileLinkRenderer, handleRenderedCodeLinkClick, useCodeLinkBase, useHasCodeLinkBases } from './CodeFileLink'
+import type { CodeLinkBase } from '../codeFileLinks'
 import { withLeadingExecLink } from './execLinks'
 import ThreadLineButton from './ThreadLineButton'
 import SpecialBlock, { MermaidDiagram } from './SpecialBlock'
@@ -379,10 +381,15 @@ const ModelUsageAnchor = memo(function ModelUsageAnchor({ usage, isMobile, callC
   )
 })
 
-const MarkdownContent = memo(function MarkdownContent({ text, className, artifactSessionId, streaming, citations }: { text: string; className: string; artifactSessionId?: string; streaming?: boolean; citations?: CitationRenderOptions | false }) {
-  const segments = useMemo(() => renderAssistantMarkdownSegments(text, { enabled: !!artifactSessionId, streaming }, citations), [text, artifactSessionId, streaming, citations])
+const MarkdownContent = memo(function MarkdownContent({ text, className, artifactSessionId, streaming, citations, linkBase, onOpenCodeFile }: { text: string; className: string; artifactSessionId?: string; streaming?: boolean; citations?: CitationRenderOptions | false; linkBase?: CodeLinkBase; onOpenCodeFile?: OpenCodeFileHandler }) {
+  // File links need the app's Code handler; without one, links keep their ordinary rendering.
+  const fileLinks = !!onOpenCodeFile
+  const segments = useMemo(() => renderAssistantMarkdownSegments(text, { enabled: !!artifactSessionId, streaming }, citations, fileLinks ? codeFileLinkRenderer(linkBase) : undefined), [text, artifactSessionId, streaming, citations, fileLinks, linkBase])
+  const handleClick = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    if (!handleRenderedCodeLinkClick(event, onOpenCodeFile)) handleMarkdownLinkClick(event)
+  }, [onOpenCodeFile])
   return (
-    <div className={`min-w-0 max-w-full ${className}`} onClick={handleMarkdownLinkClick}>
+    <div className={`min-w-0 max-w-full ${className}`} onClick={handleClick}>
       {segments.map((segment) => {
         if (segment.kind === 'artifact') return artifactSessionId ? <div key={`markdown-token-${segment.tokenIndex}-${segment.reference.artifactId}-${segment.reference.revision}`} data-search-exclude className="not-prose"><ArtifactView reference={segment.reference} sessionId={artifactSessionId} /></div> : null
         if (segment.kind === 'html') {
@@ -819,8 +826,9 @@ const WebSearchCitationLinks = memo(function WebSearchCitationLinks({ annotation
   )
 })
 
-const AssistantTextCard = memo(function AssistantTextCard({ text, message, sessionId, annotations, onOpenCodeCommit, searchReveal = false, searchPartIndex, conversation = false, reasoningBadges }: { reasoningBadges?: readonly ReasoningBadgeInfo[]; conversation?: boolean; text: string; message: Message; sessionId: string; annotations?: OpenAIResponsesAnnotation[]; onOpenCodeCommit?: OpenCodeCommitHandler; searchReveal?: boolean; searchPartIndex?: number }) {
+const AssistantTextCard = memo(function AssistantTextCard({ text, message, sessionId, annotations, onOpenCodeCommit, onOpenCodeFile, searchReveal = false, searchPartIndex, conversation = false, reasoningBadges }: { reasoningBadges?: readonly ReasoningBadgeInfo[]; conversation?: boolean; text: string; message: Message; sessionId: string; annotations?: OpenAIResponsesAnnotation[]; onOpenCodeCommit?: OpenCodeCommitHandler; onOpenCodeFile?: OpenCodeFileHandler; searchReveal?: boolean; searchPartIndex?: number }) {
   const mobileUi = useMobileChatViewport()
+  const linkBase = useCodeLinkBase(message)
   const [viewMode, setViewMode] = useState<ViewMode>('rendered')
   const displayedViewMode = searchReveal ? 'rendered' : viewMode
   const [copied, setCopied] = useState(false)
@@ -898,6 +906,8 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message, sessi
                 citations={segment.citations}
                 artifactSessionId={sessionId}
                 streaming={!!message.__meta?.streaming}
+                linkBase={linkBase}
+                onOpenCodeFile={onOpenCodeFile}
                 className="foxwarm-markdown prose prose-sm dark:prose-invert max-w-none prose-pre:bg-fw-assistant-code-surface prose-pre:text-fw-assistant-code-text prose-p:my-2 prose-headings:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-0"
               />
             ) : segment.kind === 'commit' ? (
@@ -1124,7 +1134,7 @@ const MessageRow = memo(function MessageRow({
               if (contextBlock && partIndex === firstTextPartIndex && part.text) {
                 return <ContextBlockCard key={`ctx-block-${contextBlock.id}`} sessionId={sessionId} messageKey={messageKey} block={contextBlock} text={part.text} nestedDepth={nestedDepth} renderNestedMessages={renderNestedMessages} searchPartIndex={partIndex} searchReveal={rowSearchTarget?.surface === 'ctx' && rowSearchTarget.partIndex === partIndex} />
               }
-              return <AssistantTextCard sessionId={sessionId} reasoningBadges={!hideMetrics && row.reasoningPresentation[partIndex]?.target === 'text' ? row.reasoningPresentation[partIndex]?.badges : undefined} conversation={conversationDetails || row.conversationPartIndex !== undefined} key={`assistant-text-${partIdx}`} text={part.text || ''} message={msg} annotations={getPartWebSearchAnnotations(part)} onOpenCodeCommit={onOpenCodeCommit} searchPartIndex={partIndex} searchReveal={rowSearchTarget?.surface === 'model' && rowSearchTarget.partIndex === partIndex} />
+              return <AssistantTextCard sessionId={sessionId} reasoningBadges={!hideMetrics && row.reasoningPresentation[partIndex]?.target === 'text' ? row.reasoningPresentation[partIndex]?.badges : undefined} conversation={conversationDetails || row.conversationPartIndex !== undefined} key={`assistant-text-${partIdx}`} text={part.text || ''} message={msg} annotations={getPartWebSearchAnnotations(part)} onOpenCodeCommit={onOpenCodeCommit} onOpenCodeFile={onOpenCodeFile} searchPartIndex={partIndex} searchReveal={rowSearchTarget?.surface === 'model' && rowSearchTarget.partIndex === partIndex} />
             })}
             {(surface !== 'grouped' || msg.role !== 'model') && <ImageParts imageParts={imageParts} keyPrefix={`message-${messageKey}`} />}
             {row.conversationPartIndex === undefined && surface !== 'ordinary' && !collapsedGroup && (interleavedToolGroup && pairedToolResponse ? <InterleavedToolGroup {...toolDisclosure} runningTool={runningTool} msg={msg} nextMsg={pairedToolResponse} messageKeyPrefix={messageKey} onOpenCodeFile={onOpenCodeFile} searchTarget={rowSearchTarget} /> : <ToolCallsBlock {...toolDisclosure} runningTool={runningTool} msg={msg} onOpenCodeFile={onOpenCodeFile} searchTarget={rowSearchTarget} />)}
@@ -1284,7 +1294,7 @@ const TimelineActivity = memo(function TimelineActivity({ row, identityKey, expa
         <ChevronRight size={13} className="-rotate-90" aria-hidden="true"/>Collapse activity
       </button>}
       {showPreview && <div data-conversation-preview data-search-row={row.key} className="min-w-0">
-        <AssistantTextCard sessionId={rowProps.sessionId} conversation text={preview.message.parts[preview.partIndex].text || ''} message={preview.message} searchPartIndex={preview.partIndex} searchReveal={rowProps.searchTarget?.rowKey === row.key} onOpenCodeCommit={rowProps.onOpenCodeCommit} />
+        <AssistantTextCard sessionId={rowProps.sessionId} conversation text={preview.message.parts[preview.partIndex].text || ''} message={preview.message} searchPartIndex={preview.partIndex} searchReveal={rowProps.searchTarget?.rowKey === row.key} onOpenCodeCommit={rowProps.onOpenCodeCommit} onOpenCodeFile={rowProps.onOpenCodeFile} />
       </div>}
     </div>
   )
@@ -1306,6 +1316,14 @@ const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, rea
   const rowsCacheRef = useRef<TimelineRowsCache | null>(null)
   const activityMembersRef = useRef(new Map<object | string, string>())
   const [clockTick, setClockTick] = useState(0)
+  const hasLinkBases = useHasCodeLinkBases()
+  // File links resolve against the complete loaded history, plus any visible draft rows.
+  const linkBaseMessages = useMemo(() => {
+    if (!historyMessages) return messages
+    const loaded = new Set(historyMessages)
+    const extra = messages.filter(message => !loaded.has(message))
+    return extra.length ? [...historyMessages, ...extra] : historyMessages
+  }, [historyMessages, messages])
 
   const renderNestedMessages = useCallback((nestedMessages: Message[], keyPrefix: string, nextNestedDepth: number, overrideView?: TimelineView, nestedSearchTarget?: SessionSearchMatch | null) => (
     <ChatTimeline
@@ -1454,7 +1472,7 @@ const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, rea
 
   const rowProps = { hideMetrics, conversationDetails: activityDetails, neutralToolSuccess: timelineView === 'grouped', expandedTools, onToolToggle: handleToolToggle, isMobile, showUserMessageMetadata, sessionId, nestedDepth, onOpenCodeFile, onOpenCodeCommit, renderNestedMessages, searchTarget }
 
-  return (
+  const timeline = (
     <div className="foxwarm-chat-timeline min-w-0 max-w-full">
       {renderReplyFiles(-1)}
       {renderArtifacts(-1)}
@@ -1471,6 +1489,8 @@ const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, rea
       {renderMessageFooter?.(footerAlignment)}
     </div>
   )
+  // Nested timelines read the bases of the enclosing complete timeline.
+  return hasLinkBases ? timeline : <CodeLinkBaseProvider messages={linkBaseMessages}>{timeline}</CodeLinkBaseProvider>
 })
 
 const ChatTimeline = memo(function ChatTimeline(props: ChatTimelineProps) {

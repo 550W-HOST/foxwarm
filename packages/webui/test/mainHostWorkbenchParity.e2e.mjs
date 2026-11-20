@@ -145,7 +145,7 @@ try {
   await chat(); await click('.foxwarm-chat-root button[title="Code"]')
   let code = await codeFrame(); await code.waitForSelector('.monaco-workbench', { timeout: 45000 })
   await page.evaluate(() => { window.parityCode = document.querySelector('[data-foxwarm-vscode-web-frame]'); window.parityCodeWindow = window.parityCode.contentWindow })
-  await chat(); await click('button[title="Open notes.txt in Code"]'); code = await codeFrame()
+  await chat(); if (!await page.$('a.foxwarm-code-link[title="Open notes.txt in Code"]')) { await page.waitForFunction(name => [...document.querySelectorAll('.foxwarm-tool-code-path')].some(element => element.textContent.endsWith(name)), {}, 'notes.txt'); await page.evaluate(name => [...document.querySelectorAll('.foxwarm-tool-code-path')].find(element => element.textContent.endsWith(name)).click(), 'notes.txt'); await page.waitForFunction(() => [...document.querySelectorAll('.foxwarm-tool-card, [data-tool-group]')].every(node => !node.style.height)); } await click('a.foxwarm-code-link[title="Open notes.txt in Code"]'); code = await codeFrame()
   await code.waitForSelector('.editor-instance .view-lines', { timeout: 45000 })
   await code.click('.editor-instance .view-lines'); await page.keyboard.down('Control'); await page.keyboard.press('End'); await page.keyboard.up('Control'); await page.keyboard.type('\nOfficial Code saved'); await page.keyboard.down('Control'); await page.keyboard.press('S'); await page.keyboard.up('Control')
   await until(async () => (await readFile(join(host.work, 'notes.txt'), 'utf8')).includes('Official Code saved'), 'official browser FS saved')

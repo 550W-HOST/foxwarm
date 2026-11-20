@@ -284,6 +284,25 @@ test('file requests add a containing cwd or parent, then open and focus Explorer
   statType = 2;
 });
 
+test('file requests for a directory reveal it in Explorer, adding a cwd or the directory as needed', async () => {
+  const request = commands.get('foxwarm-fs.handleOpenRequest');
+  statType = 2;
+  let opened = 0;
+  vscodeMock.workspace.openTextDocument = async uri => { opened++; return { uri, lineCount: 1 }; };
+  workspaceFolders = [{ name: 'Existing', uri: MockUri.parse('foxwarm://node+remote/existing') }];
+  const covered = await request({ kind: 'openFile', nodeId: 'remote', path: '/existing/src', startLine: 3 });
+  assert.equal(covered.status, 'revealed');
+  assert.equal(executed.at(-1).id, 'revealInExplorer');
+  assert.equal(executed.at(-1).args[0].toString(), 'foxwarm://node+remote/existing/src');
+  await request({ kind: 'openFile', nodeId: 'remote', path: '/work/pkg', cwd: '/work' });
+  assert(workspaceFolders.some(folder => folder.uri.toString() === 'foxwarm://node+remote/work'));
+  assert.equal(executed.at(-1).args[0].toString(), 'foxwarm://node+remote/work/pkg');
+  await request({ kind: 'openFile', nodeId: 'master', path: '/standalone/dir', cwd: '/unrelated' });
+  assert(workspaceFolders.some(folder => folder.uri.toString() === 'foxwarm://node+master/standalone/dir'));
+  assert.equal(executed.at(-1).args[0].toString(), 'foxwarm://node+master/standalone/dir');
+  assert.equal(opened, 0);
+});
+
 test('master folder commands from a remote workbench route to master without changing remote roots', async () => {
   workspaceFolders = [{ name: 'Remote', uri: MockUri.parse('foxwarm://node+remote/project') }];
   const count = updates.length;

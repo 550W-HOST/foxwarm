@@ -1352,14 +1352,29 @@ async function addExplorerFolderToWorkspace(uri) {
   if ((stat.type & vscode3.FileType.Directory) === 0) throw new Error(`${target.realPath} is not a directory.`);
   await addFoxwarmFolder({ kind: "addFolder", nodeId: target.nodeId, path: target.realPath });
 }
+async function revealFoxwarmDirectory(request) {
+  const uri = vscode3.Uri.parse(buildFoxwarmNodeUriString(request.nodeId, request.path));
+  const covered = (await loadedWorkspaceFolders()).some((folder) => {
+    try {
+      const root = parseFoxwarmUri(folder.uri);
+      return root.nodeId === request.nodeId && containsPath(root.realPath, request.path);
+    } catch {
+      return false;
+    }
+  });
+  if (!covered) {
+    const path = request.cwd && containsPath(request.cwd, request.path) ? request.cwd : request.path;
+    await addFoxwarmFolder({ kind: "addFolder", nodeId: request.nodeId, path });
+  }
+  await revealWorkspaceRoot(uri);
+  return { status: "revealed", uri: uri.toString(true) };
+}
 async function openFoxwarmFile(request, provider) {
   const normalized = normalizeFoxwarmOpenRequest(request);
   if (normalized.kind !== "openFile") throw new Error("Expected an openFile request.");
   const uri = vscode3.Uri.parse(buildFoxwarmNodeUriString(normalized.nodeId, normalized.path));
   const stat = await vscode3.workspace.fs.stat(uri);
-  if ((stat.type & vscode3.FileType.Directory) !== 0) {
-    throw new Error(`${normalized.path} is a directory, not a file.`);
-  }
+  if ((stat.type & vscode3.FileType.Directory) !== 0) return revealFoxwarmDirectory(normalized);
   const covered = vscode3.workspace.workspaceFolders?.some((folder) => {
     try {
       const root = parseFoxwarmUri(folder.uri);

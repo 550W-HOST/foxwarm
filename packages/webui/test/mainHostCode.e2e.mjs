@@ -189,7 +189,7 @@ try {
   stage('embedded workbench file and selection')
   await page.waitForSelector('[aria-label="Expand activity"]'); await page.click('[aria-label="Expand activity"]')
   await page.waitForFunction(() => document.querySelector('[data-activity-expanded="true"]')?.style.height === '')
-  await page.waitForSelector('button[title="Open notes.txt in Code"]'); await page.click('button[title="Open notes.txt in Code"]')
+  await page.waitForFunction(name => [...document.querySelectorAll('.foxwarm-tool-code-path')].some(element => element.textContent.endsWith(name)), {}, 'notes.txt'); await page.evaluate(name => [...document.querySelectorAll('.foxwarm-tool-code-path')].find(element => element.textContent.endsWith(name)).click(), 'notes.txt'); await page.waitForFunction(() => [...document.querySelectorAll('.foxwarm-tool-card, [data-tool-group]')].every(node => !node.style.height)); await page.waitForSelector('a.foxwarm-code-link[title="Open notes.txt in Code"]'); await page.click('a.foxwarm-code-link[title="Open notes.txt in Code"]')
   let code = await codeFrame(page); await code.waitForSelector('.editor-instance .view-lines', { timeout: 40000 })
   await code.waitForFunction(() => document.querySelector('.editor-instance .view-lines')?.textContent.replaceAll('\u00a0', ' ').includes('selected second'))
   await page.evaluate(() => { document.querySelector('iframe[src*="vscode-web"]').dataset.codeProof = 'same-frame' })
@@ -364,7 +364,8 @@ try {
   }
   await clickReadableAction('[aria-label="Expand activity"]')
   await page.waitForFunction(() => document.querySelector('[data-activity-expanded="true"]')?.style.height === '')
-  await clickReadableAction('button[title="Open notes.txt in Code"]'); code = await codeFrame(page)
+  if (!await page.$('a.foxwarm-code-link[title="Open notes.txt in Code"]')) { await page.waitForFunction(name => [...document.querySelectorAll('.foxwarm-tool-code-path')].some(element => element.textContent.endsWith(name)), {}, 'notes.txt'); await page.evaluate(name => [...document.querySelectorAll('.foxwarm-tool-code-path')].find(element => element.textContent.endsWith(name)).click(), 'notes.txt'); await page.waitForFunction(() => [...document.querySelectorAll('.foxwarm-tool-card, [data-tool-group]')].every(node => !node.style.height)); }
+  await clickReadableAction('a.foxwarm-code-link[title="Open notes.txt in Code"]'); code = await codeFrame(page)
   await code.waitForFunction(() => document.querySelector('.monaco-workbench')
     && document.querySelector('.tab.active')?.getAttribute('aria-label')?.includes('notes.txt')
     && document.querySelector('.editor-instance .view-lines')?.textContent.replaceAll('\u00a0', ' ').includes('selected second'), { timeout: 30000 })

@@ -804,6 +804,28 @@ input, textarea, select { touch-action: manipulation; }
     color: inherit;
   }
 
+  /* Reply file links and expanded file-tool paths: one Code link style. */
+  a.foxwarm-code-link {
+    color: var(--foxwarm-color-accent);
+    font-weight: inherit;
+    text-decoration-line: underline;
+    text-decoration-style: dotted;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 2px;
+    overflow-wrap: anywhere;
+    cursor: pointer;
+  }
+
+  a.foxwarm-code-link:hover {
+    text-decoration-style: solid;
+  }
+
+  a.foxwarm-code-link:focus-visible {
+    outline: 1px solid var(--foxwarm-color-focus-ring);
+    outline-offset: 1px;
+    border-radius: 2px;
+  }
+
   .foxwarm-tool-call-summary {
     min-width: 0;
     max-width: 100%;

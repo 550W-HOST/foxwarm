@@ -2696,12 +2696,18 @@ test('the initial Code file request survives lazy frame creation and explicit re
   ]
   const page = await openFixture({ tabs: [system, chat('e2e-a', false)], responsiveChat: true, chatMessages, codeNewWindow: false })
   try {
-    const openFile = 'button[aria-label="Open /fixture.txt in Code"]'
+    const openFile = 'a.foxwarm-code-link[title="Open /fixture.txt in Code"]'
+    // File-tool paths open Code from the expanded card.
+    await clickReadyControl(page, '.foxwarm-tool-code-path')
+    await page.waitForFunction(() => [...document.querySelectorAll('.foxwarm-tool-card, [data-tool-group]')].every(node => !node.style.height));
     await clickReadyControl(page, openFile)
     await page.waitForFunction(() => window.__codeRequests?.some(request => request.kind === 'openFile'))
     assert.deepEqual(await page.evaluate(() => window.__codeRequests.find(request => request.kind === 'openFile')), { kind: 'openFile', nodeId: 'master', cwd: '/', path: '/fixture.txt', startLine: 3, endLine: 8 })
     await page.click('[data-tab-id="vscode-web:master"] button[title="Close tab"]')
     await page.waitForSelector('[data-foxwarm-vscode-web-frame]', { hidden: true })
+    // The returning Chat may remount with the card collapsed again.
+    if (!await page.$(openFile)) await clickReadyControl(page, '.foxwarm-tool-code-path')
+    await page.waitForFunction(() => [...document.querySelectorAll('.foxwarm-tool-card, [data-tool-group]')].every(node => !node.style.height))
     await clickReadyControl(page, openFile)
     await page.waitForFunction(() => window.__codeRequests?.filter(request => request.kind === 'openFile').length === 2)
     assert.equal(await page.evaluate(() => window.__codeFrameLoads), 2, 'explicit Close creates a fresh frame only on reopening')
