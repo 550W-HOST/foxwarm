@@ -1,6 +1,7 @@
 using Foxwarm.Channels.WebUi;
 using Foxwarm.Models;
 using Foxwarm.Sessions;
+using Foxwarm.Telemetry;
 using Foxwarm.Terminal;
 
 namespace Foxwarm;
@@ -13,6 +14,7 @@ internal sealed class MainHost : IAsyncDisposable
     private readonly McpInboundHttp? inboundMcp;
     private readonly IHost host;
     private readonly MainLog? log;
+    private readonly FoxwarmTraces? traces;
     private readonly LogRotation rotation;
     internal WebApplication App =>
         host as WebApplication
@@ -59,6 +61,7 @@ internal sealed class MainHost : IAsyncDisposable
         IHost host,
         McpInboundHttp? inboundMcp,
         MainLog? log,
+        FoxwarmTraces? traces,
         string dataRoot
     )
     {
@@ -67,6 +70,7 @@ internal sealed class MainHost : IAsyncDisposable
         this.inboundMcp = inboundMcp;
         this.host = host;
         this.log = log;
+        this.traces = traces;
         if (sessions.ManagedChannels is { } channels)
             channelStopping = Lifetime.ApplicationStopping.Register(() =>
             {
@@ -127,8 +131,10 @@ internal sealed class MainHost : IAsyncDisposable
         );
         var log = captureDiagnostics ? new MainLog(configuration) : null;
         SessionManager sessions;
+        FoxwarmTraces? traces = null;
         try
         {
+            configuration.Traces = traces = FoxwarmTraces.Open(configuration);
             sessions = new SessionManager(
                 dataRoot,
                 workspaceRoot,
@@ -141,6 +147,7 @@ internal sealed class MainHost : IAsyncDisposable
         catch (Exception error)
         {
             MainLog.Fatal("Session construction", error);
+            traces?.Dispose();
             log?.Dispose();
             throw;
         }
@@ -178,7 +185,7 @@ internal sealed class MainHost : IAsyncDisposable
                 headless
                     .Services.GetRequiredService<IHostApplicationLifetime>()
                     .ApplicationStopping.Register(sessions.BeginShutdown);
-                return new MainHost(sessions, terminals, headless, null, log, dataRoot);
+                return new MainHost(sessions, terminals, headless, null, log, traces, dataRoot);
             }
             server = new HttpServer(
                 args,
@@ -199,11 +206,20 @@ internal sealed class MainHost : IAsyncDisposable
                 );
                 Console.WriteLine("WebUI transport registered.");
             }
-            return new MainHost(sessions, terminals, server.App, server.InboundMcp, log, dataRoot);
+            return new MainHost(
+                sessions,
+                terminals,
+                server.App,
+                server.InboundMcp,
+                log,
+                traces,
+                dataRoot
+            );
         }
         catch (Exception error)
         {
             MainLog.Fatal("host composition", error);
+            using var traceOwner = traces;
             sessions.BeginShutdown();
             if (sessions.ManagedChannels is { } channels)
                 await channels.DisposeAsync();
@@ -239,6 +255,7 @@ internal sealed class MainHost : IAsyncDisposable
 
     private async Task DisposeCoreAsync()
     {
+        using var traceOwner = traces;
         sessions.BeginShutdown();
         if (sessions.ManagedChannels is { } channels)
             await channels.StopIngressAsync();

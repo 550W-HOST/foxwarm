@@ -220,6 +220,13 @@ internal static class SecretConfigurationChanges
             && SessionWait.Text(asr["url"])?.Trim().TrimEnd('/') is { Length: > 0 } service
         )
             Add(routes, "asr " + service, "key", SessionWait.Text(asr["key"]));
+        if (
+            app["otlp"] is JsonObject otlp
+            && SessionWait.Text(otlp["endpoint"]) is { } endpoint
+            && otlp["headers"] is JsonObject headers
+        )
+            foreach (var (name, value) in headers)
+                Add(routes, "otlp " + endpoint, name, SessionWait.Text(value));
         if (app["channels"] is not JsonObject channels)
             return routes;
         foreach (var (id, value) in channels)

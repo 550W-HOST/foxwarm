@@ -1,5 +1,7 @@
+using System.Diagnostics;
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
+using Foxwarm.Telemetry;
 
 namespace Foxwarm.Tools;
 
@@ -495,6 +497,54 @@ internal sealed partial class SessionToolExecutor(
         string? command = null
     )
     {
+        var traces = hosted.Registry.Traces;
+        using var span = traces?.StartTool(hosted.Id, call);
+        try
+        {
+            var result = await ExecuteInvocationAsync(
+                call,
+                token,
+                index,
+                total,
+                scriptDelivery,
+                approved,
+                command,
+                span
+            );
+            traces?.CompleteTool(span, result, result.Timing is not null);
+            return result;
+        }
+        catch (Exception error)
+        {
+            FoxwarmTraces.End(
+                span,
+                error is OperationCanceledException or SessionTurnShutdownException
+                    ? "cancelled"
+                    : "failed",
+                error.GetType().Name
+            );
+            throw;
+        }
+    }
+
+    internal void TraceUnstarted(JsonObject call, TurnToolExecution result)
+    {
+        var traces = hosted.Registry.Traces;
+        using var span = traces?.StartTool(hosted.Id, call);
+        traces?.CompleteTool(span, result, started: false);
+    }
+
+    private async Task<TurnToolExecution> ExecuteInvocationAsync(
+        JsonObject call,
+        CancellationToken token,
+        int? index,
+        int? total,
+        string? scriptDelivery,
+        TurnToolPreparation? approved,
+        string? command,
+        Activity? span
+    )
+    {
         await sessions.WaitForIdentityMutationAsync(hosted.Id, token);
         hosted.Entry.RequireIdentityAuthority();
         var previous = invocation.Value;
@@ -526,7 +576,7 @@ internal sealed partial class SessionToolExecutor(
             JsonNode? response;
             try
             {
-                response = await ExecuteCoreAsync(call, token);
+                response = await ExecuteCoreAsync(call, token, span);
             }
             catch when (scope is { Grant: not null, Dispatched: false })
             {
@@ -724,7 +774,8 @@ internal sealed partial class SessionToolExecutor(
 
     private async Task<JsonNode?> ExecuteCoreAsync(
         JsonObject functionCall,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        Activity? span
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -759,6 +810,12 @@ internal sealed partial class SessionToolExecutor(
                 resolved = resolved with { Command = command };
             if (invocation.Value is { } targeted)
                 targeted.Target = TargetRecord(resolved);
+            FoxwarmTraces.SetToolTarget(
+                span,
+                resolved.Source,
+                resolved.Name,
+                resolved.ExecutionNode
+            );
             if (
                 resolved.Name is "run_script" or "start_toolscript_run"
                 && invocation.Value is { } scriptCall
@@ -810,6 +867,7 @@ internal sealed partial class SessionToolExecutor(
                 hosted.Registry.Runner.AssertCanContinue();
             BroadcastVerboseToolStart(functionCall);
             dispatched = true;
+            span?.SetTag("foxwarm.tool.started", true);
             if (ToolApprovalScope.Current is { } approvalScope)
                 approvalScope.Dispatched = true;
             var runtimeLease =

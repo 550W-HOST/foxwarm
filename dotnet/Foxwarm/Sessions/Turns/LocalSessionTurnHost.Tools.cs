@@ -22,10 +22,14 @@ public sealed partial class LocalSessionTurnHost
         {
             if (selectionFailed)
             {
-                results[cursor++] = new(
-                    ToolFailure.Result(
-                        "Tool call was not started because Node selection failed.",
-                        "tool_call_skipped"
+                var call = planned[cursor].Call;
+                results[cursor++] = TraceUnstarted(
+                    call,
+                    new(
+                        ToolFailure.Result(
+                            "Tool call was not started because Node selection failed.",
+                            "tool_call_skipped"
+                        )
                     )
                 );
                 continue;
@@ -213,10 +217,13 @@ public sealed partial class LocalSessionTurnHost
     {
         var call = planned.Call;
         // A prepared approval of a call skipped before it starts ends with the call.
-        Task<TurnToolExecution> Skipped(TurnToolExecution value) =>
-            tools is SessionToolExecutor approving
-                ? approving.SkippedPrepared(value, prepared, token)
-                : Task.FromResult(value);
+        async Task<TurnToolExecution> Skipped(TurnToolExecution value) =>
+            TraceUnstarted(
+                call,
+                tools is SessionToolExecutor approving
+                    ? await approving.SkippedPrepared(value, prepared, token)
+                    : value
+            );
         if (token.IsCancellationRequested || Closing)
             return await Skipped(
                 new(
@@ -230,7 +237,7 @@ public sealed partial class LocalSessionTurnHost
                 )
             );
         if (planned.Preset is JsonObject preset)
-            return new((JsonObject)preset.DeepClone());
+            return TraceUnstarted(call, new((JsonObject)preset.DeepClone()));
         if (tools is ITurnToolControl fatal && fatal.PolicyUnavailable)
             return await Skipped(
                 new(
@@ -258,10 +265,10 @@ public sealed partial class LocalSessionTurnHost
                     index,
                     total
                 );
-            return new(ToolFailure.Result(error));
+            return TraceUnstarted(call, new(ToolFailure.Result(error)));
         }
         if (prepared?.Response is not null && tools is SessionToolExecutor executor)
-            return executor.PreparedFailure(prepared);
+            return TraceUnstarted(call, executor.PreparedFailure(prepared));
         entry.ToolProgress?.Invoke(call, true);
         try
         {
@@ -290,5 +297,12 @@ public sealed partial class LocalSessionTurnHost
         {
             entry.ToolProgress?.Invoke(call, false);
         }
+    }
+
+    private TurnToolExecution TraceUnstarted(JsonObject call, TurnToolExecution result)
+    {
+        if (tools is SessionToolExecutor executor)
+            executor.TraceUnstarted(call, result);
+        return result;
     }
 }

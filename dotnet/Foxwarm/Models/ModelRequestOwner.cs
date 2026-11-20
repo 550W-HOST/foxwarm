@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
+using Foxwarm.Telemetry;
 
 namespace Foxwarm.Models;
 
@@ -14,7 +15,8 @@ internal sealed class ModelRequestOwner(
     LlmRequestJournalStore? journal = null,
     ModelInteractionDiagnostics? diagnostics = null,
     Func<string, IReadOnlyList<int>>? retryIntervals = null,
-    Foxwarm.Secrets.InstanceSecrets? secrets = null
+    Foxwarm.Secrets.InstanceSecrets? secrets = null,
+    FoxwarmTraces? traces = null
 )
 {
     internal const int DefaultMaxAttempts = 6;
@@ -401,6 +403,7 @@ internal sealed class ModelRequestOwner(
                 if (journal is not null && currentJournalRequestId is not null)
                     journalRequestStarted?.Invoke(currentJournalRequestId);
                 var attemptPrepared = false;
+                Activity? attemptSpan = null;
                 options = options with
                 {
                     CommitAssistantSegment =
@@ -439,6 +442,15 @@ internal sealed class ModelRequestOwner(
                                 .ConfigureAwait(false);
                         attemptPrepared = true;
                         cancellationToken.ThrowIfCancellationRequested();
+                        attemptSpan = traces?.StartModel(
+                            sessionId,
+                            leaf,
+                            attributedType,
+                            route.Key,
+                            journalPurpose,
+                            attempt,
+                            payload
+                        );
                     },
                 };
                 var prepared = ConcreteRequestHistory.PrepareRequest(
@@ -541,11 +553,14 @@ internal sealed class ModelRequestOwner(
                     }
                     if (request is not null)
                         routing.Success(request, leaf.Key);
+                    traces?.CompleteModel(attemptSpan, result);
+                    FoxwarmTraces.End(attemptSpan, "completed");
                     succeeded = true;
                     return result;
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
+                    FoxwarmTraces.End(attemptSpan, "cancelled", nameof(OperationCanceledException));
                     if (
                         attemptPrepared
                         && journal is not null
@@ -594,6 +609,7 @@ internal sealed class ModelRequestOwner(
                 }
                 catch (ModelPreparationException error)
                 {
+                    FoxwarmTraces.End(attemptSpan, "failed", nameof(ModelPreparationException));
                     throw new ModelPreparationException(
                         ConfiguredModelRequests.SafeReason(error.Message, leaf),
                         error
@@ -601,10 +617,20 @@ internal sealed class ModelRequestOwner(
                 }
                 catch (UnsupportedResponsesFeatureException)
                 {
+                    FoxwarmTraces.End(
+                        attemptSpan,
+                        "failed",
+                        nameof(UnsupportedResponsesFeatureException)
+                    );
                     throw;
                 }
                 catch (LlmJournalPreparationException)
                 {
+                    FoxwarmTraces.End(
+                        attemptSpan,
+                        "failed",
+                        nameof(LlmJournalPreparationException)
+                    );
                     throw;
                 }
                 catch (Exception error)
@@ -624,6 +650,7 @@ internal sealed class ModelRequestOwner(
                         ),
                         _ => new ModelAttemptFailure(error.Message, "request-error", true, true),
                     };
+                    FoxwarmTraces.End(attemptSpan, "failed", failure.Kind);
                     if (
                         journalPurpose == "compact-plan"
                         || RequestSizeDiagnostics.IsSizeFailure(failure)
@@ -664,6 +691,7 @@ internal sealed class ModelRequestOwner(
                 }
                 finally
                 {
+                    attemptSpan?.Dispose();
                     if (!succeeded)
                         result?.FinalizeHistory(null, warning);
                 }

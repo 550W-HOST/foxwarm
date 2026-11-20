@@ -24,6 +24,7 @@ This module documents current .NET source behavior. Cross-module contracts belon
 - [Matrix, Weixin and QR login](../units/dotnet-matrix-weixin.md)
 - [WeWork callback, WebSocket, streams and media](../units/dotnet-wework.md)
 - [Speech proxy](../units/asr.md)
+- [OTLP tracing](../units/otlp-tracing.md)
 
 ## Tests and callers
 

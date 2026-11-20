@@ -138,6 +138,7 @@ public sealed class SessionRegistry
     public SessionIngress Ingress => ingress;
     public SessionControl Control => control;
     public SessionTurnRunner Runner => runner;
+    internal Foxwarm.Telemetry.FoxwarmTraces? Traces { get; init; }
 
     public LocalSessionTurnHost HostFor(string sessionId) => hosts.For(GetRequired(sessionId));
 

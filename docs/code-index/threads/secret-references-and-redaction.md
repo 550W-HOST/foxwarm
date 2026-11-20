@@ -4,7 +4,7 @@ Stored credentials, where Main resolves them, and where known values are masked 
 
 ## Contract
 
-Credentials that Main uses on the user's behalf are stored once, encrypted, and referenced from configuration as `${secret:NAME}`. Only Main-owned consumers resolve references, at the moment they build a provider request, channel connection, MCP connection or ASR proxy. No route, tool or log returns a stored value. A model-initiated configuration change that would send a stored value somewhere it is not sent today carries a `secrets` authorization fact: a policy rule naming those secrets decides it, and otherwise it needs the caller's authorization for unrestricted `exec` on master, which can already read the store and its key ([secret destination facts](#secret-destination-facts)).
+Credentials that Main uses on the user's behalf are stored once, encrypted, and referenced from configuration as `${secret:NAME}`. Only Main-owned consumers resolve references, at the moment they build a provider request, channel connection, MCP connection, ASR proxy, or [OTLP trace exporter](../units/otlp-tracing.md). No route, tool or log returns a stored value. A model-initiated configuration change that would send a stored value somewhere it is not sent today carries a `secrets` authorization fact: a policy rule naming those secrets decides it, and otherwise it needs the caller's authorization for unrestricted `exec` on master, which can already read the store and its key ([secret destination facts](#secret-destination-facts)).
 
 Agents manage the store add-only: `add_secret` stores a value under a new name from the call, a file or configuration literals, and `list_secrets` shows names, owners, uses and availability. Neither returns a value, and replacing, deleting or revealing values stays in Setup. A secret an Agent adds from a value or a file is owned by that Agent and needs no policy grant for it ([Agent self-management](#agent-self-management)). A command receives stored secrets as environment variables through `exec`'s `secretEnv`; their names are secret facts of the call, and the values reach only the command's process ([command environment](#command-environment)).
 
@@ -12,7 +12,7 @@ Masking is accident protection for known values and their common encodings. It d
 
 ## References and failure
 
-`SecretSinks` declares where references are allowed: provider `apiKey` and `extraHeaders` values (and the legacy `models.*` layout); `textRedaction.apiKey` in models `defaults`, providers and model entries (`models` or the singular `model` list, which also applies to model-level `extraHeaders`), sent only as the text-detection service's Bearer credential; `llm.*ApiKey`, `asrService.key` and channel credential fields; MCP `token`, `headers`, `env`, `args`, `url` and `oauth.clientSecret`. A reference anywhere else is a validation error.
+`SecretSinks` declares where references are allowed: provider `apiKey` and `extraHeaders` values (and the legacy `models.*` layout); `textRedaction.apiKey` in models `defaults`, providers and model entries (`models` or the singular `model` list, which also applies to model-level `extraHeaders`), sent only as the text-detection service's Bearer credential; `llm.*ApiKey`, `asrService.key`, `otlp.headers` values and channel credential fields; MCP `token`, `headers`, `env`, `args`, `url` and `oauth.clientSecret`. A reference anywhere else is a validation error.
 
 A missing or unavailable value fails only the consumer that uses it:
 
@@ -20,7 +20,7 @@ A missing or unavailable value fails only the consumer that uses it:
 - Channels, MCP servers and the ASR proxy report a safe message that names the secret and points to Setup.
 - A locked store is handled the same way. The store is locked when the key file is missing, unreadable or foreign, or when `state/secrets.json` cannot be read, is malformed or was written by a newer version. Main startup, literal-key providers and ASR registration do not fail, and nothing overwrites a store it cannot read. Restoring the key or the store file takes effect without a restart; a catalog resolved while locked is rebuilt on the next request.
 
-Changing a secret restarts referencing channels. MCP connections whose resolved configuration changed are replaced on next use. The ASR proxy resolves at construction and needs a restart.
+Changing a secret restarts referencing channels. MCP connections whose resolved configuration changed are replaced on next use. The ASR proxy and OTLP trace exporter resolve at construction and need a restart.
 
 MCP OAuth compares and uses resolved settings throughout. A grant records the configured URL, which may hold a reference, and never a configured client secret; the client secret is read from configuration at each token request.
 

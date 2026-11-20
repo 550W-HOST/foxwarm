@@ -227,7 +227,8 @@ internal sealed partial class SessionManager
             journal: Journal,
             diagnostics: diagnostics,
             retryIntervals: models.GetRetryIntervals,
-            secrets: secrets
+            secrets: secrets,
+            traces: Traces
         );
         var captured = requests.Capture(catalog, route, selection.RawEffort);
         var cache = await owner.Entry.SaveLane.EnsurePromptCacheKeyAsync();

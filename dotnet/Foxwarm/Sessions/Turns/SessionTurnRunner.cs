@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
+using Foxwarm.Telemetry;
 
 namespace Foxwarm.Sessions;
 
@@ -196,6 +197,7 @@ public sealed class SessionTurnRunner
                 }
                 AssertCanContinue();
                 await host.SafePointAsync().ConfigureAwait(false);
+                IReadOnlyList<QueueItem>? batch = null;
                 if (retryPending)
                 {
                     retryPending = false;
@@ -217,17 +219,31 @@ public sealed class SessionTurnRunner
                     await entry.SaveLane.SaveBestEffortAsync().ConfigureAwait(false);
                     await host.SafePointAsync().ConfigureAwait(false);
                     AssertCanContinue();
-                    var batch = DrainLeading(entry);
+                    batch = DrainLeading(entry);
                     if (batch.Count == 0)
                         break;
                     turnSelected = true;
-                    await host.AppendQueuedInputsAsync(batch).ConfigureAwait(false);
                 }
-                AssertCanContinue();
+                var turnId = Guid.NewGuid().ToString();
+                using var span = registry.Traces?.StartRun(sessionId, turnId);
                 try
                 {
-                    var result = await host.ChatAsync(Guid.NewGuid().ToString())
-                        .ConfigureAwait(false);
+                    if (batch is not null)
+                        await host.AppendQueuedInputsAsync(batch).ConfigureAwait(false);
+                    AssertCanContinue();
+                }
+                catch (Exception error)
+                {
+                    FoxwarmTraces.End(
+                        span,
+                        error is SessionTurnShutdownException ? "cancelled" : "failed",
+                        error.GetType().Name
+                    );
+                    throw;
+                }
+                try
+                {
+                    var result = await host.ChatAsync(turnId).ConfigureAwait(false);
                     if (
                         (result.AssistantMessage is not null || result.Usage is not null)
                         && !closing
@@ -236,11 +252,13 @@ public sealed class SessionTurnRunner
                         await registry.OnTurnCompleted(entry, result).ConfigureAwait(false);
                     turnSelected = false;
                     suspended = result.Suspended;
+                    FoxwarmTraces.End(span, suspended ? "suspended" : "completed");
                     if (result.Terminal || closing)
                         break;
                 }
                 catch (OperationCanceledException) when (entry.WithState(state => state.Stopping))
                 {
+                    FoxwarmTraces.End(span, "cancelled", nameof(OperationCanceledException));
                     if (await ResumeQueuedOverrideAsync(entry).ConfigureAwait(false))
                     {
                         AssertCanContinue();
@@ -257,25 +275,29 @@ public sealed class SessionTurnRunner
                 }
                 catch (SessionTurnShutdownException)
                 {
+                    FoxwarmTraces.End(span, "cancelled", nameof(SessionTurnShutdownException));
                     interrupted = true;
                     break;
                 }
                 catch (OperationCanceledException)
                     when (closing && entry.ShutdownCancellationRequested)
                 {
+                    FoxwarmTraces.End(span, "cancelled", nameof(OperationCanceledException));
                     interrupted = true;
                     break;
                 }
                 catch (Foxwarm.Tools.ToolAuthorizationUnavailableException error)
                 {
+                    FoxwarmTraces.End(span, "failed", error.GetType().Name);
                     failed = true; // This terminal outcome must not immediately consume/retrigger queued work.
                     entry.RecordBackgroundProcessorFailure(error);
                     if (registry.OnTurnFailure is not null)
                         await registry.OnTurnFailure(error, true).ConfigureAwait(false);
                     break;
                 }
-                catch (AuthorityCommittedException)
+                catch (AuthorityCommittedException error)
                 {
+                    FoxwarmTraces.End(span, "failed", error.GetType().Name);
                     throw;
                 }
                 catch (Exception error)
@@ -287,9 +309,11 @@ public sealed class SessionTurnRunner
                         )
                     )
                     {
+                        FoxwarmTraces.End(span, "cancelled", error.GetType().Name);
                         interrupted = true;
                         break;
                     }
+                    FoxwarmTraces.End(span, "failed", error.GetType().Name);
                     // The current turn does not auto-retry a chat failure, but an HTTP host
                     // must be able to report its terminal outcome rather than imply success.
                     failed =
@@ -312,6 +336,7 @@ public sealed class SessionTurnRunner
                             .ConfigureAwait(false);
                     if (llmFailed && entry.WithState(state => state.Stopping))
                     {
+                        FoxwarmTraces.End(span, "cancelled", error.GetType().Name);
                         llmFailed = false;
                         if (await ResumeQueuedOverrideAsync(entry).ConfigureAwait(false))
                         {

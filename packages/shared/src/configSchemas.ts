@@ -685,6 +685,31 @@ export const APP_CONFIG_SCHEMA = {
       default: false,
       description: 'Require structured handoff recall and confirmation for send_to_session and create_child_session. Defaults to false and requires restart.',
     },
+    otlp: {
+      type: 'object',
+      additionalProperties: false,
+      description: 'Export Foxwarm execution traces via OTLP/HTTP protobuf. Omit this setting to disable export. Changes require restart.',
+      if: { not: { properties: { enabled: { const: false } }, required: ['enabled'] } },
+      then: { required: ['endpoint'] },
+      properties: {
+        enabled: { type: 'boolean', default: true },
+        endpoint: { type: 'string', pattern: '^https?://', description: 'Full traces URL, including the collector path.' },
+        headers: { type: 'object', additionalProperties: { type: 'string' }, description: 'Request headers with values supplied through Foxwarm secret references.' },
+        captureContent: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            systemPrompt: { type: 'boolean', default: true },
+            inputMessages: { type: 'boolean', default: true },
+            outputMessages: { type: 'boolean', default: true },
+            toolDefinitions: { type: 'boolean', default: true },
+            toolArguments: { type: 'boolean', default: true },
+            toolResults: { type: 'boolean', default: true },
+            reasoning: { type: 'boolean', default: true },
+          },
+        },
+      },
+    },
     sessionAutoTitle: {
       type: 'boolean',
       default: false,

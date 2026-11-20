@@ -64,6 +64,7 @@ internal sealed class SecretSinks
             ("llm.openaiApiKey", SecretSinkKind.Credential),
             ("llm.anthropicApiKey", SecretSinkKind.Credential),
             ("asrService.key", SecretSinkKind.Credential),
+            ("otlp.headers.*", SecretSinkKind.Header),
             ("channels.*.botToken", SecretSinkKind.Credential),
             ("channels.*.accessToken", SecretSinkKind.Credential),
             ("channels.*.token", SecretSinkKind.Credential),

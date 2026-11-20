@@ -37,6 +37,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
     internal Foxwarm.McpClient OutboundMcp => mcp;
     internal SessionRuntimeCredentialStore RuntimeCredentials { get; } = new();
     internal Uri? RuntimeMcpEndpoint { get; set; }
+    private Foxwarm.Telemetry.FoxwarmTraces? Traces => models.ConfigurationOwner?.Traces;
     internal Foxwarm.Channels.ChannelRegistry ChannelRegistry { get; } = new();
     internal Foxwarm.Nodes.NodeConnectionHub Nodes { get; }
     internal Foxwarm.Nodes.NodeProviderRegistry NodeProviders { get; }
@@ -673,7 +674,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
             journal: Journal,
             diagnostics: diagnostics,
             retryIntervals: models.GetRetryIntervals,
-            secrets: secrets
+            secrets: secrets,
+            traces: Traces
         );
         var chat = new SessionChatService(
             requests,
@@ -703,7 +705,10 @@ internal sealed partial class SessionManager : IAsyncDisposable
             ),
             migrateGoal: MigrateGoalSnapshotAsync,
             parentSessionResolver: _ => hosted.Metadata().ParentSessionId
-        );
+        )
+        {
+            Traces = Traces,
+        };
         if (secrets is { } owner)
             // Canonical append runs under the Session state gate: use the last built
             // matcher there. Queue admission (outside the gate) refreshes it.

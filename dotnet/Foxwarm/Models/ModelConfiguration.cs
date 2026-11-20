@@ -146,6 +146,7 @@ internal sealed partial class ModelConfiguration
         };
 
     public HostModels Models { get; }
+    internal Foxwarm.Telemetry.FoxwarmTraces? Traces { get; set; }
     internal JsonObject AppConfiguration => (JsonObject)app.DeepClone();
     internal bool HandoffConfirmationEnabled { get; }
     private volatile bool sessionAutoTitle;

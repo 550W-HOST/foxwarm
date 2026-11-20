@@ -42,6 +42,7 @@ internal static class AppConfigurationRules
             "app config `handoffConfirmation`",
             app.ContainsKey("handoffConfirmation")
         );
+        _ = Foxwarm.Telemetry.OtlpConfiguration.Capture(app);
         _ = SessionAutoTitle(app);
         _ = AgentDefaultNode(app);
     }
