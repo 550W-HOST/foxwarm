@@ -285,6 +285,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
   const capturedInteractionVersionRef = useRef(0)
   const pendingContentResizeRef = useRef<{ state: ChatViewportState; interactionVersion: number } | null>(null)
   const resizeRestoreFrameRef = useRef<number | null>(null)
+  const attachedRangeRef = useRef<{ scrollHeight: number; clientHeight: number } | null>(null)
   const cardHeightChangesRef = useRef(new Set<object>())
   const pendingContextScrollbarNavigationRef = useRef<{ anchorKey: string; fraction: number } | null>(null)
   const pendingScrollToTrueTopRef = useRef(false)
@@ -387,7 +388,12 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
     shouldAutoScrollRef.current = following
     pendingUserLeaveBottomRef.current = pendingUserLeave
     setFollowingBottom(following)
-  }, [])
+    if (following && historyMode === 'continuous') {
+      // A following reader sees the live tail; a window kept while reading would leave later rows unmounted.
+      setContinuousWindowKey(null)
+      setContinuousProtectedRange(null)
+    }
+  }, [historyMode])
 
   const scrollToBottom = useCallback(() => {
     const container = messagesContainerRef.current
@@ -498,6 +504,23 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
     const state = captureCurrentViewportState()
     if (state) pendingContentResizeRef.current = { state, interactionVersion: userInteractionVersionRef.current }
   }, [captureCurrentViewportState]))
+
+  // An attached reader stays on the latest row before the browser paints any growth,
+  // whether React rendered it or a Composer, image or font resize did. Changed rows or a
+  // changed scroll range pin; a render or scroll that moves no layout leaves the position
+  // alone. Rows are checked as well because a sliding window can keep the range while
+  // native scroll anchoring moves scrollTop. A restore still in progress owns the
+  // position, and a pointer gesture may be starting a scrollbar drag.
+  const keepAttachedBottom = useCallback((rowsChanged = false) => {
+    const container = messagesContainerRef.current
+    if (!container) return
+    const range = { scrollHeight: container.scrollHeight, clientHeight: container.clientHeight }
+    const previous = attachedRangeRef.current
+    attachedRangeRef.current = range
+    if (!rowsChanged && previous?.scrollHeight === range.scrollHeight && previous.clientHeight === range.clientHeight) return
+    if (!shouldAutoScrollRef.current || pendingViewportRestoreRef.current || pointerScrollInteractionRef.current || !isContentLayoutReady()) return
+    if (range.scrollHeight - container.scrollTop - range.clientHeight > 0.5) container.scrollTop = range.scrollHeight
+  }, [isContentLayoutReady])
 
   const applyViewportState = useCallback((state: ChatViewportState): boolean => {
     const container = messagesContainerRef.current
@@ -917,10 +940,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
     finally { setModelBusy(false) }
   }, [mergeConfirmedSettings, sessionId])
 
-  useEffect(() => {
-    if (pendingViewportRestoreRef.current || !shouldAutoScrollRef.current) return
-    scrollToBottom()
-  }, [messages, scrollToBottom, streamingAssistantDraft])
+  useLayoutEffect(() => keepAttachedBottom())
 
   const snapshotSystemMessage = useMemo<Message | null>(() => {
     const snapshotText = webUiIdentityMode || historyMode === 'continuous' ? '' : persistentMemorySnapshot.trim()
@@ -1003,6 +1023,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
       : snapshotSystemMessage ? [snapshotSystemMessage, ...visibleMessages] : visibleMessages
     return streamingAssistantMessage && displayingLatest ? [...baseMessages, streamingAssistantMessage] : baseMessages
   }, [timelineView, snapshotSystemMessage, streamingAssistantMessage, visibleMessages, displayingLatest])
+  useLayoutEffect(() => keepAttachedBottom(true), [keepAttachedBottom, timelineMessages, queuedMessages])
 
   const navigateSearch = useCallback((match: typeof selectedSearchMatch) => {
     if (!match) return
@@ -1352,6 +1373,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
     syncScrollbarGutter()
     const observer = new ResizeObserver(() => {
       syncScrollbarGutter()
+      keepAttachedBottom()
       if (resizeRestoreFrameRef.current !== null) {
         window.cancelAnimationFrame(resizeRestoreFrameRef.current)
       }
@@ -1406,7 +1428,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
         resizeRestoreFrameRef.current = null
       }
     }
-  }, [applyViewportAnchorCandidates, applyViewportState])
+  }, [applyViewportAnchorCandidates, applyViewportState, keepAttachedBottom])
 
   useLayoutEffect(() => () => {
     // A mode switch has already changed the rendered source by cleanup time.
