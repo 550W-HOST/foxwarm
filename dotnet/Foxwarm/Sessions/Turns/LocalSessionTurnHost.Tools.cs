@@ -16,6 +16,10 @@ public sealed partial class LocalSessionTurnHost
     )
     {
         var results = new TurnToolExecution?[planned.Count];
+        // The Session's Node and cwd once each call settled, including a cwd it changed.
+        var placements = new (string Node, string? Cwd)?[planned.Count];
+        (string Node, string? Cwd)? Placement() =>
+            tools is SessionToolExecutor executor ? executor.SessionPlacement : null;
         var cursor = 0;
         var selectionFailed = false;
         while (cursor < planned.Count)
@@ -39,6 +43,7 @@ public sealed partial class LocalSessionTurnHost
                         total: planned.Count
                     )
                     .ConfigureAwait(false);
+                placements[cursor] = Placement();
                 if (
                     IsNodeSelection(planned[cursor].Call)
                     && !SelectionSucceeded(results[cursor]!.Response)
@@ -99,9 +104,12 @@ public sealed partial class LocalSessionTurnHost
                 .Select(_ => WorkAsync())
                 .ToArray();
             await Task.WhenAll(workers).ConfigureAwait(false);
-            if (tools is SessionToolExecutor replay)
-                for (var index = start; index < end; index++)
+            for (var index = start; index < end; index++)
+            {
+                if (tools is SessionToolExecutor replay)
                     results[index] = await replay.ReplayCwdAsync(results[index]!);
+                placements[index] = Placement();
+            }
         }
         var parts = new JsonArray();
         for (var index = 0; index < planned.Count; index++)
@@ -131,6 +139,17 @@ public sealed partial class LocalSessionTurnHost
             {
                 var meta = response["__meta"] as JsonObject ?? new JsonObject();
                 meta["target"] = target.DeepClone();
+                response["__meta"] = meta;
+            }
+            // Display base for file links the model writes after this call: the Session's Node
+            // and cwd once the call settled, including a cwd the call itself changed.
+            if (placements[index] is { } after)
+            {
+                var meta = response["__meta"] as JsonObject ?? new JsonObject();
+                var value = new JsonObject { ["node"] = after.Node };
+                if (after.Cwd is { Length: > 0 } cwd)
+                    value["cwd"] = cwd;
+                meta["placementAfter"] = value;
                 response["__meta"] = meta;
             }
             if (result.ExecPlacement is { } placement)

@@ -355,6 +355,9 @@ internal sealed partial class SessionToolExecutor(
             current.ExecPlacement = RemoteExecPlacement(resolved, null);
     }
 
+    /// <summary>The Session's current Node and cwd as later calls will use them.</summary>
+    internal (string Node, string? Cwd) SessionPlacement => sessions.ExecutionPlacement(hosted);
+
     internal bool ToolScriptExecution => invocation.Value?.ToolScriptSubCalls is not null;
     internal string CurrentCallId => invocation.Value?.CallId ?? "";
     internal string? DirectExecWorkspace => execSnapshot.Value?.Cwd;
