@@ -1,7 +1,6 @@
 using System.Text.Json.Nodes;
 using Foxwarm.Models;
 using Foxwarm.Sessions;
-using Foxwarm.Telemetry;
 
 namespace Foxwarm.Secrets;
 
@@ -13,7 +12,7 @@ namespace Foxwarm.Secrets;
 // configuration: where it sends a secret (destination), in which field, and the secret name. A
 // route present after the change and absent before is a fact. Edits that change neither a
 // destination nor where a reference is placed add no route, so model lists, context limits,
-// feature flags, timeouts and descriptions alone produce no fact.
+// feature flags, timeouts, descriptions, enablement and removals produce no fact.
 internal static class SecretConfigurationChanges
 {
     // Refusal when the secret part of a decision denies and its rule gives no reason.
@@ -221,9 +220,13 @@ internal static class SecretConfigurationChanges
             && SessionWait.Text(asr["url"])?.Trim().TrimEnd('/') is { Length: > 0 } service
         )
             Add(routes, "asr " + service, "key", SessionWait.Text(asr["key"]));
-        if (OtlpConfiguration.Capture(app) is { Enabled: true, Endpoint: { } endpoint } otlp)
-            foreach (var (name, value) in otlp.Headers)
-                Add(routes, "otlp " + endpoint.AbsoluteUri, name.ToLowerInvariant(), value);
+        if (
+            app["otlp"] is JsonObject otlp
+            && SessionWait.Text(otlp["endpoint"]) is { } endpoint
+            && otlp["headers"] is JsonObject headers
+        )
+            foreach (var (name, value) in headers)
+                Add(routes, "otlp " + endpoint, name, SessionWait.Text(value));
         if (app["channels"] is not JsonObject channels)
             return routes;
         foreach (var (id, value) in channels)

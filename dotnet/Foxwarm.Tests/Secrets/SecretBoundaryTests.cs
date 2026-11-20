@@ -89,48 +89,6 @@ public sealed class SecretBoundaryTests
     }
 
     [Fact]
-    public async Task Enabling_OTLP_for_the_first_time_requires_authorization_for_its_header_secret()
-    {
-        await using var f = await ExternalChannelFixture.CreateAsync();
-        f.Configuration.Secrets.Store.Set("collector-key", ProviderKey);
-        var disabled =
-            f.Configuration.ReadCurrentAppRaw().TrimEnd()
-            + "\n"
-            + """
-                otlp:
-                  enabled: false
-                  endpoint: https://collector.example.test/v1/traces
-                  headers:
-                    Authorization: 'Bearer ${secret:collector-key}'
-                """;
-        var enabled = disabled.Replace("enabled: false\n  endpoint:", "enabled: true\n  endpoint:");
-        Assert.NotEqual(disabled, enabled);
-        Assert.True(SessionCatalog.Flag((await f.Configuration.SaveAppAsync(disabled))["saved"]));
-        await f.Manager.Authorization.InstallAsync(
-            Encoding.UTF8.GetBytes(
-                """
-                version: 1
-                rules:
-                  - id: no-master-exec
-                    action: deny
-                    agent: main
-                    tool: {source: node, name: exec}
-                    node: {exact: master}
-                """
-            ),
-            default
-        );
-        var candidate = Path.Combine(f.Work, "candidate.yaml");
-        await File.WriteAllTextAsync(candidate, enabled);
-        var denied = await f.ToolAsync(
-            "set_config",
-            new JsonObject { ["target"] = "config", ["filePath"] = candidate }
-        );
-        Assert.Contains("`collector-key`", denied?.FailureMessage());
-        Assert.Equal(disabled, f.Configuration.ReadCurrentAppRaw());
-    }
-
-    [Fact]
     public void Only_credential_shaped_literals_are_masked()
     {
         var models = new JsonObject
