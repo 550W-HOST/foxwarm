@@ -275,7 +275,8 @@ internal sealed class ToolRegistry(
     internal async Task<JsonNode?> ExecuteAsync(
         ResolvedTool resolved,
         SessionToolExecutor owner,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        System.Diagnostics.Activity? span = null
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -324,6 +325,8 @@ internal sealed class ToolRegistry(
                     owner.ScriptBudget
                 )
             : await entries[resolved.Name].Execute(owner, resolved.Args, cancellationToken);
+        if (resolved.Source == "mcp")
+            Foxwarm.Telemetry.FoxwarmTraces.ObserveMcpResult(span, result);
         if (
             resolved is { Source: "node", Name: "exec" }
             && resolved.ExecutionNode != "master"

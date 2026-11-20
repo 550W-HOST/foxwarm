@@ -114,6 +114,18 @@ internal sealed partial class FoxwarmTraces
         span?.SetTag("foxwarm.tool.node", node);
     }
 
+    // Observe the MCP envelope before large results become abbreviated tool output.
+    internal static void ObserveMcpResult(Activity? span, JsonNode? result)
+    {
+        if (
+            span is not null
+            && (result as JsonObject)?["isError"] is JsonValue failure
+            && failure.TryGetValue<bool>(out var isError)
+            && isError
+        )
+            span.SetTag("error.type", "mcp_tool_error");
+    }
+
     internal void CompleteTool(Activity? span, TurnToolExecution result, bool started)
     {
         if (span is null)
@@ -132,13 +144,8 @@ internal sealed partial class FoxwarmTraces
             End(span, "cancelled", code ?? "tool_call_cancelled");
         else if (code == "tool_call_skipped" || !started)
             End(span, "skipped", code ?? "tool_call_not_started");
-        else if (
-            Text(result.Target, "source") == "mcp"
-            && (value as JsonObject)?["isError"] is JsonValue failure
-            && failure.TryGetValue<bool>(out var isError)
-            && isError
-        )
-            End(span, "failed", "mcp_tool_error");
+        else if (span.GetTagItem("error.type") is string mcpError)
+            End(span, "failed", mcpError);
         else if ((value as JsonObject)?["error"] is not null)
             End(span, "failed", code ?? "tool_error");
         else

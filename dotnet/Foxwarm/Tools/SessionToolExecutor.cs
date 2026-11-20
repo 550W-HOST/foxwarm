@@ -853,7 +853,7 @@ internal sealed partial class SessionToolExecutor(
             var monotonic = System.Diagnostics.Stopwatch.GetTimestamp();
             try
             {
-                var result = await registry.ExecuteAsync(resolved, this, cancellationToken);
+                var result = await registry.ExecuteAsync(resolved, this, cancellationToken, span);
                 // The approver's note reaches the model beside the result; native ToolScript
                 // values are never altered.
                 if (

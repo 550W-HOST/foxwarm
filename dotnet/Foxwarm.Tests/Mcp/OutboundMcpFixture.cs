@@ -323,6 +323,7 @@ internal sealed class StatelessSdkPeer : IAsyncDisposable
                         "null" => "null",
                         "scalar" => "false",
                         "array" => "[1,null,false]",
+                        "error" => "{\"value\":\"" + new string('x', 45_000) + "\"}",
                         _ => "{\"value\":1}",
                     };
                     return ValueTask.FromResult(
